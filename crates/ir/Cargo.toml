@@ -1,0 +1,13 @@
+[package]
+name = "orla-ir"
+description = "Orla IR: typed, SSA-like, backend-neutral Kernel representation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-abi = { path = "../abi" }
+
+[lints]
+workspace = true
