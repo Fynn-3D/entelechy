@@ -1,0 +1,15 @@
+# gradient -> grayscale -> pixelate
+graph grayscale
+
+node source = image.gradient@1
+  domain 128 128
+
+node gray = image.grayscale@1
+  source <- source.result
+  amount = 1.0
+
+node blocks = image.pixelate@1
+  source <- gray.result
+  size = 8
+
+output blocks.result

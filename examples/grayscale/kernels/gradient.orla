@@ -1,0 +1,10 @@
+// A generator: no inputs, so the scene must give the node a domain.
+kernel image.gradient@1 {
+    requires { image.write; }
+    param depth: Float = 0.5;
+    output result: Image;
+    compute {
+        let uv = coord() / (domain() - vec2(1.0, 1.0));
+        return vec4(uv.x, uv.y, depth, 1.0);
+    }
+}
