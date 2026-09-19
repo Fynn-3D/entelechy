@@ -17,9 +17,10 @@ chosen at construction; `prepare` builds backend state so `publish` stays a
 pointer swap. The language covers the Phase 1 constructs plus
 structured control flow: one `compute` block per Kernel, one Image output,
 helper functions without recursion, Float/Int/Bool/Vec2/Vec3/Vec4 parameters,
-vector intrinsics, `time()` behind `time.read`, `if` expressions, and bounded
-`loop` expressions carrying one value. Structs and multi-value loops are the
-next language step when a demo needs them. `.osn` scenes bind nodes to
+vector intrinsics, `time()` behind `time.read`, `if` expressions, bounded
+`loop` expressions carrying one value, and structs so that one value can be
+a bundle. Structs stay inside the Kernel; the Typed Field decision governs
+how record data will eventually cross the ABI. `.osn` scenes bind nodes to
 `KernelId`s; the CLI session and the Player resolve sources from the
 filesystem by polling modification stamps.
 

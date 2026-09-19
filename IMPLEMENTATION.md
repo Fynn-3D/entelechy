@@ -32,6 +32,17 @@ capability claim.
 
 ## Contracts worth knowing
 
+- Structs are Kernel-internal record types: declared in `.orla`, indexed in
+  [the IR struct table](crates/ir/src/lib.rs), built and updated with
+  `Name { .. }` literals, and allowed wherever a value is (loops carry them,
+  functions take and return them). They never cross the ABI as parameters or
+  ports. The CPU backend flattens them to slot ranges
+  ([interpreter](crates/cpu/src/eval.rs)); the GPU backend emits native WGSL
+  structs. Proof: [struct tests](crates/cpu/tests/execute.rs),
+  [diagnostics](crates/compiler/tests/compile.rs),
+  [parity](crates/gpu/tests/parity.rs), and the
+  [ray-march example](examples/raymarch/kernels/march.orla).
+
 - Backends implement [`Backend`](crates/runtime/src/lib.rs): `prepare` does
   the expensive work (the GPU backend compiles WGSL and builds the pipeline
   there), so `publish` is a pointer swap. The GPU backend keeps Host ownership

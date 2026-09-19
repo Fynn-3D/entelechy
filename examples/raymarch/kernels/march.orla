@@ -1,10 +1,16 @@
 // Signed-distance ray marching: a bounded loop walks each ray until it is
-// close to a surface or leaves the scene. Shadows and normals are loops too.
+// close to a surface or leaves the scene. The loop carries a struct, so the
+// distance, the material, and the last step travel together.
 kernel scene.march@1 {
     requires { image.write; time.read; }
     param orbit_speed: Float = 0.35;
     param steps: Int = 96;
     output result: Image;
+
+    struct Ray { origin: Vec3; direction: Vec3; }
+    struct Surface { distance: Float; material: Int; }
+    struct March { t: Float; material: Int; last: Float; done: Bool; }
+    struct Shadow { t: Float; light: Float; }
 
     fn sphere(p: Vec3, r: Float) -> Float {
         return length(p) - r;
@@ -20,50 +26,59 @@ kernel scene.march@1 {
         return length(max(q, vec3(0.0, 0.0, 0.0))) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
     }
 
-    // Distance to the closest surface; .y carries a material id.
-    fn scene(p: Vec3) -> Vec2 {
-        let floor = p.y + 1.0;
-        let ball = sphere(p - vec3(-1.3, 0.0, 0.0), 1.0);
-        let ring = torus(p - vec3(1.4, -0.4, 0.4), 0.8, 0.28);
-        let block = rounded_box(p - vec3(0.2, -0.5, -1.6), vec3(0.45, 0.5, 0.45), 0.08);
-        let d1 = if ball < floor { vec2(ball, 1.0) } else { vec2(floor, 0.0) };
-        let d2 = if ring < d1.x { vec2(ring, 2.0) } else { d1 };
-        return if block < d2.x { vec2(block, 3.0) } else { d2 };
+    fn closer(a: Surface, b: Surface) -> Surface {
+        return if b.distance < a.distance { b } else { a };
+    }
+
+    // The closest surface and which material it carries.
+    fn scene(p: Vec3) -> Surface {
+        let floor = Surface { distance: p.y + 1.0, material: 0 };
+        let ball = Surface { distance: sphere(p - vec3(-1.3, 0.0, 0.0), 1.0), material: 1 };
+        let ring = Surface { distance: torus(p - vec3(1.4, -0.4, 0.4), 0.8, 0.28), material: 2 };
+        let block = Surface {
+            distance: rounded_box(p - vec3(0.2, -0.5, -1.6), vec3(0.45, 0.5, 0.45), 0.08),
+            material: 3,
+        };
+        return closer(closer(closer(floor, ball), ring), block);
     }
 
     fn normal(p: Vec3) -> Vec3 {
         let e = 0.001;
-        let dx = scene(p + vec3(e, 0.0, 0.0)).x - scene(p - vec3(e, 0.0, 0.0)).x;
-        let dy = scene(p + vec3(0.0, e, 0.0)).x - scene(p - vec3(0.0, e, 0.0)).x;
-        let dz = scene(p + vec3(0.0, 0.0, e)).x - scene(p - vec3(0.0, 0.0, e)).x;
+        let dx = scene(p + vec3(e, 0.0, 0.0)).distance - scene(p - vec3(e, 0.0, 0.0)).distance;
+        let dy = scene(p + vec3(0.0, e, 0.0)).distance - scene(p - vec3(0.0, e, 0.0)).distance;
+        let dz = scene(p + vec3(0.0, 0.0, e)).distance - scene(p - vec3(0.0, 0.0, e)).distance;
         return normalize(vec3(dx, dy, dz));
     }
 
-    // March along a ray; returns (distance, material) or material -1 on a miss.
-    fn march(ro: Vec3, rd: Vec3, limit: Int) -> Vec2 {
-        let state = loop 256 with s = vec3(0.02, -1.0, 1.0)
-            until s.z < 0.0005 || s.x > 40.0 || index() >= limit {
-            let hit = scene(ro + rd * s.x);
-            vec3(s.x + hit.x, hit.y, hit.x)
+    // March along a ray; `done` is true on a hit, false when the ray escaped.
+    fn march(ray: Ray, limit: Int) -> March {
+        let start = March { t: 0.02, material: -1, last: 1.0, done: false };
+        return loop 256 with m = start until m.done || m.t > 40.0 || index() >= limit {
+            let hit = scene(ray.origin + ray.direction * m.t);
+            March {
+                t: m.t + hit.distance,
+                material: hit.material,
+                last: hit.distance,
+                done: hit.distance < 0.0005,
+            }
         };
-        return if state.z < 0.0005 { vec2(state.x, state.y) } else { vec2(state.x, -1.0) };
     }
 
     // Soft shadow: track the smallest cone ratio along the light ray.
-    fn shadow(ro: Vec3, rd: Vec3) -> Float {
-        let s = loop 48 with st = vec2(0.05, 1.0) until st.x > 12.0 || st.y < 0.005 {
-            let h = scene(ro + rd * st.x).x;
-            vec2(st.x + clamp(h, 0.02, 0.5), min(st.y, 10.0 * h / st.x))
+    fn shadow(ray: Ray) -> Float {
+        let s = loop 48 with st = Shadow { t: 0.05, light: 1.0 } until st.t > 12.0 || st.light < 0.005 {
+            let h = scene(ray.origin + ray.direction * st.t).distance;
+            Shadow { t: st.t + clamp(h, 0.02, 0.5), light: min(st.light, 10.0 * h / st.t) }
         };
-        return clamp(s.y, 0.0, 1.0);
+        return clamp(s.light, 0.0, 1.0);
     }
 
-    fn material(id: Float, p: Vec3) -> Vec3 {
+    fn material(id: Int, p: Vec3) -> Vec3 {
         let checker = step(0.5, fract(p.x * 0.5)) + step(0.5, fract(p.z * 0.5));
         let tile = mix(vec3(0.35, 0.35, 0.38), vec3(0.8, 0.8, 0.82), abs(checker - 1.0));
-        return if id < 0.5 { tile }
-            else if id < 1.5 { vec3(0.9, 0.25, 0.2) }
-            else if id < 2.5 { vec3(0.95, 0.75, 0.2) }
+        return if id == 0 { tile }
+            else if id == 1 { vec3(0.9, 0.25, 0.2) }
+            else if id == 2 { vec3(0.95, 0.75, 0.2) }
             else { vec3(0.2, 0.5, 0.9) };
     }
 
@@ -83,20 +98,21 @@ kernel scene.march@1 {
         let up = cross(right, forward);
         let rd = normalize(forward * 1.7 + right * (px.x * aspect) + up * (-px.y));
 
-        let hit = march(ro, rd, steps);
-        let color = if hit.y < 0.0 {
+        let hit = march(Ray { origin: ro, direction: rd }, steps);
+        let color = if !hit.done {
             sky(rd)
         } else {
-            let p = ro + rd * hit.x;
+            let p = ro + rd * hit.t;
             let n = normal(p);
             let light = normalize(vec3(1.5, 2.2, 1.0));
-            let diffuse = max(dot(n, light), 0.0) * shadow(p + n * 0.02, light);
+            let lit_by = shadow(Ray { origin: p + n * 0.02, direction: light });
+            let diffuse = max(dot(n, light), 0.0) * lit_by;
             let ambient = 0.18 + 0.12 * n.y;
             let h = normalize(light - rd);
             let spec = pow(max(dot(n, h), 0.0), 48.0) * 0.5;
-            let base = material(hit.y, p);
+            let base = material(hit.material, p);
             let lit = base * (diffuse * vec3(1.0, 0.95, 0.85) + ambient) + vec3(spec, spec, spec);
-            mix(lit, sky(rd), 1.0 - exp(-hit.x * 0.045))
+            mix(lit, sky(rd), 1.0 - exp(-hit.t * 0.045))
         };
         return vec4(color.x, color.y, color.z, 1.0);
     }
