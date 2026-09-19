@@ -105,6 +105,11 @@ impl GpuBackend {
         &self.adapter_name
     }
 
+    /// The wgpu device, for interfaces and tests that speak wgpu directly.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
     pub(crate) fn parts(&self) -> (&wgpu::Instance, &wgpu::Adapter, &wgpu::Device, &wgpu::Queue) {
         (&self.instance, &self.adapter, &self.device, &self.queue)
     }

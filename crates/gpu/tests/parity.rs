@@ -412,3 +412,80 @@ fn fields_flow_through_the_gpu_exactly() {
     // Element 7 reads its clamped neighbour (itself).
     assert_eq!(image.pixels()[7], [14.0, 7.0, 28.0, 1.0]);
 }
+
+#[test]
+fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
+    let Some(gpu) = gpu() else { return };
+    let mut runtime = orla_runtime::Runtime::with_backend(1 << 22, Box::new(gpu));
+    runtime.set_background(true);
+    let device = runtime
+        .backend()
+        .as_any()
+        .downcast_ref::<GpuBackend>()
+        .unwrap()
+        .device()
+        .clone();
+    let source = |value: &str| {
+        format!(
+            "kernel test.flat@1 {{ requires {{ image.write; }} output result: Image; compute {{ return vec4({value}, 0.5, 0.25, 1.0); }} }}"
+        )
+    };
+    let running = runtime.load(&source("0.125")).unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain {
+            width: 64,
+            height: 64,
+        },
+        context: orla_abi::Context::default(),
+    };
+    // A source the device has not compiled before, long enough that the
+    // worker's job overlaps everything below.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let value = format!("0.{:03}", nanos % 1000);
+    let mut body = String::from("let v0 = 0.0;");
+    for step in 1..400 {
+        body.push_str(&format!(
+            " let v{step} = sin(v{} * {value} + {step}.0);",
+            step - 1
+        ));
+    }
+    let long = format!(
+        "kernel test.flat@1 {{ requires {{ image.write; }} output result: Image; compute {{ {body} return vec4({value}, 0.5, 0.25, 1.0 + 0.0 * v399); }} }}"
+    );
+    let module = compile(&long).unwrap();
+    // This thread opens an error scope, frames push and pop their own
+    // while the worker's scope is open, and the outer scope closes before
+    // the worker's does. wgpu keeps scope stacks per thread only with its
+    // `std` feature; on one shared stack this pop would be out of order.
+    let outer = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let ticket = runtime.prepare_later(module, String::new());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for _ in 0..3 {
+        let output = runtime.execute(&running, &invocation).unwrap()[0];
+        let pixel = runtime.image(output).unwrap().pixels()[0];
+        assert_eq!(pixel, [0.125, 0.5, 0.25, 1.0]);
+        runtime.host_mut().release_image(output).unwrap();
+    }
+    assert!(pollster::block_on(outer.pop()).is_none());
+    let mut waited = 0;
+    let candidate = loop {
+        if let Some(result) = runtime.poll(ticket) {
+            break result.unwrap();
+        }
+        let output = runtime.execute(&running, &invocation).unwrap()[0];
+        runtime.host_mut().release_image(output).unwrap();
+        waited += 1;
+        assert!(waited < 5000, "the worker never delivered");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
+    let version = runtime.detach(candidate, "test.later@1".parse().unwrap());
+    let output = runtime.execute(&version, &invocation).unwrap()[0];
+    let pixel = runtime.image(output).unwrap().pixels()[0];
+    assert_eq!(pixel[0], value.parse::<f32>().unwrap());
+    runtime.host_mut().release_image(output).unwrap();
+}
