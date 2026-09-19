@@ -605,7 +605,14 @@ impl Evaluator {
                 else {
                     continue;
                 };
-                if !orla_ir::samples_only(consumer.version.module(), input_index as u32)
+                // Native operations have no IR to inline or be inlined into.
+                let (Some(consumer_module), Some(producer_module)) = (
+                    consumer.version.module(),
+                    groups[producer_position].version.module(),
+                ) else {
+                    continue;
+                };
+                if !orla_ir::samples_only(consumer_module, input_index as u32)
                     || groups[producer_position].version.manifest().outputs.len() != 1
                 {
                     continue;
@@ -615,9 +622,9 @@ impl Evaluator {
                 parts.extend(producer.parts.iter().cloned());
                 let fuse = || {
                     orla_ir::fuse(
-                        consumer.version.module(),
+                        consumer_module,
                         input_index as u32,
-                        producer.version.module(),
+                        producer_module,
                         &producer.node.id.0,
                     )
                 };

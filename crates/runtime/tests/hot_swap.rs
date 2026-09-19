@@ -116,7 +116,10 @@ fn execution_is_scoped_to_the_manifest_capabilities() {
         runtime.host().read_pixel(outputs[0], 1, 0).unwrap(),
         [1.0, 0.0, 0.0, 1.0]
     );
-    assert_eq!(runtime.kernels().count(), 1);
+    assert_eq!(
+        runtime.kernels().filter(|v| v.native().is_none()).count(),
+        1
+    );
     let _ = Value::Float(0.0);
 }
 
@@ -166,4 +169,83 @@ fn background_preparation_resolves_through_tickets() {
     let detached = runtime.detach(kept, "fused.k@1".parse().unwrap());
     assert_eq!(run(&mut runtime, &detached, input)[0], 0.2);
     assert!(runtime.kernel(&"fused.k@1".parse().unwrap()).is_none());
+}
+
+#[test]
+fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
+    use orla_runtime::NativeOp;
+    let mut runtime = Runtime::new(1 << 16);
+    let raster = runtime.kernel(&NativeOp::Rasterize.id()).unwrap();
+    assert_eq!(raster.generation(), Generation(0));
+    assert_eq!(raster.native(), Some(NativeOp::Rasterize));
+    assert!(raster.module().is_none());
+    assert_eq!(raster.manifest().inputs.len(), 2);
+    assert_eq!(raster.manifest().outputs[0].ty.to_string(), "Grid<S2>");
+    assert!(raster.source().contains("native.rasterize@1"));
+
+    // A Kernel under the native id is refused, whatever it expects.
+    let candidate = runtime
+        .prepare("kernel native.rasterize@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }")
+        .unwrap();
+    let error = runtime.publish(candidate, Expect::Any).unwrap_err();
+    assert!(error.to_string().contains("native operation"), "{error}");
+
+    // The CPU backend executes it: a triangle over an 8x8 grid.
+    let vertex = |clip: [f32; 4]| -> Vec<u32> {
+        clip.iter()
+            .chain([0.0f32, 0.0, 1.0, 0.5, 0.5].iter())
+            .map(|v| v.to_bits())
+            .collect()
+    };
+    let mut words = Vec::new();
+    words.extend(vertex([-1.0, -1.0, 0.5, 1.0]));
+    words.extend(vertex([1.0, -1.0, 0.5, 1.0]));
+    words.extend(vertex([1.0, 1.0, 0.5, 1.0]));
+    let host = runtime.host_mut();
+    let vertices = host
+        .adopt(
+            orla_runtime::FieldData::from_words(
+                orla_cpu::raster::vertex_schema(),
+                Domain::Rows(3),
+                words,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let triangles = host
+        .adopt(
+            orla_runtime::FieldData::from_words(
+                orla_cpu::raster::triangle_schema(),
+                Domain::Rows(1),
+                vec![0, 1, 2],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![vertices, triangles],
+        params: vec![],
+        domain: Domain::Grid(8, 8),
+        context: Context::default(),
+    };
+    let surface = runtime.execute(&raster, &invocation).unwrap()[0];
+    let words = runtime.host().data(surface).unwrap().words();
+    // Bottom-right pixel is inside the triangle, top-left is not.
+    let id = |x: usize, y: usize| words[(y * 8 + x) * 7 + 6] as i32;
+    assert_eq!(id(7, 7), 0);
+    assert_eq!(id(0, 0), -1);
+    assert_eq!(f32::from_bits(words[(7 * 8 + 7) * 7]), 0.5);
+
+    // A grid of the wrong shape or layout is refused with the contract.
+    let bad = Invocation {
+        inputs: vec![triangles, vertices],
+        params: vec![],
+        domain: Domain::Grid(8, 8),
+        context: Context::default(),
+    };
+    let error = runtime.execute(&raster, &bad).unwrap_err();
+    assert!(
+        error.to_string().contains("`vertices` must be rows of"),
+        "{error}"
+    );
 }

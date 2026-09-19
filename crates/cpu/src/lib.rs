@@ -12,6 +12,7 @@
 //! pixel in row-major order is the one reported.
 
 mod eval;
+pub mod raster;
 
 use std::fmt;
 

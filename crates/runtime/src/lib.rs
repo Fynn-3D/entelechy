@@ -26,12 +26,94 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
 pub use orla_abi::{
-    Context, Domain, Host, HostError, Image, ImageHandle, InputState, Invocation, Pixel, Scope,
-    Shape, Value,
+    Context, Domain, FieldData, Host, HostError, Image, ImageHandle, InputState, Invocation, Pixel,
+    Scope, Shape, Value,
 };
 pub use orla_compiler::CompileError;
 pub use orla_cpu::ExecutionError;
+use orla_ir::{Capabilities, Capability, Port, PortType, Type};
 pub use orla_ir::{KernelId, Manifest, Validated};
+
+/// An operation a backend performs natively: device access, not a Kernel.
+/// Native operations are published by the runtime itself, under
+/// [`Generation`] zero, and cannot be replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NativeOp {
+    /// Rasterizes `vertices` and `triangles` into a `surface` grid; see
+    /// [`orla_cpu::raster`] for the contract.
+    Rasterize,
+}
+
+impl NativeOp {
+    /// Every native operation.
+    pub const ALL: [NativeOp; 1] = [NativeOp::Rasterize];
+
+    /// The id a graph binds to.
+    pub fn id(self) -> KernelId {
+        match self {
+            Self::Rasterize => KernelId::new("native.rasterize", 1).expect("valid id"),
+        }
+    }
+
+    /// The manifest: ports by layout and shape, capabilities as a Kernel
+    /// would declare them. Element types are anonymous structs.
+    pub fn manifest(self) -> Manifest {
+        match self {
+            Self::Rasterize => Manifest {
+                id: self.id(),
+                requires: [Capability::FieldRead, Capability::FieldWrite]
+                    .into_iter()
+                    .collect::<Capabilities>(),
+                inputs: vec![
+                    Port {
+                        name: "vertices".into(),
+                        ty: PortType {
+                            element: Type::Struct(0),
+                            shape: Shape::Rows,
+                            schema: orla_cpu::raster::vertex_schema(),
+                        },
+                    },
+                    Port {
+                        name: "triangles".into(),
+                        ty: PortType {
+                            element: Type::Struct(1),
+                            shape: Shape::Rows,
+                            schema: orla_cpu::raster::triangle_schema(),
+                        },
+                    },
+                ],
+                params: vec![],
+                outputs: vec![Port {
+                    name: "surface".into(),
+                    ty: PortType {
+                        element: Type::Struct(2),
+                        shape: Shape::Grid,
+                        schema: orla_cpu::raster::surface_schema(),
+                    },
+                }],
+            },
+        }
+    }
+
+    /// The contract as text, for inspection where a Kernel would show its
+    /// source.
+    pub fn source(self) -> &'static str {
+        match self {
+            Self::Rasterize => {
+                "\
+// native.rasterize@1: the backend's rasterizer.
+//   input vertices: Rows<{ clip: Vec4; normal: Vec3; uv: Vec2; }>
+//   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
+//   output surface: Grid<{ depth: Float; normal: Vec3; uv: Vec2; id: Int; }>
+// `clip` is a clip-space position (x, y in [-1, 1] after the divide by w,
+// z in [0, 1]); the nearest fragment at each pixel centre is written with
+// perspective-correct attributes and its triangle's row as `id`; empty
+// pixels hold depth 1, zeros, and id -1. No culling, no clipping.
+"
+            }
+        }
+    }
+}
 
 /// Backend-owned state built from a module at preparation time.
 pub trait Prepared: Any + Send + Sync {
@@ -62,6 +144,22 @@ pub trait Backend: Send + Sync {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<ImageHandle>, ExecutionError>;
+
+    /// Executes a native operation. The default is for backends that
+    /// have none.
+    fn execute_native(
+        &self,
+        op: NativeOp,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+        let _ = (invocation, scope);
+        Err(ExecutionError::Device(format!(
+            "backend `{}` does not implement {}",
+            self.name(),
+            op.id()
+        )))
+    }
 
     /// Downloads the bytes of a resource this backend left resident:
     /// `byte_len` bytes of little-endian words. The default is for backends
@@ -106,6 +204,17 @@ impl Backend for orla_cpu::CpuBackend {
     ) -> Result<Vec<ImageHandle>, ExecutionError> {
         orla_cpu::CpuBackend::execute(self, module, invocation, scope)
     }
+
+    fn execute_native(
+        &self,
+        op: NativeOp,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+        match op {
+            NativeOp::Rasterize => orla_cpu::raster::rasterize(invocation, scope),
+        }
+    }
 }
 
 /// Monotonic counter identifying one published version. Generations are
@@ -119,13 +228,23 @@ impl fmt::Display for Generation {
     }
 }
 
+/// What a version executes: compiled IR the backend prepared, or one of
+/// the backend's native operations.
+enum Body {
+    Kernel {
+        module: Box<Validated>,
+        prepared: Box<dyn Prepared>,
+    },
+    Native(NativeOp),
+}
+
 /// An immutable published Kernel version.
 pub struct KernelVersion {
     id: KernelId,
     generation: Generation,
-    module: Validated,
+    manifest: Manifest,
     source: String,
-    prepared: Box<dyn Prepared>,
+    body: Body,
 }
 
 impl fmt::Debug for KernelVersion {
@@ -147,12 +266,23 @@ impl KernelVersion {
 
     /// The manifest.
     pub fn manifest(&self) -> &Manifest {
-        &self.module.manifest
+        &self.manifest
     }
 
-    /// The validated IR.
-    pub fn module(&self) -> &Validated {
-        &self.module
+    /// The validated IR, or `None` for a native operation.
+    pub fn module(&self) -> Option<&Validated> {
+        match &self.body {
+            Body::Kernel { module, .. } => Some(module),
+            Body::Native(_) => None,
+        }
+    }
+
+    /// The native operation this version stands for, if it is one.
+    pub fn native(&self) -> Option<NativeOp> {
+        match &self.body {
+            Body::Native(op) => Some(*op),
+            Body::Kernel { .. } => None,
+        }
     }
 
     /// The source this version was compiled from.
@@ -240,6 +370,13 @@ impl fmt::Display for StaleCandidate {
             Some(generation) => generation.to_string(),
             None => "nothing".to_owned(),
         };
+        if self.actual == Some(Generation(0)) {
+            return write!(
+                f,
+                "cannot publish {}: it is a native operation of the backend",
+                self.id
+            );
+        }
         match self.expected {
             Expect::Absent => write!(
                 f,
@@ -346,7 +483,7 @@ impl Runtime {
 
     /// Creates a runtime over the given backend.
     pub fn with_backend(budget_words: usize, backend: Box<dyn Backend>) -> Self {
-        Self {
+        let mut runtime = Self {
             host: Host::new(budget_words),
             backend: Arc::from(backend),
             kernels: BTreeMap::new(),
@@ -355,7 +492,22 @@ impl Runtime {
             next_ticket: 1,
             ready: BTreeMap::new(),
             discarded: BTreeSet::new(),
+        };
+        // Native operations are published from the start, at generation
+        // zero, so graphs bind to them like any Kernel.
+        for op in NativeOp::ALL {
+            runtime.kernels.insert(
+                op.id(),
+                Arc::new(KernelVersion {
+                    id: op.id(),
+                    generation: Generation(0),
+                    manifest: op.manifest(),
+                    source: op.source().to_owned(),
+                    body: Body::Native(op),
+                }),
+            );
         }
+        runtime
     }
 
     /// Starts or stops the preparation worker. With a worker,
@@ -473,9 +625,12 @@ impl Runtime {
         Arc::new(KernelVersion {
             id,
             generation,
-            module: candidate.module,
+            manifest: candidate.module.manifest.clone(),
             source: candidate.source,
-            prepared: candidate.prepared,
+            body: Body::Kernel {
+                module: Box::new(candidate.module),
+                prepared: candidate.prepared,
+            },
         })
     }
 
@@ -586,6 +741,13 @@ impl Runtime {
     ) -> Result<Arc<KernelVersion>, StaleCandidate> {
         let id = candidate.id().clone();
         let actual = self.kernels.get(&id).map(|version| version.generation);
+        if self.kernels.get(&id).is_some_and(|v| v.native().is_some()) {
+            return Err(StaleCandidate {
+                id,
+                expected: expect,
+                actual,
+            });
+        }
         let matches = match expect {
             Expect::Absent => actual.is_none(),
             Expect::Generation(generation) => actual == Some(generation),
@@ -603,9 +765,12 @@ impl Runtime {
         let version = Arc::new(KernelVersion {
             id: id.clone(),
             generation,
-            module: candidate.module,
+            manifest: candidate.module.manifest.clone(),
             source: candidate.source,
-            prepared: candidate.prepared,
+            body: Body::Kernel {
+                module: Box::new(candidate.module),
+                prepared: candidate.prepared,
+            },
         });
         self.kernels.insert(id, Arc::clone(&version));
         Ok(version)
@@ -642,11 +807,12 @@ impl Runtime {
     ) -> Result<Vec<ImageHandle>, ExecutionError> {
         let granted = version.manifest().requires.clone();
         let mut scope = Scope::new(&mut self.host, granted);
-        self.backend.execute(
-            version.prepared.as_ref(),
-            &version.module,
-            invocation,
-            &mut scope,
-        )
+        match &version.body {
+            Body::Kernel { module, prepared } => {
+                self.backend
+                    .execute(prepared.as_ref(), module, invocation, &mut scope)
+            }
+            Body::Native(op) => self.backend.execute_native(*op, invocation, &mut scope),
+        }
     }
 }
