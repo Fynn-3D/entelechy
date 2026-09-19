@@ -2,25 +2,17 @@
 //! Graph Runtime (L6).
 //!
 //! A Graph is a program: nodes bound to stable [`KernelId`]s, typed
-//! connections between their ports, and one designated output. The Graph
-//! owns composition; each Kernel owns its computation. The [`Evaluator`]
-//! executes a Graph against a [`Runtime`], caches every node's outputs, and
+//! connections between their ports, and named outputs. The Graph owns
+//! composition; each Kernel owns its computation. The [`Evaluator`]
+//! executes a Graph against a [`Runtime`], caches every node's outputs,
 //! re-executes a node only when its Kernel generation, parameters, domain,
-//! or upstream results changed.
+//! context, or upstream results changed, and commits state between
+//! evaluations.
 //!
-//! Graphs are written in the small declarative `.osn` format:
-//!
-//! ```text
-//! graph demo
-//! input photo
-//! node gray = image.grayscale@1
-//!   source <- photo
-//!   amount = 1.0
-//! node blocks = image.pixelate@1
-//!   source <- gray.result
-//!   size = 8
-//! output blocks.result
-//! ```
+//! Graphs are written in `.osn` documents, parsed by the language frontend
+//! and lowered here by [`Graph::from_document`]. Inline Kernels are reported
+//! back to the loader for publication; the Graph itself binds every node by
+//! id and never holds Kernel bodies.
 
 mod document;
 mod evaluate;
@@ -28,7 +20,7 @@ mod evaluate;
 use std::collections::BTreeMap;
 use std::fmt;
 
-pub use document::DocumentError;
+pub use document::{DocumentError, InlineKernel, Lowered, anonymous_id};
 pub use evaluate::{EvaluateError, Evaluator, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
@@ -116,8 +108,8 @@ pub struct Graph {
     pub externals: Vec<String>,
     /// Nodes in document order.
     pub nodes: Vec<Node>,
-    /// The node and port whose image is the graph result.
-    pub output: (NodeId, String),
+    /// Named results in document order; interfaces present the first.
+    pub outputs: Vec<(String, Source)>,
 }
 
 /// Structural problems with a graph.
@@ -136,8 +128,10 @@ pub enum GraphError {
     },
     /// Nodes depend on each other in a cycle.
     Cycle(Vec<NodeId>),
-    /// The output refers to an unknown node.
-    UnknownOutput(NodeId),
+    /// A graph output refers to an unknown source.
+    UnknownOutput(Source),
+    /// The graph declares no output.
+    NoOutput,
     /// A `<~` binding reads an external image; only node outputs carry
     /// state between evaluations.
     FeedbackNeedsNode {
@@ -166,7 +160,8 @@ impl fmt::Display for GraphError {
                     .join(" -> ");
                 write!(f, "nodes form a cycle: {names}")
             }
-            Self::UnknownOutput(node) => write!(f, "output refers to unknown node `{node}`"),
+            Self::UnknownOutput(source) => write!(f, "output refers to unknown source `{source}`"),
+            Self::NoOutput => write!(f, "the graph declares no output"),
             Self::FeedbackNeedsNode { node, port } => write!(
                 f,
                 "node `{node}` port `{port}` reads previous state from an external image; use a node output"
@@ -178,9 +173,41 @@ impl fmt::Display for GraphError {
 impl std::error::Error for GraphError {}
 
 impl Graph {
-    /// Parses a `.osn` document.
+    /// Parses a `.osn` document that references published Kernels only.
+    /// Loaders that also publish inline Kernels use [`Graph::from_document`].
     pub fn parse(text: &str) -> Result<Self, DocumentError> {
-        document::parse(text)
+        let document = orla_language::parse_document(text).map_err(DocumentError::from)?;
+        let lowered = Self::from_document(&document, "graph")?;
+        if let Some(inline) = lowered.inline.first() {
+            return Err(DocumentError {
+                span: inline
+                    .kernel
+                    .id
+                    .as_ref()
+                    .map(|id| id.span)
+                    .unwrap_or_default(),
+                message: format!(
+                    "node `{}` carries an inline kernel; load this document through a session",
+                    inline.node
+                ),
+            });
+        }
+        Ok(lowered.graph)
+    }
+
+    /// Lowers a parsed document into a Graph named `name`, reporting inline
+    /// Kernels for the loader to publish. Anonymous inline Kernels are named
+    /// by [`anonymous_id`].
+    pub fn from_document<'a>(
+        document: &'a orla_language::Document,
+        name: &str,
+    ) -> Result<Lowered<'a>, DocumentError> {
+        document::lower(document, name)
+    }
+
+    /// The first declared output.
+    pub fn primary_output(&self) -> Option<&(String, Source)> {
+        self.outputs.first()
     }
 
     /// Looks up a node.
@@ -231,7 +258,18 @@ impl Graph {
                 }
             }
         }
-        index_of(&self.output.0).ok_or_else(|| GraphError::UnknownOutput(self.output.0.clone()))?;
+        if self.outputs.is_empty() {
+            return Err(GraphError::NoOutput);
+        }
+        for (_, source) in &self.outputs {
+            let known = match source {
+                Source::External(name) => self.externals.contains(name),
+                Source::Node { node, .. } => index_of(node).is_some(),
+            };
+            if !known {
+                return Err(GraphError::UnknownOutput(source.clone()));
+            }
+        }
 
         // Depth-first topological sort with cycle detection.
         #[derive(Clone, Copy, PartialEq)]
@@ -299,30 +337,40 @@ impl Graph {
 
 impl fmt::Display for Graph {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "graph {}", self.name)?;
+        writeln!(f, "// {}", self.name)?;
         for external in &self.externals {
-            writeln!(f, "input {external}")?;
+            writeln!(f, "input {external}: Image;")?;
         }
         for node in &self.nodes {
-            writeln!(f, "node {} = {}", node.id, node.kernel)?;
+            writeln!(f)?;
+            writeln!(f, "node {}: {} {{", node.id, node.kernel)?;
             for (port, binding) in &node.inputs {
-                writeln!(f, "  {port} {binding}")?;
+                writeln!(f, "    {port} {binding};")?;
             }
             for (name, value) in &node.params {
-                write!(f, "  {name} =")?;
-                match value {
-                    Value::Float(v) => writeln!(f, " {v:?}")?,
-                    Value::Int(v) => writeln!(f, " {v}")?,
-                    Value::Bool(v) => writeln!(f, " {v}")?,
-                    Value::Vec2([x, y]) => writeln!(f, " {x:?} {y:?}")?,
-                    Value::Vec3([x, y, z]) => writeln!(f, " {x:?} {y:?} {z:?}")?,
-                    Value::Vec4([x, y, z, w]) => writeln!(f, " {x:?} {y:?} {z:?} {w:?}")?,
-                }
+                writeln!(f, "    {name} = {};", literal_text(value))?;
             }
             if let Some(domain) = node.domain {
-                writeln!(f, "  domain {} {}", domain.width, domain.height)?;
+                writeln!(f, "    domain = vec2({}, {});", domain.width, domain.height)?;
             }
+            writeln!(f, "}}")?;
         }
-        writeln!(f, "output {}.{}", self.output.0, self.output.1)
+        writeln!(f)?;
+        for (name, source) in &self.outputs {
+            writeln!(f, "output {name} <- {source};")?;
+        }
+        Ok(())
+    }
+}
+
+/// Renders a value in the literal grammar shared with `.orla`.
+fn literal_text(value: &Value) -> String {
+    match value {
+        Value::Float(v) => format!("{v:?}"),
+        Value::Int(v) => v.to_string(),
+        Value::Bool(v) => v.to_string(),
+        Value::Vec2([x, y]) => format!("vec2({x:?}, {y:?})"),
+        Value::Vec3([x, y, z]) => format!("vec3({x:?}, {y:?}, {z:?})"),
+        Value::Vec4([x, y, z, w]) => format!("vec4({x:?}, {y:?}, {z:?}, {w:?})"),
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use orla_graph::{Context, EvaluateError, Evaluator, Graph, GraphError, NodeId};
+use orla_runtime::{ExecutionError, Runtime};
 
 fn at(time: f32) -> Context {
     Context {
@@ -8,20 +9,15 @@ fn at(time: f32) -> Context {
         ..Context::default()
     }
 }
-use orla_runtime::{ExecutionError, Runtime};
 
 const GRADIENT: &str = "kernel image.gradient@1 { requires { image.write; } output result: Image; compute { let uv = coord() / (domain() - vec2(1.0, 1.0)); return vec4(uv.x, uv.y, 0.0, 1.0); } }";
 const GRAYSCALE: &str = "kernel image.grayscale@1 { requires { image.read; image.write; } input source: Image; param amount: Float = 1.0; output result: Image; compute { let c = sample(source); let g = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return mix(c, vec4(g, g, g, c.a), amount); } }";
 const INVERT: &str = "kernel image.invert@1 { requires { image.read; image.write; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a); } }";
 const DOCUMENT: &str = "
-graph demo
-node source = image.gradient@1
-  domain 3 3
-node gray = image.grayscale@1
-  source <- source.result
-node final = image.invert@1
-  source <- gray.result
-output final.result
+node source: image.gradient@1 { domain = vec2(3, 3); }
+node gray: image.grayscale@1 { source <- source.result; }
+node final: image.invert@1 { source <- gray.result; }
+output result <- final.result;
 ";
 
 fn ids(names: &[&str]) -> Vec<NodeId> {
@@ -54,6 +50,7 @@ fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
     let pixel = runtime.host().read_pixel(report.output, 2, 0).unwrap();
     near(pixel, [1.0 - 0.2126, 1.0 - 0.2126, 1.0 - 0.2126, 1.0]);
     assert_eq!(runtime.host().live_images(), 3);
+    assert_eq!(report.outputs[0].0, "result");
 
     let again = evaluator
         .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
@@ -118,7 +115,13 @@ fn parameter_and_structure_changes_are_tracked() {
     );
 
     graph.nodes.pop();
-    graph.output = (NodeId("gray".into()), "result".into());
+    graph.outputs = vec![(
+        "result".into(),
+        orla_graph::Source::Node {
+            node: NodeId("gray".into()),
+            port: "result".into(),
+        },
+    )];
     let report = evaluator
         .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
         .unwrap();
@@ -136,7 +139,7 @@ fn parameter_and_structure_changes_are_tracked() {
 #[test]
 fn externals_feed_graph_inputs() {
     let graph = Graph::parse(
-        "graph g\ninput photo\nnode inv = image.invert@1\n  source <- photo\noutput inv.result",
+        "input photo: Image;\nnode inv: image.invert@1 { source <- photo; }\noutput result <- inv.result;",
     )
     .unwrap();
     let mut runtime = runtime();
@@ -189,7 +192,8 @@ fn failures_are_attributed_and_last_good_results_survive() {
     assert!(runtime.host().read_pixel(first.output, 0, 0).is_ok());
 
     let missing =
-        Graph::parse("graph g\nnode a = image.missing@1\n  domain 1 1\noutput a.result").unwrap();
+        Graph::parse("node a: image.missing@1 { domain = vec2(1, 1); }\noutput r <- a.result;")
+            .unwrap();
     let error = evaluator
         .evaluate(
             &missing,
@@ -206,16 +210,18 @@ fn failures_are_attributed_and_last_good_results_survive() {
 
 #[test]
 fn structural_errors_are_reported_before_execution() {
-    let cyclic = Graph::parse("graph g\nnode a = image.invert@1\n  source <- b.result\nnode b = image.invert@1\n  source <- a.result\noutput a.result").unwrap();
+    let cyclic = Graph::parse("node a: image.invert@1 { source <- b.result; }\nnode b: image.invert@1 { source <- a.result; }\noutput r <- a.result;").unwrap();
     assert!(matches!(cyclic.order(), Err(GraphError::Cycle(_))));
     let dangling =
-        Graph::parse("graph g\nnode a = image.invert@1\n  source <- nowhere\noutput a.result")
+        Graph::parse("node a: image.invert@1 { source <- nowhere; }\noutput r <- a.result;")
             .unwrap();
     assert!(matches!(
         dangling.order(),
         Err(GraphError::UnknownSource { .. })
     ));
-    let no_domain = Graph::parse("graph g\nnode a = image.gradient@1\noutput a.result").unwrap();
+    let no_output = Graph::parse("node a: image.gradient@1 { domain = vec2(1, 1); }").unwrap();
+    assert!(matches!(no_output.order(), Err(GraphError::NoOutput)));
+    let no_domain = Graph::parse("node a: image.gradient@1 { }\noutput r <- a.result;").unwrap();
     let mut runtime = runtime();
     let error = Evaluator::new()
         .evaluate(
@@ -227,7 +233,7 @@ fn structural_errors_are_reported_before_execution() {
         .unwrap_err();
     assert_eq!(error, EvaluateError::NoDomain(NodeId("a".into())));
     let bad_port = Graph::parse(
-        "graph g\nnode a = image.gradient@1\n  domain 1 1\n  gain = 2\noutput a.result",
+        "node a: image.gradient@1 { domain = vec2(1, 1); gain = 2; }\noutput r <- a.result;",
     )
     .unwrap();
     let error = Evaluator::new()
@@ -250,7 +256,7 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
     runtime
         .load("kernel image.pulse@1 { requires { image.read; image.write; time.read; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * fract(time()), c.g, c.b, c.a); } }")
         .unwrap();
-    let graph = Graph::parse("graph g\nnode source = image.gradient@1\n  domain 2 2\nnode pulse = image.pulse@1\n  source <- source.result\noutput pulse.result").unwrap();
+    let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
     let mut evaluator = Evaluator::new();
     let first = evaluator
         .evaluate(&graph, &mut runtime, &BTreeMap::new(), &at(0.25))
@@ -274,12 +280,9 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
 const ZERO: &str = "kernel test.zero@1 { requires { image.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }";
 const INCREMENT: &str = "kernel test.increment@1 { requires { image.read; image.write; } input previous: Image; param by: Float = 1.0; output result: Image; compute { let c = sample(previous); return vec4(c.r + by, c.g, c.b, 1.0); } }";
 const COUNTER: &str = "
-graph counter
-node seed = test.zero@1
-  domain 2 2
-node count = test.increment@1
-  previous <~ count.result from seed.result
-output count.result
+node seed: test.zero@1 { domain = vec2(2, 2); }
+node count: test.increment@1 { previous <~ count.result from seed.result; }
+output result <- count.result;
 ";
 
 fn red(runtime: &Runtime, handle: orla_runtime::ImageHandle) -> f32 {
@@ -341,10 +344,16 @@ fn a_failed_evaluation_commits_nothing() {
         .load("kernel test.gate@1 { requires { image.read; image.write; } input source: Image; param d: Int = 1; output result: Image; compute { let q = 1 / d; return sample(source) * float(q); } }")
         .unwrap();
     let mut graph = Graph::parse(&format!(
-        "{COUNTER}node gate = test.gate@1\n  source <- count.result\n  d = 1\n"
+        "{COUNTER}node gate: test.gate@1 {{ source <- count.result; d = 1; }}\n"
     ))
     .unwrap();
-    graph.output = (NodeId("gate".into()), "result".into());
+    graph.outputs = vec![(
+        "result".into(),
+        orla_graph::Source::Node {
+            node: NodeId("gate".into()),
+            port: "result".into(),
+        },
+    )];
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     let report = evaluator
@@ -381,17 +390,17 @@ fn a_failed_evaluation_commits_nothing() {
 
 #[test]
 fn feedback_edges_are_not_dependencies_and_must_name_nodes() {
-    let ring = Graph::parse("graph g\nnode a = test.increment@1\n  previous <~ b.result from seed.result\nnode b = test.increment@1\n  previous <~ a.result from seed.result\nnode seed = test.zero@1\n  domain 1 1\noutput a.result").unwrap();
+    let ring = Graph::parse("node a: test.increment@1 { previous <~ b.result from seed.result; }\nnode b: test.increment@1 { previous <~ a.result from seed.result; }\nnode seed: test.zero@1 { domain = vec2(1, 1); }\noutput r <- a.result;").unwrap();
     assert!(ring.order().is_ok(), "mutual feedback is not a cycle");
-    let bad = Graph::parse("graph g\ninput photo\nnode a = test.increment@1\n  previous <~ photo from photo\noutput a.result").unwrap();
+    let bad = Graph::parse("input photo: Image;\nnode a: test.increment@1 { previous <~ photo from photo; }\noutput r <- a.result;").unwrap();
     assert!(matches!(
         bad.order(),
         Err(GraphError::FeedbackNeedsNode { .. })
     ));
     let error =
-        Graph::parse("graph g\nnode a = test.increment@1\n  previous <~ a.result\noutput a.result")
+        Graph::parse("node a: test.increment@1 { previous <~ a.result; }\noutput r <- a.result;")
             .unwrap_err();
-    assert!(error.message.contains("from source"), "{error}");
+    assert!(error.message.contains("`from`"), "{error}");
 }
 
 #[test]
@@ -400,7 +409,7 @@ fn input_reading_nodes_re_execute_when_input_changes() {
     runtime
         .load("kernel image.paint@1 { requires { image.read; image.write; input.read; } input source: Image; output result: Image; compute { let c = sample(source); let near = length(coord() - pointer()) < 1.5; let hit = if near && pointer_down() { 1.0 } else { 0.0 }; return vec4(hit, float(key(65)), c.b, c.a); } }")
         .unwrap();
-    let graph = Graph::parse("graph g\nnode source = image.gradient@1\n  domain 4 4\nnode paint = image.paint@1\n  source <- source.result\noutput paint.result").unwrap();
+    let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(4, 4); }\nnode paint: image.paint@1 { source <- source.result; }\noutput r <- paint.result;").unwrap();
     let mut evaluator = Evaluator::new();
     let mut context = Context::default();
     let first = evaluator

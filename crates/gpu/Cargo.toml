@@ -16,6 +16,7 @@ pollster = "0.4"
 
 [dev-dependencies]
 orla-compiler = { path = "../compiler" }
+orla-language = { path = "../language" }
 
 [lints]
 workspace = true

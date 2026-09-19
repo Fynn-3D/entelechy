@@ -83,8 +83,48 @@ fn structs(kernel: &Kernel) -> Result<Vec<StructDef>, CompileError> {
     Ok(structs)
 }
 
-pub(crate) fn lower(kernel: &Kernel) -> Result<Module, CompileError> {
-    let manifest = manifest(kernel)?;
+/// Evaluates a literal without a declared type: integers stay `Int`.
+pub(crate) fn literal(expr: &Expr) -> Result<Value, CompileError> {
+    match &expr.kind {
+        ExprKind::Float(value) => Ok(Value::Float(*value)),
+        ExprKind::Int(value) => Ok(Value::Int(*value)),
+        ExprKind::Bool(value) => Ok(Value::Bool(*value)),
+        ExprKind::Neg(inner) => match literal(inner)? {
+            Value::Float(v) => Ok(Value::Float(-v)),
+            Value::Int(v) => v
+                .checked_neg()
+                .map(Value::Int)
+                .ok_or_else(|| semantic(expr.span, "integer literal overflows when negated")),
+            Value::Bool(_) => Err(semantic(expr.span, "cannot negate a Bool")),
+            Value::Vec2([x, y]) => Ok(Value::Vec2([-x, -y])),
+            Value::Vec3([x, y, z]) => Ok(Value::Vec3([-x, -y, -z])),
+            Value::Vec4([x, y, z, w]) => Ok(Value::Vec4([-x, -y, -z, -w])),
+        },
+        ExprKind::Call(name, _) => {
+            let ty = match name.as_str() {
+                "vec2" => Type::Vec2,
+                "vec3" => Type::Vec3,
+                "vec4" => Type::Vec4,
+                _ => {
+                    return Err(semantic(
+                        expr.span,
+                        format!(
+                            "`{name}` is not a literal; only numbers, booleans, and vec2/vec3/vec4 are"
+                        ),
+                    ));
+                }
+            };
+            constant(expr, ty)
+        }
+        _ => Err(semantic(
+            expr.span,
+            "expected a literal: a number, `true`/`false`, or vec2/vec3/vec4",
+        )),
+    }
+}
+
+pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, CompileError> {
+    let manifest = manifest(kernel, id)?;
     let structs = structs(kernel)?;
     let mut functions: Vec<(String, Function)> = Vec::new();
     for declaration in &kernel.functions {
@@ -108,7 +148,7 @@ pub(crate) fn lower(kernel: &Kernel) -> Result<Module, CompileError> {
             Some(port) => port.ty,
             None => {
                 return Err(semantic(
-                    kernel.id.span,
+                    kernel.id.as_ref().map(|id| id.span).unwrap_or_default(),
                     "kernel declares no output; add `output result: Image;`",
                 ));
             }
@@ -134,9 +174,18 @@ pub(crate) fn lower(kernel: &Kernel) -> Result<Module, CompileError> {
     })
 }
 
-fn manifest(kernel: &Kernel) -> Result<Manifest, CompileError> {
-    let id = KernelId::from_str(&kernel.id.value)
-        .map_err(|error| semantic(kernel.id.span, error.to_string()))?;
+fn manifest(kernel: &Kernel, given: Option<&KernelId>) -> Result<Manifest, CompileError> {
+    let id = match (&kernel.id, given) {
+        (Some(written), _) => KernelId::from_str(&written.value)
+            .map_err(|error| semantic(written.span, error.to_string()))?,
+        (None, Some(given)) => given.clone(),
+        (None, None) => {
+            return Err(semantic(
+                Span::default(),
+                "an anonymous kernel can only live inside a node",
+            ));
+        }
+    };
     let requires: orla_ir::Capabilities = kernel
         .requires
         .iter()
@@ -178,7 +227,7 @@ fn manifest(kernel: &Kernel) -> Result<Manifest, CompileError> {
     }
     if outputs.len() != 1 {
         return Err(semantic(
-            kernel.id.span,
+            kernel.id.as_ref().map(|id| id.span).unwrap_or_default(),
             format!(
                 "a kernel declares exactly one output in this language version, found {}",
                 outputs.len()

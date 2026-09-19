@@ -1,4 +1,4 @@
-//! Tokenizer for `.orla` sources.
+//! Tokenizer for Orla documents.
 
 use crate::{ParseError, Span};
 
@@ -7,6 +7,7 @@ pub(crate) enum Token {
     Ident(String),
     Int(i32),
     Float(f32),
+    Str(String),
     Punct(&'static str),
     Eof,
 }
@@ -17,27 +18,40 @@ impl Token {
             Self::Ident(name) => format!("`{name}`"),
             Self::Int(value) => format!("`{value}`"),
             Self::Float(value) => format!("`{value:?}`"),
+            Self::Str(value) => format!("`\"{value}\"`"),
             Self::Punct(punct) => format!("`{punct}`"),
             Self::Eof => "end of file".to_owned(),
         }
     }
 }
 
-const PUNCTS: [&str; 24] = [
-    "->", "<=", ">=", "==", "!=", "&&", "||", "{", "}", "(", ")", ":", ";", ",", "=", ".", "@",
-    "+", "-", "*", "/", "<", ">", "!",
-];
+/// A token with its position and its byte range in the source.
+#[derive(Clone, Debug)]
+pub(crate) struct Lexeme {
+    pub token: Token,
+    pub span: Span,
+    pub start: usize,
+    pub end: usize,
+}
 
-pub(crate) fn tokenize(source: &str) -> Result<Vec<(Token, Span)>, ParseError> {
+const PUNCTS: [&str; 25] = [
+    "->", "<-", "<~", "<=", ">=", "==", "!=", "&&", "||", "{", "}", "(", ")", ":", ";", ",", "=",
+    ".", "@", "+", "-", "*", "/", "<", ">",
+];
+const SINGLE_EXTRA: [&str; 1] = ["!"];
+
+pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
     let chars: Vec<char> = source.chars().collect();
     let mut tokens = Vec::new();
     let mut index = 0;
+    let mut byte = 0;
     let mut line = 1;
     let mut column = 1;
     while index < chars.len() {
         let c = chars[index];
         let span = Span { line, column };
-        let mut advance = |count: usize, index: &mut usize| {
+        let start = byte;
+        let mut advance = |count: usize, index: &mut usize, byte: &mut usize| {
             for _ in 0..count {
                 if chars[*index] == '\n' {
                     line += 1;
@@ -45,46 +59,72 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<(Token, Span)>, ParseError> {
                 } else {
                     column += 1;
                 }
+                *byte += chars[*index].len_utf8();
                 *index += 1;
             }
         };
         if c.is_whitespace() {
-            advance(1, &mut index);
+            advance(1, &mut index, &mut byte);
             continue;
         }
         if c == '/' && chars.get(index + 1) == Some(&'/') {
             while index < chars.len() && chars[index] != '\n' {
-                advance(1, &mut index);
+                advance(1, &mut index, &mut byte);
             }
+            continue;
+        }
+        if c == '"' {
+            advance(1, &mut index, &mut byte);
+            let text_start = index;
+            while index < chars.len() && chars[index] != '"' && chars[index] != '\n' {
+                advance(1, &mut index, &mut byte);
+            }
+            if chars.get(index) != Some(&'"') {
+                return Err(ParseError {
+                    span,
+                    message: "string literal is not closed".into(),
+                });
+            }
+            let text: String = chars[text_start..index].iter().collect();
+            advance(1, &mut index, &mut byte);
+            tokens.push(Lexeme {
+                token: Token::Str(text),
+                span,
+                start,
+                end: byte,
+            });
             continue;
         }
         if c.is_ascii_alphabetic() || c == '_' {
-            let start = index;
             while index < chars.len()
                 && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
             {
-                advance(1, &mut index);
+                advance(1, &mut index, &mut byte);
             }
-            let text: String = chars[start..index].iter().collect();
-            tokens.push((Token::Ident(text), span));
+            let text: String = source[start..byte].to_owned();
+            tokens.push(Lexeme {
+                token: Token::Ident(text),
+                span,
+                start,
+                end: byte,
+            });
             continue;
         }
         if c.is_ascii_digit() {
-            let start = index;
             let mut is_float = false;
             while index < chars.len() && chars[index].is_ascii_digit() {
-                advance(1, &mut index);
+                advance(1, &mut index, &mut byte);
             }
             if chars.get(index) == Some(&'.')
                 && chars.get(index + 1).is_some_and(|c| c.is_ascii_digit())
             {
                 is_float = true;
-                advance(1, &mut index);
+                advance(1, &mut index, &mut byte);
                 while index < chars.len() && chars[index].is_ascii_digit() {
-                    advance(1, &mut index);
+                    advance(1, &mut index, &mut byte);
                 }
             }
-            let text: String = chars[start..index].iter().collect();
+            let text = &source[start..byte];
             let token = if is_float {
                 Token::Float(text.parse().map_err(|_| ParseError {
                     span,
@@ -96,14 +136,28 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<(Token, Span)>, ParseError> {
                     message: format!("`{text}` does not fit in a 32-bit integer"),
                 })?)
             };
-            tokens.push((token, span));
+            tokens.push(Lexeme {
+                token,
+                span,
+                start,
+                end: byte,
+            });
             continue;
         }
         let rest: String = chars[index..chars.len().min(index + 2)].iter().collect();
-        match PUNCTS.iter().find(|punct| rest.starts_with(**punct)) {
+        let punct = PUNCTS
+            .iter()
+            .chain(SINGLE_EXTRA.iter())
+            .find(|punct| rest.starts_with(**punct));
+        match punct {
             Some(punct) => {
-                advance(punct.len(), &mut index);
-                tokens.push((Token::Punct(punct), span));
+                advance(punct.len(), &mut index, &mut byte);
+                tokens.push(Lexeme {
+                    token: Token::Punct(punct),
+                    span,
+                    start,
+                    end: byte,
+                });
             }
             None => {
                 return Err(ParseError {
@@ -113,6 +167,11 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<(Token, Span)>, ParseError> {
             }
         }
     }
-    tokens.push((Token::Eof, Span { line, column }));
+    tokens.push(Lexeme {
+        token: Token::Eof,
+        span: Span { line, column },
+        start: byte,
+        end: byte,
+    });
     Ok(tokens)
 }

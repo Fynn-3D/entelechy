@@ -149,6 +149,8 @@ pub struct Report {
     pub reused: Vec<NodeId>,
     /// Sources whose state advanced in this evaluation's commit.
     pub committed: Vec<(NodeId, String)>,
+    /// Every declared output by name.
+    pub outputs: Vec<(String, ImageHandle)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -308,19 +310,38 @@ impl Evaluator {
             }
             executed.push(node.id.clone());
         }
-        let (node, port) = &graph.output;
-        let output = self
-            .cached(node, port)
-            .ok_or_else(|| EvaluateError::UnknownOutput {
-                node: node.clone(),
-                port: port.clone(),
-            })?;
+        let mut outputs = Vec::with_capacity(graph.outputs.len());
+        for (name, source) in &graph.outputs {
+            let handle = match source {
+                Source::External(external) => {
+                    *externals
+                        .get(external)
+                        .ok_or_else(|| EvaluateError::MissingExternal {
+                            node: NodeId(format!("output {name}")),
+                            name: external.clone(),
+                        })?
+                }
+                Source::Node { node, port } => {
+                    self.cached(node, port)
+                        .ok_or_else(|| EvaluateError::UnknownOutput {
+                            node: node.clone(),
+                            port: port.clone(),
+                        })?
+                }
+            };
+            outputs.push((name.clone(), handle));
+        }
+        let output = outputs
+            .first()
+            .map(|(_, handle)| *handle)
+            .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
         let committed = self.commit(graph, runtime)?;
         Ok(Report {
             output,
             executed,
             reused,
             committed,
+            outputs,
         })
     }
 

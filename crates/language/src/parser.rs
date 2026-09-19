@@ -1,42 +1,117 @@
 //! Recursive-descent parser producing the AST in the crate root.
 
-use crate::lexer::{Token, tokenize};
+use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
-    BinaryOp, Block, Expr, ExprKind, FnDecl, Kernel, ParamDecl, ParseError, PortDecl, Span,
-    Spanned, StructDecl,
+    BinaryOp, BindingDecl, Block, Document, Expr, ExprKind, FnDecl, Kernel, NodeDecl, NodeKind,
+    NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned, StructDecl, Use,
 };
 
-/// Parses one Kernel from source text.
-pub fn parse(source: &str) -> Result<Kernel, ParseError> {
+/// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
+pub fn parse_document(source: &str) -> Result<Document, ParseError> {
     let tokens = tokenize(source)?;
     let mut parser = Parser {
         tokens,
         position: 0,
     };
-    let kernel = parser.kernel()?;
-    parser.expect_punct("}")?;
-    if parser.peek() != &Token::Eof {
-        return Err(parser.error("expected end of file after the kernel"));
+    let mut document = Document {
+        uses: Vec::new(),
+        kernels: Vec::new(),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        nodes: Vec::new(),
+    };
+    loop {
+        match parser.peek().clone() {
+            Token::Eof => break,
+            Token::Ident(word) if word == "use" => {
+                parser.next();
+                let (token, span) = parser.next();
+                let Token::Str(path) = token else {
+                    return Err(ParseError {
+                        span,
+                        message: format!("`use` needs a quoted path, found {}", token.describe()),
+                    });
+                };
+                parser.expect_punct(";")?;
+                document.uses.push(Use {
+                    path: Spanned { value: path, span },
+                });
+            }
+            Token::Ident(word) if word == "kernel" => {
+                document.kernels.push(parser.kernel(false)?);
+            }
+            Token::Ident(word) if word == "input" => {
+                parser.next();
+                document.inputs.push(parser.port(false)?);
+            }
+            Token::Ident(word) if word == "output" => {
+                parser.next();
+                let name = parser.ident("an output name")?;
+                parser.expect_punct("<-")?;
+                let source = parser.source_ref()?;
+                parser.expect_punct(";")?;
+                document.outputs.push((name, source));
+            }
+            Token::Ident(word) if word == "node" => {
+                parser.next();
+                document.nodes.push(parser.node()?);
+            }
+            _ => return Err(parser.unexpected("`use`, `kernel`, `input`, `output`, or `node`")),
+        }
     }
-    Ok(kernel)
+    Ok(document)
+}
+
+/// Parses exactly one Kernel from source text.
+pub fn parse(source: &str) -> Result<Kernel, ParseError> {
+    let document = parse_document(source)?;
+    let mut kernels = document.kernels;
+    if !document.nodes.is_empty()
+        || !document.uses.is_empty()
+        || !document.inputs.is_empty()
+        || !document.outputs.is_empty()
+    {
+        return Err(ParseError {
+            span: Span { line: 1, column: 1 },
+            message: "expected a single kernel, found graph items".into(),
+        });
+    }
+    match kernels.len() {
+        1 => Ok(kernels.remove(0)),
+        count => Err(ParseError {
+            span: Span { line: 1, column: 1 },
+            message: format!("expected a single kernel, found {count}"),
+        }),
+    }
 }
 
 struct Parser {
-    tokens: Vec<(Token, Span)>,
+    tokens: Vec<Lexeme>,
     position: usize,
 }
 
 impl Parser {
     fn peek(&self) -> &Token {
-        &self.tokens[self.position].0
+        &self.tokens[self.position].token
     }
 
     fn span(&self) -> Span {
-        self.tokens[self.position].1
+        self.tokens[self.position].span
+    }
+
+    /// Byte offset where the current token starts.
+    fn start(&self) -> usize {
+        self.tokens[self.position].start
+    }
+
+    /// Byte offset where the previous token ended.
+    fn previous_end(&self) -> usize {
+        self.tokens[self.position.saturating_sub(1)].end
     }
 
     fn next(&mut self) -> (Token, Span) {
-        let token = self.tokens[self.position].clone();
+        let lexeme = &self.tokens[self.position];
+        let token = (lexeme.token.clone(), lexeme.span);
         if self.position + 1 < self.tokens.len() {
             self.position += 1;
         }
@@ -102,12 +177,26 @@ impl Parser {
         }
     }
 
+    /// Any identifier token, reserved words included; dotted names such as
+    /// `input.read` are made of these.
+    fn raw_ident(&mut self, what: &str) -> Result<Spanned<String>, ParseError> {
+        match self.peek() {
+            Token::Ident(_) => {
+                let (Token::Ident(value), span) = self.next() else {
+                    unreachable!()
+                };
+                Ok(Spanned { value, span })
+            }
+            _ => Err(self.unexpected(what)),
+        }
+    }
+
     fn dotted_name(&mut self, what: &str) -> Result<Spanned<String>, ParseError> {
-        let first = self.ident(what)?;
+        let first = self.raw_ident(what)?;
         let mut value = first.value;
         while self.eat_punct(".") {
             value.push('.');
-            value.push_str(&self.ident("a name segment")?.value);
+            value.push_str(&self.raw_ident("a name segment")?.value);
         }
         Ok(Spanned {
             value,
@@ -115,22 +204,39 @@ impl Parser {
         })
     }
 
-    fn kernel(&mut self) -> Result<Kernel, ParseError> {
+    /// Parses `kernel [id@version] { ... }`. Inline Kernels (inside a node)
+    /// may omit the id, wire their inputs, and set `domain`.
+    fn kernel(&mut self, inline: bool) -> Result<Kernel, ParseError> {
+        let start = self.start();
         self.keyword("kernel")?;
-        let mut id = self.dotted_name("a kernel name")?;
-        if self.eat_punct("@") {
-            match self.next() {
-                (Token::Int(version), _) => id.value = format!("{}@{version}", id.value),
-                (token, span) => {
-                    return Err(ParseError {
-                        span,
-                        message: format!("expected a version number, found {}", token.describe()),
-                    });
-                }
+        let id = if self.is_punct("{") {
+            if !inline {
+                return Err(self.error(
+                    "a kernel outside a node needs an id, for example `kernel image.blur@1`",
+                ));
             }
+            None
         } else {
-            return Err(self.error("a kernel id needs a version, for example `image.blur@1`"));
-        }
+            let mut id = self.dotted_name("a kernel name")?;
+            if self.eat_punct("@") {
+                match self.next() {
+                    (Token::Int(version), _) => id.value = format!("{}@{version}", id.value),
+                    (token, span) => {
+                        return Err(ParseError {
+                            span,
+                            message: format!(
+                                "expected a version number, found {}",
+                                token.describe()
+                            ),
+                        });
+                    }
+                }
+            } else {
+                return Err(self.error("a kernel id needs a version, for example `image.blur@1`"));
+            }
+            Some(id)
+        };
+        let mut domain = None;
         self.expect_punct("{")?;
         let mut requires = None;
         let mut inputs = Vec::new();
@@ -154,11 +260,20 @@ impl Parser {
                 }
                 "input" => {
                     self.next();
-                    inputs.push(self.port()?);
+                    inputs.push(self.port(inline)?);
                 }
                 "output" => {
                     self.next();
-                    outputs.push(self.port()?);
+                    outputs.push(self.port(false)?);
+                }
+                "domain" if inline => {
+                    self.next();
+                    self.expect_punct("=")?;
+                    let value = self.expr()?;
+                    self.expect_punct(";")?;
+                    if domain.replace(value).is_some() {
+                        return Err(self.error("`domain` is set twice"));
+                    }
                 }
                 "param" => {
                     self.next();
@@ -190,8 +305,12 @@ impl Parser {
             }
         }
         let compute = compute.ok_or_else(|| self.error("kernel has no `compute` block"))?;
+        self.expect_punct("}")?;
+        let end = self.previous_end();
         Ok(Kernel {
+            range: start..end,
             id,
+            domain,
             requires: requires.unwrap_or_default(),
             inputs,
             params,
@@ -256,6 +375,82 @@ impl Parser {
         })
     }
 
+    /// `name: kernel [id] { ... }` or `name: id@version { members }` after
+    /// the `node` keyword.
+    fn node(&mut self) -> Result<NodeDecl, ParseError> {
+        let name = self.ident("a node name")?;
+        self.expect_punct(":")?;
+        if self.is_keyword("kernel") {
+            let kernel = self.kernel(true)?;
+            return Ok(NodeDecl {
+                name,
+                kind: NodeKind::Inline(Box::new(kernel)),
+                members: Vec::new(),
+            });
+        }
+        let mut kernel = self.dotted_name("a kernel id")?;
+        self.expect_punct("@")?;
+        match self.next() {
+            (Token::Int(version), _) => kernel.value = format!("{}@{version}", kernel.value),
+            (token, span) => {
+                return Err(ParseError {
+                    span,
+                    message: format!("expected a version number, found {}", token.describe()),
+                });
+            }
+        }
+        self.expect_punct("{")?;
+        let mut members = Vec::new();
+        while !self.is_punct("}") {
+            let port = self.ident("a parameter or port name")?;
+            if self.eat_punct("=") {
+                let value = self.expr()?;
+                self.expect_punct(";")?;
+                members.push(NodeMember::Set(port, value));
+            } else if self.eat_punct("<-") {
+                let source = self.source_ref()?;
+                self.expect_punct(";")?;
+                members.push(NodeMember::Bind(port, source));
+            } else if self.eat_punct("<~") {
+                let source = self.source_ref()?;
+                self.keyword("from")?;
+                let initial = self.source_ref()?;
+                self.expect_punct(";")?;
+                members.push(NodeMember::Previous {
+                    port,
+                    source,
+                    initial,
+                });
+            } else {
+                return Err(self.unexpected("`=`, `<-`, or `<~`"));
+            }
+        }
+        self.expect_punct("}")?;
+        Ok(NodeDecl {
+            name,
+            kind: NodeKind::Reference(kernel),
+            members,
+        })
+    }
+
+    fn source_ref(&mut self) -> Result<SourceRef, ParseError> {
+        let first = self.ident("a source")?;
+        if self.eat_punct(".") {
+            let port = self.ident("an output port")?;
+            Ok(SourceRef {
+                node: Some(first.value),
+                name: port.value,
+                span: first.span,
+            })
+        } else {
+            Ok(SourceRef {
+                node: None,
+                name: first.value,
+                span: first.span,
+            })
+        }
+    }
+
     fn requires(&mut self) -> Result<Vec<Spanned<String>>, ParseError> {
         self.expect_punct("{")?;
         let mut names = Vec::new();
@@ -267,12 +462,24 @@ impl Parser {
         Ok(names)
     }
 
-    fn port(&mut self) -> Result<PortDecl, ParseError> {
+    /// `name: Type;`, or with `wired`, optionally `name: Type <- source;` or
+    /// `name: Type <~ source from initial;`.
+    fn port(&mut self, wired: bool) -> Result<PortDecl, ParseError> {
         let name = self.ident("a port name")?;
         self.expect_punct(":")?;
         let ty = self.ident("a type")?;
+        let binding = if wired && self.eat_punct("<-") {
+            Some(BindingDecl::Now(self.source_ref()?))
+        } else if wired && self.eat_punct("<~") {
+            let source = self.source_ref()?;
+            self.keyword("from")?;
+            let initial = self.source_ref()?;
+            Some(BindingDecl::Previous { source, initial })
+        } else {
+            None
+        };
         self.expect_punct(";")?;
-        Ok(PortDecl { name, ty })
+        Ok(PortDecl { name, ty, binding })
     }
 
     fn param(&mut self) -> Result<ParamDecl, ParseError> {
@@ -541,8 +748,8 @@ impl Parser {
             Token::Ident(name)
                 if name.starts_with(|c: char| c.is_ascii_uppercase())
                     && matches!(
-                        self.tokens.get(self.position + 1),
-                        Some((Token::Punct("{"), _))
+                        self.tokens.get(self.position + 1).map(|l| &l.token),
+                        Some(Token::Punct("{"))
                     ) =>
             {
                 let (_, span) = self.next();
@@ -582,8 +789,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 9] = [
-    "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct",
+const RESERVED: [&str; 14] = [
+    "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "node", "use",
+    "from", "input", "output",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -618,7 +826,7 @@ kernel image.grayscale@1 {
     #[test]
     fn parses_the_grayscale_kernel() {
         let kernel = parse(GRAYSCALE).unwrap();
-        assert_eq!(kernel.id.value, "image.grayscale@1");
+        assert_eq!(kernel.id.as_ref().unwrap().value, "image.grayscale@1");
         assert_eq!(
             kernel
                 .requires

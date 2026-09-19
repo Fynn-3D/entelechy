@@ -291,6 +291,22 @@ impl Runtime {
     /// registry.
     pub fn prepare(&self, source: &str) -> Result<Candidate, PrepareError> {
         let module = orla_compiler::compile(source).map_err(PrepareError::Compile)?;
+        self.prepare_module(module, source)
+    }
+
+    /// Prepares an already parsed Kernel. `id` names an anonymous inline
+    /// Kernel; `source` is kept for inspection.
+    pub fn prepare_kernel(
+        &self,
+        kernel: &orla_language::Kernel,
+        id: Option<&KernelId>,
+        source: &str,
+    ) -> Result<Candidate, PrepareError> {
+        let module = orla_compiler::compile_kernel(kernel, id).map_err(PrepareError::Compile)?;
+        self.prepare_module(module, source)
+    }
+
+    fn prepare_module(&self, module: Validated, source: &str) -> Result<Candidate, PrepareError> {
         let prepared = self
             .backend
             .prepare(&module)

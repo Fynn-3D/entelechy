@@ -33,6 +33,32 @@ fn both(
     domain: Domain,
 ) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    both_module(gpu, &module, inputs, input_size, params, domain)
+}
+
+/// The inline Kernel a `.osn` document carries in the named node.
+fn inline_kernel(path: &Path, node: &str) -> orla_compiler::Validated {
+    let text = std::fs::read_to_string(path).unwrap();
+    let document = orla_language::parse_document(&text).unwrap_or_else(|error| panic!("{error}"));
+    let decl = document
+        .nodes
+        .iter()
+        .find(|decl| decl.name.value == node)
+        .unwrap_or_else(|| panic!("node `{node}` in {}", path.display()));
+    let orla_language::NodeKind::Inline(kernel) = &decl.kind else {
+        panic!("node `{node}` is not inline");
+    };
+    orla_compiler::compile_kernel(kernel, None).unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn both_module(
+    gpu: &GpuBackend,
+    module: &orla_compiler::Validated,
+    inputs: &[Vec<[f32; 4]>],
+    input_size: (u32, u32),
+    params: Vec<Value>,
+    domain: Domain,
+) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
     let mut host = Host::new(1 << 24);
     let handles: Vec<_> = inputs
         .iter()
@@ -53,14 +79,12 @@ fn both(
         },
     };
     let mut scope = Scope::new(&mut host, all());
-    let cpu_out = CpuBackend
-        .execute(&module, &invocation, &mut scope)
-        .unwrap()[0];
+    let cpu_out = CpuBackend.execute(module, &invocation, &mut scope).unwrap()[0];
     let prepared = gpu
-        .prepare(&module)
+        .prepare(module)
         .unwrap_or_else(|error| panic!("prepare failed: {error}"));
     let mut scope = Scope::new(&mut host, all());
-    let gpu_out = Backend::execute(gpu, prepared.as_ref(), &module, &invocation, &mut scope)
+    let gpu_out = Backend::execute(gpu, prepared.as_ref(), module, &invocation, &mut scope)
         .unwrap_or_else(|error| panic!("gpu execution failed: {error}"))[0];
     (
         host.image(cpu_out).unwrap().pixels().to_vec(),
@@ -150,8 +174,8 @@ fn loops_and_branches_match() {
 fn the_examples_match_within_tolerance() {
     let Some(gpu) = gpu() else { return };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let ball = std::fs::read_to_string(root.join("material-ball/kernels/ball.orla")).unwrap();
-    let (cpu, gpu_pixels) = both(
+    let ball = inline_kernel(&root.join("material-ball/scene.osn"), "ball");
+    let (cpu, gpu_pixels) = both_module(
         &gpu,
         &ball,
         &[],

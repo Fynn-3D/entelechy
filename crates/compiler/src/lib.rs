@@ -66,6 +66,23 @@ impl From<orla_ir::ValidationError> for CompileError {
 /// Compiles one Kernel source into validated IR.
 pub fn compile(source: &str) -> Result<Validated, CompileError> {
     let kernel = orla_language::parse(source)?;
-    let module = lower::lower(&kernel)?;
+    compile_kernel(&kernel, None)
+}
+
+/// Compiles a parsed Kernel. `id` names an anonymous inline Kernel; a
+/// Kernel that declares its own id keeps it.
+pub fn compile_kernel(
+    kernel: &orla_language::Kernel,
+    id: Option<&orla_ir::KernelId>,
+) -> Result<Validated, CompileError> {
+    let module = lower::lower(kernel, id)?;
     Ok(orla_ir::validate(module)?)
+}
+
+/// Evaluates a literal expression as a plain value: numbers, `true` and
+/// `false`, negation, and `vec2`/`vec3`/`vec4` of float literals. This is
+/// the value grammar shared by Kernel parameter defaults and graph
+/// documents.
+pub fn literal(expr: &orla_language::Expr) -> Result<orla_ir::Value, CompileError> {
+    lower::literal(expr)
 }
