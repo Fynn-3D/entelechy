@@ -1,15 +1,16 @@
-// signed-distance scene -> tone mapping -> output
+// signed-distance scene -> tone mapping sub-graph -> output
 use "kernels/";
-use "../shared/tonemap.orla";
+
+param exposure: Float = 1.1;
 
 node scene: scene.march@1 {
     domain = vec2(400, 260);
     steps = 96;
 }
 
-node display: image.tonemap@1 {
+node display: graph "../shared/display.osn" {
     source <- scene.result;
-    exposure = 1.1;
+    exposure = exposure;
 }
 
 output result <- display.result;

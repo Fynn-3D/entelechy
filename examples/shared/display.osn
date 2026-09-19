@@ -1,0 +1,13 @@
+// Tone mapping as a sub-graph. Place it with
+//   node display: graph "../shared/display.osn" { source <- x.result; exposure = 1.2; }
+use "tonemap.orla";
+
+input source: Image;
+param exposure: Float = 1.0;
+
+node map: image.tonemap@1 {
+    source <- source;
+    exposure = exposure;
+}
+
+output result <- map.result;

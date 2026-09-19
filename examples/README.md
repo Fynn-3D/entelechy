@@ -16,7 +16,8 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   light, tone-mapped by a second Kernel; one self-contained file with both
   Kernels inline.
 - [raymarch](raymarch/README.md): a signed-distance scene marched with `loop`
-  and shaded with `if`; interactive on the GPU backend, seconds per frame on
-  the CPU.
+  and shaded with `if`, displayed through the shared tone-mapping sub-graph
+  with `exposure` as a graph parameter; interactive on the GPU backend,
+  seconds per frame on the CPU.
 - [life](life/README.md): Conway's Life through a feedback binding, painted
   with the pointer, with a declarative replay test.

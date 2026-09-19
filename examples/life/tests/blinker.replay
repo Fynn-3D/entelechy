@@ -21,6 +21,15 @@ expect 20 15 = 1.0 0.85 0.45 0.06
 expect 21 16 = 1.0 0.85 0.45 0.06
 pointer up
 
+# With the brush parameter at zero the pointer paints only its own pixel,
+# so the neighbour that a brush of 2 would reach stays dead.
+param brush 0.0
+pointer 25 5 down
+frame 0.25
+expect 26 6 = 0.07 0.09 0.14
+pointer up
+param brush 2.0
+
 # Holding C clears everything.
 key 67 down
 frame 0.3

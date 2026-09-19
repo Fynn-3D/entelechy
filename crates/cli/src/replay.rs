@@ -10,6 +10,7 @@
 //! pointer up                # release without moving
 //! key 67 down               # press a key by code; `up` releases
 //! reset                     # forget committed state
+//! param exposure 1.5        # override a graph parameter (a literal)
 //! expect 11 10 = 1.0 1.0 1.0        # r g b of the last output, tolerance 0.01
 //! expect 11 10 = 1.0 1.0 1.0 0.05   # explicit tolerance
 //! ```
@@ -43,6 +44,13 @@ pub enum Step {
     },
     /// Forget committed state.
     Reset,
+    /// Override a graph parameter.
+    Param {
+        /// Parameter name.
+        name: String,
+        /// The value.
+        value: orla_runtime::Value,
+    },
     /// Check a pixel of the last frame.
     Expect {
         /// Column.
@@ -129,6 +137,17 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 down: *state == "down",
             }),
             ["reset"] => steps.push(Step::Reset),
+            ["param", name, value @ ..] if !value.is_empty() => {
+                let text = value.join(" ");
+                let expr = orla_language::parse_literal(&text)
+                    .map_err(|e| error(format!("param `{name}`: {e}")))?;
+                let value = orla_compiler::literal(&expr)
+                    .map_err(|e| error(format!("param `{name}`: {e}")))?;
+                steps.push(Step::Param {
+                    name: name.to_string(),
+                    value,
+                });
+            }
             ["expect", x, y, "=", r, g, b, rest @ ..] => {
                 let tolerance = match rest {
                     [] => 0.01,
@@ -206,6 +225,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
             }
             Step::Key { code, down } => input.set_key(*code, *down),
             Step::Reset => session.reset_state(),
+            Step::Param { name, value } => session.set_param(name, *value),
             Step::Expect {
                 x,
                 y,

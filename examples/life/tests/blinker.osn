@@ -1,6 +1,8 @@
 // A blinker alone, for deterministic checks.
 use "../kernels/";
 
+param brush: Float = 2.0;
+
 node seed: life.seed@1 {
     domain = vec2(32, 24);
     noise = 0.0;
@@ -9,7 +11,7 @@ node seed: life.seed@1 {
 
 node life: life.step@1 {
     previous <~ life.result from seed.result;
-    brush = 2.0;
+    brush = brush;
 }
 
 node show: life.show@1 {

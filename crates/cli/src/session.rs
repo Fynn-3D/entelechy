@@ -14,7 +14,7 @@ use std::time::SystemTime;
 
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_language::{Document, Kernel};
-use orla_runtime::{Backend, Context, Expect, Generation, ImageHandle, KernelId, Runtime};
+use orla_runtime::{Backend, Context, Expect, Generation, ImageHandle, KernelId, Runtime, Value};
 
 use crate::ppm;
 
@@ -129,10 +129,10 @@ fn expand_use(path: &Path, trailing_slash: bool) -> Vec<PathBuf> {
 }
 
 /// Kernels a document defines: id, source text, and the parsed Kernel.
-struct Defined<'a> {
+struct Defined {
     id: KernelId,
     text: String,
-    kernel: &'a Kernel,
+    kernel: Kernel,
 }
 
 /// A scene, the libraries it uses, and the runtime state built from them.
@@ -143,8 +143,14 @@ pub struct Session {
     evaluator: Evaluator,
     graph: Option<Graph>,
     root_stamp: Option<Stamp>,
-    /// `use` targets from the last good parse of the root, resolved.
+    /// `use` targets from the last good parse of the root and its
+    /// sub-graphs, resolved.
     root_uses: Vec<(PathBuf, bool)>,
+    /// Sub-graph documents placed by the root, with the stamps they were
+    /// loaded at; a change to any of them rebuilds the graph.
+    sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
+    /// Caller overrides of graph parameters.
+    params: BTreeMap<String, Value>,
     /// Kernel text by id for every document that published Kernels; the
     /// root document is one of them.
     documents: BTreeMap<PathBuf, DocumentState>,
@@ -176,6 +182,8 @@ impl Session {
             graph: None,
             root_stamp: None,
             root_uses: Vec::new(),
+            sub_graphs: BTreeMap::new(),
+            params: BTreeMap::new(),
             documents: BTreeMap::new(),
             owners: BTreeMap::new(),
             externals: BTreeMap::new(),
@@ -209,6 +217,17 @@ impl Session {
     /// The scene document.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Overrides a graph parameter for later evaluations. Unknown names are
+    /// kept and take effect if the graph later declares them.
+    pub fn set_param(&mut self, name: &str, value: Value) {
+        self.params.insert(name.to_owned(), value);
+    }
+
+    /// Current graph parameter overrides.
+    pub fn params(&self) -> &BTreeMap<String, Value> {
+        &self.params
     }
 
     /// Every document the session currently watches.
@@ -248,7 +267,11 @@ impl Session {
 
     fn sync_root(&mut self, events: &mut Vec<Event>) {
         let current = stamp(&self.root);
-        if current == self.root_stamp && self.graph.is_some() {
+        let sub_graph_changed = self
+            .sub_graphs
+            .iter()
+            .any(|(path, loaded)| stamp(path) != *loaded);
+        if current == self.root_stamp && self.graph.is_some() && !sub_graph_changed {
             return;
         }
         self.root_stamp = current;
@@ -267,42 +290,75 @@ impl Session {
             }
         };
         let name = self.document_name();
-        let lowered = match Graph::from_document(&document, &name) {
+        let base = self
+            .root
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let mut loader = |path: &Path| -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|error| error.to_string())
+        };
+        let lowered = match Graph::load(&document, &text, &name, &base, &mut loader) {
             Ok(lowered) => lowered,
             Err(error) => {
                 events.push(Event::SceneRejected(error.to_string()));
                 return;
             }
         };
-        let mut defined = Vec::new();
+        // Kernels defined by the root: its top-level ones and the inline
+        // ones of its own nodes. Inline Kernels of sub-graphs belong to
+        // their documents.
+        let mut by_document: BTreeMap<PathBuf, Vec<Defined>> = BTreeMap::new();
+        let root = self.root.clone();
+        let root_key = PathBuf::from(&name);
         for kernel in &document.kernels {
             match named_id(kernel) {
-                Ok(id) => defined.push(Defined {
+                Ok(id) => by_document.entry(root.clone()).or_default().push(Defined {
                     id,
                     text: text[kernel.range.clone()].to_owned(),
-                    kernel,
+                    kernel: kernel.clone(),
                 }),
                 Err(message) => events.push(Event::Rejected {
-                    path: self.root.clone(),
+                    path: root.clone(),
                     error: message,
                 }),
             }
         }
         for inline in &lowered.inline {
-            defined.push(Defined {
+            let owner = if inline.document == root_key {
+                root.clone()
+            } else {
+                inline.document.clone()
+            };
+            by_document.entry(owner).or_default().push(Defined {
                 id: inline.id.clone(),
-                text: text[inline.kernel.range.clone()].to_owned(),
-                kernel: inline.kernel,
+                text: inline.text.clone(),
+                kernel: inline.kernel.clone(),
             });
         }
-        let root = self.root.clone();
-        self.publish_document(&root, current, defined, events);
-        let base = self.root.parent().unwrap_or_else(|| Path::new("."));
-        self.root_uses = document
-            .uses
-            .iter()
-            .map(|item| (base.join(&item.path.value), item.path.value.ends_with('/')))
+        let mut sub_graphs = BTreeMap::new();
+        for path in &lowered.documents {
+            sub_graphs.insert(path.clone(), stamp(path));
+            by_document.entry(path.clone()).or_default();
+        }
+        by_document.entry(root.clone()).or_default();
+        // Documents that were graph documents before and are not any more
+        // release their kernels.
+        let gone: Vec<PathBuf> = self
+            .sub_graphs
+            .keys()
+            .filter(|path| !sub_graphs.contains_key(*path))
+            .cloned()
             .collect();
+        for path in gone {
+            self.retire_document(&path, events);
+        }
+        for (path, defined) in by_document {
+            let current = if path == root { current } else { stamp(&path) };
+            self.publish_document(&path, current, defined, events);
+        }
+        self.sub_graphs = sub_graphs;
+        self.root_uses = lowered.uses;
         self.graph = Some(lowered.graph);
         events.push(Event::SceneLoaded);
     }
@@ -315,12 +371,17 @@ impl Session {
         for path in &self.extra_uses {
             wanted.extend(expand_use(path, false));
         }
-        wanted.retain(|path| *path != self.root);
+        wanted.retain(|path| *path != self.root && !self.sub_graphs.contains_key(path));
+        wanted.sort();
         wanted.dedup();
         let stale: Vec<PathBuf> = self
             .documents
             .keys()
-            .filter(|path| **path != self.root && !wanted.contains(path))
+            .filter(|path| {
+                **path != self.root
+                    && !wanted.contains(path)
+                    && !self.sub_graphs.contains_key(*path)
+            })
             .cloned()
             .collect();
         for path in stale {
@@ -371,7 +432,7 @@ impl Session {
                     Ok(id) => defined.push(Defined {
                         id,
                         text: text[kernel.range.clone()].to_owned(),
-                        kernel,
+                        kernel: kernel.clone(),
                     }),
                     Err(message) => events.push(Event::Rejected {
                         path: path.clone(),
@@ -389,7 +450,7 @@ impl Session {
         &mut self,
         path: &Path,
         current: Option<Stamp>,
-        defined: Vec<Defined<'_>>,
+        defined: Vec<Defined>,
         events: &mut Vec<Event>,
     ) {
         let previous = self
@@ -420,7 +481,7 @@ impl Session {
                 kernels.insert(id, text);
                 continue;
             }
-            match self.runtime.prepare_kernel(kernel, Some(&id), &text) {
+            match self.runtime.prepare_kernel(&kernel, Some(&id), &text) {
                 Ok(candidate) => {
                     let expect = match self.runtime.kernel(&id) {
                         Some(version) => Expect::Generation(version.generation()),
@@ -485,8 +546,13 @@ impl Session {
                 orla_graph::Source::External("<no scene>".into()),
             ))
         })?;
-        self.evaluator
-            .evaluate(graph, &mut self.runtime, &self.externals, context)
+        self.evaluator.evaluate(
+            graph,
+            &mut self.runtime,
+            &self.externals,
+            context,
+            &self.params,
+        )
     }
 
     /// Forgets committed state; `<~` bindings restart from their initial

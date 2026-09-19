@@ -13,6 +13,7 @@ usage:
       Parse documents, compile their Kernels, and print manifests or diagnostics.
   orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu]
+                       [--param <name>=<literal>]...
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version.
@@ -60,7 +61,11 @@ fn check(args: &[String]) -> Result<(), String> {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or("scene");
-        let lowered = match orla_graph::Graph::from_document(&document, name) {
+        let base = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
+        let mut loader = |path: &Path| -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|error| error.to_string())
+        };
+        let lowered = match orla_graph::Graph::load(&document, &text, name, base, &mut loader) {
             Ok(lowered) => lowered,
             Err(error) => {
                 failures += 1;
@@ -77,7 +82,7 @@ fn check(args: &[String]) -> Result<(), String> {
             lowered
                 .inline
                 .iter()
-                .map(|inline| (Some(inline.id.clone()), inline.kernel)),
+                .map(|inline| (Some(inline.id.clone()), &inline.kernel)),
         );
         for (id, kernel) in kernels {
             match orla_compiler::compile_kernel(kernel, id.as_ref()) {
@@ -122,6 +127,7 @@ struct RunOptions {
     out: PathBuf,
     watch: bool,
     backend: String,
+    params: Vec<(String, orla_runtime::Value)>,
 }
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {
@@ -132,6 +138,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         out: PathBuf::from("output.ppm"),
         watch: false,
         backend: "cpu".into(),
+        params: Vec::new(),
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -146,6 +153,15 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
             "--backend" => options.backend = value("--backend")?,
+            "--param" => {
+                let binding = value("--param")?;
+                let (name, text) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
+                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
+                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
+                options.params.push((name.to_owned(), literal));
+            }
             "--input" => {
                 let binding = value("--input")?;
                 let (name, path) = binding
@@ -173,6 +189,9 @@ fn run(args: &[String]) -> Result<(), String> {
         session
             .bind_external(name, path)
             .map_err(|e| e.to_string())?;
+    }
+    for (name, value) in &options.params {
+        session.set_param(name, *value);
     }
     let events = session.sync();
     report_events(&events);
