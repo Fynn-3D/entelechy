@@ -70,6 +70,11 @@ device's rate (48 kHz when offered), one block per frame; the callback
 never waits or allocates. The audio example is a synthesizer whose phase
 crosses blocks through Graph state; its oscilloscope replay pins that.
 
+Reduction exists as the second execution mode: a Kernel with `merge(a,
+b)` maps over its first input and folds pairwise into one `Rows` element
+on both backends, in the same tree; the exposure example meters a frame
+and tone-maps by the result.
+
 Geometry exists as the first native operation: `native.rasterize@1` takes
 vertex and triangle rows and writes a surface grid (depth, normal, uv,
 triangle id); the CPU reference and the GPU render pipeline agree on
@@ -85,14 +90,16 @@ about 70 ms and now holds none; the swap lands about 110 ms later.
 
 ## Next
 
-Every device the architecture named now has an adapter: window, sound
-card, rasterizer. The next primitives are in the language and the
-evaluator: a `reduce` execution mode for sums and extrema (the first
-non-map mode), `domain` as an expression so topology-changing Kernels
-(subdivision) can size their output, and the sample rate as context
-rather than a parameter the scene repeats. Also worth doing: let the
-audio device drive evaluation when a scene has sound, so blocks are
-produced when the ring asks instead of when the window redraws.
+Every device the architecture named has an adapter and both execution
+modes the decision document names exist: map and reduce. What remains
+is ordered work (prefix sums, sorting, IIR filters), which is a third
+mode with real sequencing, and the smaller items: `domain` as an
+expression so topology-changing Kernels (subdivision) can size their
+output; the sample rate as context rather than a parameter the scene
+repeats; letting the audio device drive evaluation when a scene has
+sound; a reduction that keeps its intermediate levels resident across
+frames instead of allocating its scratch per evaluation; and a `scan`
+that reuses the reduce tree for prefix sums.
 
 ## Open
 

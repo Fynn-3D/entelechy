@@ -60,8 +60,34 @@ match the output's), `at(f, address)` reads anywhere (clamped into range;
 `element()` the current linear index, and `coord()` and `domain()` the
 current address and extent over a grid or volume. Reading needs
 `field.read`, writing `field.write`. A struct or `type` declared at the top
-of a document is shared by every Kernel in it. The exact language is
-defined by [the frontend](../crates/language/src/lib.rs) and its tests.
+of a document is shared by every Kernel in it.
+
+A Kernel with a `merge` is a reduction, the one execution mode besides
+the map:
+
+```text
+kernel stats.luma@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    output result: Rows<Light>;          // exactly one element comes out
+    struct Light { sum: Float; max: Float; count: Int; }
+    compute {                            // once per element of `source`
+        let l = luma(sample(source));
+        return Light { sum: l, max: l, count: 1 };
+    }
+    merge(a, b) {                        // folds two results into one
+        return Light { sum: a.sum + b.sum, max: max(a.max, b.max), count: a.count + b.count };
+    }
+}
+```
+
+`compute` maps over the first input's domain (so `coord()`, `sample`, and
+`domain()` refer to it) and `merge` folds the results pairwise into the
+single element of a `Rows` output. `merge` must be associative and
+commutative: the fold's tree belongs to the backend, integers and
+booleans come out exact, floats agree to rounding. A reduce node takes no
+`domain` and is never fused. The exact language is defined by
+[the frontend](../crates/language/src/lib.rs) and its tests.
 
 ## Graph
 

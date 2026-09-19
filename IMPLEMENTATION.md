@@ -112,6 +112,23 @@ capability claim.
   phase across blocks through `<~` state, and its replay pins the
   oscilloscope, block continuity included.
 
+- Reduction is the second execution mode, declared by a `merge(a, b)`
+  block: the entry maps over the first input's domain and `merge`
+  folds the results pairwise into one `Rows` element; the manifest
+  carries `mode`, the module carries `merge`, and the validator checks
+  the fold's signature against the output element
+  ([IR](crates/ir/src/lib.rs), [validator](crates/ir/src/validate.rs),
+  [compiler](crates/compiler/src/lower.rs)). The CPU folds level by level
+  in a fixed tree regardless of thread count; the GPU maps into a scratch
+  buffer and folds with a second pipeline in the same tree, so integers
+  are exact on both and floats agree to rounding
+  ([CPU](crates/cpu/src/lib.rs), [WGSL](crates/gpu/src/wgsl.rs),
+  [parity test](crates/gpu/tests/parity.rs)). The evaluator gives a reduce
+  node the domain of one element and keeps it out of fusion
+  ([evaluator](crates/graph/src/evaluate.rs)). The
+  [exposure example](examples/exposure/README.md) meters a frame and
+  tone-maps by the result.
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the
