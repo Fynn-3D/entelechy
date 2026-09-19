@@ -17,8 +17,10 @@ Diagnostics are `file:line:column: message` for both.
 ```text
 struct Particle { position: Vec2; velocity: Vec2; }   // a document struct: every
                                                        // Kernel below sees it
+type Swarm = Rows<Particle>;                           // a port type alias, shared
+                                                       // the same way
 kernel image.grayscale@1 {
-    requires { image.read; image.write; }
+    requires { field.read; field.write; }
     input source: Image;
     param amount: Float = 1.0;
     output result: Image;
@@ -33,13 +35,33 @@ kernel image.grayscale@1 {
 ```
 
 The id `name@version` is the Kernel's identity; graphs bind to it and never
-to a file. Ports are `Image` (a grid of `Vec4`, read with `sample`, `fetch`,
-`size`) or `Field<Element>` (rows of one element type, read with `sample`,
-`at`, `count`; the current row is `element()`). A Field's element may be a
-scalar, a vector, or a struct; its layout is the struct's scalars in order,
-integers exact. A struct declared at the top of a document is shared by
-every Kernel in it. The exact language is defined by
-[the frontend](../crates/language/src/lib.rs) and its tests.
+to a file.
+
+Every port carries a Field: elements of one type in one shape. The shapes
+are the dense lattices a Kernel can be mapped over, and there are three:
+
+| Shape | Address | `size(f)` | `domain =` in a graph |
+|---|---|---|---|
+| `Rows<T>` | `Int` | `Int` | `256` |
+| `Grid<T>` | `Vec2` | `Vec2` | `vec2(w, h)` |
+| `Volume<T>` | `Vec3` | `Vec3` | `vec3(w, h, d)` |
+
+`Image` is the built-in alias for `Grid<Vec4>` and nothing more: a
+`Grid<Vec4>` output shows in the window and reads as pixels wherever an
+`Image` would. `type Name = Shape<Element>;` declares another alias; aliases
+are transparent, so a `Rows<Vec2>` wire connects to a `type Stereo =
+Rows<Vec2>;` port and any mismatch is reported by structure, never by name.
+
+The element may be a scalar, a vector, or a struct; its layout is the
+struct's scalars in order, integers and booleans exact. Inside `compute`,
+`sample(f)` reads an input at this element's own address (its shape must
+match the output's), `at(f, address)` reads anywhere (clamped into range;
+`fetch` is the same word for grids), `count(f)` is the element count,
+`element()` the current linear index, and `coord()` and `domain()` the
+current address and extent over a grid or volume. Reading needs
+`field.read`, writing `field.write`. A struct or `type` declared at the top
+of a document is shared by every Kernel in it. The exact language is
+defined by [the frontend](../crates/language/src/lib.rs) and its tests.
 
 ## Graph
 
@@ -56,7 +78,7 @@ node gray: image.grayscale@1 {        // reference a published Kernel
 }
 
 node trail: kernel {                  // an anonymous Kernel, placed here
-    requires { image.read; image.write; }
+    requires { field.read; field.write; }
     input current: Image <- gray.result;                     // wired where declared
     input previous: Image <~ trail.result from gray.result;  // previous evaluation
     param decay: Float = 0.9;         // the default is this node's value
@@ -89,10 +111,11 @@ output result <- display.result;      // named graph output; sub-graph outputs
    declare is an error; both are reported before anything runs.
 4. Values use `=`: numbers, `true`/`false`, negation, `vec2`/`vec3`/`vec4`.
    An integer literal is accepted where a Float is expected.
-5. `domain = vec2(width, height);` sets a node's grid output size and
-   `domain = count;` its Field output size; nodes with an input default to
-   the size of their first declared input. Bindings must match the port's
-   kind and, for Fields, its element layout.
+5. `domain = count;`, `domain = vec2(width, height);`, or
+   `domain = vec3(width, height, depth);` sets a node's output extent in
+   its output's shape; nodes with an input default to the extent of their
+   first declared input. A binding must match the port's shape and element
+   layout, whatever either side calls it.
 6. A Kernel id is unique across everything a graph loads; the same id from
    two documents is an error, never a silent override. An anonymous inline
    Kernel is named `<document>.<node>@1`.

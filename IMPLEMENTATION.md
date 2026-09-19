@@ -33,16 +33,21 @@ capability claim.
 
 ## Contracts worth knowing
 
-- Fields follow [the Typed Field decision](Orla%20Typed%20Field%20Architecture.md):
-  a `Field<Element>` port carries rows of one element layout
-  ([schema](crates/host/src/lib.rs)), shares the Host's handles, budget,
-  residency, and commit rules with images, and executes as a Rows domain of
-  height one. The CPU backend encodes elements as words with exact integers
-  ([execution test](crates/cpu/tests/execute.rs)); the GPU backend binds
-  Field buffers as `array<u32>` and stays resident across frames
-  ([parity test](crates/gpu/tests/parity.rs)). Image remains the grid view
-  with its own sampling. The [particles example](examples/particles/README.md)
-  is the working proof.
+- There is one resource, following [the Typed Field decision](Orla%20Typed%20Field%20Architecture.md):
+  a Field of elements in one of three shapes, `Rows`, `Grid`, or `Volume`,
+  with one 32-bit word per scalar ([host](crates/host/src/lib.rs)). Port
+  types are structural (`element`, `shape`, `schema`); `Image` is the
+  compiler's alias for `Grid<Vec4>` and `type` declares more aliases
+  ([compiler](crates/compiler/src/lower.rs)). Both backends carry every
+  element as words, so integers and booleans are exact and the two agree
+  bit for bit on the examples ([execution test](crates/cpu/tests/execute.rs),
+  [parity test](crates/gpu/tests/parity.rs)); the GPU dispatches over three
+  axes and keeps every shape resident. Bindings are checked by shape and
+  layout, never by spelling ([evaluator](crates/graph/src/evaluate.rs)).
+  The [particles](examples/particles/README.md) (rows),
+  [tiles](examples/tiles/README.md) (a grid of structs through an alias),
+  [Life](examples/life/README.md) (a grid of booleans and integers), and
+  [volume](examples/volume/README.md) examples are the working proofs.
 
 - Presentation is an observation the GPU can do itself: the Player gives the
   GPU backend its window, and a resident output is drawn onto the surface by
@@ -128,10 +133,10 @@ capability claim.
 
 - Backends implement [`Backend`](crates/runtime/src/lib.rs): `prepare` does
   the expensive work (the GPU backend compiles WGSL and builds the pipeline
-  there), so `publish` is a pointer swap. The GPU backend keeps Host ownership
-  of images by uploading inputs and reading outputs back per execution; GPU
-  and CPU results agree within float tolerance, and integer arithmetic
-  failures are reported only by the CPU backend.
+  there), so `publish` is a pointer swap. GPU and CPU results agree within
+  float tolerance (exactly on the examples, whose hashes avoid `sin` of
+  large arguments), and integer arithmetic failures are reported only by
+  the CPU backend.
 
 - Control flow is structured and expression-shaped: `if c { a } else { b }`
   and `loop N with x = init until done { next }` lower to [`Op::If` and

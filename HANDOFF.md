@@ -8,14 +8,13 @@ authorized; do not merge or push. Preserve both architectural bibles verbatim.
 This implementation started on 2026-09-19 from the architecture documents alone.
 The previous implementation lives outside the repository at `../bak/orla` as a
 read-only reference; study its invariants, do not port it wholesale. Its typed
-Field decision remains the binding direction for numerical resources when they
-are introduced; the current Host exposes only images.
+Field decision is implemented: the Host exposes one resource in three shapes.
 
 The runtime crates have no external dependencies; the Player depends on winit
 and softbuffer and the GPU backend on wgpu. The runtime holds one backend
 chosen at construction; `prepare` builds backend state so `publish` stays a
 pointer swap. The language covers the Phase 1 constructs plus
-structured control flow: one `compute` block per Kernel, one Image output,
+structured control flow: one `compute` block per Kernel, one output,
 helper functions without recursion, Float/Int/Bool/Vec2/Vec3/Vec4 parameters,
 vector intrinsics, `time()` behind `time.read`, `if` expressions, bounded
 `loop` expressions carrying one value, and structs so that one value can be
@@ -56,11 +55,14 @@ The Player serves the protocol with `--serve`: requests arrive on stdin
 between frames, `evaluate` answers with a window frame under the person's
 input, and `read` observes the shown output.
 
-Typed Fields exist as Rows of one element layout: `Field<Element>` ports,
-`element()`, `sample`, `at`, `count`, `domain = count;`, document-level
-structs, exact integer transport, GPU residency, and the particles example.
-Grid Fields of non-`Vec4` elements, audio sample blocks, and geometry
-attributes are the same model with more domain kinds and device adapters.
+There is one resource now. A Field has a shape, `Rows<T>`, `Grid<T>`, or
+`Volume<T>`, and an element layout; `Image` is an alias for `Grid<Vec4>`
+and `type Name = Shape<T>;` declares more. Capabilities are `field.read`
+and `field.write` for every shape. The Host stores words for everything
+and offers pixel views; both backends transport words, so integers and
+booleans are exact and the examples render identically on the CPU and the
+GPU. Audio sample blocks and geometry attributes are rows of this model
+plus device adapters, nothing more.
 
 Preparation is off the frame thread: the runtime prepares behind tickets on
 one worker, the session republishes running Kernels through it, and the
