@@ -141,6 +141,15 @@ capability claim.
   [audio example](examples/audio/README.md) filters each block with one
   and carries the filter's memory across blocks through Graph state.
 
+- A node's `domain` may be an expression over its inputs and parameters
+  ([domain](crates/graph/src/domain.rs)): a small arithmetic language with
+  `size(port)` and `count(port)`, accepted at document lowering, resolved
+  when the node binds (and at planning, so fusion and `orla graph` see
+  the extent), and printed back so documents round-trip. It lets a Kernel
+  that changes topology size its output from its input, as the
+  [mesh example](examples/mesh/README.md)'s subdivision does, and the
+  [tiles example](examples/tiles/README.md) draw a map at its tile size.
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the

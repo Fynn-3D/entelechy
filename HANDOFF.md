@@ -70,6 +70,10 @@ device's rate (48 kHz when offered), one block per frame; the callback
 never waits or allocates. The audio example is a synthesizer whose phase
 crosses blocks through Graph state; its oscilloscope replay pins that.
 
+A node's `domain` can be an expression over its inputs and parameters
+(`size(map) * tile`, `4 * count(faces)`), so topology-changing Kernels
+size their own output; the mesh example subdivides its torus that way.
+
 Ordered work exists as the third execution mode: `scan with y = init {
 ... }` walks a Kernel's first input in order, carrying a value, on one
 thread on either backend; the audio example's low-pass filter is one,
@@ -98,8 +102,7 @@ about 70 ms and now holds none; the swap lands about 110 ms later.
 Every device the architecture named has an adapter and all three
 execution modes exist: map, reduce, and scan. The language is complete
 for the architecture's Phase 1 and the resource model is converged. What
-remains is smaller and can be picked by need: `domain` as an expression
-so topology-changing Kernels (subdivision) can size their output; the
+remains is smaller and can be picked by need: the
 sample rate as context rather than a parameter the scene repeats;
 letting the audio device drive evaluation when a scene has sound;
 reductions and scans that keep their scratch resident across frames; a

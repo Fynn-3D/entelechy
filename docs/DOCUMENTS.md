@@ -166,8 +166,15 @@ output result <- display.result;      // named graph output; sub-graph outputs
 5. `domain = count;`, `domain = vec2(width, height);`, or
    `domain = vec3(width, height, depth);` sets a node's output extent in
    its output's shape; nodes with an input default to the extent of their
-   first declared input. A binding must match the port's shape and element
-   layout, whatever either side calls it.
+   first declared input. The extent may also be an expression over what
+   comes in: `size(port)` (the extent a port is bound to, as a count, a
+   pair, or a triple), `count(port)`, the node's parameters and the
+   graph's by name, numbers, `vec2`/`vec3`, `+ - * /`, `max`, `min`,
+   `floor`, and `ceil`; it resolves when the node binds, and its sides
+   must come out positive and whole. `domain = size(map) * tile;` draws a
+   map at its tile size; `domain = 4 * count(faces);` sizes a subdivision.
+   A binding must match the port's shape and element layout, whatever
+   either side calls it.
 6. A Kernel id is unique across everything a graph loads; the same id from
    two documents is an error, never a silent override. An anonymous inline
    Kernel is named `<document>.<node>@1`.
