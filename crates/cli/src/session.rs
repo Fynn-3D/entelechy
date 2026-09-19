@@ -538,6 +538,35 @@ impl Session {
         }
     }
 
+    /// Publishes Kernel source that did not come from a document, for the
+    /// creation protocol. The source holds exactly one Kernel. Ownership
+    /// stays with documents: a document that later defines the id
+    /// republishes it from the file.
+    pub fn publish_source(
+        &mut self,
+        source: &str,
+        expect: Expect,
+    ) -> Result<std::sync::Arc<orla_runtime::KernelVersion>, String> {
+        let candidate = self.runtime.prepare(source).map_err(|e| e.to_string())?;
+        self.runtime
+            .publish(candidate, expect)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Retires a published Kernel; returns whether one was registered.
+    pub fn retire_kernel(&mut self, id: &KernelId) -> bool {
+        self.owners.remove(id);
+        for state in self.documents.values_mut() {
+            state.kernels.remove(id);
+        }
+        self.runtime.retire(id).is_some()
+    }
+
+    /// The cached image of a node's output port, if it was evaluated.
+    pub fn cached(&self, node: &orla_graph::NodeId, port: &str) -> Option<ImageHandle> {
+        self.evaluator.cached(node, port)
+    }
+
     /// Evaluates the current graph under `context`. Unchanged nodes are
     /// reused; state commits only when the whole evaluation succeeds.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {

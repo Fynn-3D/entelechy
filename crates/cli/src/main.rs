@@ -18,7 +18,10 @@ usage:
       republish Kernels as their files change; a rejected change keeps the
       running version.
   orla replay <file.replay>... [--backend cpu|gpu]
-      Drive scenes through scripted frames and inputs and check pixels.";
+      Drive scenes through scripted frames and inputs and check pixels.
+  orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu]
+      Serve the creation protocol: JSON requests on stdin, one response per
+      line on stdout. See crates/cli/src/protocol.rs for the operations.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -26,6 +29,7 @@ fn main() -> ExitCode {
         Some("check") => check(&args[1..]),
         Some("run") => run(&args[1..]),
         Some("replay") => replay(&args[1..]),
+        Some("serve") => serve(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -230,6 +234,42 @@ fn run(args: &[String]) -> Result<(), String> {
                 evaluate_and_export(&mut session, &options.out, clock.elapsed().as_secs_f32());
         }
     }
+}
+
+fn serve(args: &[String]) -> Result<(), String> {
+    let mut backend = "cpu".to_string();
+    let mut library = None;
+    let mut scene = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--backend" => {
+                backend = iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| "--backend needs a value".to_string())?;
+            }
+            "--library" => {
+                library = Some(PathBuf::from(
+                    iter.next()
+                        .ok_or_else(|| "--library needs a value".to_string())?,
+                ));
+            }
+            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
+            other => {
+                if scene.replace(PathBuf::from(other)).is_some() {
+                    return Err("serve takes exactly one scene file".into());
+                }
+            }
+        }
+    }
+    let scene = scene.ok_or_else(|| "serve needs a scene file".to_string())?;
+    let runtime = Session::runtime_for(&backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
+    let mut session = Session::open_with(&scene, library.as_deref(), runtime);
+    report_events(&session.sync());
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    orla::protocol::serve(&mut session, stdin.lock(), stdout.lock()).map_err(|e| e.to_string())
 }
 
 fn replay(args: &[String]) -> Result<(), String> {

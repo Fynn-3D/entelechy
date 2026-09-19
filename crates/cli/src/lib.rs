@@ -7,5 +7,6 @@
 //! here, not in the runtimes.
 
 pub mod ppm;
+pub mod protocol;
 pub mod replay;
 pub mod session;

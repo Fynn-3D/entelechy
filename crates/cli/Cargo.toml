@@ -19,9 +19,11 @@ orla-ir = { path = "../ir" }
 orla-graph = { path = "../graph" }
 orla-runtime = { path = "../runtime" }
 orla-gpu = { path = "../gpu" }
+serde_json = "1"
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 orla-graph = { path = "../graph" }
+serde_json = "1"
