@@ -1,0 +1,11 @@
+// The scene as it is; the replay checks the scope, which the sound
+// follows exactly.
+use "../kernels/";
+
+node silence: audio.silence@1 { domain = 800; }
+node voice: audio.voice@1 { previous <~ voice.result from silence.result; }
+node mix: audio.mix@1 { voice <- voice.result; }
+node scope: audio.scope@1 { block <- mix.result; domain = vec2(320, 240); }
+
+output view <- scope.result;
+output sound <- mix.result;

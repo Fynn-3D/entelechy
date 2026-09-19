@@ -1,0 +1,20 @@
+// silence -> voice (fed back) -> mix -> scope; the sound card takes `sound`
+use "kernels/";
+
+node silence: audio.silence@1 { domain = 800; }   // one block per frame at 60 fps and 48 kHz
+
+node voice: audio.voice@1 {
+    previous <~ voice.result from silence.result;
+}
+
+node mix: audio.mix@1 {
+    voice <- voice.result;
+}
+
+node scope: audio.scope@1 {
+    block <- mix.result;
+    domain = vec2(320, 240);
+}
+
+output view <- scope.result;
+output sound <- mix.result;

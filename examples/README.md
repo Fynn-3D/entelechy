@@ -32,3 +32,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [mesh](mesh/README.md): a torus as vertex and triangle rows, projected by
   a Kernel, rasterized by the backend's native `native.rasterize@1`, and
   shaded by a Kernel; the CPU and GPU rasterizers agree.
+- [audio](audio/README.md): a synthesizer as rows, its phase carried across
+  blocks by Graph state, mixed to stereo and drawn as an oscilloscope; the
+  Player plays the stereo rows and shows the scope.

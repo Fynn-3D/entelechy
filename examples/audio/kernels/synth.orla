@@ -1,0 +1,68 @@
+// A synthesizer as rows: one voice per block, carried across blocks by
+// Graph state so the phase never breaks, mixed to stereo, and drawn as an
+// oscilloscope. The sound card claims the stereo rows; the window claims
+// the scope image. Nothing here knows a device exists.
+struct Voice { sample: Float; phase: Float; }
+type Block = Rows<Voice>;
+type Stereo = Rows<Vec2>;
+
+kernel audio.silence@1 {
+    requires { field.write; }
+    output result: Block;
+    compute { return Voice { sample: 0.0, phase: 0.0 }; }
+}
+
+// Continues the phase from the last frame of the previous block. Holding
+// the pointer bends the pitch with x.
+kernel audio.voice@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Block;
+    param frequency: Float = 220.0;
+    param rate: Float = 48000.0;
+    param gain: Float = 0.4;
+    output result: Block;
+
+    compute {
+        let last = at(previous, count(previous) - 1).phase;
+        let bend = if pointer_down() { pow(2.0, pointer().x / 320.0 * 2.0) } else { 1.0 };
+        let phase = fract(last + float(element() + 1) * frequency * bend / rate);
+        let tone = sin(phase * 6.2831853) + 0.3 * sin(phase * 12.566371);
+        return Voice { sample: tone * gain, phase: phase };
+    }
+}
+
+// Pans the voice into two channels; the pointer's y pans while held.
+kernel audio.mix@1 {
+    requires { field.read; field.write; input.read; }
+    input voice: Block;
+    param pan: Float = 0.0;
+    output result: Stereo;
+
+    compute {
+        let v = sample(voice);
+        let p = if pointer_down() { pointer().y / 240.0 * 2.0 - 1.0 } else { pan };
+        return vec2(v.sample * (0.5 - p * 0.5), v.sample * (0.5 + p * 0.5));
+    }
+}
+
+// The block as a trace: each column shows one frame of the block.
+kernel audio.scope@1 {
+    requires { field.read; field.write; }
+    input block: Stereo;
+    param amplitude: Float = 90.0;
+    output result: Image;
+
+    compute {
+        let c = coord();
+        let d = domain();
+        let frame = at(block, int(floor(c.x / d.x * float(count(block)))));
+        let value = frame.x + frame.y;
+        let y = d.y * 0.5 - value * amplitude;
+        let on_trace = abs(c.y - y) < 1.5;
+        let on_axis = abs(c.y - d.y * 0.5) < 0.5;
+        let color = if on_trace { vec3(0.4, 1.0, 0.6) }
+            else if on_axis { vec3(0.2, 0.25, 0.3) }
+            else { vec3(0.05, 0.06, 0.09) };
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}
