@@ -542,3 +542,70 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
         "{compared} compared, {covered} covered"
     );
 }
+
+#[test]
+fn reductions_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    // Ints exactly, floats within the tree's rounding, over an odd count
+    // so the tail path runs, and over an image so the map is a grid.
+    let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let (width, height) = (37, 23);
+    let mut host = Host::new(1 << 20);
+    let image = host
+        .adopt_image(
+            orla_abi::Image::from_pixels(
+                width,
+                height,
+                (0..width * height)
+                    .map(|i| {
+                        let f = i as f32 / (width * height) as f32;
+                        [f, 1.0 - f, (i % 7) as f32 / 7.0, 1.0]
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![image],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu_out = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_stats = host.element(cpu_out, 0).unwrap().to_vec();
+    let prepared = Backend::prepare(&gpu, &module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let gpu_out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let byte_len =
+        host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+    let device = host.resident(gpu_out).unwrap().expect("resident");
+    let bytes = Backend::download(&gpu, device, byte_len).unwrap();
+    let gpu_stats: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    assert_eq!(host.domain(gpu_out).unwrap(), Domain::Rows(1));
+    assert_eq!(cpu_stats[0], gpu_stats[0], "bright counts are exact");
+    for k in 1..6 {
+        let (c, g) = (f32::from_bits(cpu_stats[k]), f32::from_bits(gpu_stats[k]));
+        assert!(
+            (c - g).abs() <= 1e-3 * c.abs().max(1.0),
+            "word {k}: cpu {c}, gpu {g}"
+        );
+    }
+    assert_eq!(
+        cpu_stats[0],
+        (0..width * height)
+            .filter(|i| {
+                let f = *i as f32 / (width * height) as f32;
+                f * 0.2126 + (1.0 - f) * 0.7152 + ((i % 7) as f32 / 7.0) * 0.0722 > 0.5
+            })
+            .count() as u32
+    );
+}

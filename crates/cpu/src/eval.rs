@@ -54,6 +54,7 @@ struct Layouts {
     structs: Vec<StructLayout>,
     functions: Vec<FunctionLayout>,
     entry: FunctionLayout,
+    merge: Option<FunctionLayout>,
 }
 
 impl Layouts {
@@ -136,6 +137,7 @@ impl Layouts {
         Self {
             functions: module.functions.iter().map(function_layout).collect(),
             entry: function_layout(&module.entry),
+            merge: module.merge.as_ref().map(function_layout),
             structs,
         }
     }
@@ -147,17 +149,21 @@ impl Layouts {
 pub(crate) struct Machine<'m> {
     module: &'m Validated,
     invocation: &'m Invocation,
+    /// The domain the entry maps over: the output's, or the first input's
+    /// for a reduction.
+    domain: Domain,
     layouts: Layouts,
     stack: Vec<Value>,
 }
 
 impl<'m> Machine<'m> {
-    pub(crate) fn new(module: &'m Validated, invocation: &'m Invocation) -> Self {
+    pub(crate) fn new(module: &'m Validated, invocation: &'m Invocation, domain: Domain) -> Self {
         let layouts = Layouts::new(module);
         let stack = Vec::with_capacity(layouts.entry.values_size * 2);
         Self {
             module,
             invocation,
+            domain,
             layouts,
             stack,
         }
@@ -178,6 +184,7 @@ impl<'m> Machine<'m> {
         let mut frame = Frame {
             module: self.module,
             invocation: self.invocation,
+            domain: self.domain,
             layouts: &self.layouts,
             layout,
             scope,
@@ -198,6 +205,64 @@ impl<'m> Machine<'m> {
                 &mut out[cursor..],
             );
         }
+        Ok(())
+    }
+
+    /// Runs the module's `merge` on two encoded values and encodes the
+    /// result into `out`.
+    pub(crate) fn run_merge_words(
+        &mut self,
+        scope: &Scope<'_>,
+        a: &[u32],
+        b: &[u32],
+        out: &mut [u32],
+    ) -> Result<(), ExecutionError> {
+        let (merge, layout) = match (&self.module.merge, &self.layouts.merge) {
+            (Some(merge), Some(layout)) => (merge, layout),
+            _ => unreachable!("only reduce modules merge"),
+        };
+        self.stack.clear();
+        self.stack
+            .resize(layout.args_size + layout.values_size, Value::Float(0.0));
+        let ty = merge.args[0];
+        decode(
+            self.module,
+            &self.layouts,
+            ty,
+            a,
+            &mut self.stack,
+            layout.arg_offsets[0],
+        );
+        decode(
+            self.module,
+            &self.layouts,
+            ty,
+            b,
+            &mut self.stack,
+            layout.arg_offsets[1],
+        );
+        let mut frame = Frame {
+            module: self.module,
+            invocation: self.invocation,
+            domain: self.domain,
+            layouts: &self.layouts,
+            layout,
+            scope,
+            at: [0; 3],
+            base: 0,
+            values: layout.args_size,
+            loops: Vec::new(),
+        };
+        frame.instructions(&merge.body, &mut self.stack)?;
+        let result = merge.results[0];
+        let ty = find_type(merge, result).unwrap_or(Type::Float);
+        encode(
+            self.module,
+            &self.layouts,
+            ty,
+            &self.stack[layout.args_size + layout.offsets[result.0 as usize]..],
+            out,
+        );
         Ok(())
     }
 }
@@ -318,6 +383,7 @@ enum Produced {
 struct Frame<'a, 'm> {
     module: &'m Validated,
     invocation: &'m Invocation,
+    domain: Domain,
     layouts: &'a Layouts,
     layout: &'a FunctionLayout,
     scope: &'a Scope<'a>,
@@ -372,7 +438,7 @@ impl<'m> Frame<'_, 'm> {
         stack: &mut Vec<Value>,
     ) -> Result<Produced, ExecutionError> {
         let [x, y, z] = self.at;
-        let height = self.invocation.domain.height();
+        let height = self.domain.height();
         let arithmetic = |error| ExecutionError::Arithmetic {
             x,
             y: z * height + y,
@@ -436,6 +502,7 @@ impl<'m> Frame<'_, 'm> {
                 let mut frame = Frame {
                     module: self.module,
                     invocation: self.invocation,
+                    domain: self.domain,
                     layouts: self.layouts,
                     layout,
                     scope: self.scope,
@@ -515,7 +582,7 @@ impl<'m> Frame<'_, 'm> {
                     .index,
             ),
             Op::Element => {
-                let domain = self.invocation.domain;
+                let domain = self.domain;
                 let [x, y, z] = self.at;
                 Value::Int(((z * domain.height() + y) * domain.width() + x) as i32)
             }
@@ -554,12 +621,12 @@ impl<'m> Frame<'_, 'm> {
             }
             Op::Coord => {
                 let [x, y, z] = self.at;
-                match self.invocation.domain {
+                match self.domain {
                     Domain::Volume(..) => Value::Vec3([x as f32, y as f32, z as f32]),
                     _ => Value::Vec2([x as f32, y as f32]),
                 }
             }
-            Op::Domain => extent(self.invocation.domain),
+            Op::Domain => extent(self.domain),
             Op::Time => Value::Float(self.invocation.context.time),
             Op::Pointer => Value::Vec2(self.invocation.context.input.pointer),
             Op::PointerDown => Value::Bool(self.invocation.context.input.pointer_down),
@@ -592,6 +659,10 @@ impl<'m> Frame<'_, 'm> {
     fn function(&self) -> &'m Function {
         if std::ptr::eq(self.layout, &self.layouts.entry) {
             &self.module.entry
+        } else if let (Some(merge), Some(layout)) = (&self.module.merge, &self.layouts.merge)
+            && std::ptr::eq(self.layout, layout)
+        {
+            merge
         } else {
             let index = self
                 .layouts

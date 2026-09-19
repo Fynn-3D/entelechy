@@ -375,6 +375,7 @@ fn manifest_json(manifest: &Manifest, generation: Generation) -> Json {
     json!({
         "id": manifest.id.to_string(),
         "generation": generation.0,
+        "mode": manifest.mode.to_string(),
         "requires": manifest.requires.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
         "inputs": manifest.inputs.iter().map(|p| json!({ "name": p.name, "type": p.ty.to_string() })).collect::<Vec<_>>(),
         "params": manifest.params.iter().map(|p| json!({ "name": p.name, "type": p.default.ty().to_string(), "default": value_json(&p.default) })).collect::<Vec<_>>(),

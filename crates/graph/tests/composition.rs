@@ -876,3 +876,75 @@ fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
     );
     evaluator.clear(&mut runtime);
 }
+
+#[test]
+fn reductions_produce_one_element_and_stay_out_of_fusion() {
+    let mut runtime = runtime();
+    runtime
+        .load("kernel test.total@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec4>; compute { return sample(source); } merge(a, b) { return a + b; } }")
+        .unwrap();
+    runtime
+        .load("kernel test.show@1 { requires { field.read; field.write; } input total: Rows<Vec4>; output result: Image; compute { let t = at(total, 0); return t / 24.0; } }")
+        .unwrap();
+    let graph = Graph::parse(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node gray: image.grayscale@1 { source <- source.result; amount = 1.0; }
+         node total: test.total@1 { source <- gray.result; }
+         node show: test.show@1 { total <- total.result; domain = vec2(2, 2); }
+         output result <- show.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    // gray absorbs source, but the reduction absorbs nothing and is not
+    // absorbed by `show`, which reads it by address.
+    assert_eq!(
+        report.fused,
+        vec![(NodeId("gray".into()), ids(&["source"]))]
+    );
+    let total = evaluator.cached(&NodeId("total".into()), "result").unwrap();
+    assert_eq!(
+        runtime.host().domain(total).unwrap(),
+        orla_runtime::Domain::Rows(1)
+    );
+    let expected: [f32; 4] = pixels(
+        &runtime,
+        evaluator.cached(&NodeId("gray".into()), "result").unwrap(),
+    )
+    .iter()
+    .fold([0.0; 4], |acc, p| std::array::from_fn(|k| acc[k] + p[k]));
+    let shown = pixels(&runtime, report.output)[0];
+    for k in 0..4 {
+        assert!(
+            (shown[k] * 24.0 - expected[k]).abs() < 1e-3,
+            "{shown:?} vs {expected:?}"
+        );
+    }
+
+    // A reduction with a domain is refused with the node named.
+    let graph = Graph::parse(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node total: test.total@1 { source <- source.result; domain = 1; }
+         output result <- total.result;",
+    )
+    .unwrap();
+    let error = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("remove its `domain`"), "{error}");
+    evaluator.clear(&mut runtime);
+}

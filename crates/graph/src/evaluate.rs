@@ -88,6 +88,9 @@ pub enum EvaluateError {
         /// The failure.
         error: ExecutionError,
     },
+    /// A reduction node was given a `domain`; a reduction produces one
+    /// element and maps over its first input.
+    ReduceDomain(NodeId),
     /// A port is bound to a resource of the other kind, or to a Field with
     /// a different element layout.
     PortKind {
@@ -147,6 +150,10 @@ impl fmt::Display for EvaluateError {
             Self::Fusion { node, message } => {
                 write!(f, "fused group at `{node}` was rejected: {message}")
             }
+            Self::ReduceDomain(node) => write!(
+                f,
+                "node `{node}` is a reduction, which produces one element; remove its `domain`"
+            ),
             Self::PortKind {
                 node,
                 port,
@@ -605,13 +612,18 @@ impl Evaluator {
                 else {
                     continue;
                 };
-                // Native operations have no IR to inline or be inlined into.
+                // Native operations have no IR to inline or be inlined into,
+                // and a reduction neither maps over its output nor yields
+                // one element per consumer element.
                 let (Some(consumer_module), Some(producer_module)) = (
                     consumer.version.module(),
                     groups[producer_position].version.module(),
                 ) else {
                     continue;
                 };
+                if consumer_module.merge.is_some() || producer_module.merge.is_some() {
+                    continue;
+                }
                 if !orla_ir::samples_only(consumer_module, input_index as u32)
                     || groups[producer_position].version.manifest().outputs.len() != 1
                 {
@@ -763,6 +775,9 @@ impl Evaluator {
         externals: &BTreeMap<String, ImageHandle>,
         domains: &BTreeMap<NodeId, Domain>,
     ) -> Option<Domain> {
+        if group.version.manifest().mode == orla_ir::Mode::Reduce {
+            return Some(Domain::Rows(1));
+        }
         if let Some(domain) = group.node.domain {
             return Some(domain);
         }
@@ -984,10 +999,17 @@ impl Evaluator {
             };
             params.push(value);
         }
-        let domain = match (node.domain, inputs.first()) {
-            (Some(domain), _) => domain,
-            (None, Some(first)) => runtime.host().domain(*first)?,
-            (None, None) => return Err(EvaluateError::NoDomain(node.id.clone())),
+        let domain = if manifest.mode == orla_ir::Mode::Reduce {
+            if node.domain.is_some() {
+                return Err(EvaluateError::ReduceDomain(node.id.clone()));
+            }
+            Domain::Rows(1)
+        } else {
+            match (node.domain, inputs.first()) {
+                (Some(domain), _) => domain,
+                (None, Some(first)) => runtime.host().domain(*first)?,
+                (None, None) => return Err(EvaluateError::NoDomain(node.id.clone())),
+            }
         };
         let reads_clock = manifest.requires.contains(Capability::TimeRead);
         let reads_input = manifest.requires.contains(Capability::InputRead);

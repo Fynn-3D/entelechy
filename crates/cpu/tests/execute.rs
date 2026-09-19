@@ -431,3 +431,83 @@ fn fields_carry_struct_elements_with_exact_integers() {
     .unwrap_err();
     assert!(error.to_string().contains("use `at`"), "{error}");
 }
+
+#[test]
+fn reductions_fold_exactly_in_a_fixed_tree() {
+    // Sum, maximum, and count over 1000 rows of ints and floats; the ints
+    // are exact whatever the tree, the floats follow the pairwise tree.
+    let source = "kernel test.stats@1 { requires { field.read; field.write; } input rows: Rows<Item>; output result: Rows<Stats>; struct Item { value: Int; weight: Float; } struct Stats { sum: Int; max: Int; weight: Float; count: Int; } compute { let it = sample(rows); return Stats { sum: it.value, max: it.value, weight: it.weight, count: 1 }; } merge(a, b) { return Stats { sum: a.sum + b.sum, max: max(a.max, b.max), weight: a.weight + b.weight, count: a.count + b.count }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(module.manifest.mode, orla_ir::Mode::Reduce);
+    assert!(module.merge.is_some());
+    let mut host = Host::new(1 << 16);
+    let count = 1000u32;
+    let words: Vec<u32> = (0..count)
+        .flat_map(|i| [(i as i32 * 7 - 3000) as u32, (i as f32 * 0.25).to_bits()])
+        .collect();
+    let rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]),
+                Domain::Rows(count),
+                words,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![rows],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.domain(output).unwrap(), Domain::Rows(1));
+    let stats = host.element(output, 0).unwrap().to_vec();
+    let expected_sum: i32 = (0..count as i32).map(|i| i * 7 - 3000).sum();
+    assert_eq!(stats[0] as i32, expected_sum);
+    assert_eq!(stats[1] as i32, (count as i32 - 1) * 7 - 3000);
+    let weight = f32::from_bits(stats[2]);
+    assert!((weight - 124_875.0).abs() < 8.0, "{weight}");
+    assert_eq!(stats[3], count);
+
+    // The output domain of a reduction is fixed.
+    let bad = Invocation {
+        inputs: vec![rows],
+        params: vec![],
+        domain: Domain::Rows(4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let error = CpuBackend.execute(&module, &bad, &mut scope).unwrap_err();
+    assert!(error.to_string().contains("one element"), "{error}");
+
+    // A single-element input folds nothing and still yields its value.
+    let one = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]),
+                Domain::Rows(1),
+                vec![5, 1.5f32.to_bits()],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![one],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(
+        host.element(output, 0).unwrap(),
+        &[5, 5, 1.5f32.to_bits(), 1]
+    );
+}

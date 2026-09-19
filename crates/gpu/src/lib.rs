@@ -64,6 +64,8 @@ impl fmt::Debug for GpuBackend {
 struct Pipeline {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    /// The fold of a reduce module, run level by level after the map.
+    reduce: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
 }
 
 impl Prepared for Pipeline {
@@ -245,7 +247,56 @@ impl Backend for GpuBackend {
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(format!("{error}\n--- emitted WGSL ---\n{source}"));
         }
-        Ok(Box::new(Pipeline { pipeline, layout }))
+        let reduce = if module.manifest.mode == orla_ir::Mode::Reduce {
+            let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let reduce_source = wgsl::emit_reduce(module);
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("reduce"),
+                    source: wgpu::ShaderSource::Wgsl(reduce_source.as_str().into()),
+                });
+            let entries = [
+                uniform_entry(wgsl::REDUCE_COUNT_BINDING),
+                storage_entry(wgsl::REDUCE_IN_BINDING, true),
+                storage_entry(wgsl::REDUCE_OUT_BINDING, false),
+                uniform_entry(3),
+            ];
+            let layout = self
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("orla reduce"),
+                    entries: &entries,
+                });
+            let pipeline_layout =
+                self.device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("orla reduce"),
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
+                    });
+            let pipeline = self
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("reduce"),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+            if let Some(error) = pollster::block_on(scope_guard.pop()) {
+                return Err(format!("{error}\n--- emitted WGSL ---\n{reduce_source}"));
+            }
+            Some((pipeline, layout))
+        } else {
+            None
+        };
+        Ok(Box::new(Pipeline {
+            pipeline,
+            layout,
+            reduce,
+        }))
     }
 
     fn execute(
@@ -265,7 +316,13 @@ impl Backend for GpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let domain = invocation.domain;
+        // A reduction maps over its first input and folds afterwards.
+        let reducing = module.manifest.mode == orla_ir::Mode::Reduce;
+        let domain = if reducing {
+            scope.size(invocation.inputs[0])?
+        } else {
+            invocation.domain
+        };
         let element_count = domain.count();
 
         // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per input.
@@ -304,6 +361,7 @@ impl Backend for GpuBackend {
         let output_port = &module.manifest.outputs[0];
         let output_words = output_port.ty.schema.words();
         let output_size = (element_count * output_words * 4) as u64;
+        let params_buffer_for_reduce = params_buffer.clone();
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("output"),
             size: output_size,
@@ -355,6 +413,66 @@ impl Backend for GpuBackend {
                 domain.depth(),
             );
         }
+        // The fold: level by level into a second buffer, alternating, in
+        // the same pairwise tree as the CPU reference.
+        let mut final_buffer = output_buffer;
+        if let Some((reduce_pipeline, reduce_layout)) = pipeline.reduce.as_ref() {
+            let stride = output_words as u64 * 4;
+            let mut count = element_count as u64;
+            let other = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("reduce level"),
+                size: (count.div_ceil(2) * stride).max(16),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut current = final_buffer;
+            let mut next = other;
+            while count > 1 {
+                let level: [u32; 4] = [count as u32, 0, 0, 0];
+                let level_bytes: Vec<u8> = level.iter().flat_map(|v| v.to_le_bytes()).collect();
+                let level_buffer =
+                    self.buffer("reduce count", &level_bytes, wgpu::BufferUsages::UNIFORM);
+                let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("orla reduce"),
+                    layout: reduce_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::REDUCE_COUNT_BINDING,
+                            resource: level_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::REDUCE_IN_BINDING,
+                            resource: current.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::REDUCE_OUT_BINDING,
+                            resource: next.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: params_buffer_for_reduce.as_entire_binding(),
+                        },
+                    ],
+                });
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("orla reduce"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(reduce_pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(
+                    (count.div_ceil(2) as u32).div_ceil(wgsl::REDUCE_WORKGROUP),
+                    1,
+                    1,
+                );
+                drop(pass);
+                count = count.div_ceil(2);
+                std::mem::swap(&mut current, &mut next);
+            }
+            final_buffer = current;
+        }
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         self.queue.submit(Some(encoder.finish()));
         // Submissions on one queue run in order, so a later node reading
@@ -364,9 +482,14 @@ impl Backend for GpuBackend {
             return Err(ExecutionError::Device(error.to_string()));
         }
         let device = Box::new(DeviceImage {
-            buffer: output_buffer,
+            buffer: final_buffer,
         });
-        let output = scope.adopt_resident(output_port.ty.schema.clone(), domain, device)?;
+        let output_domain = if reducing {
+            orla_abi::Domain::Rows(1)
+        } else {
+            domain
+        };
+        let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
         Ok(vec![output])
     }
 

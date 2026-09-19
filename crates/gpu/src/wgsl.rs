@@ -8,8 +8,8 @@
 use std::fmt::Write;
 
 use orla_ir::{
-    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, Shape, Type, UnaryOp, Value,
-    ValueId,
+    BinaryOp, Block, Function, Instruction, Intrinsic, Mode, Module, Op, Shape, Type, UnaryOp,
+    Value, ValueId,
 };
 
 /// Binding index of the context uniform.
@@ -190,6 +190,9 @@ pub fn emit(module: &Module) -> String {
         out.push('\n');
     }
     emit_function(&mut out, module, &module.entry, "entry", true);
+    if let Some(merge) = &module.merge {
+        emit_function(&mut out, module, merge, "merge", false);
+    }
     let _ = writeln!(
         out,
         "
@@ -204,6 +207,114 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let element = (gid.z * h + gid.y) * w + gid.x;
     let coord = vec3<f32>(f32(gid.x), f32(gid.y), f32(gid.z));
     store_out0(element, entry(coord, element));
+}}"
+    );
+    out
+}
+
+/// Binding index of the reduce step's count uniform.
+pub const REDUCE_COUNT_BINDING: u32 = 0;
+/// Binding index of the reduce step's input level.
+pub const REDUCE_IN_BINDING: u32 = 1;
+/// Binding index of the reduce step's output level.
+pub const REDUCE_OUT_BINDING: u32 = 2;
+/// Workgroup length of the reduce step.
+pub const REDUCE_WORKGROUP: u32 = 64;
+
+/// Emits the reduce step of a reduce module: element `i` of the output
+/// level is `merge(in[2i], in[2i + 1])`, or `in[2i]` alone at an odd tail.
+/// Run with the level's element count in the uniform until one element
+/// is left. Both backends fold in this same tree.
+pub fn emit_reduce(module: &Module) -> String {
+    debug_assert_eq!(module.manifest.mode, Mode::Reduce);
+    let Some(merge) = &module.merge else {
+        return String::new();
+    };
+    let element = merge.args[0];
+    let stride = module.manifest.outputs[0].ty.schema.words();
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({REDUCE_COUNT_BINDING}) var<uniform> level: vec4<u32>;"
+    );
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({REDUCE_IN_BINDING}) var<storage, read> in0: array<u32>;"
+    );
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({REDUCE_OUT_BINDING}) var<storage, read_write> out0: array<u32>;"
+    );
+    // The map shader's context and params are absent here: `merge` is a
+    // plain function, but it may call helpers and read params, so params
+    // are bound too.
+    let _ = writeln!(
+        out,
+        "@group(0) @binding(3) var<uniform> params: array<vec4<f32>, {}>;",
+        module.manifest.params.len().max(1)
+    );
+    for (index, def) in module.structs.iter().enumerate() {
+        let fields = def
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
+    }
+    for ty in [Type::Vec2, Type::Vec3, Type::Vec4] {
+        let name = wgsl_type(ty);
+        let _ = writeln!(
+            out,
+            "fn safe_normalize_{}(v: {name}) -> {name} {{
+    let l = length(v);
+    if (l > 0.0) {{ return v / l; }}
+    return {name}(0.0);
+}}",
+            ty.components().unwrap_or(0)
+        );
+    }
+    let (expr, _) = load_expr(module, element, "in0", "b", 0);
+    let _ = writeln!(
+        out,
+        "fn load_level(index: u32) -> {} {{
+    let b = index * {stride}u;
+    return {expr};
+}}",
+        wgsl_type(element)
+    );
+    let mut stores = Vec::new();
+    store_lines(module, element, "v", 0, &mut stores);
+    let _ = writeln!(
+        out,
+        "fn store_out0(index: u32, v: {}) {{
+    let b = index * {stride}u;
+{}
+}}",
+        wgsl_type(element),
+        stores.join("\n")
+    );
+    for (index, function) in module.functions.iter().enumerate() {
+        emit_function(&mut out, module, function, &format!("f{index}"), false);
+        out.push('\n');
+    }
+    emit_function(&mut out, module, merge, "merge", false);
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size({REDUCE_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let n = level.x;
+    let i = gid.x;
+    if (i >= (n + 1u) / 2u) {{
+        return;
+    }}
+    if (2u * i + 1u < n) {{
+        store_out0(i, merge(load_level(2u * i), load_level(2u * i + 1u)));
+    }} else {{
+        store_out0(i, load_level(2u * i));
+    }}
 }}"
     );
     out
@@ -535,12 +646,14 @@ impl Emitter<'_> {
         }
     }
 
+    /// The shape the entry maps over: the output's, or the first input's
+    /// for a reduction.
     fn output_shape(&self) -> Shape {
-        self.module
-            .manifest
-            .outputs
-            .first()
-            .map_or(Shape::Grid, |p| p.shape())
+        let manifest = &self.module.manifest;
+        match manifest.mode {
+            Mode::Reduce => manifest.inputs.first().map_or(Shape::Rows, |p| p.shape()),
+            Mode::Map => manifest.outputs.first().map_or(Shape::Grid, |p| p.shape()),
+        }
     }
 
     fn input_shape(&self, input: u32) -> Shape {

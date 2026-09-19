@@ -16,8 +16,8 @@ pub mod raster;
 
 use std::fmt;
 
-use orla_abi::{AbiError, ImageHandle, Invocation, Scope, Shape, Type};
-use orla_ir::Validated;
+use orla_abi::{AbiError, Domain, ImageHandle, Invocation, Scope, Shape, Type};
+use orla_ir::{Mode, Validated};
 
 pub use eval::ArithmeticError;
 
@@ -129,7 +129,10 @@ impl CpuBackend {
     ) -> Result<Vec<ImageHandle>, ExecutionError> {
         check_invocation(module, invocation)?;
         let strides = output_strides(module);
-        let results = compute(module, invocation, scope, &strides)?;
+        if module.manifest.mode == Mode::Reduce {
+            return reduce(module, invocation, scope, strides[0]);
+        }
+        let results = compute(module, invocation, scope, &strides, invocation.domain)?;
         let domain = invocation.domain;
         let stride: usize = strides.iter().sum();
         let count = domain.count();
@@ -168,15 +171,54 @@ fn output_strides(module: &Validated) -> Vec<usize> {
         .collect()
 }
 
-/// Runs the entry point over every element, reading through `scope` only.
-/// Returns every output's words per element, outputs concatenated.
+/// A reduction: the entry over the first input's domain, then a pairwise
+/// fold with `merge` in a fixed tree, so the result does not depend on
+/// how many threads ran the map. One `Rows` element comes out.
+fn reduce(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+    stride: usize,
+) -> Result<Vec<ImageHandle>, ExecutionError> {
+    let domain = scope.size(invocation.inputs[0])?;
+    let mut level = compute(module, invocation, scope, &[stride], domain)?;
+    let mut machine = eval::Machine::new(module, invocation, domain);
+    let mut count = domain.count();
+    while count > 1 {
+        let pairs = count / 2;
+        let mut next = vec![0u32; count.div_ceil(2) * stride];
+        for pair in 0..pairs {
+            let (a, b) = (
+                &level[2 * pair * stride..(2 * pair + 1) * stride],
+                &level[(2 * pair + 1) * stride..(2 * pair + 2) * stride],
+            );
+            machine.run_merge_words(scope, a, b, &mut next[pair * stride..(pair + 1) * stride])?;
+        }
+        if count % 2 == 1 {
+            next[pairs * stride..].copy_from_slice(&level[(count - 1) * stride..count * stride]);
+        }
+        level = next;
+        count = count.div_ceil(2);
+    }
+    let port = &module.manifest.outputs[0];
+    let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
+    if let Err(error) = scope.write_all(output, &level) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// Runs the entry point over every element of `domain`, reading through
+/// `scope` only. Returns every output's words per element, outputs
+/// concatenated.
 fn compute(
     module: &Validated,
     invocation: &Invocation,
     scope: &Scope<'_>,
     strides: &[usize],
+    domain: Domain,
 ) -> Result<Vec<u32>, ExecutionError> {
-    let domain = invocation.domain;
     let width = domain.width() as usize;
     let height = domain.height();
     // Rows of every layer, one after another: the third axis is outermost.
@@ -193,7 +235,7 @@ fn compute(
         .max(1);
     let rows_per_thread = rows.div_ceil(threads);
     let run_rows = |first_row: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
-        let mut machine = eval::Machine::new(module, invocation);
+        let mut machine = eval::Machine::new(module, invocation, domain);
         for (offset, row) in chunk.chunks_exact_mut(row_words.max(1)).enumerate() {
             let flat = (first_row + offset) as u32;
             let (y, z) = (flat % height, flat / height);
@@ -257,6 +299,14 @@ pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(
     }
     if invocation.domain.is_empty() {
         return Err(ExecutionError::EmptyDomain);
+    }
+    if manifest.mode == Mode::Reduce {
+        if invocation.domain != Domain::Rows(1) {
+            return Err(ExecutionError::Device(
+                "a reduction produces one element; its domain is 1".into(),
+            ));
+        }
+        return Ok(());
     }
     if let Some(output) = manifest.outputs.first()
         && output.ty.shape != invocation.domain.shape()
