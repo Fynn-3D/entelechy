@@ -88,6 +88,16 @@ pub enum EvaluateError {
         /// The failure.
         error: ExecutionError,
     },
+    /// A port is bound to a resource of the other kind, or to a Field with
+    /// a different element layout.
+    PortKind {
+        /// The node.
+        node: NodeId,
+        /// The port.
+        port: String,
+        /// What is wrong.
+        message: String,
+    },
     /// A fused group could not be prepared by the backend.
     Fusion {
         /// The consuming node.
@@ -137,6 +147,11 @@ impl fmt::Display for EvaluateError {
             Self::Fusion { node, message } => {
                 write!(f, "fused group at `{node}` was rejected: {message}")
             }
+            Self::PortKind {
+                node,
+                port,
+                message,
+            } => write!(f, "node `{node}` port `{port}`: {message}"),
             Self::Host(error) => write!(f, "{error}"),
         }
     }
@@ -836,6 +851,29 @@ impl Evaluator {
                     }));
                 }
             };
+            // The bound resource must be the kind and layout the port declares.
+            let bound_schema = runtime.host().schema(handle)?.cloned();
+            let message = match (&input.ty, &bound_schema) {
+                (orla_abi::PortType::Image, Some(_)) => {
+                    Some("expects an image but is bound to a Field".to_string())
+                }
+                (orla_abi::PortType::Field { .. }, None) => {
+                    Some("expects a Field but is bound to an image".to_string())
+                }
+                (orla_abi::PortType::Field { schema, .. }, Some(bound)) if *schema != *bound => {
+                    Some(format!(
+                        "expects elements laid out as {schema} but is bound to {bound}"
+                    ))
+                }
+                _ => None,
+            };
+            if let Some(message) = message {
+                return Err(EvaluateError::PortKind {
+                    node: node.id.clone(),
+                    port: input.name.clone(),
+                    message,
+                });
+            }
             inputs.push(handle);
             input_keys.push(key);
         }

@@ -293,6 +293,24 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     Source::External(_) => return Err(failure("output is an external image")),
                 }
             };
+            if let Ok(Some(schema)) = session.runtime().host().schema(handle).map(|s| s.cloned()) {
+                session
+                    .runtime_mut()
+                    .materialize(handle)
+                    .map_err(|e| failure(e.to_string()))?;
+                let field = session
+                    .runtime()
+                    .host()
+                    .field(handle)
+                    .map_err(|e| failure(e.to_string()))?;
+                let bytes: Vec<u8> = field.words().iter().flat_map(|w| w.to_le_bytes()).collect();
+                return Ok(json!({
+                    "count": field.count(),
+                    "schema": schema.to_string(),
+                    "format": "words",
+                    "data": base64(&bytes),
+                }));
+            }
             let image = session
                 .runtime_mut()
                 .image(handle)

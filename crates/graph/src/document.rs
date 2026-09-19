@@ -102,11 +102,17 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
 }
 
 fn domain_value(value: Value, span: Span) -> Result<Domain, DocumentError> {
-    let Value::Vec2([width, height]) = value else {
-        return Err(error(
-            span,
-            "`domain` needs `vec2(width, height)` with positive whole numbers",
-        ));
+    // A single number is a Rows domain: that many elements.
+    let (width, height) = match value {
+        Value::Vec2([width, height]) => (width, height),
+        Value::Int(count) => (count as f32, 1.0),
+        Value::Float(count) => (count, 1.0),
+        _ => {
+            return Err(error(
+                span,
+                "`domain` needs `vec2(width, height)` for a grid or a count for rows",
+            ));
+        }
     };
     let side = |v: f32| {
         (v > 0.0 && v.fract() == 0.0 && v <= u32::MAX as f32)
@@ -767,7 +773,7 @@ output result <- blocks.result;
         let error =
             Graph::parse("node a: t.k@1 { x <- y; x <- z; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("bound twice"), "{error}");
-        let error = Graph::parse("node a: t.k@1 { domain = 3; }\noutput r <- a.r;").unwrap_err();
+        let error = Graph::parse("node a: t.k@1 { domain = true; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("vec2(width, height)"), "{error}");
         let error = Graph::parse("node a: kernel { requires { image.write; } input s: Image; output result: Image; compute { return sample(s); } }\noutput r <- a.result;").unwrap_err();
         assert!(error.message.contains("must be wired"), "{error}");

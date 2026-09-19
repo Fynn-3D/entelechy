@@ -421,7 +421,11 @@ impl fmt::Display for Graph {
                 }
             }
             if let Some(domain) = node.domain {
-                writeln!(f, "    domain = vec2({}, {});", domain.width, domain.height)?;
+                if domain.height == 1 {
+                    writeln!(f, "    domain = {};", domain.width)?;
+                } else {
+                    writeln!(f, "    domain = vec2({}, {});", domain.width, domain.height)?;
+                }
             }
             writeln!(f, "}}")?;
         }

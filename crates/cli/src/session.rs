@@ -678,4 +678,5 @@ fn is_library(document: &Document) -> bool {
         && document.inputs.is_empty()
         && document.outputs.is_empty()
         && document.uses.is_empty()
+        && document.params.is_empty()
 }
