@@ -9,5 +9,9 @@ rust-version.workspace = true
 [dependencies]
 orla-abi = { path = "../abi" }
 
+[dev-dependencies]
+orla-compiler = { path = "../compiler" }
+orla-cpu = { path = "../cpu" }
+
 [lints]
 workspace = true

@@ -318,6 +318,27 @@ impl Runtime {
         })
     }
 
+    /// Prepares a module the runtime did not compile from source (a fused
+    /// group, say) as a version that is never registered: it executes like
+    /// any pinned version but does not appear in the registry.
+    pub fn prepare_detached(
+        &mut self,
+        module: Validated,
+        id: KernelId,
+        source: String,
+    ) -> Result<Arc<KernelVersion>, PrepareError> {
+        let candidate = self.prepare_module(module, &source)?;
+        let generation = Generation(self.next_generation);
+        self.next_generation += 1;
+        Ok(Arc::new(KernelVersion {
+            id,
+            generation,
+            module: candidate.module,
+            source,
+            prepared: candidate.prepared,
+        }))
+    }
+
     /// Atomically publishes a candidate if `expect` matches the registry.
     /// Existing `Arc<KernelVersion>` holders keep their pinned version.
     pub fn publish(

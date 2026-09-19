@@ -10,11 +10,13 @@
 //! which capabilities a Kernel needs before it ever runs.
 
 mod display;
+mod fuse;
 mod validate;
 
 use std::fmt;
 use std::str::FromStr;
 
+pub use fuse::{FuseError, InputUse, fuse, input_use, samples_only};
 pub use orla_abi::{Capabilities, Capability, Type, Value};
 pub use validate::{Validated, ValidationError, validate};
 
