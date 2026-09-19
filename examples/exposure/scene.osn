@@ -1,0 +1,15 @@
+// scene -> measure (a reduction) -> apply
+use "kernels/";
+
+node scene: exposure.scene@1 { domain = vec2(320, 240); }
+
+node measure: exposure.measure@1 {
+    source <- scene.result;      // one element out; no domain
+}
+
+node view: exposure.apply@1 {
+    source <- scene.result;
+    light <- measure.result;
+}
+
+output result <- view.result;

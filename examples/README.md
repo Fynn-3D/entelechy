@@ -35,3 +35,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [audio](audio/README.md): a synthesizer as rows, its phase carried across
   blocks by Graph state, mixed to stereo and drawn as an oscilloscope; the
   Player plays the stereo rows and shows the scope.
+- [exposure](exposure/README.md): the first reduction. A `merge` Kernel
+  meters a frame's luma into one element and a second Kernel tone-maps by
+  it; both backends fold in the same tree.
