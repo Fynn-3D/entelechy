@@ -26,6 +26,12 @@ observe   evaluate, read (rgba32f or ppm, base64)
 repair    the same operations again; retire; reset
 ```
 
+The same protocol runs inside the Player with `orla-player --serve
+<scene.osn>`: requests arrive on stdin while the window runs, an `evaluate`
+answers with the next window frame under the person's real pointer and keys,
+and `read` returns the frame the window shows. An agent and a person then
+work on the same picture.
+
 Operations, fields, and results are listed in
 [the protocol module](../crates/cli/src/protocol.rs), which is the
 authoritative definition; [the end-to-end test](../crates/cli/tests/protocol.rs)

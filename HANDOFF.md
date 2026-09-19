@@ -52,15 +52,23 @@ The Player presents resident outputs on the device through a blit shader;
 downloads happen only on the CPU path or when the window cannot take a
 frame.
 
+The Player serves the protocol with `--serve`: requests arrive on stdin
+between frames, `evaluate` answers with a window frame under the person's
+input, and `read` observes the shown output.
+
 ## Next
 
-Let the protocol drive the Player: run the creation protocol inside the
-Player process (a `--serve` flag reading stdin) so an agent's publish,
-compose, and param operations land in the window a person is watching, and
-the person's pointer and keys are what the agent's `evaluate` observes.
-Acceptance: the protocol test can be pointed at `orla-player --serve` and
-pass unchanged for every operation that does not read pixels, and a `read`
-returns the frame the window shows.
+The next capability is numerical resources beyond images, following the
+Typed Field decision: a `Field` port type with an element schema and a
+Rows or Grid domain, stored by the backend, so Kernels can produce and
+consume point sets, audio blocks, and geometry attributes through the same
+handles, budgets, residency, and commit rules images use. Start from one
+demo that cannot be an image (particles as a Rows field of a struct schema)
+and let it pull the primitives; do not add a second resource lifecycle.
+
+Two smaller items first if they block a demo: prepare fused groups on a
+worker thread so republishing a fused Kernel cannot hitch a frame, and let
+the Player accept `--param` and `--library` like `run` does.
 
 ## Open
 

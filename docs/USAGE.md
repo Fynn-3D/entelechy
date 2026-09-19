@@ -109,7 +109,9 @@ Agents drive a session over stdin and stdout with JSON lines:
 cargo run -- serve examples/life/scene.osn
 ```
 
-See [the protocol](PROTOCOL.md) for the operations.
+See [the protocol](PROTOCOL.md) for the operations. `orla-player --serve`
+runs the same protocol inside the window, so an agent edits what a person
+is watching.
 
 ## Where the contracts live
 
