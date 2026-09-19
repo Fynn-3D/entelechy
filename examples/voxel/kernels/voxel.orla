@@ -1,0 +1,337 @@
+// A voxel studio: a Volume<Int> of colours fed back through the Graph,
+// one row of state (the camera, the tool, the colour, the voxel under
+// the pointer), a backup volume for one level of undo, and a picture.
+// Drag to orbit; the arrows zoom; a click places, erases, or paints the
+// voxel under the pointer, by the tool chosen on the bar at the bottom.
+struct Edit {
+    yaw: Float; pitch: Float; zoom: Float;
+    dragging: Bool; moved: Float; px: Float; py: Float; down: Bool;
+    tool: Int; colour: Int; hover: Int;
+    found: Bool; hit: Vec3; face: Vec3;     // the voxel under the pointer and the face seen
+    apply: Bool; undo: Bool; reset: Bool;    // what this frame does to the volume
+    zkey: Bool;
+}
+type Studio = Rows<Edit>;
+type Voxels = Volume<Int>;
+struct Cast { cell: Vec3; side: Vec3; t: Float; face: Vec3; id: Int; inside: Bool; }
+
+// The starting model: a ground plate, a tree, a few blocks.
+kernel voxel.seed@1 {
+    requires { field.write; }
+    output result: Voxels;
+    compute {
+        let c = coord();
+        let trunk = c.x == 24.0 && c.z == 24.0 && c.y >= 1.0 && c.y <= 7.0;
+        let crown = length(c - vec3(24.0, 10.0, 24.0)) < 4.5;
+        let steps = c.y >= 1.0 && c.y <= 3.0 && c.x >= 8.0 && c.x <= 16.0 - c.y * 2.0 && c.z >= 30.0 && c.z <= 34.0;
+        let ground = c.y == 0.0;
+        return if trunk { 7 } else if crown { 3 } else if steps { 2 } else if ground { 8 } else { 0 };
+    }
+}
+
+kernel voxel.begin@1 {
+    requires { field.write; }
+    output result: Studio;
+    compute {
+        return Edit {
+            yaw: 0.7, pitch: 0.5, zoom: 0.8,
+            dragging: false, moved: 0.0, px: 0.0, py: 0.0, down: false,
+            tool: 0, colour: 1, hover: -1,
+            found: false, hit: vec3(0.0, 0.0, 0.0), face: vec3(0.0, 1.0, 0.0),
+            apply: false, undo: false, reset: false,
+            zkey: false
+        };
+    }
+}
+
+// The bar: six items of 64 pixels with 12 between, centred at the bottom.
+// Place, erase, paint, the colour (a click cycles it), undo, reset.
+kernel voxel.state@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Studio;
+    input voxels: Voxels;
+    param width: Float = 960.0;
+    param height: Float = 540.0;
+    output result: Studio;
+
+    fn item_at(x: Float, y: Float, width: Float, height: Float) -> Int {
+        let left = width * 0.5 - 222.0;
+        let inside = y >= height - 56.0 && y <= height - 8.0 && x >= left && x <= left + 444.0;
+        let slot = int(floor((x - left) / 76.0));
+        let within = (x - left) - float(slot) * 76.0 <= 64.0;
+        return if inside && within && slot >= 0 && slot < 6 { slot } else { -1 };
+    }
+
+    fn eye_at(yaw: Float, pitch: Float, zoom: Float, n: Float) -> Vec3 {
+        let centre = vec3(n * 0.5, n * 0.25, n * 0.5);
+        let radius = n * 1.3 * zoom;
+        return centre + vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * radius;
+    }
+
+    fn ray_at(eye: Vec3, n: Float, x: Float, y: Float, width: Float, height: Float) -> Vec3 {
+        let centre = vec3(n * 0.5, n * 0.25, n * 0.5);
+        let fwd = normalize(centre - eye);
+        let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+        let up = cross(right, fwd);
+        let u = (x - width * 0.5) / height;
+        let v = (height * 0.5 - y) / height;
+        return normalize(fwd * 1.5 + right * u + up * v);
+    }
+
+    fn inv(d: Float) -> Float {
+        return if abs(d) < 0.000001 { if d < 0.0 { -1000000.0 } else { 1000000.0 } } else { 1.0 / d };
+    }
+
+    // Amanatides-Woo: enter the box, then step cell to cell until a
+    // coloured voxel or the far side.
+    fn cast(eye: Vec3, dir: Vec3, n: Float) -> Cast {
+        let ix = inv(dir.x); let iy = inv(dir.y); let iz = inv(dir.z);
+        let ax = (0.0 - eye.x) * ix; let bx = (n - eye.x) * ix;
+        let ay = (0.0 - eye.y) * iy; let by = (n - eye.y) * iy;
+        let az = (0.0 - eye.z) * iz; let bz = (n - eye.z) * iz;
+        let tnear = max(max(min(ax, bx), min(ay, by)), max(min(az, bz), 0.0));
+        let tfar = min(min(max(ax, bx), max(ay, by)), max(az, bz));
+        let p = eye + dir * (tnear + 0.0005);
+        let cell = vec3(clamp(floor(p.x), 0.0, n - 1.0), clamp(floor(p.y), 0.0, n - 1.0), clamp(floor(p.z), 0.0, n - 1.0));
+        let step = vec3(if dir.x < 0.0 { -1.0 } else { 1.0 }, if dir.y < 0.0 { -1.0 } else { 1.0 }, if dir.z < 0.0 { -1.0 } else { 1.0 });
+        let delta = vec3(abs(ix), abs(iy), abs(iz));
+        let side = vec3((cell.x + max(step.x, 0.0) - eye.x) * ix, (cell.y + max(step.y, 0.0) - eye.y) * iy, (cell.z + max(step.z, 0.0) - eye.z) * iz);
+        let entry = if tnear == min(ax, bx) { vec3(-step.x, 0.0, 0.0) } else if tnear == min(ay, by) { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
+        let start = Cast { cell: cell, side: side, t: tnear, face: entry, id: 0, inside: tfar > tnear };
+        return loop 160 with c = start until c.id > 0 || !c.inside {
+            let id = at(voxels, c.cell);
+            if id > 0 { Cast { ..c, id: id } } else {
+                let x_first = c.side.x < c.side.y && c.side.x < c.side.z;
+                let y_first = !x_first && c.side.y < c.side.z;
+                let cell = if x_first { c.cell + vec3(step.x, 0.0, 0.0) } else if y_first { c.cell + vec3(0.0, step.y, 0.0) } else { c.cell + vec3(0.0, 0.0, step.z) };
+                let t = if x_first { c.side.x } else if y_first { c.side.y } else { c.side.z };
+                let side = if x_first { c.side + vec3(delta.x, 0.0, 0.0) } else if y_first { c.side + vec3(0.0, delta.y, 0.0) } else { c.side + vec3(0.0, 0.0, delta.z) };
+                let face = if x_first { vec3(-step.x, 0.0, 0.0) } else if y_first { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
+                let inside = cell.x >= 0.0 && cell.x < n && cell.y >= 0.0 && cell.y < n && cell.z >= 0.0 && cell.z < n;
+                Cast { cell: cell, side: side, t: t, face: face, id: 0, inside: inside }
+            }
+        };
+    }
+
+    compute {
+        let s = sample(previous);
+        let p = pointer();
+        let down = pointer_down();
+        let pressed = down && !s.down;
+        let released = !down && s.down;
+        let hover = item_at(p.x, p.y, width, height);
+        let dx = if s.dragging && down { p.x - s.px } else { 0.0 };
+        let dy = if s.dragging && down { p.y - s.py } else { 0.0 };
+        let dragging = if pressed && hover < 0 { true } else if released { false } else { s.dragging };
+        let moved = if pressed { 0.0 } else { s.moved + abs(dx) + abs(dy) };
+        let yaw = s.yaw + dx * 0.008;
+        let pitch = clamp(s.pitch + dy * 0.008, 0.08, 1.45);
+        let zoom = clamp(s.zoom + (if key(38) { -0.02 } else { 0.0 }) + (if key(40) { 0.02 } else { 0.0 }), 0.5, 2.5);
+        let n = size(voxels).x;
+        let eye = eye_at(yaw, pitch, zoom, n);
+        let seen = cast(eye, ray_at(eye, n, p.x, p.y, width, height), n);
+        let item = if released && !s.dragging { item_at(s.px, s.py, width, height) } else { -1 };
+        let clicked = released && s.dragging && s.moved < 3.0;
+        let tool = if item >= 0 && item <= 2 { item } else { s.tool };
+        let target = seen.cell + seen.face;
+        let in_box = target.x >= 0.0 && target.x < n && target.y >= 0.0 && target.y < n && target.z >= 0.0 && target.z < n;
+        let can = seen.id > 0 && (tool != 0 || in_box);
+        let undo_key = key(90);
+        return Edit {
+            yaw: yaw, pitch: pitch, zoom: zoom,
+            dragging: dragging, moved: moved, px: p.x, py: p.y, down: down,
+            tool: tool,
+            colour: if item == 3 { s.colour % 8 + 1 } else { s.colour },
+            hover: hover,
+            found: seen.id > 0, hit: seen.cell, face: seen.face,
+            apply: clicked && can,
+            undo: item == 4 || (undo_key && !s.zkey),
+            reset: item == 5,
+            zkey: undo_key
+        };
+    }
+}
+
+// The volume after this frame's edit: one voxel placed, erased, or
+// painted; or the backup restored; or the model reset.
+kernel voxel.edit@1 {
+    requires { field.read; field.write; }
+    input previous: Voxels;
+    input backup: Voxels;
+    input origin: Voxels;
+    input state: Studio;
+    output result: Voxels;
+    compute {
+        let s = at(state, 0);
+        let me = sample(previous);
+        let c = coord();
+        let target = if s.tool == 0 { s.hit + s.face } else { s.hit };
+        return if s.reset { sample(origin) }
+            else if s.undo { sample(backup) }
+            else if s.apply && c == target { if s.tool == 1 { 0 } else { s.colour } }
+            else { me };
+    }
+}
+
+// The backup takes the volume as it was before each change, so undo
+// restores it, and a second undo restores the change.
+kernel voxel.keep@1 {
+    requires { field.read; field.write; }
+    input previous: Voxels;
+    input world: Voxels;
+    input state: Studio;
+    output result: Voxels;
+    compute {
+        let s = at(state, 0);
+        return if s.apply || s.undo || s.reset { sample(world) } else { sample(previous) };
+    }
+}
+
+// The picture: the same camera and the same cast as the state, per
+// pixel; faces lit by their direction, darkened where neighbours crowd
+// the face; the voxel under the pointer outlined; a floor; the bar.
+kernel voxel.draw@1 {
+    requires { field.read; field.write; }
+    input voxels: Voxels;
+    input state: Studio;
+    param width: Float = 960.0;
+    param height: Float = 540.0;
+    output result: Image;
+
+    fn palette(id: Int) -> Vec3 {
+        return if id == 1 { vec3(0.92, 0.9, 0.86) } else if id == 2 { vec3(0.85, 0.25, 0.2) }
+            else if id == 3 { vec3(0.3, 0.65, 0.3) } else if id == 4 { vec3(0.25, 0.45, 0.85) }
+            else if id == 5 { vec3(0.95, 0.8, 0.25) } else if id == 6 { vec3(0.9, 0.5, 0.2) }
+            else if id == 7 { vec3(0.45, 0.3, 0.2) } else { vec3(0.55, 0.56, 0.6) };
+    }
+
+    fn eye_at(yaw: Float, pitch: Float, zoom: Float, n: Float) -> Vec3 {
+        let centre = vec3(n * 0.5, n * 0.25, n * 0.5);
+        let radius = n * 1.3 * zoom;
+        return centre + vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * radius;
+    }
+
+    fn ray_at(eye: Vec3, n: Float, x: Float, y: Float, width: Float, height: Float) -> Vec3 {
+        let centre = vec3(n * 0.5, n * 0.25, n * 0.5);
+        let fwd = normalize(centre - eye);
+        let right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+        let up = cross(right, fwd);
+        let u = (x - width * 0.5) / height;
+        let v = (height * 0.5 - y) / height;
+        return normalize(fwd * 1.5 + right * u + up * v);
+    }
+
+    fn inv(d: Float) -> Float {
+        return if abs(d) < 0.000001 { if d < 0.0 { -1000000.0 } else { 1000000.0 } } else { 1.0 / d };
+    }
+
+    fn cast(eye: Vec3, dir: Vec3, n: Float) -> Cast {
+        let ix = inv(dir.x); let iy = inv(dir.y); let iz = inv(dir.z);
+        let ax = (0.0 - eye.x) * ix; let bx = (n - eye.x) * ix;
+        let ay = (0.0 - eye.y) * iy; let by = (n - eye.y) * iy;
+        let az = (0.0 - eye.z) * iz; let bz = (n - eye.z) * iz;
+        let tnear = max(max(min(ax, bx), min(ay, by)), max(min(az, bz), 0.0));
+        let tfar = min(min(max(ax, bx), max(ay, by)), max(az, bz));
+        let p = eye + dir * (tnear + 0.0005);
+        let cell = vec3(clamp(floor(p.x), 0.0, n - 1.0), clamp(floor(p.y), 0.0, n - 1.0), clamp(floor(p.z), 0.0, n - 1.0));
+        let step = vec3(if dir.x < 0.0 { -1.0 } else { 1.0 }, if dir.y < 0.0 { -1.0 } else { 1.0 }, if dir.z < 0.0 { -1.0 } else { 1.0 });
+        let delta = vec3(abs(ix), abs(iy), abs(iz));
+        let side = vec3((cell.x + max(step.x, 0.0) - eye.x) * ix, (cell.y + max(step.y, 0.0) - eye.y) * iy, (cell.z + max(step.z, 0.0) - eye.z) * iz);
+        let entry = if tnear == min(ax, bx) { vec3(-step.x, 0.0, 0.0) } else if tnear == min(ay, by) { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
+        let start = Cast { cell: cell, side: side, t: tnear, face: entry, id: 0, inside: tfar > tnear };
+        return loop 160 with c = start until c.id > 0 || !c.inside {
+            let id = at(voxels, c.cell);
+            if id > 0 { Cast { ..c, id: id } } else {
+                let x_first = c.side.x < c.side.y && c.side.x < c.side.z;
+                let y_first = !x_first && c.side.y < c.side.z;
+                let cell = if x_first { c.cell + vec3(step.x, 0.0, 0.0) } else if y_first { c.cell + vec3(0.0, step.y, 0.0) } else { c.cell + vec3(0.0, 0.0, step.z) };
+                let t = if x_first { c.side.x } else if y_first { c.side.y } else { c.side.z };
+                let side = if x_first { c.side + vec3(delta.x, 0.0, 0.0) } else if y_first { c.side + vec3(0.0, delta.y, 0.0) } else { c.side + vec3(0.0, 0.0, delta.z) };
+                let face = if x_first { vec3(-step.x, 0.0, 0.0) } else if y_first { vec3(0.0, -step.y, 0.0) } else { vec3(0.0, 0.0, -step.z) };
+                let inside = cell.x >= 0.0 && cell.x < n && cell.y >= 0.0 && cell.y < n && cell.z >= 0.0 && cell.z < n;
+                Cast { cell: cell, side: side, t: t, face: face, id: 0, inside: inside }
+            }
+        };
+    }
+
+    // Whether a voxel is coloured, empty outside the box.
+    fn solid(c: Vec3, n: Float) -> Bool {
+        let inside = c.x >= 0.0 && c.x < n && c.y >= 0.0 && c.y < n && c.z >= 0.0 && c.z < n;
+        return inside && at(voxels, c) > 0;
+    }
+
+    // Occlusion on a face from the four voxels beside it, each weighing
+    // by how close the point is to its side.
+    fn occlusion(cell: Vec3, face: Vec3, local: Vec3, n: Float) -> Float {
+        let over = cell + face;
+        let ta = if abs(face.x) > 0.5 { vec3(0.0, 1.0, 0.0) } else { vec3(1.0, 0.0, 0.0) };
+        let tb = if abs(face.z) > 0.5 { vec3(0.0, 1.0, 0.0) } else { vec3(0.0, 0.0, 1.0) };
+        let la = dot(local, ta);
+        let lb = dot(local, tb);
+        let shade = (if solid(over + ta, n) { la } else { 0.0 }) + (if solid(over - ta, n) { 1.0 - la } else { 0.0 })
+                  + (if solid(over + tb, n) { lb } else { 0.0 }) + (if solid(over - tb, n) { 1.0 - lb } else { 0.0 });
+        return 1.0 - 0.45 * clamp(shade, 0.0, 1.5);
+    }
+
+    fn icon(item: Int, u: Vec2, tool: Int, colour: Int) -> Vec3 {
+        let box = max(abs(u.x), abs(u.y));
+        let ring = abs(box - 9.0) < 1.5;
+        let plus = (abs(u.x) < 1.2 && abs(u.y) < 5.0) || (abs(u.y) < 1.2 && abs(u.x) < 5.0);
+        let minus = abs(u.y) < 1.2 && abs(u.x) < 5.0;
+        let dot_ = length(u) < 5.0;
+        let swatch = box < 9.0;
+        let arc = abs(length(u) - 8.0) < 1.5 && !(u.x > 0.0 && u.y < 0.0);
+        let head = u.x > 0.0 && u.y < 0.0 && abs(u.x - 8.0) + abs(u.y + 2.0) < 4.0;
+        let cross_ = abs(abs(u.x) - abs(u.y)) < 1.5 && box < 8.0;
+        let light = vec3(0.92, 0.92, 0.95);
+        let on = if item == 0 { ring || plus } else if item == 1 { ring || minus } else if item == 2 { dot_ }
+            else if item == 3 { swatch } else if item == 4 { arc || head } else { cross_ };
+        let tint = if item == 2 || item == 3 { palette(colour) } else { light };
+        return if on { tint } else { vec3(0.0, 0.0, 0.0) };
+    }
+
+    compute {
+        let s = at(state, 0);
+        let px = coord();
+        let n = size(voxels).x;
+        let eye = eye_at(s.yaw, s.pitch, s.zoom, n);
+        let dir = ray_at(eye, n, px.x + 0.5, px.y + 0.5, width, height);
+        let seen = cast(eye, dir, n);
+        let sky = mix(vec3(0.07, 0.075, 0.09), vec3(0.025, 0.027, 0.035), clamp(dir.y * 2.0 + 0.6, 0.0, 1.0));
+        let scene = if seen.id > 0 {
+            let p = eye + dir * seen.t;
+            let local = p - seen.cell;
+            let light = normalize(vec3(-0.4, 0.9, 0.5));
+            let lit = 0.35 + 0.65 * clamp(dot(seen.face, light), 0.0, 1.0);
+            let base = palette(seen.id) * lit * occlusion(seen.cell, seen.face, local, n);
+            // The voxel under the pointer: its seen face outlined.
+            let mine = s.found && seen.cell == s.hit && seen.face == s.face;
+            let edge = min(min(local.x, 1.0 - local.x), min(min(local.y, 1.0 - local.y), min(local.z, 1.0 - local.z)));
+            let on_edge = mine && edge < 0.08 && (abs(seen.face.x) > 0.5 || (abs(seen.face.y) > 0.5 || abs(seen.face.z) > 0.5));
+            if on_edge { vec3(1.0, 1.0, 1.0) } else if mine { base * 1.2 + vec3(0.05, 0.05, 0.05) } else { base }
+        } else {
+            // The floor below the box: a faint grid on the ground plane.
+            let t = (-0.02 - eye.y) * inv(dir.y);
+            if dir.y < 0.0 && t > 0.0 {
+                let f = eye + dir * t;
+                let g = max(abs(fract(f.x / 8.0) - 0.5), abs(fract(f.z / 8.0) - 0.5));
+                let line = if g > 0.48 { 0.035 } else { 0.0 };
+                let fade = clamp(1.0 - t / (n * 5.0), 0.0, 1.0);
+                sky + vec3(line, line, line) * fade
+            } else { sky }
+        };
+        // The bar, drawn over everything.
+        let left = width * 0.5 - 222.0;
+        let slot = int(floor((px.x - left) / 76.0));
+        let u = vec2((px.x - left) - float(slot) * 76.0 - 32.0, px.y - (height - 32.0));
+        let in_bar = px.y >= height - 56.0 && px.y <= height - 8.0 && px.x >= left && px.x <= left + 444.0;
+        let in_item = in_bar && slot >= 0 && slot < 6 && abs(u.x) <= 32.0;
+        let active = in_item && slot == s.tool;
+        let hovered = in_item && slot == s.hover;
+        let glyph = if in_item { icon(slot, u, s.tool, s.colour) } else { vec3(0.0, 0.0, 0.0) };
+        let plate = if active { vec3(0.36, 0.38, 0.46) } else if hovered { vec3(0.2, 0.21, 0.25) } else { vec3(0.11, 0.115, 0.14) };
+        let colour = if in_bar { mix(scene, plate, 0.85) + glyph } else { scene };
+        let g = 1.0 / 1.8;
+        return vec4(pow(clamp(colour.x, 0.0, 1.0), g), pow(clamp(colour.y, 0.0, 1.0), g), pow(clamp(colour.z, 0.0, 1.0), g), 1.0);
+    }
+}

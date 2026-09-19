@@ -115,6 +115,12 @@ plus a hit sound the rules trigger, played by the sound card with the
 device pacing the game at sixty blocks a second; six seconds on the GPU
 ran with no underruns and no drops. A gamepad maps to the keyboard's
 codes in the Player (untested on hardware here: none was connected).
+The voxel editor is the first tool: a 48³ `Volume<Int>` fed back and
+edited a voxel per click, the voxel under the pointer found by a grid
+walk in the state row, a backup volume for one level of undo (undo
+twice is redo), the same walk per pixel for the picture; it needed
+nothing new, and the gaps it found are the Host's, not the Kernel's:
+no right button or wheel, and no way to load a Field from outside.
 The fluid is an Eulerian smoke simulation: a staggered velocity grid
 and a smoke grid fed back through the Graph, semi-Lagrangian advection
 by `at_linear`, vorticity confinement, a Jacobi pressure solve as one

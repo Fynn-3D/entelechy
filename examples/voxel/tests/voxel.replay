@@ -1,0 +1,80 @@
+scene voxel.osn
+
+# A quarter of the pixels: the bar's items are centred at x 50, 126,
+# 202, 278, 354, 430 and y 238; the middle of the picture, (240, 157),
+# looks down on the top of the tree, voxel (27, 11, 27).
+frame 0.0
+pointer 240 157 up
+frame 0.02
+expect state.result[0].found = true
+expect state.result[0].hit = 27 11 27
+expect state.result[0].face = 0 1 0
+expect state.result[0].tool = 0
+expect 4 4 = 0.205 0.213 0.237 0.02          # the sky is dark
+
+# A click places a white voxel on that face: (27, 12, 27) is 62811.
+pointer 240 157 down
+frame 0.03
+pointer up
+frame 0.05
+expect state.result[0].apply = true
+expect world.result[62811] = 1
+
+# Z undoes it, and Z again brings it back.
+key 90 down
+frame 0.07
+expect world.result[62811] = 0
+key 90 up
+frame 0.08
+key 90 down
+frame 0.1
+expect world.result[62811] = 1
+key 90 up
+frame 0.12
+
+# The second item is the eraser; the same click removes it.
+pointer 126 238 down
+frame 0.13
+pointer up
+frame 0.15
+expect state.result[0].tool = 1
+pointer 240 157 up
+frame 0.17
+pointer 240 157 down
+frame 0.18
+pointer up
+frame 0.2
+expect world.result[62811] = 0
+
+# The fourth item cycles the colour, the third is the brush: the tree's
+# top voxel (27, 11, 27), 62763, turns red.
+pointer 278 238 down
+frame 0.22
+pointer up
+frame 0.23
+expect state.result[0].colour = 2
+pointer 202 238 down
+frame 0.25
+pointer up
+frame 0.27
+expect state.result[0].tool = 2
+pointer 240 157 up
+frame 0.28
+pointer 240 157 down
+frame 0.3
+pointer up
+frame 0.32
+expect world.result[62763] = 2
+
+# A drag orbits and edits nothing: sixty pixels are 0.48 of yaw.
+pointer 100 100 down
+frame 0.33
+pointer 130 100 down
+frame 0.35
+pointer 160 100 down
+frame 0.37
+pointer up
+frame 0.38
+expect state.result[0].yaw = 1.18 0.001
+expect state.result[0].apply = false
+expect world.result[62763] = 2
