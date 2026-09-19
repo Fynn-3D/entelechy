@@ -257,7 +257,13 @@ impl Player {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
             let host = self.session.runtime().host();
             let resident = host.resident(output).ok().flatten();
-            if let (Some(device), Ok((width, height))) = (resident, host.image_size(output)) {
+            // Only a grid of pixels can be shown; anything else downloads
+            // and fails below with a clear message.
+            let presentable = host.schema(output).is_ok_and(|s| s.is_pixel())
+                && host.domain(output).is_ok_and(|d| d.depth() == 1);
+            if let (true, Some(device), Ok((width, height))) =
+                (presentable, resident, host.image_size(output))
+            {
                 let size = window.inner_size();
                 let backend = self.session.runtime().backend().as_any();
                 if let Some(gpu) = backend.downcast_ref::<GpuBackend>() {

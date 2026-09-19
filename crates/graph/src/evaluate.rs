@@ -761,13 +761,7 @@ impl Evaluator {
         }
         let first = group.version.manifest().inputs.first()?;
         let binding = group.node.inputs.get(&first.name)?;
-        let size = |handle: ImageHandle| {
-            runtime
-                .host()
-                .image_size(handle)
-                .ok()
-                .map(|(width, height)| Domain { width, height })
-        };
+        let size = |handle: ImageHandle| runtime.host().domain(handle).ok();
         let of_source = |source: &Source| match source {
             Source::External(name) => externals.get(name).and_then(|h| size(*h)),
             Source::Node { node, .. } => domains.get(node).copied(),
@@ -919,21 +913,22 @@ impl Evaluator {
                     }));
                 }
             };
-            // The bound resource must be the kind and layout the port declares.
-            let bound_schema = runtime.host().schema(handle)?.cloned();
-            let message = match (&input.ty, &bound_schema) {
-                (orla_abi::PortType::Image, Some(_)) => {
-                    Some("expects an image but is bound to a Field".to_string())
-                }
-                (orla_abi::PortType::Field { .. }, None) => {
-                    Some("expects a Field but is bound to an image".to_string())
-                }
-                (orla_abi::PortType::Field { schema, .. }, Some(bound)) if *schema != *bound => {
-                    Some(format!(
-                        "expects elements laid out as {schema} but is bound to {bound}"
-                    ))
-                }
-                _ => None,
+            // The bound resource must have the shape and layout the port
+            // declares; the spelling of either side does not matter.
+            let bound_shape = runtime.host().domain(handle)?.shape();
+            let bound_schema = runtime.host().schema(handle)?;
+            let message = if input.ty.shape != bound_shape {
+                Some(format!(
+                    "expects {} but is bound to a {bound_shape}",
+                    input.ty.shape
+                ))
+            } else if input.ty.schema != *bound_schema {
+                Some(format!(
+                    "expects elements laid out as {} but is bound to {bound_schema}",
+                    input.ty.schema
+                ))
+            } else {
+                None
             };
             if let Some(message) = message {
                 return Err(EvaluateError::PortKind {
@@ -984,10 +979,7 @@ impl Evaluator {
         }
         let domain = match (node.domain, inputs.first()) {
             (Some(domain), _) => domain,
-            (None, Some(first)) => {
-                let (width, height) = runtime.host().image_size(*first)?;
-                Domain { width, height }
-            }
+            (None, Some(first)) => runtime.host().domain(*first)?,
             (None, None) => return Err(EvaluateError::NoDomain(node.id.clone())),
         };
         let reads_clock = manifest.requires.contains(Capability::TimeRead);
@@ -1082,5 +1074,5 @@ fn release(runtime: &mut Runtime, handle: ImageHandle) {
     // Handles here were created by executions this evaluator owns; a failure
     // means the interface released them behind our back, which is the only
     // case where ignoring the error is correct.
-    let _ = runtime.host_mut().release_image(handle);
+    let _ = runtime.host_mut().release(handle);
 }

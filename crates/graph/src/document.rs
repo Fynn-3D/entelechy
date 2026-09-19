@@ -102,26 +102,26 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
 }
 
 fn domain_value(value: Value, span: Span) -> Result<Domain, DocumentError> {
-    // A single number is a Rows domain: that many elements.
-    let (width, height) = match value {
-        Value::Vec2([width, height]) => (width, height),
-        Value::Int(count) => (count as f32, 1.0),
-        Value::Float(count) => (count, 1.0),
-        _ => {
-            return Err(error(
-                span,
-                "`domain` needs `vec2(width, height)` for a grid or a count for rows",
-            ));
-        }
-    };
+    // The literal's arity is the shape: a count for rows, a pair for a
+    // grid, a triple for a volume.
     let side = |v: f32| {
         (v > 0.0 && v.fract() == 0.0 && v <= u32::MAX as f32)
             .then_some(v as u32)
             .ok_or_else(|| error(span, "`domain` sides must be positive whole numbers"))
     };
-    Ok(Domain {
-        width: side(width)?,
-        height: side(height)?,
+    Ok(match value {
+        Value::Int(count) => Domain::Rows(side(count as f32)?),
+        Value::Float(count) => Domain::Rows(side(count)?),
+        Value::Vec2([width, height]) => Domain::Grid(side(width)?, side(height)?),
+        Value::Vec3([width, height, depth]) => {
+            Domain::Volume(side(width)?, side(height)?, side(depth)?)
+        }
+        _ => {
+            return Err(error(
+                span,
+                "`domain` needs a count for rows, `vec2(width, height)` for a grid, or `vec3(width, height, depth)` for a volume",
+            ));
+        }
     })
 }
 
@@ -630,13 +630,7 @@ output result <- blocks.result;
             graph.nodes[1].params["size"],
             ParamValue::Literal(Value::Int(8))
         );
-        assert_eq!(
-            graph.nodes[1].domain,
-            Some(Domain {
-                width: 64,
-                height: 32
-            })
-        );
+        assert_eq!(graph.nodes[1].domain, Some(Domain::Grid(64, 32)));
         let text = graph.to_string();
         assert_eq!(Graph::parse(&text).unwrap(), graph);
     }
@@ -646,7 +640,7 @@ output result <- blocks.result;
         let source = "input photo: Image;
              param decay: Float = 0.9;
              node trail: kernel {
-                 requires { image.read; image.write; }
+                 requires { field.read; field.write; }
                  input current: Image <- photo;
                  input previous: Image <~ trail.result from photo;
                  param fade: Float = decay;
@@ -655,7 +649,7 @@ output result <- blocks.result;
                  compute { return sample(current) * fade + sample(previous); }
              }
              node named: kernel fx.glow@2 {
-                 requires { image.read; image.write; }
+                 requires { field.read; field.write; }
                  input source: Image <- trail.result;
                  output result: Image;
                  compute { return sample(source); }
@@ -676,13 +670,7 @@ output result <- blocks.result;
         let trail = &lowered.graph.nodes[0];
         assert_eq!(trail.kernel.to_string(), "my_scene.trail@1");
         assert!(matches!(trail.inputs["previous"], Binding::Previous { .. }));
-        assert_eq!(
-            trail.domain,
-            Some(Domain {
-                width: 4,
-                height: 4
-            })
-        );
+        assert_eq!(trail.domain, Some(Domain::Grid(4, 4)));
         assert_eq!(trail.params["fade"], ParamValue::Graph("decay".into()));
         let compiled =
             orla_compiler::compile_kernel(&lowered.inline[0].kernel, Some(&lowered.inline[0].id))
@@ -775,7 +763,7 @@ output result <- blocks.result;
         assert!(error.message.contains("bound twice"), "{error}");
         let error = Graph::parse("node a: t.k@1 { domain = true; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("vec2(width, height)"), "{error}");
-        let error = Graph::parse("node a: kernel { requires { image.write; } input s: Image; output result: Image; compute { return sample(s); } }\noutput r <- a.result;").unwrap_err();
+        let error = Graph::parse("node a: kernel { requires { field.write; } input s: Image; output result: Image; compute { return sample(s); } }\noutput r <- a.result;").unwrap_err();
         assert!(error.message.contains("must be wired"), "{error}");
         let error = Graph::parse("node a: t.k@1 { y = 1.0 + 2.0; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("literal"), "{error}");

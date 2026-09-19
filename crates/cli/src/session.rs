@@ -189,8 +189,8 @@ struct DocumentState {
 impl Session {
     /// Creates a CPU-backed session; call [`Session::sync`] to load files.
     /// `library` is an extra directory or file of Kernels to use.
-    pub fn open(scene: &Path, library: Option<&Path>, budget_pixels: usize) -> Self {
-        Self::open_with(scene, library, Runtime::new(budget_pixels))
+    pub fn open(scene: &Path, library: Option<&Path>, budget_words: usize) -> Self {
+        Self::open_with(scene, library, Runtime::new(budget_words))
     }
 
     /// Creates a session over a runtime built by the caller, for choosing
@@ -220,13 +220,13 @@ impl Session {
 
     /// Builds a runtime over a named backend: `cpu`, or `gpu` when a device
     /// is available.
-    pub fn runtime_for(backend: &str, budget_pixels: usize) -> Result<Runtime, String> {
+    pub fn runtime_for(backend: &str, budget_words: usize) -> Result<Runtime, String> {
         match backend {
-            "cpu" => Ok(Runtime::new(budget_pixels)),
+            "cpu" => Ok(Runtime::new(budget_words)),
             "gpu" => {
                 let gpu = orla_gpu::GpuBackend::new().map_err(|error| error.to_string())?;
                 let backend: Box<dyn Backend> = Box::new(gpu);
-                Ok(Runtime::with_backend(budget_pixels, backend))
+                Ok(Runtime::with_backend(budget_words, backend))
             }
             other => Err(format!("unknown backend `{other}`; use cpu or gpu")),
         }
@@ -272,7 +272,7 @@ impl Session {
             .adopt_image(image)
             .map_err(SessionError::Host)?;
         if let Some(previous) = self.externals.insert(name.to_owned(), handle) {
-            let _ = self.runtime.host_mut().release_image(previous);
+            let _ = self.runtime.host_mut().release(previous);
         }
         Ok(())
     }
@@ -740,7 +740,7 @@ impl Session {
             .runtime
             .image(image)
             .map_err(|e| SessionError::Observe(e.to_string()))?;
-        ppm::write(path, image).map_err(|e| SessionError::Image(path.to_path_buf(), e))
+        ppm::write(path, &image).map_err(|e| SessionError::Image(path.to_path_buf(), e))
     }
 
     /// Reads one pixel of a cached image, materializing it if needed.

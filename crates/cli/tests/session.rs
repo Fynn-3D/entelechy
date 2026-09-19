@@ -41,7 +41,7 @@ fn rejected(events: &[Event]) -> Vec<String> {
         .collect()
 }
 
-const INVERT: &str = "kernel image.invert@1 { requires { image.read; image.write; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a); } }";
+const INVERT: &str = "kernel image.invert@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a); } }";
 
 #[test]
 fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
@@ -110,7 +110,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     // Break it: the previous version keeps running and the diagnostic has a position.
     std::fs::write(
         &grayscale,
-        "kernel image.grayscale@1 {\n  requires { image.write; }\n  output result: Image;\n  compute { return oops; }\n}",
+        "kernel image.grayscale@1 {\n  requires { field.write; }\n  output result: Image;\n  compute { return oops; }\n}",
     )
     .unwrap();
     let events = session.sync();
@@ -148,7 +148,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     // Two documents claiming one id: the second is rejected, the first stays.
     std::fs::write(
         &grayscale,
-        "kernel image.pixelate@1 { requires { image.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+        "kernel image.pixelate@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
     )
     .unwrap();
     let events = session.sync();
@@ -200,7 +200,7 @@ fn scene_edits_inline_kernels_and_externals_flow_through_the_session() {
             "input photo: Image;
 node inv: {}
 node dim: kernel {{
-    requires {{ image.read; image.write; }}
+    requires {{ field.read; field.write; }}
     input source: Image <- inv.result;
     param amount: Float = 0.5;
     output result: Image;
@@ -253,7 +253,7 @@ fn the_binary_checks_and_runs() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{stdout}");
     assert!(stdout.contains("kernel image.grayscale@1"), "{stdout}");
-    assert!(stdout.contains("host image.sample input0"), "{stdout}");
+    assert!(stdout.contains("host sample input0"), "{stdout}");
     assert!(
         stdout.contains("graph `scene` with 3 node(s), 1 use(s)"),
         "{stdout}"
@@ -380,7 +380,7 @@ fn the_graph_command_prints_the_plan() {
     );
     assert!(stdout.contains("// plan: 2 group(s)"), "{stdout}");
     assert!(
-        stdout.contains("//   gray + source: fused.gray@1 128x128"),
+        stdout.contains("//   gray + source: fused.gray@1 vec2(128, 128)"),
         "{stdout}"
     );
     assert!(stdout.contains("//   blocks: image.pixelate@1"), "{stdout}");
@@ -466,7 +466,7 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
     // A broken edit is rejected by the compiler at once, off no thread.
     std::fs::write(
         &grayscale,
-        "kernel image.grayscale@1 {\n  requires { image.write; }\n  output result: Image;\n  compute { return oops; }\n}",
+        "kernel image.grayscale@1 {\n  requires { field.write; }\n  output result: Image;\n  compute { return oops; }\n}",
     )
     .unwrap();
     let events = session.sync();

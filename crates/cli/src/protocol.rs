@@ -33,7 +33,7 @@
 use std::io::{BufRead, Write};
 
 use orla_graph::{Binding, ParamValue, Source};
-use orla_runtime::{Context, Expect, Generation, InputState, KernelId, Manifest, Value};
+use orla_runtime::{Context, Expect, Generation, InputState, KernelId, Manifest, Shape, Value};
 use serde_json::{Value as Json, json};
 
 use crate::ppm;
@@ -293,19 +293,32 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     Source::External(_) => return Err(failure("output is an external image")),
                 }
             };
-            if let Ok(Some(schema)) = session.runtime().host().schema(handle).map(|s| s.cloned()) {
+            // A Field of pixels reads as an image; anything else reads as
+            // words with its shape and layout.
+            let (domain, schema) = {
+                let host = session.runtime().host();
+                (
+                    host.domain(handle).map_err(|e| failure(e.to_string()))?,
+                    host.schema(handle)
+                        .map_err(|e| failure(e.to_string()))?
+                        .clone(),
+                )
+            };
+            if !schema.is_pixel() || domain.shape() == Shape::Volume {
                 session
                     .runtime_mut()
                     .materialize(handle)
                     .map_err(|e| failure(e.to_string()))?;
-                let field = session
+                let data = session
                     .runtime()
                     .host()
-                    .field(handle)
+                    .data(handle)
                     .map_err(|e| failure(e.to_string()))?;
-                let bytes: Vec<u8> = field.words().iter().flat_map(|w| w.to_le_bytes()).collect();
+                let bytes: Vec<u8> = data.words().iter().flat_map(|w| w.to_le_bytes()).collect();
                 return Ok(json!({
-                    "count": field.count(),
+                    "shape": domain.shape().to_string(),
+                    "extent": [domain.width(), domain.height(), domain.depth()],
+                    "count": domain.count(),
                     "schema": schema.to_string(),
                     "format": "words",
                     "data": base64(&bytes),
@@ -325,7 +338,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     .iter()
                     .flat_map(|pixel| pixel.iter().flat_map(|v| v.to_le_bytes()))
                     .collect::<Vec<u8>>(),
-                "ppm" => ppm::encode(image),
+                "ppm" => ppm::encode(&image),
                 other => {
                     return Err(failure(format!(
                         "unknown format `{other}`; use rgba32f or ppm"
@@ -394,7 +407,11 @@ fn graph_json(
                 ParamValue::Literal(v) => value_json(v),
                 ParamValue::Graph(p) => json!({ "param": p }),
             })).collect::<serde_json::Map<_, _>>(),
-            "domain": node.domain.map(|d| json!([d.width, d.height])),
+            "domain": node.domain.map(|d| match d {
+                orla_runtime::Domain::Rows(n) => json!([n]),
+                orla_runtime::Domain::Grid(w, h) => json!([w, h]),
+                orla_runtime::Domain::Volume(w, h, d) => json!([w, h, d]),
+            }),
         })).collect::<Vec<_>>(),
         "outputs": graph.outputs.iter().map(|(name, s)| json!({ "name": name, "source": source(s) })).collect::<Vec<_>>(),
     })

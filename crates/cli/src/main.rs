@@ -305,10 +305,7 @@ fn graph(args: &[String]) -> Result<(), String> {
                             .join(" + ")
                     )
                 };
-                let domain = entry
-                    .domain
-                    .map(|d| format!(" {}x{}", d.width, d.height))
-                    .unwrap_or_default();
+                let domain = entry.domain.map(|d| format!(" {d}")).unwrap_or_default();
                 println!("//   {}{absorbed}: {}{domain}", entry.node, entry.kernel);
             }
             Ok(())

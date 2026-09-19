@@ -10,9 +10,9 @@ fn at(time: f32) -> Context {
     }
 }
 
-const GRADIENT: &str = "kernel image.gradient@1 { requires { image.write; } output result: Image; compute { let uv = coord() / (domain() - vec2(1.0, 1.0)); return vec4(uv.x, uv.y, 0.0, 1.0); } }";
-const GRAYSCALE: &str = "kernel image.grayscale@1 { requires { image.read; image.write; } input source: Image; param amount: Float = 1.0; output result: Image; compute { let c = sample(source); let g = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return mix(c, vec4(g, g, g, c.a), amount); } }";
-const INVERT: &str = "kernel image.invert@1 { requires { image.read; image.write; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a); } }";
+const GRADIENT: &str = "kernel image.gradient@1 { requires { field.write; } output result: Image; compute { let uv = coord() / (domain() - vec2(1.0, 1.0)); return vec4(uv.x, uv.y, 0.0, 1.0); } }";
+const GRAYSCALE: &str = "kernel image.grayscale@1 { requires { field.read; field.write; } input source: Image; param amount: Float = 1.0; output result: Image; compute { let c = sample(source); let g = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return mix(c, vec4(g, g, g, c.a), amount); } }";
+const INVERT: &str = "kernel image.invert@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a); } }";
 const DOCUMENT: &str = "
 node source: image.gradient@1 { domain = vec2(3, 3); }
 node gray: image.grayscale@1 { source <- source.result; }
@@ -56,7 +56,7 @@ fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
     assert_eq!(report.executed, ids(&["source", "gray", "final"]));
     let pixel = runtime.host().read_pixel(report.output, 2, 0).unwrap();
     near(pixel, [1.0 - 0.2126, 1.0 - 0.2126, 1.0 - 0.2126, 1.0]);
-    assert_eq!(runtime.host().live_images(), 3);
+    assert_eq!(runtime.host().live(), 3);
     assert_eq!(report.outputs[0].0, "result");
 
     let again = evaluator
@@ -112,11 +112,7 @@ fn republishing_a_kernel_invalidates_only_its_dependents() {
         runtime.host().read_pixel(report.output, 2, 0).unwrap(),
         [0.0, 0.0, 0.0, 1.0],
     );
-    assert_eq!(
-        runtime.host().live_images(),
-        3,
-        "replaced outputs were released"
-    );
+    assert_eq!(runtime.host().live(), 3, "replaced outputs were released");
 }
 
 #[test]
@@ -172,14 +168,10 @@ fn parameter_and_structure_changes_are_tracked() {
         )
         .unwrap();
     assert!(report.executed.is_empty());
-    assert_eq!(
-        runtime.host().live_images(),
-        2,
-        "removed node released its image"
-    );
+    assert_eq!(runtime.host().live(), 2, "removed node released its image");
 
     evaluator.clear(&mut runtime);
-    assert_eq!(runtime.host().live_images(), 0);
+    assert_eq!(runtime.host().live(), 0);
 }
 
 #[test]
@@ -240,7 +232,7 @@ fn failures_are_attributed_and_last_good_results_survive() {
         .unwrap();
 
     runtime
-        .load("kernel image.invert@1 { requires { image.read; image.write; } input source: Image; param d: Int = 0; output result: Image; compute { let q = 1 / d; return vec4(float(q), 0.0, 0.0, 1.0); } }")
+        .load("kernel image.invert@1 { requires { field.read; field.write; } input source: Image; param d: Int = 0; output result: Image; compute { let q = 1 / d; return vec4(float(q), 0.0, 0.0, 1.0); } }")
         .unwrap();
     let error = evaluator
         .evaluate(
@@ -327,7 +319,7 @@ fn structural_errors_are_reported_before_execution() {
 fn only_clock_reading_nodes_re_execute_when_time_advances() {
     let mut runtime = runtime();
     runtime
-        .load("kernel image.pulse@1 { requires { image.read; image.write; time.read; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * fract(time()), c.g, c.b, c.a); } }")
+        .load("kernel image.pulse@1 { requires { field.read; field.write; time.read; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * fract(time()), c.g, c.b, c.a); } }")
         .unwrap();
     let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
     let mut evaluator = Evaluator::new();
@@ -369,8 +361,8 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
     assert!(third.executed.is_empty(), "same time, nothing re-executes");
 }
 
-const ZERO: &str = "kernel test.zero@1 { requires { image.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }";
-const INCREMENT: &str = "kernel test.increment@1 { requires { image.read; image.write; } input previous: Image; param by: Float = 1.0; output result: Image; compute { let c = sample(previous); return vec4(c.r + by, c.g, c.b, 1.0); } }";
+const ZERO: &str = "kernel test.zero@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }";
+const INCREMENT: &str = "kernel test.increment@1 { requires { field.read; field.write; } input previous: Image; param by: Float = 1.0; output result: Image; compute { let c = sample(previous); return vec4(c.r + by, c.g, c.b, 1.0); } }";
 const COUNTER: &str = "
 node seed: test.zero@1 { domain = vec2(2, 2); }
 node count: test.increment@1 { previous <~ count.result from seed.result; }
@@ -406,7 +398,7 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
             vec![(NodeId("count".into()), "result".into())]
         );
         assert_eq!(
-            runtime.host().live_images(),
+            runtime.host().live(),
             2,
             "seed and the committed frame only"
         );
@@ -439,10 +431,10 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
         )
         .unwrap();
     assert_eq!(red(&runtime, report.output), 10.0);
-    assert_eq!(runtime.host().live_images(), 2);
+    assert_eq!(runtime.host().live(), 2);
 
     evaluator.clear(&mut runtime);
-    assert_eq!(runtime.host().live_images(), 0);
+    assert_eq!(runtime.host().live(), 0);
 }
 
 #[test]
@@ -451,7 +443,7 @@ fn a_failed_evaluation_commits_nothing() {
     runtime.load(ZERO).unwrap();
     runtime.load(INCREMENT).unwrap();
     runtime
-        .load("kernel test.gate@1 { requires { image.read; image.write; } input source: Image; param d: Int = 1; output result: Image; compute { let q = 1 / d; return sample(source) * float(q); } }")
+        .load("kernel test.gate@1 { requires { field.read; field.write; } input source: Image; param d: Int = 1; output result: Image; compute { let q = 1 / d; return sample(source) * float(q); } }")
         .unwrap();
     let mut graph = Graph::parse(&format!(
         "{COUNTER}node gate: test.gate@1 {{ source <- count.result; d = 1; }}\n"
@@ -512,9 +504,9 @@ fn a_failed_evaluation_commits_nothing() {
         "state advanced exactly once past the failures"
     );
     assert!(
-        runtime.host().live_images() <= 4,
+        runtime.host().live() <= 4,
         "no leaked frames: {}",
-        runtime.host().live_images()
+        runtime.host().live()
     );
 }
 
@@ -534,7 +526,7 @@ fn feedback_edges_are_not_dependencies_and_must_name_nodes() {
 fn input_reading_nodes_re_execute_when_input_changes() {
     let mut runtime = runtime();
     runtime
-        .load("kernel image.paint@1 { requires { image.read; image.write; input.read; } input source: Image; output result: Image; compute { let c = sample(source); let near = length(coord() - pointer()) < 1.5; let hit = if near && pointer_down() { 1.0 } else { 0.0 }; return vec4(hit, float(key(65)), c.b, c.a); } }")
+        .load("kernel image.paint@1 { requires { field.read; field.write; input.read; } input source: Image; output result: Image; compute { let c = sample(source); let near = length(coord() - pointer()) < 1.5; let hit = if near && pointer_down() { 1.0 } else { 0.0 }; return vec4(hit, float(key(65)), c.b, c.a); } }")
         .unwrap();
     let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(4, 4); }\nnode paint: image.paint@1 { source <- source.result; }\noutput r <- paint.result;").unwrap();
     let mut evaluator = Evaluator::new();
@@ -661,7 +653,7 @@ fn pixels(runtime: &Runtime, handle: orla_runtime::ImageHandle) -> Vec<[f32; 4]>
 fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
     let mut runtime = runtime();
     runtime
-        .load("kernel image.pixelate@1 { requires { image.read; image.write; } input source: Image; param size: Int = 2; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }")
+        .load("kernel image.pixelate@1 { requires { field.read; field.write; } input source: Image; param size: Int = 2; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }")
         .unwrap();
     // gradient -> gray -> inv -> blocks: gray and inv are pointwise; blocks
     // fetches, so it stays separate and absorbs nothing.
@@ -705,7 +697,7 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
         vec![(NodeId("inv".into()), ids(&["gray", "source"]))]
     );
     assert_eq!(
-        runtime.host().live_images(),
+        runtime.host().live(),
         2,
         "only the fused group and blocks are materialized"
     );
@@ -767,7 +759,7 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
         .unwrap();
     assert_eq!(report.fused[0].1, ids(&["gray", "source"]));
     fused.clear(&mut runtime);
-    assert_eq!(runtime.host().live_images(), 0);
+    assert_eq!(runtime.host().live(), 0);
 }
 
 #[test]
