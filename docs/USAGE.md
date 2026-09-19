@@ -28,6 +28,14 @@ bound with `--input <name>=<file.ppm>`; graph parameters are overridden with
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
 ```
 
+## Fusion
+
+Chains of pointwise nodes run as one Kernel: a producer whose only reader
+samples it at the current coordinate over the same domain is inlined into
+that reader, and its image is never written. `run` reports fused groups as
+`consumer+producer`. Pass `--no-fusion` to `run` to compare, or pin a node
+through the protocol to observe its image.
+
 ## Backends
 
 `run` and the Player take `--backend cpu|gpu`. The CPU interpreter is the

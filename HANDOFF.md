@@ -41,16 +41,18 @@ The creation protocol exists: `orla serve` speaks JSON lines over stdin and
 stdout ([docs/PROTOCOL.md](docs/PROTOCOL.md)); the end-to-end test drives
 the binary as a client.
 
+Fusion exists: pointwise chains run as one detached Kernel version, bit-
+identical to the materialized chain, with pinning to observe absorbed nodes.
+
 ## Next
 
-In the Graph layer and backend-neutral: fuse chains of pointwise nodes
-(those that only `sample` their inputs) into one module before execution,
-verified by exact equality against the unfused CPU result. A fused group is
-one cache unit; an interface that asks for an intermediate node's image
-forces materialization. GPU residency (images staying on the device between
-nodes, with committed state as a ping-pong pair and explicit readback at
-observation boundaries) comes after fusion, once transfer cost is what
-remains.
+GPU residency: images stay on the device between nodes, committed state is
+a ping-pong pair, and readback happens only at observation boundaries (an
+export, a `read`, a pinned node, the Player's present). Keep the Host as
+the owner: a resident image is a Host resource whose bytes live on the
+device until observed. Acceptance: the material ball and ray-march scenes
+run without a per-node upload or readback, parity tests still pass, and the
+Life state loop never leaves the device.
 
 Then let the protocol drive the Player: the Player as a `serve` client that
 shows frames, so an agent and a person watch the same window.

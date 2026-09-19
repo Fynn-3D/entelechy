@@ -1257,6 +1257,8 @@ name = "orla-ir"
 version = "0.1.0"
 dependencies = [
  "orla-abi",
+ "orla-compiler",
+ "orla-cpu",
 ]
 
 [[package]]

@@ -20,7 +20,7 @@ capability claim.
 | --- | --- | --- |
 | Host Core | [host](crates/host/src/lib.rs) | Unit tests: handles, budgets, bounds |
 | Capability ABI | [abi](crates/abi/src/lib.rs) | Unit tests: grant checks before Host access |
-| Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs) | Unit tests: typing, SSA order, capability coverage |
+| Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [interpreter](crates/cpu/src/eval.rs) | [execution tests](crates/cpu/tests/execute.rs) |
@@ -32,6 +32,14 @@ capability claim.
 | Player | [window loop](crates/player/src/main.rs), [presentation](crates/player/src/lib.rs) | Presentation unit tests; [material ball](examples/material-ball/README.md) for the live loop |
 
 ## Contracts worth knowing
+
+- Fusion is backend-neutral and exact: a producer read by exactly one
+  consumer, only through `sample`, over the same domain, that is neither a
+  graph output, a state source, nor pinned, is inlined into that consumer
+  by [`fuse`](crates/ir/src/fuse.rs) and executed as one detached Kernel
+  version. Results are bit-identical on the CPU
+  ([IR test](crates/ir/tests/fusion.rs), [graph tests](crates/graph/tests/composition.rs));
+  absorbed nodes are not materialized until pinned.
 
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
