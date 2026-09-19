@@ -50,7 +50,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
         ["image.gradient@1", "image.grayscale@1", "image.pixelate@1"]
     );
     assert!(events.contains(&Event::SceneLoaded));
-    let report = session.evaluate().unwrap();
+    let report = session.evaluate(0.0).unwrap();
     assert_eq!(report.executed.len(), 3);
     let out = dir.join("out.ppm");
     session.export(report.output, &out).unwrap();
@@ -79,7 +79,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     .unwrap();
     let events = session.sync();
     assert_eq!(published(&events), ["image.grayscale@1"]);
-    let report = session.evaluate().unwrap();
+    let report = session.evaluate(0.0).unwrap();
     assert_eq!(
         report
             .executed
@@ -115,7 +115,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
             .generation(),
         generation
     );
-    let report = session.evaluate().unwrap();
+    let report = session.evaluate(0.0).unwrap();
     assert!(report.executed.is_empty());
     assert_eq!(
         pixel,
@@ -132,7 +132,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     assert!(
         matches!(&events[..], [Event::Retired { id, .. }] if id.to_string() == "image.grayscale@1")
     );
-    let error = session.evaluate().unwrap_err();
+    let error = session.evaluate(0.0).unwrap_err();
     assert!(
         matches!(error, EvaluateError::UnknownKernel { .. }),
         "{error}"
@@ -151,13 +151,13 @@ fn scene_edits_and_externals_flow_through_the_session() {
     let dir = scratch("scene");
     let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
     session.sync();
-    let first = session.evaluate().unwrap();
+    let first = session.evaluate(0.0).unwrap();
 
     let scene = dir.join("scene.osn");
     let text = std::fs::read_to_string(&scene).unwrap();
     std::fs::write(&scene, text.replace("size = 8", "size = 32")).unwrap();
     assert_eq!(session.sync(), [Event::SceneLoaded]);
-    let report = session.evaluate().unwrap();
+    let report = session.evaluate(0.0).unwrap();
     assert_eq!(
         report
             .executed
@@ -170,7 +170,7 @@ fn scene_edits_and_externals_flow_through_the_session() {
     std::fs::write(&scene, "graph broken\noutput nowhere").unwrap();
     let events = session.sync();
     assert!(matches!(&events[..], [Event::SceneRejected(_)]));
-    let report = session.evaluate().unwrap();
+    let report = session.evaluate(0.0).unwrap();
     assert!(
         report.executed.is_empty(),
         "previous graph is still evaluated"
@@ -192,7 +192,7 @@ fn scene_edits_and_externals_flow_through_the_session() {
     session.bind_external("photo", &photo).unwrap();
     let events = session.sync();
     assert_eq!(published(&events), ["image.invert@1"]);
-    let report = session.evaluate().unwrap();
+    let report = session.evaluate(0.0).unwrap();
     let original = session
         .runtime()
         .host()

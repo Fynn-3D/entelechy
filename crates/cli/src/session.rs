@@ -322,15 +322,16 @@ impl Session {
         }
     }
 
-    /// Evaluates the current graph. Unchanged nodes are reused.
-    pub fn evaluate(&mut self) -> Result<Report, EvaluateError> {
+    /// Evaluates the current graph at session time `time` (seconds).
+    /// Unchanged nodes are reused.
+    pub fn evaluate(&mut self, time: f32) -> Result<Report, EvaluateError> {
         let graph = self.graph.as_ref().ok_or_else(|| {
             EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(orla_graph::NodeId(
                 "<no scene>".into(),
             )))
         })?;
         self.evaluator
-            .evaluate(graph, &mut self.runtime, &self.externals)
+            .evaluate(graph, &mut self.runtime, &self.externals, time)
     }
 
     /// Writes a cached image to a PPM file.

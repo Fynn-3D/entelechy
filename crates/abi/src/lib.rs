@@ -20,17 +20,24 @@ pub enum Capability {
     ImageRead,
     /// Create and write output images.
     ImageWrite,
+    /// Read the session clock.
+    TimeRead,
 }
 
 impl Capability {
     /// All capabilities known to this ABI version.
-    pub const ALL: [Capability; 2] = [Capability::ImageRead, Capability::ImageWrite];
+    pub const ALL: [Capability; 3] = [
+        Capability::ImageRead,
+        Capability::ImageWrite,
+        Capability::TimeRead,
+    ];
 
     /// Stable spelling used in `.orla` sources and manifests.
     pub fn name(self) -> &'static str {
         match self {
             Self::ImageRead => "image.read",
             Self::ImageWrite => "image.write",
+            Self::TimeRead => "time.read",
         }
     }
 }
@@ -124,6 +131,8 @@ pub enum Type {
     Int,
     /// Two floats.
     Vec2,
+    /// Three floats.
+    Vec3,
     /// Four floats.
     Vec4,
     /// An image resource, only ever seen through a handle.
@@ -137,6 +146,7 @@ impl Type {
             Self::Float => "Float",
             Self::Int => "Int",
             Self::Vec2 => "Vec2",
+            Self::Vec3 => "Vec3",
             Self::Vec4 => "Vec4",
             Self::Image => "Image",
         }
@@ -146,6 +156,7 @@ impl Type {
     pub fn components(self) -> Option<u8> {
         match self {
             Self::Vec2 => Some(2),
+            Self::Vec3 => Some(3),
             Self::Vec4 => Some(4),
             _ => None,
         }
@@ -179,10 +190,17 @@ impl FromStr for Type {
     type Err = UnknownType;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        [Self::Float, Self::Int, Self::Vec2, Self::Vec4, Self::Image]
-            .into_iter()
-            .find(|ty| ty.name() == name)
-            .ok_or_else(|| UnknownType(name.to_owned()))
+        [
+            Self::Float,
+            Self::Int,
+            Self::Vec2,
+            Self::Vec3,
+            Self::Vec4,
+            Self::Image,
+        ]
+        .into_iter()
+        .find(|ty| ty.name() == name)
+        .ok_or_else(|| UnknownType(name.to_owned()))
     }
 }
 
@@ -195,6 +213,8 @@ pub enum Value {
     Int(i32),
     /// A two-component vector.
     Vec2([f32; 2]),
+    /// A three-component vector.
+    Vec3([f32; 3]),
     /// A four-component vector.
     Vec4([f32; 4]),
 }
@@ -206,6 +226,7 @@ impl Value {
             Self::Float(_) => Type::Float,
             Self::Int(_) => Type::Int,
             Self::Vec2(_) => Type::Vec2,
+            Self::Vec3(_) => Type::Vec3,
             Self::Vec4(_) => Type::Vec4,
         }
     }
@@ -217,6 +238,7 @@ impl fmt::Display for Value {
             Self::Float(value) => write!(f, "{value:?}"),
             Self::Int(value) => write!(f, "{value}"),
             Self::Vec2([x, y]) => write!(f, "vec2({x:?}, {y:?})"),
+            Self::Vec3([x, y, z]) => write!(f, "vec3({x:?}, {y:?}, {z:?})"),
             Self::Vec4([x, y, z, w]) => write!(f, "vec4({x:?}, {y:?}, {z:?}, {w:?})"),
         }
     }
@@ -242,6 +264,9 @@ pub struct Invocation {
     pub params: Vec<Value>,
     /// Output domain.
     pub domain: Domain,
+    /// Session time in seconds. Context, not a resource; Kernels read it
+    /// through `time()` and must declare `time.read`.
+    pub time: f32,
 }
 
 /// Errors a Kernel can observe when calling the Host through the ABI.

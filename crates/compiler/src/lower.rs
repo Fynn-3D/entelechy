@@ -72,7 +72,7 @@ pub(crate) fn lower(kernel: &Kernel) -> Result<Module, CompileError> {
 fn manifest(kernel: &Kernel) -> Result<Manifest, CompileError> {
     let id = KernelId::from_str(&kernel.id.value)
         .map_err(|error| semantic(kernel.id.span, error.to_string()))?;
-    let requires = kernel
+    let requires: orla_ir::Capabilities = kernel
         .requires
         .iter()
         .map(|name| {
@@ -103,6 +103,14 @@ fn manifest(kernel: &Kernel) -> Result<Manifest, CompileError> {
     };
     let inputs = ports(&kernel.inputs, "input")?;
     let outputs = ports(&kernel.outputs, "output")?;
+    if let Some(output) = kernel.outputs.first()
+        && !requires.contains(Capability::ImageWrite)
+    {
+        return Err(semantic(
+            output.name.span,
+            "writing an output needs `image.write`; add it to `requires`",
+        ));
+    }
     if outputs.len() != 1 {
         return Err(semantic(
             kernel.id.span,
@@ -161,10 +169,11 @@ fn constant(expr: &Expr, ty: Type) -> Result<Value, CompileError> {
                     .ok_or_else(|| semantic(expr.span, "integer literal overflows when negated"))?,
             ),
             Value::Vec2([x, y]) => Value::Vec2([-x, -y]),
+            Value::Vec3([x, y, z]) => Value::Vec3([-x, -y, -z]),
             Value::Vec4([x, y, z, w]) => Value::Vec4([-x, -y, -z, -w]),
         },
-        (ExprKind::Call(name, args), Type::Vec2 | Type::Vec4)
-            if (name == "vec2" && ty == Type::Vec2) || (name == "vec4" && ty == Type::Vec4) =>
+        (ExprKind::Call(name, args), Type::Vec2 | Type::Vec3 | Type::Vec4)
+            if constructor(ty) == Some(name.as_str()) =>
         {
             let count = ty.components().unwrap_or(0) as usize;
             if args.len() != count {
@@ -180,10 +189,10 @@ fn constant(expr: &Expr, ty: Type) -> Result<Value, CompileError> {
                 };
                 *slot = component;
             }
-            if ty == Type::Vec2 {
-                Value::Vec2([parts[0], parts[1]])
-            } else {
-                Value::Vec4(parts)
+            match ty {
+                Type::Vec2 => Value::Vec2([parts[0], parts[1]]),
+                Type::Vec3 => Value::Vec3([parts[0], parts[1], parts[2]]),
+                _ => Value::Vec4(parts),
             }
         }
         _ => {
@@ -194,6 +203,16 @@ fn constant(expr: &Expr, ty: Type) -> Result<Value, CompileError> {
         }
     };
     Ok(value)
+}
+
+/// The builtin that constructs a vector type.
+fn constructor(ty: Type) -> Option<&'static str> {
+    match ty {
+        Type::Vec2 => Some("vec2"),
+        Type::Vec3 => Some("vec3"),
+        Type::Vec4 => Some("vec4"),
+        _ => None,
+    }
 }
 
 fn lower_function(
@@ -419,6 +438,17 @@ impl<'a> Builder<'a> {
         }
     }
 
+    fn require(&self, name: &str, capability: Capability, span: Span) -> Result<(), CompileError> {
+        if self.manifest.requires.contains(capability) {
+            Ok(())
+        } else {
+            Err(semantic(
+                span,
+                format!("`{name}` needs `{capability}`; add it to `requires`"),
+            ))
+        }
+    }
+
     fn arity(
         &self,
         name: &str,
@@ -440,11 +470,13 @@ impl<'a> Builder<'a> {
         match name {
             "sample" => {
                 self.entry_only(name, span)?;
+                self.require(name, Capability::ImageRead, span)?;
                 self.arity(name, args, 1, span)?;
                 let input = self.input_index(&args[0], name)?;
                 Ok(self.emit(Type::Vec4, Op::ImageSample(input)))
             }
             "fetch" => {
+                self.require(name, Capability::ImageRead, span)?;
                 self.arity(name, args, 2, span)?;
                 let input = self.input_index(&args[0], name)?;
                 let coord = self.value(&args[1])?;
@@ -457,6 +489,7 @@ impl<'a> Builder<'a> {
                 Ok(self.emit(Type::Vec4, Op::ImageFetch(input, coord)))
             }
             "size" => {
+                self.require(name, Capability::ImageRead, span)?;
                 self.arity(name, args, 1, span)?;
                 let input = self.input_index(&args[0], name)?;
                 Ok(self.emit(Type::Vec2, Op::ImageSize(input)))
@@ -471,11 +504,16 @@ impl<'a> Builder<'a> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Vec2, Op::Domain))
             }
-            "vec2" | "vec4" => {
-                let ty = if name == "vec2" {
-                    Type::Vec2
-                } else {
-                    Type::Vec4
+            "time" => {
+                self.require(name, Capability::TimeRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Float, Op::Time))
+            }
+            "vec2" | "vec3" | "vec4" => {
+                let ty = match name {
+                    "vec2" => Type::Vec2,
+                    "vec3" => Type::Vec3,
+                    _ => Type::Vec4,
                 };
                 self.arity(name, args, ty.components().unwrap_or(0) as usize, span)?;
                 let mut parts = Vec::with_capacity(args.len());

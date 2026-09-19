@@ -187,7 +187,7 @@ fn validate_function(
         } else {
             Err(error(
                 name,
-                format!("%{position} calls the host but `{capability}` is not declared"),
+                format!("%{position} needs `{capability}`, which is not declared"),
             ))
         }
     };
@@ -334,6 +334,10 @@ fn validate_function(
                 entry_only(position)?;
                 Type::Vec2
             }
+            Op::Time => {
+                require(Capability::TimeRead, position)?;
+                Type::Float
+            }
             Op::ImageSize(image) => {
                 input(*image, position)?;
                 require(Capability::ImageRead, position)?;
@@ -413,10 +417,7 @@ mod tests {
     fn host_access_needs_declared_capabilities() {
         let module = sample_module(&[Capability::ImageWrite]);
         let error = validate(module).unwrap_err();
-        assert!(
-            error.message.contains("`image.read` is not declared"),
-            "{error}"
-        );
+        assert!(error.message.contains("needs `image.read`"), "{error}");
         let module = sample_module(&[Capability::ImageRead]);
         let error = validate(module).unwrap_err();
         assert!(error.message.contains("`image.write`"), "{error}");

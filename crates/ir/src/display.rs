@@ -73,6 +73,7 @@ impl fmt::Display for Op {
             }
             Self::Coord => f.write_str("coord"),
             Self::Domain => f.write_str("domain"),
+            Self::Time => f.write_str("context time"),
             Self::ImageSize(input) => write!(f, "host image.size input{input}"),
             Self::ImageSample(input) => write!(f, "host image.sample input{input}"),
             Self::ImageFetch(input, coord) => write!(f, "host image.fetch input{input} {coord}"),

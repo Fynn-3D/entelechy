@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use orla_abi::{Domain, ImageHandle, Invocation, Type, Value};
+use orla_abi::{Capability, Domain, ImageHandle, Invocation, Type, Value};
 use orla_runtime::{ExecutionError, Generation, HostError, KernelId, KernelVersion, Runtime};
 
 use crate::{Graph, GraphError, Node, NodeId, Source};
@@ -155,6 +155,9 @@ struct CacheKey {
     params: Vec<Value>,
     inputs: Vec<InputKey>,
     domain: Domain,
+    /// Present only for Kernels that read the clock, so pure nodes stay cached
+    /// across frames.
+    time: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -192,12 +195,15 @@ impl Evaluator {
         Some(cached.outputs[index])
     }
 
-    /// Evaluates `graph`, executing only nodes whose inputs changed.
+    /// Evaluates `graph` at session time `time`, executing only nodes whose
+    /// inputs changed. Nodes that declare `time.read` re-execute whenever
+    /// `time` changes.
     pub fn evaluate(
         &mut self,
         graph: &Graph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, ImageHandle>,
+        time: f32,
     ) -> Result<Report, EvaluateError> {
         let order = graph.order()?;
         // Nodes that left the graph release their images.
@@ -223,7 +229,7 @@ impl Evaluator {
                         node: node.id.clone(),
                         kernel: node.kernel.clone(),
                     })?;
-            let (invocation, key) = self.bind(graph, node, &version, runtime, externals)?;
+            let (invocation, key) = self.bind(node, &version, runtime, externals, time)?;
             if self
                 .cache
                 .get(&node.id)
@@ -271,11 +277,11 @@ impl Evaluator {
 
     fn bind(
         &self,
-        graph: &Graph,
         node: &Node,
         version: &Arc<KernelVersion>,
         runtime: &Runtime,
         externals: &BTreeMap<String, ImageHandle>,
+        time: f32,
     ) -> Result<(Invocation, CacheKey), EvaluateError> {
         let manifest = version.manifest();
         for port in node.inputs.keys().chain(node.params.keys()) {
@@ -364,18 +370,20 @@ impl Evaluator {
             }
             (None, None) => return Err(EvaluateError::NoDomain(node.id.clone())),
         };
-        let _ = graph;
+        let reads_clock = manifest.requires.contains(Capability::TimeRead);
         let key = CacheKey {
             generation: version.generation(),
             params: params.clone(),
             inputs: input_keys,
             domain,
+            time: reads_clock.then_some(time.to_bits()),
         };
         Ok((
             Invocation {
                 inputs,
                 params,
                 domain,
+                time,
             },
             key,
         ))

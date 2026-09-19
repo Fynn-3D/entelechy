@@ -89,7 +89,7 @@ pub(crate) fn parse(text: &str) -> Result<Graph, DocumentError> {
                     .ok_or_else(|| error(format!("`{param} = ...` appears before any node")))?;
                 let value = parse_value(numbers).ok_or_else(|| {
                     error(format!(
-                        "`{param}` needs one number, or two or four floats, found `{}`",
+                        "`{param}` needs one number, or two, three, or four floats, found `{}`",
                         numbers.join(" ")
                     ))
                 })?;
@@ -140,6 +140,7 @@ fn parse_value(words: &[&str]) -> Option<Value> {
             }
         }
         [_, _] => floats().map(|v| Value::Vec2([v[0], v[1]])),
+        [_, _, _] => floats().map(|v| Value::Vec3([v[0], v[1], v[2]])),
         [_, _, _, _] => floats().map(|v| Value::Vec4([v[0], v[1], v[2], v[3]])),
         _ => None,
     }

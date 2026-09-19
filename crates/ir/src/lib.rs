@@ -158,6 +158,9 @@ impl BinaryOp {
             (Type::Vec2, Type::Vec2) | (Type::Vec2, Type::Float) | (Type::Float, Type::Vec2) => {
                 Some(Type::Vec2)
             }
+            (Type::Vec3, Type::Vec3) | (Type::Vec3, Type::Float) | (Type::Float, Type::Vec3) => {
+                Some(Type::Vec3)
+            }
             (Type::Vec4, Type::Vec4) | (Type::Vec4, Type::Float) | (Type::Float, Type::Vec4) => {
                 Some(Type::Vec4)
             }
@@ -211,11 +214,30 @@ pub enum Intrinsic {
     ToFloat,
     /// Convert `Float` to `Int` by truncation toward zero.
     ToInt,
+    /// Dot product of two vectors of the same size.
+    Dot,
+    /// Cross product of two `Vec3`.
+    Cross,
+    /// Euclidean length of a vector.
+    Length,
+    /// Unit vector in the same direction; the zero vector stays zero.
+    Normalize,
+    /// `pow(base, exponent)` componentwise; a `Float` exponent broadcasts.
+    Pow,
+    /// `e^x` componentwise.
+    Exp,
+    /// `step(edge, x)`: 1 where `x >= edge`, else 0, componentwise; a
+    /// `Float` edge broadcasts.
+    Step,
+    /// `smoothstep(low, high, x)` componentwise; `Float` edges broadcast.
+    Smoothstep,
+    /// `reflect(incident, normal)` for vectors of the same size.
+    Reflect,
 }
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 12] = [
+    pub const ALL: [(Intrinsic, &'static str); 21] = [
         (Intrinsic::Floor, "floor"),
         (Intrinsic::Fract, "fract"),
         (Intrinsic::Abs, "abs"),
@@ -228,6 +250,15 @@ impl Intrinsic {
         (Intrinsic::Mix, "mix"),
         (Intrinsic::ToFloat, "float"),
         (Intrinsic::ToInt, "int"),
+        (Intrinsic::Dot, "dot"),
+        (Intrinsic::Cross, "cross"),
+        (Intrinsic::Length, "length"),
+        (Intrinsic::Normalize, "normalize"),
+        (Intrinsic::Pow, "pow"),
+        (Intrinsic::Exp, "exp"),
+        (Intrinsic::Step, "step"),
+        (Intrinsic::Smoothstep, "smoothstep"),
+        (Intrinsic::Reflect, "reflect"),
     ];
 
     /// Source spelling.
@@ -250,12 +281,31 @@ impl Intrinsic {
     /// Result type for the given argument types, or `None` if the call is
     /// ill-typed.
     pub fn result_type(self, args: &[Type]) -> Option<Type> {
-        let float_like = |ty: Type| matches!(ty, Type::Float | Type::Vec2 | Type::Vec4);
+        let float_like =
+            |ty: Type| matches!(ty, Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4);
+        let vector = |ty: Type| ty.components().is_some();
         match (self, args) {
-            (Self::Floor | Self::Fract | Self::Abs | Self::Sqrt | Self::Sin | Self::Cos, [a])
-                if float_like(*a) =>
+            (
+                Self::Floor
+                | Self::Fract
+                | Self::Abs
+                | Self::Sqrt
+                | Self::Sin
+                | Self::Cos
+                | Self::Exp,
+                [a],
+            ) if float_like(*a) => Some(*a),
+            (Self::Dot, [a, b]) if a == b && vector(*a) => Some(Type::Float),
+            (Self::Cross, [Type::Vec3, Type::Vec3]) => Some(Type::Vec3),
+            (Self::Length, [a]) if vector(*a) => Some(Type::Float),
+            (Self::Normalize, [a]) if vector(*a) => Some(*a),
+            (Self::Reflect, [a, b]) if a == b && vector(*a) => Some(*a),
+            (Self::Pow, [a, b]) if (a == b || *b == Type::Float) && float_like(*a) => Some(*a),
+            (Self::Step, [a, b]) if (a == b || *a == Type::Float) && float_like(*b) => Some(*b),
+            (Self::Smoothstep, [a, b, c])
+                if a == b && (b == c || *a == Type::Float) && float_like(*c) =>
             {
-                Some(*a)
+                Some(*c)
             }
             (Self::Abs, [Type::Int]) => Some(Type::Int),
             (Self::Min | Self::Max, [a, b]) if a == b && (float_like(*a) || *a == Type::Int) => {
@@ -297,6 +347,8 @@ pub enum Op {
     Coord,
     /// The output domain size as `Vec2`. Entry point only.
     Domain,
+    /// Session time in seconds as `Float`. Context: `time.read`.
+    Time,
     /// Size of an input image as `Vec2`. Host call: `image.read`.
     ImageSize(u32),
     /// Pixel of an input image at the current coordinate as `Vec4`.

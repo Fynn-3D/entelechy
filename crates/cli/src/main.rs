@@ -125,7 +125,8 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let events = session.sync();
     report_events(&events);
-    let mut healthy = evaluate_and_export(&mut session, &options.out);
+    let clock = Instant::now();
+    let mut healthy = evaluate_and_export(&mut session, &options.out, 0.0);
     if !options.watch {
         return if healthy {
             Ok(())
@@ -152,7 +153,8 @@ fn run(args: &[String]) -> Result<(), String> {
             )
         });
         if changed || !healthy {
-            healthy = evaluate_and_export(&mut session, &options.out);
+            healthy =
+                evaluate_and_export(&mut session, &options.out, clock.elapsed().as_secs_f32());
         }
     }
 }
@@ -163,9 +165,9 @@ fn report_events(events: &[Event]) {
     }
 }
 
-fn evaluate_and_export(session: &mut Session, out: &Path) -> bool {
+fn evaluate_and_export(session: &mut Session, out: &Path, time: f32) -> bool {
     let started = Instant::now();
-    match session.evaluate() {
+    match session.evaluate(time) {
         Ok(report) => {
             let executed = report
                 .executed
