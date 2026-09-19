@@ -11,6 +11,8 @@ use orla_gpu::GpuBackend;
 use orla_gpu::present::Presenter;
 use orla_player::{Placement, key_code, to_output};
 use orla_runtime::{Context, InputState};
+use serde_json::Value as Json;
+use std::sync::mpsc::{Receiver, channel};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
@@ -25,7 +27,10 @@ usage:
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`. F5 resets state.
-      Press Escape or close the window to quit.";
+      Press Escape or close the window to quit.
+      With --serve, the creation protocol runs on stdin and stdout inside the
+      window: an agent's publish, compose, and param land in the frame a
+      person watches, and its evaluate observes that person's input.";
 
 struct Options {
     scene: PathBuf,
@@ -33,6 +38,7 @@ struct Options {
     inputs: Vec<(String, PathBuf)>,
     scale: u32,
     backend: Option<String>,
+    serve: bool,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -42,6 +48,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         inputs: Vec::new(),
         scale: 2,
         backend: None,
+        serve: false,
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -54,6 +61,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         match arg.as_str() {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--backend" => options.backend = Some(value("--backend")?),
+            "--serve" => options.serve = true,
             "--scale" => {
                 options.scale = value("--scale")?
                     .parse::<u32>()
@@ -97,6 +105,8 @@ struct Player {
     cursor: (f32, f32),
     status: String,
     last_title: Instant,
+    /// Protocol requests arriving from stdin, when serving.
+    requests: Option<Receiver<String>>,
 }
 
 impl Player {
@@ -107,7 +117,7 @@ impl Player {
         }
     }
 
-    fn frame(&mut self) {
+    fn frame(&mut self) -> Option<orla_graph::Report> {
         let events = self.session.sync();
         for event in &events {
             eprintln!("{event}");
@@ -130,6 +140,7 @@ impl Player {
                     self.last_title = Instant::now();
                     self.update_title();
                 }
+                Some(report)
             }
             Err(error) => {
                 let message = format!("evaluation failed: {error}");
@@ -139,6 +150,35 @@ impl Player {
                     self.update_title();
                 }
                 self.blit();
+                None
+            }
+        }
+    }
+
+    /// Answers protocol requests that arrived since the last frame. An
+    /// `evaluate` runs one window frame under the person's input and
+    /// reports it; everything else goes through the shared handler.
+    fn serve_pending(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(requests) = &self.requests else {
+            return;
+        };
+        let pending: Vec<String> = std::iter::from_fn(|| requests.try_recv().ok()).collect();
+        for line in pending {
+            let (response, quit) = match orla::protocol::parse_request(&line) {
+                Ok((id, request))
+                    if request.get("op").and_then(Json::as_str) == Some("evaluate") =>
+                {
+                    let result = match self.frame() {
+                        Some(report) => Ok(orla::protocol::report_json(&self.session, &report)),
+                        None => Err(serde_json::json!({ "message": self.status })),
+                    };
+                    (orla::protocol::envelope(&id, result), false)
+                }
+                _ => orla::protocol::respond_line(&mut self.session, &line),
+            };
+            println!("{response}");
+            if quit {
+                event_loop.exit();
             }
         }
     }
@@ -327,12 +367,15 @@ impl ApplicationHandler for Player {
                     _ => {}
                 }
             }
-            WindowEvent::RedrawRequested => self.frame(),
+            WindowEvent::RedrawRequested => {
+                self.frame();
+            }
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.serve_pending(event_loop);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -389,7 +432,22 @@ fn main() -> ExitCode {
         cursor: (0.0, 0.0),
         status: "starting".into(),
         last_title: Instant::now(),
+        requests: None,
     };
+    if options.serve {
+        let (sender, receiver) = channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines().map_while(Result::ok) {
+                if !line.trim().is_empty() && sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        player.requests = Some(receiver);
+        eprintln!("serving the creation protocol on stdin/stdout");
+    }
     // Evaluate once before opening the window so it can take the output size.
     let context = player.context();
     match player.session.evaluate(&context) {

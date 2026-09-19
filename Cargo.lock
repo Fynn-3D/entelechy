@@ -1272,7 +1272,9 @@ version = "0.1.0"
 dependencies = [
  "orla",
  "orla-gpu",
+ "orla-graph",
  "orla-runtime",
+ "serde_json",
  "softbuffer",
  "winit",
 ]
