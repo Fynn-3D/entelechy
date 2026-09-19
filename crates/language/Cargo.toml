@@ -1,0 +1,10 @@
+[package]
+name = "orla-language"
+description = "Minimal .orla Kernel language frontend: lexer, parser, AST"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
