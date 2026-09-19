@@ -3,11 +3,13 @@
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use orla::session::Session;
-use orla_player::{Placement, key_code};
+use orla_gpu::GpuBackend;
+use orla_gpu::present::Presenter;
+use orla_player::{Placement, key_code, to_output};
 use orla_runtime::{Context, InputState};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -82,8 +84,12 @@ struct Player {
     session: Session,
     scale: u32,
     clock: Instant,
-    window: Option<Rc<Window>>,
-    surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+    window: Option<Arc<Window>>,
+    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    /// The GPU presenter, when the backend is the GPU and the surface could
+    /// be configured; then frames are shown without any readback.
+    presenter: Option<Presenter>,
+    downloads: u64,
     last_frame: Vec<[f32; 4]>,
     last_size: (u32, u32),
     placement: Placement,
@@ -110,18 +116,16 @@ impl Player {
         let context = self.context();
         match self.session.evaluate(&context) {
             Ok(report) => {
-                if let Ok(image) = self.session.runtime_mut().image(report.output) {
-                    self.last_size = (image.width(), image.height());
-                    self.last_frame.clear();
-                    self.last_frame.extend_from_slice(image.pixels());
-                }
                 let elapsed = started.elapsed();
+                let shown = self.show(report.output);
                 if self.last_title.elapsed() > Duration::from_millis(250) {
                     self.status = format!(
-                        "{:.1} ms, {} executed, {} reused",
+                        "{:.1} ms, {} executed, {} reused, {}, {} downloads",
                         elapsed.as_secs_f64() * 1000.0,
                         report.executed.len(),
-                        report.reused.len()
+                        report.reused.len(),
+                        shown,
+                        self.downloads
                     );
                     self.last_title = Instant::now();
                     self.update_title();
@@ -134,9 +138,45 @@ impl Player {
                     self.status = message;
                     self.update_title();
                 }
+                self.blit();
             }
         }
+    }
+
+    /// Shows an output image: directly from the device when it is resident
+    /// and a presenter exists, otherwise by downloading it and blitting.
+    /// Returns a short description of the path taken.
+    fn show(&mut self, output: orla_runtime::ImageHandle) -> &'static str {
+        if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
+            let host = self.session.runtime().host();
+            let resident = host.resident(output).ok().flatten();
+            if let (Some(device), Ok((width, height))) = (resident, host.image_size(output)) {
+                let size = window.inner_size();
+                let backend = self.session.runtime().backend().as_any();
+                if let Some(gpu) = backend.downcast_ref::<GpuBackend>() {
+                    match gpu.present(presenter, device, width, height, size.width, size.height) {
+                        Ok(Some(placement)) => {
+                            self.last_size = (width, height);
+                            self.placement = placement;
+                            return "presented on the device";
+                        }
+                        Ok(None) => {
+                            self.last_size = (width, height);
+                            return "window not ready";
+                        }
+                        Err(error) => eprintln!("present failed: {error}; downloading instead"),
+                    }
+                }
+            }
+        }
+        if let Ok(image) = self.session.runtime_mut().image(output) {
+            self.downloads += 1;
+            self.last_size = (image.width(), image.height());
+            self.last_frame.clear();
+            self.last_frame.extend_from_slice(image.pixels());
+        }
         self.blit();
+        "downloaded and blitted"
     }
 
     fn update_title(&self) {
@@ -151,6 +191,9 @@ impl Player {
     }
 
     fn blit(&mut self) {
+        if self.presenter.is_some() && self.last_frame.is_empty() {
+            return;
+        }
         let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
             return;
         };
@@ -178,7 +221,8 @@ impl Player {
     }
 
     fn update_pointer(&mut self) {
-        self.input.pointer = self.placement.to_output(
+        self.input.pointer = to_output(
+            &self.placement,
             self.cursor.0,
             self.cursor.1,
             self.last_size.0,
@@ -201,22 +245,35 @@ impl ApplicationHandler for Player {
             .with_title("Orla Player")
             .with_inner_size(LogicalSize::new(width * self.scale, height * self.scale));
         let window = match event_loop.create_window(attributes) {
-            Ok(window) => Rc::new(window),
+            Ok(window) => Arc::new(window),
             Err(error) => {
                 eprintln!("cannot create a window: {error}");
                 event_loop.exit();
                 return;
             }
         };
-        let context = softbuffer::Context::new(window.clone());
-        let surface =
-            context.and_then(|context| softbuffer::Surface::new(&context, window.clone()));
-        match surface {
-            Ok(surface) => self.surface = Some(surface),
-            Err(error) => {
-                eprintln!("cannot present to the window: {error}");
-                event_loop.exit();
-                return;
+        let size = window.inner_size();
+        let backend = self.session.runtime().backend().as_any();
+        if let Some(gpu) = backend.downcast_ref::<GpuBackend>() {
+            match gpu.presenter(window.clone(), size.width, size.height) {
+                Ok(presenter) => {
+                    self.presenter = Some(presenter);
+                    eprintln!("presenting on the device");
+                }
+                Err(error) => eprintln!("device presentation unavailable ({error}); blitting"),
+            }
+        }
+        if self.presenter.is_none() {
+            let context = softbuffer::Context::new(window.clone());
+            let surface =
+                context.and_then(|context| softbuffer::Surface::new(&context, window.clone()));
+            match surface {
+                Ok(surface) => self.surface = Some(surface),
+                Err(error) => {
+                    eprintln!("cannot present to the window: {error}");
+                    event_loop.exit();
+                    return;
+                }
             }
         }
         self.window = Some(window);
@@ -323,6 +380,8 @@ fn main() -> ExitCode {
         clock: Instant::now(),
         window: None,
         surface: None,
+        presenter: None,
+        downloads: 0,
         last_frame: Vec::new(),
         last_size: (0, 0),
         placement: Placement::default(),
@@ -335,9 +394,8 @@ fn main() -> ExitCode {
     let context = player.context();
     match player.session.evaluate(&context) {
         Ok(report) => {
-            if let Ok(image) = player.session.runtime_mut().image(report.output) {
-                player.last_size = (image.width(), image.height());
-                player.last_frame = image.pixels().to_vec();
+            if let Ok((width, height)) = player.session.runtime().host().image_size(report.output) {
+                player.last_size = (width, height);
             }
         }
         Err(error) => {

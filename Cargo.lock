@@ -1271,6 +1271,7 @@ name = "orla-player"
 version = "0.1.0"
 dependencies = [
  "orla",
+ "orla-gpu",
  "orla-runtime",
  "softbuffer",
  "winit",
