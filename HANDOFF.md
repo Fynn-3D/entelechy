@@ -27,9 +27,10 @@ filesystem by polling modification stamps.
 Documents are a public contract now: `.orla` libraries and `.osn` graphs
 share one grammar ([docs/DOCUMENTS.md](docs/DOCUMENTS.md)); a node
 references a Kernel by id or carries it inline; `use` brings in libraries.
-Graphs expose named inputs and outputs so that a graph can later be placed
-as a node; graph-level parameters are the next syntax step when a sub-graph
-needs them.
+Graphs expose named inputs, params, and outputs and are placed as nodes with
+`node name: graph "path.osn" { ... }`; placement flattens the sub-graph into
+the parent with prefixed node ids, so the evaluator and state keys are
+unchanged.
 
 State and input now exist: `<~ ... from ...` bindings hold Graph state with
 atomic end-of-evaluation commit, and `pointer()`, `pointer_down()`, `key()`

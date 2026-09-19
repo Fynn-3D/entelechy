@@ -41,10 +41,11 @@ use "kernels/";                       // every .orla directly in the directory
 use "../shared/tonemap.orla";         // one library file
 
 input photo: Image;                   // supplied by the caller
+param amount: Float = 1.0;            // a graph parameter, overridable by the caller
 
 node gray: image.grayscale@1 {        // reference a published Kernel
     source <- photo;                  // wire: this evaluation's value
-    amount = 1.0;                     // value: the shared literal grammar
+    amount = amount;                  // value: a literal, or a graph param by name
 }
 
 node trail: kernel {                  // an anonymous Kernel, placed here
@@ -59,7 +60,13 @@ node trail: kernel {                  // an anonymous Kernel, placed here
 node glow: kernel fx.glow@1 { ... }   // a named inline Kernel: placed here and
                                       // also publishable to other nodes by id
 
-output result <- trail.result;        // named graph output
+node display: graph "../shared/display.osn" {   // another graph placed as a node
+    source <- glow.result;            // wires its `input`s
+    exposure = 1.2;                   // sets its `param`s
+}
+
+output result <- display.result;      // named graph output; sub-graph outputs
+                                      // are read as node.output
 ```
 
 ### Rules
@@ -82,8 +89,14 @@ output result <- trail.result;        // named graph output
    Kernel is named `<document>.<node>@1`.
 7. A `use` path is relative to the document; a trailing `/` means the
    directory's `.orla` files. Used documents must hold Kernels only.
-8. The graph exposes `input` and `output` ports like a Kernel does, so a
-   graph can later be placed as a node of another graph.
+8. The graph exposes `input`, `param`, and `output` like a Kernel does, so
+   a graph is placed as a node with `node name: graph "path.osn" { ... }`.
+   Placement flattens it: its nodes join the parent under the prefix
+   `name.`, its inputs take the parent's wires, its params take the parent's
+   values (or its own defaults), and `name.output` reads its outputs. An
+   inline Kernel's `param x: Float = amount;` takes the graph param `amount`
+   as its value. The caller overrides a graph's params at evaluation; nested
+   graphs cannot place themselves.
 
 ### Loading
 

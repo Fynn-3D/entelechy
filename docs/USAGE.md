@@ -21,7 +21,8 @@ cargo run -- check --ir examples/grayscale/kernels/grayscale.orla
 Evaluate a `.osn` graph and write the output image as a binary PPM. The
 document names its Kernel sources with `use`; `--library <dir|file>` adds
 more. External images declared with `input <name>: Image;` in the scene are
-bound with `--input <name>=<file.ppm>`.
+bound with `--input <name>=<file.ppm>`; graph parameters are overridden with
+`--param <name>=<literal>`.
 
 ```sh
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
