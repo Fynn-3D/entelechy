@@ -211,6 +211,23 @@ pub struct Kernel {
     pub functions: Vec<FnDecl>,
     /// The per-element body.
     pub compute: Block,
+    /// `merge(a, b) { ... }`: present for a reduction, folding two
+    /// `compute` results into one.
+    pub merge: Option<MergeDecl>,
+}
+
+/// `merge(a, b) { ... }`: the fold of a reduce Kernel. Both arguments and
+/// the result have the output's element type.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MergeDecl {
+    /// Name of the first value.
+    pub a: Spanned<String>,
+    /// Name of the second value.
+    pub b: Spanned<String>,
+    /// Body yielding the merged value.
+    pub body: Block,
+    /// Where `merge` was written.
+    pub span: Span,
 }
 
 /// `type Name = Shape<Element>;`: another spelling of a port type. Aliases

@@ -157,6 +157,8 @@ pub struct Param {
 pub struct Manifest {
     /// Kernel identity.
     pub id: KernelId,
+    /// How the Kernel executes.
+    pub mode: Mode,
     /// Capabilities the Kernel declares.
     pub requires: Capabilities,
     /// Inputs in declaration order.
@@ -165,6 +167,35 @@ pub struct Manifest {
     pub params: Vec<Param>,
     /// Outputs in declaration order.
     pub outputs: Vec<Port>,
+}
+
+/// How a Kernel executes over its domain.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Mode {
+    /// The entry runs once per element of the output domain.
+    #[default]
+    Map,
+    /// The entry runs once per element of the first input's domain and
+    /// the results are folded pairwise by the module's `merge` function
+    /// into the single element of a `Rows` output. `merge` must be
+    /// associative and commutative: the fold's tree is the backend's.
+    Reduce,
+}
+
+impl Mode {
+    /// Stable spelling used in manifests.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Map => "map",
+            Self::Reduce => "reduce",
+        }
+    }
+}
+
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
 }
 
 /// Index of a value within a function. Ids are assigned in pre-order over
@@ -597,9 +628,13 @@ pub struct Module {
     pub structs: Vec<StructDef>,
     /// Helper functions in dependency order.
     pub functions: Vec<Function>,
-    /// The entry point, executed once per output pixel. Its results map to
-    /// `manifest.outputs` in order; image outputs receive the `Vec4` result.
+    /// The entry point, executed once per element (of the output's domain
+    /// in [`Mode::Map`], of the first input's in [`Mode::Reduce`]). Its
+    /// results map to `manifest.outputs` in order.
     pub entry: Function,
+    /// In [`Mode::Reduce`], the fold: `(T, T) -> T` over the entry's
+    /// result type `T`. Present exactly when the mode is `Reduce`.
+    pub merge: Option<Function>,
 }
 
 #[cfg(test)]

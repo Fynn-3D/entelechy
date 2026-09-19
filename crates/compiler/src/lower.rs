@@ -4,8 +4,8 @@ use std::str::FromStr;
 
 use orla_ir::{
     BinaryOp, Block as IrBlock, Capability, Field, Function, Instruction, Intrinsic, KernelId,
-    MAX_LOOP_COUNT, Manifest, Module, Op, Param, Port, PortType, Shape, ShapeIndex, StructDef,
-    Type, UnaryOp, Value, ValueId, schema_of,
+    MAX_LOOP_COUNT, Manifest, Mode, Module, Op, Param, Port, PortType, Shape, ShapeIndex,
+    StructDef, Type, UnaryOp, Value, ValueId, schema_of,
 };
 use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 
@@ -139,18 +139,18 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         let function = lower_function(&manifest, &structs, &functions, declaration)?;
         functions.push((declaration.name.value.clone(), function));
     }
+    let expected = match manifest.outputs.first() {
+        Some(port) => port.element(),
+        None => {
+            return Err(semantic(
+                kernel.id.as_ref().map(|id| id.span).unwrap_or_default(),
+                "kernel declares no output; add `output result: Image;`",
+            ));
+        }
+    };
     let entry = {
         let mut builder = Builder::new(&manifest, &structs, &functions, true, "compute");
         let result = builder.block(&kernel.compute)?;
-        let expected = match manifest.outputs.first() {
-            Some(port) => port.element(),
-            None => {
-                return Err(semantic(
-                    kernel.id.as_ref().map(|id| id.span).unwrap_or_default(),
-                    "kernel declares no output; add `output result: Image;`",
-                ));
-            }
-        };
         let actual = builder.ty(result);
         if actual != expected {
             return Err(semantic(
@@ -165,11 +165,39 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         }
         builder.finish(vec![result])
     };
+    let merge = match &kernel.merge {
+        None => None,
+        Some(decl) => {
+            let mut builder = Builder::new(&manifest, &structs, &functions, false, "merge");
+            if decl.a.value == decl.b.value {
+                return Err(semantic(
+                    decl.b.span,
+                    format!("`merge` names both values `{}`", decl.a.value),
+                ));
+            }
+            builder.args.push((decl.a.value.clone(), expected));
+            builder.args.push((decl.b.value.clone(), expected));
+            let result = builder.block(&decl.body)?;
+            let actual = builder.ty(result);
+            if actual != expected {
+                return Err(semantic(
+                    decl.body.result.span,
+                    format!(
+                        "`merge` must give a {} like `compute`, but the body gives {}",
+                        describe(expected, &structs),
+                        describe(actual, &structs)
+                    ),
+                ));
+            }
+            Some(builder.finish(vec![result]))
+        }
+    };
     Ok(Module {
         manifest,
         structs,
         functions: functions.into_iter().map(|(_, f)| f).collect(),
         entry,
+        merge,
     })
 }
 
@@ -319,6 +347,26 @@ fn manifest(
     };
     let inputs = ports(&kernel.inputs)?;
     let outputs = ports(&kernel.outputs)?;
+    let mode = if let Some(merge) = &kernel.merge {
+        if inputs.is_empty() {
+            return Err(semantic(
+                merge.span,
+                "a reduction maps over its first input; declare one",
+            ));
+        }
+        match outputs.first() {
+            Some(port) if port.shape() == Shape::Rows => {}
+            _ => {
+                return Err(semantic(
+                    merge.span,
+                    "a reduction produces one element: its output must be `Rows<T>` (the node needs no `domain`)",
+                ));
+            }
+        }
+        Mode::Reduce
+    } else {
+        Mode::Map
+    };
     if let Some(decl) = kernel.outputs.first()
         && !requires.contains(Capability::FieldWrite)
     {
@@ -375,6 +423,7 @@ fn manifest(
     }
     Ok(Manifest {
         id,
+        mode,
         requires,
         inputs,
         params,
@@ -974,12 +1023,21 @@ impl<'a> Builder<'a> {
         Ok((index as u32, &self.manifest.inputs[index]))
     }
 
-    /// The shape the entry point maps over.
+    /// The shape the entry point maps over: the output's, or the first
+    /// input's for a reduction.
     fn output_shape(&self) -> Shape {
-        self.manifest
-            .outputs
-            .first()
-            .map_or(Shape::Grid, Port::shape)
+        match self.manifest.mode {
+            Mode::Reduce => self
+                .manifest
+                .inputs
+                .first()
+                .map_or(Shape::Rows, Port::shape),
+            Mode::Map => self
+                .manifest
+                .outputs
+                .first()
+                .map_or(Shape::Grid, Port::shape),
+        }
     }
 
     fn entry_only(&self, name: &str, span: Span) -> Result<(), CompileError> {

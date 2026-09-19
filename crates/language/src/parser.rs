@@ -2,9 +2,9 @@
 
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
-    BinaryOp, BindingDecl, Block, Document, Expr, ExprKind, FnDecl, Kernel, NodeDecl, NodeKind,
-    NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias,
-    Use,
+    BinaryOp, BindingDecl, Block, Document, Expr, ExprKind, FnDecl, Kernel, MergeDecl, NodeDecl,
+    NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned, StructDecl,
+    TypeAlias, Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -305,6 +305,7 @@ impl Parser {
         let mut types = Vec::new();
         let mut functions = Vec::new();
         let mut compute = None;
+        let mut merge = None;
         while !self.is_punct("}") {
             let span = self.span();
             let Token::Ident(keyword) = self.peek().clone() else {
@@ -358,11 +359,24 @@ impl Parser {
                     self.next();
                     compute = Some(self.block()?);
                 }
+                "merge" => {
+                    if merge.is_some() {
+                        return Err(self.error("`merge` is declared twice"));
+                    }
+                    self.next();
+                    self.expect_punct("(")?;
+                    let a = self.ident("a value name")?;
+                    self.expect_punct(",")?;
+                    let b = self.ident("a value name")?;
+                    self.expect_punct(")")?;
+                    let body = self.block()?;
+                    merge = Some(MergeDecl { a, b, body, span });
+                }
                 _ => {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, or `compute`, found `{keyword}`"
+                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, `compute`, or `merge`, found `{keyword}`"
                         ),
                     });
                 }
@@ -383,6 +397,7 @@ impl Parser {
             types,
             functions,
             compute,
+            merge,
         })
     }
 
@@ -905,9 +920,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 16] = [
+const RESERVED: [&str; 17] = [
     "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "type", "node",
-    "use", "from", "input", "output", "graph",
+    "use", "from", "input", "output", "graph", "merge",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

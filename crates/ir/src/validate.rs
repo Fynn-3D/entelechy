@@ -9,8 +9,8 @@ use std::fmt;
 use std::ops::Deref;
 
 use crate::{
-    Block, Capability, Function, Instruction, MAX_LOOP_COUNT, Manifest, Module, Op, Port, PortType,
-    Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
+    Block, Capability, Function, Instruction, MAX_LOOP_COUNT, Manifest, Mode, Module, Op, Port,
+    PortType, Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
 };
 
 /// A module that passed [`validate`].
@@ -78,6 +78,47 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
         return Err(error(&entry.name, "the entry point takes no arguments"));
     }
     let outputs = &module.manifest.outputs;
+    match (module.manifest.mode, &module.merge) {
+        (Mode::Map, None) => {}
+        (Mode::Map, Some(_)) => {
+            return Err(error("manifest", "a map Kernel has no `merge`"));
+        }
+        (Mode::Reduce, None) => {
+            return Err(error("manifest", "a reduce Kernel needs a `merge`"));
+        }
+        (Mode::Reduce, Some(merge)) => {
+            if module.manifest.inputs.is_empty() {
+                return Err(error(
+                    "manifest",
+                    "a reduction maps over its first input, so it needs one",
+                ));
+            }
+            let output = outputs
+                .first()
+                .ok_or_else(|| error("manifest", "a reduction produces one output element"))?;
+            if outputs.len() != 1 || output.shape() != Shape::Rows {
+                return Err(error(
+                    "manifest",
+                    "a reduction produces exactly one output, a `Rows`",
+                ));
+            }
+            let element = output.element();
+            if merge.args != [element, element] {
+                return Err(error(
+                    &merge.name,
+                    format!("`merge` takes two values of the output element type {element}"),
+                ));
+            }
+            let merge_types = validate_function(&module, merge, module.functions.len() + 1, false)?;
+            let actual = merge.results.first().map(|r| merge_types[r.0 as usize]);
+            if merge.results.len() != 1 || actual != Some(element) {
+                return Err(error(
+                    &merge.name,
+                    format!("`merge` returns one value of the output element type {element}"),
+                ));
+            }
+        }
+    }
     if entry.results.len() != outputs.len() {
         return Err(error(
             &entry.name,
@@ -252,13 +293,14 @@ impl<'a> Checker<'a> {
             .ok_or_else(|| self.fail(format!("{position} reads unknown input {input}")))
     }
 
-    /// The shape the entry point maps over.
+    /// The shape the entry point maps over: the output's, or the first
+    /// input's for a reduction.
     fn output_shape(&self) -> Shape {
-        self.module
-            .manifest
-            .outputs
-            .first()
-            .map_or(Shape::Grid, Port::shape)
+        let manifest = &self.module.manifest;
+        match manifest.mode {
+            Mode::Reduce => manifest.inputs.first().map_or(Shape::Rows, Port::shape),
+            Mode::Map => manifest.outputs.first().map_or(Shape::Grid, Port::shape),
+        }
     }
 
     fn entry_only(&self, position: ValueId) -> Result<(), ValidationError> {
@@ -652,6 +694,7 @@ mod tests {
     fn manifest(requires: &[Capability]) -> Manifest {
         Manifest {
             id: "test.kernel@1".parse::<KernelId>().unwrap(),
+            mode: Mode::Map,
             requires: requires.iter().copied().collect(),
             inputs: vec![Port {
                 name: "source".into(),
@@ -684,6 +727,7 @@ mod tests {
                 body: vec![instruction(0, Type::Vec4, Op::Sample(0))],
                 results: vec![ValueId(0)],
             },
+            merge: None,
         }
     }
 

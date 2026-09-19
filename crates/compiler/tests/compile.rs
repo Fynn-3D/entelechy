@@ -244,3 +244,32 @@ fn structs_are_checked_by_name_and_field() {
     let error = compile("kernel t.k@1 { requires { field.write; } output r: Image; struct hit { t: Float; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }").unwrap_err();
     assert!(error.to_string().contains("uppercase"), "{error}");
 }
+
+#[test]
+fn merge_makes_a_reduction_and_is_checked() {
+    let module = compile(
+        "kernel test.mean@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec2>; compute { let c = sample(source); return vec2(c.r, 1.0); } merge(a, b) { return a + b; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(module.manifest.mode, orla_ir::Mode::Reduce);
+    let text = module.to_string();
+    assert!(text.contains("mode reduce"), "{text}");
+    assert!(text.contains("fn merge(arg0: Vec2, arg1: Vec2)"), "{text}");
+
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { return sample(source); } merge(a, b) { return a + b; } }",
+    );
+    assert!(message.contains("must be `Rows<T>`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } merge(a, b) { return a + b; } }",
+    );
+    assert!(message.contains("maps over its first input"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Float>; compute { return 1.0; } merge(a, b) { return vec2(a, b); } }",
+    );
+    assert!(message.contains("`merge` must give a Float"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input source: Rows<Float>; output result: Rows<Float>; compute { return coord().x; } merge(a, b) { return a + b; } }",
+    );
+    assert!(message.contains("use `element()`"), "{message}");
+}

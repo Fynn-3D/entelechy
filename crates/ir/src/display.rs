@@ -7,6 +7,9 @@ use crate::{Block, Function, Instruction, Manifest, Module, Op, UnaryOp, ValueId
 impl fmt::Display for Manifest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "kernel {}", self.id)?;
+        if self.mode != crate::Mode::Map {
+            writeln!(f, "  mode {}", self.mode)?;
+        }
         writeln!(f, "  requires {}", self.requires)?;
         for input in &self.inputs {
             writeln!(f, "  input {}: {}", input.name, input.ty)?;
@@ -148,6 +151,11 @@ impl fmt::Display for Module {
             write!(f, "{function}")?;
         }
         writeln!(f)?;
-        write!(f, "{}", self.entry)
+        write!(f, "{}", self.entry)?;
+        if let Some(merge) = &self.merge {
+            writeln!(f)?;
+            write!(f, "{merge}")?;
+        }
+        Ok(())
     }
 }

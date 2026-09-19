@@ -100,6 +100,11 @@ pub fn fuse(
     if producer_manifest.outputs.len() != 1 {
         return Err(FuseError("producer must have exactly one output".into()));
     }
+    if consumer.merge.is_some() || producer.merge.is_some() {
+        return Err(FuseError(
+            "a reduction neither absorbs a producer nor is absorbed".into(),
+        ));
+    }
     if producer_manifest.outputs[0].ty != consumer_manifest.inputs[input as usize].ty {
         return Err(FuseError(format!(
             "producer writes {} but the consumer reads {}",
@@ -134,6 +139,7 @@ pub fn fuse(
     }
     let manifest = Manifest {
         id: consumer_manifest.id.clone(),
+        mode: consumer_manifest.mode,
         requires,
         inputs,
         params,
@@ -227,6 +233,7 @@ pub fn fuse(
         structs,
         functions,
         entry,
+        merge: None,
     })
     .map_err(|error| FuseError(format!("fused module is invalid: {error}")))
 }
