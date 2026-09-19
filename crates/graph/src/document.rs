@@ -6,7 +6,7 @@ use std::fmt;
 use orla_abi::{Domain, Value};
 use orla_ir::KernelId;
 
-use crate::{Graph, Node, NodeId, Source};
+use crate::{Binding, Graph, Node, NodeId, Source};
 
 /// A document does not parse.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,16 +72,27 @@ pub(crate) fn parse(text: &str) -> Result<Graph, DocumentError> {
                 let node = nodes.last_mut().ok_or_else(|| {
                     error(format!("`{port} <- {source}` appears before any node"))
                 })?;
-                let source = match source.split_once('.') {
-                    Some((producer, output)) => Source::Node {
-                        node: NodeId(producer.to_string()),
-                        port: output.to_string(),
-                    },
-                    None => Source::External(source.to_string()),
-                };
-                if node.inputs.insert(port.to_string(), source).is_some() {
+                let binding = Binding::Now(parse_source(source));
+                if node.inputs.insert(port.to_string(), binding).is_some() {
                     return Err(error(format!("port `{port}` is bound twice")));
                 }
+            }
+            [port, "<~", source, "from", initial] => {
+                let node = nodes.last_mut().ok_or_else(|| {
+                    error(format!("`{port} <~ {source}` appears before any node"))
+                })?;
+                let binding = Binding::Previous {
+                    source: parse_source(source),
+                    initial: parse_source(initial),
+                };
+                if node.inputs.insert(port.to_string(), binding).is_some() {
+                    return Err(error(format!("port `{port}` is bound twice")));
+                }
+            }
+            [port, "<~", ..] => {
+                return Err(error(format!(
+                    "`{port} <~` needs `<~ node.port from source`: the previous value and where it starts"
+                )));
             }
             [param, "=", numbers @ ..] if !numbers.is_empty() => {
                 let node = nodes
@@ -122,6 +133,16 @@ pub(crate) fn parse(text: &str) -> Result<Graph, DocumentError> {
             message: "document must end with `output <node>.<port>`".into(),
         })?,
     })
+}
+
+fn parse_source(text: &str) -> Source {
+    match text.split_once('.') {
+        Some((producer, output)) => Source::Node {
+            node: NodeId(producer.to_string()),
+            port: output.to_string(),
+        },
+        None => Source::External(text.to_string()),
+    }
 }
 
 fn parse_value(words: &[&str]) -> Option<Value> {
@@ -174,7 +195,7 @@ output blocks.result
         assert_eq!(graph.externals, ["photo"]);
         assert_eq!(
             graph.nodes[0].inputs["source"],
-            Source::External("photo".into())
+            Binding::Now(Source::External("photo".into()))
         );
         assert_eq!(graph.nodes[0].params["amount"], Value::Float(0.5));
         assert_eq!(graph.nodes[1].params["size"], Value::Int(8));

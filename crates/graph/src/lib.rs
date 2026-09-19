@@ -30,7 +30,7 @@ use std::fmt;
 
 pub use document::DocumentError;
 pub use evaluate::{EvaluateError, Evaluator, Report};
-pub use orla_abi::{Domain, Value};
+pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
 
 /// Name of a node within a graph.
@@ -66,6 +66,32 @@ impl fmt::Display for Source {
     }
 }
 
+/// How an input port is fed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Binding {
+    /// The source's value from this evaluation.
+    Now(Source),
+    /// The source's value as committed by the previous successful
+    /// evaluation; `initial` feeds the port until a value has been
+    /// committed, and again after a state reset. This is how state lives in
+    /// the Graph while Kernels stay pure.
+    Previous {
+        /// A node output; read from the last commit.
+        source: Source,
+        /// What to read before the first commit.
+        initial: Source,
+    },
+}
+
+impl fmt::Display for Binding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Now(source) => write!(f, "<- {source}"),
+            Self::Previous { source, initial } => write!(f, "<~ {source} from {initial}"),
+        }
+    }
+}
+
 /// A node: a Kernel binding plus its connections and parameter overrides.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
@@ -74,7 +100,7 @@ pub struct Node {
     /// The Kernel this node executes.
     pub kernel: KernelId,
     /// Input port bindings.
-    pub inputs: BTreeMap<String, Source>,
+    pub inputs: BTreeMap<String, Binding>,
     /// Parameter overrides; unlisted parameters use manifest defaults.
     pub params: BTreeMap<String, Value>,
     /// Explicit output domain; defaults to the first image input's size.
@@ -112,6 +138,14 @@ pub enum GraphError {
     Cycle(Vec<NodeId>),
     /// The output refers to an unknown node.
     UnknownOutput(NodeId),
+    /// A `<~` binding reads an external image; only node outputs carry
+    /// state between evaluations.
+    FeedbackNeedsNode {
+        /// The node whose port is bound.
+        node: NodeId,
+        /// The port.
+        port: String,
+    },
 }
 
 impl fmt::Display for GraphError {
@@ -133,6 +167,10 @@ impl fmt::Display for GraphError {
                 write!(f, "nodes form a cycle: {names}")
             }
             Self::UnknownOutput(node) => write!(f, "output refers to unknown node `{node}`"),
+            Self::FeedbackNeedsNode { node, port } => write!(
+                f,
+                "node `{node}` port `{port}` reads previous state from an external image; use a node output"
+            ),
         }
     }
 }
@@ -165,17 +203,31 @@ impl Graph {
         }
         let index_of = |id: &NodeId| self.nodes.iter().position(|node| &node.id == id);
         for node in &self.nodes {
-            for (port, source) in &node.inputs {
-                let known = match source {
-                    Source::External(name) => self.externals.contains(name),
-                    Source::Node { node, .. } => index_of(node).is_some(),
+            for (port, binding) in &node.inputs {
+                let sources: Vec<&Source> = match binding {
+                    Binding::Now(source) => vec![source],
+                    Binding::Previous { source, initial } => {
+                        if let Source::External(_) = source {
+                            return Err(GraphError::FeedbackNeedsNode {
+                                node: node.id.clone(),
+                                port: port.clone(),
+                            });
+                        }
+                        vec![source, initial]
+                    }
                 };
-                if !known {
-                    return Err(GraphError::UnknownSource {
-                        node: node.id.clone(),
-                        port: port.clone(),
-                        source: source.clone(),
-                    });
+                for source in sources {
+                    let known = match source {
+                        Source::External(name) => self.externals.contains(name),
+                        Source::Node { node, .. } => index_of(node).is_some(),
+                    };
+                    if !known {
+                        return Err(GraphError::UnknownSource {
+                            node: node.id.clone(),
+                            port: port.clone(),
+                            source: source.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -198,12 +250,18 @@ impl Graph {
             marks[root] = Mark::Active;
             stack.push((root, 0));
             while let Some((current, next_input)) = stack.last().copied() {
+                // `Previous` sources read committed state and add no
+                // dependency; their initial sources do.
                 let dependencies: Vec<usize> = self.nodes[current]
                     .inputs
                     .values()
-                    .filter_map(|source| match source {
-                        Source::Node { node, .. } => index_of(node),
-                        Source::External(_) => None,
+                    .filter_map(|binding| match binding {
+                        Binding::Now(Source::Node { node, .. })
+                        | Binding::Previous {
+                            initial: Source::Node { node, .. },
+                            ..
+                        } => index_of(node),
+                        _ => None,
                     })
                     .collect();
                 if next_input < dependencies.len() {
@@ -247,8 +305,8 @@ impl fmt::Display for Graph {
         }
         for node in &self.nodes {
             writeln!(f, "node {} = {}", node.id, node.kernel)?;
-            for (port, source) in &node.inputs {
-                writeln!(f, "  {port} <- {source}")?;
+            for (port, binding) in &node.inputs {
+                writeln!(f, "  {port} {binding}")?;
             }
             for (name, value) in &node.params {
                 write!(f, "  {name} =")?;
