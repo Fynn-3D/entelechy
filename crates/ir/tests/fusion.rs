@@ -74,3 +74,49 @@ fn addressed_inputs_do_not_fuse() {
     assert!(error.to_string().contains("address or size"), "{error}");
     assert!(samples_only(&compile(GRAYSCALE).unwrap(), 0));
 }
+
+#[test]
+fn producer_helpers_with_struct_arguments_survive_fusion() {
+    // The consumer has structs of its own, so the producer's struct indices
+    // shift; a helper taking a struct argument must shift exactly once.
+    let producer = compile(
+        "kernel test.points@1 { requires { field.write; } output result: Rows<Point>; struct Point { p: Vec2; w: Float; } fn nudge(a: Point) -> Point { return Point { p: a.p + vec2(1.0, 0.0), w: a.w }; } compute { return nudge(Point { p: vec2(float(element()), 0.0), w: 2.0 }); } }",
+    )
+    .unwrap();
+    let consumer = compile(
+        "kernel test.weigh@1 { requires { field.read; field.write; } input points: Rows<Point>; output result: Rows<Float>; struct Pad { a: Float; } struct Extra { b: Int; } struct Point { p: Vec2; w: Float; } compute { let q = sample(points); return q.p.x * q.w; } }",
+    )
+    .unwrap();
+    let fused = fuse(&consumer, 0, &producer, "points").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(fused.structs.len(), 4);
+    let helper = fused
+        .functions
+        .iter()
+        .find(|f| f.name == "points/nudge")
+        .expect("the helper is carried over");
+    assert_eq!(
+        helper.args,
+        [orla_ir::Type::Struct(3)],
+        "shifted past the consumer's three structs"
+    );
+    let mut host = Host::new(1 << 16);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(3),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::FieldRead, Capability::FieldWrite]
+            .into_iter()
+            .collect(),
+    );
+    let output = orla_cpu::CpuBackend
+        .execute(&fused, &invocation, &mut scope)
+        .unwrap()[0];
+    let values: Vec<f32> = (0..3)
+        .map(|i| f32::from_bits(host.element(output, i).unwrap()[0]))
+        .collect();
+    assert_eq!(values, [2.0, 4.0, 6.0]);
+}

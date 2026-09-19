@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::{
-    Block, Capabilities, Function, Instruction, Manifest, Mode, Module, Op, Param, Port, StructDef,
-    Type, Validated, ValueId, validate,
+    Block, Capabilities, Function, Instruction, Manifest, Mode, Module, Op, Param, Port, PortType,
+    StructDef, Type, Validated, ValueId, validate,
 };
 
 /// Why two modules cannot fuse.
@@ -105,10 +105,15 @@ pub fn fuse(
             "only map Kernels fuse; reductions and scans run on their own".into(),
         ));
     }
-    if producer_manifest.outputs[0].ty != consumer_manifest.inputs[input as usize].ty {
+    // Ports match by structure: shape and layout. Element types are
+    // struct indices local to each module and mean nothing across them.
+    let (written, read) = (
+        &producer_manifest.outputs[0].ty,
+        &consumer_manifest.inputs[input as usize].ty,
+    );
+    if written.shape != read.shape || written.schema != read.schema {
         return Err(FuseError(format!(
-            "producer writes {} but the consumer reads {}",
-            producer_manifest.outputs[0].ty, consumer_manifest.inputs[input as usize].ty
+            "producer writes {written} but the consumer reads {read}"
         )));
     }
     let consumer_inputs = consumer_manifest.inputs.len() as u32;
@@ -117,6 +122,10 @@ pub fn fuse(
     let consumer_structs = consumer.structs.len() as u32;
     let rename = |name: &str| format!("{prefix}/{name}");
 
+    let shift_struct = |ty: Type| match ty {
+        Type::Struct(index) => Type::Struct(index + consumer_structs),
+        other => other,
+    };
     let mut inputs: Vec<Port> = consumer_manifest
         .inputs
         .iter()
@@ -126,7 +135,11 @@ pub fn fuse(
         .collect();
     inputs.extend(producer_manifest.inputs.iter().map(|port| Port {
         name: rename(&port.name),
-        ty: port.ty.clone(),
+        ty: PortType {
+            element: shift_struct(port.ty.element),
+            shape: port.ty.shape,
+            schema: port.ty.schema.clone(),
+        },
     }));
     let mut params: Vec<Param> = consumer_manifest.params.clone();
     params.extend(producer_manifest.params.iter().map(|param| Param {
@@ -146,10 +159,6 @@ pub fn fuse(
         outputs: consumer_manifest.outputs.clone(),
     };
 
-    let shift_struct = |ty: Type| match ty {
-        Type::Struct(index) => Type::Struct(index + consumer_structs),
-        other => other,
-    };
     let mut structs = consumer.structs.clone();
     structs.extend(producer.structs.iter().map(|def| {
         StructDef {
@@ -202,9 +211,11 @@ pub fn fuse(
         .collect();
     functions.extend(producer.functions.iter().map(|function| {
         let mut renumber = Renumber::new(&producer_ops, &shift_struct, None);
+        // `function` already shifted the argument types along with the
+        // instruction types; shifting them again would point past the
+        // struct table.
         let mut fused = renumber.function(function);
         fused.name = rename(&function.name);
-        fused.args = fused.args.into_iter().map(shift_struct).collect();
         fused
     }));
 
