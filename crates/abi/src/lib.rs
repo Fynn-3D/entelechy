@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
-pub use orla_host::{Host, HostError, Image, ImageHandle, Pixel};
+pub use orla_host::{FieldData, Host, HostError, Image, ImageHandle, Pixel, Scalar, Schema};
 
 /// A named authority a Kernel may declare and be granted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -24,15 +24,21 @@ pub enum Capability {
     TimeRead,
     /// Read pointer and key state.
     InputRead,
+    /// Read elements and counts of input Fields.
+    FieldRead,
+    /// Create and write output Fields.
+    FieldWrite,
 }
 
 impl Capability {
     /// All capabilities known to this ABI version.
-    pub const ALL: [Capability; 4] = [
+    pub const ALL: [Capability; 6] = [
         Capability::ImageRead,
         Capability::ImageWrite,
         Capability::TimeRead,
         Capability::InputRead,
+        Capability::FieldRead,
+        Capability::FieldWrite,
     ];
 
     /// Stable spelling used in `.orla` sources and manifests.
@@ -42,6 +48,8 @@ impl Capability {
             Self::ImageWrite => "image.write",
             Self::TimeRead => "time.read",
             Self::InputRead => "input.read",
+            Self::FieldRead => "field.read",
+            Self::FieldWrite => "field.write",
         }
     }
 }
@@ -265,8 +273,33 @@ impl fmt::Display for Value {
     }
 }
 
+/// What a Kernel port carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PortType {
+    /// A grid of `Vec4` pixels, sampled and fetched by coordinate.
+    Image,
+    /// Rows of one element type, read by index.
+    Field {
+        /// The element type as the Kernel sees it (`Type::Struct` indexes
+        /// the Kernel's struct table).
+        element: Type,
+        /// The element's storage layout.
+        schema: Schema,
+    },
+}
+
+impl fmt::Display for PortType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Image => f.write_str("Image"),
+            Self::Field { element, .. } => write!(f, "Field<{element}>"),
+        }
+    }
+}
+
 /// The output domain of one Kernel execution: the grid of pixels the entry
-/// point runs over.
+/// point runs over. A Field's Rows domain is a grid of height 1, so the
+/// element index is the column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Domain {
     /// Output width in pixels.
@@ -424,6 +457,62 @@ impl<'a> Scope<'a> {
         Ok(self.host.read_pixel(image, x, y)?)
     }
 
+    /// The size of any resource as `(width, height)`; a Field is `(count, 1)`.
+    /// Requires `image.read` for an image and `field.read` for a Field.
+    pub fn resource_size(&self, handle: ImageHandle) -> Result<(u32, u32), AbiError> {
+        self.require_read(handle)?;
+        Ok(self.host.image_size(handle)?)
+    }
+
+    /// One element of a Field as words. Requires `field.read`. Fails while
+    /// the Field is resident on a device.
+    pub fn field_element(&self, field: ImageHandle, index: u32) -> Result<&[u32], AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.field(field)?.element(index)?)
+    }
+
+    /// Every word of a Field. Requires `field.read`.
+    pub fn field_words(&self, field: ImageHandle) -> Result<&[u32], AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.field(field)?.words())
+    }
+
+    /// A Field's element count and schema, resident or not. Requires
+    /// `field.read`.
+    pub fn field_shape(&self, field: ImageHandle) -> Result<(u32, Schema), AbiError> {
+        self.require(Capability::FieldRead)?;
+        let schema = self
+            .host
+            .schema(field)?
+            .cloned()
+            .ok_or(AbiError::Host(HostError::NotAField(field)))?;
+        let (count, _) = self.host.image_size(field)?;
+        Ok((count, schema))
+    }
+
+    /// A new zeroed Field. Requires `field.write`.
+    pub fn field_create(&mut self, schema: Schema, count: u32) -> Result<ImageHandle, AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self.host.create_field(schema, count)?)
+    }
+
+    /// Replaces every word of a Field. Requires `field.write`.
+    pub fn field_write_all(&mut self, field: ImageHandle, words: &[u32]) -> Result<(), AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self.host.write_field(field, words)?)
+    }
+
+    /// A new Field whose words live on the device. Requires `field.write`.
+    pub fn field_adopt_resident(
+        &mut self,
+        schema: Schema,
+        count: u32,
+        device: Box<dyn std::any::Any + Send + Sync>,
+    ) -> Result<ImageHandle, AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self.host.adopt_resident_field(schema, count, device)?)
+    }
+
     /// Every pixel of an image, row-major. Requires `image.read`. Fails
     /// while the image is resident on a device.
     pub fn image_pixels(&self, image: ImageHandle) -> Result<&[Pixel], AbiError> {
@@ -431,23 +520,33 @@ impl<'a> Scope<'a> {
         Ok(self.host.image(image)?.pixels())
     }
 
-    /// The device object of a resident input, if any. Requires `image.read`.
+    fn require_read(&self, handle: ImageHandle) -> Result<(), AbiError> {
+        let is_field = self.host.schema(handle)?.is_some();
+        self.require(if is_field {
+            Capability::FieldRead
+        } else {
+            Capability::ImageRead
+        })
+    }
+
+    /// The device object of a resident input, if any. Requires the read
+    /// capability of the resource's kind.
     pub fn image_resident(
         &self,
         image: ImageHandle,
     ) -> Result<Option<&(dyn std::any::Any + Send + Sync)>, AbiError> {
-        self.require(Capability::ImageRead)?;
+        self.require_read(image)?;
         Ok(self.host.resident(image)?)
     }
 
-    /// Moves an input's pixels onto the device, replacing the Host copy.
+    /// Moves an input's data onto the device, replacing the Host copy.
     /// Residency is a storage detail, so reading authority suffices.
     pub fn image_make_resident(
         &mut self,
         image: ImageHandle,
         device: Box<dyn std::any::Any + Send + Sync>,
     ) -> Result<(), AbiError> {
-        self.require(Capability::ImageRead)?;
+        self.require_read(image)?;
         Ok(self.host.make_resident(image, device)?)
     }
 

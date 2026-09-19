@@ -29,6 +29,128 @@ impl fmt::Display for ImageHandle {
 /// One RGBA pixel with linear float components.
 pub type Pixel = [f32; 4];
 
+/// One scalar of a Field element, as stored: every scalar is one 32-bit
+/// word, so integers cross the boundary exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Scalar {
+    /// An `f32` word.
+    Float,
+    /// An `i32` word.
+    Int,
+    /// A `0` or `1` word.
+    Bool,
+}
+
+/// The flattened element layout of a Field: vectors and structs become
+/// their scalars in declaration order. This is the complete schema the
+/// Host and backends need; names live in the Kernel that declared it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Schema(Vec<Scalar>);
+
+impl Schema {
+    /// Builds a schema from scalars in order.
+    pub fn new(scalars: Vec<Scalar>) -> Self {
+        Self(scalars)
+    }
+
+    /// The scalars in order.
+    pub fn scalars(&self) -> &[Scalar] {
+        &self.0
+    }
+
+    /// Words per element.
+    pub fn words(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl fmt::Display for Schema {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, scalar) in self.0.iter().enumerate() {
+            if index > 0 {
+                f.write_str(",")?;
+            }
+            f.write_str(match scalar {
+                Scalar::Float => "f",
+                Scalar::Int => "i",
+                Scalar::Bool => "b",
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Rows of elements laid out by a [`Schema`], one word per scalar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldData {
+    schema: Schema,
+    count: u32,
+    words: Vec<u32>,
+}
+
+impl FieldData {
+    /// A zeroed Field.
+    pub fn new(schema: Schema, count: u32) -> Result<Self, HostError> {
+        if count == 0 || schema.words() == 0 {
+            return Err(HostError::ZeroSize);
+        }
+        let words = vec![0; count as usize * schema.words()];
+        Ok(Self {
+            schema,
+            count,
+            words,
+        })
+    }
+
+    /// Wraps existing words; the length must be `count * schema.words()`.
+    pub fn from_words(schema: Schema, count: u32, words: Vec<u32>) -> Result<Self, HostError> {
+        if count == 0 || schema.words() == 0 {
+            return Err(HostError::ZeroSize);
+        }
+        let expected = count as usize * schema.words();
+        if words.len() != expected {
+            return Err(HostError::PixelCount {
+                expected,
+                actual: words.len(),
+            });
+        }
+        Ok(Self {
+            schema,
+            count,
+            words,
+        })
+    }
+
+    /// The element layout.
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    /// Number of elements.
+    pub fn count(&self) -> u32 {
+        self.count
+    }
+
+    /// All words, element after element.
+    pub fn words(&self) -> &[u32] {
+        &self.words
+    }
+
+    /// The words of one element.
+    pub fn element(&self, index: u32) -> Result<&[u32], HostError> {
+        if index >= self.count {
+            return Err(HostError::OutOfBounds {
+                x: index,
+                y: 0,
+                width: self.count,
+                height: 1,
+            });
+        }
+        let stride = self.schema.words();
+        Ok(&self.words[index as usize * stride..(index as usize + 1) * stride])
+    }
+}
+
 /// Image storage: a dense row-major RGBA float grid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Image {
@@ -134,6 +256,10 @@ pub enum HostError {
     /// The image's pixels live on a device; materialize it before reading
     /// or writing them from the CPU.
     Resident(ImageHandle),
+    /// The handle is a Field, not an image.
+    NotAnImage(ImageHandle),
+    /// The handle is an image, not a Field.
+    NotAField(ImageHandle),
 }
 
 impl fmt::Display for HostError {
@@ -161,6 +287,8 @@ impl fmt::Display for HostError {
                 f,
                 "{handle} is resident on a device; materialize it before touching its pixels"
             ),
+            Self::NotAnImage(handle) => write!(f, "{handle} is a Field, not an image"),
+            Self::NotAField(handle) => write!(f, "{handle} is an image, not a Field"),
         }
     }
 }
@@ -173,10 +301,14 @@ enum Storage {
     Free,
     /// Pixels in Host memory.
     Pixels(Image),
-    /// Pixels on a device, held by an object only that backend understands.
+    /// Field words in Host memory.
+    Field(FieldData),
+    /// Pixels or words on a device, held by an object only that backend
+    /// understands. `schema` is `Some` for a Field.
     Resident {
         width: u32,
         height: u32,
+        schema: Option<Schema>,
         device: Box<dyn Any + Send + Sync>,
     },
 }
@@ -184,6 +316,8 @@ enum Storage {
 struct Slot {
     generation: u32,
     storage: Storage,
+    /// Budget charged when the resource was adopted, returned on release.
+    charge: usize,
 }
 
 impl Slot {
@@ -191,6 +325,7 @@ impl Slot {
         match &self.storage {
             Storage::Free => None,
             Storage::Pixels(image) => Some((image.width, image.height)),
+            Storage::Field(field) => Some((field.count, 1)),
             Storage::Resident { width, height, .. } => Some((*width, *height)),
         }
     }
@@ -269,9 +404,106 @@ impl Host {
             Storage::Resident {
                 width,
                 height,
+                schema: None,
                 device,
             },
         )
+    }
+
+    /// Allocates a zeroed Field of `count` elements.
+    pub fn create_field(&mut self, schema: Schema, count: u32) -> Result<ImageHandle, HostError> {
+        self.adopt_field(FieldData::new(schema, count)?)
+    }
+
+    /// Takes ownership of an existing Field.
+    pub fn adopt_field(&mut self, field: FieldData) -> Result<ImageHandle, HostError> {
+        let requested = field.words.len().div_ceil(4);
+        self.adopt(requested, Storage::Field(field))
+    }
+
+    /// Takes ownership of a Field whose words live on a device.
+    pub fn adopt_resident_field(
+        &mut self,
+        schema: Schema,
+        count: u32,
+        device: Box<dyn Any + Send + Sync>,
+    ) -> Result<ImageHandle, HostError> {
+        if count == 0 || schema.words() == 0 {
+            return Err(HostError::ZeroSize);
+        }
+        let requested = (count as usize * schema.words()).div_ceil(4);
+        self.adopt(
+            requested,
+            Storage::Resident {
+                width: count,
+                height: 1,
+                schema: Some(schema),
+                device,
+            },
+        )
+    }
+
+    /// The schema of a Field, resident or not; `None` for an image.
+    pub fn schema(&self, handle: ImageHandle) -> Result<Option<&Schema>, HostError> {
+        Ok(match &self.slot(handle)?.storage {
+            Storage::Field(field) => Some(&field.schema),
+            Storage::Resident { schema, .. } => schema.as_ref(),
+            _ => None,
+        })
+    }
+
+    /// Borrows the Field behind a handle; fails with [`HostError::Resident`]
+    /// when its words are on a device.
+    pub fn field(&self, handle: ImageHandle) -> Result<&FieldData, HostError> {
+        match &self.slot(handle)?.storage {
+            Storage::Field(field) => Ok(field),
+            Storage::Resident {
+                schema: Some(_), ..
+            } => Err(HostError::Resident(handle)),
+            Storage::Free => Err(HostError::InvalidHandle(handle)),
+            _ => Err(HostError::NotAField(handle)),
+        }
+    }
+
+    /// Replaces every word of a Field; the length must match.
+    pub fn write_field(&mut self, handle: ImageHandle, words: &[u32]) -> Result<(), HostError> {
+        let field = match &mut self.slot_mut(handle)?.storage {
+            Storage::Field(field) => field,
+            Storage::Resident {
+                schema: Some(_), ..
+            } => return Err(HostError::Resident(handle)),
+            Storage::Free => return Err(HostError::InvalidHandle(handle)),
+            _ => return Err(HostError::NotAField(handle)),
+        };
+        if words.len() != field.words.len() {
+            return Err(HostError::PixelCount {
+                expected: field.words.len(),
+                actual: words.len(),
+            });
+        }
+        field.words.copy_from_slice(words);
+        Ok(())
+    }
+
+    /// Brings a resident Field back into Host memory with the words the
+    /// backend downloaded.
+    pub fn materialize_words(
+        &mut self,
+        handle: ImageHandle,
+        words: Vec<u32>,
+    ) -> Result<(), HostError> {
+        let slot = self.slot_mut(handle)?;
+        let (count, schema) = match &slot.storage {
+            Storage::Resident {
+                width,
+                schema: Some(schema),
+                ..
+            } => (*width, schema.clone()),
+            Storage::Field(_) => return Ok(()),
+            _ => return Err(HostError::NotAField(handle)),
+        };
+        slot.storage = Storage::Field(FieldData::from_words(schema, count, words)?);
+        Ok(())
     }
 
     fn adopt(&mut self, requested: usize, storage: Storage) -> Result<ImageHandle, HostError> {
@@ -288,12 +520,14 @@ impl Host {
                 let slot = &mut self.slots[index as usize];
                 slot.generation = slot.generation.wrapping_add(1);
                 slot.storage = storage;
+                slot.charge = requested;
                 index
             }
             None => {
                 self.slots.push(Slot {
                     generation: 0,
                     storage,
+                    charge: requested,
                 });
                 (self.slots.len() - 1) as u32
             }
@@ -325,9 +559,15 @@ impl Host {
     ) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         let (width, height) = slot.size().ok_or(HostError::InvalidHandle(handle))?;
+        let schema = match &slot.storage {
+            Storage::Field(field) => Some(field.schema.clone()),
+            Storage::Resident { schema, .. } => schema.clone(),
+            _ => None,
+        };
         slot.storage = Storage::Resident {
             width,
             height,
+            schema,
             device,
         };
         Ok(())
@@ -342,6 +582,16 @@ impl Host {
     ) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         let (width, height) = slot.size().ok_or(HostError::InvalidHandle(handle))?;
+        if matches!(
+            slot.storage,
+            Storage::Field(_)
+                | Storage::Resident {
+                    schema: Some(_),
+                    ..
+                }
+        ) {
+            return Err(HostError::NotAnImage(handle));
+        }
         let image = Image::from_pixels(width, height, pixels)?;
         slot.storage = Storage::Pixels(image);
         Ok(())
@@ -350,9 +600,10 @@ impl Host {
     /// Releases an image, resident or not. The handle is invalid afterwards.
     pub fn release_image(&mut self, handle: ImageHandle) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
-        let (width, height) = slot.size().ok_or(HostError::InvalidHandle(handle))?;
+        slot.size().ok_or(HostError::InvalidHandle(handle))?;
         slot.storage = Storage::Free;
-        self.used_pixels -= width as usize * height as usize;
+        let charge = std::mem::take(&mut slot.charge);
+        self.used_pixels -= charge;
         self.free.push(handle.index);
         Ok(())
     }
@@ -362,8 +613,9 @@ impl Host {
     pub fn image(&self, handle: ImageHandle) -> Result<&Image, HostError> {
         match &self.slot(handle)?.storage {
             Storage::Pixels(image) => Ok(image),
-            Storage::Resident { .. } => Err(HostError::Resident(handle)),
+            Storage::Resident { schema: None, .. } => Err(HostError::Resident(handle)),
             Storage::Free => Err(HostError::InvalidHandle(handle)),
+            _ => Err(HostError::NotAnImage(handle)),
         }
     }
 
@@ -425,8 +677,9 @@ impl Host {
     fn image_mut(&mut self, handle: ImageHandle) -> Result<&mut Image, HostError> {
         match &mut self.slot_mut(handle)?.storage {
             Storage::Pixels(image) => Ok(image),
-            Storage::Resident { .. } => Err(HostError::Resident(handle)),
+            Storage::Resident { schema: None, .. } => Err(HostError::Resident(handle)),
             Storage::Free => Err(HostError::InvalidHandle(handle)),
+            _ => Err(HostError::NotAnImage(handle)),
         }
     }
 }
@@ -496,6 +749,38 @@ mod tests {
         let resident = host.adopt_resident(2, 2, Box::new(7u8)).unwrap();
         assert_eq!(host.live_images(), 2);
         host.release_image(resident).unwrap();
+        host.release_image(image).unwrap();
+        assert_eq!(host.used_pixels(), 0);
+    }
+
+    #[test]
+    fn fields_share_the_store_with_images() {
+        let mut host = Host::new(8);
+        let schema = Schema::new(vec![Scalar::Float, Scalar::Int, Scalar::Bool]);
+        let field = host.create_field(schema.clone(), 4).unwrap();
+        assert_eq!(host.image_size(field).unwrap(), (4, 1));
+        assert_eq!(
+            host.used_pixels(),
+            3,
+            "twelve words round up to three pixels"
+        );
+        assert_eq!(host.image(field).unwrap_err(), HostError::NotAnImage(field));
+        assert_eq!(host.schema(field).unwrap(), Some(&schema));
+        let words: Vec<u32> = (0..12).collect();
+        host.write_field(field, &words).unwrap();
+        assert_eq!(host.field(field).unwrap().element(2).unwrap(), &[6, 7, 8]);
+        host.make_resident(field, Box::new(1u8)).unwrap();
+        assert_eq!(host.schema(field).unwrap(), Some(&schema));
+        assert_eq!(host.field(field).unwrap_err(), HostError::Resident(field));
+        assert_eq!(
+            host.materialize(field, vec![]).unwrap_err(),
+            HostError::NotAnImage(field)
+        );
+        host.materialize_words(field, words.clone()).unwrap();
+        assert_eq!(host.field(field).unwrap().words(), &words[..]);
+        let image = host.create_image(1, 1).unwrap();
+        assert_eq!(host.field(image).unwrap_err(), HostError::NotAField(image));
+        host.release_image(field).unwrap();
         host.release_image(image).unwrap();
         assert_eq!(host.used_pixels(), 0);
     }
