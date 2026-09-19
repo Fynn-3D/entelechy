@@ -424,10 +424,42 @@ impl<'a> Scope<'a> {
         Ok(self.host.read_pixel(image, x, y)?)
     }
 
-    /// Every pixel of an image, row-major. Requires `image.read`.
+    /// Every pixel of an image, row-major. Requires `image.read`. Fails
+    /// while the image is resident on a device.
     pub fn image_pixels(&self, image: ImageHandle) -> Result<&[Pixel], AbiError> {
         self.require(Capability::ImageRead)?;
         Ok(self.host.image(image)?.pixels())
+    }
+
+    /// The device object of a resident input, if any. Requires `image.read`.
+    pub fn image_resident(
+        &self,
+        image: ImageHandle,
+    ) -> Result<Option<&(dyn std::any::Any + Send + Sync)>, AbiError> {
+        self.require(Capability::ImageRead)?;
+        Ok(self.host.resident(image)?)
+    }
+
+    /// Moves an input's pixels onto the device, replacing the Host copy.
+    /// Residency is a storage detail, so reading authority suffices.
+    pub fn image_make_resident(
+        &mut self,
+        image: ImageHandle,
+        device: Box<dyn std::any::Any + Send + Sync>,
+    ) -> Result<(), AbiError> {
+        self.require(Capability::ImageRead)?;
+        Ok(self.host.make_resident(image, device)?)
+    }
+
+    /// A new image whose pixels live on the device. Requires `image.write`.
+    pub fn image_adopt_resident(
+        &mut self,
+        width: u32,
+        height: u32,
+        device: Box<dyn std::any::Any + Send + Sync>,
+    ) -> Result<ImageHandle, AbiError> {
+        self.require(Capability::ImageWrite)?;
+        Ok(self.host.adopt_resident(width, height, device)?)
     }
 
     /// Replaces every pixel of an image. Requires `image.write`.

@@ -7,6 +7,7 @@
 //! release. Nothing here should ever grow product logic; if a feature can be
 //! a Kernel, it does not belong in this crate.
 
+use std::any::Any;
 use std::fmt;
 
 /// Opaque handle to an image owned by the Host.
@@ -130,6 +131,9 @@ pub enum HostError {
         /// Pixels supplied.
         actual: usize,
     },
+    /// The image's pixels live on a device; materialize it before reading
+    /// or writing them from the CPU.
+    Resident(ImageHandle),
 }
 
 impl fmt::Display for HostError {
@@ -153,15 +157,43 @@ impl fmt::Display for HostError {
             Self::PixelCount { expected, actual } => {
                 write!(f, "expected {expected} pixels, received {actual}")
             }
+            Self::Resident(handle) => write!(
+                f,
+                "{handle} is resident on a device; materialize it before touching its pixels"
+            ),
         }
     }
 }
 
 impl std::error::Error for HostError {}
 
+/// Where an image's pixels are.
+enum Storage {
+    /// Nothing; the slot is free.
+    Free,
+    /// Pixels in Host memory.
+    Pixels(Image),
+    /// Pixels on a device, held by an object only that backend understands.
+    Resident {
+        width: u32,
+        height: u32,
+        device: Box<dyn Any + Send + Sync>,
+    },
+}
+
 struct Slot {
     generation: u32,
-    image: Option<Image>,
+    storage: Storage,
+}
+
+impl Slot {
+    fn size(&self) -> Option<(u32, u32)> {
+        match &self.storage {
+            Storage::Free => None,
+            Storage::Pixels(image) => Some((image.width, image.height)),
+            Storage::Resident { width, height, .. } => Some((*width, *height)),
+        }
+    }
 }
 
 /// The Host: a bounded store of primitive resources.
@@ -183,11 +215,19 @@ impl Host {
         }
     }
 
-    /// Number of live images.
+    /// Number of live images, resident ones included.
     pub fn live_images(&self) -> usize {
         self.slots
             .iter()
-            .filter(|slot| slot.image.is_some())
+            .filter(|slot| slot.size().is_some())
+            .count()
+    }
+
+    /// Number of live images whose pixels are on a device.
+    pub fn resident_images(&self) -> usize {
+        self.slots
+            .iter()
+            .filter(|slot| matches!(slot.storage, Storage::Resident { .. }))
             .count()
     }
 
@@ -209,6 +249,32 @@ impl Host {
     /// Takes ownership of an existing image.
     pub fn adopt_image(&mut self, image: Image) -> Result<ImageHandle, HostError> {
         let requested = image.pixels.len();
+        self.adopt(requested, Storage::Pixels(image))
+    }
+
+    /// Takes ownership of an image whose pixels live on a device. `device`
+    /// is whatever the owning backend needs to find them again.
+    pub fn adopt_resident(
+        &mut self,
+        width: u32,
+        height: u32,
+        device: Box<dyn Any + Send + Sync>,
+    ) -> Result<ImageHandle, HostError> {
+        if width == 0 || height == 0 {
+            return Err(HostError::ZeroSize);
+        }
+        let requested = width as usize * height as usize;
+        self.adopt(
+            requested,
+            Storage::Resident {
+                width,
+                height,
+                device,
+            },
+        )
+    }
+
+    fn adopt(&mut self, requested: usize, storage: Storage) -> Result<ImageHandle, HostError> {
         let available = self.budget_pixels.saturating_sub(self.used_pixels);
         if requested > available {
             return Err(HostError::BudgetExceeded {
@@ -221,13 +287,13 @@ impl Host {
             Some(index) => {
                 let slot = &mut self.slots[index as usize];
                 slot.generation = slot.generation.wrapping_add(1);
-                slot.image = Some(image);
+                slot.storage = storage;
                 index
             }
             None => {
                 self.slots.push(Slot {
                     generation: 0,
-                    image: Some(image),
+                    storage,
                 });
                 (self.slots.len() - 1) as u32
             }
@@ -238,29 +304,74 @@ impl Host {
         })
     }
 
-    /// Releases an image. The handle is invalid afterwards.
+    /// The device object of a resident image, or `None` when its pixels are
+    /// in Host memory.
+    pub fn resident(
+        &self,
+        handle: ImageHandle,
+    ) -> Result<Option<&(dyn Any + Send + Sync)>, HostError> {
+        Ok(match &self.slot(handle)?.storage {
+            Storage::Resident { device, .. } => Some(device.as_ref()),
+            _ => None,
+        })
+    }
+
+    /// Moves an image's pixels onto a device: the Host drops its copy and
+    /// keeps `device` in its place. Size and identity are unchanged.
+    pub fn make_resident(
+        &mut self,
+        handle: ImageHandle,
+        device: Box<dyn Any + Send + Sync>,
+    ) -> Result<(), HostError> {
+        let slot = self.slot_mut(handle)?;
+        let (width, height) = slot.size().ok_or(HostError::InvalidHandle(handle))?;
+        slot.storage = Storage::Resident {
+            width,
+            height,
+            device,
+        };
+        Ok(())
+    }
+
+    /// Brings a resident image back into Host memory with the pixels the
+    /// backend downloaded; the device object is dropped.
+    pub fn materialize(
+        &mut self,
+        handle: ImageHandle,
+        pixels: Vec<Pixel>,
+    ) -> Result<(), HostError> {
+        let slot = self.slot_mut(handle)?;
+        let (width, height) = slot.size().ok_or(HostError::InvalidHandle(handle))?;
+        let image = Image::from_pixels(width, height, pixels)?;
+        slot.storage = Storage::Pixels(image);
+        Ok(())
+    }
+
+    /// Releases an image, resident or not. The handle is invalid afterwards.
     pub fn release_image(&mut self, handle: ImageHandle) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
-        let image = slot.image.take().ok_or(HostError::InvalidHandle(handle))?;
-        self.used_pixels -= image.pixels.len();
+        let (width, height) = slot.size().ok_or(HostError::InvalidHandle(handle))?;
+        slot.storage = Storage::Free;
+        self.used_pixels -= width as usize * height as usize;
         self.free.push(handle.index);
         Ok(())
     }
 
-    /// Borrows the image behind a handle.
+    /// Borrows the image behind a handle; fails with
+    /// [`HostError::Resident`] when its pixels are on a device.
     pub fn image(&self, handle: ImageHandle) -> Result<&Image, HostError> {
-        let slot = self
-            .slots
-            .get(handle.index as usize)
-            .filter(|slot| slot.generation == handle.generation)
-            .ok_or(HostError::InvalidHandle(handle))?;
-        slot.image.as_ref().ok_or(HostError::InvalidHandle(handle))
+        match &self.slot(handle)?.storage {
+            Storage::Pixels(image) => Ok(image),
+            Storage::Resident { .. } => Err(HostError::Resident(handle)),
+            Storage::Free => Err(HostError::InvalidHandle(handle)),
+        }
     }
 
-    /// Image dimensions as `(width, height)`.
+    /// Image dimensions as `(width, height)`, resident or not.
     pub fn image_size(&self, handle: ImageHandle) -> Result<(u32, u32), HostError> {
-        let image = self.image(handle)?;
-        Ok((image.width, image.height))
+        self.slot(handle)?
+            .size()
+            .ok_or(HostError::InvalidHandle(handle))
     }
 
     /// Reads one pixel.
@@ -278,11 +389,7 @@ impl Host {
         y: u32,
         pixel: Pixel,
     ) -> Result<(), HostError> {
-        let slot = self.slot_mut(handle)?;
-        let image = slot
-            .image
-            .as_mut()
-            .ok_or(HostError::InvalidHandle(handle))?;
+        let image = self.image_mut(handle)?;
         let offset = image.offset(x, y)?;
         image.pixels[offset] = pixel;
         Ok(())
@@ -290,11 +397,7 @@ impl Host {
 
     /// Replaces every pixel of an image; the slice length must match.
     pub fn write_image(&mut self, handle: ImageHandle, pixels: &[Pixel]) -> Result<(), HostError> {
-        let slot = self.slot_mut(handle)?;
-        let image = slot
-            .image
-            .as_mut()
-            .ok_or(HostError::InvalidHandle(handle))?;
+        let image = self.image_mut(handle)?;
         if pixels.len() != image.pixels.len() {
             return Err(HostError::PixelCount {
                 expected: image.pixels.len(),
@@ -305,11 +408,26 @@ impl Host {
         Ok(())
     }
 
+    fn slot(&self, handle: ImageHandle) -> Result<&Slot, HostError> {
+        self.slots
+            .get(handle.index as usize)
+            .filter(|slot| slot.generation == handle.generation && slot.size().is_some())
+            .ok_or(HostError::InvalidHandle(handle))
+    }
+
     fn slot_mut(&mut self, handle: ImageHandle) -> Result<&mut Slot, HostError> {
         self.slots
             .get_mut(handle.index as usize)
-            .filter(|slot| slot.generation == handle.generation && slot.image.is_some())
+            .filter(|slot| slot.generation == handle.generation && slot.size().is_some())
             .ok_or(HostError::InvalidHandle(handle))
+    }
+
+    fn image_mut(&mut self, handle: ImageHandle) -> Result<&mut Image, HostError> {
+        match &mut self.slot_mut(handle)?.storage {
+            Storage::Pixels(image) => Ok(image),
+            Storage::Resident { .. } => Err(HostError::Resident(handle)),
+            Storage::Free => Err(HostError::InvalidHandle(handle)),
+        }
     }
 }
 
@@ -354,6 +472,32 @@ mod tests {
         host.release_image(first).unwrap();
         assert_eq!(host.used_pixels(), 0);
         assert!(host.create_image(2, 4).is_ok());
+    }
+
+    #[test]
+    fn resident_images_keep_identity_size_and_budget_but_hide_pixels() {
+        let mut host = Host::new(8);
+        let image = host.create_image(2, 2).unwrap();
+        host.write_pixel(image, 0, 0, [1.0; 4]).unwrap();
+        host.make_resident(image, Box::new(42u32)).unwrap();
+        assert_eq!(host.image_size(image).unwrap(), (2, 2));
+        assert_eq!(host.resident_images(), 1);
+        assert_eq!(host.used_pixels(), 4);
+        assert_eq!(
+            host.read_pixel(image, 0, 0),
+            Err(HostError::Resident(image))
+        );
+        assert_eq!(host.image(image).unwrap_err(), HostError::Resident(image));
+        let device = host.resident(image).unwrap().unwrap();
+        assert_eq!(device.downcast_ref::<u32>(), Some(&42));
+        host.materialize(image, vec![[0.5; 4]; 4]).unwrap();
+        assert_eq!(host.read_pixel(image, 1, 1).unwrap(), [0.5; 4]);
+        assert!(host.resident(image).unwrap().is_none());
+        let resident = host.adopt_resident(2, 2, Box::new(7u8)).unwrap();
+        assert_eq!(host.live_images(), 2);
+        host.release_image(resident).unwrap();
+        host.release_image(image).unwrap();
+        assert_eq!(host.used_pixels(), 0);
     }
 
     #[test]

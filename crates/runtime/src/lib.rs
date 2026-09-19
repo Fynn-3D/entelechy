@@ -17,7 +17,8 @@ use std::fmt;
 use std::sync::Arc;
 
 pub use orla_abi::{
-    Context, Domain, Host, HostError, Image, ImageHandle, InputState, Invocation, Scope, Value,
+    Context, Domain, Host, HostError, Image, ImageHandle, InputState, Invocation, Pixel, Scope,
+    Value,
 };
 pub use orla_compiler::CompileError;
 pub use orla_cpu::ExecutionError;
@@ -39,7 +40,8 @@ pub trait Backend: Send + Sync {
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
 
     /// Executes a prepared module over the invocation's domain, returning one
-    /// image handle per manifest output, owned by the scope's Host.
+    /// image handle per manifest output, owned by the scope's Host. Outputs
+    /// may be left resident on the backend's device.
     fn execute(
         &self,
         prepared: &dyn Prepared,
@@ -47,6 +49,18 @@ pub trait Backend: Send + Sync {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<ImageHandle>, ExecutionError>;
+
+    /// Downloads the pixels of an image this backend left resident. The
+    /// default is for backends that never do.
+    fn download(
+        &self,
+        device: &(dyn Any + Send + Sync),
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<Pixel>, String> {
+        let _ = (device, width, height);
+        Err("this backend keeps no resident images".into())
+    }
 }
 
 struct NothingPrepared;
@@ -280,6 +294,38 @@ impl Runtime {
     /// The Host, for interfaces that import and export resources.
     pub fn host(&self) -> &Host {
         &self.host
+    }
+
+    /// Brings a resident image back into Host memory through the backend
+    /// that owns it; a no-op for images already in memory.
+    pub fn materialize(&mut self, handle: ImageHandle) -> Result<(), ExecutionError> {
+        let Some(device) = self
+            .host
+            .resident(handle)
+            .map_err(|e| ExecutionError::Abi(e.into()))?
+        else {
+            return Ok(());
+        };
+        let (width, height) = self
+            .host
+            .image_size(handle)
+            .map_err(|e| ExecutionError::Abi(e.into()))?;
+        let pixels = self
+            .backend
+            .download(device, width, height)
+            .map_err(ExecutionError::Device)?;
+        self.host
+            .materialize(handle, pixels)
+            .map_err(|e| ExecutionError::Abi(e.into()))
+    }
+
+    /// The image behind a handle, materialized if it was resident. This is
+    /// an observation boundary: it is where device work is waited for.
+    pub fn image(&mut self, handle: ImageHandle) -> Result<&Image, ExecutionError> {
+        self.materialize(handle)?;
+        self.host
+            .image(handle)
+            .map_err(|e| ExecutionError::Abi(e.into()))
     }
 
     /// Mutable Host access, for interfaces that import and release resources.
