@@ -18,7 +18,7 @@ use winit::window::{Window, WindowId};
 
 const USAGE: &str = "\
 usage:
-  orla-player <scene.osn> [--kernels <dir>] [--input <name>=<file.ppm>]... [--scale <n>]
+  orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--backend gpu|cpu]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
@@ -50,7 +50,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 .ok_or_else(|| format!("{flag} needs a value"))
         };
         match arg.as_str() {
-            "--kernels" => options.kernels = Some(PathBuf::from(value("--kernels")?)),
+            "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--backend" => options.backend = Some(value("--backend")?),
             "--scale" => {
                 options.scale = value("--scale")?

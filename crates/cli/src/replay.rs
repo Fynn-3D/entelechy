@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! scene ../scene.osn        # required; paths are relative to the replay file
-//! kernels ../kernels        # optional; defaults to <scene dir>/kernels
+//! library ../kernels/       # optional extra Kernels beyond the scene's `use`
 //! frame 0.0                 # evaluate at this session time
 //! pointer 20 20 down        # move the pointer and press; `up` releases
 //! pointer up                # release without moving
@@ -105,7 +105,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
         };
         match words.as_slice() {
             ["scene", path] => scene = Some(base.join(path)),
-            ["kernels", path] => kernels = Some(base.join(path)),
+            ["library" | "kernels", path] => kernels = Some(base.join(path)),
             ["frame", time] => steps.push(Step::Frame(number(time, "time")?)),
             ["pointer", state @ ("down" | "up")] => steps.push(Step::Pointer {
                 position: None,
@@ -252,6 +252,7 @@ mod tests {
         .unwrap();
         assert_eq!(replay.scene, Path::new("/base/s.osn"));
         assert_eq!(replay.kernels, Some(PathBuf::from("/base/k")));
+        let _ = "library";
         assert_eq!(replay.steps.len(), 7);
         assert!(matches!(replay.steps[6], Step::Expect { tolerance, .. } if tolerance == 0.5));
         let error = parse("frame 1\n", Path::new(".")).unwrap_err();

@@ -9,9 +9,9 @@ use orla_runtime::Context;
 
 const USAGE: &str = "\
 usage:
-  orla check [--ir] <file.orla>...
-      Compile Kernels and print their manifests, or diagnostics.
-  orla run <scene.osn> [--kernels <dir>] [--input <name>=<file.ppm>]...
+  orla check [--ir] <file.orla|file.osn>...
+      Parse documents, compile their Kernels, and print manifests or diagnostics.
+  orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
@@ -43,26 +43,73 @@ fn check(args: &[String]) -> Result<(), String> {
     let show_ir = args.iter().any(|arg| arg == "--ir");
     let files: Vec<&String> = args.iter().filter(|arg| *arg != "--ir").collect();
     if files.is_empty() {
-        return Err("check needs at least one .orla file".into());
+        return Err("check needs at least one document".into());
     }
     let mut failures = 0;
     for file in files {
-        let source = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
-        match orla_compiler::compile(&source) {
-            Ok(module) => {
-                print!("{file}: ok\n{}", module.manifest);
-                if show_ir {
-                    println!("{module}");
-                }
-            }
+        let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+        let document = match orla_language::parse_document(&text) {
+            Ok(document) => document,
             Err(error) => {
                 failures += 1;
                 println!("{file}:{error}");
+                continue;
+            }
+        };
+        let name = Path::new(file)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("scene");
+        let lowered = match orla_graph::Graph::from_document(&document, name) {
+            Ok(lowered) => lowered,
+            Err(error) => {
+                failures += 1;
+                println!("{file}:{error}");
+                continue;
+            }
+        };
+        let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
+            .kernels
+            .iter()
+            .map(|kernel| (None, kernel))
+            .collect();
+        kernels.extend(
+            lowered
+                .inline
+                .iter()
+                .map(|inline| (Some(inline.id.clone()), inline.kernel)),
+        );
+        for (id, kernel) in kernels {
+            match orla_compiler::compile_kernel(kernel, id.as_ref()) {
+                Ok(module) => {
+                    print!("{file}: {}\n{}", module.manifest.id, module.manifest);
+                    if show_ir {
+                        println!("{module}");
+                    }
+                }
+                Err(error) => {
+                    failures += 1;
+                    println!("{file}:{error}");
+                }
+            }
+        }
+        if !document.nodes.is_empty() {
+            match lowered.graph.order() {
+                Ok(order) => println!(
+                    "{file}: graph `{}` with {} node(s), {} use(s)",
+                    lowered.graph.name,
+                    order.len(),
+                    document.uses.len()
+                ),
+                Err(error) => {
+                    failures += 1;
+                    println!("{file}: {error}");
+                }
             }
         }
     }
     if failures > 0 {
-        Err(format!("{failures} kernel(s) failed to compile"))
+        Err(format!("{failures} problem(s) found"))
     } else {
         Ok(())
     }
@@ -95,7 +142,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
                 .ok_or_else(|| format!("{flag} needs a value"))
         };
         match arg.as_str() {
-            "--kernels" => options.kernels = Some(PathBuf::from(value("--kernels")?)),
+            "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
             "--backend" => options.backend = value("--backend")?,
@@ -139,11 +186,13 @@ fn run(args: &[String]) -> Result<(), String> {
             Err("the scene did not evaluate".into())
         };
     }
-    eprintln!(
-        "watching {} and {}; edit a .orla file and save",
-        options.scene.display(),
-        session.kernels_dir().display()
-    );
+    let watched = session
+        .watched()
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!("watching {watched}; edit a document and save");
     loop {
         std::thread::sleep(Duration::from_millis(200));
         let events = session.sync();
