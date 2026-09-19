@@ -13,3 +13,9 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = "warn"
+
+# The CPU backend runs the examples' replays in the test suite through
+# the debug binary; unoptimised, a frame of the larger examples takes
+# tens of seconds, so that crate alone is optimised in dev builds.
+[profile.dev.package.orla-cpu]
+opt-level = 3
