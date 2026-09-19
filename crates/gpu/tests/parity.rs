@@ -9,6 +9,18 @@ use orla_cpu::CpuBackend;
 use orla_gpu::GpuBackend;
 use orla_runtime::Backend;
 
+/// Downloads a resident GPU output into Host memory and returns its pixels.
+fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::ImageHandle) -> Vec<[f32; 4]> {
+    let (width, height) = host.image_size(handle).unwrap();
+    let device = host
+        .resident(handle)
+        .unwrap()
+        .expect("gpu outputs are resident");
+    let pixels = Backend::download(gpu, device, width, height).unwrap();
+    host.materialize(handle, pixels).unwrap();
+    host.image(handle).unwrap().pixels().to_vec()
+}
+
 fn gpu() -> Option<GpuBackend> {
     match GpuBackend::new() {
         Ok(gpu) => Some(gpu),
@@ -88,7 +100,7 @@ fn both_module(
         .unwrap_or_else(|error| panic!("gpu execution failed: {error}"))[0];
     (
         host.image(cpu_out).unwrap().pixels().to_vec(),
-        host.image(gpu_out).unwrap().pixels().to_vec(),
+        materialized(gpu, &mut host, gpu_out),
     )
 }
 
@@ -286,7 +298,69 @@ fn input_context_matches_between_backends() {
     let gpu_out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
     let cpu = host.image(cpu_out).unwrap().pixels().to_vec();
-    let gpu_pixels = host.image(gpu_out).unwrap().pixels().to_vec();
+    let gpu_pixels = materialized(&gpu, &mut host, gpu_out);
     assert_eq!(cpu[0], [f32::sqrt(10.0), 1.0, 5.0, 0.5]);
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
+}
+
+#[test]
+fn chains_and_state_stay_resident_until_observed() {
+    let Some(gpu) = gpu() else { return };
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
+    runtime
+        .load("kernel test.zero@1 { requires { image.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }")
+        .unwrap();
+    runtime
+        .load("kernel test.increment@1 { requires { image.read; image.write; } input previous: Image; output result: Image; compute { let c = sample(previous); return vec4(c.r + 1.0, c.g, c.b, 1.0); } }")
+        .unwrap();
+    runtime
+        .load("kernel test.blur@1 { requires { image.read; image.write; } input source: Image; output result: Image; compute { let c = coord(); return (fetch(source, c) + fetch(source, c + vec2(1.0, 0.0))) * 0.5; } }")
+        .unwrap();
+    let graph = orla_graph::Graph::parse(
+        "node seed: test.zero@1 { domain = vec2(8, 8); }
+         node count: test.increment@1 { previous <~ count.result from seed.result; }
+         node soft: test.blur@1 { source <- count.result; }
+         output result <- soft.result;",
+    )
+    .unwrap();
+    let mut evaluator = orla_graph::Evaluator::new();
+    let empty: std::collections::BTreeMap<String, orla_abi::ImageHandle> =
+        std::collections::BTreeMap::new();
+    let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+    for frame in 1..=3 {
+        let report = evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &empty,
+                &Context::default(),
+                &no_params,
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.host().resident_images(),
+            runtime.host().live_images(),
+            "nothing came back to the Host during evaluation"
+        );
+        if frame == 3 {
+            let image = runtime.image(report.output).unwrap();
+            assert_eq!(image.pixels()[0][0], 3.0, "state advanced on the device");
+            assert_eq!(
+                runtime.host().resident_images(),
+                runtime.host().live_images() - 1
+            );
+        }
+    }
+    // The observed image is usable as an input again: it is re-uploaded once.
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &empty,
+            &Context::default(),
+            &no_params,
+        )
+        .unwrap();
+    assert_eq!(runtime.image(report.output).unwrap().pixels()[0][0], 4.0);
 }

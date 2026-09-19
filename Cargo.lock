@@ -1230,6 +1230,7 @@ dependencies = [
  "orla-abi",
  "orla-compiler",
  "orla-cpu",
+ "orla-graph",
  "orla-ir",
  "orla-language",
  "orla-runtime",

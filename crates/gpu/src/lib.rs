@@ -2,11 +2,14 @@
 //! GPU backend.
 //!
 //! Emits WGSL from validated IR at preparation time and runs one compute
-//! dispatch per execution through wgpu. The Host keeps owning images: inputs
-//! are uploaded and outputs read back for every execution, so semantics
-//! match the CPU backend exactly except for floating-point rounding and the
-//! absence of per-pixel integer arithmetic errors, which WGSL defines
-//! instead of reporting.
+//! dispatch per execution through wgpu. The Host keeps owning images, but
+//! their pixels stay resident on the device: an input that is already
+//! resident is bound directly, an input in Host memory is uploaded once and
+//! made resident, and outputs are adopted by the Host as resident images.
+//! Pixels come back only at observation boundaries, through
+//! [`Backend::download`]. Semantics match the CPU backend except for
+//! floating-point rounding and the absence of per-pixel integer arithmetic
+//! errors, which WGSL defines instead of reporting.
 
 pub mod wgsl;
 
@@ -14,10 +17,15 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Mutex;
 
-use orla_abi::{ImageHandle, Invocation, Scope, Type, Value};
+use orla_abi::{ImageHandle, Invocation, Pixel, Scope, Value};
 use orla_cpu::{ExecutionError, check_invocation};
 use orla_ir::Validated;
 use orla_runtime::{Backend, Prepared};
+
+/// A resident image: its pixels as a storage buffer of `vec4<f32>`.
+struct DeviceImage {
+    buffer: wgpu::Buffer,
+}
 
 /// The GPU could not be opened.
 #[derive(Debug)]
@@ -128,7 +136,7 @@ fn param_bytes(params: &[Value]) -> Vec<u8> {
     bytes
 }
 
-fn pixel_bytes(pixels: &[[f32; 4]]) -> Vec<u8> {
+fn pixel_bytes(pixels: &[Pixel]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(pixels.len() * 16);
     for pixel in pixels {
         for component in pixel {
@@ -222,16 +230,35 @@ impl Backend for GpuBackend {
             0.0,
         ];
         context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
-        let mut input_buffers = Vec::with_capacity(invocation.inputs.len());
+        // Inputs: bind resident buffers directly; upload the rest once and
+        // leave them resident.
+        let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let (width, height) = scope.image_size(*handle)?;
             context.extend_from_slice(&[width as f32, height as f32, 0.0, 0.0]);
-            let pixels = scope.image_pixels(*handle)?;
-            input_buffers.push(self.buffer(
-                &format!("input {index}"),
-                &pixel_bytes(pixels),
-                wgpu::BufferUsages::STORAGE,
-            ));
+            let resident = scope
+                .image_resident(*handle)?
+                .and_then(|device| device.downcast_ref::<DeviceImage>())
+                .map(|device| device.buffer.clone());
+            let buffer = match resident {
+                Some(buffer) => buffer,
+                None => {
+                    let pixels = scope.image_pixels(*handle)?;
+                    let buffer = self.buffer(
+                        &format!("input {index}"),
+                        &pixel_bytes(pixels),
+                        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    );
+                    scope.image_make_resident(
+                        *handle,
+                        Box::new(DeviceImage {
+                            buffer: buffer.clone(),
+                        }),
+                    )?;
+                    buffer
+                }
+            };
+            input_buffers.push(buffer);
         }
         let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
         let context_buffer = self.buffer("context", &context_bytes, wgpu::BufferUsages::UNIFORM);
@@ -244,13 +271,9 @@ impl Backend for GpuBackend {
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("output"),
             size: output_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging"),
-            size: output_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let mut entries = vec![
@@ -296,8 +319,51 @@ impl Backend for GpuBackend {
                 1,
             );
         }
-        encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging, 0, output_size);
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        self.queue.submit(Some(encoder.finish()));
+        // Submissions on one queue run in order, so a later node reading
+        // this output needs no wait here; only observation does.
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        if let Some(error) = pollster::block_on(scope_guard.pop()) {
+            return Err(ExecutionError::Device(error.to_string()));
+        }
+        let output = scope.image_adopt_resident(
+            domain.width,
+            domain.height,
+            Box::new(DeviceImage {
+                buffer: output_buffer,
+            }),
+        )?;
+        Ok(vec![output])
+    }
+
+    fn download(
+        &self,
+        device: &(dyn Any + Send + Sync),
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<Pixel>, String> {
+        let image = device
+            .downcast_ref::<DeviceImage>()
+            .ok_or_else(|| "image is resident on a different backend".to_string())?;
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pixel_count = width as usize * height as usize;
+        let size = (pixel_count * 16) as u64;
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("orla download"),
+            });
+        encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
         let submission = self.queue.submit(Some(encoder.finish()));
         let (sender, receiver) = std::sync::mpsc::channel();
         staging
@@ -310,19 +376,16 @@ impl Backend for GpuBackend {
                 submission_index: Some(submission),
                 timeout: None,
             })
-            .map_err(|error| ExecutionError::Device(error.to_string()))?;
-        if let Some(error) = pollster::block_on(scope_guard.pop()) {
-            return Err(ExecutionError::Device(error.to_string()));
-        }
+            .map_err(|error| error.to_string())?;
         receiver
             .recv()
-            .map_err(|_| ExecutionError::Device("readback was dropped".into()))?
-            .map_err(|error| ExecutionError::Device(error.to_string()))?;
-        let pixels: Vec<[f32; 4]> = {
+            .map_err(|_| "readback was dropped".to_string())?
+            .map_err(|error| error.to_string())?;
+        let pixels: Vec<Pixel> = {
             let view = staging
                 .slice(..)
                 .get_mapped_range()
-                .map_err(|error| ExecutionError::Device(error.to_string()))?;
+                .map_err(|error| error.to_string())?;
             view.chunks_exact(16)
                 .take(pixel_count)
                 .map(|chunk| {
@@ -338,14 +401,7 @@ impl Backend for GpuBackend {
                 .collect()
         };
         staging.unmap();
-
-        let output = scope.image_create(domain.width, domain.height)?;
-        if let Err(error) = scope.image_write_all(output, &pixels) {
-            let _ = scope.image_release(output);
-            return Err(error.into());
-        }
-        let _ = Type::Image;
-        Ok(vec![output])
+        Ok(pixels)
     }
 }
 
