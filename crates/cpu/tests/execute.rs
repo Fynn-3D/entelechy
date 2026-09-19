@@ -1,4 +1,6 @@
-use orla_abi::{AbiError, Capabilities, Capability, Domain, Host, Invocation, Scope, Value};
+use orla_abi::{
+    AbiError, Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value,
+};
 use orla_compiler::compile;
 use orla_cpu::{CpuBackend, ExecutionError};
 
@@ -47,7 +49,7 @@ fn grayscale_reads_and_writes_through_the_abi() {
             width: 2,
             height: 1,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let outputs = CpuBackend
@@ -87,7 +89,7 @@ fn execution_without_grant_is_denied_and_leaks_nothing() {
             width: 1,
             height: 1,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, [Capability::ImageWrite].into_iter().collect());
     let error = CpuBackend
@@ -117,7 +119,7 @@ fn invocations_are_checked_against_the_manifest() {
             width: 1,
             height: 1,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     assert!(matches!(
         CpuBackend.execute(&module, &bad_params, &mut scope),
@@ -150,7 +152,7 @@ fn generators_use_coord_and_domain_and_fetch_clamps() {
             width: 3,
             height: 2,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let gradient_out = CpuBackend
@@ -176,7 +178,7 @@ fn generators_use_coord_and_domain_and_fetch_clamps() {
             width: 3,
             height: 2,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let shifted = CpuBackend.execute(&shift, &invocation, &mut scope).unwrap()[0];
@@ -200,7 +202,7 @@ fn integer_failures_name_the_pixel() {
             width: 2,
             height: 2,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let error = CpuBackend
@@ -227,7 +229,10 @@ fn vector_intrinsics_and_time_follow_their_contracts() {
             width: 1,
             height: 1,
         },
-        time: 2.5,
+        context: Context {
+            time: 2.5,
+            ..Context::default()
+        },
     };
     let mut scope = Scope::new(
         &mut host,
@@ -258,7 +263,7 @@ fn parallel_rows_match_the_per_pixel_formula_and_report_the_first_failure() {
             width: 301,
             height: 257,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let output = CpuBackend
@@ -315,7 +320,7 @@ fn branches_loops_and_booleans_follow_their_contracts() {
                 width: 2,
                 height: 1,
             },
-            time: 0.0,
+            context: Context::default(),
         };
         let mut scope = Scope::new(host, granted());
         CpuBackend
@@ -353,7 +358,7 @@ fn untaken_branches_do_not_execute() {
             width: 1,
             height: 1,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let output = CpuBackend
@@ -393,7 +398,7 @@ fn structs_carry_several_values_through_loops_calls_and_branches() {
             width: 4,
             height: 2,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let output = CpuBackend

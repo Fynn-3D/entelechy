@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use orla_abi::{Capabilities, Capability, Domain, Host, Invocation, Scope, Value};
+use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
 use orla_compiler::compile;
 use orla_cpu::CpuBackend;
 use orla_gpu::GpuBackend;
@@ -47,7 +47,10 @@ fn both(
         inputs: handles,
         params,
         domain,
-        time: 1.25,
+        context: Context {
+            time: 1.25,
+            ..Context::default()
+        },
     };
     let mut scope = Scope::new(&mut host, all());
     let cpu_out = CpuBackend
@@ -223,5 +226,43 @@ fn structs_match_between_backends() {
             height: 6,
         },
     );
+    assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
+}
+
+#[test]
+fn input_context_matches_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.input@1 { requires { image.write; input.read; time.read; } output result: Image; compute {
+        let d = length(coord() - pointer());
+        let k = float(key(65)) + float(key(37)) * 2.0 + float(key(255)) * 4.0 + float(key(-1)) * 8.0 + float(key(300)) * 16.0;
+        return vec4(d, float(pointer_down()), k, time());
+    } }";
+    let module = compile(source).unwrap();
+    let mut host = Host::new(1 << 16);
+    let mut input = orla_abi::InputState::default();
+    input.pointer = [3.0, 1.0];
+    input.pointer_down = true;
+    input.set_key(65, true);
+    input.set_key(255, true);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain {
+            width: 6,
+            height: 3,
+        },
+        context: Context { time: 0.5, input },
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu_out = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let prepared = gpu.prepare(&module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let gpu_out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let cpu = host.image(cpu_out).unwrap().pixels().to_vec();
+    let gpu_pixels = host.image(gpu_out).unwrap().pixels().to_vec();
+    assert_eq!(cpu[0], [f32::sqrt(10.0), 1.0, 5.0, 0.5]);
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
 }

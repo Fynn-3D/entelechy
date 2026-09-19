@@ -1,4 +1,4 @@
-use orla_runtime::{Domain, Expect, Generation, Invocation, KernelId, Runtime, Value};
+use orla_runtime::{Context, Domain, Expect, Generation, Invocation, KernelId, Runtime, Value};
 
 fn source(red: &str) -> String {
     format!(
@@ -22,7 +22,7 @@ fn run(
             width: 1,
             height: 1,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let outputs = runtime.execute(version, &invocation).unwrap();
     let pixel = runtime.host().read_pixel(outputs[0], 0, 0).unwrap();
@@ -115,7 +115,7 @@ fn execution_is_scoped_to_the_manifest_capabilities() {
             width: 2,
             height: 1,
         },
-        time: 0.0,
+        context: Context::default(),
     };
     let outputs = runtime.execute(&version, &invocation).unwrap();
     assert_eq!(

@@ -22,6 +22,9 @@ pub const OUTPUT_BINDING: u32 = 2;
 pub const INPUT_BINDING: u32 = 3;
 /// Workgroup edge length in both dimensions.
 pub const WORKGROUP: u32 = 8;
+/// Context slots before the per-input sizes: `[width, height, time,
+/// pointer_down]`, `[pointer.x, pointer.y, 0, 0]`, and two slots of key bits.
+pub const CONTEXT_HEAD: usize = 4;
 
 fn wgsl_type(ty: Type) -> String {
     match ty {
@@ -66,7 +69,7 @@ fn literal(value: &Value) -> String {
 pub fn emit(module: &Module) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
-    let context_len = 1 + manifest.inputs.len();
+    let context_len = CONTEXT_HEAD + manifest.inputs.len();
     let params_len = manifest.params.len().max(1);
     let _ = writeln!(
         out,
@@ -98,8 +101,17 @@ pub fn emit(module: &Module) -> String {
             .join(", ");
         let _ = writeln!(out, "struct S{index} {{ {fields} }}");
     }
+    let _ = writeln!(
+        out,
+        "fn key_down(code: i32) -> bool {{
+    if (code < 0 || code > 255) {{ return false; }}
+    let c = u32(code);
+    let word = bitcast<u32>(ctx[2u + (c >> 7u)][(c >> 5u) & 3u]);
+    return ((word >> (c & 31u)) & 1u) == 1u;
+}}"
+    );
     for index in 0..manifest.inputs.len() {
-        let slot = 1 + index;
+        let slot = CONTEXT_HEAD + index;
         let _ = writeln!(
             out,
             "fn fetch{index}(c: vec2<f32>) -> vec4<f32> {{
@@ -321,7 +333,10 @@ impl Emitter<'_> {
             Op::Coord => "coord".to_owned(),
             Op::Domain => "ctx[0].xy".to_owned(),
             Op::Time => "ctx[0].z".to_owned(),
-            Op::ImageSize(input) => format!("ctx[{}].xy", 1 + input),
+            Op::Pointer => "ctx[1].xy".to_owned(),
+            Op::PointerDown => "(ctx[0].w != 0.0)".to_owned(),
+            Op::Key(code) => format!("key_down({})", v(code)),
+            Op::ImageSize(input) => format!("ctx[{}].xy", CONTEXT_HEAD as u32 + input),
             Op::ImageSample(input) => format!("fetch{input}(coord)"),
             Op::ImageFetch(input, coord) => format!("fetch{input}({})", v(coord)),
         };

@@ -22,14 +22,17 @@ pub enum Capability {
     ImageWrite,
     /// Read the session clock.
     TimeRead,
+    /// Read pointer and key state.
+    InputRead,
 }
 
 impl Capability {
     /// All capabilities known to this ABI version.
-    pub const ALL: [Capability; 3] = [
+    pub const ALL: [Capability; 4] = [
         Capability::ImageRead,
         Capability::ImageWrite,
         Capability::TimeRead,
+        Capability::InputRead,
     ];
 
     /// Stable spelling used in `.orla` sources and manifests.
@@ -38,6 +41,7 @@ impl Capability {
             Self::ImageRead => "image.read",
             Self::ImageWrite => "image.write",
             Self::TimeRead => "time.read",
+            Self::InputRead => "input.read",
         }
     }
 }
@@ -271,6 +275,75 @@ pub struct Domain {
     pub height: u32,
 }
 
+/// Pointer and key state observed for one evaluation. Key codes follow the
+/// common browser key codes: letters and digits by their ASCII uppercase
+/// value, space 32, enter 13, escape 27, arrows 37 to 40; 256 codes fit.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InputState {
+    /// Pointer position in output pixels.
+    pub pointer: [f32; 2],
+    /// Whether the primary pointer button is held.
+    pub pointer_down: bool,
+    keys: [u32; 8],
+}
+
+impl InputState {
+    /// Whether the key with `code` is held; codes outside `0..256` are never held.
+    pub fn key(&self, code: i32) -> bool {
+        if !(0..256).contains(&code) {
+            return false;
+        }
+        let code = code as u32;
+        (self.keys[(code >> 5) as usize] >> (code & 31)) & 1 == 1
+    }
+
+    /// Presses or releases a key; codes outside `0..256` are ignored.
+    pub fn set_key(&mut self, code: i32, down: bool) {
+        if !(0..256).contains(&code) {
+            return;
+        }
+        let code = code as u32;
+        let word = &mut self.keys[(code >> 5) as usize];
+        if down {
+            *word |= 1 << (code & 31);
+        } else {
+            *word &= !(1 << (code & 31));
+        }
+    }
+
+    /// The key set as eight 32-bit words, bit `code` set when held.
+    pub fn key_words(&self) -> [u32; 8] {
+        self.keys
+    }
+
+    /// A value that changes whenever any observable input changes.
+    pub fn fingerprint(&self) -> u64 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |word: u32| {
+            hash ^= word as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        feed(self.pointer[0].to_bits());
+        feed(self.pointer[1].to_bits());
+        feed(self.pointer_down as u32);
+        for word in self.keys {
+            feed(word);
+        }
+        hash
+    }
+}
+
+/// `C` in `Y = K(X, P, C)`: what the world looks like for one evaluation.
+/// Context is not a resource; Kernels read it through builtins behind
+/// `time.read` and `input.read`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Context {
+    /// Session time in seconds.
+    pub time: f32,
+    /// Pointer and key state.
+    pub input: InputState,
+}
+
 /// Everything a Kernel receives for one execution: `X`, `P` and `C` in
 /// `Y = K(X, P, C)`.
 #[derive(Clone, Debug, PartialEq)]
@@ -281,9 +354,8 @@ pub struct Invocation {
     pub params: Vec<Value>,
     /// Output domain.
     pub domain: Domain,
-    /// Session time in seconds. Context, not a resource; Kernels read it
-    /// through `time()` and must declare `time.read`.
-    pub time: f32,
+    /// Time and input for this execution.
+    pub context: Context,
 }
 
 /// Errors a Kernel can observe when calling the Host through the ABI.

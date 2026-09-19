@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-pub use orla_abi::{Domain, Host, HostError, Image, ImageHandle, Invocation, Scope, Value};
+pub use orla_abi::{
+    Context, Domain, Host, HostError, Image, ImageHandle, InputState, Invocation, Scope, Value,
+};
 pub use orla_compiler::CompileError;
 pub use orla_cpu::ExecutionError;
 pub use orla_ir::{KernelId, Manifest, Validated};

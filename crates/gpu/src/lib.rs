@@ -209,13 +209,19 @@ impl Backend for GpuBackend {
         let domain = invocation.domain;
         let pixel_count = domain.width as usize * domain.height as usize;
 
-        // Context: [width, height, time, 0] then one [w, h, 0, 0] per input.
+        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, 0, 0] per input.
+        let input = &invocation.context.input;
         let mut context = vec![
             domain.width as f32,
             domain.height as f32,
-            invocation.time,
+            invocation.context.time,
+            input.pointer_down as u8 as f32,
+            input.pointer[0],
+            input.pointer[1],
+            0.0,
             0.0,
         ];
+        context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
         let mut input_buffers = Vec::with_capacity(invocation.inputs.len());
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let (width, height) = scope.image_size(*handle)?;

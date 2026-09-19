@@ -504,6 +504,21 @@ impl Checker<'_> {
                 self.entry_only(position)?;
                 Type::Vec2
             }
+            Op::Pointer => {
+                self.require(Capability::InputRead, position)?;
+                Type::Vec2
+            }
+            Op::PointerDown => {
+                self.require(Capability::InputRead, position)?;
+                Type::Bool
+            }
+            Op::Key(code) => {
+                self.require(Capability::InputRead, position)?;
+                if self.operand(*code, position)? != Type::Int {
+                    return Err(self.fail(format!("{position} tests a key with a non-Int code")));
+                }
+                Type::Bool
+            }
             Op::Time => {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float

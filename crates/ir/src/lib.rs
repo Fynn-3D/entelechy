@@ -473,6 +473,13 @@ pub enum Op {
     Domain,
     /// Session time in seconds as `Float`. Context: `time.read`.
     Time,
+    /// Pointer position in output pixels as `Vec2`. Context: `input.read`.
+    Pointer,
+    /// Whether the pointer button is held, as `Bool`. Context: `input.read`.
+    PointerDown,
+    /// Whether the key with the given `Int` code is held, as `Bool`.
+    /// Context: `input.read`.
+    Key(ValueId),
     /// Size of an input image as `Vec2`. Host call: `image.read`.
     ImageSize(u32),
     /// Pixel of an input image at the current coordinate as `Vec4`.

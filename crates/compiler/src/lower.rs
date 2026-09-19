@@ -914,6 +914,31 @@ impl<'a> Builder<'a> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Float, Op::Time))
             }
+            "pointer" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Vec2, Op::Pointer))
+            }
+            "pointer_down" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Bool, Op::PointerDown))
+            }
+            "key" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 1, span)?;
+                let code = self.value(&args[0])?;
+                if self.ty(code) != Type::Int {
+                    return Err(semantic(
+                        args[0].span,
+                        format!(
+                            "`key` needs an Int code, found {}",
+                            self.describe(self.ty(code))
+                        ),
+                    ));
+                }
+                Ok(self.emit(Type::Bool, Op::Key(code)))
+            }
             "index" => {
                 self.arity(name, args, 0, span)?;
                 if self.loops.is_empty() {

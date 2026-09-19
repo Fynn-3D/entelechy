@@ -412,7 +412,15 @@ impl<'m> Frame<'_, 'm> {
                 self.invocation.domain.width as f32,
                 self.invocation.domain.height as f32,
             ]),
-            Op::Time => Value::Float(self.invocation.time),
+            Op::Time => Value::Float(self.invocation.context.time),
+            Op::Pointer => Value::Vec2(self.invocation.context.input.pointer),
+            Op::PointerDown => Value::Bool(self.invocation.context.input.pointer_down),
+            Op::Key(code) => {
+                let Value::Int(code) = at(stack, code) else {
+                    unreachable!("validation guarantees an Int key code")
+                };
+                Value::Bool(self.invocation.context.input.key(code))
+            }
             Op::ImageSize(input) => {
                 let (width, height) = self
                     .scope
