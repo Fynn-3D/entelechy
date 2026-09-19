@@ -12,16 +12,17 @@
 //! errors, which WGSL defines instead of reporting.
 
 pub mod present;
+mod raster;
 pub mod wgsl;
 
 use std::any::Any;
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use orla_abi::{ImageHandle, Invocation, Scope, Value};
 use orla_cpu::{ExecutionError, check_invocation};
 use orla_ir::Validated;
-use orla_runtime::{Backend, Prepared};
+use orla_runtime::{Backend, NativeOp, Prepared};
 
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
 pub(crate) struct DeviceImage {
@@ -50,6 +51,8 @@ pub struct GpuBackend {
     /// Serializes executions; wgpu is thread-safe but readback ordering is
     /// simpler with one execution at a time.
     lock: Mutex<()>,
+    /// The rasterizer's pipelines, built on first use.
+    raster: OnceLock<Result<raster::RasterPipelines, String>>,
 }
 
 impl fmt::Debug for GpuBackend {
@@ -97,6 +100,7 @@ impl GpuBackend {
             queue,
             adapter_name,
             lock: Mutex::new(()),
+            raster: OnceLock::new(),
         })
     }
 
@@ -114,7 +118,46 @@ impl GpuBackend {
         (&self.instance, &self.adapter, &self.device, &self.queue)
     }
 
-    fn buffer(&self, label: &str, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    /// The device buffer holding an input: the resident one, or an upload
+    /// of its words that then stays resident.
+    pub(crate) fn bind_input(
+        &self,
+        scope: &mut Scope<'_>,
+        handle: ImageHandle,
+        index: usize,
+    ) -> Result<wgpu::Buffer, ExecutionError> {
+        let resident = scope
+            .resident(handle)?
+            .and_then(|device| device.downcast_ref::<DeviceImage>())
+            .map(|device| device.buffer.clone());
+        if let Some(buffer) = resident {
+            return Ok(buffer);
+        }
+        let bytes = scope
+            .words(handle)?
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect::<Vec<u8>>();
+        let buffer = self.buffer(
+            &format!("input {index}"),
+            &bytes,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        );
+        scope.make_resident(
+            handle,
+            Box::new(DeviceImage {
+                buffer: buffer.clone(),
+            }),
+        )?;
+        Ok(buffer)
+    }
+
+    pub(crate) fn buffer(
+        &self,
+        label: &str,
+        contents: &[u8],
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
         let size = (contents.len().max(16) as u64).div_ceil(16) * 16;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
@@ -249,33 +292,7 @@ impl Backend for GpuBackend {
                 extent.depth() as f32,
                 0.0,
             ]);
-            let resident = scope
-                .resident(*handle)?
-                .and_then(|device| device.downcast_ref::<DeviceImage>())
-                .map(|device| device.buffer.clone());
-            let buffer = match resident {
-                Some(buffer) => buffer,
-                None => {
-                    let bytes = scope
-                        .words(*handle)?
-                        .iter()
-                        .flat_map(|w| w.to_le_bytes())
-                        .collect::<Vec<u8>>();
-                    let buffer = self.buffer(
-                        &format!("input {index}"),
-                        &bytes,
-                        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                    );
-                    scope.make_resident(
-                        *handle,
-                        Box::new(DeviceImage {
-                            buffer: buffer.clone(),
-                        }),
-                    )?;
-                    buffer
-                }
-            };
-            input_buffers.push(buffer);
+            input_buffers.push(self.bind_input(scope, *handle, index)?);
         }
         let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
         let context_buffer = self.buffer("context", &context_bytes, wgpu::BufferUsages::UNIFORM);
@@ -351,6 +368,17 @@ impl Backend for GpuBackend {
         });
         let output = scope.adopt_resident(output_port.ty.schema.clone(), domain, device)?;
         Ok(vec![output])
+    }
+
+    fn execute_native(
+        &self,
+        op: NativeOp,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+        match op {
+            NativeOp::Rasterize => raster::rasterize(self, &self.raster, invocation, scope),
+        }
     }
 
     fn download(

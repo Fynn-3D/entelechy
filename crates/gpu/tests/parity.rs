@@ -451,3 +451,94 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
     assert_eq!(pixel[0], value.parse::<f32>().unwrap());
     runtime.host_mut().release(output).unwrap();
 }
+
+#[test]
+fn the_rasterizer_matches_the_reference_on_interior_pixels() {
+    use orla_cpu::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
+    let Some(gpu) = gpu() else { return };
+    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, Box::new(gpu));
+    // Two triangles: a large one at depth 0.6 and a nearer one at 0.3
+    // covering the lower-left, with distinct normals and uvs, at w = 2 so
+    // perspective correction is exercised.
+    let vertex = |clip: [f32; 4], normal: [f32; 3], uv: [f32; 2]| -> Vec<u32> {
+        clip.iter()
+            .chain(normal.iter())
+            .chain(uv.iter())
+            .map(|v| v.to_bits())
+            .collect()
+    };
+    let mut vertices = Vec::new();
+    vertices.extend(vertex([-1.8, -1.8, 1.2, 2.0], [0.0, 0.0, 1.0], [0.0, 0.0]));
+    vertices.extend(vertex([1.8, -1.8, 1.2, 2.0], [0.0, 0.0, 1.0], [1.0, 0.0]));
+    vertices.extend(vertex([0.0, 1.8, 1.2, 2.0], [0.0, 0.0, 1.0], [0.5, 1.0]));
+    vertices.extend(vertex([-1.0, -1.0, 0.3, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0]));
+    vertices.extend(vertex([0.2, -1.0, 0.3, 1.0], [0.0, 1.0, 0.0], [1.0, 1.0]));
+    vertices.extend(vertex([-1.0, 0.2, 0.3, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0]));
+    let triangles: Vec<u32> = [0u32, 1, 2, 3, 4, 5].into_iter().collect();
+    let (width, height) = (64, 48);
+    let host = runtime.host_mut();
+    let vertex_rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(vertex_schema(), Domain::Rows(6), vertices.clone())
+                .unwrap(),
+        )
+        .unwrap();
+    let triangle_rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(triangle_schema(), Domain::Rows(2), triangles.clone())
+                .unwrap(),
+        )
+        .unwrap();
+    let raster = runtime
+        .kernel(&"native.rasterize@1".parse().unwrap())
+        .expect("the rasterizer is published from the start");
+    assert!(raster.native().is_some() && raster.module().is_none());
+    let invocation = orla_abi::Invocation {
+        inputs: vec![vertex_rows, triangle_rows],
+        params: vec![],
+        domain: Domain::Grid(width, height),
+        context: orla_abi::Context::default(),
+    };
+    let surface = runtime.execute(&raster, &invocation).unwrap()[0];
+    runtime.materialize(surface).unwrap();
+    let device = runtime.host().data(surface).unwrap().words().to_vec();
+    assert_eq!(
+        runtime.host().schema(surface).unwrap().to_string(),
+        "f,f,f,f,f,f,i"
+    );
+    let reference = rasterize_words(&vertices, &triangles, width, height);
+    // Compare every pixel whose eight neighbours carry the same triangle
+    // on the CPU: away from edges, where coverage rules may differ.
+    let id_at =
+        |words: &[u32], x: u32, y: u32| words[(y * width + x) as usize * SURFACE_WORDS + 6] as i32;
+    let mut compared = 0;
+    let mut covered = 0;
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let id = id_at(&reference, x, y);
+            let interior =
+                (0..3).all(|dy| (0..3).all(|dx| id_at(&reference, x + dx - 1, y + dy - 1) == id));
+            if !interior {
+                continue;
+            }
+            compared += 1;
+            covered += (id >= 0) as usize;
+            let base = (y * width + x) as usize * SURFACE_WORDS;
+            assert_eq!(id_at(&device, x, y), id, "id at ({x}, {y})");
+            for k in 0..6 {
+                let (r, d) = (
+                    f32::from_bits(reference[base + k]),
+                    f32::from_bits(device[base + k]),
+                );
+                assert!(
+                    (r - d).abs() <= 2e-3,
+                    "word {k} at ({x}, {y}): cpu {r}, gpu {d}"
+                );
+            }
+        }
+    }
+    assert!(
+        compared > 2000 && covered > 800,
+        "{compared} compared, {covered} covered"
+    );
+}
