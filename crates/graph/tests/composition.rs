@@ -1010,3 +1010,61 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
     );
     evaluator.clear(&mut runtime);
 }
+
+#[test]
+fn a_write_replaces_committed_state_and_is_checked() {
+    let mut runtime = Runtime::new(1024);
+    runtime.load(ZERO).unwrap();
+    runtime.load(INCREMENT).unwrap();
+    let graph = Graph::parse(COUNTER).unwrap();
+    let mut evaluator = Evaluator::new();
+    let ctx = Context::default();
+    let count = NodeId("count".into());
+    let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
+        evaluator
+            .evaluate(&graph, runtime, &BTreeMap::new(), &ctx, &BTreeMap::new())
+            .unwrap()
+    };
+    // Before any evaluation the port's layout is unknown.
+    assert!(matches!(
+        evaluator.write(&graph, &mut runtime, &count, "result", vec![0; 16]),
+        Err(EvaluateError::UnknownOutput { .. })
+    ));
+    let report = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(red(&runtime, report.output), 1.0);
+    // Two by two pixels of four words: red 40 everywhere.
+    let mut words = Vec::new();
+    for _ in 0..4 {
+        words.extend([40.0f32, 0.0, 0.0, 1.0].map(f32::to_bits));
+    }
+    evaluator
+        .write(&graph, &mut runtime, &count, "result", words)
+        .unwrap();
+    let report = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(
+        red(&runtime, report.output),
+        41.0,
+        "the next frame counts on from what was written"
+    );
+    assert_eq!(runtime.host().live(), 2, "the replaced state was released");
+    // Only state can be written, and only with the right number of words.
+    assert!(matches!(
+        evaluator.write(
+            &graph,
+            &mut runtime,
+            &NodeId("seed".into()),
+            "result",
+            vec![0; 16]
+        ),
+        Err(EvaluateError::NotState { .. })
+    ));
+    assert!(matches!(
+        evaluator.write(&graph, &mut runtime, &count, "result", vec![0; 15]),
+        Err(EvaluateError::WordCount {
+            expected: 16,
+            found: 15,
+            ..
+        })
+    ));
+    evaluator.clear(&mut runtime);
+}

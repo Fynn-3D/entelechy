@@ -24,8 +24,9 @@
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
 //! | `retire` | `id` | retired |
 //! | `param` | `name`, `value` | ok |
-//! | `evaluate` | `time`?, `pointer`?, `down`?, `keys`? | executed, reused, committed, outputs |
-//! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` | width, height, format, data (base64) |
+//! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`? | executed, reused, committed, outputs |
+//! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` | width, height, format, data (base64); words for a Field that is not pixels |
+//! | `write` | `node`, `port`?, `data` (base64 words) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `reset` | | ok |
 //! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
 //! | `quit` | | bye |
@@ -249,6 +250,22 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             }
             context.input.pointer_down =
                 request.get("down").and_then(Json::as_bool).unwrap_or(false);
+            if let Some(buttons) = request.get("buttons").and_then(Json::as_array) {
+                for button in buttons.iter().filter_map(Json::as_i64) {
+                    match button {
+                        0 => context.input.pointer_down = true,
+                        1 => context.input.pointer_right = true,
+                        2 => context.input.pointer_middle = true,
+                        _ => {}
+                    }
+                }
+            }
+            if let Some(wheel) = request.get("wheel").and_then(Json::as_array) {
+                context.input.wheel = [
+                    wheel.first().and_then(Json::as_f64).unwrap_or(0.0) as f32,
+                    wheel.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
+                ];
+            }
             if let Some(keys) = request.get("keys").and_then(Json::as_array) {
                 for key in keys.iter().filter_map(Json::as_i64) {
                     context.input.set_key(key as i32, true);
@@ -258,6 +275,28 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 .evaluate(&context)
                 .map_err(|e| failure(e.to_string()))?;
             Ok(report_json(session, &report))
+        }
+        "write" => {
+            let node = text_field("node")?;
+            let port = request
+                .get("port")
+                .and_then(Json::as_str)
+                .unwrap_or("result")
+                .to_owned();
+            let data = text_field("data")?;
+            let bytes = unbase64(&data).map_err(failure)?;
+            if bytes.len() % 4 != 0 {
+                return Err(failure("`data` must be whole 32-bit words"));
+            }
+            let words: Vec<u32> = bytes
+                .chunks_exact(4)
+                .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+                .collect();
+            let count = words.len();
+            session
+                .write(&orla_graph::NodeId(node.clone()), &port, words)
+                .map_err(|e| failure(e.to_string()))?;
+            Ok(json!({ "node": node, "port": port, "words": count }))
         }
         "read" => {
             let graph = session
@@ -488,6 +527,31 @@ pub fn value_from_json(json: &Json) -> Result<Value, Json> {
     }
 }
 
+/// Decodes standard base64, with or without padding.
+pub fn unbase64(text: &str) -> Result<Vec<u8>, String> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for byte in text.bytes() {
+        if byte == b'=' || byte.is_ascii_whitespace() {
+            continue;
+        }
+        let value = ALPHABET
+            .iter()
+            .position(|c| *c == byte)
+            .ok_or_else(|| format!("`{}` is not base64", byte as char))?;
+        acc = (acc << 6) | value as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Ok(out)
+}
+
 /// Standard base64 with padding.
 pub fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -511,6 +575,24 @@ pub fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_decodes_what_it_encodes() {
+        for sample in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foob",
+            b"fooba",
+            b"foobar",
+            &[0, 255, 7, 128],
+        ] {
+            assert_eq!(unbase64(&base64(sample)).unwrap(), sample);
+        }
+        assert_eq!(unbase64("Zm9v").unwrap(), b"foo");
+        assert!(unbase64("Zm9*").is_err());
+    }
 
     #[test]
     fn base64_matches_the_standard() {

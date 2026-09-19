@@ -66,6 +66,19 @@ pointer up
 frame 0.32
 expect world.result[62763] = 2
 
+# The right button erases whatever the tool; the wheel zooms in.
+button right down
+frame 0.325
+expect world.result[62763] = 0
+expect state.result[0].act = 1
+button right up
+frame 0.327
+wheel 0 1
+frame 0.328
+expect state.result[0].zoom = 0.72 0.001
+frame 0.329
+expect state.result[0].zoom = 0.72 0.001
+
 # A drag orbits and edits nothing: sixty pixels are 0.48 of yaw.
 pointer 100 100 down
 frame 0.33
@@ -77,4 +90,4 @@ pointer up
 frame 0.38
 expect state.result[0].yaw = 1.18 0.001
 expect state.result[0].apply = false
-expect world.result[62763] = 2
+expect world.result[62763] = 0

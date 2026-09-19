@@ -781,6 +781,13 @@ impl<'m> Frame<'_, 'm> {
                 };
                 Value::Bool(self.invocation.context.input.key(code))
             }
+            Op::Button(code) => {
+                let Value::Int(code) = at(stack, code) else {
+                    unreachable!("validation guarantees an Int button number")
+                };
+                Value::Bool(self.invocation.context.input.button(code))
+            }
+            Op::Wheel => Value::Vec2(self.invocation.context.input.wheel),
         }))
     }
 

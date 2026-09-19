@@ -45,7 +45,17 @@ through the protocol are not owned by any document: a document that later
 defines the same id republishes it from the file.
 
 `evaluate` takes `time`, `rate` (the sound device's clock, for Kernels
-that read it; zero when absent), `pointer`, `down`, and `keys`.
+that read it; zero when absent), `pointer`, `down`, `buttons` (the pointer
+buttons held, by number: 0 left, 1 right, 2 middle), `wheel` (what scrolled
+since the last evaluation), and `keys`.
+
+`read` with a `node` returns a Field that is not pixels as its words, and
+`write` with a `node`, a `port`, and `data` (base64 words in the same
+layout) replaces that port's committed state, so the next evaluation's
+`<~` readers start from it. This is how a Field comes in from outside, a
+saved file for instance; the port must be state, read by some `<~`
+binding, and the count of words must match. A `read` after an evaluation
+and a `write` before the next make a save and a load.
 
 A saved edit to a Kernel that is already running is prepared on a worker
 thread: `sync` reports `preparing` at once and `published` (or `rejected`)

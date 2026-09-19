@@ -325,6 +325,27 @@ fn rate_is_context_under_time_read() {
 }
 
 #[test]
+fn buttons_and_the_wheel_are_context_under_input_read() {
+    let module = compile(
+        "kernel test.stir@1 { requires { field.write; input.read; } output result: Rows<Float>; compute { return if button(1) { wheel().y } else { 0.0 }; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = module.to_string();
+    assert!(
+        text.contains("context button") && text.contains("context wheel"),
+        "{text}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return wheel().x; } }",
+    );
+    assert!(message.contains("needs `input.read`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; input.read; } output result: Rows<Bool>; compute { return button(1.0); } }",
+    );
+    assert!(message.contains("Int"), "{message}");
+}
+
+#[test]
 fn remainder_widening_and_vector_equality_type_check() {
     let module = compile(
         "kernel test.ops@1 { requires { field.write; } output result: Rows<Bool>; compute { let n = element() % 4; let p = vec2(n, 1); return p == vec2(1.0, 1.0) && n % 2 == 0 && fract(2.5 % 1.0) == 0.5; } }",

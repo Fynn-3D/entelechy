@@ -126,6 +126,8 @@ impl fmt::Display for Op {
             Self::Pointer => f.write_str("context pointer"),
             Self::PointerDown => f.write_str("context pointer.down"),
             Self::Key(code) => write!(f, "context key {code}"),
+            Self::Button(code) => write!(f, "context button {code}"),
+            Self::Wheel => f.write_str("context wheel"),
             Self::Element => f.write_str("element"),
             Self::Sample(input) => write!(f, "host sample input{input}"),
             Self::At(input, index) => write!(f, "host at input{input} {index}"),

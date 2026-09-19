@@ -17,7 +17,7 @@ use serde_json::Value as Json;
 use std::sync::mpsc::{Receiver, channel};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -160,6 +160,7 @@ impl Player {
         }
         let started = Instant::now();
         let context = self.context();
+        self.input.wheel = [0.0, 0.0];
         match self.session.evaluate(&context) {
             Ok(report) => {
                 let elapsed = started.elapsed();
@@ -507,13 +508,24 @@ impl ApplicationHandler for Player {
                 self.cursor = (position.x as f32, position.y as f32);
                 self.update_pointer();
             }
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-                ..
-            } => {
-                self.input.pointer_down = state == ElementState::Pressed;
+            WindowEvent::MouseInput { state, button, .. } => {
+                let held = state == ElementState::Pressed;
+                match button {
+                    MouseButton::Left => self.input.pointer_down = held,
+                    MouseButton::Right => self.input.pointer_right = held,
+                    MouseButton::Middle => self.input.pointer_middle = held,
+                    _ => {}
+                }
                 self.update_pointer();
+            }
+            // The wheel accumulates until the next evaluation reads it.
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (x, y) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (x, y),
+                    MouseScrollDelta::PixelDelta(p) => (p.x as f32 / 40.0, p.y as f32 / 40.0),
+                };
+                self.input.wheel[0] += x;
+                self.input.wheel[1] += y;
             }
             WindowEvent::KeyboardInput {
                 event:

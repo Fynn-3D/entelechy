@@ -81,7 +81,9 @@ is all floats, whatever the spelling, `count(f)` is the element count,
 current address and extent over a grid or volume. `time()` and `rate()`,
 the session clock in seconds and the sound device's clock in samples per
 second (zero without a device), need `time.read`; `pointer()`,
-`pointer_down()`, and `key(code)` need `input.read`. Reading a port needs
+`pointer_down()`, `button(n)` (0 left, 1 right, 2 middle), `wheel()` (what
+scrolled since the last evaluation, as a `Vec2`), and `key(code)` need
+`input.read`. Reading a port needs
 `field.read`, writing `field.write`. A struct or `type` declared at the top
 of a document is shared by every Kernel in it.
 

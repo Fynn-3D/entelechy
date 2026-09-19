@@ -325,16 +325,42 @@ impl ShapeIndex for Shape {
 /// Pointer and key state observed for one evaluation. Key codes follow the
 /// common browser key codes: letters and digits by their ASCII uppercase
 /// value, space 32, enter 13, escape 27, arrows 37 to 40; 256 codes fit.
+/// Pointer buttons are numbered 0 left, 1 right, 2 middle.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InputState {
     /// Pointer position in output pixels.
     pub pointer: [f32; 2],
     /// Whether the primary pointer button is held.
     pub pointer_down: bool,
+    /// Whether the secondary (right) pointer button is held.
+    pub pointer_right: bool,
+    /// Whether the middle pointer button is held.
+    pub pointer_middle: bool,
+    /// What the wheel scrolled since the last evaluation, in lines: `x`
+    /// sideways, `y` positive away from the person.
+    pub wheel: [f32; 2],
     keys: [u32; 8],
 }
 
 impl InputState {
+    /// Whether the pointer button numbered `code` is held: 0 left, 1
+    /// right, 2 middle; any other number is never held.
+    pub fn button(&self, code: i32) -> bool {
+        match code {
+            0 => self.pointer_down,
+            1 => self.pointer_right,
+            2 => self.pointer_middle,
+            _ => false,
+        }
+    }
+
+    /// The held buttons as bits, `button(n)` at bit `n`.
+    pub fn button_bits(&self) -> u32 {
+        (self.pointer_down as u32)
+            | (self.pointer_right as u32) << 1
+            | (self.pointer_middle as u32) << 2
+    }
+
     /// Whether the key with `code` is held; codes outside `0..256` are never held.
     pub fn key(&self, code: i32) -> bool {
         if !(0..256).contains(&code) {
@@ -372,7 +398,9 @@ impl InputState {
         };
         feed(self.pointer[0].to_bits());
         feed(self.pointer[1].to_bits());
-        feed(self.pointer_down as u32);
+        feed(self.button_bits());
+        feed(self.wheel[0].to_bits());
+        feed(self.wheel[1].to_bits());
         for word in self.keys {
             feed(word);
         }
@@ -553,6 +581,19 @@ impl<'a> Scope<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buttons_and_the_wheel_are_input() {
+        let mut input = InputState::default();
+        let quiet = input.fingerprint();
+        input.pointer_right = true;
+        assert!(input.button(1) && !input.button(0) && !input.button(7));
+        assert_eq!(input.button_bits(), 0b010);
+        let right = input.fingerprint();
+        assert_ne!(right, quiet);
+        input.wheel = [0.0, -1.0];
+        assert_ne!(input.fingerprint(), right);
+    }
 
     #[test]
     fn capabilities_round_trip_through_names() {

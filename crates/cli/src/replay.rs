@@ -8,6 +8,8 @@
 //! frame 0.0                 # evaluate at this session time
 //! pointer 20 20 down        # move the pointer and press; `up` releases
 //! pointer up                # release without moving
+//! button right down         # a pointer button: left, right, middle; `up` releases
+//! wheel 0 -1                # what the wheel scrolls before the next frame only
 //! key 67 down               # press a key by code; `up` releases
 //! reset                     # forget committed state
 //! param exposure 1.5        # override a graph parameter (a literal)
@@ -50,6 +52,15 @@ pub enum Step {
         /// Pressed or released.
         down: bool,
     },
+    /// Press or release a pointer button by number: 0 left, 1 right, 2 middle.
+    Button {
+        /// Button number.
+        code: i32,
+        /// Pressed or released.
+        down: bool,
+    },
+    /// What the wheel scrolls for the next frame.
+    Wheel([f32; 2]),
     /// Forget committed state.
     Reset,
     /// Override a graph parameter.
@@ -154,6 +165,16 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     down,
                 });
             }
+            ["button", name, state @ ("down" | "up")] => steps.push(Step::Button {
+                code: match *name {
+                    "left" => 0,
+                    "right" => 1,
+                    "middle" => 2,
+                    _ => return Err(error("button is `left`, `right`, or `middle`".into())),
+                },
+                down: *state == "down",
+            }),
+            ["wheel", x, y] => steps.push(Step::Wheel([number(x, "x")?, number(y, "y")?])),
             ["key", code, state @ ("down" | "up")] => steps.push(Step::Key {
                 code: code
                     .parse::<i32>()
@@ -276,6 +297,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                     .map_err(|error| format!("frame at {time}: {error}"))?;
                 outcome.frames += 1;
                 last = Some(report);
+                input.wheel = [0.0, 0.0];
             }
             Step::Pointer { position, down } => {
                 if let Some(position) = position {
@@ -284,6 +306,12 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                 input.pointer_down = *down;
             }
             Step::Key { code, down } => input.set_key(*code, *down),
+            Step::Button { code, down } => match code {
+                0 => input.pointer_down = *down,
+                1 => input.pointer_right = *down,
+                _ => input.pointer_middle = *down,
+            },
+            Step::Wheel(delta) => input.wheel = *delta,
             Step::Reset => session.reset_state(),
             Step::Param { name, value } => session.set_param(name, *value),
             Step::ExpectElement {
@@ -467,15 +495,25 @@ mod tests {
     #[test]
     fn parses_every_step() {
         let replay = parse(
-            "scene s.osn\nkernels k\nframe 0.5\npointer 1 2 down\npointer up\nkey 65 down\nreset\nexpect 1 2 = 0.1 0.2 0.3\nexpect 1 2 = 0 0 0 0.5\n",
+            "scene s.osn\nkernels k\nframe 0.5\npointer 1 2 down\npointer up\nkey 65 down\nreset\nexpect 1 2 = 0.1 0.2 0.3\nexpect 1 2 = 0 0 0 0.5\nbutton right down\nwheel 0 -1\n",
             Path::new("/base"),
         )
         .unwrap();
         assert_eq!(replay.scene, Path::new("/base/s.osn"));
         assert_eq!(replay.kernels, Some(PathBuf::from("/base/k")));
         let _ = "library";
-        assert_eq!(replay.steps.len(), 7);
+        assert_eq!(replay.steps.len(), 9);
         assert!(matches!(replay.steps[6], Step::Expect { tolerance, .. } if tolerance == 0.5));
+        assert!(matches!(
+            replay.steps[7],
+            Step::Button {
+                code: 1,
+                down: true
+            }
+        ));
+        assert!(matches!(replay.steps[8], Step::Wheel([x, y]) if x == 0.0 && y == -1.0));
+        let error = parse("scene s\nbutton fourth down\n", Path::new(".")).unwrap_err();
+        assert!(error.message.contains("left"), "{error}");
         let replay = parse(
             "scene s.osn\nexpect step.result[0].score = 1\nexpect mix.result[3] = 0.5 0.25 0.02\n",
             Path::new("."),

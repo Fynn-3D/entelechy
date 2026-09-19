@@ -203,9 +203,13 @@ capability claim.
   the initial sources ([evaluator](crates/graph/src/evaluate.rs),
   [feedback tests](crates/graph/tests/composition.rs),
   [Life example](examples/life/README.md)).
-- Input is context, like time: `pointer()`, `pointer_down()`, and `key(code)`
-  behind `input.read`; only nodes that declare it re-execute when input
-  changes ([ABI](crates/abi/src/lib.rs), [parity](crates/gpu/tests/parity.rs)).
+- Input is context, like time: `pointer()`, `pointer_down()`, `button(n)`,
+  `wheel()`, and `key(code)` behind `input.read`; only nodes that declare it
+  re-execute when input changes ([ABI](crates/abi/src/lib.rs),
+  [parity](crates/gpu/tests/parity.rs)).
+- A Field comes in from outside through the protocol's `write`, which
+  replaces a state port's committed value with words in its layout
+  ([evaluator](crates/graph/src/evaluate.rs), [protocol](crates/cli/src/protocol.rs)).
 - Application tests are data: `.replay` files script frames, pointer, keys,
   reset, and pixel expectations; `orla replay` runs them and the interface
   tests run every `examples/*/tests/*.replay`

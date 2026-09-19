@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use orla_abi::{Capability, Context, Domain, Handle, Invocation, Type, Value};
+use orla_abi::{Capability, Context, Domain, FieldData, Handle, Invocation, Type, Value};
 use orla_runtime::{
     ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Runtime, Ticket,
 };
@@ -98,6 +98,26 @@ pub enum EvaluateError {
         /// What is wrong.
         message: String,
     },
+    /// A write named an output no `<~` binding reads, so it holds no
+    /// state to replace.
+    NotState {
+        /// The producer.
+        node: NodeId,
+        /// The port.
+        port: String,
+    },
+    /// A write supplied the wrong number of words for the port's layout
+    /// and extent.
+    WordCount {
+        /// The producer.
+        node: NodeId,
+        /// The port.
+        port: String,
+        /// Words the port holds.
+        expected: usize,
+        /// Words supplied.
+        found: usize,
+    },
     /// A port is bound to a resource of the other kind, or to a Field with
     /// a different element layout.
     PortKind {
@@ -158,6 +178,19 @@ impl fmt::Display for EvaluateError {
                 write!(f, "fused group at `{node}` was rejected: {message}")
             }
             Self::Domain { node, message } => write!(f, "node `{node}`: {message}"),
+            Self::NotState { node, port } => write!(
+                f,
+                "`{node}.{port}` is not state: no `<~` binding reads it, so there is nothing to replace"
+            ),
+            Self::WordCount {
+                node,
+                port,
+                expected,
+                found,
+            } => write!(
+                f,
+                "`{node}.{port}` holds {expected} words; {found} were written"
+            ),
             Self::ReduceDomain(node) => write!(
                 f,
                 "node `{node}` is a reduction, which produces one element; remove its `domain`"
@@ -893,6 +926,64 @@ impl Evaluator {
             }
         }
         self.pinned.retain(|node| graph.node(node).is_some());
+    }
+
+    /// Replaces the committed state of `node.port` with `words`, laid out
+    /// as the port's current value is, so the next evaluation's `<~`
+    /// readers start from it: how a Field comes in from outside, a saved
+    /// file for instance. The port must be state, read by some `<~`
+    /// binding, and must have been evaluated once, so its layout and
+    /// extent are known.
+    pub fn write(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        node: &NodeId,
+        port: &str,
+        words: Vec<u32>,
+    ) -> Result<(), EvaluateError> {
+        let is_state = graph.nodes.iter().any(|reader| {
+            reader.inputs.values().any(|binding| {
+                matches!(binding, Binding::Previous { source: Source::Node { node: producer, port: read }, .. }
+                    if producer == node && read == port)
+            })
+        });
+        if !is_state {
+            return Err(EvaluateError::NotState {
+                node: node.clone(),
+                port: port.to_owned(),
+            });
+        }
+        let key = (node.clone(), port.to_owned());
+        let current = self
+            .committed
+            .get(&key)
+            .copied()
+            .or_else(|| self.cached(node, port))
+            .ok_or_else(|| EvaluateError::UnknownOutput {
+                node: node.clone(),
+                port: port.to_owned(),
+            })?;
+        let domain = runtime.host().domain(current)?;
+        let schema = runtime.host().schema(current)?.clone();
+        let expected = domain.count() * schema.words();
+        if words.len() != expected {
+            return Err(EvaluateError::WordCount {
+                node: node.clone(),
+                port: port.to_owned(),
+                expected,
+                found: words.len(),
+            });
+        }
+        let data = FieldData::from_words(schema, domain, words)?;
+        let handle = runtime.host_mut().adopt(data)?;
+        if let Some(previous) = self.committed.insert(key, handle)
+            && !self.is_cached(previous)
+            && !self.is_committed(previous)
+        {
+            release(runtime, previous);
+        }
+        Ok(())
     }
 
     /// Makes every `<~` source's current output the committed state.

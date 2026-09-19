@@ -24,9 +24,10 @@ pub const INPUT_BINDING: u32 = 3;
 /// Workgroup edge length in the first two dimensions.
 pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
-/// pointer_down]`, `[pointer.x, pointer.y, depth, rate]`, and two slots of
-/// key bits. Each input then has `[width, height, depth, 0]`.
-pub const CONTEXT_HEAD: usize = 4;
+/// button bits]`, `[pointer.x, pointer.y, depth, rate]`, two slots of key
+/// bits, and `[wheel.x, wheel.y, 0, 0]`. Each input then has `[width,
+/// height, depth, 0]`.
+pub const CONTEXT_HEAD: usize = 5;
 
 fn wgsl_type(ty: Type) -> String {
     match ty {
@@ -109,6 +110,10 @@ pub fn emit(module: &Module) -> String {
     let c = u32(code);
     let word = bitcast<u32>(ctx[2u + (c >> 7u)][(c >> 5u) & 3u]);
     return ((word >> (c & 31u)) & 1u) == 1u;
+}}
+fn button_down(code: i32) -> bool {{
+    if (code < 0 || code > 2) {{ return false; }}
+    return ((u32(ctx[0].w) >> u32(code)) & 1u) == 1u;
 }}"
     );
     for (index, port) in manifest.inputs.iter().enumerate() {
@@ -800,7 +805,9 @@ impl Emitter<'_> {
             Op::Time => "ctx[0].z".to_owned(),
             Op::Rate => "ctx[1].w".to_owned(),
             Op::Pointer => "ctx[1].xy".to_owned(),
-            Op::PointerDown => "(ctx[0].w != 0.0)".to_owned(),
+            Op::PointerDown => "button_down(0)".to_owned(),
+            Op::Button(code) => format!("button_down({})", v(code)),
+            Op::Wheel => "ctx[4].xy".to_owned(),
             Op::Key(code) => format!("key_down({})", v(code)),
             Op::Element => "i32(element)".to_owned(),
             Op::Count(input) => {

@@ -32,8 +32,8 @@ the parent with prefixed node ids, so the evaluator and state keys are
 unchanged.
 
 State and input now exist: `<~ ... from ...` bindings hold Graph state with
-atomic end-of-evaluation commit, and `pointer()`, `pointer_down()`, `key()`
-read context behind `input.read`. `orla replay` runs an example's `.replay`
+atomic end-of-evaluation commit, and `pointer()`, `pointer_down()`,
+`button()`, `wheel()`, `key()` read context behind `input.read`. `orla replay` runs an example's `.replay`
 tests; the Life example is the first with a `tests/` directory.
 
 The creation protocol exists: `orla serve` speaks JSON lines over stdin and
@@ -119,8 +119,11 @@ The voxel editor is the first tool: a 48³ `Volume<Int>` fed back and
 edited a voxel per click, the voxel under the pointer found by a grid
 walk in the state row, a backup volume for one level of undo (undo
 twice is redo), the same walk per pixel for the picture; it needed
-nothing new, and the gaps it found are the Host's, not the Kernel's:
-no right button or wheel, and no way to load a Field from outside.
+nothing new in the Kernel, and the gaps it found were the Host's, now
+closed: the right and middle buttons and the wheel are input (the
+editor erases with the right button and zooms with the wheel), and the
+protocol's `write` replaces a state port's committed words, so a saved
+Field comes back in; `read` takes it out.
 The fluid is an Eulerian smoke simulation: a staggered velocity grid
 and a smoke grid fed back through the Graph, semi-Lagrangian advection
 by `at_linear`, vorticity confinement, a Jacobi pressure solve as one

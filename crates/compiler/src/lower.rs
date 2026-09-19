@@ -1257,6 +1257,26 @@ impl<'a> Builder<'a> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Bool, Op::PointerDown))
             }
+            "button" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 1, span)?;
+                let code = self.value(&args[0])?;
+                if self.ty(code) != Type::Int {
+                    return Err(semantic(
+                        args[0].span,
+                        format!(
+                            "`button` needs an Int number, found {}",
+                            self.describe(self.ty(code))
+                        ),
+                    ));
+                }
+                Ok(self.emit(Type::Bool, Op::Button(code)))
+            }
+            "wheel" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Vec2, Op::Wheel))
+            }
             "key" => {
                 self.require(name, Capability::InputRead, span)?;
                 self.arity(name, args, 1, span)?;

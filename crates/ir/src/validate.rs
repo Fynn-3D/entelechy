@@ -617,6 +617,19 @@ impl<'a> Checker<'a> {
                 }
                 Type::Bool
             }
+            Op::Button(code) => {
+                self.require(Capability::InputRead, position)?;
+                if self.operand(*code, position)? != Type::Int {
+                    return Err(self.fail(format!(
+                        "{position} tests a pointer button with a non-Int number"
+                    )));
+                }
+                Type::Bool
+            }
+            Op::Wheel => {
+                self.require(Capability::InputRead, position)?;
+                Type::Vec2
+            }
             Op::Time => {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float

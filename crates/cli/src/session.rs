@@ -854,6 +854,23 @@ impl Session {
         )
     }
 
+    /// Replaces the committed state of `node.port` with `words`; see
+    /// [`orla_graph::Evaluator::write`].
+    pub fn write(
+        &mut self,
+        node: &orla_graph::NodeId,
+        port: &str,
+        words: Vec<u32>,
+    ) -> Result<(), EvaluateError> {
+        let graph = self.graph.as_ref().ok_or_else(|| {
+            EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(
+                orla_graph::Source::External("<no scene>".into()),
+            ))
+        })?;
+        self.evaluator
+            .write(graph, &mut self.runtime, node, port, words)
+    }
+
     /// Forgets committed state; `<~` bindings restart from their initial
     /// sources on the next evaluation.
     pub fn reset_state(&mut self) {

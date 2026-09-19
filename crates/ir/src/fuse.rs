@@ -369,7 +369,7 @@ impl<'a> Renumber<'a> {
                 }
             }
             Op::At(_, coord) | Op::AtLinear(_, coord) => *coord = self.map(*coord),
-            Op::Key(code) => *code = self.map(*code),
+            Op::Key(code) | Op::Button(code) => *code = self.map(*code),
             Op::Const(_)
             | Op::Param(_)
             | Op::Arg(_)
@@ -381,6 +381,7 @@ impl<'a> Renumber<'a> {
             | Op::Rate
             | Op::Pointer
             | Op::PointerDown
+            | Op::Wheel
             | Op::Element
             | Op::Sample(_)
             | Op::Count(_)

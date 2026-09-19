@@ -569,6 +569,12 @@ pub enum Op {
     Pointer,
     /// Whether the pointer button is held, as `Bool`. Context: `input.read`.
     PointerDown,
+    /// Whether the pointer button with the given `Int` number is held, as
+    /// `Bool`: 0 left, 1 right, 2 middle. Context: `input.read`.
+    Button(ValueId),
+    /// What the wheel scrolled since the last evaluation, as `Vec2`.
+    /// Context: `input.read`.
+    Wheel,
     /// Whether the key with the given `Int` code is held, as `Bool`.
     /// Context: `input.read`.
     Key(ValueId),
