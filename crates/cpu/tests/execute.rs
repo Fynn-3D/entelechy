@@ -677,3 +677,35 @@ fn linear_interpolation_blends_neighbours_and_clamps() {
     .unwrap_err();
     assert!(error.to_string().contains("lays out as i"), "{error}");
 }
+
+#[test]
+fn remainder_truncates_like_division_and_vectors_compare_whole() {
+    let source = "kernel test.rem@1 { requires { field.write; } param a: Int = 7; param b: Int = 3; param x: Float = 7.5; output result: Rows<Out>; struct Out { q: Int; r: Int; f: Float; same: Bool; other: Bool; } compute { let v = vec2(a, b); return Out { q: a / b, r: a % b, f: x % 2.0, same: v == vec2(7.0, 3.0), other: vec3(1, 2, 3) != vec3(1.0, 2.0, 3.0) }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(64);
+    let run = |host: &mut Host, a: i32, b: i32| -> Result<Vec<u32>, orla_cpu::ExecutionError> {
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(a), Value::Int(b), Value::Float(7.5)],
+            domain: Domain::Rows(1),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(host, granted());
+        let output = CpuBackend.execute(&module, &invocation, &mut scope)?[0];
+        Ok(host.element(output, 0).unwrap().to_vec())
+    };
+    let words = run(&mut host, 7, 3).unwrap();
+    assert_eq!(words[0] as i32, 2);
+    assert_eq!(words[1] as i32, 1);
+    assert_eq!(f32::from_bits(words[2]), 1.5);
+    assert_eq!(words[3], 1, "vec2(7, 3) widens and equals vec2(7.0, 3.0)");
+    assert_eq!(words[4], 0);
+    let words = run(&mut host, -7, 3).unwrap();
+    assert_eq!(words[0] as i32, -2);
+    assert_eq!(
+        words[1] as i32, -1,
+        "the remainder takes the sign of the left side"
+    );
+    let error = run(&mut host, 7, 0).unwrap_err();
+    assert!(error.to_string().contains("division by zero"), "{error}");
+}

@@ -732,6 +732,7 @@ impl<'a> Builder<'a> {
                     orla_language::BinaryOp::Sub => BinaryOp::Sub,
                     orla_language::BinaryOp::Mul => BinaryOp::Mul,
                     orla_language::BinaryOp::Div => BinaryOp::Div,
+                    orla_language::BinaryOp::Rem => BinaryOp::Rem,
                     orla_language::BinaryOp::Less => BinaryOp::Less,
                     orla_language::BinaryOp::LessEqual => BinaryOp::LessEqual,
                     orla_language::BinaryOp::Greater => BinaryOp::Greater,
@@ -1292,12 +1293,20 @@ impl<'a> Builder<'a> {
                 let mut parts = Vec::with_capacity(args.len());
                 for arg in args {
                     let part = self.value(arg)?;
-                    if self.ty(part) != Type::Float {
-                        return Err(semantic(
-                            arg.span,
-                            format!("`{name}` components must be Float, found {}", self.ty(part)),
-                        ));
-                    }
+                    let part = match self.ty(part) {
+                        Type::Float => part,
+                        // An Int component widens; a cell address needs no
+                        // `float()` at every use.
+                        Type::Int => {
+                            self.emit(Type::Float, Op::Intrinsic(Intrinsic::ToFloat, vec![part]))
+                        }
+                        other => {
+                            return Err(semantic(
+                                arg.span,
+                                format!("`{name}` components must be Float or Int, found {other}"),
+                            ));
+                        }
+                    };
                     parts.push(part);
                 }
                 Ok(self.emit(ty, Op::Construct(parts)))

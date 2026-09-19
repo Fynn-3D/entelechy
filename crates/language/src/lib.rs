@@ -323,6 +323,8 @@ pub enum BinaryOp {
     Mul,
     /// `/`
     Div,
+    /// `%`: the remainder, truncated like `/`
+    Rem,
     /// `<`
     Less,
     /// `<=`

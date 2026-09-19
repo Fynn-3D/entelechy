@@ -54,6 +54,14 @@ Rows<Vec2>;` port and any mismatch is reported by structure, never by name.
 
 The element may be a scalar, a vector, or a struct; its layout is the
 struct's scalars in order, integers and booleans exact. Inside `compute`,
+Expressions are `let` bindings and a result; `+ - * /` and `%` (the
+remainder, truncated like `/`, on `Int` and `Float` alike, and
+componentwise on vectors) with `Int` and `Float` kept apart except that
+`vec2`, `vec3`, and `vec4` take `Int` components and widen them; `==` and
+`!=` compare scalars and whole vectors; `<` and the rest compare scalars;
+`if c { a } else { b }` and `loop n with x = init until done { next }` are
+expressions; `Name { a: .., b: .. }` builds a struct and
+`Name { ..base, a: .. }` copies one with some fields replaced.
 `sample(f)` reads an input at this element's own address (its shape must
 match the output's), `at(f, address)` reads anywhere (clamped into range;
 `fetch` is the same word for grids), `at_linear(f, position)` reads

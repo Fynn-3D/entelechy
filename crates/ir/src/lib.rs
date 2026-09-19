@@ -227,6 +227,8 @@ pub enum BinaryOp {
     Mul,
     /// `a / b`
     Div,
+    /// `a % b`: the remainder with the sign of `a`, as `/` truncates.
+    Rem,
     /// `a < b`
     Less,
     /// `a <= b`
@@ -253,7 +255,7 @@ impl BinaryOp {
     /// also compares `Bool`s. `&&` and `||` take `Bool`s.
     pub fn result_type(self, a: Type, b: Type) -> Option<Type> {
         match self {
-            Self::Add | Self::Sub | Self::Mul | Self::Div => match (a, b) {
+            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem => match (a, b) {
                 (Type::Float, Type::Float) => Some(Type::Float),
                 (Type::Int, Type::Int) => Some(Type::Int),
                 (Type::Vec2, Type::Vec2)
@@ -271,10 +273,14 @@ impl BinaryOp {
                 (Type::Float, Type::Float) | (Type::Int, Type::Int) => Some(Type::Bool),
                 _ => None,
             },
+            // Vectors compare whole: equal when every component is.
             Self::Equal | Self::NotEqual => match (a, b) {
-                (Type::Float, Type::Float) | (Type::Int, Type::Int) | (Type::Bool, Type::Bool) => {
-                    Some(Type::Bool)
-                }
+                (Type::Float, Type::Float)
+                | (Type::Int, Type::Int)
+                | (Type::Bool, Type::Bool)
+                | (Type::Vec2, Type::Vec2)
+                | (Type::Vec3, Type::Vec3)
+                | (Type::Vec4, Type::Vec4) => Some(Type::Bool),
                 _ => None,
             },
             Self::And | Self::Or => match (a, b) {
@@ -291,6 +297,7 @@ impl BinaryOp {
             Self::Sub => "-",
             Self::Mul => "*",
             Self::Div => "/",
+            Self::Rem => "%",
             Self::Less => "<",
             Self::LessEqual => "<=",
             Self::Greater => ">",

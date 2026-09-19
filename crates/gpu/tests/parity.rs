@@ -748,3 +748,20 @@ fn linear_interpolation_matches_between_backends() {
         "element 1 sits 0.37 past element 0"
     );
 }
+
+#[test]
+fn remainder_widening_and_vector_equality_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.rem@1 { requires { field.write; } output result: Image; compute { let c = coord(); let x = int(c.x); let y = int(c.y); let r = x % 7; let s = (c.x - 8.0) % 3.0; let cell = vec2(x / 4, y / 4); let picked = cell == vec2(2.0, 1.0); return vec4(float(r) / 7.0, s / 3.0, float(picked), float(vec3(x, y, 1) != vec3(3.0, 3.0, 1.0))); } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let (cpu, device) = both_module(&gpu, &module, &[], (1, 1), vec![], Domain::Grid(16, 8));
+    assert!(mismatch(&cpu, &device, 1e-6) <= 1e-6);
+    let at = |x: usize, y: usize| cpu[y * 16 + x];
+    assert_eq!(at(9, 0)[0], 2.0 / 7.0);
+    assert!(
+        (at(3, 0)[1] - (-2.0 / 3.0)).abs() < 1e-6,
+        "float remainder keeps the sign of the left side"
+    );
+    assert_eq!(at(9, 5)[2], 1.0, "cell (2, 1) is picked");
+    assert_eq!(at(3, 3)[3], 0.0);
+}

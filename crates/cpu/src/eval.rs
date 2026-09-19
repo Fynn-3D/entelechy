@@ -921,7 +921,7 @@ fn negate(value: Value) -> Result<Value, ArithmeticError> {
 
 fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
     match op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {}
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {}
         BinaryOp::And => {
             return Ok(Value::Bool(
                 a == Value::Bool(true) && b == Value::Bool(true),
@@ -963,6 +963,12 @@ fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
                 }
                 a.checked_div(b).ok_or(ArithmeticError::Overflow)?
             }
+            BinaryOp::Rem => {
+                if b == 0 {
+                    return Err(ArithmeticError::DivisionByZero);
+                }
+                a.checked_rem(b).ok_or(ArithmeticError::Overflow)?
+            }
             _ => unreachable!(),
         };
         return Ok(Value::Int(result));
@@ -972,6 +978,8 @@ fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
         BinaryOp::Sub => a - b,
         BinaryOp::Mul => a * b,
         BinaryOp::Div => a / b,
+        // Truncated, like `/`, and like WGSL's `%` on floats.
+        BinaryOp::Rem => a % b,
         _ => unreachable!(),
     };
     Ok(map2(a, b, apply))
@@ -982,6 +990,9 @@ fn equal(a: Value, b: Value) -> bool {
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Vec2(a), Value::Vec2(b)) => a == b,
+        (Value::Vec3(a), Value::Vec3(b)) => a == b,
+        (Value::Vec4(a), Value::Vec4(b)) => a == b,
         _ => unreachable!("validation guarantees matching equality operands"),
     }
 }

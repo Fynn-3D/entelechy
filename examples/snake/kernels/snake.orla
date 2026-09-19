@@ -59,10 +59,8 @@ kernel snake.step@1 {
 
     // Whether cell `probe` can take the food: empty, and not the new head.
     fn free(probe: Int, width: Int, nx: Int, ny: Int) -> Bool {
-        let px = probe - (probe / width) * width;
-        let py = probe / width;
-        let c = at(board, vec2(float(px), float(py)));
-        return c.kind == 0 && !(px == nx && py == ny);
+        let cell = vec2(probe % width, probe / width);
+        return at(board, cell).kind == 0 && cell != vec2(nx, ny);
     }
 
     compute {
@@ -86,7 +84,7 @@ kernel snake.step@1 {
         let nx = g.hx + dx;
         let ny = g.hy + dy;
         let inside = nx >= 0 && nx < width && ny >= 0 && ny < height;
-        let target = if inside { at(board, vec2(float(nx), float(ny))) } else { Cell { kind: 0, ttl: 0 } };
+        let target = if inside { at(board, vec2(nx, ny)) } else { Cell { kind: 0, ttl: 0 } };
         // A body cell with time left after this tick is still there to hit.
         let alive = g.alive && (!advancing || (inside && !(target.kind == 1 && target.ttl > 1)));
         let moved = advancing && alive;
@@ -94,17 +92,16 @@ kernel snake.step@1 {
         let cells = width * height;
         let seed = int(hash(float(tick) * 3.0 + float(g.score) * 7.0 + 1.0) * float(cells));
         let food = if ate {
-            loop 4096 with probe = seed until free(probe, width, nx, ny) {
-                if probe + 1 >= cells { 0 } else { probe + 1 }
-            }
+            loop 4096 with probe = seed until free(probe, width, nx, ny) { (probe + 1) % cells }
         } else { g.fy * width + g.fx };
         return Game {
+            ..g,
             hx: if moved { nx } else { g.hx },
             hy: if moved { ny } else { g.hy },
             dx: dx, dy: dy,
             length: if ate { g.length + 1 } else { g.length },
             alive: alive,
-            fx: food - (food / width) * width,
+            fx: food % width,
             fy: food / width,
             tick: tick,
             score: if ate { g.score + 1 } else { g.score },
@@ -128,10 +125,11 @@ kernel snake.board@1 {
         let x = int(c.x);
         let y = int(c.y);
         let cell = sample(previous);
-        let is_head = g.advanced && x == g.hx && y == g.hy;
-        let is_food = x == g.fx && y == g.fy;
+        let here = vec2(x, y);
+        let is_head = g.advanced && here == vec2(g.hx, g.hy);
+        let is_food = here == vec2(g.fx, g.fy);
         let body = if g.advanced && cell.kind == 1 && !g.ate {
-            Cell { kind: if cell.ttl > 1 { 1 } else { 0 }, ttl: cell.ttl - 1 }
+            Cell { ..cell, kind: if cell.ttl > 1 { 1 } else { 0 }, ttl: cell.ttl - 1 }
         } else { cell };
         return if is_head { Cell { kind: 1, ttl: g.length } }
             else if body.kind == 1 { body }

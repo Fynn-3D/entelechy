@@ -702,6 +702,7 @@ impl Emitter<'_> {
                     BinaryOp::Sub => "-",
                     BinaryOp::Mul => "*",
                     BinaryOp::Div => "/",
+                    BinaryOp::Rem => "%",
                     BinaryOp::Less => "<",
                     BinaryOp::LessEqual => "<=",
                     BinaryOp::Greater => ">",
@@ -711,7 +712,13 @@ impl Emitter<'_> {
                     BinaryOp::And => "&&",
                     BinaryOp::Or => "||",
                 };
-                format!("({} {symbol} {})", v(a), v(b))
+                // A whole-vector comparison folds the componentwise one.
+                let vector = self.type_of(*a).components().is_some();
+                match op {
+                    BinaryOp::Equal if vector => format!("all({} == {})", v(a), v(b)),
+                    BinaryOp::NotEqual if vector => format!("any({} != {})", v(a), v(b)),
+                    _ => format!("({} {symbol} {})", v(a), v(b)),
+                }
             }
             Op::Construct(parts) => format!(
                 "{ty_name}({})",

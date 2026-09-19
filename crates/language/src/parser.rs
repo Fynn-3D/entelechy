@@ -765,6 +765,8 @@ impl Parser {
                 BinaryOp::Mul
             } else if self.is_punct("/") {
                 BinaryOp::Div
+            } else if self.is_punct("%") {
+                BinaryOp::Rem
             } else {
                 return Ok(left);
             };

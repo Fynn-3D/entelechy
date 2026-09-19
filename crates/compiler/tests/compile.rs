@@ -64,9 +64,9 @@ fn diagnostics_name_the_problem_and_the_position() {
     assert!(message.contains("needs a Vec4 per element"), "{message}");
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(1, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(true, 0.0, 0.0, 1.0); } }",
     );
-    assert!(message.contains("must be Float, found Int"), "{message}");
+    assert!(message.contains("must be Float or Int, found Bool"), "{message}");
 
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output r: Image; fn f(x: Float) -> Float { return coord().x; } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",
@@ -319,4 +319,22 @@ fn rate_is_context_under_time_read() {
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return rate(); } }",
     );
     assert!(message.contains("needs `time.read`"), "{message}");
+}
+
+#[test]
+fn remainder_widening_and_vector_equality_type_check() {
+    let module = compile(
+        "kernel test.ops@1 { requires { field.write; } output result: Rows<Bool>; compute { let n = element() % 4; let p = vec2(n, 1); return p == vec2(1.0, 1.0) && n % 2 == 0 && fract(2.5 % 1.0) == 0.5; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = module.to_string();
+    assert!(text.contains(" % "), "{text}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Bool>; compute { return vec2(1.0, 2.0) == vec3(1.0, 2.0, 3.0); } }",
+    );
+    assert!(message.contains("cannot apply `==`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Bool>; compute { return vec2(true, 1.0) == vec2(1.0, 1.0); } }",
+    );
+    assert!(message.contains("must be Float or Int"), "{message}");
 }
