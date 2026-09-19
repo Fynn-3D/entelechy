@@ -3,8 +3,10 @@
 //!
 //! The language is deliberately small: a Kernel declares its identity,
 //! required capabilities, inputs, parameters, outputs, optional helper
-//! functions, and one `compute` block that runs per output pixel. The
-//! frontend produces an AST only; it knows nothing about IR or backends.
+//! functions, and one `compute` block that runs per output pixel. Control
+//! flow is expression-shaped: `if c { a } else { b }` and bounded
+//! `loop N with x = init until done { next }`. The frontend produces an AST
+//! only; it knows nothing about IR or backends.
 //!
 //! ```text
 //! kernel image.grayscale@1 {
@@ -106,12 +108,14 @@ pub struct FnDecl {
     pub body: Block,
 }
 
-/// A sequence of `let` bindings ending in `return`.
+/// A sequence of `let` bindings ending in a result: `return expr;` in
+/// function and `compute` bodies, or a tail expression in `if` and `loop`
+/// blocks (both forms are accepted everywhere).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
     /// Bindings in order.
     pub lets: Vec<(Spanned<String>, Expr)>,
-    /// The returned expression.
+    /// The resulting expression.
     pub result: Expr,
 }
 
@@ -126,6 +130,22 @@ pub enum BinaryOp {
     Mul,
     /// `/`
     Div,
+    /// `<`
+    Less,
+    /// `<=`
+    LessEqual,
+    /// `>`
+    Greater,
+    /// `>=`
+    GreaterEqual,
+    /// `==`
+    Equal,
+    /// `!=`
+    NotEqual,
+    /// `&&`
+    And,
+    /// `||`
+    Or,
 }
 
 /// An expression.
@@ -144,6 +164,8 @@ pub enum ExprKind {
     Float(f32),
     /// An integer literal such as `8`.
     Int(i32),
+    /// `true` or `false`.
+    Bool(bool),
     /// A reference to an input, parameter, argument, or binding.
     Name(String),
     /// A call to a builtin, intrinsic, or helper function.
@@ -152,8 +174,32 @@ pub enum ExprKind {
     Member(Box<Expr>, String),
     /// Negation.
     Neg(Box<Expr>),
-    /// Binary arithmetic.
+    /// Logical not.
+    Not(Box<Expr>),
+    /// Binary arithmetic, comparison, or logic.
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    /// `if condition { then } else { otherwise }`.
+    If {
+        /// The condition.
+        condition: Box<Expr>,
+        /// Block taken when the condition holds.
+        then: Box<Block>,
+        /// Block taken otherwise.
+        otherwise: Box<Block>,
+    },
+    /// `loop count with name = init until done { body }`.
+    Loop {
+        /// Compile-time iteration bound.
+        count: Spanned<u32>,
+        /// Name of the carried value inside `until` and `body`.
+        name: Spanned<String>,
+        /// Initial carried value.
+        init: Box<Expr>,
+        /// Optional exit test evaluated before each iteration.
+        until: Option<Box<Expr>>,
+        /// The body, yielding the next carried value.
+        body: Box<Block>,
+    },
 }
 
 /// A parse failure with a position.

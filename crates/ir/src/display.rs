@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::{Function, Instruction, Manifest, Module, Op, UnaryOp};
+use crate::{Block, Function, Instruction, Manifest, Module, Op, UnaryOp, ValueId};
 
 impl fmt::Display for Manifest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -27,6 +27,58 @@ impl fmt::Display for Manifest {
     }
 }
 
+fn list(ids: &[ValueId]) -> String {
+    ids.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn write_block(f: &mut fmt::Formatter<'_>, block: &Block, depth: usize) -> fmt::Result {
+    let indent = "  ".repeat(depth);
+    for instruction in &block.body {
+        write_instruction(f, instruction, depth)?;
+    }
+    writeln!(f, "{indent}yield {}", block.result)
+}
+
+fn write_instruction(
+    f: &mut fmt::Formatter<'_>,
+    Instruction { id, ty, op }: &Instruction,
+    depth: usize,
+) -> fmt::Result {
+    let indent = "  ".repeat(depth);
+    match op {
+        Op::If {
+            condition,
+            then,
+            otherwise,
+        } => {
+            writeln!(f, "{indent}{id}: {ty} = if {condition} {{")?;
+            write_block(f, then, depth + 1)?;
+            writeln!(f, "{indent}}} else {{")?;
+            write_block(f, otherwise, depth + 1)?;
+            writeln!(f, "{indent}}}")
+        }
+        Op::Loop {
+            count,
+            init,
+            until,
+            body,
+        } => {
+            writeln!(f, "{indent}{id}: {ty} = loop {count} carrying {init} {{")?;
+            if let Some(until) = until {
+                writeln!(f, "{indent}  until {{")?;
+                write_block(f, until, depth + 2)?;
+                writeln!(f, "{indent}  }}")?;
+            }
+            write_block(f, body, depth + 1)?;
+            writeln!(f, "{indent}}}")
+        }
+        other => writeln!(f, "{indent}{id}: {ty} = {other}"),
+    }
+}
+
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let args = self
@@ -37,33 +89,22 @@ impl fmt::Display for Function {
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(f, "fn {}({args}) {{", self.name)?;
-        for (index, Instruction { ty, op }) in self.body.iter().enumerate() {
-            writeln!(f, "  %{index}: {ty} = {op}")?;
+        for instruction in &self.body {
+            write_instruction(f, instruction, 1)?;
         }
-        let results = self
-            .results
-            .iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(f, "  return {results}")?;
+        writeln!(f, "  return {}", list(&self.results))?;
         writeln!(f, "}}")
     }
 }
 
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let list = |ids: &[crate::ValueId]| {
-            ids.iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
         match self {
             Self::Const(value) => write!(f, "const {value}"),
             Self::Param(index) => write!(f, "param {index}"),
             Self::Arg(index) => write!(f, "arg {index}"),
             Self::Unary(UnaryOp::Neg, a) => write!(f, "neg {a}"),
+            Self::Unary(UnaryOp::Not, a) => write!(f, "not {a}"),
             Self::Binary(op, a, b) => write!(f, "{a} {} {b}", op.symbol()),
             Self::Construct(parts) => write!(f, "construct {}", list(parts)),
             Self::Extract(vector, component) => write!(f, "extract {vector}[{component}]"),
@@ -71,12 +112,18 @@ impl fmt::Display for Op {
             Self::Intrinsic(intrinsic, args) => {
                 write!(f, "{}({})", intrinsic.name(), list(args))
             }
+            Self::If { condition, .. } => write!(f, "if {condition} {{ ... }}"),
+            Self::Loop { count, init, .. } => write!(f, "loop {count} carrying {init} {{ ... }}"),
+            Self::Carried => f.write_str("carried"),
+            Self::Index => f.write_str("index"),
             Self::Coord => f.write_str("coord"),
             Self::Domain => f.write_str("domain"),
             Self::Time => f.write_str("context time"),
             Self::ImageSize(input) => write!(f, "host image.size input{input}"),
             Self::ImageSample(input) => write!(f, "host image.sample input{input}"),
-            Self::ImageFetch(input, coord) => write!(f, "host image.fetch input{input} {coord}"),
+            Self::ImageFetch(input, coord) => {
+                write!(f, "host image.fetch input{input} {coord}")
+            }
         }
     }
 }

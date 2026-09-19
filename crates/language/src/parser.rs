@@ -60,6 +60,10 @@ impl Parser {
         matches!(self.peek(), Token::Punct(p) if *p == punct)
     }
 
+    fn is_keyword(&self, keyword: &str) -> bool {
+        matches!(self.peek(), Token::Ident(name) if name == keyword)
+    }
+
     fn eat_punct(&mut self, punct: &str) -> bool {
         if self.is_punct(punct) {
             self.next();
@@ -79,7 +83,7 @@ impl Parser {
 
     fn ident(&mut self, what: &str) -> Result<Spanned<String>, ParseError> {
         match self.peek() {
-            Token::Ident(_) => {
+            Token::Ident(name) if !RESERVED.contains(&name.as_str()) => {
                 let (Token::Ident(value), span) = self.next() else {
                     unreachable!()
                 };
@@ -90,9 +94,10 @@ impl Parser {
     }
 
     fn keyword(&mut self, keyword: &str) -> Result<Span, ParseError> {
-        match self.peek() {
-            Token::Ident(name) if name == keyword => Ok(self.next().1),
-            _ => Err(self.unexpected(&format!("`{keyword}`"))),
+        if self.is_keyword(keyword) {
+            Ok(self.next().1)
+        } else {
+            Err(self.unexpected(&format!("`{keyword}`")))
         }
     }
 
@@ -244,33 +249,79 @@ impl Parser {
         })
     }
 
+    /// `{ let ...; return expr; }` or `{ let ...; expr }`.
     fn block(&mut self) -> Result<Block, ParseError> {
         self.expect_punct("{")?;
         let mut lets = Vec::new();
         loop {
-            match self.peek() {
-                Token::Ident(keyword) if keyword == "let" => {
-                    self.next();
-                    let name = self.ident("a binding name")?;
-                    self.expect_punct("=")?;
-                    let value = self.expr()?;
-                    self.expect_punct(";")?;
-                    lets.push((name, value));
-                }
-                Token::Ident(keyword) if keyword == "return" => {
-                    self.next();
-                    let result = self.expr()?;
-                    self.expect_punct(";")?;
-                    self.expect_punct("}")?;
-                    return Ok(Block { lets, result });
-                }
-                _ => return Err(self.unexpected("`let` or `return`")),
+            if self.is_keyword("let") {
+                self.next();
+                let name = self.ident("a binding name")?;
+                self.expect_punct("=")?;
+                let value = self.expr()?;
+                self.expect_punct(";")?;
+                lets.push((name, value));
+            } else if self.is_keyword("return") {
+                self.next();
+                let result = self.expr()?;
+                self.expect_punct(";")?;
+                self.expect_punct("}")?;
+                return Ok(Block { lets, result });
+            } else if self.is_punct("}") {
+                return Err(self.error("a block must end with `return expr;` or a value"));
+            } else {
+                let result = self.expr()?;
+                self.expect_punct("}")?;
+                return Ok(Block { lets, result });
             }
         }
     }
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.additive()
+        self.or()
+    }
+
+    fn or(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.and()?;
+        while self.is_punct("||") {
+            self.next();
+            let right = self.and()?;
+            left = binary(BinaryOp::Or, left, right);
+        }
+        Ok(left)
+    }
+
+    fn and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.comparison()?;
+        while self.is_punct("&&") {
+            self.next();
+            let right = self.comparison()?;
+            left = binary(BinaryOp::And, left, right);
+        }
+        Ok(left)
+    }
+
+    fn comparison(&mut self) -> Result<Expr, ParseError> {
+        let left = self.additive()?;
+        let op = match self.peek() {
+            Token::Punct("<") => BinaryOp::Less,
+            Token::Punct("<=") => BinaryOp::LessEqual,
+            Token::Punct(">") => BinaryOp::Greater,
+            Token::Punct(">=") => BinaryOp::GreaterEqual,
+            Token::Punct("==") => BinaryOp::Equal,
+            Token::Punct("!=") => BinaryOp::NotEqual,
+            _ => return Ok(left),
+        };
+        self.next();
+        let right = self.additive()?;
+        let result = binary(op, left, right);
+        if matches!(
+            self.peek(),
+            Token::Punct("<" | "<=" | ">" | ">=" | "==" | "!=")
+        ) {
+            return Err(self.error("comparisons do not chain; parenthesize or use `&&`"));
+        }
+        Ok(result)
     }
 
     fn additive(&mut self) -> Result<Expr, ParseError> {
@@ -314,6 +365,14 @@ impl Parser {
                 span,
             });
         }
+        if self.is_punct("!") {
+            let span = self.next().1;
+            let inner = self.unary()?;
+            return Ok(Expr {
+                kind: ExprKind::Not(Box::new(inner)),
+                span,
+            });
+        }
         self.postfix()
     }
 
@@ -345,6 +404,78 @@ impl Parser {
                     kind: ExprKind::Int(value),
                     span,
                 })
+            }
+            Token::Ident(name) if name == "true" || name == "false" => {
+                self.next();
+                Ok(Expr {
+                    kind: ExprKind::Bool(name == "true"),
+                    span,
+                })
+            }
+            Token::Ident(name) if name == "if" => {
+                self.next();
+                let condition = self.expr()?;
+                let then = self.block()?;
+                self.keyword("else")?;
+                let otherwise = if self.is_keyword("if") {
+                    let nested = self.primary()?;
+                    Block {
+                        lets: Vec::new(),
+                        result: nested,
+                    }
+                } else {
+                    self.block()?
+                };
+                Ok(Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(condition),
+                        then: Box::new(then),
+                        otherwise: Box::new(otherwise),
+                    },
+                    span,
+                })
+            }
+            Token::Ident(name) if name == "loop" => {
+                self.next();
+                let count = match self.next() {
+                    (Token::Int(count), span) if count > 0 => Spanned {
+                        value: count as u32,
+                        span,
+                    },
+                    (token, span) => {
+                        return Err(ParseError {
+                            span,
+                            message: format!(
+                                "`loop` needs a positive integer bound, found {}",
+                                token.describe()
+                            ),
+                        });
+                    }
+                };
+                self.keyword("with")?;
+                let name = self.ident("a carried value name")?;
+                self.expect_punct("=")?;
+                let init = self.expr()?;
+                let until = if self.is_keyword("until") {
+                    self.next();
+                    Some(Box::new(self.expr()?))
+                } else {
+                    None
+                };
+                let body = self.block()?;
+                Ok(Expr {
+                    kind: ExprKind::Loop {
+                        count,
+                        name,
+                        init: Box::new(init),
+                        until,
+                        body: Box::new(body),
+                    },
+                    span,
+                })
+            }
+            Token::Ident(name) if RESERVED.contains(&name.as_str()) => {
+                Err(self.unexpected("an expression"))
             }
             Token::Ident(name) => {
                 self.next();
@@ -378,6 +509,11 @@ impl Parser {
         }
     }
 }
+
+/// Words that cannot name values.
+const RESERVED: [&str; 8] = [
+    "let", "return", "if", "else", "loop", "with", "until", "kernel",
+];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr {
@@ -434,18 +570,72 @@ kernel image.grayscale@1 {
     }
 
     #[test]
-    fn precedence_and_unary_minus() {
-        let kernel =
-            parse("kernel t.k@1 { compute { return -a.x * 2.0 + b / (c - 1); } }").unwrap();
-        let ExprKind::Binary(BinaryOp::Add, left, right) = &kernel.compute.result.kind else {
-            panic!("expected top-level add");
+    fn precedence_and_unary_operators() {
+        let kernel = parse(
+            "kernel t.k@1 { compute { return -a.x * 2.0 + b / (c - 1) < 3.0 && !d || e == f; } }",
+        )
+        .unwrap();
+        let ExprKind::Binary(BinaryOp::Or, left, right) = &kernel.compute.result.kind else {
+            panic!("expected `||` at the top");
         };
-        assert!(matches!(left.kind, ExprKind::Binary(BinaryOp::Mul, ..)));
-        assert!(matches!(right.kind, ExprKind::Binary(BinaryOp::Div, ..)));
-        let ExprKind::Binary(_, negated, _) = &left.kind else {
+        assert!(matches!(right.kind, ExprKind::Binary(BinaryOp::Equal, ..)));
+        let ExprKind::Binary(BinaryOp::And, compare, not) = &left.kind else {
+            panic!("expected `&&` below `||`");
+        };
+        assert!(matches!(not.kind, ExprKind::Not(_)));
+        let ExprKind::Binary(BinaryOp::Less, sum, _) = &compare.kind else {
+            panic!("expected `<` below `&&`");
+        };
+        let ExprKind::Binary(BinaryOp::Add, product, quotient) = &sum.kind else {
+            panic!("expected `+` below `<`");
+        };
+        assert!(matches!(product.kind, ExprKind::Binary(BinaryOp::Mul, ..)));
+        assert!(matches!(quotient.kind, ExprKind::Binary(BinaryOp::Div, ..)));
+        let ExprKind::Binary(_, negated, _) = &product.kind else {
             unreachable!()
         };
         assert!(matches!(negated.kind, ExprKind::Neg(_)));
+    }
+
+    #[test]
+    fn if_and_loop_are_expressions() {
+        let kernel = parse(
+            "kernel t.k@1 { compute {
+                let m = loop 64 with s = vec2(0.0, 1.0) until s.y < 0.001 {
+                    let d = sdf(s.x);
+                    vec2(s.x + d, d)
+                };
+                let c = if m.y < 0.001 { 1.0 } else if m.x > 9.0 { 0.5 } else { let z = 0.0; z };
+                return vec4(c, c, c, 1.0);
+            } }",
+        )
+        .unwrap();
+        let ExprKind::Loop {
+            count,
+            name,
+            until,
+            body,
+            ..
+        } = &kernel.compute.lets[0].1.kind
+        else {
+            panic!("expected a loop");
+        };
+        assert_eq!(count.value, 64);
+        assert_eq!(name.value, "s");
+        assert!(until.is_some());
+        assert_eq!(body.lets.len(), 1);
+        let ExprKind::If { otherwise, .. } = &kernel.compute.lets[1].1.kind else {
+            panic!("expected an if");
+        };
+        assert!(matches!(otherwise.result.kind, ExprKind::If { .. }));
+
+        let error = parse("kernel t.k@1 { compute { return if a { 1.0 }; } }").unwrap_err();
+        assert!(error.message.contains("`else`"), "{error}");
+        let error = parse("kernel t.k@1 { compute { return a < b < c; } }").unwrap_err();
+        assert!(error.message.contains("do not chain"), "{error}");
+        let error =
+            parse("kernel t.k@1 { compute { return loop 0 with x = 1.0 { x }; } }").unwrap_err();
+        assert!(error.message.contains("positive integer bound"), "{error}");
     }
 
     #[test]

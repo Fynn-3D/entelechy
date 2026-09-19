@@ -289,3 +289,75 @@ fn parallel_rows_match_the_per_pixel_formula_and_report_the_first_failure() {
     );
     assert_eq!(host.live_images(), 1);
 }
+
+#[test]
+fn branches_loops_and_booleans_follow_their_contracts() {
+    let module = compile(
+        "kernel test.flow@1 { requires { image.write; } param invert: Bool = false; param steps: Int = 5; output result: Image;
+            fn sum_to(n: Int) -> Int { return loop 100 with acc = 0 until index() >= n { acc + index() }; }
+            compute {
+                let c = coord();
+                let side = if c.x < 1.0 { if invert { 0.25 } else { 0.75 } } else { let z = 0.5; z };
+                let total = sum_to(steps);
+                let nan = 0.0 / 0.0;
+                let cmp = if nan < 1.0 || nan >= 1.0 { 1.0 } else { 0.0 };
+                let march = loop 64 with s = vec2(0.0, 1.0) until s.y < 0.01 { vec2(s.x + 1.0, s.y * 0.5) };
+                return vec4(side, float(total), cmp + float(!(c.x == 0.0)) * 8.0, march.x);
+            } }",
+    )
+    .unwrap();
+    let mut host = Host::new(64);
+    let run = |host: &mut Host, invert: bool, steps: i32| {
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Bool(invert), Value::Int(steps)],
+            domain: Domain {
+                width: 2,
+                height: 1,
+            },
+            time: 0.0,
+        };
+        let mut scope = Scope::new(host, granted());
+        CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0]
+    };
+    let output = run(&mut host, false, 5);
+    // sum 0..5 = 10; the march halves 1.0 until < 0.01: 7 steps.
+    near(
+        host.read_pixel(output, 0, 0).unwrap(),
+        [0.75, 10.0, 0.0, 7.0],
+    );
+    near(
+        host.read_pixel(output, 1, 0).unwrap(),
+        [0.5, 10.0, 8.0, 7.0],
+    );
+    let output = run(&mut host, true, 0);
+    near(
+        host.read_pixel(output, 0, 0).unwrap(),
+        [0.25, 0.0, 0.0, 7.0],
+    );
+}
+
+#[test]
+fn untaken_branches_do_not_execute() {
+    let module = compile(
+        "kernel test.guard@1 { requires { image.write; } param d: Int = 0; output result: Image; compute { let q = if d == 0 { 0 } else { 1 / d }; return vec4(float(q), 0.0, 0.0, 1.0); } }",
+    )
+    .unwrap();
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![Value::Int(0)],
+        domain: Domain {
+            width: 1,
+            height: 1,
+        },
+        time: 0.0,
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    near(host.read_pixel(output, 0, 0).unwrap(), [0.0, 0.0, 0.0, 1.0]);
+}

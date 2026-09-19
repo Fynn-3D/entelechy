@@ -3,8 +3,8 @@
 use std::str::FromStr;
 
 use orla_ir::{
-    BinaryOp, Capability, Function, Instruction, Intrinsic, KernelId, Manifest, Module, Op, Param,
-    Port, Type, UnaryOp, Value, ValueId,
+    BinaryOp, Block as IrBlock, Capability, Function, Instruction, Intrinsic, KernelId,
+    MAX_LOOP_COUNT, Manifest, Module, Op, Param, Port, Type, UnaryOp, Value, ValueId,
 };
 use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 
@@ -55,7 +55,7 @@ pub(crate) fn lower(kernel: &Kernel) -> Result<Module, CompileError> {
             return Err(semantic(
                 kernel.compute.result.span,
                 format!(
-                    "output `{}` needs a {expected} per pixel, but `return` gives {actual}",
+                    "output `{}` needs a {expected} per pixel, but the body gives {actual}",
                     manifest.outputs[0].name
                 ),
             ));
@@ -162,12 +162,14 @@ fn constant(expr: &Expr, ty: Type) -> Result<Value, CompileError> {
         (ExprKind::Float(value), Type::Float) => Value::Float(*value),
         (ExprKind::Int(value), Type::Float) => Value::Float(*value as f32),
         (ExprKind::Int(value), Type::Int) => Value::Int(*value),
+        (ExprKind::Bool(value), Type::Bool) => Value::Bool(*value),
         (ExprKind::Neg(inner), _) => match constant(inner, ty)? {
             Value::Float(v) => Value::Float(-v),
             Value::Int(v) => Value::Int(
                 v.checked_neg()
                     .ok_or_else(|| semantic(expr.span, "integer literal overflows when negated"))?,
             ),
+            Value::Bool(_) => return Err(semantic(expr.span, "cannot negate a Bool")),
             Value::Vec2([x, y]) => Value::Vec2([-x, -y]),
             Value::Vec3([x, y, z]) => Value::Vec3([-x, -y, -z]),
             Value::Vec4([x, y, z, w]) => Value::Vec4([-x, -y, -z, -w]),
@@ -253,14 +255,33 @@ fn lower_function(
     Ok(builder.finish(vec![result]))
 }
 
+/// What a name resolves to inside a block.
+#[derive(Clone)]
+enum Local {
+    Value(ValueId),
+    /// The carried value of the loop that introduced the name.
+    Carried {
+        depth: usize,
+        ty: Type,
+    },
+}
+
 struct Builder<'a> {
     manifest: &'a Manifest,
     functions: &'a [(String, Function)],
     is_entry: bool,
     name: String,
     args: Vec<(String, Type)>,
-    locals: Vec<(String, ValueId)>,
-    body: Vec<Instruction>,
+    /// Visible bindings, innermost last.
+    locals: Vec<(String, Local)>,
+    /// Index into `locals` where each open block scope starts.
+    scopes: Vec<usize>,
+    /// Instruction buffers, one per open block; the last is current.
+    buffers: Vec<Vec<Instruction>>,
+    /// Type of every emitted value by id.
+    types: Vec<Type>,
+    /// Carried types of enclosing loops, innermost last.
+    loops: Vec<Type>,
 }
 
 impl<'a> Builder<'a> {
@@ -277,44 +298,94 @@ impl<'a> Builder<'a> {
             name: name.to_owned(),
             args: Vec::new(),
             locals: Vec::new(),
-            body: Vec::new(),
+            scopes: vec![0],
+            buffers: vec![Vec::new()],
+            types: Vec::new(),
+            loops: Vec::new(),
         }
     }
 
-    fn finish(self, results: Vec<ValueId>) -> Function {
+    fn finish(mut self, results: Vec<ValueId>) -> Function {
+        let body = self.buffers.pop().unwrap_or_default();
         Function {
             name: self.name,
             args: self.args.into_iter().map(|(_, ty)| ty).collect(),
-            body: self.body,
+            body,
             results,
         }
     }
 
+    /// Reserves the next value id without emitting anything yet.
+    fn reserve(&mut self, ty: Type) -> ValueId {
+        self.types.push(ty);
+        ValueId((self.types.len() - 1) as u32)
+    }
+
+    fn place(&mut self, id: ValueId, ty: Type, op: Op) -> ValueId {
+        self.types[id.0 as usize] = ty;
+        self.buffers
+            .last_mut()
+            .expect("a block is open")
+            .push(Instruction { id, ty, op });
+        id
+    }
+
     fn emit(&mut self, ty: Type, op: Op) -> ValueId {
-        self.body.push(Instruction { ty, op });
-        ValueId((self.body.len() - 1) as u32)
+        let id = self.reserve(ty);
+        self.place(id, ty, op)
     }
 
     fn ty(&self, id: ValueId) -> Type {
-        self.body[id.0 as usize].ty
+        self.types[id.0 as usize]
+    }
+
+    /// Lowers a block into a fresh buffer and returns it with its result.
+    fn nested(&mut self, block: &Block) -> Result<IrBlock, CompileError> {
+        self.buffers.push(Vec::new());
+        let result = self.block(block);
+        let body = self.buffers.pop().expect("the nested buffer is open");
+        Ok(IrBlock {
+            body,
+            result: result?,
+        })
+    }
+
+    /// Lowers a single expression as a block (for `else if` and `until`).
+    fn nested_expr(&mut self, expr: &Expr) -> Result<IrBlock, CompileError> {
+        self.buffers.push(Vec::new());
+        let result = self.value(expr);
+        let body = self.buffers.pop().expect("the nested buffer is open");
+        Ok(IrBlock {
+            body,
+            result: result?,
+        })
     }
 
     fn block(&mut self, block: &Block) -> Result<ValueId, CompileError> {
-        for (name, value) in &block.lets {
-            if self
-                .locals
-                .iter()
-                .any(|(existing, _)| existing == &name.value)
-            {
-                return Err(semantic(
-                    name.span,
-                    format!("`{}` is already bound; bindings are immutable", name.value),
-                ));
+        self.scopes.push(self.locals.len());
+        let result = (|| {
+            for (name, value) in &block.lets {
+                let scope_start = *self.scopes.last().expect("a scope is open");
+                if self.locals[scope_start..]
+                    .iter()
+                    .any(|(existing, _)| existing == &name.value)
+                {
+                    return Err(semantic(
+                        name.span,
+                        format!(
+                            "`{}` is already bound in this block; bindings are immutable",
+                            name.value
+                        ),
+                    ));
+                }
+                let id = self.value(value)?;
+                self.locals.push((name.value.clone(), Local::Value(id)));
             }
-            let id = self.value(value)?;
-            self.locals.push((name.value.clone(), id));
-        }
-        self.value(&block.result)
+            self.value(&block.result)
+        })();
+        let start = self.scopes.pop().expect("a scope is open");
+        self.locals.truncate(start);
+        result
     }
 
     /// Lowers an expression that must produce a plain value (not an image).
@@ -322,18 +393,24 @@ impl<'a> Builder<'a> {
         match &expr.kind {
             ExprKind::Float(value) => Ok(self.emit(Type::Float, Op::Const(Value::Float(*value)))),
             ExprKind::Int(value) => Ok(self.emit(Type::Int, Op::Const(Value::Int(*value)))),
+            ExprKind::Bool(value) => Ok(self.emit(Type::Bool, Op::Const(Value::Bool(*value)))),
             ExprKind::Name(name) => self.name(name, expr.span),
-            ExprKind::Neg(inner) => {
-                let inner = self.value(inner)?;
-                let ty = self.ty(inner);
-                Ok(self.emit(ty, Op::Unary(UnaryOp::Neg, inner)))
-            }
+            ExprKind::Neg(inner) => self.unary(UnaryOp::Neg, "-", inner, expr.span),
+            ExprKind::Not(inner) => self.unary(UnaryOp::Not, "!", inner, expr.span),
             ExprKind::Binary(op, left, right) => {
                 let op = match op {
                     orla_language::BinaryOp::Add => BinaryOp::Add,
                     orla_language::BinaryOp::Sub => BinaryOp::Sub,
                     orla_language::BinaryOp::Mul => BinaryOp::Mul,
                     orla_language::BinaryOp::Div => BinaryOp::Div,
+                    orla_language::BinaryOp::Less => BinaryOp::Less,
+                    orla_language::BinaryOp::LessEqual => BinaryOp::LessEqual,
+                    orla_language::BinaryOp::Greater => BinaryOp::Greater,
+                    orla_language::BinaryOp::GreaterEqual => BinaryOp::GreaterEqual,
+                    orla_language::BinaryOp::Equal => BinaryOp::Equal,
+                    orla_language::BinaryOp::NotEqual => BinaryOp::NotEqual,
+                    orla_language::BinaryOp::And => BinaryOp::And,
+                    orla_language::BinaryOp::Or => BinaryOp::Or,
                 };
                 let left = self.value(left)?;
                 let right = self.value(right)?;
@@ -373,12 +450,143 @@ impl<'a> Builder<'a> {
                 Ok(self.emit(Type::Float, Op::Extract(inner, component)))
             }
             ExprKind::Call(name, args) => self.call(name, args, expr.span),
+            ExprKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let condition_id = self.value(condition)?;
+                if self.ty(condition_id) != Type::Bool {
+                    return Err(semantic(
+                        condition.span,
+                        format!(
+                            "`if` needs a Bool condition, found {}",
+                            self.ty(condition_id)
+                        ),
+                    ));
+                }
+                let id = self.reserve(Type::Bool);
+                let then_block = self.nested(then)?;
+                let otherwise_block = self.nested(otherwise)?;
+                let (a, b) = (self.ty(then_block.result), self.ty(otherwise_block.result));
+                if a != b {
+                    return Err(semantic(
+                        otherwise.result.span,
+                        format!("`if` branches give {a} and {b}; they must agree"),
+                    ));
+                }
+                Ok(self.place(
+                    id,
+                    a,
+                    Op::If {
+                        condition: condition_id,
+                        then: then_block,
+                        otherwise: otherwise_block,
+                    },
+                ))
+            }
+            ExprKind::Loop {
+                count,
+                name,
+                init,
+                until,
+                body,
+            } => {
+                if count.value > MAX_LOOP_COUNT {
+                    return Err(semantic(
+                        count.span,
+                        format!("`loop` bound {} exceeds {MAX_LOOP_COUNT}", count.value),
+                    ));
+                }
+                let init_id = self.value(init)?;
+                let carried = self.ty(init_id);
+                if !carried.is_value() {
+                    return Err(semantic(init.span, "a loop cannot carry an image"));
+                }
+                let id = self.reserve(carried);
+                self.loops.push(carried);
+                self.locals.push((
+                    name.value.clone(),
+                    Local::Carried {
+                        depth: self.loops.len(),
+                        ty: carried,
+                    },
+                ));
+                let lowered = (|| {
+                    let until_block = match until {
+                        Some(until) => {
+                            let block = self.nested_expr(until)?;
+                            if self.ty(block.result) != Type::Bool {
+                                return Err(semantic(
+                                    until.span,
+                                    format!(
+                                        "`until` needs a Bool, found {}",
+                                        self.ty(block.result)
+                                    ),
+                                ));
+                            }
+                            Some(block)
+                        }
+                        None => None,
+                    };
+                    let body_block = self.nested(body)?;
+                    let next = self.ty(body_block.result);
+                    if next != carried {
+                        return Err(semantic(
+                            body.result.span,
+                            format!("loop carries {carried} but the body gives {next}"),
+                        ));
+                    }
+                    Ok((until_block, body_block))
+                })();
+                self.locals.pop();
+                self.loops.pop();
+                let (until_block, body_block) = lowered?;
+                Ok(self.place(
+                    id,
+                    carried,
+                    Op::Loop {
+                        count: count.value,
+                        init: init_id,
+                        until: until_block,
+                        body: body_block,
+                    },
+                ))
+            }
         }
     }
 
+    fn unary(
+        &mut self,
+        op: UnaryOp,
+        symbol: &str,
+        inner: &Expr,
+        span: Span,
+    ) -> Result<ValueId, CompileError> {
+        let inner = self.value(inner)?;
+        let ty = self.ty(inner);
+        let result = op
+            .result_type(ty)
+            .ok_or_else(|| semantic(span, format!("cannot apply `{symbol}` to {ty}")))?;
+        Ok(self.emit(result, Op::Unary(op, inner)))
+    }
+
     fn name(&mut self, name: &str, span: Span) -> Result<ValueId, CompileError> {
-        if let Some((_, id)) = self.locals.iter().rev().find(|(local, _)| local == name) {
-            return Ok(*id);
+        if let Some((_, local)) = self.locals.iter().rev().find(|(local, _)| local == name) {
+            return match local.clone() {
+                Local::Value(id) => Ok(id),
+                Local::Carried { depth, ty } => {
+                    if depth != self.loops.len() {
+                        return Err(semantic(
+                            span,
+                            format!(
+                                "`{name}` is carried by an outer loop; pass it through this loop's carried value"
+                            ),
+                        ));
+                    }
+                    Ok(self.emit(ty, Op::Carried))
+                }
+            };
         }
         if let Some(index) = self.args.iter().position(|(arg, _)| arg == name) {
             let ty = self.args[index].1;
@@ -509,6 +717,13 @@ impl<'a> Builder<'a> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Float, Op::Time))
             }
+            "index" => {
+                self.arity(name, args, 0, span)?;
+                if self.loops.is_empty() {
+                    return Err(semantic(span, "`index()` is only available inside a loop"));
+                }
+                Ok(self.emit(Type::Int, Op::Index))
+            }
             "vec2" | "vec3" | "vec4" => {
                 let ty = match name {
                     "vec2" => Type::Vec2,
@@ -550,7 +765,7 @@ impl<'a> Builder<'a> {
                     let function = &self.functions[index].1;
                     self.arity(name, args, function.args.len(), span)?;
                     let expected = function.args.clone();
-                    let ret = function.body[function.results[0].0 as usize].ty;
+                    let ret = result_type(function);
                     let mut ids = Vec::with_capacity(args.len());
                     for (arg, expected) in args.iter().zip(expected) {
                         let id = self.value(arg)?;
@@ -571,4 +786,30 @@ impl<'a> Builder<'a> {
             }
         }
     }
+}
+
+/// Type of a lowered helper function's result.
+fn result_type(function: &Function) -> Type {
+    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
+        for instruction in instructions {
+            if instruction.id == id {
+                return Some(instruction.ty);
+            }
+            let nested = match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                Op::Loop { until, body, .. } => until
+                    .as_ref()
+                    .and_then(|block| find(&block.body, id))
+                    .or_else(|| find(&body.body, id)),
+                _ => None,
+            };
+            if nested.is_some() {
+                return nested;
+            }
+        }
+        None
+    }
+    find(&function.body, function.results[0]).unwrap_or(Type::Float)
 }

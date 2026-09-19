@@ -255,6 +255,7 @@ impl fmt::Display for Graph {
                 match value {
                     Value::Float(v) => writeln!(f, " {v:?}")?,
                     Value::Int(v) => writeln!(f, " {v}")?,
+                    Value::Bool(v) => writeln!(f, " {v}")?,
                     Value::Vec2([x, y]) => writeln!(f, " {x:?} {y:?}")?,
                     Value::Vec3([x, y, z]) => writeln!(f, " {x:?} {y:?} {z:?}")?,
                     Value::Vec4([x, y, z, w]) => writeln!(f, " {x:?} {y:?} {z:?} {w:?}")?,

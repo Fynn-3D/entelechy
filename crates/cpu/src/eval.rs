@@ -3,7 +3,7 @@
 use std::fmt;
 
 use orla_abi::{ImageHandle, Invocation, Scope, Type, Value};
-use orla_ir::{BinaryOp, Function, Intrinsic, Op, UnaryOp, Validated};
+use orla_ir::{BinaryOp, Block, Function, Instruction, Intrinsic, Op, UnaryOp, Validated};
 
 use crate::ExecutionError;
 
@@ -26,20 +26,23 @@ impl fmt::Display for ArithmeticError {
 }
 
 /// Interpreter state for one thread. All frames live on one value stack:
-/// a frame holds its arguments followed by its instruction values, so
-/// calls allocate nothing.
+/// a frame holds its arguments followed by one slot per instruction of the
+/// function, nested blocks included, so calls and loops allocate nothing.
 pub(crate) struct Machine<'m> {
     module: &'m Validated,
     invocation: &'m Invocation,
     stack: Vec<Value>,
+    entry_slots: usize,
 }
 
 impl<'m> Machine<'m> {
     pub(crate) fn new(module: &'m Validated, invocation: &'m Invocation) -> Self {
+        let entry_slots = module.entry.slot_count();
         Self {
             module,
             invocation,
-            stack: Vec::with_capacity(module.entry.body.len() * 2),
+            stack: Vec::with_capacity(entry_slots * 2),
+            entry_slots,
         }
     }
 
@@ -51,99 +54,202 @@ impl<'m> Machine<'m> {
         y: u32,
     ) -> Result<impl Iterator<Item = &Value>, ExecutionError> {
         self.stack.clear();
+        self.stack.resize(self.entry_slots, Value::Float(0.0));
         let entry = &self.module.entry;
-        run(
-            self.module,
-            self.invocation,
+        let mut frame = Frame {
+            module: self.module,
+            invocation: self.invocation,
             scope,
-            entry,
-            0,
-            &mut self.stack,
             x,
             y,
-        )?;
+            base: 0,
+            values: 0,
+            loops: Vec::new(),
+        };
+        frame.run(entry, &mut self.stack)?;
         let stack = &self.stack;
         Ok(entry.results.iter().map(move |id| &stack[id.0 as usize]))
     }
 }
 
-/// Executes `function` whose arguments already sit at `stack[base..]`.
-/// Instruction values follow the arguments.
-#[allow(clippy::too_many_arguments)]
-fn run(
-    module: &Validated,
-    invocation: &Invocation,
-    scope: &Scope<'_>,
-    function: &Function,
-    base: usize,
-    stack: &mut Vec<Value>,
+struct LoopState {
+    carried: Value,
+    index: i32,
+}
+
+/// One activation of a function.
+struct Frame<'a, 'm> {
+    module: &'m Validated,
+    invocation: &'m Invocation,
+    scope: &'a Scope<'a>,
     x: u32,
     y: u32,
-) -> Result<(), ExecutionError> {
-    let arithmetic = |error| ExecutionError::Arithmetic { x, y, error };
-    let values = base + function.args.len();
-    for instruction in &function.body {
-        let at = |id: &orla_ir::ValueId| stack[values + id.0 as usize];
-        let value = match &instruction.op {
+    /// Where the arguments start.
+    base: usize,
+    /// Where the instruction slots start.
+    values: usize,
+    loops: Vec<LoopState>,
+}
+
+impl<'m> Frame<'_, 'm> {
+    fn run(
+        &mut self,
+        function: &'m Function,
+        stack: &mut Vec<Value>,
+    ) -> Result<(), ExecutionError> {
+        self.instructions(&function.body, stack)
+    }
+
+    fn instructions(
+        &mut self,
+        instructions: &'m [Instruction],
+        stack: &mut Vec<Value>,
+    ) -> Result<(), ExecutionError> {
+        for instruction in instructions {
+            let value = self.instruction(instruction, stack)?;
+            stack[self.values + instruction.id.0 as usize] = value;
+        }
+        Ok(())
+    }
+
+    fn block(&mut self, block: &'m Block, stack: &mut Vec<Value>) -> Result<Value, ExecutionError> {
+        self.instructions(&block.body, stack)?;
+        Ok(stack[self.values + block.result.0 as usize])
+    }
+
+    fn instruction(
+        &mut self,
+        instruction: &'m Instruction,
+        stack: &mut Vec<Value>,
+    ) -> Result<Value, ExecutionError> {
+        let (x, y) = (self.x, self.y);
+        let arithmetic = |error| ExecutionError::Arithmetic { x, y, error };
+        let values = self.values;
+        let at = |stack: &Vec<Value>, id: &orla_ir::ValueId| stack[values + id.0 as usize];
+        Ok(match &instruction.op {
             Op::Const(value) => *value,
-            Op::Param(index) => invocation.params[*index as usize],
-            Op::Arg(index) => stack[base + *index as usize],
-            Op::Unary(UnaryOp::Neg, a) => negate(at(a)).map_err(arithmetic)?,
-            Op::Binary(op, a, b) => binary(*op, at(a), at(b)).map_err(arithmetic)?,
+            Op::Param(index) => self.invocation.params[*index as usize],
+            Op::Arg(index) => stack[self.base + *index as usize],
+            Op::Unary(UnaryOp::Neg, a) => negate(at(stack, a)).map_err(arithmetic)?,
+            Op::Unary(UnaryOp::Not, a) => match at(stack, a) {
+                Value::Bool(value) => Value::Bool(!value),
+                _ => unreachable!("validation guarantees a Bool operand"),
+            },
+            Op::Binary(op, a, b) => binary(*op, at(stack, a), at(stack, b)).map_err(arithmetic)?,
             Op::Construct(parts) => {
                 let mut components = [0.0; 4];
                 for (slot, part) in components.iter_mut().zip(parts) {
-                    *slot = float(at(part));
+                    *slot = float(at(stack, part));
                 }
                 from_parts(components, instruction.ty)
             }
             Op::Extract(vector, component) => {
-                Value::Float(components(at(vector))[*component as usize])
+                Value::Float(components(at(stack, vector))[*component as usize])
             }
             Op::Call(callee, call_args) => {
-                let callee = &module.functions[*callee as usize];
-                let frame = stack.len();
+                let callee = &self.module.functions[*callee as usize];
+                let frame_base = stack.len();
                 for arg in call_args {
                     let value = stack[values + arg.0 as usize];
                     stack.push(value);
                 }
-                run(module, invocation, scope, callee, frame, stack, x, y)?;
-                let result = stack[frame + callee.args.len() + callee.results[0].0 as usize];
-                stack.truncate(frame);
+                let frame_values = stack.len();
+                stack.resize(frame_values + callee.slot_count(), Value::Float(0.0));
+                let mut frame = Frame {
+                    module: self.module,
+                    invocation: self.invocation,
+                    scope: self.scope,
+                    x,
+                    y,
+                    base: frame_base,
+                    values: frame_values,
+                    loops: Vec::new(),
+                };
+                frame.run(callee, stack)?;
+                let result = stack[frame_values + callee.results[0].0 as usize];
+                stack.truncate(frame_base);
                 result
             }
             Op::Intrinsic(intrinsic, call_args) => {
                 let mut args = [Value::Float(0.0); 3];
                 for (slot, arg) in args.iter_mut().zip(call_args) {
-                    *slot = at(arg);
+                    *slot = at(stack, arg);
                 }
                 intrinsic_value(*intrinsic, &args[..call_args.len()])
             }
+            Op::If {
+                condition,
+                then,
+                otherwise,
+            } => match at(stack, condition) {
+                Value::Bool(true) => self.block(then, stack)?,
+                Value::Bool(false) => self.block(otherwise, stack)?,
+                _ => unreachable!("validation guarantees a Bool condition"),
+            },
+            Op::Loop {
+                count,
+                init,
+                until,
+                body,
+            } => {
+                self.loops.push(LoopState {
+                    carried: at(stack, init),
+                    index: 0,
+                });
+                let outcome: Result<(), ExecutionError> = (|| {
+                    for index in 0..*count {
+                        self.loops.last_mut().expect("loop is open").index = index as i32;
+                        if let Some(until) = until
+                            && self.block(until, stack)? == Value::Bool(true)
+                        {
+                            break;
+                        }
+                        let next = self.block(body, stack)?;
+                        self.loops.last_mut().expect("loop is open").carried = next;
+                    }
+                    Ok(())
+                })();
+                let state = self.loops.pop().expect("loop is open");
+                outcome?;
+                state.carried
+            }
+            Op::Carried => {
+                self.loops
+                    .last()
+                    .expect("validation guarantees a loop")
+                    .carried
+            }
+            Op::Index => Value::Int(
+                self.loops
+                    .last()
+                    .expect("validation guarantees a loop")
+                    .index,
+            ),
             Op::Coord => Value::Vec2([x as f32, y as f32]),
             Op::Domain => Value::Vec2([
-                invocation.domain.width as f32,
-                invocation.domain.height as f32,
+                self.invocation.domain.width as f32,
+                self.invocation.domain.height as f32,
             ]),
-            Op::Time => Value::Float(invocation.time),
+            Op::Time => Value::Float(self.invocation.time),
             Op::ImageSize(input) => {
-                let (width, height) = scope.image_size(invocation.inputs[*input as usize])?;
+                let (width, height) = self
+                    .scope
+                    .image_size(self.invocation.inputs[*input as usize])?;
                 Value::Vec2([width as f32, height as f32])
             }
             Op::ImageSample(input) => {
-                let image = invocation.inputs[*input as usize];
-                Value::Vec4(fetch_clamped(scope, image, x as f32, y as f32)?)
+                let image = self.invocation.inputs[*input as usize];
+                Value::Vec4(fetch_clamped(self.scope, image, x as f32, y as f32)?)
             }
             Op::ImageFetch(input, coord) => {
-                let image = invocation.inputs[*input as usize];
-                let Value::Vec2([fx, fy]) = at(coord) else {
+                let image = self.invocation.inputs[*input as usize];
+                let Value::Vec2([fx, fy]) = at(stack, coord) else {
                     unreachable!("validation guarantees a Vec2 coordinate")
                 };
-                Value::Vec4(fetch_clamped(scope, image, fx, fy)?)
+                Value::Vec4(fetch_clamped(self.scope, image, fx, fy)?)
             }
-        };
-        stack.push(value);
+        })
     }
-    Ok(())
 }
 
 fn fetch_clamped(
@@ -167,6 +273,7 @@ fn float(value: Value) -> f32 {
     match value {
         Value::Float(v) => v,
         Value::Int(v) => v as f32,
+        Value::Bool(v) => v as u8 as f32,
         Value::Vec2([x, _]) => x,
         Value::Vec3([x, ..]) => x,
         Value::Vec4([x, ..]) => x,
@@ -178,6 +285,7 @@ fn components(value: Value) -> [f32; 4] {
     match value {
         Value::Float(v) => [v, v, v, v],
         Value::Int(v) => [v as f32; 4],
+        Value::Bool(v) => [v as u8 as f32; 4],
         Value::Vec2([x, y]) => [x, y, 0.0, 0.0],
         Value::Vec3([x, y, z]) => [x, y, z, 0.0],
         Value::Vec4(v) => v,
@@ -194,6 +302,7 @@ fn from_parts(parts: [f32; 4], ty: Type) -> Value {
         Type::Vec3 => Value::Vec3([parts[0], parts[1], parts[2]]),
         Type::Vec4 => Value::Vec4(parts),
         Type::Int => Value::Int(parts[0] as i32),
+        Type::Bool => Value::Bool(parts[0] != 0.0),
         Type::Float | Type::Image => Value::Float(parts[0]),
     }
 }
@@ -206,6 +315,38 @@ fn negate(value: Value) -> Result<Value, ArithmeticError> {
 }
 
 fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
+    match op {
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {}
+        BinaryOp::And => {
+            return Ok(Value::Bool(
+                a == Value::Bool(true) && b == Value::Bool(true),
+            ));
+        }
+        BinaryOp::Or => {
+            return Ok(Value::Bool(
+                a == Value::Bool(true) || b == Value::Bool(true),
+            ));
+        }
+        BinaryOp::Equal => return Ok(Value::Bool(equal(a, b))),
+        BinaryOp::NotEqual => return Ok(Value::Bool(!equal(a, b))),
+        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+            let ordering = match (a, b) {
+                (Value::Int(a), Value::Int(b)) => a.partial_cmp(&b),
+                (Value::Float(a), Value::Float(b)) => a.partial_cmp(&b),
+                _ => unreachable!("validation guarantees scalar comparison operands"),
+            };
+            // NaN compares false, as in IEEE 754 and every GPU language.
+            let holds = match (op, ordering) {
+                (_, None) => false,
+                (BinaryOp::Less, Some(o)) => o.is_lt(),
+                (BinaryOp::LessEqual, Some(o)) => o.is_le(),
+                (BinaryOp::Greater, Some(o)) => o.is_gt(),
+                (BinaryOp::GreaterEqual, Some(o)) => o.is_ge(),
+                _ => unreachable!(),
+            };
+            return Ok(Value::Bool(holds));
+        }
+    }
     if let (Value::Int(a), Value::Int(b)) = (a, b) {
         let result = match op {
             BinaryOp::Add => a.checked_add(b).ok_or(ArithmeticError::Overflow)?,
@@ -217,6 +358,7 @@ fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
                 }
                 a.checked_div(b).ok_or(ArithmeticError::Overflow)?
             }
+            _ => unreachable!(),
         };
         return Ok(Value::Int(result));
     }
@@ -225,8 +367,18 @@ fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
         BinaryOp::Sub => a - b,
         BinaryOp::Mul => a * b,
         BinaryOp::Div => a / b,
+        _ => unreachable!(),
     };
     Ok(map2(a, b, apply))
+}
+
+fn equal(a: Value, b: Value) -> bool {
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        _ => unreachable!("validation guarantees matching equality operands"),
+    }
 }
 
 /// Applies `f` componentwise; the result takes the vector type of either
@@ -269,7 +421,9 @@ fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
         }
         (Intrinsic::Mix, [a, b, Value::Float(t)]) => map2(*a, *b, |a, b| a + (b - a) * t),
         (Intrinsic::ToFloat, [Value::Int(v)]) => Value::Float(*v as f32),
+        (Intrinsic::ToFloat, [Value::Bool(v)]) => Value::Float(*v as u8 as f32),
         (Intrinsic::ToInt, [Value::Float(v)]) => Value::Int(*v as i32),
+        (Intrinsic::ToInt, [Value::Bool(v)]) => Value::Int(*v as i32),
         (Intrinsic::Dot, [a, b]) => Value::Float(dot(*a, *b)),
         (Intrinsic::Cross, [a, b]) => {
             let (a, b) = (components(*a), components(*b));
@@ -304,6 +458,7 @@ fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
             let scale = 2.0 * dot(*normal, *incident);
             map2(*incident, *normal, |i, n| i - scale * n)
         }
+        (Intrinsic::Atan2, [Value::Float(y), Value::Float(x)]) => Value::Float(y.atan2(*x)),
         _ => unreachable!("validation guarantees intrinsic signatures"),
     }
 }

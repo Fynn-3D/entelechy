@@ -129,6 +129,8 @@ pub enum Type {
     Float,
     /// 32-bit signed integer.
     Int,
+    /// A truth value.
+    Bool,
     /// Two floats.
     Vec2,
     /// Three floats.
@@ -145,6 +147,7 @@ impl Type {
         match self {
             Self::Float => "Float",
             Self::Int => "Int",
+            Self::Bool => "Bool",
             Self::Vec2 => "Vec2",
             Self::Vec3 => "Vec3",
             Self::Vec4 => "Vec4",
@@ -193,6 +196,7 @@ impl FromStr for Type {
         [
             Self::Float,
             Self::Int,
+            Self::Bool,
             Self::Vec2,
             Self::Vec3,
             Self::Vec4,
@@ -211,6 +215,8 @@ pub enum Value {
     Float(f32),
     /// An integer.
     Int(i32),
+    /// A truth value.
+    Bool(bool),
     /// A two-component vector.
     Vec2([f32; 2]),
     /// A three-component vector.
@@ -225,6 +231,7 @@ impl Value {
         match self {
             Self::Float(_) => Type::Float,
             Self::Int(_) => Type::Int,
+            Self::Bool(_) => Type::Bool,
             Self::Vec2(_) => Type::Vec2,
             Self::Vec3(_) => Type::Vec3,
             Self::Vec4(_) => Type::Vec4,
@@ -237,6 +244,7 @@ impl fmt::Display for Value {
         match self {
             Self::Float(value) => write!(f, "{value:?}"),
             Self::Int(value) => write!(f, "{value}"),
+            Self::Bool(value) => write!(f, "{value}"),
             Self::Vec2([x, y]) => write!(f, "vec2({x:?}, {y:?})"),
             Self::Vec3([x, y, z]) => write!(f, "vec3({x:?}, {y:?}, {z:?})"),
             Self::Vec4([x, y, z, w]) => write!(f, "vec4({x:?}, {y:?}, {z:?}, {w:?})"),

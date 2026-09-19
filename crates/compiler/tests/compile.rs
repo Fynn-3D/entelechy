@@ -147,3 +147,48 @@ fn time_and_vec3_are_typed_and_gated() {
         "{message}"
     );
 }
+
+#[test]
+fn control_flow_is_scoped_and_typed() {
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = if 1.0 { 1.0 } else { 2.0 }; return vec4(a, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.contains("needs a Bool condition"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = if true { 1.0 } else { 2 }; return vec4(a, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.contains("branches give Float and Int"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = if true { let z = 1.0; z } else { 2.0 }; return vec4(z, 0.0, 0.0, 1.0); } }",
+    );
+    assert_eq!(message, "`z` is not defined");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { 2 }; return vec4(a, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(
+        message.contains("carries Float but the body gives Int"),
+        "{message}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { loop 2 with y = 0.0 { x } }; return vec4(a, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.contains("carried by an outer loop"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let i = index(); return vec4(float(i), 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.contains("inside a loop"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = loop 4 with x = 1.0 until x { x }; return vec4(a, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.contains("`until` needs a Bool"), "{message}");
+    let module = compile(
+        "kernel t.k@1 { requires { image.write; } param on: Bool = true; output r: Image; compute { let a = if on && !(1 > 2) { 1.0 } else { 0.0 }; return vec4(a, a, a, 1.0); } }",
+    )
+    .unwrap();
+    assert_eq!(
+        module.manifest.params[0].default,
+        orla_ir::Value::Bool(true)
+    );
+    let text = module.to_string();
+    assert!(text.contains("= if %"), "{text}");
+}

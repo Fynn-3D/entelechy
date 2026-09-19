@@ -89,7 +89,7 @@ pub(crate) fn parse(text: &str) -> Result<Graph, DocumentError> {
                     .ok_or_else(|| error(format!("`{param} = ...` appears before any node")))?;
                 let value = parse_value(numbers).ok_or_else(|| {
                     error(format!(
-                        "`{param}` needs one number, or two, three, or four floats, found `{}`",
+                        "`{param}` needs one number, `true`/`false`, or two, three, or four floats, found `{}`",
                         numbers.join(" ")
                     ))
                 })?;
@@ -132,6 +132,8 @@ fn parse_value(words: &[&str]) -> Option<Value> {
             .collect::<Option<Vec<f32>>>()
     };
     match words {
+        ["true"] => Some(Value::Bool(true)),
+        ["false"] => Some(Value::Bool(false)),
         [single] => {
             if single.contains('.') {
                 single.parse::<f32>().ok().map(Value::Float)
