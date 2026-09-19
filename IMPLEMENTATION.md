@@ -27,10 +27,26 @@ capability claim.
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs) | [CPU/GPU parity tests](crates/gpu/tests/parity.rs) (skip without an adapter) |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
-| Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [ppm](crates/cli/src/ppm.rs) | [session and binary tests](crates/cli/tests/session.rs) |
+| Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
 | Player | [window loop](crates/player/src/main.rs), [presentation](crates/player/src/lib.rs) | Presentation unit tests; [material ball](examples/material-ball/README.md) for the live loop |
 
 ## Contracts worth knowing
+
+- State lives in the Graph, not in Kernels: a `port <~ node.output from
+  initial` binding reads the source as committed by the previous successful
+  evaluation. Every node of one evaluation reads the same committed state;
+  the evaluation commits atomically at its end; a failed evaluation commits
+  nothing; a republished Kernel inherits the state; `reset_state` returns to
+  the initial sources ([evaluator](crates/graph/src/evaluate.rs),
+  [feedback tests](crates/graph/tests/composition.rs),
+  [Life example](examples/life/README.md)).
+- Input is context, like time: `pointer()`, `pointer_down()`, and `key(code)`
+  behind `input.read`; only nodes that declare it re-execute when input
+  changes ([ABI](crates/abi/src/lib.rs), [parity](crates/gpu/tests/parity.rs)).
+- Application tests are data: `.replay` files script frames, pointer, keys,
+  reset, and pixel expectations; `orla replay` runs them and the interface
+  tests run every `examples/*/tests/*.replay`
+  ([replay](crates/cli/src/replay.rs)).
 
 - Structs are Kernel-internal record types: declared in `.orla`, indexed in
   [the IR struct table](crates/ir/src/lib.rs), built and updated with

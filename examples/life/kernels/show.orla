@@ -1,0 +1,14 @@
+// Colors cells by age: fresh cells glow, old cells settle.
+kernel life.show@1 {
+    requires { image.read; image.write; }
+    input cells: Image;
+    output result: Image;
+    compute {
+        let cell = sample(cells);
+        let dead = vec3(0.07, 0.09, 0.14);
+        let fresh = vec3(1.0, 0.85, 0.45);
+        let old = vec3(0.55, 0.75, 0.95);
+        let color = if cell.r > 0.5 { mix(fresh, old, clamp(cell.g / 20.0, 0.0, 1.0)) } else { dead };
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}

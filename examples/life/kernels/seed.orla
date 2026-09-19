@@ -1,0 +1,18 @@
+// Initial cells: a blinker at a fixed spot plus deterministic noise.
+kernel life.seed@1 {
+    requires { image.write; }
+    param noise: Float = 0.3;
+    param blinker: Vec2 = vec2(10.0, 10.0);
+    output result: Image;
+
+    fn hash(p: Vec2) -> Float {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    compute {
+        let c = coord();
+        let in_blinker = c.y == blinker.y && c.x >= blinker.x && c.x <= blinker.x + 2.0;
+        let alive = in_blinker || hash(c) < noise;
+        return vec4(float(alive), 0.0, 0.0, 1.0);
+    }
+}

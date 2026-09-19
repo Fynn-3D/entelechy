@@ -62,8 +62,24 @@ cargo run --release -p orla-player -- examples/material-ball/scene.osn
 ```
 
 `--scale <n>` sets the initial window magnification, `--backend` picks the
-backend, and `--input` binds external images as for `run`. Escape closes the
-window.
+backend, and `--input` binds external images as for `run`. The pointer and
+keys reach Kernels that declare `input.read`; F5 resets Graph state; Escape
+closes the window.
+
+## Replay tests
+
+An application's tests are `.replay` files next to its scene: scripted frames,
+pointer and key input, state resets, and pixel expectations. No Rust is
+needed to test a scene.
+
+```sh
+cargo run -- replay examples/life/tests/blinker.replay
+```
+
+The file format is documented at the top of
+[the replay module](../crates/cli/src/replay.rs). Key codes follow the common
+browser codes: letters and digits by ASCII uppercase, space 32, enter 13,
+arrows 37 to 40.
 
 ## Where the contracts live
 

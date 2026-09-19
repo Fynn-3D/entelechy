@@ -1,7 +1,9 @@
 # Examples
 
-Each example is a directory with a `scene.osn` entry and a `kernels/` directory
-of `.orla` sources. Documentation for an example belongs in its own `README.md`.
+Each example is a directory with a `scene.osn` entry, a `kernels/` directory
+of `.orla` sources, and, once it has behavior worth pinning down, a `tests/`
+directory of `.replay` scripts with their fixture scenes. Documentation for an
+example belongs in its own `README.md`.
 
 ```sh
 cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
@@ -14,3 +16,5 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [raymarch](raymarch/README.md): a signed-distance scene marched with `loop`
   and shaded with `if`; interactive on the GPU backend, seconds per frame on
   the CPU.
+- [life](life/README.md): Conway's Life through a feedback binding, painted
+  with the pointer, with a declarative replay test.
