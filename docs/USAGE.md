@@ -97,8 +97,12 @@ A graph may have several outputs. The window shows the first that is a
 grid of pixels; the sound card plays the first that is rows of one float
 (mono) or two (stereo), one block per frame, continuing across frames as
 the Kernel's `<~` state dictates. Both are claimed by structure, never by
-name. `--no-audio` leaves the sound card closed. The title reports the
-device's rate, the block size, and how many callbacks ran dry.
+name. The device's clock reaches Kernels as `rate()`, and while it plays
+the device paces evaluation: the next block is computed when the ring can
+take it, so nothing is dropped and evaluation neither races ahead of the
+sound nor waits on the display. `--no-audio` leaves the sound card closed.
+The title reports the device's rate, the block size, and how many
+callbacks ran dry.
 
 A saved edit to a running Kernel compiles on a worker thread: the terminal
 shows `preparing`, the window keeps drawing the previous version, and the

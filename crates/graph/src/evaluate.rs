@@ -1096,7 +1096,8 @@ impl Evaluator {
             params: params.clone(),
             inputs: input_keys,
             domain,
-            time: reads_clock.then_some(context.time.to_bits()),
+            time: reads_clock
+                .then_some(context.time.to_bits() ^ context.rate.to_bits().rotate_left(7)),
             input: reads_input.then_some(context.input.fingerprint()),
         };
         Ok((

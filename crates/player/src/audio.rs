@@ -146,6 +146,9 @@ impl Audio {
             buffer_size: cpal::BufferSize::Default,
         };
         let ring = Arc::new(Ring::new(block.max(64) * channels * BLOCKS_AHEAD));
+        // One block of silence ahead, so the device's first callbacks do
+        // not count as underruns while the first block is computed.
+        ring.push(&vec![0.0; block.max(64) * channels]);
         let consumer = Arc::clone(&ring);
         let stream = device
             .build_output_stream(
@@ -173,6 +176,13 @@ impl Audio {
     /// The device's sample rate.
     pub fn rate(&self) -> u32 {
         self.rate
+    }
+
+    /// Whether the ring can take another block of the last block's size:
+    /// when it cannot, the device has not yet consumed what it was given,
+    /// and evaluating again would only drop the result.
+    pub fn has_room(&self) -> bool {
+        self.ring.room() >= self.block.max(1) * self.channels
     }
 
     /// Queues one block of frames laid out as `words_per_frame` floats

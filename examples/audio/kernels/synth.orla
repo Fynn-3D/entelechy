@@ -12,20 +12,22 @@ kernel audio.silence@1 {
     compute { return Voice { sample: 0.0, phase: 0.0 }; }
 }
 
-// Continues the phase from the last frame of the previous block. Holding
-// the pointer bends the pitch with x.
+// Continues the phase from the last frame of the previous block, at the
+// sound device's rate. Holding the pointer bends the pitch with x.
 kernel audio.voice@1 {
-    requires { field.read; field.write; input.read; }
+    requires { field.read; field.write; input.read; time.read; }
     input previous: Block;
     param frequency: Float = 220.0;
-    param rate: Float = 48000.0;
     param gain: Float = 0.4;
     output result: Block;
 
     compute {
         let last = at(previous, count(previous) - 1).phase;
         let bend = if pointer_down() { pow(2.0, pointer().x / 320.0 * 2.0) } else { 1.0 };
-        let phase = fract(last + float(element() + 1) * frequency * bend / rate);
+        // The device's clock is context; without a device (a replay, a
+        // render to file) the block is laid out at 48 kHz.
+        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
+        let phase = fract(last + float(element() + 1) * frequency * bend / hz);
         let tone = sin(phase * 6.2831853) + 0.3 * sin(phase * 12.566371);
         return Voice { sample: tone * gain, phase: phase };
     }

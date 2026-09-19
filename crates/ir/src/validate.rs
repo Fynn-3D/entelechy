@@ -621,6 +621,10 @@ impl<'a> Checker<'a> {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float
             }
+            Op::Rate => {
+                self.require(Capability::TimeRead, position)?;
+                Type::Float
+            }
             Op::Element => {
                 self.entry_only(position)?;
                 Type::Int

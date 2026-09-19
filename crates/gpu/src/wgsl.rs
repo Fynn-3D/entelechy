@@ -24,8 +24,8 @@ pub const INPUT_BINDING: u32 = 3;
 /// Workgroup edge length in the first two dimensions.
 pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
-/// pointer_down]`, `[pointer.x, pointer.y, depth, 0]`, and two slots of key
-/// bits. Each input then has `[width, height, depth, 0]`.
+/// pointer_down]`, `[pointer.x, pointer.y, depth, rate]`, and two slots of
+/// key bits. Each input then has `[width, height, depth, 0]`.
 pub const CONTEXT_HEAD: usize = 4;
 
 fn wgsl_type(ty: Type) -> String {
@@ -649,6 +649,7 @@ impl Emitter<'_> {
                 Shape::Volume => "vec3<f32>(ctx[0].xy, ctx[1].z)".to_owned(),
             },
             Op::Time => "ctx[0].z".to_owned(),
+            Op::Rate => "ctx[1].w".to_owned(),
             Op::Pointer => "ctx[1].xy".to_owned(),
             Op::PointerDown => "(ctx[0].w != 0.0)".to_owned(),
             Op::Key(code) => format!("key_down({})", v(code)),

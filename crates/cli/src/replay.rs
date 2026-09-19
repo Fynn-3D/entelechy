@@ -210,7 +210,11 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     for step in &replay.steps {
         match step {
             Step::Frame(time) => {
-                let context = Context { time: *time, input };
+                let context = Context {
+                    time: *time,
+                    rate: 0.0,
+                    input,
+                };
                 let report = session
                     .evaluate(&context)
                     .map_err(|error| format!("frame at {time}: {error}"))?;

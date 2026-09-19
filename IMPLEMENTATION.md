@@ -106,7 +106,10 @@ capability claim.
   that is rows of one or two floats, takes each evaluation's block into a
   lock-free ring, and feeds the device from the ring in its real-time
   callback, which never waits on the Graph or the GPU and never
-  allocates; a dry ring plays silence and counts an underrun. Materializing
+  allocates; a dry ring plays silence and counts an underrun. The device's
+  clock is context (`Context.rate`, read by `rate()` under `time.read`),
+  and while a device plays it paces evaluation: the Player computes the
+  next block when the ring can take it. Materializing
   the block is the observation boundary, on the frame thread. The
   [audio example](examples/audio/README.md) carries the oscillator's
   phase across blocks through `<~` state, and its replay pins the

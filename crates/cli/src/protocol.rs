@@ -238,6 +238,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "evaluate" => {
             let mut context = Context {
                 time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0) as f32,
+                rate: request.get("rate").and_then(Json::as_f64).unwrap_or(0.0) as f32,
                 input: InputState::default(),
             };
             if let Some(pointer) = request.get("pointer").and_then(Json::as_array) {

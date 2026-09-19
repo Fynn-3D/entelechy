@@ -374,6 +374,7 @@ impl<'a> Renumber<'a> {
             | Op::Coord
             | Op::Domain
             | Op::Time
+            | Op::Rate
             | Op::Pointer
             | Op::PointerDown
             | Op::Element

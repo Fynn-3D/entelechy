@@ -1209,6 +1209,11 @@ impl<'a> Builder<'a> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Float, Op::Time))
             }
+            "rate" => {
+                self.require(name, Capability::TimeRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Float, Op::Rate))
+            }
             "pointer" => {
                 self.require(name, Capability::InputRead, span)?;
                 self.arity(name, args, 0, span)?;

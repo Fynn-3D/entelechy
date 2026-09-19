@@ -12,9 +12,12 @@ both are claimed by structure, not by name.
 
 The device adapter in the Player takes each block into a ring and feeds
 the sound card from it in the real-time callback; the callback never waits
-on the Graph or the GPU and never allocates. At 60 frames per second a
-block of 800 frames is 48 kHz exactly. Hold the pointer to bend the pitch
-with x and pan with y.
+on the Graph or the GPU and never allocates. The device's clock reaches
+the Kernel as `rate()`, context like `time()`, and the device paces the
+evaluation: the next block is computed when the ring can take it, so at
+48 kHz a block of 800 frames means sixty evaluations a second whatever
+the display does, and nothing is dropped. Hold the pointer to bend the
+pitch with x and pan with y.
 
 ```sh
 cargo run --release -p orla-player -- examples/audio/scene.osn

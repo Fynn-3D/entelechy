@@ -58,7 +58,10 @@ struct's scalars in order, integers and booleans exact. Inside `compute`,
 match the output's), `at(f, address)` reads anywhere (clamped into range;
 `fetch` is the same word for grids), `count(f)` is the element count,
 `element()` the current linear index, and `coord()` and `domain()` the
-current address and extent over a grid or volume. Reading needs
+current address and extent over a grid or volume. `time()` and `rate()`,
+the session clock in seconds and the sound device's clock in samples per
+second (zero without a device), need `time.read`; `pointer()`,
+`pointer_down()`, and `key(code)` need `input.read`. Reading a port needs
 `field.read`, writing `field.write`. A struct or `type` declared at the top
 of a document is shared by every Kernel in it.
 

@@ -339,7 +339,7 @@ impl Backend for GpuBackend {
             input.pointer[0],
             input.pointer[1],
             domain.depth() as f32,
-            0.0,
+            invocation.context.rate,
         ];
         context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
         // Inputs: bind resident buffers directly; upload the rest once and

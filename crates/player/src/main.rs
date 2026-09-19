@@ -136,8 +136,15 @@ impl Player {
     fn context(&self) -> Context {
         Context {
             time: self.clock.elapsed().as_secs_f32(),
+            rate: self.audio.as_ref().map_or(0.0, |audio| audio.rate() as f32),
             input: self.input,
         }
+    }
+
+    /// Whether the sound device is still playing the last block: then the
+    /// device sets the pace and the next evaluation waits for it.
+    fn device_is_ahead(&self) -> bool {
+        self.audio.as_ref().is_some_and(|audio| !audio.has_room())
     }
 
     fn frame(&mut self) -> Option<orla_graph::Report> {
@@ -540,7 +547,14 @@ impl ApplicationHandler for Player {
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.frame();
+                // With sound, the device paces evaluation: a block is
+                // produced when the ring can take it, not when the window
+                // redraws, so nothing is dropped and nothing races ahead.
+                if self.device_is_ahead() {
+                    std::thread::sleep(Duration::from_millis(1));
+                } else {
+                    self.frame();
+                }
             }
             _ => {}
         }

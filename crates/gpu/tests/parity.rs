@@ -266,7 +266,11 @@ fn input_context_matches_between_backends() {
         inputs: vec![],
         params: vec![],
         domain: Domain::Grid(6, 3),
-        context: Context { time: 0.5, input },
+        context: Context {
+            time: 0.5,
+            rate: 0.0,
+            input,
+        },
     };
     let mut scope = Scope::new(&mut host, all());
     let cpu_out = CpuBackend

@@ -555,6 +555,9 @@ pub enum Op {
     Domain,
     /// Session time in seconds as `Float`. Context: `time.read`.
     Time,
+    /// The sound device's clock in samples per second as `Float`, zero
+    /// without a device. Context: `time.read`.
+    Rate,
     /// Pointer position in output pixels as `Vec2`. Context: `input.read`.
     Pointer,
     /// Whether the pointer button is held, as `Bool`. Context: `input.read`.

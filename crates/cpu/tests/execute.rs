@@ -573,3 +573,31 @@ fn scans_thread_the_carried_value_in_order() {
         "{error}"
     );
 }
+
+#[test]
+fn the_device_rate_reaches_kernels_as_context() {
+    let module = compile(
+        "kernel test.hz@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return rate(); } }",
+    )
+    .unwrap();
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: Context {
+            rate: 48000.0,
+            ..Context::default()
+        },
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::FieldWrite, Capability::TimeRead]
+            .into_iter()
+            .collect(),
+    );
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(f32::from_bits(host.element(output, 0).unwrap()[0]), 48000.0);
+}

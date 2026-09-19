@@ -66,8 +66,9 @@ plus device adapters, nothing more.
 
 Audio exists as a device adapter in the Player: a `Rows<Float>` or
 `Rows<Vec2>` graph output is played through a lock-free ring at the
-device's rate (48 kHz when offered), one block per frame; the callback
-never waits or allocates. The audio example is a synthesizer whose phase
+device's rate (48 kHz when offered); the device's clock is context
+(`rate()`) and paces evaluation, so a block is computed when the ring can
+take it; the callback never waits or allocates. The audio example is a synthesizer whose phase
 crosses blocks through Graph state; its oscilloscope replay pins that.
 
 A node's `domain` can be an expression over its inputs and parameters
@@ -102,13 +103,11 @@ about 70 ms and now holds none; the swap lands about 110 ms later.
 Every device the architecture named has an adapter and all three
 execution modes exist: map, reduce, and scan. The language is complete
 for the architecture's Phase 1 and the resource model is converged. What
-remains is smaller and can be picked by need: the
-sample rate as context rather than a parameter the scene repeats;
-letting the audio device drive evaluation when a scene has sound;
-reductions and scans that keep their scratch resident across frames; a
-parallel scan for associative bodies (prefix sums at image scale) that
-reuses the reduce tree; sorting as a native operation or as map passes.
-Sorting is the one named computation with no home yet.
+remains is smaller and can be picked by need: reductions and scans that
+keep their scratch resident across frames; a parallel scan for
+associative bodies (prefix sums at image scale) that reuses the reduce
+tree; sorting as a native operation or as map passes. Sorting is the one
+named computation with no home yet.
 
 ## Open
 
@@ -120,11 +119,10 @@ Life and particles have replay tests; the other examples are time-driven
 renders whose pixels a replay could still pin down at fixed times.
 The worker is one thread with a FIFO queue: a burst of edits prepares in
 order, and a superseded edit still occupies the queue until its turn.
-Audio blocks are produced at the window's frame rate: 800 frames at 60 fps
-is 48 kHz exactly, but a slow frame is an underrun and a fast one a
-dropped block; a six-second run showed three underruns at startup and no
-drops. The device is opened at 48 kHz when offered and otherwise at its
-default rate, which shifts pitch; the rate should become context.
+Audio pacing is one block behind the ring: the Player evaluates when the
+ring can take a block, so a slow evaluation is still an underrun. The
+device is opened at 48 kHz when offered and otherwise at its default
+rate, which Kernels see through `rate()`.
 Native manifests print their element types as anonymous structs (`S0`);
 the contract text names the fields. The handle type is still called
 `ImageHandle` although it names any Field.

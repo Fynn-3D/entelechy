@@ -307,3 +307,16 @@ fn scan_carries_a_value_and_is_checked() {
         "{error}"
     );
 }
+
+#[test]
+fn rate_is_context_under_time_read() {
+    let module = compile(
+        "kernel test.hz@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return rate() + time(); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert!(module.to_string().contains("context rate"), "{module}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return rate(); } }",
+    );
+    assert!(message.contains("needs `time.read`"), "{message}");
+}

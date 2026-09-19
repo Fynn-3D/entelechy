@@ -715,6 +715,7 @@ impl<'m> Frame<'_, 'm> {
             }
             Op::Domain => extent(self.domain),
             Op::Time => Value::Float(self.invocation.context.time),
+            Op::Rate => Value::Float(self.invocation.context.rate),
             Op::Pointer => Value::Vec2(self.invocation.context.input.pointer),
             Op::PointerDown => Value::Bool(self.invocation.context.input.pointer_down),
             Op::Key(code) => {

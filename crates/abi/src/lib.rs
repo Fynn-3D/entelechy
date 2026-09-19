@@ -387,6 +387,9 @@ impl InputState {
 pub struct Context {
     /// Session time in seconds.
     pub time: f32,
+    /// The sound device's clock in samples per second, or zero when no
+    /// device is driving the evaluation. A device fact, like time.
+    pub rate: f32,
     /// Pointer and key state.
     pub input: InputState,
 }

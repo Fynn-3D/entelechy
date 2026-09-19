@@ -122,6 +122,7 @@ impl fmt::Display for Op {
             Self::Coord => f.write_str("coord"),
             Self::Domain => f.write_str("domain"),
             Self::Time => f.write_str("context time"),
+            Self::Rate => f.write_str("context rate"),
             Self::Pointer => f.write_str("context pointer"),
             Self::PointerDown => f.write_str("context pointer.down"),
             Self::Key(code) => write!(f, "context key {code}"),
