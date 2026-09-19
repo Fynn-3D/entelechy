@@ -11,21 +11,17 @@ use orla_runtime::Backend;
 
 /// Downloads a resident GPU output into Host memory and returns its pixels.
 fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::ImageHandle) -> Vec<[f32; 4]> {
-    let (width, height) = host.image_size(handle).unwrap();
+    let byte_len = host.domain(handle).unwrap().count() * host.schema(handle).unwrap().words() * 4;
     let device = host
         .resident(handle)
         .unwrap()
         .expect("gpu outputs are resident");
-    let bytes = Backend::download(gpu, device, width as usize * height as usize * 16).unwrap();
-    let pixels: Vec<[f32; 4]> = bytes
-        .chunks_exact(16)
-        .map(|c| {
-            std::array::from_fn(|i| {
-                f32::from_le_bytes([c[i * 4], c[i * 4 + 1], c[i * 4 + 2], c[i * 4 + 3]])
-            })
-        })
+    let bytes = Backend::download(gpu, device, byte_len).unwrap();
+    let words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
-    host.materialize(handle, pixels).unwrap();
+    host.materialize(handle, words).unwrap();
     host.image(handle).unwrap().pixels().to_vec()
 }
 
@@ -133,7 +129,7 @@ fn pointwise_kernels_match_exactly_enough() {
     let gradient: Vec<[f32; 4]> = (0..64 * 32)
         .map(|i| [(i % 64) as f32 / 63.0, (i / 64) as f32 / 31.0, 0.5, 1.0])
         .collect();
-    let source = "kernel test.pointwise@1 { requires { image.read; image.write; time.read; } input source: Image; param amount: Float = 1.0; param tint: Vec3 = vec3(1.0, 0.5, 0.25); param flip: Bool = true; param n: Int = 3; output result: Image;
+    let source = "kernel test.pointwise@1 { requires { field.read; field.write; time.read; } input source: Image; param amount: Float = 1.0; param tint: Vec3 = vec3(1.0, 0.5, 0.25); param flip: Bool = true; param n: Int = 3; output result: Image;
         fn luma(c: Vec4) -> Float { return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; }
         compute {
             let c = sample(source);
@@ -155,10 +151,7 @@ fn pointwise_kernels_match_exactly_enough() {
             Value::Bool(true),
             Value::Int(3),
         ],
-        Domain {
-            width: 64,
-            height: 32,
-        },
+        Domain::Grid(64, 32),
     );
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-4), 0.0);
 }
@@ -166,7 +159,7 @@ fn pointwise_kernels_match_exactly_enough() {
 #[test]
 fn loops_and_branches_match() {
     let Some(gpu) = gpu() else { return };
-    let source = "kernel test.flow@1 { requires { image.write; } param steps: Int = 5; output result: Image;
+    let source = "kernel test.flow@1 { requires { field.write; } param steps: Int = 5; output result: Image;
         fn sum_to(n: Int) -> Int { return loop 100 with acc = 0 until index() >= n { acc + index() }; }
         compute {
             let c = coord();
@@ -182,10 +175,7 @@ fn loops_and_branches_match() {
         &[],
         (1, 1),
         vec![Value::Int(5)],
-        Domain {
-            width: 16,
-            height: 8,
-        },
+        Domain::Grid(16, 8),
     );
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-4), 0.0);
 }
@@ -207,10 +197,7 @@ fn the_examples_match_within_tolerance() {
             Value::Vec3([1.0, 0.96, 0.9]),
             Value::Float(0.7),
         ],
-        Domain {
-            width: 120,
-            height: 100,
-        },
+        Domain::Grid(120, 100),
     );
     let fraction = mismatch(&cpu, &gpu_pixels, 2e-3);
     assert!(
@@ -225,10 +212,7 @@ fn the_examples_match_within_tolerance() {
         &[],
         (1, 1),
         vec![Value::Float(0.35), Value::Int(96)],
-        Domain {
-            width: 100,
-            height: 65,
-        },
+        Domain::Grid(100, 65),
     );
     let fraction = mismatch(&cpu, &gpu_pixels, 2e-2);
     assert!(fraction < 0.03, "ray march differs on {fraction} of pixels");
@@ -237,7 +221,7 @@ fn the_examples_match_within_tolerance() {
 #[test]
 fn rejected_shaders_report_the_backend_not_a_panic() {
     let Some(gpu) = gpu() else { return };
-    let module = compile("kernel test.ok@1 { requires { image.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }").unwrap();
+    let module = compile("kernel test.ok@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }").unwrap();
     assert!(gpu.prepare(&module).is_ok());
     eprintln!("adapter: {}", gpu.adapter_name());
 }
@@ -245,7 +229,7 @@ fn rejected_shaders_report_the_backend_not_a_panic() {
 #[test]
 fn structs_match_between_backends() {
     let Some(gpu) = gpu() else { return };
-    let source = "kernel test.structs@1 { requires { image.write; } output result: Image;
+    let source = "kernel test.structs@1 { requires { field.write; } output result: Image;
         struct Ray { origin: Vec3; direction: Vec3; }
         struct March { ray: Ray; t: Float; steps: Int; hit: Bool; }
         fn advance(m: March, d: Float) -> March { return March { ..m, t: m.t + d, steps: m.steps + 1 }; }
@@ -259,24 +243,14 @@ fn structs_match_between_backends() {
             let flipped = if c.y > 2.5 { Ray { ..m.ray, origin: vec3(9.0, 9.0, 9.0) } } else { m.ray };
             return vec4(m.t, float(m.steps), flipped.origin.x + m.ray.direction.z, float(m.hit));
         } }";
-    let (cpu, gpu_pixels) = both(
-        &gpu,
-        source,
-        &[],
-        (1, 1),
-        vec![],
-        Domain {
-            width: 8,
-            height: 6,
-        },
-    );
+    let (cpu, gpu_pixels) = both(&gpu, source, &[], (1, 1), vec![], Domain::Grid(8, 6));
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
 }
 
 #[test]
 fn input_context_matches_between_backends() {
     let Some(gpu) = gpu() else { return };
-    let source = "kernel test.input@1 { requires { image.write; input.read; time.read; } output result: Image; compute {
+    let source = "kernel test.input@1 { requires { field.write; input.read; time.read; } output result: Image; compute {
         let d = length(coord() - pointer());
         let k = float(key(65)) + float(key(37)) * 2.0 + float(key(255)) * 4.0 + float(key(-1)) * 8.0 + float(key(300)) * 16.0;
         return vec4(d, float(pointer_down()), k, time());
@@ -291,10 +265,7 @@ fn input_context_matches_between_backends() {
     let invocation = Invocation {
         inputs: vec![],
         params: vec![],
-        domain: Domain {
-            width: 6,
-            height: 3,
-        },
+        domain: Domain::Grid(6, 3),
         context: Context { time: 0.5, input },
     };
     let mut scope = Scope::new(&mut host, all());
@@ -317,13 +288,13 @@ fn chains_and_state_stay_resident_until_observed() {
     let backend: Box<dyn Backend> = Box::new(gpu);
     let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
     runtime
-        .load("kernel test.zero@1 { requires { image.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }")
+        .load("kernel test.zero@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }")
         .unwrap();
     runtime
-        .load("kernel test.increment@1 { requires { image.read; image.write; } input previous: Image; output result: Image; compute { let c = sample(previous); return vec4(c.r + 1.0, c.g, c.b, 1.0); } }")
+        .load("kernel test.increment@1 { requires { field.read; field.write; } input previous: Image; output result: Image; compute { let c = sample(previous); return vec4(c.r + 1.0, c.g, c.b, 1.0); } }")
         .unwrap();
     runtime
-        .load("kernel test.blur@1 { requires { image.read; image.write; } input source: Image; output result: Image; compute { let c = coord(); return (fetch(source, c) + fetch(source, c + vec2(1.0, 0.0))) * 0.5; } }")
+        .load("kernel test.blur@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = coord(); return (fetch(source, c) + fetch(source, c + vec2(1.0, 0.0))) * 0.5; } }")
         .unwrap();
     let graph = orla_graph::Graph::parse(
         "node seed: test.zero@1 { domain = vec2(8, 8); }
@@ -347,17 +318,14 @@ fn chains_and_state_stay_resident_until_observed() {
             )
             .unwrap();
         assert_eq!(
-            runtime.host().resident_images(),
-            runtime.host().live_images(),
+            runtime.host().resident_count(),
+            runtime.host().live(),
             "nothing came back to the Host during evaluation"
         );
         if frame == 3 {
             let image = runtime.image(report.output).unwrap();
             assert_eq!(image.pixels()[0][0], 3.0, "state advanced on the device");
-            assert_eq!(
-                runtime.host().resident_images(),
-                runtime.host().live_images() - 1
-            );
+            assert_eq!(runtime.host().resident_count(), runtime.host().live() - 1);
         }
     }
     // The observed image is usable as an input again: it is re-uploaded once.
@@ -379,13 +347,13 @@ fn fields_flow_through_the_gpu_exactly() {
     let backend: Box<dyn Backend> = Box::new(gpu);
     let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
     runtime
-        .load("kernel test.seed@1 { requires { field.write; } output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3, alive: i / 2 * 2 == i }; } }")
+        .load("kernel test.seed@1 { requires { field.write; } output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3, alive: i / 2 * 2 == i }; } }")
         .unwrap();
     runtime
-        .load("kernel test.step@1 { requires { field.read; field.write; } input previous: Field<Particle>; output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 1 + count(previous), alive: !p.alive }; } }")
+        .load("kernel test.step@1 { requires { field.read; field.write; } input previous: Rows<Particle>; output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 1 + count(previous), alive: !p.alive }; } }")
         .unwrap();
     runtime
-        .load("kernel test.draw@1 { requires { field.read; image.write; } input particles: Field<Particle>; output result: Image; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = at(particles, int(coord().x)); return vec4(p.position.x, p.position.y, float(p.life), float(p.alive)); } }")
+        .load("kernel test.draw@1 { requires { field.read; field.write; } input particles: Rows<Particle>; output result: Image; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = at(particles, int(coord().x)); return vec4(p.position.x, p.position.y, float(p.life), float(p.alive)); } }")
         .unwrap();
     let graph = orla_graph::Graph::parse(
         "node seed: test.seed@1 { domain = 8; }
@@ -402,10 +370,7 @@ fn fields_flow_through_the_gpu_exactly() {
     let report = evaluator
         .evaluate(&graph, &mut runtime, &none, &Context::default(), &params)
         .unwrap();
-    assert_eq!(
-        runtime.host().resident_images(),
-        runtime.host().live_images()
-    );
+    assert_eq!(runtime.host().resident_count(), runtime.host().live());
     let image = runtime.image(report.output).unwrap();
     // Element 2 after one step: position (2,1)+(3,1.5), life 6-1+8, alive flipped.
     assert_eq!(image.pixels()[2], [5.0, 2.5, 13.0, 0.0]);
@@ -427,17 +392,14 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
         .clone();
     let source = |value: &str| {
         format!(
-            "kernel test.flat@1 {{ requires {{ image.write; }} output result: Image; compute {{ return vec4({value}, 0.5, 0.25, 1.0); }} }}"
+            "kernel test.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4({value}, 0.5, 0.25, 1.0); }} }}"
         )
     };
     let running = runtime.load(&source("0.125")).unwrap();
     let invocation = orla_abi::Invocation {
         inputs: vec![],
         params: vec![],
-        domain: Domain {
-            width: 64,
-            height: 64,
-        },
+        domain: Domain::Grid(64, 64),
         context: orla_abi::Context::default(),
     };
     // A source the device has not compiled before, long enough that the
@@ -455,7 +417,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
         ));
     }
     let long = format!(
-        "kernel test.flat@1 {{ requires {{ image.write; }} output result: Image; compute {{ {body} return vec4({value}, 0.5, 0.25, 1.0 + 0.0 * v399); }} }}"
+        "kernel test.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ {body} return vec4({value}, 0.5, 0.25, 1.0 + 0.0 * v399); }} }}"
     );
     let module = compile(&long).unwrap();
     // This thread opens an error scope, frames push and pop their own
@@ -469,7 +431,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
         let output = runtime.execute(&running, &invocation).unwrap()[0];
         let pixel = runtime.image(output).unwrap().pixels()[0];
         assert_eq!(pixel, [0.125, 0.5, 0.25, 1.0]);
-        runtime.host_mut().release_image(output).unwrap();
+        runtime.host_mut().release(output).unwrap();
     }
     assert!(pollster::block_on(outer.pop()).is_none());
     let mut waited = 0;
@@ -478,7 +440,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
             break result.unwrap();
         }
         let output = runtime.execute(&running, &invocation).unwrap()[0];
-        runtime.host_mut().release_image(output).unwrap();
+        runtime.host_mut().release(output).unwrap();
         waited += 1;
         assert!(waited < 5000, "the worker never delivered");
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -487,5 +449,5 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
     let output = runtime.execute(&version, &invocation).unwrap()[0];
     let pixel = runtime.image(output).unwrap().pixels()[0];
     assert_eq!(pixel[0], value.parse::<f32>().unwrap());
-    runtime.host_mut().release_image(output).unwrap();
+    runtime.host_mut().release(output).unwrap();
 }

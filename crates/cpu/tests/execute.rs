@@ -5,7 +5,7 @@ use orla_compiler::compile;
 use orla_cpu::{CpuBackend, ExecutionError};
 
 fn granted() -> Capabilities {
-    [Capability::ImageRead, Capability::ImageWrite]
+    [Capability::FieldRead, Capability::FieldWrite]
         .into_iter()
         .collect()
 }
@@ -18,7 +18,7 @@ fn near(actual: [f32; 4], expected: [f32; 4]) {
 
 const GRAYSCALE: &str = r#"
 kernel image.grayscale@1 {
-    requires { image.read; image.write; }
+    requires { field.read; field.write; }
     input source: Image;
     param amount: Float = 1.0;
     output result: Image;
@@ -45,10 +45,7 @@ fn grayscale_reads_and_writes_through_the_abi() {
     let invocation = Invocation {
         inputs: vec![source],
         params: vec![Value::Float(1.0)],
-        domain: Domain {
-            width: 2,
-            height: 1,
-        },
+        domain: Domain::Grid(2, 1),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -85,25 +82,18 @@ fn execution_without_grant_is_denied_and_leaks_nothing() {
     let invocation = Invocation {
         inputs: vec![source],
         params: vec![Value::Float(1.0)],
-        domain: Domain {
-            width: 1,
-            height: 1,
-        },
+        domain: Domain::Grid(1, 1),
         context: Context::default(),
     };
-    let mut scope = Scope::new(&mut host, [Capability::ImageWrite].into_iter().collect());
+    let mut scope = Scope::new(&mut host, [Capability::FieldWrite].into_iter().collect());
     let error = CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap_err();
     assert_eq!(
         error,
-        ExecutionError::Abi(AbiError::Denied(Capability::ImageRead))
+        ExecutionError::Abi(AbiError::Denied(Capability::FieldRead))
     );
-    assert_eq!(
-        host.live_images(),
-        1,
-        "failed execution released its outputs"
-    );
+    assert_eq!(host.live(), 1, "failed execution released its outputs");
 }
 
 #[test]
@@ -115,10 +105,7 @@ fn invocations_are_checked_against_the_manifest() {
     let bad_params = Invocation {
         inputs: vec![source],
         params: vec![Value::Int(1)],
-        domain: Domain {
-            width: 1,
-            height: 1,
-        },
+        domain: Domain::Grid(1, 1),
         context: Context::default(),
     };
     assert!(matches!(
@@ -141,17 +128,14 @@ fn invocations_are_checked_against_the_manifest() {
 #[test]
 fn generators_use_coord_and_domain_and_fetch_clamps() {
     let gradient = compile(
-        "kernel test.gradient@1 { requires { image.write; } output result: Image; compute { let uv = coord() / (domain() - vec2(1.0, 1.0)); return vec4(uv.x, uv.y, 0.0, 1.0); } }",
+        "kernel test.gradient@1 { requires { field.write; } output result: Image; compute { let uv = coord() / (domain() - vec2(1.0, 1.0)); return vec4(uv.x, uv.y, 0.0, 1.0); } }",
     )
     .unwrap();
     let mut host = Host::new(256);
     let invocation = Invocation {
         inputs: vec![],
         params: vec![],
-        domain: Domain {
-            width: 3,
-            height: 2,
-        },
+        domain: Domain::Grid(3, 2),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -168,16 +152,13 @@ fn generators_use_coord_and_domain_and_fetch_clamps() {
     );
 
     let shift = compile(
-        "kernel test.shift@1 { requires { image.read; image.write; } input source: Image; param offset: Int = 10; output result: Image; compute { return fetch(source, coord() + vec2(float(offset), 0.0)); } }",
+        "kernel test.shift@1 { requires { field.read; field.write; } input source: Image; param offset: Int = 10; output result: Image; compute { return fetch(source, coord() + vec2(float(offset), 0.0)); } }",
     )
     .unwrap();
     let invocation = Invocation {
         inputs: vec![gradient_out],
         params: vec![Value::Int(10)],
-        domain: Domain {
-            width: 3,
-            height: 2,
-        },
+        domain: Domain::Grid(3, 2),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -191,17 +172,14 @@ fn generators_use_coord_and_domain_and_fetch_clamps() {
 #[test]
 fn integer_failures_name_the_pixel() {
     let module = compile(
-        "kernel test.div@1 { requires { image.write; } param d: Int = 0; output result: Image; compute { let q = 1 / d; return vec4(float(q), 0.0, 0.0, 1.0); } }",
+        "kernel test.div@1 { requires { field.write; } param d: Int = 0; output result: Image; compute { let q = 1 / d; return vec4(float(q), 0.0, 0.0, 1.0); } }",
     )
     .unwrap();
     let mut host = Host::new(64);
     let invocation = Invocation {
         inputs: vec![],
         params: vec![Value::Int(0)],
-        domain: Domain {
-            width: 2,
-            height: 2,
-        },
+        domain: Domain::Grid(2, 2),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -210,25 +188,22 @@ fn integer_failures_name_the_pixel() {
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "at pixel (0, 0): integer division by zero"
+        "at element (0, 0): integer division by zero"
     );
-    assert_eq!(host.live_images(), 0);
+    assert_eq!(host.live(), 0);
 }
 
 #[test]
 fn vector_intrinsics_and_time_follow_their_contracts() {
     let module = compile(
-        "kernel test.vectors@1 { requires { image.write; time.read; } param light: Vec3 = vec3(0.0, 3.0, 4.0); output result: Image; compute { let n = normalize(light); let d = dot(n, vec3(0.0, 0.0, 1.0)); let r = reflect(vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0)); let s = step(0.5, vec3(0.2, 0.5, 0.9)); let c = cross(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)); return vec4(d, r.z * s.y + s.x, c.z * time(), length(light) + pow(2.0, 3.0) + smoothstep(0.0, 1.0, 0.5)); } }",
+        "kernel test.vectors@1 { requires { field.write; time.read; } param light: Vec3 = vec3(0.0, 3.0, 4.0); output result: Image; compute { let n = normalize(light); let d = dot(n, vec3(0.0, 0.0, 1.0)); let r = reflect(vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0)); let s = step(0.5, vec3(0.2, 0.5, 0.9)); let c = cross(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)); return vec4(d, r.z * s.y + s.x, c.z * time(), length(light) + pow(2.0, 3.0) + smoothstep(0.0, 1.0, 0.5)); } }",
     )
     .unwrap();
     let mut host = Host::new(64);
     let invocation = Invocation {
         inputs: vec![],
         params: vec![Value::Vec3([0.0, 3.0, 4.0])],
-        domain: Domain {
-            width: 1,
-            height: 1,
-        },
+        domain: Domain::Grid(1, 1),
         context: Context {
             time: 2.5,
             ..Context::default()
@@ -236,7 +211,7 @@ fn vector_intrinsics_and_time_follow_their_contracts() {
     };
     let mut scope = Scope::new(
         &mut host,
-        [Capability::ImageWrite, Capability::TimeRead]
+        [Capability::FieldWrite, Capability::TimeRead]
             .into_iter()
             .collect(),
     );
@@ -252,17 +227,14 @@ fn vector_intrinsics_and_time_follow_their_contracts() {
 #[test]
 fn parallel_rows_match_the_per_pixel_formula_and_report_the_first_failure() {
     let gradient = compile(
-        "kernel test.big@1 { requires { image.write; } output result: Image; compute { let c = coord(); return vec4(c.x, c.y, c.x + c.y, 1.0); } }",
+        "kernel test.big@1 { requires { field.write; } output result: Image; compute { let c = coord(); return vec4(c.x, c.y, c.x + c.y, 1.0); } }",
     )
     .unwrap();
     let mut host = Host::new(1 << 20);
     let invocation = Invocation {
         inputs: vec![],
         params: vec![],
-        domain: Domain {
-            width: 301,
-            height: 257,
-        },
+        domain: Domain::Grid(301, 257),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -277,7 +249,7 @@ fn parallel_rows_match_the_per_pixel_formula_and_report_the_first_failure() {
     }
 
     let failing = compile(
-        "kernel test.fail@1 { requires { image.write; } param d: Int = 0; output result: Image; compute { let c = coord(); let q = 7 / d; return vec4(float(q), c.y, 0.0, 1.0); } }",
+        "kernel test.fail@1 { requires { field.write; } param d: Int = 0; output result: Image; compute { let c = coord(); let q = 7 / d; return vec4(float(q), c.y, 0.0, 1.0); } }",
     )
     .unwrap();
     let invocation = Invocation {
@@ -290,15 +262,15 @@ fn parallel_rows_match_the_per_pixel_formula_and_report_the_first_failure() {
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "at pixel (0, 0): integer division by zero"
+        "at element (0, 0): integer division by zero"
     );
-    assert_eq!(host.live_images(), 1);
+    assert_eq!(host.live(), 1);
 }
 
 #[test]
 fn branches_loops_and_booleans_follow_their_contracts() {
     let module = compile(
-        "kernel test.flow@1 { requires { image.write; } param invert: Bool = false; param steps: Int = 5; output result: Image;
+        "kernel test.flow@1 { requires { field.write; } param invert: Bool = false; param steps: Int = 5; output result: Image;
             fn sum_to(n: Int) -> Int { return loop 100 with acc = 0 until index() >= n { acc + index() }; }
             compute {
                 let c = coord();
@@ -316,10 +288,7 @@ fn branches_loops_and_booleans_follow_their_contracts() {
         let invocation = Invocation {
             inputs: vec![],
             params: vec![Value::Bool(invert), Value::Int(steps)],
-            domain: Domain {
-                width: 2,
-                height: 1,
-            },
+            domain: Domain::Grid(2, 1),
             context: Context::default(),
         };
         let mut scope = Scope::new(host, granted());
@@ -347,17 +316,14 @@ fn branches_loops_and_booleans_follow_their_contracts() {
 #[test]
 fn untaken_branches_do_not_execute() {
     let module = compile(
-        "kernel test.guard@1 { requires { image.write; } param d: Int = 0; output result: Image; compute { let q = if d == 0 { 0 } else { 1 / d }; return vec4(float(q), 0.0, 0.0, 1.0); } }",
+        "kernel test.guard@1 { requires { field.write; } param d: Int = 0; output result: Image; compute { let q = if d == 0 { 0 } else { 1 / d }; return vec4(float(q), 0.0, 0.0, 1.0); } }",
     )
     .unwrap();
     let mut host = Host::new(64);
     let invocation = Invocation {
         inputs: vec![],
         params: vec![Value::Int(0)],
-        domain: Domain {
-            width: 1,
-            height: 1,
-        },
+        domain: Domain::Grid(1, 1),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -370,7 +336,7 @@ fn untaken_branches_do_not_execute() {
 #[test]
 fn structs_carry_several_values_through_loops_calls_and_branches() {
     let module = compile(
-        "kernel test.structs@1 { requires { image.write; } output result: Image;
+        "kernel test.structs@1 { requires { field.write; } output result: Image;
             struct Ray { origin: Vec3; direction: Vec3; }
             struct March { ray: Ray; t: Float; steps: Int; hit: Bool; }
             fn advance(m: March, d: Float) -> March {
@@ -394,10 +360,7 @@ fn structs_carry_several_values_through_loops_calls_and_branches() {
     let invocation = Invocation {
         inputs: vec![],
         params: vec![],
-        domain: Domain {
-            width: 4,
-            height: 2,
-        },
+        domain: Domain::Grid(4, 2),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -420,18 +383,15 @@ fn structs_carry_several_values_through_loops_calls_and_branches() {
 #[test]
 fn fields_carry_struct_elements_with_exact_integers() {
     let seed = compile(
-        "kernel test.seed@1 { requires { field.write; } output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3 + 2000000000, alive: i / 2 * 2 == i }; } }",
+        "kernel test.seed@1 { requires { field.write; } output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3 + 2000000000, alive: i / 2 * 2 == i }; } }",
     )
     .unwrap();
     let step = compile(
-        "kernel test.step@1 { requires { field.read; field.write; } input previous: Field<Particle>; output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 2000000000 + count(previous), alive: !p.alive }; } }",
+        "kernel test.step@1 { requires { field.read; field.write; } input previous: Rows<Particle>; output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 2000000000 + count(previous), alive: !p.alive }; } }",
     )
     .unwrap();
     let mut host = Host::new(4096);
-    let domain = Domain {
-        width: 8,
-        height: 1,
-    };
+    let domain = Domain::Rows(8);
     let invocation = Invocation {
         inputs: vec![],
         params: vec![],
@@ -443,9 +403,9 @@ fn fields_carry_struct_elements_with_exact_integers() {
         .collect();
     let mut scope = Scope::new(&mut host, fields.clone());
     let seeded = CpuBackend.execute(&seed, &invocation, &mut scope).unwrap()[0];
-    assert_eq!(host.schema(seeded).unwrap().unwrap().to_string(), "f,f,i,b");
+    assert_eq!(host.schema(seeded).unwrap().to_string(), "f,f,i,b");
     assert_eq!(
-        host.field(seeded).unwrap().element(3).unwrap(),
+        host.element(seeded, 3).unwrap(),
         &[3.0f32.to_bits(), 1.5f32.to_bits(), 2000000009u32, 0]
     );
     let invocation = Invocation {
@@ -456,9 +416,9 @@ fn fields_carry_struct_elements_with_exact_integers() {
     };
     let mut scope = Scope::new(&mut host, fields);
     let stepped = CpuBackend.execute(&step, &invocation, &mut scope).unwrap()[0];
-    let element = host.field(stepped).unwrap().element(2).unwrap().to_vec();
+    let element = host.element(stepped, 2).unwrap().to_vec();
     assert_eq!(element, vec![5.0f32.to_bits(), 2.5f32.to_bits(), 14, 0]);
-    let last = host.field(stepped).unwrap().element(7).unwrap().to_vec();
+    let last = host.element(stepped, 7).unwrap().to_vec();
     assert_eq!(
         last,
         vec![14.0f32.to_bits(), 7.0f32.to_bits(), 29, 1],
@@ -466,11 +426,8 @@ fn fields_carry_struct_elements_with_exact_integers() {
     );
 
     let error = compile(
-        "kernel test.bad@1 { requires { field.read; image.write; } input p: Field<Vec2>; output result: Image; compute { return sample(p); } }",
+        "kernel test.bad@1 { requires { field.read; field.write; } input p: Rows<Vec2>; output result: Image; compute { return sample(p); } }",
     )
     .unwrap_err();
-    assert!(
-        error.to_string().contains("needs a Vec4 per pixel"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("use `at`"), "{error}");
 }

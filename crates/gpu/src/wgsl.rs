@@ -2,14 +2,14 @@
 //!
 //! Every value slot becomes a WGSL `let` (straight-line values) or `var`
 //! (results of `if` and `loop`). Blocks map to WGSL blocks, so IR scoping
-//! and WGSL scoping coincide. Resources are storage buffers of `vec4<f32>`
-//! plus two small uniform arrays for context and parameters.
+//! and WGSL scoping coincide. Resources are storage buffers of `u32` words,
+//! one per scalar, plus two small uniform arrays for context and parameters.
 
 use std::fmt::Write;
 
 use orla_ir::{
-    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, PortType, Type, UnaryOp, Value,
-    ValueId, schema_of,
+    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, Shape, Type, UnaryOp, Value,
+    ValueId,
 };
 
 /// Binding index of the context uniform.
@@ -21,10 +21,11 @@ pub const OUTPUT_BINDING: u32 = 2;
 /// Binding index of the first input storage buffer; input `i` is at
 /// `INPUT_BINDING + i`.
 pub const INPUT_BINDING: u32 = 3;
-/// Workgroup edge length in both dimensions.
+/// Workgroup edge length in the first two dimensions.
 pub const WORKGROUP: u32 = 8;
-/// Context slots before the per-input sizes: `[width, height, time,
-/// pointer_down]`, `[pointer.x, pointer.y, 0, 0]`, and two slots of key bits.
+/// Context slots before the per-input extents: `[width, height, time,
+/// pointer_down]`, `[pointer.x, pointer.y, depth, 0]`, and two slots of key
+/// bits. Each input then has `[width, height, depth, 0]`.
 pub const CONTEXT_HEAD: usize = 4;
 
 fn wgsl_type(ty: Type) -> String {
@@ -35,7 +36,6 @@ fn wgsl_type(ty: Type) -> String {
         Type::Vec2 => "vec2<f32>".into(),
         Type::Vec3 => "vec3<f32>".into(),
         Type::Vec4 => "vec4<f32>".into(),
-        Type::Image => "vec4<f32>".into(),
         Type::Struct(index) => format!("S{index}"),
     }
 }
@@ -80,18 +80,15 @@ pub fn emit(module: &Module) -> String {
         out,
         "@group(0) @binding({PARAMS_BINDING}) var<uniform> params: array<vec4<f32>, {params_len}>;"
     );
-    let output_is_field = manifest.outputs.first().is_some_and(|port| port.is_field());
     let _ = writeln!(
         out,
-        "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<{}>;",
-        if output_is_field { "u32" } else { "vec4<f32>" }
+        "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<u32>;"
     );
-    for (index, port) in manifest.inputs.iter().enumerate() {
+    for index in 0..manifest.inputs.len() {
         let _ = writeln!(
             out,
-            "@group(0) @binding({}) var<storage, read> in{index}: array<{}>;",
+            "@group(0) @binding({}) var<storage, read> in{index}: array<u32>;",
             INPUT_BINDING + index as u32,
-            if port.is_field() { "u32" } else { "vec4<f32>" }
         );
     }
     out.push('\n');
@@ -115,30 +112,50 @@ pub fn emit(module: &Module) -> String {
 }}"
     );
     for (index, port) in manifest.inputs.iter().enumerate() {
-        if let PortType::Field { element, .. } = &port.ty {
-            let stride = schema_of(*element, &module.structs).map_or(1, |s| s.words());
-            let (expr, _) = load_expr(module, *element, &format!("in{index}"), "b", 0);
-            let _ = writeln!(
-                out,
-                "fn load_in{index}(index: u32) -> {} {{
+        let element = port.element();
+        let stride = port.ty.schema.words();
+        let (expr, _) = load_expr(module, element, &format!("in{index}"), "b", 0);
+        let _ = writeln!(
+            out,
+            "fn load_in{index}(index: u32) -> {} {{
     let b = index * {stride}u;
     return {expr};
 }}",
-                wgsl_type(*element)
-            );
-            continue;
-        }
+            wgsl_type(element)
+        );
+        // The linear index of an address, each axis floored and clamped
+        // into the input's extent (NaN counts as zero).
         let slot = CONTEXT_HEAD + index;
-        let _ = writeln!(
-            out,
-            "fn fetch{index}(c: vec2<f32>) -> vec4<f32> {{
+        let _ = match port.shape() {
+            Shape::Rows => writeln!(
+                out,
+                "fn index_in{index}(i: i32) -> u32 {{
+    return u32(clamp(i, 0i, i32(ctx[{slot}].x) - 1i));
+}}"
+            ),
+            Shape::Grid => writeln!(
+                out,
+                "fn index_in{index}(c: vec2<f32>) -> u32 {{
     let w = ctx[{slot}].x;
     let h = ctx[{slot}].y;
     let x = clamp(select(floor(c.x), 0.0, c.x != c.x), 0.0, w - 1.0);
     let y = clamp(select(floor(c.y), 0.0, c.y != c.y), 0.0, h - 1.0);
-    return in{index}[u32(y) * u32(w) + u32(x)];
+    return u32(y) * u32(w) + u32(x);
 }}"
-        );
+            ),
+            Shape::Volume => writeln!(
+                out,
+                "fn index_in{index}(c: vec3<f32>) -> u32 {{
+    let w = ctx[{slot}].x;
+    let h = ctx[{slot}].y;
+    let d = ctx[{slot}].z;
+    let x = clamp(select(floor(c.x), 0.0, c.x != c.x), 0.0, w - 1.0);
+    let y = clamp(select(floor(c.y), 0.0, c.y != c.y), 0.0, h - 1.0);
+    let z = clamp(select(floor(c.z), 0.0, c.z != c.z), 0.0, d - 1.0);
+    return (u32(z) * u32(h) + u32(y)) * u32(w) + u32(x);
+}}"
+            ),
+        };
     }
     for ty in [Type::Vec2, Type::Vec3, Type::Vec4] {
         let name = wgsl_type(ty);
@@ -153,17 +170,18 @@ pub fn emit(module: &Module) -> String {
         );
     }
     out.push('\n');
-    if let Some(PortType::Field { element, .. }) = manifest.outputs.first().map(|p| &p.ty) {
-        let stride = schema_of(*element, &module.structs).map_or(1, |s| s.words());
+    if let Some(port) = manifest.outputs.first() {
+        let element = port.element();
+        let stride = port.ty.schema.words();
         let mut stores = Vec::new();
-        store_lines(module, *element, "v", 0, &mut stores);
+        store_lines(module, element, "v", 0, &mut stores);
         let _ = writeln!(
             out,
             "fn store_out0(index: u32, v: {}) {{
     let b = index * {stride}u;
 {}
 }}",
-            wgsl_type(*element),
+            wgsl_type(element),
             stores.join("\n")
         );
     }
@@ -179,17 +197,14 @@ pub fn emit(module: &Module) -> String {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let w = u32(ctx[0].x);
     let h = u32(ctx[0].y);
-    if (gid.x >= w || gid.y >= h) {{
+    let d = u32(ctx[1].z);
+    if (gid.x >= w || gid.y >= h || gid.z >= d) {{
         return;
     }}
-    let coord = vec2<f32>(f32(gid.x), f32(gid.y));
-    {}
-}}",
-        if output_is_field {
-            "store_out0(gid.x, entry(coord, gid.x));"
-        } else {
-            "out0[gid.y * w + gid.x] = entry(coord, gid.x);"
-        }
+    let element = (gid.z * h + gid.y) * w + gid.x;
+    let coord = vec3<f32>(f32(gid.x), f32(gid.y), f32(gid.z));
+    store_out0(element, entry(coord, element));
+}}"
     );
     out
 }
@@ -208,7 +223,7 @@ fn load_expr(
         Type::Float => (format!("bitcast<f32>({})", word(offset)), 1),
         Type::Int => (format!("bitcast<i32>({})", word(offset)), 1),
         Type::Bool => (format!("({} != 0u)", word(offset)), 1),
-        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::Image => {
+        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
             let n = ty.components().unwrap_or(4) as usize;
             let parts = (0..n)
                 .map(|k| format!("bitcast<f32>({})", word(offset + k)))
@@ -251,7 +266,7 @@ fn store_lines(
             out.push(format!("    out0[b + {offset}u] = select(0u, 1u, {path});"));
             1
         }
-        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::Image => {
+        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
             let n = ty.components().unwrap_or(4) as usize;
             for (k, component) in ["x", "y", "z", "w"].iter().take(n).enumerate() {
                 out.push(format!(
@@ -280,7 +295,7 @@ fn store_lines(
 
 fn emit_function(out: &mut String, module: &Module, function: &Function, name: &str, entry: bool) {
     let args = if entry {
-        "coord: vec2<f32>, element: u32".to_owned()
+        "coord: vec3<f32>, element: u32".to_owned()
     } else {
         function
             .args
@@ -365,7 +380,7 @@ impl Emitter<'_> {
                     Type::Bool => format!("({slot}.x != 0.0)"),
                     Type::Vec2 => format!("{slot}.xy"),
                     Type::Vec3 => format!("{slot}.xyz"),
-                    Type::Vec4 | Type::Image | Type::Struct(_) => slot,
+                    Type::Vec4 | Type::Struct(_) => slot,
                 }
             }
             Op::Arg(index) => format!("a{index}"),
@@ -450,23 +465,43 @@ impl Emitter<'_> {
             }
             Op::Carried => format!("v{}", self.loops.last().map_or(0, |id| id.0)),
             Op::Index => format!("i{}", self.loops.last().map_or(0, |id| id.0)),
-            Op::Coord => "coord".to_owned(),
-            Op::Domain => "ctx[0].xy".to_owned(),
+            Op::Coord => match self.output_shape() {
+                Shape::Volume => "coord".to_owned(),
+                _ => "coord.xy".to_owned(),
+            },
+            Op::Domain => match self.output_shape() {
+                Shape::Rows => "i32(ctx[0].x)".to_owned(),
+                Shape::Grid => "ctx[0].xy".to_owned(),
+                Shape::Volume => "vec3<f32>(ctx[0].xy, ctx[1].z)".to_owned(),
+            },
             Op::Time => "ctx[0].z".to_owned(),
             Op::Pointer => "ctx[1].xy".to_owned(),
             Op::PointerDown => "(ctx[0].w != 0.0)".to_owned(),
             Op::Key(code) => format!("key_down({})", v(code)),
-            Op::ImageSize(input) => format!("ctx[{}].xy", CONTEXT_HEAD as u32 + input),
             Op::Element => "i32(element)".to_owned(),
-            Op::FieldCount(input) => format!("i32(ctx[{}].x)", CONTEXT_HEAD as u32 + input),
-            Op::FieldSample(input) => format!("load_in{input}(element)"),
-            Op::FieldAt(input, index) => format!(
-                "load_in{input}(u32(clamp({}, 0i, i32(ctx[{}].x) - 1i)))",
-                v(index),
-                CONTEXT_HEAD as u32 + input
-            ),
-            Op::ImageSample(input) => format!("fetch{input}(coord)"),
-            Op::ImageFetch(input, coord) => format!("fetch{input}({})", v(coord)),
+            Op::Count(input) => {
+                let slot = CONTEXT_HEAD as u32 + input;
+                format!("i32(ctx[{slot}].x * ctx[{slot}].y * ctx[{slot}].z)")
+            }
+            Op::Size(input) => {
+                let slot = CONTEXT_HEAD as u32 + input;
+                match self.input_shape(*input) {
+                    Shape::Rows => format!("i32(ctx[{slot}].x)"),
+                    Shape::Grid => format!("ctx[{slot}].xy"),
+                    Shape::Volume => format!("ctx[{slot}].xyz"),
+                }
+            }
+            Op::Sample(input) => {
+                // Validation made the input's shape the output's, so this
+                // element's own address is the right one.
+                let own = match self.output_shape() {
+                    Shape::Rows => "i32(element)",
+                    Shape::Grid => "coord.xy",
+                    Shape::Volume => "coord",
+                };
+                format!("load_in{input}(index_in{input}({own}))")
+            }
+            Op::At(input, index) => format!("load_in{input}(index_in{input}({}))", v(index)),
         };
         let _ = self.function;
         self.line(depth, &format!("let v{}: {ty_name} = {expression};", id.0));
@@ -498,6 +533,18 @@ impl Emitter<'_> {
             ),
             other => format!("{}({list})", other.name()),
         }
+    }
+
+    fn output_shape(&self) -> Shape {
+        self.module
+            .manifest
+            .outputs
+            .first()
+            .map_or(Shape::Grid, |p| p.shape())
+    }
+
+    fn input_shape(&self, input: u32) -> Shape {
+        self.module.manifest.inputs[input as usize].shape()
     }
 
     fn type_of(&self, id: ValueId) -> Type {

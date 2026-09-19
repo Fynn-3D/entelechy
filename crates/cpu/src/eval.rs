@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use orla_abi::{ImageHandle, Invocation, Scope, Type, Value};
+use orla_abi::{Domain, Invocation, Scope, Type, Value};
 use orla_ir::{
     BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated, ValueId,
 };
@@ -168,8 +168,7 @@ impl<'m> Machine<'m> {
     pub(crate) fn run_entry_words(
         &mut self,
         scope: &Scope<'_>,
-        x: u32,
-        y: u32,
+        at: [u32; 3],
         out: &mut [u32],
     ) -> Result<(), ExecutionError> {
         self.stack.clear();
@@ -182,8 +181,7 @@ impl<'m> Machine<'m> {
             layouts: &self.layouts,
             layout,
             scope,
-            x,
-            y,
+            at,
             base: 0,
             values: 0,
             loops: Vec::new(),
@@ -289,7 +287,7 @@ fn decode(
             ]);
             3
         }
-        Type::Vec4 | Type::Image => {
+        Type::Vec4 => {
             stack[dst] = Value::Vec4([
                 f32::from_bits(words[0]),
                 f32::from_bits(words[1]),
@@ -323,8 +321,7 @@ struct Frame<'a, 'm> {
     layouts: &'a Layouts,
     layout: &'a FunctionLayout,
     scope: &'a Scope<'a>,
-    x: u32,
-    y: u32,
+    at: [u32; 3],
     /// Where the arguments start.
     base: usize,
     /// Where the value area starts.
@@ -374,8 +371,13 @@ impl<'m> Frame<'_, 'm> {
         instruction: &'m Instruction,
         stack: &mut Vec<Value>,
     ) -> Result<Produced, ExecutionError> {
-        let (x, y) = (self.x, self.y);
-        let arithmetic = |error| ExecutionError::Arithmetic { x, y, error };
+        let [x, y, z] = self.at;
+        let height = self.invocation.domain.height();
+        let arithmetic = |error| ExecutionError::Arithmetic {
+            x,
+            y: z * height + y,
+            error,
+        };
         let at = |stack: &Vec<Value>, id: &ValueId| stack[self.slot(id)];
         Ok(Produced::Scalar(match &instruction.op {
             Op::Const(value) => *value,
@@ -437,8 +439,7 @@ impl<'m> Frame<'_, 'm> {
                     layouts: self.layouts,
                     layout,
                     scope: self.scope,
-                    x,
-                    y,
+                    at: self.at,
                     base: frame_base,
                     values: frame_base + layout.args_size,
                     loops: Vec::new(),
@@ -513,26 +514,33 @@ impl<'m> Frame<'_, 'm> {
                     .expect("validation guarantees a loop")
                     .index,
             ),
-            Op::Element => Value::Int(x as i32),
-            Op::FieldCount(input) => {
-                let (count, _) = self
-                    .scope
-                    .resource_size(self.invocation.inputs[*input as usize])?;
-                Value::Int(count as i32)
+            Op::Element => {
+                let domain = self.invocation.domain;
+                let [x, y, z] = self.at;
+                Value::Int(((z * domain.height() + y) * domain.width() + x) as i32)
             }
-            Op::FieldSample(input) | Op::FieldAt(input, _) => {
+            Op::Count(input) => {
+                let domain = self.scope.size(self.invocation.inputs[*input as usize])?;
+                Value::Int(domain.count() as i32)
+            }
+            Op::Size(input) => extent(self.scope.size(self.invocation.inputs[*input as usize])?),
+            Op::Sample(input) | Op::At(input, _) => {
                 let handle = self.invocation.inputs[*input as usize];
-                let index = match &instruction.op {
-                    Op::FieldAt(_, index) => {
-                        let Value::Int(index) = at(stack, index) else {
-                            unreachable!("validation guarantees an Int index")
-                        };
-                        let (count, _) = self.scope.resource_size(handle)?;
-                        index.clamp(0, count as i32 - 1) as u32
+                let domain = self.scope.size(handle)?;
+                let address = match &instruction.op {
+                    Op::At(_, index) => match at(stack, index) {
+                        Value::Int(i) => [i as f32, 0.0, 0.0],
+                        Value::Vec2([x, y]) => [x, y, 0.0],
+                        Value::Vec3([x, y, z]) => [x, y, z],
+                        _ => unreachable!("validation guarantees an address"),
+                    },
+                    _ => {
+                        let [x, y, z] = self.at;
+                        [x as f32, y as f32, z as f32]
                     }
-                    _ => x,
                 };
-                let words = self.scope.field_element(handle, index)?.to_vec();
+                let index = linear(domain, address);
+                let words = self.scope.element(handle, index)?.to_vec();
                 let destination = self.slot(&instruction.id);
                 decode(
                     self.module,
@@ -544,11 +552,14 @@ impl<'m> Frame<'_, 'm> {
                 );
                 return Ok(Produced::Done);
             }
-            Op::Coord => Value::Vec2([x as f32, y as f32]),
-            Op::Domain => Value::Vec2([
-                self.invocation.domain.width as f32,
-                self.invocation.domain.height as f32,
-            ]),
+            Op::Coord => {
+                let [x, y, z] = self.at;
+                match self.invocation.domain {
+                    Domain::Volume(..) => Value::Vec3([x as f32, y as f32, z as f32]),
+                    _ => Value::Vec2([x as f32, y as f32]),
+                }
+            }
+            Op::Domain => extent(self.invocation.domain),
             Op::Time => Value::Float(self.invocation.context.time),
             Op::Pointer => Value::Vec2(self.invocation.context.input.pointer),
             Op::PointerDown => Value::Bool(self.invocation.context.input.pointer_down),
@@ -557,23 +568,6 @@ impl<'m> Frame<'_, 'm> {
                     unreachable!("validation guarantees an Int key code")
                 };
                 Value::Bool(self.invocation.context.input.key(code))
-            }
-            Op::ImageSize(input) => {
-                let (width, height) = self
-                    .scope
-                    .image_size(self.invocation.inputs[*input as usize])?;
-                Value::Vec2([width as f32, height as f32])
-            }
-            Op::ImageSample(input) => {
-                let image = self.invocation.inputs[*input as usize];
-                Value::Vec4(fetch_clamped(self.scope, image, x as f32, y as f32)?)
-            }
-            Op::ImageFetch(input, coord) => {
-                let image = self.invocation.inputs[*input as usize];
-                let Value::Vec2([fx, fy]) = at(stack, coord) else {
-                    unreachable!("validation guarantees a Vec2 coordinate")
-                };
-                Value::Vec4(fetch_clamped(self.scope, image, fx, fy)?)
             }
         }))
     }
@@ -635,13 +629,18 @@ fn find_type(function: &Function, id: ValueId) -> Option<Type> {
     find(&function.body, id)
 }
 
-fn fetch_clamped(
-    scope: &Scope<'_>,
-    image: ImageHandle,
-    fx: f32,
-    fy: f32,
-) -> Result<[f32; 4], ExecutionError> {
-    let (width, height) = scope.image_size(image)?;
+/// The extent of a domain as the value its shape is addressed with.
+fn extent(domain: Domain) -> Value {
+    match domain {
+        Domain::Rows(n) => Value::Int(n as i32),
+        Domain::Grid(w, h) => Value::Vec2([w as f32, h as f32]),
+        Domain::Volume(w, h, d) => Value::Vec3([w as f32, h as f32, d as f32]),
+    }
+}
+
+/// The linear index of an address in a domain, each axis floored and
+/// clamped into range (NaN counts as zero), so no read is ever outside.
+fn linear(domain: Domain, address: [f32; 3]) -> u32 {
     let clamp = |value: f32, limit: u32| -> u32 {
         if value.is_nan() {
             0
@@ -649,7 +648,10 @@ fn fetch_clamped(
             value.floor().clamp(0.0, (limit - 1) as f32) as u32
         }
     };
-    Ok(scope.image_read(image, clamp(fx, width), clamp(fy, height))?)
+    let x = clamp(address[0], domain.width());
+    let y = clamp(address[1], domain.height());
+    let z = clamp(address[2], domain.depth());
+    (z * domain.height() + y) * domain.width() + x
 }
 
 fn float(value: Value) -> f32 {
@@ -686,7 +688,7 @@ fn from_parts(parts: [f32; 4], ty: Type) -> Value {
         Type::Vec4 => Value::Vec4(parts),
         Type::Int => Value::Int(parts[0] as i32),
         Type::Bool => Value::Bool(parts[0] != 0.0),
-        Type::Float | Type::Image | Type::Struct(_) => Value::Float(parts[0]),
+        Type::Float | Type::Struct(_) => Value::Float(parts[0]),
     }
 }
 

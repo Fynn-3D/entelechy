@@ -2,7 +2,7 @@ use orla_runtime::{Context, Domain, Expect, Generation, Invocation, KernelId, Ru
 
 fn source(red: &str) -> String {
     format!(
-        "kernel test.color@1 {{ requires {{ image.read; image.write; }} input source: Image; output result: Image; compute {{ let c = sample(source); return vec4({red}, c.g, c.b, c.a); }} }}"
+        "kernel test.color@1 {{ requires {{ field.read; field.write; }} input source: Image; output result: Image; compute {{ let c = sample(source); return vec4({red}, c.g, c.b, c.a); }} }}"
     )
 }
 
@@ -18,15 +18,12 @@ fn run(
     let invocation = Invocation {
         inputs: vec![input],
         params: vec![],
-        domain: Domain {
-            width: 1,
-            height: 1,
-        },
+        domain: Domain::Grid(1, 1),
         context: Context::default(),
     };
     let outputs = runtime.execute(version, &invocation).unwrap();
     let pixel = runtime.host().read_pixel(outputs[0], 0, 0).unwrap();
-    runtime.host_mut().release_image(outputs[0]).unwrap();
+    runtime.host_mut().release(outputs[0]).unwrap();
     pixel
 }
 
@@ -106,15 +103,12 @@ fn stale_and_foreign_candidates_are_rejected() {
 fn execution_is_scoped_to_the_manifest_capabilities() {
     let mut runtime = Runtime::new(64);
     let version = runtime
-        .load("kernel test.gen@1 { requires { image.write; } output result: Image; compute { return vec4(coord().x, 0.0, 0.0, 1.0); } }")
+        .load("kernel test.gen@1 { requires { field.write; } output result: Image; compute { return vec4(coord().x, 0.0, 0.0, 1.0); } }")
         .unwrap();
     let invocation = Invocation {
         inputs: vec![],
         params: vec![],
-        domain: Domain {
-            width: 2,
-            height: 1,
-        },
+        domain: Domain::Grid(2, 1),
         context: Context::default(),
     };
     let outputs = runtime.execute(&version, &invocation).unwrap();

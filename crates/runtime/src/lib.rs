@@ -27,7 +27,7 @@ use std::thread::JoinHandle;
 
 pub use orla_abi::{
     Context, Domain, Host, HostError, Image, ImageHandle, InputState, Invocation, Pixel, Scope,
-    Value,
+    Shape, Value,
 };
 pub use orla_compiler::CompileError;
 pub use orla_cpu::ExecutionError;
@@ -339,15 +339,15 @@ pub struct Runtime {
 
 impl Runtime {
     /// Creates a CPU-backed runtime whose Host may hold at most
-    /// `budget_pixels`.
-    pub fn new(budget_pixels: usize) -> Self {
-        Self::with_backend(budget_pixels, Box::new(orla_cpu::CpuBackend))
+    /// `budget_words`.
+    pub fn new(budget_words: usize) -> Self {
+        Self::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
     }
 
     /// Creates a runtime over the given backend.
-    pub fn with_backend(budget_pixels: usize, backend: Box<dyn Backend>) -> Self {
+    pub fn with_backend(budget_words: usize, backend: Box<dyn Backend>) -> Self {
         Self {
-            host: Host::new(budget_pixels),
+            host: Host::new(budget_words),
             backend: Arc::from(backend),
             kernels: BTreeMap::new(),
             next_generation: 1,
@@ -494,8 +494,8 @@ impl Runtime {
         &self.host
     }
 
-    /// Brings a resident image back into Host memory through the backend
-    /// that owns it; a no-op for images already in memory.
+    /// Brings a resident Field back into Host memory through the backend
+    /// that owns it; a no-op for Fields already in memory.
     pub fn materialize(&mut self, handle: ImageHandle) -> Result<(), ExecutionError> {
         let Some(device) = self
             .host
@@ -504,19 +504,16 @@ impl Runtime {
         else {
             return Ok(());
         };
-        let (width, height) = self
+        let domain = self
             .host
-            .image_size(handle)
+            .domain(handle)
             .map_err(|e| ExecutionError::Abi(e.into()))?;
-        let schema = self
+        let words_per_element = self
             .host
             .schema(handle)
             .map_err(|e| ExecutionError::Abi(e.into()))?
-            .cloned();
-        let byte_len = match &schema {
-            Some(schema) => width as usize * schema.words() * 4,
-            None => width as usize * height as usize * 16,
-        };
+            .words();
+        let byte_len = domain.count() * words_per_element * 4;
         let bytes = self
             .backend
             .download(device, byte_len)
@@ -525,29 +522,15 @@ impl Runtime {
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
-        let result = match schema {
-            Some(_) => self.host.materialize_words(handle, words),
-            None => {
-                let pixels: Vec<Pixel> = words
-                    .chunks_exact(4)
-                    .map(|c| {
-                        [
-                            f32::from_bits(c[0]),
-                            f32::from_bits(c[1]),
-                            f32::from_bits(c[2]),
-                            f32::from_bits(c[3]),
-                        ]
-                    })
-                    .collect();
-                self.host.materialize(handle, pixels)
-            }
-        };
-        result.map_err(|e| ExecutionError::Abi(e.into()))
+        self.host
+            .materialize(handle, words)
+            .map_err(|e| ExecutionError::Abi(e.into()))
     }
 
-    /// The image behind a handle, materialized if it was resident. This is
-    /// an observation boundary: it is where device work is waited for.
-    pub fn image(&mut self, handle: ImageHandle) -> Result<&Image, ExecutionError> {
+    /// The image view of a Field of pixels, materialized if it was
+    /// resident. This is an observation boundary: it is where device work
+    /// is waited for.
+    pub fn image(&mut self, handle: ImageHandle) -> Result<Image, ExecutionError> {
         self.materialize(handle)?;
         self.host
             .image(handle)

@@ -18,9 +18,9 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Mutex;
 
-use orla_abi::{ImageHandle, Invocation, Pixel, PortType, Scope, Value};
+use orla_abi::{ImageHandle, Invocation, Scope, Value};
 use orla_cpu::{ExecutionError, check_invocation};
-use orla_ir::{Validated, schema_of};
+use orla_ir::Validated;
 use orla_runtime::{Backend, Prepared};
 
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
@@ -150,16 +150,6 @@ fn param_bytes(params: &[Value]) -> Vec<u8> {
     bytes
 }
 
-fn pixel_bytes(pixels: &[Pixel]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(pixels.len() * 16);
-    for pixel in pixels {
-        for component in pixel {
-            bytes.extend_from_slice(&component.to_le_bytes());
-        }
-    }
-    bytes
-}
-
 impl Backend for GpuBackend {
     fn name(&self) -> &'static str {
         "gpu"
@@ -233,18 +223,18 @@ impl Backend for GpuBackend {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let domain = invocation.domain;
-        let pixel_count = domain.width as usize * domain.height as usize;
+        let element_count = domain.count();
 
-        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, 0, 0] per input.
+        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per input.
         let input = &invocation.context.input;
         let mut context = vec![
-            domain.width as f32,
-            domain.height as f32,
+            domain.width() as f32,
+            domain.height() as f32,
             invocation.context.time,
             input.pointer_down as u8 as f32,
             input.pointer[0],
             input.pointer[1],
-            0.0,
+            domain.depth() as f32,
             0.0,
         ];
         context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
@@ -252,30 +242,31 @@ impl Backend for GpuBackend {
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
         for (index, handle) in invocation.inputs.iter().enumerate() {
-            let (width, height) = scope.resource_size(*handle)?;
-            context.extend_from_slice(&[width as f32, height as f32, 0.0, 0.0]);
+            let extent = scope.size(*handle)?;
+            context.extend_from_slice(&[
+                extent.width() as f32,
+                extent.height() as f32,
+                extent.depth() as f32,
+                0.0,
+            ]);
             let resident = scope
-                .image_resident(*handle)?
+                .resident(*handle)?
                 .and_then(|device| device.downcast_ref::<DeviceImage>())
                 .map(|device| device.buffer.clone());
             let buffer = match resident {
                 Some(buffer) => buffer,
                 None => {
-                    let bytes = if module.manifest.inputs[index].is_field() {
-                        scope
-                            .field_words(*handle)?
-                            .iter()
-                            .flat_map(|w| w.to_le_bytes())
-                            .collect::<Vec<u8>>()
-                    } else {
-                        pixel_bytes(scope.image_pixels(*handle)?)
-                    };
+                    let bytes = scope
+                        .words(*handle)?
+                        .iter()
+                        .flat_map(|w| w.to_le_bytes())
+                        .collect::<Vec<u8>>();
                     let buffer = self.buffer(
                         &format!("input {index}"),
                         &bytes,
                         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     );
-                    scope.image_make_resident(
+                    scope.make_resident(
                         *handle,
                         Box::new(DeviceImage {
                             buffer: buffer.clone(),
@@ -294,13 +285,8 @@ impl Backend for GpuBackend {
             wgpu::BufferUsages::UNIFORM,
         );
         let output_port = &module.manifest.outputs[0];
-        let output_words = match &output_port.ty {
-            PortType::Image => 4,
-            PortType::Field { element, .. } => {
-                schema_of(*element, &module.structs).map_or(1, |s| s.words())
-            }
-        };
-        let output_size = (pixel_count * output_words * 4) as u64;
+        let output_words = output_port.ty.schema.words();
+        let output_size = (element_count * output_words * 4) as u64;
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("output"),
             size: output_size,
@@ -347,9 +333,9 @@ impl Backend for GpuBackend {
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(
-                domain.width.div_ceil(wgsl::WORKGROUP),
-                domain.height.div_ceil(wgsl::WORKGROUP),
-                1,
+                domain.width().div_ceil(wgsl::WORKGROUP),
+                domain.height().div_ceil(wgsl::WORKGROUP),
+                domain.depth(),
             );
         }
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -363,12 +349,7 @@ impl Backend for GpuBackend {
         let device = Box::new(DeviceImage {
             buffer: output_buffer,
         });
-        let output = match &output_port.ty {
-            PortType::Image => scope.image_adopt_resident(domain.width, domain.height, device)?,
-            PortType::Field { schema, .. } => {
-                scope.field_adopt_resident(schema.clone(), domain.width, device)?
-            }
-        };
+        let output = scope.adopt_resident(output_port.ty.schema.clone(), domain, device)?;
         Ok(vec![output])
     }
 
