@@ -1,0 +1,17 @@
+// Eight Jacobi steps toward the pressure; the scene places this five
+// times, and starts from last frame's pressure, which is close already.
+use "kernels/";
+
+input pressure: Amount;
+input divergence: Amount;
+
+node p1: fluid.relax@1 { pressure <- pressure; divergence <- divergence; }
+node p2: fluid.relax@1 { pressure <- p1.result; divergence <- divergence; }
+node p3: fluid.relax@1 { pressure <- p2.result; divergence <- divergence; }
+node p4: fluid.relax@1 { pressure <- p3.result; divergence <- divergence; }
+node p5: fluid.relax@1 { pressure <- p4.result; divergence <- divergence; }
+node p6: fluid.relax@1 { pressure <- p5.result; divergence <- divergence; }
+node p7: fluid.relax@1 { pressure <- p6.result; divergence <- divergence; }
+node p8: fluid.relax@1 { pressure <- p7.result; divergence <- divergence; }
+
+output result <- p8.result;

@@ -1,0 +1,31 @@
+// still, clear, rest seed the fields; hand tracks the pointer; advect
+// carries last frame's projected velocity, the solve relaxes pressure
+// from last frame's, project makes the velocity divergence-free, smoke
+// rides it, and view paints it. Drag the pointer to stir.
+use "kernels/";
+
+node still: fluid.still@1 { domain = vec2(384, 216); }
+node clear: fluid.clear@1 { domain = vec2(384, 216); }
+node rest: fluid.rest@1 { domain = 1; }
+
+node hand: fluid.hand@1 { previous <~ hand.result from rest.result; }
+node advect: fluid.advect@1 {
+    velocity <~ project.result from still.result;
+    smoke <~ smoke.result from clear.result;
+    hand <- hand.result;
+}
+node divergence: fluid.divergence@1 { velocity <- advect.result; }
+node solve1: graph "solve.osn" { pressure <~ solve5.result from clear.result; divergence <- divergence.result; }
+node solve2: graph "solve.osn" { pressure <- solve1.result; divergence <- divergence.result; }
+node solve3: graph "solve.osn" { pressure <- solve2.result; divergence <- divergence.result; }
+node solve4: graph "solve.osn" { pressure <- solve3.result; divergence <- divergence.result; }
+node solve5: graph "solve.osn" { pressure <- solve4.result; divergence <- divergence.result; }
+node project: fluid.project@1 { velocity <- advect.result; pressure <- solve5.result; }
+node smoke: fluid.smoke@1 {
+    previous <~ smoke.result from clear.result;
+    velocity <- project.result;
+    hand <- hand.result;
+}
+node view: fluid.draw@1 { smoke <- smoke.result; velocity <- project.result; }
+
+output result <- view.result;

@@ -115,6 +115,12 @@ plus a hit sound the rules trigger, played by the sound card with the
 device pacing the game at sixty blocks a second; six seconds on the GPU
 ran with no underruns and no drops. A gamepad maps to the keyboard's
 codes in the Player (untested on hardware here: none was connected).
+The fluid is an Eulerian smoke simulation: a staggered velocity grid
+and a smoke grid fed back through the Graph, semi-Lagrangian advection
+by `at_linear`, vorticity confinement, a Jacobi pressure solve as one
+Kernel placed forty times through a sub-graph, the projection; 52
+nodes at 5 ms a frame on the GPU, and a `merge` Kernel sums the
+divergence so the replay asserts the projection removed it.
 The showcase is a product page at 720p: a gamepad as a signed-distance
 model with GGX shading, a soft shadow, a floor reflection and a toolbar,
 orbited by the pointer, at 27 ms a frame on the GPU including the read

@@ -1,0 +1,242 @@
+// Eulerian smoke: a velocity grid carried by itself, made divergence-free
+// by a Jacobi solve for pressure, and a smoke grid carried by it. Every
+// step is a map over the grid; the solve is one Kernel placed as many
+// times as it should iterate; the frame's result feeds the next frame
+// through the Graph. The pointer stirs the fluid and adds smoke; a plume
+// at the bottom keeps it alive when nobody touches it.
+struct Touch { x: Float; y: Float; down: Bool; vx: Float; vy: Float; }
+type Hand = Rows<Touch>;
+type Flow = Grid<Vec2>;
+type Amount = Grid<Float>;
+
+kernel fluid.rest@1 {
+    requires { field.write; }
+    output result: Hand;
+    compute { return Touch { x: 0.0, y: 0.0, down: false, vx: 0.0, vy: 0.0 }; }
+}
+
+kernel fluid.still@1 {
+    requires { field.write; }
+    output result: Flow;
+    compute { return vec2(0.0, 0.0); }
+}
+
+kernel fluid.clear@1 {
+    requires { field.write; }
+    output result: Amount;
+    compute { return 0.0; }
+}
+
+// The pointer as a row: where it is, whether it is down, and how far it
+// moved since last frame while down, which is the stirring velocity.
+kernel fluid.hand@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Hand;
+    output result: Hand;
+    compute {
+        let s = sample(previous);
+        let p = pointer();
+        let down = pointer_down();
+        let moving = down && s.down;
+        return Touch {
+            x: p.x, y: p.y, down: down,
+            vx: if moving { p.x - s.x } else { 0.0 },
+            vy: if moving { p.y - s.y } else { 0.0 }
+        };
+    }
+}
+
+// The velocity is staggered: a cell's x stands on its left face, its y
+// on its top face, so the divergence and the pressure gradient are face
+// differences that agree with the Jacobi stencil, and the projection can
+// drive the divergence to zero. Reading the velocity at a point offsets
+// each component by half a cell; each Kernel that reads it has flow_at.
+// Advection of the velocity by itself, semi-Lagrangian with a midpoint
+// step, then the forces: vorticity confinement, the hand, the plume, and
+// the lift of warm smoke; the border cells are walls.
+kernel fluid.advect@1 {
+    requires { field.read; field.write; time.read; }
+    input velocity: Flow;
+    input smoke: Amount;
+    input hand: Hand;
+    param dt: Float = 1.0;
+    param radius: Float = 12.0;
+    param push: Float = 0.4;
+    param lift: Float = 0.02;
+    param swirl: Float = 0.25;
+    param drag: Float = 0.998;
+    param source: Float = 1.0;
+    output result: Flow;
+
+    fn flow_at(p: Vec2) -> Vec2 {
+        return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
+    }
+
+    // Where the fluid at p came from, and what it carried.
+    fn carried(p: Vec2, dt: Float) -> Vec2 {
+        let mid = flow_at(p - flow_at(p) * (0.5 * dt));
+        return flow_at(p - mid * dt);
+    }
+
+    // Vorticity at the cell's corner, from the faces around it.
+    fn curl(c: Vec2) -> Float {
+        return at(velocity, c).y - at(velocity, c - vec2(1.0, 0.0)).y
+             - at(velocity, c).x + at(velocity, c - vec2(0.0, 1.0)).x;
+    }
+
+    // The forces at a point: the hand, the plume, and the lift.
+    fn force(p: Vec2, ext: Vec2, h: Touch) -> Vec2 {
+        let d = p - vec2(h.x, h.y);
+        let near = if h.down { exp(-dot(d, d) / (radius * radius)) } else { 0.0 };
+        let stir = vec2(h.vx, h.vy) * (push * near);
+        let e = p - vec2(ext.x * 0.5, ext.y - 10.0);
+        let plume = exp(-dot(e, e) / 60.0) * source;
+        let sway = vec2(0.3 * sin(time() * 2.1) + 0.2 * sin(time() * 5.3), -0.6) * plume;
+        let rise = vec2(0.0, -lift * at_linear(smoke, p));
+        return stir + sway + rise;
+    }
+
+    compute {
+        let c = coord();
+        let ext = domain();
+        let h = at(hand, 0);
+        let on_u = vec2(c.x, c.y + 0.5);
+        let on_v = vec2(c.x + 0.5, c.y);
+        let u = carried(on_u, dt).x + force(on_u, ext, h).x * dt;
+        let v = carried(on_v, dt).y + force(on_v, ext, h).y * dt;
+        // Vorticity confinement: a push toward the centre of each eddy,
+        // which keeps the small swirls the grid would otherwise smooth away.
+        let w = curl(c);
+        let g = vec2(abs(curl(c + vec2(1.0, 0.0))) - abs(curl(c - vec2(1.0, 0.0))),
+                     abs(curl(c + vec2(0.0, 1.0))) - abs(curl(c - vec2(0.0, 1.0))));
+        let n = g / (length(g) + 0.0001);
+        let confine = vec2(n.y, -n.x) * (w * swirl * dt);
+        let out = (vec2(u, v) + confine) * drag;
+        let wall_x = c.x < 1.5 || c.x > ext.x - 1.5;
+        let wall_y = c.y < 1.5 || c.y > ext.y - 1.5;
+        return vec2(if wall_x { 0.0 } else { out.x }, if wall_y { 0.0 } else { out.y });
+    }
+}
+
+// The net flow out of each cell through its four faces.
+kernel fluid.divergence@1 {
+    requires { field.read; field.write; }
+    input velocity: Flow;
+    output result: Amount;
+    compute {
+        let c = coord();
+        let ext = domain();
+        let here = sample(velocity);
+        let solid = c.x < 1.0 || c.x > ext.x - 1.5 || c.y < 1.0 || c.y > ext.y - 1.5;
+        return if solid { 0.0 } else {
+            at(velocity, c + vec2(1.0, 0.0)).x - here.x + at(velocity, c + vec2(0.0, 1.0)).y - here.y
+        };
+    }
+}
+
+// One Jacobi step of the Poisson equation for pressure: the average of
+// the neighbours less the divergence. A neighbour in the wall counts as
+// this cell's own pressure, so no pressure difference drives flow into
+// the wall.
+kernel fluid.relax@1 {
+    requires { field.read; field.write; }
+    input pressure: Amount;
+    input divergence: Amount;
+    output result: Amount;
+
+    fn beside(c: Vec2, own: Float, ext: Vec2) -> Float {
+        let solid = c.x < 1.0 || c.x > ext.x - 1.5 || c.y < 1.0 || c.y > ext.y - 1.5;
+        return if solid { own } else { at(pressure, c) };
+    }
+
+    compute {
+        let c = coord();
+        let ext = domain();
+        let own = sample(pressure);
+        return 0.25 * (beside(c + vec2(1.0, 0.0), own, ext) + beside(c - vec2(1.0, 0.0), own, ext)
+                     + beside(c + vec2(0.0, 1.0), own, ext) + beside(c - vec2(0.0, 1.0), own, ext)
+                     - sample(divergence));
+    }
+}
+
+// Subtracting the pressure difference across each face leaves the
+// velocity divergence-free.
+kernel fluid.project@1 {
+    requires { field.read; field.write; }
+    input velocity: Flow;
+    input pressure: Amount;
+    output result: Flow;
+    compute {
+        let c = coord();
+        let ext = domain();
+        let p = sample(pressure);
+        let grad = vec2(p - at(pressure, c - vec2(1.0, 0.0)), p - at(pressure, c - vec2(0.0, 1.0)));
+        let out = sample(velocity) - grad;
+        let wall_x = c.x < 1.5 || c.x > ext.x - 1.5;
+        let wall_y = c.y < 1.5 || c.y > ext.y - 1.5;
+        return vec2(if wall_x { 0.0 } else { out.x }, if wall_y { 0.0 } else { out.y });
+    }
+}
+
+// The smoke, carried by the projected velocity, fed by the plume and by
+// the hand while it is down, fading slowly.
+kernel fluid.smoke@1 {
+    requires { field.read; field.write; }
+    input previous: Amount;
+    input velocity: Flow;
+    input hand: Hand;
+    param dt: Float = 1.0;
+    param radius: Float = 12.0;
+    param feed: Float = 0.06;
+    param fade: Float = 0.993;
+    param source: Float = 1.0;
+    output result: Amount;
+    fn flow_at(p: Vec2) -> Vec2 {
+        return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
+    }
+
+    compute {
+        let c = coord();
+        let ext = domain();
+        let here = c + vec2(0.5, 0.5);
+        let carried = at_linear(previous, here - flow_at(here) * dt);
+        let h = at(hand, 0);
+        let d = here - vec2(h.x, h.y);
+        let near = if h.down { exp(-dot(d, d) / (radius * radius)) } else { 0.0 };
+        let e = here - vec2(ext.x * 0.5, ext.y - 10.0);
+        let plume = exp(-dot(e, e) / 60.0) * source;
+        return min(carried * fade + feed * (0.2 * near + plume), 1.2);
+    }
+}
+
+// Smoke as light on a dark ground, tinted by how fast it moves.
+kernel fluid.draw@1 {
+    requires { field.read; field.write; }
+    input smoke: Amount;
+    input velocity: Flow;
+    output result: Image;
+    fn flow_at(p: Vec2) -> Vec2 {
+        return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
+    }
+
+    compute {
+        let s = clamp(sample(smoke), 0.0, 1.0);
+        let speed = length(flow_at(coord() + vec2(0.5, 0.5)));
+        let calm = vec3(0.92, 0.88, 0.82);
+        let fast = vec3(0.45, 0.7, 1.0);
+        let tint = mix(calm, fast, clamp(speed * 0.2, 0.0, 1.0));
+        let ground = vec3(0.02, 0.022, 0.03);
+        let colour = ground + tint * pow(s, 0.8);
+        return vec4(colour.x, colour.y, colour.z, 1.0);
+    }
+}
+
+// The sum of a grid's magnitudes as one element: a measure of how much
+// divergence is left, for a test to read, or for anyone to watch.
+kernel fluid.total@1 {
+    requires { field.read; field.write; }
+    input field: Amount;
+    output result: Rows<Float>;
+    compute { return abs(sample(field)); }
+    merge(a, b) { return a + b; }
+}

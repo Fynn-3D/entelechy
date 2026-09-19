@@ -54,3 +54,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   under physically based shading at 720p, orbited by a drag, recoloured
   and refinished from a centred toolbar; one state row, one picture, the
   replay asserts on the row.
+- [fluid](fluid/README.md): smoke by the Navier-Stokes equations: a
+  staggered velocity grid carried by itself, a pressure solve as one
+  Jacobi Kernel placed forty times, the projection, the smoke it carries;
+  the pointer stirs, a replay reads the divergence before and after.
