@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use orla::session::Session;
 use orla_gpu::GpuBackend;
 use orla_gpu::present::Presenter;
+use orla_player::audio::Audio;
 use orla_player::{Placement, key_code, to_output};
 use orla_runtime::{Context, InputState};
 use serde_json::Value as Json;
@@ -41,6 +42,8 @@ struct Options {
     backend: Option<String>,
     serve: bool,
     params: Vec<(String, orla_runtime::Value)>,
+    /// Leave the sound card closed even when the scene has a sound output.
+    no_audio: bool,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -52,6 +55,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         backend: None,
         serve: false,
         params: Vec::new(),
+        no_audio: false,
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -65,6 +69,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--backend" => options.backend = Some(value("--backend")?),
             "--serve" => options.serve = true,
+            "--no-audio" => options.no_audio = true,
             "--param" => {
                 let binding = value("--param")?;
                 let (name, text) = binding
@@ -121,6 +126,10 @@ struct Player {
     requests: Option<Receiver<String>>,
     /// The node whose image is shown instead of the graph output.
     preview: Option<orla_graph::NodeId>,
+    /// The sound card, opened when a scene has a sound-shaped output.
+    audio: Option<Audio>,
+    audio_allowed: bool,
+    audio_failed: bool,
 }
 
 impl Player {
@@ -141,12 +150,17 @@ impl Player {
         match self.session.evaluate(&context) {
             Ok(report) => {
                 let elapsed = started.elapsed();
+                // The window claims the first output that is a grid of
+                // pixels; the sound card the first that is rows of one or
+                // two floats. Both go by structure, never by name.
+                let displayed = self.displayed_output(&report);
                 let target = self
                     .preview
                     .as_ref()
                     .and_then(|node| self.session.cached(node, "result"))
-                    .unwrap_or(report.output);
+                    .unwrap_or(displayed);
                 let shown = self.show(target);
+                self.play(&report);
                 if self.last_title.elapsed() > Duration::from_millis(250) {
                     let executed = report
                         .executed
@@ -168,8 +182,12 @@ impl Player {
                         Some(node) => format!("view {node}"),
                         None => "view output".to_string(),
                     };
+                    let sound = match &self.audio {
+                        Some(audio) => format!(" | {}", audio.describe()),
+                        None => String::new(),
+                    };
                     self.status = format!(
-                        "{view} | {:.1} ms | ran [{executed}] reused {} | {}, {} downloads",
+                        "{view} | {:.1} ms | ran [{executed}] reused {} | {}, {} downloads{sound}",
                         elapsed.as_secs_f64() * 1000.0,
                         report.reused.len(),
                         shown,
@@ -290,6 +308,82 @@ impl Player {
         }
         self.blit();
         "downloaded and blitted"
+    }
+
+    /// The output the window shows: the first grid of pixels, or the
+    /// graph's first output when there is none.
+    fn displayed_output(&self, report: &orla_graph::Report) -> orla_runtime::ImageHandle {
+        let host = self.session.runtime().host();
+        report
+            .outputs
+            .iter()
+            .map(|(_, handle)| *handle)
+            .find(|handle| {
+                host.schema(*handle).is_ok_and(|s| s.is_pixel())
+                    && host.domain(*handle).is_ok_and(|d| d.depth() == 1)
+            })
+            .unwrap_or(report.output)
+    }
+
+    /// Hands the first sound-shaped output to the sound card: rows of one
+    /// float (mono) or two (stereo). Opens the device on first need.
+    fn play(&mut self, report: &orla_graph::Report) {
+        if !self.audio_allowed || self.audio_failed {
+            return;
+        }
+        let sound = {
+            let host = self.session.runtime().host();
+            report
+                .outputs
+                .iter()
+                .map(|(_, handle)| *handle)
+                .find(|handle| {
+                    host.domain(*handle)
+                        .is_ok_and(|d| d.shape() == orla_runtime::Shape::Rows)
+                        && host.schema(*handle).is_ok_and(|s| {
+                            (1..=2).contains(&s.words())
+                                && s.scalars()
+                                    .iter()
+                                    .all(|c| *c == orla_runtime::Scalar::Float)
+                        })
+                })
+        };
+        let Some(handle) = sound else {
+            return;
+        };
+        let (frames, words_per_frame) = {
+            let host = self.session.runtime().host();
+            (
+                host.domain(handle).map(|d| d.count()).unwrap_or(0),
+                host.schema(handle).map(|s| s.words()).unwrap_or(0),
+            )
+        };
+        if self.audio.is_none() {
+            match Audio::open(frames) {
+                Ok(audio) => {
+                    eprintln!("audio: {}", audio.describe());
+                    self.audio = Some(audio);
+                }
+                Err(error) => {
+                    eprintln!("audio unavailable: {error}");
+                    self.audio_failed = true;
+                    return;
+                }
+            }
+        }
+        // Materializing is the observation boundary: on the GPU this is
+        // one small download per frame, on the frame thread, never in the
+        // device callback.
+        if self.session.runtime_mut().materialize(handle).is_err() {
+            return;
+        }
+        let words: Vec<u32> = match self.session.runtime().host().data(handle) {
+            Ok(data) => data.words().to_vec(),
+            Err(_) => return,
+        };
+        if let Some(audio) = &mut self.audio {
+            audio.push(&words, words_per_frame);
+        }
     }
 
     fn update_title(&self) {
@@ -514,6 +608,9 @@ fn main() -> ExitCode {
         last_title: Instant::now(),
         requests: None,
         preview: None,
+        audio: None,
+        audio_allowed: !options.no_audio,
+        audio_failed: false,
     };
     for (name, value) in &options.params {
         player.session.set_param(name, *value);

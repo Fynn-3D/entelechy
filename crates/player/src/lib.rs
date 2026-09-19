@@ -2,6 +2,8 @@
 //! Presentation helpers for the Player, kept free of windowing so they can
 //! be tested headlessly.
 
+pub mod audio;
+
 pub use orla_gpu::present::{Placement, placement};
 
 /// Maps a window position to output pixel coordinates; positions in the

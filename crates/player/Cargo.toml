@@ -19,6 +19,7 @@ orla-compiler = { path = "../compiler" }
 orla-language = { path = "../language" }
 winit = "0.30.13"
 softbuffer = "0.4"
+cpal = "0.18"
 serde_json = "1"
 
 [lints]

@@ -27,7 +27,7 @@ use std::thread::JoinHandle;
 
 pub use orla_abi::{
     Context, Domain, FieldData, Host, HostError, Image, ImageHandle, InputState, Invocation, Pixel,
-    Scope, Shape, Value,
+    Scalar, Schema, Scope, Shape, Value,
 };
 pub use orla_compiler::CompileError;
 pub use orla_cpu::ExecutionError;
