@@ -93,6 +93,12 @@ presentation path and how many frames had to be downloaded. The pointer and
 keys reach Kernels that declare `input.read`; F5 resets Graph state; Escape
 closes the window.
 
+A saved edit to a running Kernel compiles on a worker thread: the terminal
+shows `preparing`, the window keeps drawing the previous version, and the
+swap happens when the replacement is ready, so a republish never stalls a
+frame. The same holds for fused groups, which run as separate nodes until
+their fused version arrives.
+
 ## Replay tests
 
 An application's tests are `.replay` files next to its scene: scripted frames,

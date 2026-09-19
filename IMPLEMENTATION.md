@@ -68,6 +68,21 @@ capability claim.
   ([IR test](crates/ir/tests/fusion.rs), [graph tests](crates/graph/tests/composition.rs));
   absorbed nodes are not materialized until pinned.
 
+- Preparation leaves the frame thread: [`Runtime::prepare_later`](crates/runtime/src/lib.rs)
+  hands a validated module to one worker and returns a ticket; `poll`
+  collects the candidate, and publishing stays a pointer swap on the owning
+  thread. Without a worker the same calls prepare inline, which is what
+  `run`, `replay`, and `check` use for determinism; `serve` and the Player
+  enable the worker after the first load. The session republishes a running
+  Kernel through a ticket (`preparing`, then `published`) and keeps the old
+  version until then; the evaluator runs a group's nodes separately until
+  its fused version arrives, which changes no pixel
+  ([runtime test](crates/runtime/tests/hot_swap.rs),
+  [graph test](crates/graph/tests/composition.rs),
+  [session test](crates/cli/tests/session.rs)). wgpu's error scopes are
+  thread-local only with its `std` feature, which the GPU backend therefore
+  enables ([parity test](crates/gpu/tests/parity.rs)).
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the

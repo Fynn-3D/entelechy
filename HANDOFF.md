@@ -62,6 +62,13 @@ structs, exact integer transport, GPU residency, and the particles example.
 Grid Fields of non-`Vec4` elements, audio sample blocks, and geometry
 attributes are the same model with more domain kinds and device adapters.
 
+Preparation is off the frame thread: the runtime prepares behind tickets on
+one worker, the session republishes running Kernels through it, and the
+evaluator runs groups unfused until their fused version arrives. `serve` and
+the Player enable the worker; the one-shot tools prepare inline. Measured on
+the GPU: a saved edit to the ray-march Kernel used to hold a frame for
+about 70 ms and now holds none; the swap lands about 110 ms later.
+
 ## Next
 
 Pick the next demo that pulls a primitive: audio (a Rows Field of samples
@@ -69,20 +76,15 @@ written by a Kernel per block, played by a device adapter that respects
 deadlines and never waits on the GPU) or geometry (a Field of vertices
 rasterized into an image by a native adapter). Either one starts by reusing
 the Field lifecycle exactly as it is; a new adapter provides device access,
-not algorithms. Before that, prepare fused groups on a worker thread so a
-republish cannot hitch a frame.
+not algorithms.
 
 ## Open
 
 The watch loop polls every 200 ms and can observe a half-written file; the next
 write is picked up because the stamp changes again. Exports are PPM only.
 The CPU interpreter stays the reference and the frame-rate floor: the
-ray-march example takes over a second per frame there. On the GPU backend
-each node still uploads its inputs and reads its output back through the Host,
-which bounds frame rate by transfer at large domains; residency is the answer,
-after fusion.
-Only Life has replay tests; the other examples are time-driven renders whose
-pixels a replay could still pin down at fixed times.
-Fused groups are prepared at evaluation time: on the GPU that is a shader
-compile on the rendering thread, so republishing a fused Kernel can hitch
-one frame. Preparing fused groups on a worker thread is the fix.
+ray-march example takes over a second per frame there.
+Life and particles have replay tests; the other examples are time-driven
+renders whose pixels a replay could still pin down at fixed times.
+The worker is one thread with a FIFO queue: a burst of edits prepares in
+order, and a superseded edit still occupies the queue until its turn.

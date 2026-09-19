@@ -39,3 +39,9 @@ drives the binary as a client. Values cross as JSON numbers (integers become
 `Int`), booleans, and arrays of two, three, or four numbers. Kernels published
 through the protocol are not owned by any document: a document that later
 defines the same id republishes it from the file.
+
+A saved edit to a Kernel that is already running is prepared on a worker
+thread: `sync` reports `preparing` at once and `published` (or `rejected`)
+on a later `sync`, and every `evaluate` in between runs the previous
+version. A Kernel nothing runs yet, and `publish` itself, prepare inline so
+the reply is final.
