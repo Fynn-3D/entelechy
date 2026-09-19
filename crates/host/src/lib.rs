@@ -16,18 +16,18 @@ use std::any::Any;
 use std::fmt;
 
 /// Opaque handle to a resource owned by the Host: any Field, an image
-/// included. The name is the architecture documents' and is kept for
-/// that reason.
+/// included. The architecture documents list handle kinds (image, buffer,
+/// texture); the Typed Field decision converged them into this one.
 ///
 /// The handle carries a generation so that a released slot cannot be reached
 /// through a stale copy of the handle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ImageHandle {
+pub struct Handle {
     index: u32,
     generation: u32,
 }
 
-impl fmt::Display for ImageHandle {
+impl fmt::Display for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "field#{}.{}", self.index, self.generation)
     }
@@ -380,7 +380,7 @@ impl Image {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostError {
     /// The handle does not refer to a live resource.
-    InvalidHandle(ImageHandle),
+    InvalidHandle(Handle),
     /// Allocating the resource would exceed the Host budget.
     BudgetExceeded {
         /// Words requested by the allocation.
@@ -424,7 +424,7 @@ pub enum HostError {
     },
     /// The Field's words live on a device; materialize it before reading or
     /// writing them from the CPU.
-    Resident(ImageHandle),
+    Resident(Handle),
     /// The Field's elements are not pixels, so it has no image view.
     NotPixels,
 }
@@ -546,12 +546,12 @@ impl Host {
     }
 
     /// Allocates a zeroed Field.
-    pub fn create(&mut self, schema: Schema, domain: Domain) -> Result<ImageHandle, HostError> {
+    pub fn create(&mut self, schema: Schema, domain: Domain) -> Result<Handle, HostError> {
         self.adopt(FieldData::new(schema, domain)?)
     }
 
     /// Takes ownership of existing data.
-    pub fn adopt(&mut self, data: FieldData) -> Result<ImageHandle, HostError> {
+    pub fn adopt(&mut self, data: FieldData) -> Result<Handle, HostError> {
         let requested = data.words.len();
         self.place(requested, Storage::Data(data))
     }
@@ -563,7 +563,7 @@ impl Host {
         schema: Schema,
         domain: Domain,
         device: Box<dyn Any + Send + Sync>,
-    ) -> Result<ImageHandle, HostError> {
+    ) -> Result<Handle, HostError> {
         if domain.is_empty() || schema.words() == 0 {
             return Err(HostError::ZeroSize);
         }
@@ -579,16 +579,16 @@ impl Host {
     }
 
     /// Allocates a black image: a grid of pixels.
-    pub fn create_image(&mut self, width: u32, height: u32) -> Result<ImageHandle, HostError> {
+    pub fn create_image(&mut self, width: u32, height: u32) -> Result<Handle, HostError> {
         self.create(Schema::pixel(), Domain::Grid(width, height))
     }
 
     /// Takes ownership of an image as a grid of pixels.
-    pub fn adopt_image(&mut self, image: Image) -> Result<ImageHandle, HostError> {
+    pub fn adopt_image(&mut self, image: Image) -> Result<Handle, HostError> {
         self.adopt(FieldData::from_image(image))
     }
 
-    fn place(&mut self, requested: usize, storage: Storage) -> Result<ImageHandle, HostError> {
+    fn place(&mut self, requested: usize, storage: Storage) -> Result<Handle, HostError> {
         let available = self.budget_words.saturating_sub(self.used_words);
         if requested > available {
             return Err(HostError::BudgetExceeded {
@@ -614,32 +614,32 @@ impl Host {
                 (self.slots.len() - 1) as u32
             }
         };
-        Ok(ImageHandle {
+        Ok(Handle {
             index,
             generation: self.slots[index as usize].generation,
         })
     }
 
     /// The element layout, resident or not.
-    pub fn schema(&self, handle: ImageHandle) -> Result<&Schema, HostError> {
+    pub fn schema(&self, handle: Handle) -> Result<&Schema, HostError> {
         Ok(self.slot(handle)?.describe().expect("live slot").0)
     }
 
     /// The extent, resident or not.
-    pub fn domain(&self, handle: ImageHandle) -> Result<Domain, HostError> {
+    pub fn domain(&self, handle: Handle) -> Result<Domain, HostError> {
         Ok(self.slot(handle)?.describe().expect("live slot").1)
     }
 
     /// Width and height, resident or not; a volume reports its first two
     /// axes.
-    pub fn image_size(&self, handle: ImageHandle) -> Result<(u32, u32), HostError> {
+    pub fn image_size(&self, handle: Handle) -> Result<(u32, u32), HostError> {
         let domain = self.domain(handle)?;
         Ok((domain.width(), domain.height()))
     }
 
     /// Borrows the data behind a handle; fails with [`HostError::Resident`]
     /// when its words are on a device.
-    pub fn data(&self, handle: ImageHandle) -> Result<&FieldData, HostError> {
+    pub fn data(&self, handle: Handle) -> Result<&FieldData, HostError> {
         match &self.slot(handle)?.storage {
             Storage::Data(data) => Ok(data),
             Storage::Resident { .. } => Err(HostError::Resident(handle)),
@@ -647,7 +647,7 @@ impl Host {
         }
     }
 
-    fn data_mut(&mut self, handle: ImageHandle) -> Result<&mut FieldData, HostError> {
+    fn data_mut(&mut self, handle: Handle) -> Result<&mut FieldData, HostError> {
         match &mut self.slot_mut(handle)?.storage {
             Storage::Data(data) => Ok(data),
             Storage::Resident { .. } => Err(HostError::Resident(handle)),
@@ -656,12 +656,12 @@ impl Host {
     }
 
     /// The words of one element by linear index.
-    pub fn element(&self, handle: ImageHandle, index: u32) -> Result<&[u32], HostError> {
+    pub fn element(&self, handle: Handle, index: u32) -> Result<&[u32], HostError> {
         self.data(handle)?.element(index)
     }
 
     /// Replaces every word; the length must match.
-    pub fn write_words(&mut self, handle: ImageHandle, words: &[u32]) -> Result<(), HostError> {
+    pub fn write_words(&mut self, handle: Handle, words: &[u32]) -> Result<(), HostError> {
         let data = self.data_mut(handle)?;
         if words.len() != data.words.len() {
             return Err(HostError::WordCount {
@@ -676,7 +676,7 @@ impl Host {
     /// Replaces the words of one element.
     pub fn write_element(
         &mut self,
-        handle: ImageHandle,
+        handle: Handle,
         index: u32,
         words: &[u32],
     ) -> Result<(), HostError> {
@@ -702,10 +702,7 @@ impl Host {
 
     /// The device object of a resident Field, or `None` when its words are
     /// in Host memory.
-    pub fn resident(
-        &self,
-        handle: ImageHandle,
-    ) -> Result<Option<&(dyn Any + Send + Sync)>, HostError> {
+    pub fn resident(&self, handle: Handle) -> Result<Option<&(dyn Any + Send + Sync)>, HostError> {
         Ok(match &self.slot(handle)?.storage {
             Storage::Resident { device, .. } => Some(device.as_ref()),
             _ => None,
@@ -717,7 +714,7 @@ impl Host {
     /// unchanged.
     pub fn make_resident(
         &mut self,
-        handle: ImageHandle,
+        handle: Handle,
         device: Box<dyn Any + Send + Sync>,
     ) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
@@ -734,7 +731,7 @@ impl Host {
     /// Brings a resident Field back into Host memory with the words the
     /// backend downloaded; the device object is dropped. A no-op for a
     /// Field already in memory.
-    pub fn materialize(&mut self, handle: ImageHandle, words: Vec<u32>) -> Result<(), HostError> {
+    pub fn materialize(&mut self, handle: Handle, words: Vec<u32>) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         let (schema, domain) = match &slot.storage {
             Storage::Resident { schema, domain, .. } => (schema.clone(), *domain),
@@ -746,7 +743,7 @@ impl Host {
     }
 
     /// Releases a Field, resident or not. The handle is invalid afterwards.
-    pub fn release(&mut self, handle: ImageHandle) -> Result<(), HostError> {
+    pub fn release(&mut self, handle: Handle) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         slot.storage = Storage::Free;
         let charge = std::mem::take(&mut slot.charge);
@@ -758,7 +755,7 @@ impl Host {
     /// The image view of a Field of pixels: a copy, since the Host stores
     /// words. Fails with [`HostError::Resident`] when the words are on a
     /// device and [`HostError::NotPixels`] for other layouts.
-    pub fn image(&self, handle: ImageHandle) -> Result<Image, HostError> {
+    pub fn image(&self, handle: Handle) -> Result<Image, HostError> {
         self.data(handle)?.to_image()
     }
 
@@ -780,7 +777,7 @@ impl Host {
     }
 
     /// Reads one pixel of a Field of pixels.
-    pub fn read_pixel(&self, handle: ImageHandle, x: u32, y: u32) -> Result<Pixel, HostError> {
+    pub fn read_pixel(&self, handle: Handle, x: u32, y: u32) -> Result<Pixel, HostError> {
         let data = self.data(handle)?;
         let offset = Self::pixel_offset(data, x, y)?;
         let w = &data.words[offset..offset + 4];
@@ -795,7 +792,7 @@ impl Host {
     /// Writes one pixel of a Field of pixels.
     pub fn write_pixel(
         &mut self,
-        handle: ImageHandle,
+        handle: Handle,
         x: u32,
         y: u32,
         pixel: Pixel,
@@ -809,7 +806,7 @@ impl Host {
     }
 
     /// Replaces every pixel of a Field of pixels; the length must match.
-    pub fn write_image(&mut self, handle: ImageHandle, pixels: &[Pixel]) -> Result<(), HostError> {
+    pub fn write_image(&mut self, handle: Handle, pixels: &[Pixel]) -> Result<(), HostError> {
         let data = self.data_mut(handle)?;
         if !data.schema.is_pixel() {
             return Err(HostError::NotPixels);
@@ -830,14 +827,14 @@ impl Host {
         Ok(())
     }
 
-    fn slot(&self, handle: ImageHandle) -> Result<&Slot, HostError> {
+    fn slot(&self, handle: Handle) -> Result<&Slot, HostError> {
         self.slots
             .get(handle.index as usize)
             .filter(|slot| slot.generation == handle.generation && slot.live())
             .ok_or(HostError::InvalidHandle(handle))
     }
 
-    fn slot_mut(&mut self, handle: ImageHandle) -> Result<&mut Slot, HostError> {
+    fn slot_mut(&mut self, handle: Handle) -> Result<&mut Slot, HostError> {
         self.slots
             .get_mut(handle.index as usize)
             .filter(|slot| slot.generation == handle.generation && slot.live())

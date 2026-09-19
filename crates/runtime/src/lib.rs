@@ -26,7 +26,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
 pub use orla_abi::{
-    Context, Domain, FieldData, Host, HostError, Image, ImageHandle, InputState, Invocation, Pixel,
+    Context, Domain, FieldData, Handle, Host, HostError, Image, InputState, Invocation, Pixel,
     Scalar, Schema, Scope, Shape, Value,
 };
 pub use orla_compiler::CompileError;
@@ -144,7 +144,7 @@ pub trait Backend: Send + Sync {
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<ImageHandle>, ExecutionError>;
+    ) -> Result<Vec<Handle>, ExecutionError>;
 
     /// Executes a native operation. The default is for backends that
     /// have none.
@@ -153,7 +153,7 @@ pub trait Backend: Send + Sync {
         op: NativeOp,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+    ) -> Result<Vec<Handle>, ExecutionError> {
         let _ = (invocation, scope);
         Err(ExecutionError::Device(format!(
             "backend `{}` does not implement {}",
@@ -202,7 +202,7 @@ impl Backend for orla_cpu::CpuBackend {
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+    ) -> Result<Vec<Handle>, ExecutionError> {
         orla_cpu::CpuBackend::execute(self, module, invocation, scope)
     }
 
@@ -211,7 +211,7 @@ impl Backend for orla_cpu::CpuBackend {
         op: NativeOp,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+    ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
             NativeOp::Rasterize => orla_cpu::raster::rasterize(invocation, scope),
         }
@@ -652,7 +652,7 @@ impl Runtime {
 
     /// Brings a resident Field back into Host memory through the backend
     /// that owns it; a no-op for Fields already in memory.
-    pub fn materialize(&mut self, handle: ImageHandle) -> Result<(), ExecutionError> {
+    pub fn materialize(&mut self, handle: Handle) -> Result<(), ExecutionError> {
         let Some(device) = self
             .host
             .resident(handle)
@@ -686,7 +686,7 @@ impl Runtime {
     /// The image view of a Field of pixels, materialized if it was
     /// resident. This is an observation boundary: it is where device work
     /// is waited for.
-    pub fn image(&mut self, handle: ImageHandle) -> Result<Image, ExecutionError> {
+    pub fn image(&mut self, handle: Handle) -> Result<Image, ExecutionError> {
         self.materialize(handle)?;
         self.host
             .image(handle)
@@ -805,7 +805,7 @@ impl Runtime {
         &mut self,
         version: &KernelVersion,
         invocation: &Invocation,
-    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+    ) -> Result<Vec<Handle>, ExecutionError> {
         let granted = version.manifest().requires.clone();
         let mut scope = Scope::new(&mut self.host, granted);
         match &version.body {

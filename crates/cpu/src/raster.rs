@@ -18,7 +18,7 @@
 //! skipped. Triangles are drawn in row order; a nearer fragment replaces
 //! a farther one, and an equal depth keeps the earlier triangle.
 
-use orla_abi::{ImageHandle, Invocation, Scalar, Schema, Scope, Shape};
+use orla_abi::{Handle, Invocation, Scalar, Schema, Scope, Shape};
 
 use crate::ExecutionError;
 
@@ -51,7 +51,7 @@ pub fn surface_schema() -> Schema {
 pub fn check_rasterize(
     invocation: &Invocation,
     scope: &Scope<'_>,
-) -> Result<(ImageHandle, ImageHandle), ExecutionError> {
+) -> Result<(Handle, Handle), ExecutionError> {
     let [vertices, triangles] = invocation.inputs[..] else {
         return Err(ExecutionError::InputCount {
             expected: 2,
@@ -91,7 +91,7 @@ pub fn check_rasterize(
 pub fn rasterize(
     invocation: &Invocation,
     scope: &mut Scope<'_>,
-) -> Result<Vec<ImageHandle>, ExecutionError> {
+) -> Result<Vec<Handle>, ExecutionError> {
     let (vertices, triangles) = check_rasterize(invocation, scope)?;
     let vertex_words = scope.words(vertices)?.to_vec();
     let triangle_words = scope.words(triangles)?.to_vec();

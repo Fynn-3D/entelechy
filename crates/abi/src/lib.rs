@@ -12,7 +12,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use orla_host::{
-    Domain, FieldData, Host, HostError, Image, ImageHandle, Pixel, Scalar, Schema, Shape,
+    Domain, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
 };
 
 /// A named authority a Kernel may declare and be granted.
@@ -399,7 +399,7 @@ pub struct Context {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Invocation {
     /// Field inputs in manifest order.
-    pub inputs: Vec<ImageHandle>,
+    pub inputs: Vec<Handle>,
     /// Parameter values in manifest order.
     pub params: Vec<Value>,
     /// Output domain.
@@ -463,26 +463,26 @@ impl<'a> Scope<'a> {
     }
 
     /// The extent of an input. Requires `field.read`.
-    pub fn size(&self, field: ImageHandle) -> Result<Domain, AbiError> {
+    pub fn size(&self, field: Handle) -> Result<Domain, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.domain(field)?)
     }
 
     /// The element layout of an input. Requires `field.read`.
-    pub fn schema(&self, field: ImageHandle) -> Result<Schema, AbiError> {
+    pub fn schema(&self, field: Handle) -> Result<Schema, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.schema(field)?.clone())
     }
 
     /// One element of an input as words, by linear index. Requires
     /// `field.read`. Fails while the Field is resident on a device.
-    pub fn element(&self, field: ImageHandle, index: u32) -> Result<&[u32], AbiError> {
+    pub fn element(&self, field: Handle, index: u32) -> Result<&[u32], AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.element(field, index)?)
     }
 
     /// Every word of an input. Requires `field.read`.
-    pub fn words(&self, field: ImageHandle) -> Result<&[u32], AbiError> {
+    pub fn words(&self, field: Handle) -> Result<&[u32], AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.data(field)?.words())
     }
@@ -490,7 +490,7 @@ impl<'a> Scope<'a> {
     /// The device object of a resident input, if any. Requires `field.read`.
     pub fn resident(
         &self,
-        field: ImageHandle,
+        field: Handle,
     ) -> Result<Option<&(dyn std::any::Any + Send + Sync)>, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.resident(field)?)
@@ -500,7 +500,7 @@ impl<'a> Scope<'a> {
     /// Residency is a storage detail, so reading authority suffices.
     pub fn make_resident(
         &mut self,
-        field: ImageHandle,
+        field: Handle,
         device: Box<dyn std::any::Any + Send + Sync>,
     ) -> Result<(), AbiError> {
         self.require(Capability::FieldRead)?;
@@ -508,14 +508,14 @@ impl<'a> Scope<'a> {
     }
 
     /// A new zeroed Field. Requires `field.write`.
-    pub fn create(&mut self, schema: Schema, domain: Domain) -> Result<ImageHandle, AbiError> {
+    pub fn create(&mut self, schema: Schema, domain: Domain) -> Result<Handle, AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.create(schema, domain)?)
     }
 
     /// Replaces every word of a Field this scope created. Requires
     /// `field.write`.
-    pub fn write_all(&mut self, field: ImageHandle, words: &[u32]) -> Result<(), AbiError> {
+    pub fn write_all(&mut self, field: Handle, words: &[u32]) -> Result<(), AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.write_words(field, words)?)
     }
@@ -524,7 +524,7 @@ impl<'a> Scope<'a> {
     /// `field.write`.
     pub fn write_element(
         &mut self,
-        field: ImageHandle,
+        field: Handle,
         index: u32,
         words: &[u32],
     ) -> Result<(), AbiError> {
@@ -538,13 +538,13 @@ impl<'a> Scope<'a> {
         schema: Schema,
         domain: Domain,
         device: Box<dyn std::any::Any + Send + Sync>,
-    ) -> Result<ImageHandle, AbiError> {
+    ) -> Result<Handle, AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.adopt_resident(schema, domain, device)?)
     }
 
     /// Releases a Field this scope created. Requires `field.write`.
-    pub fn release(&mut self, field: ImageHandle) -> Result<(), AbiError> {
+    pub fn release(&mut self, field: Handle) -> Result<(), AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.release(field)?)
     }

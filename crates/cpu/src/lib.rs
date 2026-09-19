@@ -16,7 +16,7 @@ pub mod raster;
 
 use std::fmt;
 
-use orla_abi::{AbiError, Domain, ImageHandle, Invocation, Scope, Shape, Type};
+use orla_abi::{AbiError, Domain, Handle, Invocation, Scope, Shape, Type};
 use orla_ir::{Mode, Validated};
 
 pub use eval::ArithmeticError;
@@ -126,7 +126,7 @@ impl CpuBackend {
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+    ) -> Result<Vec<Handle>, ExecutionError> {
         check_invocation(module, invocation)?;
         let strides = output_strides(module);
         if module.manifest.mode == Mode::Reduce {
@@ -182,7 +182,7 @@ fn reduce(
     invocation: &Invocation,
     scope: &mut Scope<'_>,
     stride: usize,
-) -> Result<Vec<ImageHandle>, ExecutionError> {
+) -> Result<Vec<Handle>, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
     let mut level = compute(module, invocation, scope, &[stride], domain)?;
     let mut machine = eval::Machine::new(module, invocation, domain);
@@ -234,7 +234,7 @@ fn scan(
     invocation: &Invocation,
     scope: &mut Scope<'_>,
     stride: usize,
-) -> Result<Vec<ImageHandle>, ExecutionError> {
+) -> Result<Vec<Handle>, ExecutionError> {
     let domain = check_scan(invocation, scope)?;
     let count = domain.count();
     let mut machine = eval::Machine::new(module, invocation, domain);
@@ -365,7 +365,7 @@ pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(
     Ok(())
 }
 
-fn release_all(scope: &mut Scope<'_>, outputs: &[ImageHandle]) {
+fn release_all(scope: &mut Scope<'_>, outputs: &[Handle]) {
     for output in outputs {
         // The output was created through this scope, so release cannot be
         // denied; a Host failure here would mean the handle is already gone.

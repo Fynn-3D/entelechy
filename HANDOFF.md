@@ -128,7 +128,7 @@ ring can take a block, so a slow evaluation is still an underrun. The
 device is opened at 48 kHz when offered and otherwise at its default
 rate, which Kernels see through `rate()`.
 Native manifests print their element types as anonymous structs (`S0`);
-the contract text names the fields. The handle type keeps the
-architecture documents' name, `ImageHandle`, although it names any
-Field; the documents are authoritative and are not edited, so the code
-follows them and the Host's doc says what the handle is.
+the contract text names the fields. The handle type is `Handle`: the
+architecture documents list several handle kinds as examples of opaque
+handles, and the Typed Field decision converged them into one, so the
+code has one name and the documents keep their lists as written.

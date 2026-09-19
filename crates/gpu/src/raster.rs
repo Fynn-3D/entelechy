@@ -7,7 +7,7 @@
 
 use std::sync::OnceLock;
 
-use orla_abi::{ImageHandle, Invocation, Scope};
+use orla_abi::{Handle, Invocation, Scope};
 use orla_cpu::ExecutionError;
 use orla_cpu::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
 
@@ -244,7 +244,7 @@ pub(crate) fn rasterize(
     pipelines: &OnceLock<Result<RasterPipelines, String>>,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
-) -> Result<Vec<ImageHandle>, ExecutionError> {
+) -> Result<Vec<Handle>, ExecutionError> {
     let (vertices, triangles) = check_rasterize(invocation, scope)?;
     let pipelines = match pipelines.get_or_init(|| build(&gpu.device)) {
         Ok(pipelines) => pipelines,

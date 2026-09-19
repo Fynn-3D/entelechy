@@ -10,7 +10,7 @@ use orla_gpu::GpuBackend;
 use orla_runtime::Backend;
 
 /// Downloads a resident GPU output into Host memory and returns its pixels.
-fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::ImageHandle) -> Vec<[f32; 4]> {
+fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::Handle) -> Vec<[f32; 4]> {
     let byte_len = host.domain(handle).unwrap().count() * host.schema(handle).unwrap().words() * 4;
     let device = host
         .resident(handle)
@@ -308,7 +308,7 @@ fn chains_and_state_stay_resident_until_observed() {
     )
     .unwrap();
     let mut evaluator = orla_graph::Evaluator::new();
-    let empty: std::collections::BTreeMap<String, orla_abi::ImageHandle> =
+    let empty: std::collections::BTreeMap<String, orla_abi::Handle> =
         std::collections::BTreeMap::new();
     let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
     for frame in 1..=3 {
@@ -369,7 +369,7 @@ fn fields_flow_through_the_gpu_exactly() {
     )
     .unwrap();
     let mut evaluator = orla_graph::Evaluator::new();
-    let none: std::collections::BTreeMap<String, orla_abi::ImageHandle> = Default::default();
+    let none: std::collections::BTreeMap<String, orla_abi::Handle> = Default::default();
     let params: std::collections::BTreeMap<String, Value> = Default::default();
     let report = evaluator
         .evaluate(&graph, &mut runtime, &none, &Context::default(), &params)

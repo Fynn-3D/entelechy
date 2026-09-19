@@ -278,7 +278,7 @@ impl Player {
     /// Shows an output image: directly from the device when it is resident
     /// and a presenter exists, otherwise by downloading it and blitting.
     /// Returns a short description of the path taken.
-    fn show(&mut self, output: orla_runtime::ImageHandle) -> &'static str {
+    fn show(&mut self, output: orla_runtime::Handle) -> &'static str {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
             let host = self.session.runtime().host();
             let resident = host.resident(output).ok().flatten();
@@ -319,7 +319,7 @@ impl Player {
 
     /// The output the window shows: the first grid of pixels, or the
     /// graph's first output when there is none.
-    fn displayed_output(&self, report: &orla_graph::Report) -> orla_runtime::ImageHandle {
+    fn displayed_output(&self, report: &orla_graph::Report) -> orla_runtime::Handle {
         let host = self.session.runtime().host();
         report
             .outputs

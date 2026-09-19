@@ -19,7 +19,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::{Mutex, OnceLock};
 
-use orla_abi::{ImageHandle, Invocation, Scope, Value};
+use orla_abi::{Handle, Invocation, Scope, Value};
 use orla_cpu::{ExecutionError, check_invocation};
 use orla_ir::Validated;
 use orla_runtime::{Backend, NativeOp, Prepared};
@@ -125,7 +125,7 @@ impl GpuBackend {
     pub(crate) fn bind_input(
         &self,
         scope: &mut Scope<'_>,
-        handle: ImageHandle,
+        handle: Handle,
         index: usize,
     ) -> Result<wgpu::Buffer, ExecutionError> {
         let resident = scope
@@ -305,7 +305,7 @@ impl Backend for GpuBackend {
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+    ) -> Result<Vec<Handle>, ExecutionError> {
         check_invocation(module, invocation)?;
         let Some(pipeline) = prepared.as_any().downcast_ref::<Pipeline>() else {
             return Err(ExecutionError::Device(
@@ -506,7 +506,7 @@ impl Backend for GpuBackend {
         op: NativeOp,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+    ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
             NativeOp::Rasterize => raster::rasterize(self, &self.raster, invocation, scope),
         }

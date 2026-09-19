@@ -369,7 +369,7 @@ node count: test.increment@1 { previous <~ count.result from seed.result; }
 output result <- count.result;
 ";
 
-fn red(runtime: &Runtime, handle: orla_runtime::ImageHandle) -> f32 {
+fn red(runtime: &Runtime, handle: orla_runtime::Handle) -> f32 {
     runtime.host().read_pixel(handle, 1, 1).unwrap()[0]
 }
 
@@ -645,7 +645,7 @@ fn graph_params_feed_nodes_and_can_be_overridden() {
     );
 }
 
-fn pixels(runtime: &Runtime, handle: orla_runtime::ImageHandle) -> Vec<[f32; 4]> {
+fn pixels(runtime: &Runtime, handle: orla_runtime::Handle) -> Vec<[f32; 4]> {
     runtime.host().image(handle).unwrap().pixels().to_vec()
 }
 

@@ -13,7 +13,7 @@ const PIXELATE: &str = "kernel image.pixelate@1 { requires { field.read; field.w
 
 fn run(
     module: &orla_ir::Validated,
-    inputs: Vec<orla_abi::ImageHandle>,
+    inputs: Vec<orla_abi::Handle>,
     params: Vec<Value>,
     host: &mut Host,
 ) -> Vec<[f32; 4]> {

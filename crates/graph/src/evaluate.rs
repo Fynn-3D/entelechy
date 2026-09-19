@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use orla_abi::{Capability, Context, Domain, ImageHandle, Invocation, Type, Value};
+use orla_abi::{Capability, Context, Domain, Handle, Invocation, Type, Value};
 use orla_runtime::{
     ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Runtime, Ticket,
 };
@@ -190,7 +190,7 @@ impl From<HostError> for EvaluateError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
     /// The graph output image, owned by the evaluator's cache.
-    pub output: ImageHandle,
+    pub output: Handle,
     /// Nodes that executed, in evaluation order.
     pub executed: Vec<NodeId>,
     /// Nodes whose cached outputs were reused.
@@ -198,7 +198,7 @@ pub struct Report {
     /// Sources whose state advanced in this evaluation's commit.
     pub committed: Vec<(NodeId, String)>,
     /// Every declared output by name.
-    pub outputs: Vec<(String, ImageHandle)>,
+    pub outputs: Vec<(String, Handle)>,
     /// Groups that ran as one Kernel: the executing node and the nodes it
     /// absorbed, whose images were never materialized.
     pub fused: Vec<(NodeId, Vec<NodeId>)>,
@@ -206,10 +206,10 @@ pub struct Report {
 
 #[derive(Clone, Debug, PartialEq)]
 enum InputKey {
-    External(ImageHandle),
+    External(Handle),
     Node(NodeId, usize, u64),
     /// A committed value or an initial value, identified by handle.
-    State(ImageHandle),
+    State(Handle),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -228,7 +228,7 @@ struct CacheKey {
 #[derive(Debug)]
 struct Cached {
     key: CacheKey,
-    outputs: Vec<ImageHandle>,
+    outputs: Vec<Handle>,
     output_names: Vec<String>,
     epoch: u64,
 }
@@ -288,7 +288,7 @@ pub struct Evaluator {
     /// State as of the last successful evaluation, by producing node and
     /// port. A committed handle may also be a node's current cached output;
     /// it is released only when neither refers to it any more.
-    committed: BTreeMap<(NodeId, String), ImageHandle>,
+    committed: BTreeMap<(NodeId, String), Handle>,
     epoch: u64,
     fusion: bool,
     pinned: BTreeSet<NodeId>,
@@ -375,19 +375,19 @@ impl Evaluator {
 
     /// The cached image for a node's output port, if it was evaluated and
     /// materialized. Absorbed nodes have none; pin them to observe them.
-    pub fn cached(&self, node: &NodeId, port: &str) -> Option<ImageHandle> {
+    pub fn cached(&self, node: &NodeId, port: &str) -> Option<Handle> {
         let cached = self.cache.get(node)?;
         let index = cached.output_names.iter().position(|name| name == port)?;
         Some(cached.outputs[index])
     }
 
-    fn is_cached(&self, handle: ImageHandle) -> bool {
+    fn is_cached(&self, handle: Handle) -> bool {
         self.cache
             .values()
             .any(|cached| cached.outputs.contains(&handle))
     }
 
-    fn is_committed(&self, handle: ImageHandle) -> bool {
+    fn is_committed(&self, handle: Handle) -> bool {
         self.committed
             .values()
             .any(|committed| *committed == handle)
@@ -400,7 +400,7 @@ impl Evaluator {
         &mut self,
         graph: &Graph,
         runtime: &mut Runtime,
-        externals: &BTreeMap<String, ImageHandle>,
+        externals: &BTreeMap<String, Handle>,
         overrides: &BTreeMap<String, Value>,
     ) -> Result<Vec<PlanEntry>, EvaluateError> {
         let order = graph.order()?;
@@ -424,7 +424,7 @@ impl Evaluator {
         &mut self,
         graph: &Graph,
         runtime: &mut Runtime,
-        externals: &BTreeMap<String, ImageHandle>,
+        externals: &BTreeMap<String, Handle>,
         context: &Context,
         params: &BTreeMap<String, Value>,
     ) -> Result<Report, EvaluateError> {
@@ -538,7 +538,7 @@ impl Evaluator {
         graph: &Graph,
         order: &[usize],
         runtime: &mut Runtime,
-        externals: &BTreeMap<String, ImageHandle>,
+        externals: &BTreeMap<String, Handle>,
         overrides: &BTreeMap<String, Value>,
     ) -> Result<Vec<Group>, EvaluateError> {
         let mut groups: Vec<Group> = Vec::with_capacity(order.len());
@@ -808,7 +808,7 @@ impl Evaluator {
         graph: &Graph,
         group: &Group,
         runtime: &Runtime,
-        externals: &BTreeMap<String, ImageHandle>,
+        externals: &BTreeMap<String, Handle>,
         domains: &BTreeMap<NodeId, Domain>,
         overrides: &BTreeMap<String, Value>,
     ) -> Option<Domain> {
@@ -816,7 +816,7 @@ impl Evaluator {
         if manifest.mode == orla_ir::Mode::Reduce {
             return Some(Domain::Rows(1));
         }
-        let size = |handle: ImageHandle| runtime.host().domain(handle).ok();
+        let size = |handle: Handle| runtime.host().domain(handle).ok();
         let of_source = |source: &Source| match source {
             Source::External(name) => externals.get(name).and_then(|h| size(*h)),
             Source::Node { node, .. } => domains.get(node).copied(),
@@ -943,7 +943,7 @@ impl Evaluator {
         node: &Node,
         version: &Arc<KernelVersion>,
         runtime: &Runtime,
-        externals: &BTreeMap<String, ImageHandle>,
+        externals: &BTreeMap<String, Handle>,
         context: &Context,
         overrides: &BTreeMap<String, Value>,
     ) -> Result<(Invocation, CacheKey), EvaluateError> {
@@ -1116,8 +1116,8 @@ impl Evaluator {
         &self,
         node: &Node,
         source: &Source,
-        externals: &BTreeMap<String, ImageHandle>,
-    ) -> Result<(ImageHandle, InputKey), EvaluateError> {
+        externals: &BTreeMap<String, Handle>,
+    ) -> Result<(Handle, InputKey), EvaluateError> {
         match source {
             Source::External(name) => {
                 let handle =
@@ -1178,7 +1178,7 @@ fn fused_id(node: &NodeId) -> KernelId {
     KernelId::new(&format!("fused.{segment}"), 1).expect("sanitized segment forms a valid id")
 }
 
-fn release(runtime: &mut Runtime, handle: ImageHandle) {
+fn release(runtime: &mut Runtime, handle: Handle) {
     // Handles here were created by executions this evaluator owns; a failure
     // means the interface released them behind our back, which is the only
     // case where ignoring the error is correct.

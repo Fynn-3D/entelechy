@@ -19,7 +19,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use orla_graph::Report;
-use orla_runtime::{Context, ImageHandle, InputState, Runtime};
+use orla_runtime::{Context, Handle, InputState, Runtime};
 
 use crate::session::Session;
 
@@ -237,7 +237,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                 tolerance,
                 line,
             } => {
-                let output: ImageHandle = last
+                let output: Handle = last
                     .as_ref()
                     .map(|report| report.output)
                     .ok_or_else(|| format!("line {line}: expect before any frame"))?;

@@ -15,7 +15,7 @@ use std::time::SystemTime;
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_language::{Document, Kernel};
 use orla_runtime::{
-    Backend, Context, Expect, Generation, ImageHandle, KernelId, Runtime, Ticket, Value,
+    Backend, Context, Expect, Generation, Handle, KernelId, Runtime, Ticket, Value,
 };
 
 use crate::ppm;
@@ -169,7 +169,7 @@ pub struct Session {
     /// root document is one of them.
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
-    externals: BTreeMap<String, ImageHandle>,
+    externals: BTreeMap<String, Handle>,
     /// Replacements of running Kernels the runtime is still preparing.
     pending: BTreeMap<KernelId, PendingPublish>,
 }
@@ -675,7 +675,7 @@ impl Session {
     }
 
     /// The cached image of a node's output port, if it was evaluated.
-    pub fn cached(&self, node: &orla_graph::NodeId, port: &str) -> Option<ImageHandle> {
+    pub fn cached(&self, node: &orla_graph::NodeId, port: &str) -> Option<Handle> {
         self.evaluator.cached(node, port)
     }
 
@@ -735,7 +735,7 @@ impl Session {
 
     /// Writes a cached image to a PPM file, materializing it if it was
     /// resident on the device.
-    pub fn export(&mut self, image: ImageHandle, path: &Path) -> Result<(), SessionError> {
+    pub fn export(&mut self, image: Handle, path: &Path) -> Result<(), SessionError> {
         let image = self
             .runtime
             .image(image)
@@ -746,7 +746,7 @@ impl Session {
     /// Reads one pixel of a cached image, materializing it if needed.
     pub fn read_pixel(
         &mut self,
-        image: ImageHandle,
+        image: Handle,
         x: u32,
         y: u32,
     ) -> Result<orla_runtime::Pixel, SessionError> {

@@ -13,7 +13,7 @@ fn id() -> KernelId {
 fn run(
     runtime: &mut Runtime,
     version: &orla_runtime::KernelVersion,
-    input: orla_runtime::ImageHandle,
+    input: orla_runtime::Handle,
 ) -> [f32; 4] {
     let invocation = Invocation {
         inputs: vec![input],
