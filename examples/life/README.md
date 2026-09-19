@@ -1,6 +1,8 @@
 # Life
 
-Conway's Game of Life as three Kernels and one feedback edge:
+Conway's Game of Life as three Kernels and one feedback edge. The board is
+a `Grid<Cell>` with `struct Cell { alive: Bool; age: Int; }`, named once as
+`type Cells`; only `show` turns it into pixels.
 
 ```text
 seed -> life -> show
