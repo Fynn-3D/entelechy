@@ -32,6 +32,16 @@ capability claim.
 
 ## Contracts worth knowing
 
+- Documents: one grammar for `.orla` libraries and `.osn` graphs
+  ([contract](docs/DOCUMENTS.md), [frontend](crates/language/src/lib.rs),
+  [graph lowering](crates/graph/src/document.rs),
+  [session loader](crates/cli/src/session.rs)). Nodes reference Kernels by
+  id or carry them inline; the loader publishes inline Kernels and follows
+  `use`. Proof: [parser tests](crates/language/src/parser.rs),
+  [lowering tests](crates/graph/src/document.rs),
+  [session tests](crates/cli/tests/session.rs), and the
+  [self-contained material ball](examples/material-ball/scene.osn).
+
 - State lives in the Graph, not in Kernels: a `port <~ node.output from
   initial` binding reads the source as committed by the previous successful
   evaluation. Every node of one evaluation reads the same committed state;

@@ -1187,6 +1187,8 @@ dependencies = [
  "orla-compiler",
  "orla-gpu",
  "orla-graph",
+ "orla-ir",
+ "orla-language",
  "orla-runtime",
 ]
 
@@ -1222,6 +1224,7 @@ dependencies = [
  "orla-compiler",
  "orla-cpu",
  "orla-ir",
+ "orla-language",
  "orla-runtime",
  "pollster",
  "wgpu",
@@ -1232,7 +1235,9 @@ name = "orla-graph"
 version = "0.1.0"
 dependencies = [
  "orla-abi",
+ "orla-compiler",
  "orla-ir",
+ "orla-language",
  "orla-runtime",
 ]
 
@@ -1269,6 +1274,7 @@ dependencies = [
  "orla-compiler",
  "orla-cpu",
  "orla-ir",
+ "orla-language",
 ]
 
 [[package]]

@@ -169,6 +169,7 @@ The roadmaps describe acceptance criteria, not a promise of universal support.
 - [Minimal core architecture](Orla%20%E2%80%94%20Minimal%20Core%20Architecture.md):
   the computational model and layer boundaries.
 - [Engineering principles](AGENTS.md): rules for preserving those boundaries.
+- [Document format](docs/DOCUMENTS.md): `.orla` libraries and `.osn` graphs.
 - [Implementation evidence](IMPLEMENTATION.md): code and test entry points.
 - [Usage guide](docs/USAGE.md): setup, examples, and technical reference.
 - [Current handoff](HANDOFF.md): session context and the next action.

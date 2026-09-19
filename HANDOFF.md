@@ -24,6 +24,13 @@ how record data will eventually cross the ABI. `.osn` scenes bind nodes to
 `KernelId`s; the CLI session and the Player resolve sources from the
 filesystem by polling modification stamps.
 
+Documents are a public contract now: `.orla` libraries and `.osn` graphs
+share one grammar ([docs/DOCUMENTS.md](docs/DOCUMENTS.md)); a node
+references a Kernel by id or carries it inline; `use` brings in libraries.
+Graphs expose named inputs and outputs so that a graph can later be placed
+as a node; graph-level parameters are the next syntax step when a sub-graph
+needs them.
+
 State and input now exist: `<~ ... from ...` bindings hold Graph state with
 atomic end-of-evaluation commit, and `pointer()`, `pointer_down()`, `key()`
 read context behind `input.read`. `orla replay` runs an example's `.replay`
