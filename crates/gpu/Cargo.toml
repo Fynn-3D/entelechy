@@ -1,0 +1,21 @@
+[package]
+name = "orla-gpu"
+description = "GPU backend: emits WGSL from Orla IR and runs it as compute dispatches through wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-abi = { path = "../abi" }
+orla-ir = { path = "../ir" }
+orla-cpu = { path = "../cpu" }
+orla-runtime = { path = "../runtime" }
+wgpu = { version = "30", default-features = false, features = ["wgsl", "metal", "vulkan", "dx12"] }
+pollster = "0.4"
+
+[dev-dependencies]
+orla-compiler = { path = "../compiler" }
+
+[lints]
+workspace = true
