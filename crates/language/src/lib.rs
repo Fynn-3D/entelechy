@@ -56,7 +56,7 @@ mod parser;
 use std::fmt;
 use std::ops::Range;
 
-pub use parser::{parse, parse_document};
+pub use parser::{parse, parse_document, parse_literal};
 
 /// A whole file. For a `.osn` the file is the graph; for a `.orla` only
 /// `kernels` is populated.
@@ -68,6 +68,9 @@ pub struct Document {
     pub kernels: Vec<Kernel>,
     /// External images the caller supplies: `input name: Image;`.
     pub inputs: Vec<PortDecl>,
+    /// Graph parameters: `param name: Type = default;`. Node values may
+    /// name them, and a parent graph or the caller may override them.
+    pub params: Vec<ParamDecl>,
     /// Named results: `output name <- source;`.
     pub outputs: Vec<(Spanned<String>, SourceRef)>,
     /// Nodes in document order.
@@ -104,6 +107,9 @@ pub enum NodeKind {
     /// that id; without one it is anonymous and the loader names it after
     /// the document and the node.
     Inline(Box<Kernel>),
+    /// Another `.osn` document placed as a node: `node fx: graph "path";`.
+    /// Its inputs are wired and its params set like a Kernel's.
+    SubGraph(Spanned<String>),
 }
 
 /// One line inside a reference node's block.

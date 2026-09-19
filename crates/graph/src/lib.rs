@@ -20,7 +20,7 @@ mod evaluate;
 use std::collections::BTreeMap;
 use std::fmt;
 
-pub use document::{DocumentError, InlineKernel, Lowered, anonymous_id};
+pub use document::{DocumentError, InlineKernel, Loader, Lowered, anonymous_id};
 pub use evaluate::{EvaluateError, Evaluator, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
@@ -84,17 +84,37 @@ impl fmt::Display for Binding {
     }
 }
 
+/// A parameter value on a node: a literal, or a graph parameter by name.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ParamValue {
+    /// A fixed value.
+    Literal(Value),
+    /// The graph parameter with this name, resolved at evaluation from the
+    /// caller's overrides or the graph's defaults.
+    Graph(String),
+}
+
+/// A graph parameter: part of the graph's interface, like a Kernel's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GraphParam {
+    /// Parameter name.
+    pub name: String,
+    /// Default value; its type is the parameter type.
+    pub default: Value,
+}
+
 /// A node: a Kernel binding plus its connections and parameter overrides.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
-    /// Node name.
+    /// Node name; nodes of a placed sub-graph carry its node name as a
+    /// dotted prefix.
     pub id: NodeId,
     /// The Kernel this node executes.
     pub kernel: KernelId,
     /// Input port bindings.
     pub inputs: BTreeMap<String, Binding>,
     /// Parameter overrides; unlisted parameters use manifest defaults.
-    pub params: BTreeMap<String, Value>,
+    pub params: BTreeMap<String, ParamValue>,
     /// Explicit output domain; defaults to the first image input's size.
     pub domain: Option<Domain>,
 }
@@ -106,7 +126,9 @@ pub struct Graph {
     pub name: String,
     /// External image names the caller must supply.
     pub externals: Vec<String>,
-    /// Nodes in document order.
+    /// Parameters the caller may override.
+    pub params: Vec<GraphParam>,
+    /// Nodes in document order, sub-graphs flattened in place.
     pub nodes: Vec<Node>,
     /// Named results in document order; interfaces present the first.
     pub outputs: Vec<(String, Source)>,
@@ -174,10 +196,23 @@ impl std::error::Error for GraphError {}
 
 impl Graph {
     /// Parses a `.osn` document that references published Kernels only.
-    /// Loaders that also publish inline Kernels use [`Graph::from_document`].
+    /// Loaders that also publish inline Kernels or place sub-graphs use
+    /// [`Graph::load`].
     pub fn parse(text: &str) -> Result<Self, DocumentError> {
         let document = orla_language::parse_document(text).map_err(DocumentError::from)?;
-        let lowered = Self::from_document(&document, "graph")?;
+        let mut loader = |path: &std::path::Path| -> Result<String, String> {
+            Err(format!(
+                "sub-graph `{}` cannot be loaded here",
+                path.display()
+            ))
+        };
+        let lowered = document::lower(
+            &document,
+            text,
+            "graph",
+            std::path::Path::new("."),
+            &mut loader,
+        )?;
         if let Some(inline) = lowered.inline.first() {
             return Err(DocumentError {
                 span: inline
@@ -195,14 +230,35 @@ impl Graph {
         Ok(lowered.graph)
     }
 
-    /// Lowers a parsed document into a Graph named `name`, reporting inline
-    /// Kernels for the loader to publish. Anonymous inline Kernels are named
-    /// by [`anonymous_id`].
-    pub fn from_document<'a>(
-        document: &'a orla_language::Document,
+    /// Lowers a parsed document that places no sub-graphs into a Graph named
+    /// `name`, reporting inline Kernels for the loader to publish. Anonymous
+    /// inline Kernels are named by [`anonymous_id`].
+    pub fn from_document(
+        document: &orla_language::Document,
         name: &str,
-    ) -> Result<Lowered<'a>, DocumentError> {
-        document::lower(document, name)
+    ) -> Result<Lowered, DocumentError> {
+        let mut loader = |path: &std::path::Path| -> Result<String, String> {
+            Err(format!(
+                "sub-graph `{}` cannot be loaded here; use Graph::load with a loader",
+                path.display()
+            ))
+        };
+        document::lower(document, "", name, std::path::Path::new("."), &mut loader)
+    }
+
+    /// Lowers a parsed document into a Graph, loading the sub-graphs it
+    /// places through `loader` (paths are resolved against `base`) and
+    /// flattening them in place: their nodes are prefixed with the placing
+    /// node's name, their inputs rewired to the parent's bindings, their
+    /// params set from the parent's values.
+    pub fn load(
+        document: &orla_language::Document,
+        text: &str,
+        name: &str,
+        base: &std::path::Path,
+        loader: &mut Loader<'_>,
+    ) -> Result<Lowered, DocumentError> {
+        document::lower(document, text, name, base, loader)
     }
 
     /// The first declared output.
@@ -341,6 +397,15 @@ impl fmt::Display for Graph {
         for external in &self.externals {
             writeln!(f, "input {external}: Image;")?;
         }
+        for param in &self.params {
+            writeln!(
+                f,
+                "param {}: {} = {};",
+                param.name,
+                param.default.ty(),
+                literal_text(&param.default)
+            )?;
+        }
         for node in &self.nodes {
             writeln!(f)?;
             writeln!(f, "node {}: {} {{", node.id, node.kernel)?;
@@ -348,7 +413,12 @@ impl fmt::Display for Graph {
                 writeln!(f, "    {port} {binding};")?;
             }
             for (name, value) in &node.params {
-                writeln!(f, "    {name} = {};", literal_text(value))?;
+                match value {
+                    ParamValue::Literal(value) => {
+                        writeln!(f, "    {name} = {};", literal_text(value))?
+                    }
+                    ParamValue::Graph(param) => writeln!(f, "    {name} = {param};")?,
+                }
             }
             if let Some(domain) = node.domain {
                 writeln!(f, "    domain = vec2({}, {});", domain.width, domain.height)?;

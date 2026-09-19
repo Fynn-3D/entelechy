@@ -44,7 +44,13 @@ fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(report.executed, ids(&["source", "gray", "final"]));
     let pixel = runtime.host().read_pixel(report.output, 2, 0).unwrap();
@@ -53,7 +59,13 @@ fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
     assert_eq!(report.outputs[0].0, "result");
 
     let again = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert!(again.executed.is_empty());
     assert_eq!(again.reused, ids(&["source", "gray", "final"]));
@@ -66,7 +78,13 @@ fn republishing_a_kernel_invalidates_only_its_dependents() {
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
 
     runtime
@@ -78,7 +96,13 @@ fn republishing_a_kernel_invalidates_only_its_dependents() {
         )
         .unwrap();
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(report.reused, ids(&["source"]));
     assert_eq!(report.executed, ids(&["gray", "final"]));
@@ -99,14 +123,27 @@ fn parameter_and_structure_changes_are_tracked() {
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
 
-    graph.nodes[1]
-        .params
-        .insert("amount".into(), orla_graph::Value::Int(0));
+    graph.nodes[1].params.insert(
+        "amount".into(),
+        orla_graph::ParamValue::Literal(orla_graph::Value::Int(0)),
+    );
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(report.executed, ids(&["gray", "final"]));
     near(
@@ -123,7 +160,13 @@ fn parameter_and_structure_changes_are_tracked() {
         },
     )];
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert!(report.executed.is_empty());
     assert_eq!(
@@ -150,7 +193,13 @@ fn externals_feed_graph_inputs() {
         .unwrap();
     let mut evaluator = Evaluator::new();
     let error = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap_err();
     assert!(
         matches!(error, EvaluateError::MissingExternal { .. }),
@@ -158,7 +207,13 @@ fn externals_feed_graph_inputs() {
     );
     let externals = BTreeMap::from([("photo".to_string(), photo)]);
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &externals, &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &externals,
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
     near(
         runtime.host().read_pixel(report.output, 0, 0).unwrap(),
@@ -172,14 +227,26 @@ fn failures_are_attributed_and_last_good_results_survive() {
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     let first = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap();
 
     runtime
         .load("kernel image.invert@1 { requires { image.read; image.write; } input source: Image; param d: Int = 0; output result: Image; compute { let q = 1 / d; return vec4(float(q), 0.0, 0.0, 1.0); } }")
         .unwrap();
     let error = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &Context::default())
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
         .unwrap_err();
     assert!(
         matches!(&error, EvaluateError::Execution { node, error: ExecutionError::Arithmetic { .. } } if node.0 == "final"),
@@ -200,6 +267,7 @@ fn failures_are_attributed_and_last_good_results_survive() {
             &mut runtime,
             &BTreeMap::new(),
             &Context::default(),
+            &BTreeMap::new(),
         )
         .unwrap_err();
     assert!(
@@ -229,6 +297,7 @@ fn structural_errors_are_reported_before_execution() {
             &mut runtime,
             &BTreeMap::new(),
             &Context::default(),
+            &BTreeMap::new(),
         )
         .unwrap_err();
     assert_eq!(error, EvaluateError::NoDomain(NodeId("a".into())));
@@ -242,6 +311,7 @@ fn structural_errors_are_reported_before_execution() {
             &mut runtime,
             &BTreeMap::new(),
             &Context::default(),
+            &BTreeMap::new(),
         )
         .unwrap_err();
     assert!(
@@ -259,11 +329,23 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
     let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
     let mut evaluator = Evaluator::new();
     let first = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &at(0.25))
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.25),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(first.executed, ids(&["source", "pulse"]));
     let second = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &at(0.5))
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.5),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(second.reused, ids(&["source"]));
     assert_eq!(second.executed, ids(&["pulse"]));
@@ -272,7 +354,13 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
         [0.5, 0.0, 0.0, 1.0],
     );
     let third = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &at(0.5))
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.5),
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert!(third.executed.is_empty(), "same time, nothing re-executes");
 }
@@ -300,7 +388,13 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
     let ctx = Context::default();
     for expected in 1..=3 {
         let report = evaluator
-            .evaluate(&graph, &mut runtime, &BTreeMap::new(), &ctx)
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &ctx,
+                &BTreeMap::new(),
+            )
             .unwrap();
         assert_eq!(red(&runtime, report.output), expected as f32);
         assert_eq!(
@@ -319,14 +413,26 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
         .load(&INCREMENT.replace("param by: Float = 1.0", "param by: Float = 10.0"))
         .unwrap();
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &ctx)
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &ctx,
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(red(&runtime, report.output), 13.0);
 
     // Reset restarts from the initial source.
     evaluator.reset_state(&mut runtime);
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &ctx)
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &ctx,
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(red(&runtime, report.output), 10.0);
     assert_eq!(runtime.host().live_images(), 2);
@@ -357,24 +463,44 @@ fn a_failed_evaluation_commits_nothing() {
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &ctx)
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &ctx,
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(red(&runtime, report.output), 1.0);
 
-    graph.nodes[2]
-        .params
-        .insert("d".into(), orla_graph::Value::Int(0));
+    graph.nodes[2].params.insert(
+        "d".into(),
+        orla_graph::ParamValue::Literal(orla_graph::Value::Int(0)),
+    );
     for _ in 0..2 {
         let error = evaluator
-            .evaluate(&graph, &mut runtime, &BTreeMap::new(), &ctx)
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &ctx,
+                &BTreeMap::new(),
+            )
             .unwrap_err();
         assert!(matches!(error, EvaluateError::Execution { .. }), "{error}");
     }
-    graph.nodes[2]
-        .params
-        .insert("d".into(), orla_graph::Value::Int(1));
+    graph.nodes[2].params.insert(
+        "d".into(),
+        orla_graph::ParamValue::Literal(orla_graph::Value::Int(1)),
+    );
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &ctx)
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &ctx,
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(
         red(&runtime, report.output),
@@ -392,11 +518,8 @@ fn a_failed_evaluation_commits_nothing() {
 fn feedback_edges_are_not_dependencies_and_must_name_nodes() {
     let ring = Graph::parse("node a: test.increment@1 { previous <~ b.result from seed.result; }\nnode b: test.increment@1 { previous <~ a.result from seed.result; }\nnode seed: test.zero@1 { domain = vec2(1, 1); }\noutput r <- a.result;").unwrap();
     assert!(ring.order().is_ok(), "mutual feedback is not a cycle");
-    let bad = Graph::parse("input photo: Image;\nnode a: test.increment@1 { previous <~ photo from photo; }\noutput r <- a.result;").unwrap();
-    assert!(matches!(
-        bad.order(),
-        Err(GraphError::FeedbackNeedsNode { .. })
-    ));
+    let error = Graph::parse("input photo: Image;\nnode a: test.increment@1 { previous <~ photo from photo; }\noutput r <- a.result;").unwrap_err();
+    assert!(error.message.contains("carry no state"), "{error}");
     let error =
         Graph::parse("node a: test.increment@1 { previous <~ a.result; }\noutput r <- a.result;")
             .unwrap_err();
@@ -413,14 +536,26 @@ fn input_reading_nodes_re_execute_when_input_changes() {
     let mut evaluator = Evaluator::new();
     let mut context = Context::default();
     let first = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &context)
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &context,
+            &BTreeMap::new(),
+        )
         .unwrap();
     near(
         runtime.host().read_pixel(first.output, 2, 2).unwrap(),
         [0.0, 0.0, 0.0, 1.0],
     );
     let again = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &context)
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &context,
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert!(again.executed.is_empty());
 
@@ -428,7 +563,13 @@ fn input_reading_nodes_re_execute_when_input_changes() {
     context.input.pointer_down = true;
     context.input.set_key(65, true);
     let report = evaluator
-        .evaluate(&graph, &mut runtime, &BTreeMap::new(), &context)
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &context,
+            &BTreeMap::new(),
+        )
         .unwrap();
     assert_eq!(report.executed, ids(&["paint"]));
     near(
@@ -438,5 +579,72 @@ fn input_reading_nodes_re_execute_when_input_changes() {
     near(
         runtime.host().read_pixel(report.output, 0, 0).unwrap(),
         [0.0, 1.0, 0.0, 1.0],
+    );
+}
+
+#[test]
+fn graph_params_feed_nodes_and_can_be_overridden() {
+    let mut runtime = runtime();
+    let graph = Graph::parse(
+        "param amount: Float = 1.0;\nnode source: image.gradient@1 { domain = vec2(2, 2); }\nnode gray: image.grayscale@1 { source <- source.result; amount = amount; }\noutput r <- gray.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let first = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let gray = runtime.host().read_pixel(first.output, 1, 0).unwrap();
+    assert!(
+        (gray[0] - gray[1]).abs() < 1e-5,
+        "default 1.0 fully desaturates"
+    );
+    let overrides = BTreeMap::from([("amount".to_string(), orla_graph::Value::Int(0))]);
+    let second = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &overrides,
+        )
+        .unwrap();
+    assert_eq!(second.executed, ids(&["gray"]));
+    near(
+        runtime.host().read_pixel(second.output, 1, 0).unwrap(),
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    let missing = BTreeMap::from([("nope".to_string(), orla_graph::Value::Int(0))]);
+    let third = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &missing,
+        )
+        .unwrap();
+    assert_eq!(
+        third.executed,
+        ids(&["gray"]),
+        "dropping the override reverts to the default"
+    );
+    let fourth = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &missing,
+        )
+        .unwrap();
+    assert!(
+        fourth.executed.is_empty(),
+        "unknown overrides change nothing"
     );
 }

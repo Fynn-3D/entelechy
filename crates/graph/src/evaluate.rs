@@ -16,7 +16,7 @@ use std::sync::Arc;
 use orla_abi::{Capability, Context, Domain, ImageHandle, Invocation, Type, Value};
 use orla_runtime::{ExecutionError, Generation, HostError, KernelId, KernelVersion, Runtime};
 
-use crate::{Binding, Graph, GraphError, Node, NodeId, Source};
+use crate::{Binding, Graph, GraphError, Node, NodeId, ParamValue, Source};
 
 /// Why evaluation stopped. Nodes evaluated before the failure keep their new
 /// results; the failing node keeps its last successful result, if any; no
@@ -253,13 +253,15 @@ impl Evaluator {
     }
 
     /// Evaluates `graph` under `context`, executing only nodes whose inputs
-    /// changed, then commits state.
+    /// changed, then commits state. `params` overrides graph parameters by
+    /// name; unlisted ones use their defaults.
     pub fn evaluate(
         &mut self,
         graph: &Graph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, ImageHandle>,
         context: &Context,
+        params: &BTreeMap<String, Value>,
     ) -> Result<Report, EvaluateError> {
         let order = graph.order()?;
         self.prune(graph, runtime);
@@ -274,7 +276,8 @@ impl Evaluator {
                         node: node.id.clone(),
                         kernel: node.kernel.clone(),
                     })?;
-            let (invocation, key) = self.bind(node, &version, runtime, externals, context)?;
+            let (invocation, key) =
+                self.bind(graph, node, &version, runtime, externals, context, params)?;
             if self
                 .cache
                 .get(&node.id)
@@ -418,13 +421,16 @@ impl Evaluator {
         Ok(advanced)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn bind(
         &self,
+        graph: &Graph,
         node: &Node,
         version: &Arc<KernelVersion>,
         runtime: &Runtime,
         externals: &BTreeMap<String, ImageHandle>,
         context: &Context,
+        overrides: &BTreeMap<String, Value>,
     ) -> Result<(Invocation, CacheKey), EvaluateError> {
         let manifest = version.manifest();
         for port in node.inputs.keys().chain(node.params.keys()) {
@@ -475,10 +481,30 @@ impl Evaluator {
         }
         let mut params = Vec::with_capacity(manifest.params.len());
         for param in &manifest.params {
-            let value = match node.params.get(&param.name) {
+            let given = match node.params.get(&param.name) {
+                None => None,
+                Some(ParamValue::Literal(value)) => Some(*value),
+                Some(ParamValue::Graph(name)) => Some(
+                    overrides
+                        .get(name)
+                        .copied()
+                        .or_else(|| {
+                            graph
+                                .params
+                                .iter()
+                                .find(|p| &p.name == name)
+                                .map(|p| p.default)
+                        })
+                        .ok_or_else(|| EvaluateError::UnknownPort {
+                            node: node.id.clone(),
+                            port: name.clone(),
+                        })?,
+                ),
+            };
+            let value = match given {
                 None => param.default,
-                Some(Value::Int(v)) if param.default.ty() == Type::Float => Value::Float(*v as f32),
-                Some(value) if value.ty() == param.default.ty() => *value,
+                Some(Value::Int(v)) if param.default.ty() == Type::Float => Value::Float(v as f32),
+                Some(value) if value.ty() == param.default.ty() => value,
                 Some(value) => {
                     return Err(EvaluateError::ParamType {
                         node: node.id.clone(),

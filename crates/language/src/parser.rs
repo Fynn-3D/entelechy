@@ -17,6 +17,7 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
         uses: Vec::new(),
         kernels: Vec::new(),
         inputs: Vec::new(),
+        params: Vec::new(),
         outputs: Vec::new(),
         nodes: Vec::new(),
     };
@@ -44,6 +45,10 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
                 parser.next();
                 document.inputs.push(parser.port(false)?);
             }
+            Token::Ident(word) if word == "param" => {
+                parser.next();
+                document.params.push(parser.param()?);
+            }
             Token::Ident(word) if word == "output" => {
                 parser.next();
                 let name = parser.ident("an output name")?;
@@ -56,10 +61,28 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
                 parser.next();
                 document.nodes.push(parser.node()?);
             }
-            _ => return Err(parser.unexpected("`use`, `kernel`, `input`, `output`, or `node`")),
+            _ => {
+                return Err(
+                    parser.unexpected("`use`, `kernel`, `input`, `param`, `output`, or `node`")
+                );
+            }
         }
     }
     Ok(document)
+}
+
+/// Parses one literal expression, as written in a document value position.
+pub fn parse_literal(source: &str) -> Result<Expr, ParseError> {
+    let tokens = tokenize(source)?;
+    let mut parser = Parser {
+        tokens,
+        position: 0,
+    };
+    let expr = parser.expr()?;
+    if parser.peek() != &Token::Eof {
+        return Err(parser.unexpected("end of the value"));
+    }
+    Ok(expr)
 }
 
 /// Parses exactly one Kernel from source text.
@@ -69,6 +92,7 @@ pub fn parse(source: &str) -> Result<Kernel, ParseError> {
     if !document.nodes.is_empty()
         || !document.uses.is_empty()
         || !document.inputs.is_empty()
+        || !document.params.is_empty()
         || !document.outputs.is_empty()
     {
         return Err(ParseError {
@@ -388,6 +412,22 @@ impl Parser {
                 members: Vec::new(),
             });
         }
+        if self.is_keyword("graph") {
+            self.next();
+            let (token, span) = self.next();
+            let Token::Str(path) = token else {
+                return Err(ParseError {
+                    span,
+                    message: format!("`graph` needs a quoted path, found {}", token.describe()),
+                });
+            };
+            let members = self.node_members()?;
+            return Ok(NodeDecl {
+                name,
+                kind: NodeKind::SubGraph(Spanned { value: path, span }),
+                members,
+            });
+        }
         let mut kernel = self.dotted_name("a kernel id")?;
         self.expect_punct("@")?;
         match self.next() {
@@ -399,6 +439,15 @@ impl Parser {
                 });
             }
         }
+        let members = self.node_members()?;
+        Ok(NodeDecl {
+            name,
+            kind: NodeKind::Reference(kernel),
+            members,
+        })
+    }
+
+    fn node_members(&mut self) -> Result<Vec<NodeMember>, ParseError> {
         self.expect_punct("{")?;
         let mut members = Vec::new();
         while !self.is_punct("}") {
@@ -426,11 +475,7 @@ impl Parser {
             }
         }
         self.expect_punct("}")?;
-        Ok(NodeDecl {
-            name,
-            kind: NodeKind::Reference(kernel),
-            members,
-        })
+        Ok(members)
     }
 
     fn source_ref(&mut self) -> Result<SourceRef, ParseError> {
@@ -789,9 +834,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 14] = [
+const RESERVED: [&str; 15] = [
     "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "node", "use",
-    "from", "input", "output",
+    "from", "input", "output", "graph",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
