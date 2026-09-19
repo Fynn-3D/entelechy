@@ -1,0 +1,15 @@
+[package]
+name = "orla-graph"
+description = "Orla Graph Runtime: composes Kernels by KernelID with cached, dirty-tracked evaluation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-runtime = { path = "../runtime" }
+orla-ir = { path = "../ir" }
+orla-abi = { path = "../abi" }
+
+[lints]
+workspace = true
