@@ -31,6 +31,15 @@ capability claim.
 
 ## Contracts worth knowing
 
+- Control flow is structured and expression-shaped: `if c { a } else { b }`
+  and `loop N with x = init until done { next }` lower to [`Op::If` and
+  `Op::Loop`](crates/ir/src/lib.rs) with pre-order value ids and block
+  scoping proved by [the validator](crates/ir/src/validate.rs). Only the taken
+  branch executes and loop bounds are compile-time constants
+  ([execution tests](crates/cpu/tests/execute.rs),
+  [scoping diagnostics](crates/compiler/tests/compile.rs)). The
+  [ray-march example](examples/raymarch/README.md) is the working proof.
+
 - Vector math and the clock: `Vec3`, `dot`, `cross`, `normalize`, `pow`,
   `step`, `smoothstep`, `reflect`, and `time()` are typed in
   [the IR](crates/ir/src/lib.rs) and exercised by

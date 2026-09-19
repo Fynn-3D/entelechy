@@ -1,0 +1,12 @@
+# signed-distance scene -> tone mapping -> output
+graph raymarch
+
+node scene = scene.march@1
+  domain 400 260
+  steps = 96
+
+node display = image.tonemap@1
+  source <- scene.result
+  exposure = 1.1
+
+output display.result

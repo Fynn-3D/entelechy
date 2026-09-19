@@ -11,3 +11,5 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   through grayscale and pixelate Kernels; edit any Kernel while it runs.
 - [material-ball](material-ball/README.md): a shaded sphere under an orbiting
   light, tone-mapped by a second Kernel, shown live in the Player.
+- [raymarch](raymarch/README.md): a signed-distance scene marched with `loop`
+  and shaded with `if`; the case that needs the GPU backend.
