@@ -44,15 +44,19 @@ the binary as a client.
 Fusion exists: pointwise chains run as one detached Kernel version, bit-
 identical to the materialized chain, with pinning to observe absorbed nodes.
 
+Residency exists: GPU images stay on the device between nodes and frames;
+the Host owns them as resident slots; `Runtime::image` is the observation
+boundary.
+
 ## Next
 
-GPU residency: images stay on the device between nodes, committed state is
-a ping-pong pair, and readback happens only at observation boundaries (an
-export, a `read`, a pinned node, the Player's present). Keep the Host as
-the owner: a resident image is a Host resource whose bytes live on the
-device until observed. Acceptance: the material ball and ray-march scenes
-run without a per-node upload or readback, parity tests still pass, and the
-Life state loop never leaves the device.
+Present without readback: the Player still downloads the output image every
+frame to blit it through softbuffer. Give the Player a wgpu surface and let
+the GPU backend present a resident output directly, so a frame never
+crosses to the Host unless something else observes it. Keep the CPU path as
+the fallback. Acceptance: the Player on the GPU shows the ray-march scene
+with zero downloads per frame (the Host's resident count stays equal to its
+live count while the window runs).
 
 Then let the protocol drive the Player: the Player as a `serve` client that
 shows frames, so an agent and a person watch the same window.
@@ -68,6 +72,6 @@ which bounds frame rate by transfer at large domains; residency is the answer,
 after fusion.
 Only Life has replay tests; the other examples are time-driven renders whose
 pixels a replay could still pin down at fixed times.
-Committed state is read through the Host each frame; on the GPU backend that
-means the previous frame is uploaded again. Residency will make it a
-ping-pong pair.
+Fused groups are prepared at evaluation time: on the GPU that is a shader
+compile on the rendering thread, so republishing a fused Kernel can hitch
+one frame. Preparing fused groups on a worker thread is the fix.

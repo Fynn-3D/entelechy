@@ -33,6 +33,15 @@ capability claim.
 
 ## Contracts worth knowing
 
+- Residency: the Host owns every image, but a slot may hold its pixels on a
+  device as an opaque object the backend understands
+  ([host](crates/host/src/lib.rs)). The GPU backend binds resident inputs
+  directly, uploads Host-memory inputs once, and leaves outputs resident;
+  committed state therefore ping-pongs on the device. Pixels return only at
+  observation boundaries through [`Runtime::image`](crates/runtime/src/lib.rs)
+  (export, protocol `read`, replay `expect`, the Player's present), which is
+  where device work is waited for ([residency test](crates/gpu/tests/parity.rs)).
+
 - Fusion is backend-neutral and exact: a producer read by exactly one
   consumer, only through `sample`, over the same domain, that is neither a
   graph output, a state source, nor pinned, is inlined into that consumer

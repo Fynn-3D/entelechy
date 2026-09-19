@@ -40,8 +40,10 @@ through the protocol to observe its image.
 
 `run` and the Player take `--backend cpu|gpu`. The CPU interpreter is the
 reference and reports per-pixel integer failures; the GPU backend runs the
-same IR as WGSL compute through wgpu and is the one to use for anything
-interactive. The Player defaults to the GPU when a device is available.
+same IR as WGSL compute through wgpu, keeps images resident on the device
+between nodes and frames, and reads pixels back only when something
+observes them. It is the one to use for anything interactive. The Player
+defaults to the GPU when a device is available.
 
 ```sh
 cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm
