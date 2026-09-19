@@ -54,16 +54,16 @@ pub trait Backend: Send + Sync {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<ImageHandle>, ExecutionError>;
 
-    /// Downloads the pixels of an image this backend left resident. The
-    /// default is for backends that never do.
+    /// Downloads the bytes of a resource this backend left resident:
+    /// `byte_len` bytes of little-endian words. The default is for backends
+    /// that never do.
     fn download(
         &self,
         device: &(dyn Any + Send + Sync),
-        width: u32,
-        height: u32,
-    ) -> Result<Vec<Pixel>, String> {
-        let _ = (device, width, height);
-        Err("this backend keeps no resident images".into())
+        byte_len: usize,
+    ) -> Result<Vec<u8>, String> {
+        let _ = (device, byte_len);
+        Err("this backend keeps no resident resources".into())
     }
 }
 
@@ -323,13 +323,41 @@ impl Runtime {
             .host
             .image_size(handle)
             .map_err(|e| ExecutionError::Abi(e.into()))?;
-        let pixels = self
+        let schema = self
+            .host
+            .schema(handle)
+            .map_err(|e| ExecutionError::Abi(e.into()))?
+            .cloned();
+        let byte_len = match &schema {
+            Some(schema) => width as usize * schema.words() * 4,
+            None => width as usize * height as usize * 16,
+        };
+        let bytes = self
             .backend
-            .download(device, width, height)
+            .download(device, byte_len)
             .map_err(ExecutionError::Device)?;
-        self.host
-            .materialize(handle, pixels)
-            .map_err(|e| ExecutionError::Abi(e.into()))
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let result = match schema {
+            Some(_) => self.host.materialize_words(handle, words),
+            None => {
+                let pixels: Vec<Pixel> = words
+                    .chunks_exact(4)
+                    .map(|c| {
+                        [
+                            f32::from_bits(c[0]),
+                            f32::from_bits(c[1]),
+                            f32::from_bits(c[2]),
+                            f32::from_bits(c[3]),
+                        ]
+                    })
+                    .collect();
+                self.host.materialize(handle, pixels)
+            }
+        };
+        result.map_err(|e| ExecutionError::Abi(e.into()))
     }
 
     /// The image behind a handle, materialized if it was resident. This is

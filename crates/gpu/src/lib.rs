@@ -18,9 +18,9 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Mutex;
 
-use orla_abi::{ImageHandle, Invocation, Pixel, Scope, Value};
+use orla_abi::{ImageHandle, Invocation, Pixel, PortType, Scope, Value};
 use orla_cpu::{ExecutionError, check_invocation};
-use orla_ir::Validated;
+use orla_ir::{Validated, schema_of};
 use orla_runtime::{Backend, Prepared};
 
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
@@ -247,7 +247,7 @@ impl Backend for GpuBackend {
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
         for (index, handle) in invocation.inputs.iter().enumerate() {
-            let (width, height) = scope.image_size(*handle)?;
+            let (width, height) = scope.resource_size(*handle)?;
             context.extend_from_slice(&[width as f32, height as f32, 0.0, 0.0]);
             let resident = scope
                 .image_resident(*handle)?
@@ -256,10 +256,18 @@ impl Backend for GpuBackend {
             let buffer = match resident {
                 Some(buffer) => buffer,
                 None => {
-                    let pixels = scope.image_pixels(*handle)?;
+                    let bytes = if module.manifest.inputs[index].is_field() {
+                        scope
+                            .field_words(*handle)?
+                            .iter()
+                            .flat_map(|w| w.to_le_bytes())
+                            .collect::<Vec<u8>>()
+                    } else {
+                        pixel_bytes(scope.image_pixels(*handle)?)
+                    };
                     let buffer = self.buffer(
                         &format!("input {index}"),
-                        &pixel_bytes(pixels),
+                        &bytes,
                         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                     );
                     scope.image_make_resident(
@@ -280,7 +288,14 @@ impl Backend for GpuBackend {
             &param_bytes(&invocation.params),
             wgpu::BufferUsages::UNIFORM,
         );
-        let output_size = (pixel_count * 16) as u64;
+        let output_port = &module.manifest.outputs[0];
+        let output_words = match &output_port.ty {
+            PortType::Image => 4,
+            PortType::Field { element, .. } => {
+                schema_of(*element, &module.structs).map_or(1, |s| s.words())
+            }
+        };
+        let output_size = (pixel_count * output_words * 4) as u64;
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("output"),
             size: output_size,
@@ -340,22 +355,23 @@ impl Backend for GpuBackend {
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(error.to_string()));
         }
-        let output = scope.image_adopt_resident(
-            domain.width,
-            domain.height,
-            Box::new(DeviceImage {
-                buffer: output_buffer,
-            }),
-        )?;
+        let device = Box::new(DeviceImage {
+            buffer: output_buffer,
+        });
+        let output = match &output_port.ty {
+            PortType::Image => scope.image_adopt_resident(domain.width, domain.height, device)?,
+            PortType::Field { schema, .. } => {
+                scope.field_adopt_resident(schema.clone(), domain.width, device)?
+            }
+        };
         Ok(vec![output])
     }
 
     fn download(
         &self,
         device: &(dyn Any + Send + Sync),
-        width: u32,
-        height: u32,
-    ) -> Result<Vec<Pixel>, String> {
+        byte_len: usize,
+    ) -> Result<Vec<u8>, String> {
         let image = device
             .downcast_ref::<DeviceImage>()
             .ok_or_else(|| "image is resident on a different backend".to_string())?;
@@ -363,8 +379,7 @@ impl Backend for GpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let pixel_count = width as usize * height as usize;
-        let size = (pixel_count * 16) as u64;
+        let size = byte_len as u64;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("staging"),
             size,
@@ -394,27 +409,15 @@ impl Backend for GpuBackend {
             .recv()
             .map_err(|_| "readback was dropped".to_string())?
             .map_err(|error| error.to_string())?;
-        let pixels: Vec<Pixel> = {
+        let bytes: Vec<u8> = {
             let view = staging
                 .slice(..)
                 .get_mapped_range()
                 .map_err(|error| error.to_string())?;
-            view.chunks_exact(16)
-                .take(pixel_count)
-                .map(|chunk| {
-                    std::array::from_fn(|i| {
-                        f32::from_le_bytes([
-                            chunk[i * 4],
-                            chunk[i * 4 + 1],
-                            chunk[i * 4 + 2],
-                            chunk[i * 4 + 3],
-                        ])
-                    })
-                })
-                .collect()
+            view[..byte_len].to_vec()
         };
         staging.unmap();
-        Ok(pixels)
+        Ok(bytes)
     }
 }
 

@@ -8,7 +8,8 @@
 use std::fmt::Write;
 
 use orla_ir::{
-    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, Type, UnaryOp, Value, ValueId,
+    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, PortType, Type, UnaryOp, Value,
+    ValueId, schema_of,
 };
 
 /// Binding index of the context uniform.
@@ -79,15 +80,18 @@ pub fn emit(module: &Module) -> String {
         out,
         "@group(0) @binding({PARAMS_BINDING}) var<uniform> params: array<vec4<f32>, {params_len}>;"
     );
+    let output_is_field = manifest.outputs.first().is_some_and(|port| port.is_field());
     let _ = writeln!(
         out,
-        "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<vec4<f32>>;"
+        "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<{}>;",
+        if output_is_field { "u32" } else { "vec4<f32>" }
     );
-    for index in 0..manifest.inputs.len() {
+    for (index, port) in manifest.inputs.iter().enumerate() {
         let _ = writeln!(
             out,
-            "@group(0) @binding({}) var<storage, read> in{index}: array<vec4<f32>>;",
-            INPUT_BINDING + index as u32
+            "@group(0) @binding({}) var<storage, read> in{index}: array<{}>;",
+            INPUT_BINDING + index as u32,
+            if port.is_field() { "u32" } else { "vec4<f32>" }
         );
     }
     out.push('\n');
@@ -110,7 +114,20 @@ pub fn emit(module: &Module) -> String {
     return ((word >> (c & 31u)) & 1u) == 1u;
 }}"
     );
-    for index in 0..manifest.inputs.len() {
+    for (index, port) in manifest.inputs.iter().enumerate() {
+        if let PortType::Field { element, .. } = &port.ty {
+            let stride = schema_of(*element, &module.structs).map_or(1, |s| s.words());
+            let (expr, _) = load_expr(module, *element, &format!("in{index}"), "b", 0);
+            let _ = writeln!(
+                out,
+                "fn load_in{index}(index: u32) -> {} {{
+    let b = index * {stride}u;
+    return {expr};
+}}",
+                wgsl_type(*element)
+            );
+            continue;
+        }
         let slot = CONTEXT_HEAD + index;
         let _ = writeln!(
             out,
@@ -136,6 +153,20 @@ pub fn emit(module: &Module) -> String {
         );
     }
     out.push('\n');
+    if let Some(PortType::Field { element, .. }) = manifest.outputs.first().map(|p| &p.ty) {
+        let stride = schema_of(*element, &module.structs).map_or(1, |s| s.words());
+        let mut stores = Vec::new();
+        store_lines(module, *element, "v", 0, &mut stores);
+        let _ = writeln!(
+            out,
+            "fn store_out0(index: u32, v: {}) {{
+    let b = index * {stride}u;
+{}
+}}",
+            wgsl_type(*element),
+            stores.join("\n")
+        );
+    }
     for (index, function) in module.functions.iter().enumerate() {
         emit_function(&mut out, module, function, &format!("f{index}"), false);
         out.push('\n');
@@ -152,15 +183,104 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return;
     }}
     let coord = vec2<f32>(f32(gid.x), f32(gid.y));
-    out0[gid.y * w + gid.x] = entry(coord);
-}}"
+    {}
+}}",
+        if output_is_field {
+            "store_out0(gid.x, entry(coord, gid.x));"
+        } else {
+            "out0[gid.y * w + gid.x] = entry(coord, gid.x);"
+        }
     );
     out
 }
 
+/// An expression loading a value of type `ty` from `buffer[base + offset..]`,
+/// and the words it consumes.
+fn load_expr(
+    module: &Module,
+    ty: Type,
+    buffer: &str,
+    base: &str,
+    offset: usize,
+) -> (String, usize) {
+    let word = |k: usize| format!("{buffer}[{base} + {k}u]");
+    match ty {
+        Type::Float => (format!("bitcast<f32>({})", word(offset)), 1),
+        Type::Int => (format!("bitcast<i32>({})", word(offset)), 1),
+        Type::Bool => (format!("({} != 0u)", word(offset)), 1),
+        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::Image => {
+            let n = ty.components().unwrap_or(4) as usize;
+            let parts = (0..n)
+                .map(|k| format!("bitcast<f32>({})", word(offset + k)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (format!("{}({parts})", wgsl_type(ty)), n)
+        }
+        Type::Struct(index) => {
+            let def = &module.structs[index as usize];
+            let mut parts = Vec::new();
+            let mut used = 0;
+            for field in &def.fields {
+                let (expr, n) = load_expr(module, field.ty, buffer, base, offset + used);
+                parts.push(expr);
+                used += n;
+            }
+            (format!("S{index}({})", parts.join(", ")), used)
+        }
+    }
+}
+
+/// Statements storing `path` (a value of type `ty`) into `out0[b + ..]`.
+fn store_lines(
+    module: &Module,
+    ty: Type,
+    path: &str,
+    offset: usize,
+    out: &mut Vec<String>,
+) -> usize {
+    match ty {
+        Type::Float => {
+            out.push(format!("    out0[b + {offset}u] = bitcast<u32>({path});"));
+            1
+        }
+        Type::Int => {
+            out.push(format!("    out0[b + {offset}u] = bitcast<u32>({path});"));
+            1
+        }
+        Type::Bool => {
+            out.push(format!("    out0[b + {offset}u] = select(0u, 1u, {path});"));
+            1
+        }
+        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::Image => {
+            let n = ty.components().unwrap_or(4) as usize;
+            for (k, component) in ["x", "y", "z", "w"].iter().take(n).enumerate() {
+                out.push(format!(
+                    "    out0[b + {}u] = bitcast<u32>({path}.{component});",
+                    offset + k
+                ));
+            }
+            n
+        }
+        Type::Struct(index) => {
+            let def = &module.structs[index as usize];
+            let mut used = 0;
+            for (k, field) in def.fields.iter().enumerate() {
+                used += store_lines(
+                    module,
+                    field.ty,
+                    &format!("{path}.f{k}"),
+                    offset + used,
+                    out,
+                );
+            }
+            used
+        }
+    }
+}
+
 fn emit_function(out: &mut String, module: &Module, function: &Function, name: &str, entry: bool) {
     let args = if entry {
-        "coord: vec2<f32>".to_owned()
+        "coord: vec2<f32>, element: u32".to_owned()
     } else {
         function
             .args
@@ -337,6 +457,14 @@ impl Emitter<'_> {
             Op::PointerDown => "(ctx[0].w != 0.0)".to_owned(),
             Op::Key(code) => format!("key_down({})", v(code)),
             Op::ImageSize(input) => format!("ctx[{}].xy", CONTEXT_HEAD as u32 + input),
+            Op::Element => "i32(element)".to_owned(),
+            Op::FieldCount(input) => format!("i32(ctx[{}].x)", CONTEXT_HEAD as u32 + input),
+            Op::FieldSample(input) => format!("load_in{input}(element)"),
+            Op::FieldAt(input, index) => format!(
+                "load_in{input}(u32(clamp({}, 0i, i32(ctx[{}].x) - 1i)))",
+                v(index),
+                CONTEXT_HEAD as u32 + input
+            ),
             Op::ImageSample(input) => format!("fetch{input}(coord)"),
             Op::ImageFetch(input, coord) => format!("fetch{input}({})", v(coord)),
         };

@@ -16,7 +16,15 @@ fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::ImageHandle
         .resident(handle)
         .unwrap()
         .expect("gpu outputs are resident");
-    let pixels = Backend::download(gpu, device, width, height).unwrap();
+    let bytes = Backend::download(gpu, device, width as usize * height as usize * 16).unwrap();
+    let pixels: Vec<[f32; 4]> = bytes
+        .chunks_exact(16)
+        .map(|c| {
+            std::array::from_fn(|i| {
+                f32::from_le_bytes([c[i * 4], c[i * 4 + 1], c[i * 4 + 2], c[i * 4 + 3]])
+            })
+        })
+        .collect();
     host.materialize(handle, pixels).unwrap();
     host.image(handle).unwrap().pixels().to_vec()
 }
@@ -363,4 +371,44 @@ fn chains_and_state_stay_resident_until_observed() {
         )
         .unwrap();
     assert_eq!(runtime.image(report.output).unwrap().pixels()[0][0], 4.0);
+}
+
+#[test]
+fn fields_flow_through_the_gpu_exactly() {
+    let Some(gpu) = gpu() else { return };
+    let backend: Box<dyn Backend> = Box::new(gpu);
+    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
+    runtime
+        .load("kernel test.seed@1 { requires { field.write; } output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3, alive: i / 2 * 2 == i }; } }")
+        .unwrap();
+    runtime
+        .load("kernel test.step@1 { requires { field.read; field.write; } input previous: Field<Particle>; output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 1 + count(previous), alive: !p.alive }; } }")
+        .unwrap();
+    runtime
+        .load("kernel test.draw@1 { requires { field.read; image.write; } input particles: Field<Particle>; output result: Image; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = at(particles, int(coord().x)); return vec4(p.position.x, p.position.y, float(p.life), float(p.alive)); } }")
+        .unwrap();
+    let graph = orla_graph::Graph::parse(
+        "node seed: test.seed@1 { domain = 8; }
+         node step: test.step@1 { previous <~ step.result from seed.result; }
+         node draw: test.draw@1 { source <- step.result; domain = vec2(8, 1); }
+         output result <- draw.result;"
+            .replace("source <-", "particles <-")
+            .as_str(),
+    )
+    .unwrap();
+    let mut evaluator = orla_graph::Evaluator::new();
+    let none: std::collections::BTreeMap<String, orla_abi::ImageHandle> = Default::default();
+    let params: std::collections::BTreeMap<String, Value> = Default::default();
+    let report = evaluator
+        .evaluate(&graph, &mut runtime, &none, &Context::default(), &params)
+        .unwrap();
+    assert_eq!(
+        runtime.host().resident_images(),
+        runtime.host().live_images()
+    );
+    let image = runtime.image(report.output).unwrap();
+    // Element 2 after one step: position (2,1)+(3,1.5), life 6-1+8, alive flipped.
+    assert_eq!(image.pixels()[2], [5.0, 2.5, 13.0, 0.0]);
+    // Element 7 reads its clamped neighbour (itself).
+    assert_eq!(image.pixels()[7], [14.0, 7.0, 28.0, 1.0]);
 }

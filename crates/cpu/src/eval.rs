@@ -163,13 +163,15 @@ impl<'m> Machine<'m> {
         }
     }
 
-    /// Runs the entry point for one pixel and returns its results.
-    pub(crate) fn run_entry(
+    /// Runs the entry point for one element and encodes its results into
+    /// `out` as words, result after result.
+    pub(crate) fn run_entry_words(
         &mut self,
         scope: &Scope<'_>,
         x: u32,
         y: u32,
-    ) -> Result<impl Iterator<Item = &Value>, ExecutionError> {
+        out: &mut [u32],
+    ) -> Result<(), ExecutionError> {
         self.stack.clear();
         let layout = &self.layouts.entry;
         self.stack.resize(layout.values_size, Value::Float(0.0));
@@ -187,11 +189,115 @@ impl<'m> Machine<'m> {
             loops: Vec::new(),
         };
         frame.instructions(&entry.body, &mut self.stack)?;
-        let stack = &self.stack;
-        Ok(entry
-            .results
-            .iter()
-            .map(move |id| &stack[layout.offsets[id.0 as usize]]))
+        let mut cursor = 0;
+        for id in &entry.results {
+            let ty = find_type(entry, *id).unwrap_or(Type::Float);
+            cursor += encode(
+                self.module,
+                &self.layouts,
+                ty,
+                &self.stack[layout.offsets[id.0 as usize]..],
+                &mut out[cursor..],
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Encodes the value of type `ty` starting at `slots[0]` into words,
+/// returning how many words were written.
+fn encode(module: &Module, layouts: &Layouts, ty: Type, slots: &[Value], out: &mut [u32]) -> usize {
+    match ty {
+        Type::Struct(index) => {
+            let def = &module.structs[index as usize];
+            let layout = &layouts.structs[index as usize];
+            let mut written = 0;
+            for (field, offset) in def.fields.iter().zip(&layout.field_offsets) {
+                written += encode(
+                    module,
+                    layouts,
+                    field.ty,
+                    &slots[*offset..],
+                    &mut out[written..],
+                );
+            }
+            written
+        }
+        _ => {
+            let words: Vec<u32> = match slots[0] {
+                Value::Float(v) => vec![v.to_bits()],
+                Value::Int(v) => vec![v as u32],
+                Value::Bool(v) => vec![v as u32],
+                Value::Vec2(v) => v.iter().map(|c| c.to_bits()).collect(),
+                Value::Vec3(v) => v.iter().map(|c| c.to_bits()).collect(),
+                Value::Vec4(v) => v.iter().map(|c| c.to_bits()).collect(),
+            };
+            out[..words.len()].copy_from_slice(&words);
+            words.len()
+        }
+    }
+}
+
+/// Decodes words into the slots of a value of type `ty` starting at
+/// `stack[dst]`, returning how many words were consumed.
+fn decode(
+    module: &Module,
+    layouts: &Layouts,
+    ty: Type,
+    words: &[u32],
+    stack: &mut [Value],
+    dst: usize,
+) -> usize {
+    match ty {
+        Type::Struct(index) => {
+            let def = &module.structs[index as usize];
+            let layout = &layouts.structs[index as usize];
+            let mut consumed = 0;
+            for (field, offset) in def.fields.iter().zip(&layout.field_offsets) {
+                consumed += decode(
+                    module,
+                    layouts,
+                    field.ty,
+                    &words[consumed..],
+                    stack,
+                    dst + offset,
+                );
+            }
+            consumed
+        }
+        Type::Float => {
+            stack[dst] = Value::Float(f32::from_bits(words[0]));
+            1
+        }
+        Type::Int => {
+            stack[dst] = Value::Int(words[0] as i32);
+            1
+        }
+        Type::Bool => {
+            stack[dst] = Value::Bool(words[0] != 0);
+            1
+        }
+        Type::Vec2 => {
+            stack[dst] = Value::Vec2([f32::from_bits(words[0]), f32::from_bits(words[1])]);
+            2
+        }
+        Type::Vec3 => {
+            stack[dst] = Value::Vec3([
+                f32::from_bits(words[0]),
+                f32::from_bits(words[1]),
+                f32::from_bits(words[2]),
+            ]);
+            3
+        }
+        Type::Vec4 | Type::Image => {
+            stack[dst] = Value::Vec4([
+                f32::from_bits(words[0]),
+                f32::from_bits(words[1]),
+                f32::from_bits(words[2]),
+                f32::from_bits(words[3]),
+            ]);
+            4
+        }
     }
 }
 
@@ -407,6 +513,37 @@ impl<'m> Frame<'_, 'm> {
                     .expect("validation guarantees a loop")
                     .index,
             ),
+            Op::Element => Value::Int(x as i32),
+            Op::FieldCount(input) => {
+                let (count, _) = self
+                    .scope
+                    .resource_size(self.invocation.inputs[*input as usize])?;
+                Value::Int(count as i32)
+            }
+            Op::FieldSample(input) | Op::FieldAt(input, _) => {
+                let handle = self.invocation.inputs[*input as usize];
+                let index = match &instruction.op {
+                    Op::FieldAt(_, index) => {
+                        let Value::Int(index) = at(stack, index) else {
+                            unreachable!("validation guarantees an Int index")
+                        };
+                        let (count, _) = self.scope.resource_size(handle)?;
+                        index.clamp(0, count as i32 - 1) as u32
+                    }
+                    _ => x,
+                };
+                let words = self.scope.field_element(handle, index)?.to_vec();
+                let destination = self.slot(&instruction.id);
+                decode(
+                    self.module,
+                    self.layouts,
+                    instruction.ty,
+                    &words,
+                    stack,
+                    destination,
+                );
+                return Ok(Produced::Done);
+            }
             Op::Coord => Value::Vec2([x as f32, y as f32]),
             Op::Domain => Value::Vec2([
                 self.invocation.domain.width as f32,

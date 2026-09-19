@@ -416,3 +416,61 @@ fn structs_carry_several_values_through_loops_calls_and_branches() {
         [0.5, 1.0, -1.0, 1.0],
     );
 }
+
+#[test]
+fn fields_carry_struct_elements_with_exact_integers() {
+    let seed = compile(
+        "kernel test.seed@1 { requires { field.write; } output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3 + 2000000000, alive: i / 2 * 2 == i }; } }",
+    )
+    .unwrap();
+    let step = compile(
+        "kernel test.step@1 { requires { field.read; field.write; } input previous: Field<Particle>; output result: Field<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 2000000000 + count(previous), alive: !p.alive }; } }",
+    )
+    .unwrap();
+    let mut host = Host::new(4096);
+    let domain = Domain {
+        width: 8,
+        height: 1,
+    };
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain,
+        context: Context::default(),
+    };
+    let fields: Capabilities = [Capability::FieldRead, Capability::FieldWrite]
+        .into_iter()
+        .collect();
+    let mut scope = Scope::new(&mut host, fields.clone());
+    let seeded = CpuBackend.execute(&seed, &invocation, &mut scope).unwrap()[0];
+    assert_eq!(host.schema(seeded).unwrap().unwrap().to_string(), "f,f,i,b");
+    assert_eq!(
+        host.field(seeded).unwrap().element(3).unwrap(),
+        &[3.0f32.to_bits(), 1.5f32.to_bits(), 2000000009u32, 0]
+    );
+    let invocation = Invocation {
+        inputs: vec![seeded],
+        params: vec![],
+        domain,
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, fields);
+    let stepped = CpuBackend.execute(&step, &invocation, &mut scope).unwrap()[0];
+    let element = host.field(stepped).unwrap().element(2).unwrap().to_vec();
+    assert_eq!(element, vec![5.0f32.to_bits(), 2.5f32.to_bits(), 14, 0]);
+    let last = host.field(stepped).unwrap().element(7).unwrap().to_vec();
+    assert_eq!(
+        last,
+        vec![14.0f32.to_bits(), 7.0f32.to_bits(), 29, 1],
+        "at clamps to the last element"
+    );
+
+    let error = compile(
+        "kernel test.bad@1 { requires { field.read; image.write; } input p: Field<Vec2>; output result: Image; compute { return sample(p); } }",
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("needs a Vec4 per pixel"),
+        "{error}"
+    );
+}

@@ -15,8 +15,8 @@ mod eval;
 
 use std::fmt;
 
-use orla_abi::{AbiError, ImageHandle, Invocation, Pixel, Scope, Type, Value};
-use orla_ir::Validated;
+use orla_abi::{AbiError, ImageHandle, Invocation, Pixel, PortType, Scope, Type};
+use orla_ir::{Validated, schema_of};
 
 pub use eval::ArithmeticError;
 
@@ -120,12 +120,45 @@ impl CpuBackend {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<ImageHandle>, ExecutionError> {
         check_invocation(module, invocation)?;
-        let results = compute(module, invocation, scope)?;
+        let strides = output_strides(module);
+        let results = compute(module, invocation, scope, &strides)?;
         let domain = invocation.domain;
-        let output_count = module.manifest.outputs.len();
-        let mut outputs = Vec::with_capacity(output_count);
-        for _ in 0..output_count {
-            match scope.image_create(domain.width, domain.height) {
+        let stride: usize = strides.iter().sum();
+        let count = domain.width as usize * domain.height as usize;
+        let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
+        let mut offset = 0;
+        for (port, words) in module.manifest.outputs.iter().zip(&strides) {
+            // Gather this output's words, element after element.
+            let mut own: Vec<u32> = Vec::with_capacity(count * words);
+            for element in 0..count {
+                let base = element * stride + offset;
+                own.extend_from_slice(&results[base..base + words]);
+            }
+            offset += words;
+            let created = match &port.ty {
+                PortType::Image => {
+                    scope
+                        .image_create(domain.width, domain.height)
+                        .and_then(|handle| {
+                            let pixels: Vec<Pixel> = own
+                                .chunks_exact(4)
+                                .map(|c| {
+                                    [
+                                        f32::from_bits(c[0]),
+                                        f32::from_bits(c[1]),
+                                        f32::from_bits(c[2]),
+                                        f32::from_bits(c[3]),
+                                    ]
+                                })
+                                .collect();
+                            scope.image_write_all(handle, &pixels).map(|()| handle)
+                        })
+                }
+                PortType::Field { schema, .. } => scope
+                    .field_create(schema.clone(), domain.width)
+                    .and_then(|handle| scope.field_write_all(handle, &own).map(|()| handle)),
+            };
+            match created {
                 Ok(handle) => outputs.push(handle),
                 Err(error) => {
                     release_all(scope, &outputs);
@@ -133,34 +166,39 @@ impl CpuBackend {
                 }
             }
         }
-        let mut pixels = results.chunks_exact(output_count.max(1));
-        for y in 0..domain.height {
-            for x in 0..domain.width {
-                let pixel = pixels.next().unwrap_or(&[]);
-                for (output, value) in outputs.iter().zip(pixel) {
-                    if let Err(error) = scope.image_write(*output, x, y, *value) {
-                        release_all(scope, &outputs);
-                        return Err(error.into());
-                    }
-                }
-            }
-        }
         Ok(outputs)
     }
 }
 
-/// Runs the entry point over every pixel, reading through `scope` only.
-/// Returns `outputs` pixels per position, row-major.
+/// Words per element of each output: four for an image, the schema's count
+/// for a Field.
+fn output_strides(module: &Validated) -> Vec<usize> {
+    module
+        .manifest
+        .outputs
+        .iter()
+        .map(|port| match &port.ty {
+            PortType::Image => 4,
+            PortType::Field { element, .. } => schema_of(*element, &module.structs)
+                .map(|schema| schema.words())
+                .unwrap_or(0),
+        })
+        .collect()
+}
+
+/// Runs the entry point over every element, reading through `scope` only.
+/// Returns every output's words per element, outputs concatenated.
 fn compute(
     module: &Validated,
     invocation: &Invocation,
     scope: &Scope<'_>,
-) -> Result<Vec<Pixel>, ExecutionError> {
+    strides: &[usize],
+) -> Result<Vec<u32>, ExecutionError> {
     let domain = invocation.domain;
     let width = domain.width as usize;
-    let output_count = module.manifest.outputs.len();
-    let stride = width * output_count;
-    let mut results = vec![[0.0; 4]; domain.height as usize * stride];
+    let stride: usize = strides.iter().sum();
+    let row_words = width * stride;
+    let mut results = vec![0u32; domain.height as usize * row_words];
     let pixel_count = width * domain.height as usize;
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -169,19 +207,13 @@ fn compute(
         .min(pixel_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
     let rows_per_thread = (domain.height as usize).div_ceil(threads);
-    let run_rows = |first_row: usize, rows: &mut [Pixel]| -> Result<(), ExecutionError> {
+    let run_rows = |first_row: usize, rows: &mut [u32]| -> Result<(), ExecutionError> {
         let mut machine = eval::Machine::new(module, invocation);
-        for (offset, row) in rows.chunks_exact_mut(stride.max(1)).enumerate() {
+        for (offset, row) in rows.chunks_exact_mut(row_words.max(1)).enumerate() {
             let y = (first_row + offset) as u32;
             for x in 0..domain.width {
-                let values = machine.run_entry(scope, x, y)?;
-                let slot = x as usize * output_count;
-                for (target, value) in row[slot..slot + output_count].iter_mut().zip(values) {
-                    let Value::Vec4(pixel) = value else {
-                        unreachable!("validation guarantees Vec4 results for image outputs")
-                    };
-                    *target = *pixel;
-                }
+                let slot = x as usize * stride;
+                machine.run_entry_words(scope, x, y, &mut row[slot..slot + stride])?;
             }
         }
         Ok(())
@@ -190,7 +222,7 @@ fn compute(
         run_rows(0, &mut results)?;
         return Ok(results);
     }
-    let chunk_len = rows_per_thread * stride.max(1);
+    let chunk_len = rows_per_thread * row_words.max(1);
     let outcomes: Vec<Result<(), ExecutionError>> = std::thread::scope(|s| {
         let handles: Vec<_> = results
             .chunks_mut(chunk_len)
