@@ -25,10 +25,13 @@ impl fmt::Display for ArithmeticError {
     }
 }
 
+/// Interpreter state for one thread. All frames live on one value stack:
+/// a frame holds its arguments followed by its instruction values, so
+/// calls allocate nothing.
 pub(crate) struct Machine<'m> {
     module: &'m Validated,
     invocation: &'m Invocation,
-    entry_values: Vec<Value>,
+    stack: Vec<Value>,
 }
 
 impl<'m> Machine<'m> {
@@ -36,116 +39,111 @@ impl<'m> Machine<'m> {
         Self {
             module,
             invocation,
-            entry_values: Vec::with_capacity(module.entry.body.len()),
+            stack: Vec::with_capacity(module.entry.body.len() * 2),
         }
     }
 
+    /// Runs the entry point for one pixel and returns its results.
     pub(crate) fn run_entry(
         &mut self,
-        scope: &mut Scope<'_>,
+        scope: &Scope<'_>,
         x: u32,
         y: u32,
-    ) -> Result<Vec<Value>, ExecutionError> {
-        let mut values = std::mem::take(&mut self.entry_values);
-        values.clear();
+    ) -> Result<impl Iterator<Item = &Value>, ExecutionError> {
+        self.stack.clear();
         let entry = &self.module.entry;
-        let result = self.run(scope, entry, &[], x, y, &mut values);
-        self.entry_values = values;
-        let values = &self.entry_values;
-        result.map(|()| {
-            entry
-                .results
-                .iter()
-                .map(|id| values[id.0 as usize])
-                .collect()
-        })
+        run(
+            self.module,
+            self.invocation,
+            scope,
+            entry,
+            0,
+            &mut self.stack,
+            x,
+            y,
+        )?;
+        let stack = &self.stack;
+        Ok(entry.results.iter().map(move |id| &stack[id.0 as usize]))
     }
+}
 
-    fn call(
-        &self,
-        scope: &mut Scope<'_>,
-        function: &Function,
-        args: &[Value],
-        x: u32,
-        y: u32,
-    ) -> Result<Value, ExecutionError> {
-        let mut values = Vec::with_capacity(function.body.len());
-        self.run(scope, function, args, x, y, &mut values)?;
-        Ok(values[function.results[0].0 as usize])
+/// Executes `function` whose arguments already sit at `stack[base..]`.
+/// Instruction values follow the arguments.
+#[allow(clippy::too_many_arguments)]
+fn run(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+    function: &Function,
+    base: usize,
+    stack: &mut Vec<Value>,
+    x: u32,
+    y: u32,
+) -> Result<(), ExecutionError> {
+    let arithmetic = |error| ExecutionError::Arithmetic { x, y, error };
+    let values = base + function.args.len();
+    for instruction in &function.body {
+        let at = |id: &orla_ir::ValueId| stack[values + id.0 as usize];
+        let value = match &instruction.op {
+            Op::Const(value) => *value,
+            Op::Param(index) => invocation.params[*index as usize],
+            Op::Arg(index) => stack[base + *index as usize],
+            Op::Unary(UnaryOp::Neg, a) => negate(at(a)).map_err(arithmetic)?,
+            Op::Binary(op, a, b) => binary(*op, at(a), at(b)).map_err(arithmetic)?,
+            Op::Construct(parts) => {
+                let mut components = [0.0; 4];
+                for (slot, part) in components.iter_mut().zip(parts) {
+                    *slot = float(at(part));
+                }
+                from_parts(components, instruction.ty)
+            }
+            Op::Extract(vector, component) => {
+                Value::Float(components(at(vector))[*component as usize])
+            }
+            Op::Call(callee, call_args) => {
+                let callee = &module.functions[*callee as usize];
+                let frame = stack.len();
+                for arg in call_args {
+                    let value = stack[values + arg.0 as usize];
+                    stack.push(value);
+                }
+                run(module, invocation, scope, callee, frame, stack, x, y)?;
+                let result = stack[frame + callee.args.len() + callee.results[0].0 as usize];
+                stack.truncate(frame);
+                result
+            }
+            Op::Intrinsic(intrinsic, call_args) => {
+                let mut args = [Value::Float(0.0); 3];
+                for (slot, arg) in args.iter_mut().zip(call_args) {
+                    *slot = at(arg);
+                }
+                intrinsic_value(*intrinsic, &args[..call_args.len()])
+            }
+            Op::Coord => Value::Vec2([x as f32, y as f32]),
+            Op::Domain => Value::Vec2([
+                invocation.domain.width as f32,
+                invocation.domain.height as f32,
+            ]),
+            Op::Time => Value::Float(invocation.time),
+            Op::ImageSize(input) => {
+                let (width, height) = scope.image_size(invocation.inputs[*input as usize])?;
+                Value::Vec2([width as f32, height as f32])
+            }
+            Op::ImageSample(input) => {
+                let image = invocation.inputs[*input as usize];
+                Value::Vec4(fetch_clamped(scope, image, x as f32, y as f32)?)
+            }
+            Op::ImageFetch(input, coord) => {
+                let image = invocation.inputs[*input as usize];
+                let Value::Vec2([fx, fy]) = at(coord) else {
+                    unreachable!("validation guarantees a Vec2 coordinate")
+                };
+                Value::Vec4(fetch_clamped(scope, image, fx, fy)?)
+            }
+        };
+        stack.push(value);
     }
-
-    fn run(
-        &self,
-        scope: &mut Scope<'_>,
-        function: &Function,
-        args: &[Value],
-        x: u32,
-        y: u32,
-        values: &mut Vec<Value>,
-    ) -> Result<(), ExecutionError> {
-        let arithmetic = |error| ExecutionError::Arithmetic { x, y, error };
-        for instruction in &function.body {
-            let value = match &instruction.op {
-                Op::Const(value) => *value,
-                Op::Param(index) => self.invocation.params[*index as usize],
-                Op::Arg(index) => args[*index as usize],
-                Op::Unary(UnaryOp::Neg, a) => negate(values[a.0 as usize]).map_err(arithmetic)?,
-                Op::Binary(op, a, b) => {
-                    binary(*op, values[a.0 as usize], values[b.0 as usize]).map_err(arithmetic)?
-                }
-                Op::Construct(parts) => {
-                    let mut components = [0.0; 4];
-                    for (slot, part) in components.iter_mut().zip(parts) {
-                        *slot = float(values[part.0 as usize]);
-                    }
-                    match instruction.ty {
-                        Type::Vec2 => Value::Vec2([components[0], components[1]]),
-                        _ => Value::Vec4(components),
-                    }
-                }
-                Op::Extract(vector, component) => {
-                    Value::Float(components(values[vector.0 as usize])[*component as usize])
-                }
-                Op::Call(callee, call_args) => {
-                    let call_args: Vec<Value> =
-                        call_args.iter().map(|id| values[id.0 as usize]).collect();
-                    let callee = &self.module.functions[*callee as usize];
-                    self.call(scope, callee, &call_args, x, y)?
-                }
-                Op::Intrinsic(intrinsic, call_args) => {
-                    let call_args: Vec<Value> =
-                        call_args.iter().map(|id| values[id.0 as usize]).collect();
-                    intrinsic_value(*intrinsic, &call_args)
-                }
-                Op::Coord => Value::Vec2([x as f32, y as f32]),
-                Op::Domain => Value::Vec2([
-                    self.invocation.domain.width as f32,
-                    self.invocation.domain.height as f32,
-                ]),
-                Op::ImageSize(input) => {
-                    let (width, height) = scope.image_size(self.input(*input))?;
-                    Value::Vec2([width as f32, height as f32])
-                }
-                Op::ImageSample(input) => {
-                    let image = self.input(*input);
-                    Value::Vec4(fetch_clamped(scope, image, x as f32, y as f32)?)
-                }
-                Op::ImageFetch(input, coord) => {
-                    let image = self.input(*input);
-                    let Value::Vec2([fx, fy]) = values[coord.0 as usize] else {
-                        unreachable!("validation guarantees a Vec2 coordinate")
-                    };
-                    Value::Vec4(fetch_clamped(scope, image, fx, fy)?)
-                }
-            };
-            values.push(value);
-        }
-        Ok(())
-    }
-
-    fn input(&self, index: u32) -> ImageHandle {
-        self.invocation.inputs[index as usize]
-    }
+    Ok(())
 }
 
 fn fetch_clamped(
@@ -170,25 +168,40 @@ fn float(value: Value) -> f32 {
         Value::Float(v) => v,
         Value::Int(v) => v as f32,
         Value::Vec2([x, _]) => x,
+        Value::Vec3([x, ..]) => x,
         Value::Vec4([x, ..]) => x,
     }
 }
 
+/// Components padded to four; scalars broadcast.
 fn components(value: Value) -> [f32; 4] {
     match value {
         Value::Float(v) => [v, v, v, v],
         Value::Int(v) => [v as f32; 4],
         Value::Vec2([x, y]) => [x, y, 0.0, 0.0],
+        Value::Vec3([x, y, z]) => [x, y, z, 0.0],
         Value::Vec4(v) => v,
+    }
+}
+
+fn arity(value: Value) -> usize {
+    value.ty().components().unwrap_or(1) as usize
+}
+
+fn from_parts(parts: [f32; 4], ty: Type) -> Value {
+    match ty {
+        Type::Vec2 => Value::Vec2([parts[0], parts[1]]),
+        Type::Vec3 => Value::Vec3([parts[0], parts[1], parts[2]]),
+        Type::Vec4 => Value::Vec4(parts),
+        Type::Int => Value::Int(parts[0] as i32),
+        Type::Float | Type::Image => Value::Float(parts[0]),
     }
 }
 
 fn negate(value: Value) -> Result<Value, ArithmeticError> {
     Ok(match value {
-        Value::Float(v) => Value::Float(-v),
         Value::Int(v) => Value::Int(v.checked_neg().ok_or(ArithmeticError::Overflow)?),
-        Value::Vec2([x, y]) => Value::Vec2([-x, -y]),
-        Value::Vec4([x, y, z, w]) => Value::Vec4([-x, -y, -z, -w]),
+        other => map1(other, |v| -v),
     })
 }
 
@@ -213,34 +226,24 @@ fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
         BinaryOp::Mul => a * b,
         BinaryOp::Div => a / b,
     };
-    Ok(match (a, b) {
-        (Value::Float(a), Value::Float(b)) => Value::Float(apply(a, b)),
-        (Value::Vec2(a), Value::Vec2(b)) => Value::Vec2([apply(a[0], b[0]), apply(a[1], b[1])]),
-        (Value::Vec2(a), Value::Float(b)) => Value::Vec2([apply(a[0], b), apply(a[1], b)]),
-        (Value::Float(a), Value::Vec2(b)) => Value::Vec2([apply(a, b[0]), apply(a, b[1])]),
-        (Value::Vec4(a), Value::Vec4(b)) => Value::Vec4(std::array::from_fn(|i| apply(a[i], b[i]))),
-        (Value::Vec4(a), Value::Float(b)) => Value::Vec4(a.map(|a| apply(a, b))),
-        (Value::Float(a), Value::Vec4(b)) => Value::Vec4(b.map(|b| apply(a, b))),
-        _ => unreachable!("validation rejects mixed operand types"),
-    })
+    Ok(map2(a, b, apply))
+}
+
+/// Applies `f` componentwise; the result takes the vector type of either
+/// operand (scalars broadcast).
+fn map2(a: Value, b: Value, f: impl Fn(f32, f32) -> f32) -> Value {
+    let ty = if arity(a) >= arity(b) { a.ty() } else { b.ty() };
+    let (a, b) = (components(a), components(b));
+    from_parts(std::array::from_fn(|i| f(a[i], b[i])), ty)
 }
 
 fn map1(value: Value, f: impl Fn(f32) -> f32) -> Value {
-    match value {
-        Value::Float(v) => Value::Float(f(v)),
-        Value::Vec2(v) => Value::Vec2(v.map(&f)),
-        Value::Vec4(v) => Value::Vec4(v.map(&f)),
-        Value::Int(v) => Value::Int(v),
-    }
+    from_parts(components(value).map(f), value.ty())
 }
 
-fn map2(a: Value, b: Value, f: impl Fn(f32, f32) -> f32) -> Value {
-    match (a, b) {
-        (Value::Float(a), Value::Float(b)) => Value::Float(f(a, b)),
-        (Value::Vec2(a), Value::Vec2(b)) => Value::Vec2([f(a[0], b[0]), f(a[1], b[1])]),
-        (Value::Vec4(a), Value::Vec4(b)) => Value::Vec4(std::array::from_fn(|i| f(a[i], b[i]))),
-        _ => unreachable!("validation rejects mixed intrinsic operands"),
-    }
+fn dot(a: Value, b: Value) -> f32 {
+    let (n, a, b) = (arity(a), components(a), components(b));
+    (0..n).map(|i| a[i] * b[i]).sum()
 }
 
 fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
@@ -252,6 +255,7 @@ fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
         (Intrinsic::Sqrt, [a]) => map1(*a, f32::sqrt),
         (Intrinsic::Sin, [a]) => map1(*a, f32::sin),
         (Intrinsic::Cos, [a]) => map1(*a, f32::cos),
+        (Intrinsic::Exp, [a]) => map1(*a, f32::exp),
         (Intrinsic::Min, [Value::Int(a), Value::Int(b)]) => Value::Int((*a).min(*b)),
         (Intrinsic::Max, [Value::Int(a), Value::Int(b)]) => Value::Int((*a).max(*b)),
         (Intrinsic::Min, [a, b]) => map2(*a, *b, f32::min),
@@ -266,6 +270,40 @@ fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
         (Intrinsic::Mix, [a, b, Value::Float(t)]) => map2(*a, *b, |a, b| a + (b - a) * t),
         (Intrinsic::ToFloat, [Value::Int(v)]) => Value::Float(*v as f32),
         (Intrinsic::ToInt, [Value::Float(v)]) => Value::Int(*v as i32),
+        (Intrinsic::Dot, [a, b]) => Value::Float(dot(*a, *b)),
+        (Intrinsic::Cross, [a, b]) => {
+            let (a, b) = (components(*a), components(*b));
+            Value::Vec3([
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ])
+        }
+        (Intrinsic::Length, [a]) => Value::Float(dot(*a, *a).sqrt()),
+        (Intrinsic::Normalize, [a]) => {
+            let length = dot(*a, *a).sqrt();
+            if length > 0.0 {
+                map1(*a, |v| v / length)
+            } else {
+                map1(*a, |_| 0.0)
+            }
+        }
+        (Intrinsic::Pow, [a, b]) => map2(*a, *b, f32::powf),
+        (Intrinsic::Step, [edge, x]) => {
+            map2(*edge, *x, |edge, x| if x >= edge { 1.0 } else { 0.0 })
+        }
+        (Intrinsic::Smoothstep, [low, high, x]) => {
+            let t = map2(
+                map2(*x, *low, |x, low| x - low),
+                map2(*high, *low, |h, l| h - l),
+                |a, b| (a / b).clamp(0.0, 1.0),
+            );
+            map1(t, |t| t * t * (3.0 - 2.0 * t))
+        }
+        (Intrinsic::Reflect, [incident, normal]) => {
+            let scale = 2.0 * dot(*normal, *incident);
+            map2(*incident, *normal, |i, n| i - scale * n)
+        }
         _ => unreachable!("validation guarantees intrinsic signatures"),
     }
 }

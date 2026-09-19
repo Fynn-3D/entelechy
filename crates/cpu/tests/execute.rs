@@ -47,6 +47,7 @@ fn grayscale_reads_and_writes_through_the_abi() {
             width: 2,
             height: 1,
         },
+        time: 0.0,
     };
     let mut scope = Scope::new(&mut host, granted());
     let outputs = CpuBackend
@@ -86,6 +87,7 @@ fn execution_without_grant_is_denied_and_leaks_nothing() {
             width: 1,
             height: 1,
         },
+        time: 0.0,
     };
     let mut scope = Scope::new(&mut host, [Capability::ImageWrite].into_iter().collect());
     let error = CpuBackend
@@ -115,6 +117,7 @@ fn invocations_are_checked_against_the_manifest() {
             width: 1,
             height: 1,
         },
+        time: 0.0,
     };
     assert!(matches!(
         CpuBackend.execute(&module, &bad_params, &mut scope),
@@ -147,6 +150,7 @@ fn generators_use_coord_and_domain_and_fetch_clamps() {
             width: 3,
             height: 2,
         },
+        time: 0.0,
     };
     let mut scope = Scope::new(&mut host, granted());
     let gradient_out = CpuBackend
@@ -172,6 +176,7 @@ fn generators_use_coord_and_domain_and_fetch_clamps() {
             width: 3,
             height: 2,
         },
+        time: 0.0,
     };
     let mut scope = Scope::new(&mut host, granted());
     let shifted = CpuBackend.execute(&shift, &invocation, &mut scope).unwrap()[0];
@@ -195,6 +200,7 @@ fn integer_failures_name_the_pixel() {
             width: 2,
             height: 2,
         },
+        time: 0.0,
     };
     let mut scope = Scope::new(&mut host, granted());
     let error = CpuBackend
@@ -205,4 +211,81 @@ fn integer_failures_name_the_pixel() {
         "at pixel (0, 0): integer division by zero"
     );
     assert_eq!(host.live_images(), 0);
+}
+
+#[test]
+fn vector_intrinsics_and_time_follow_their_contracts() {
+    let module = compile(
+        "kernel test.vectors@1 { requires { image.write; time.read; } param light: Vec3 = vec3(0.0, 3.0, 4.0); output result: Image; compute { let n = normalize(light); let d = dot(n, vec3(0.0, 0.0, 1.0)); let r = reflect(vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0)); let s = step(0.5, vec3(0.2, 0.5, 0.9)); let c = cross(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)); return vec4(d, r.z * s.y + s.x, c.z * time(), length(light) + pow(2.0, 3.0) + smoothstep(0.0, 1.0, 0.5)); } }",
+    )
+    .unwrap();
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![Value::Vec3([0.0, 3.0, 4.0])],
+        domain: Domain {
+            width: 1,
+            height: 1,
+        },
+        time: 2.5,
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::ImageWrite, Capability::TimeRead]
+            .into_iter()
+            .collect(),
+    );
+    let outputs = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap();
+    near(
+        host.read_pixel(outputs[0], 0, 0).unwrap(),
+        [0.8, 1.0, 2.5, 13.5],
+    );
+}
+
+#[test]
+fn parallel_rows_match_the_per_pixel_formula_and_report_the_first_failure() {
+    let gradient = compile(
+        "kernel test.big@1 { requires { image.write; } output result: Image; compute { let c = coord(); return vec4(c.x, c.y, c.x + c.y, 1.0); } }",
+    )
+    .unwrap();
+    let mut host = Host::new(1 << 20);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain {
+            width: 301,
+            height: 257,
+        },
+        time: 0.0,
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&gradient, &invocation, &mut scope)
+        .unwrap()[0];
+    for (x, y) in [(0, 0), (300, 0), (0, 256), (300, 256), (17, 200), (299, 1)] {
+        near(
+            host.read_pixel(output, x, y).unwrap(),
+            [x as f32, y as f32, (x + y) as f32, 1.0],
+        );
+    }
+
+    let failing = compile(
+        "kernel test.fail@1 { requires { image.write; } param d: Int = 0; output result: Image; compute { let c = coord(); let q = 7 / d; return vec4(float(q), c.y, 0.0, 1.0); } }",
+    )
+    .unwrap();
+    let invocation = Invocation {
+        params: vec![Value::Int(0)],
+        ..invocation
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let error = CpuBackend
+        .execute(&failing, &invocation, &mut scope)
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "at pixel (0, 0): integer division by zero"
+    );
+    assert_eq!(host.live_images(), 1);
 }

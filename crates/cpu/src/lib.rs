@@ -5,12 +5,17 @@
 //! trusted Rust, but the Kernel it runs is not: every Host access goes through
 //! the capability-gated [`Scope`], and the backend creates and releases the
 //! output images it allocates so a failed execution leaks nothing.
+//!
+//! Execution has two phases. The compute phase only reads through the scope
+//! and runs rows in parallel; the write phase stores results sequentially.
+//! Results are identical to a single-threaded run, and the first failing
+//! pixel in row-major order is the one reported.
 
 mod eval;
 
 use std::fmt;
 
-use orla_abi::{AbiError, ImageHandle, Invocation, Scope, Type, Value};
+use orla_abi::{AbiError, ImageHandle, Invocation, Pixel, Scope, Type, Value};
 use orla_ir::Validated;
 
 pub use eval::ArithmeticError;
@@ -95,6 +100,9 @@ impl From<AbiError> for ExecutionError {
     }
 }
 
+/// Pixels per thread below which the backend stays single-threaded.
+const PARALLEL_THRESHOLD: usize = 4096;
+
 /// The CPU backend. Stateless; one instance can execute any module.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CpuBackend;
@@ -109,9 +117,11 @@ impl CpuBackend {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<ImageHandle>, ExecutionError> {
         check_invocation(module, invocation)?;
+        let results = compute(module, invocation, scope)?;
         let domain = invocation.domain;
-        let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
-        for _ in &module.manifest.outputs {
+        let output_count = module.manifest.outputs.len();
+        let mut outputs = Vec::with_capacity(output_count);
+        for _ in 0..output_count {
             match scope.image_create(domain.width, domain.height) {
                 Ok(handle) => outputs.push(handle),
                 Err(error) => {
@@ -120,20 +130,82 @@ impl CpuBackend {
                 }
             }
         }
-        let mut machine = eval::Machine::new(module, invocation);
+        let mut pixels = results.chunks_exact(output_count.max(1));
         for y in 0..domain.height {
             for x in 0..domain.width {
-                let result = machine
-                    .run_entry(scope, x, y)
-                    .and_then(|results| write_results(scope, &outputs, x, y, &results));
-                if let Err(error) = result {
-                    release_all(scope, &outputs);
-                    return Err(error);
+                let pixel = pixels.next().unwrap_or(&[]);
+                for (output, value) in outputs.iter().zip(pixel) {
+                    if let Err(error) = scope.image_write(*output, x, y, *value) {
+                        release_all(scope, &outputs);
+                        return Err(error.into());
+                    }
                 }
             }
         }
         Ok(outputs)
     }
+}
+
+/// Runs the entry point over every pixel, reading through `scope` only.
+/// Returns `outputs` pixels per position, row-major.
+fn compute(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+) -> Result<Vec<Pixel>, ExecutionError> {
+    let domain = invocation.domain;
+    let width = domain.width as usize;
+    let output_count = module.manifest.outputs.len();
+    let stride = width * output_count;
+    let mut results = vec![[0.0; 4]; domain.height as usize * stride];
+    let pixel_count = width * domain.height as usize;
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(domain.height as usize)
+        .min(pixel_count.div_ceil(PARALLEL_THRESHOLD))
+        .max(1);
+    let rows_per_thread = (domain.height as usize).div_ceil(threads);
+    let run_rows = |first_row: usize, rows: &mut [Pixel]| -> Result<(), ExecutionError> {
+        let mut machine = eval::Machine::new(module, invocation);
+        for (offset, row) in rows.chunks_exact_mut(stride.max(1)).enumerate() {
+            let y = (first_row + offset) as u32;
+            for x in 0..domain.width {
+                let values = machine.run_entry(scope, x, y)?;
+                let slot = x as usize * output_count;
+                for (target, value) in row[slot..slot + output_count].iter_mut().zip(values) {
+                    let Value::Vec4(pixel) = value else {
+                        unreachable!("validation guarantees Vec4 results for image outputs")
+                    };
+                    *target = *pixel;
+                }
+            }
+        }
+        Ok(())
+    };
+    if threads == 1 {
+        run_rows(0, &mut results)?;
+        return Ok(results);
+    }
+    let chunk_len = rows_per_thread * stride.max(1);
+    let outcomes: Vec<Result<(), ExecutionError>> = std::thread::scope(|s| {
+        let handles: Vec<_> = results
+            .chunks_mut(chunk_len)
+            .enumerate()
+            .map(|(index, chunk)| {
+                let run_rows = &run_rows;
+                s.spawn(move || run_rows(index * rows_per_thread, chunk))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("row worker panicked"))
+            .collect()
+    });
+    for outcome in outcomes {
+        outcome?;
+    }
+    Ok(results)
 }
 
 fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(), ExecutionError> {
@@ -161,22 +233,6 @@ fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(), E
     }
     if invocation.domain.width == 0 || invocation.domain.height == 0 {
         return Err(ExecutionError::EmptyDomain);
-    }
-    Ok(())
-}
-
-fn write_results(
-    scope: &mut Scope<'_>,
-    outputs: &[ImageHandle],
-    x: u32,
-    y: u32,
-    results: &[Value],
-) -> Result<(), ExecutionError> {
-    for (output, value) in outputs.iter().zip(results) {
-        let Value::Vec4(pixel) = value else {
-            unreachable!("validation guarantees Vec4 results for image outputs")
-        };
-        scope.image_write(*output, x, y, *pixel)?;
     }
     Ok(())
 }
