@@ -36,6 +36,10 @@ pub trait Backend: Send + Sync {
     /// Short backend name for diagnostics, e.g. `cpu`.
     fn name(&self) -> &'static str;
 
+    /// For interfaces that know a specific backend, such as a window that
+    /// presents a resident image directly.
+    fn as_any(&self) -> &dyn Any;
+
     /// Builds backend state for a validated module.
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
 
@@ -74,6 +78,10 @@ impl Prepared for NothingPrepared {
 impl Backend for orla_cpu::CpuBackend {
     fn name(&self) -> &'static str {
         "cpu"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn prepare(&self, _module: &Validated) -> Result<Box<dyn Prepared>, String> {
@@ -289,6 +297,11 @@ impl Runtime {
     /// Name of the backend executing Kernels.
     pub fn backend_name(&self) -> &'static str {
         self.backend.name()
+    }
+
+    /// The backend executing Kernels.
+    pub fn backend(&self) -> &dyn Backend {
+        self.backend.as_ref()
     }
 
     /// The Host, for interfaces that import and export resources.

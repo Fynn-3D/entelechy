@@ -11,6 +11,7 @@
 //! floating-point rounding and the absence of per-pixel integer arithmetic
 //! errors, which WGSL defines instead of reporting.
 
+pub mod present;
 pub mod wgsl;
 
 use std::any::Any;
@@ -23,8 +24,8 @@ use orla_ir::Validated;
 use orla_runtime::{Backend, Prepared};
 
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
-struct DeviceImage {
-    buffer: wgpu::Buffer,
+pub(crate) struct DeviceImage {
+    pub(crate) buffer: wgpu::Buffer,
 }
 
 /// The GPU could not be opened.
@@ -41,6 +42,8 @@ impl std::error::Error for GpuError {}
 
 /// A wgpu device with a compute-only contract.
 pub struct GpuBackend {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     adapter_name: String,
@@ -88,6 +91,8 @@ impl GpuBackend {
         .map_err(|error| GpuError(error.to_string()))?;
         let adapter_name = adapter.get_info().name;
         Ok(Self {
+            instance,
+            adapter,
             device,
             queue,
             adapter_name,
@@ -98,6 +103,10 @@ impl GpuBackend {
     /// The adapter's name, for diagnostics.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    pub(crate) fn parts(&self) -> (&wgpu::Instance, &wgpu::Adapter, &wgpu::Device, &wgpu::Queue) {
+        (&self.instance, &self.adapter, &self.device, &self.queue)
     }
 
     fn buffer(&self, label: &str, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
@@ -149,6 +158,10 @@ fn pixel_bytes(pixels: &[Pixel]) -> Vec<u8> {
 impl Backend for GpuBackend {
     fn name(&self) -> &'static str {
         "gpu"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {

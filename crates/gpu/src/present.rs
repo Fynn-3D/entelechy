@@ -1,0 +1,326 @@
+//! Presenting a resident image to a window without reading it back.
+//!
+//! The Player hands the backend a window; the backend configures a surface
+//! on it and draws the output image with one fullscreen triangle whose
+//! fragment shader samples the image's storage buffer directly, letterboxed
+//! and nearest-neighbour scaled. The image never crosses to the Host.
+
+use std::any::Any;
+
+use crate::{DeviceImage, GpuBackend};
+
+/// Where the image landed inside the window, in window pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Placement {
+    /// Left edge.
+    pub x: u32,
+    /// Top edge.
+    pub y: u32,
+    /// Shown width.
+    pub width: u32,
+    /// Shown height.
+    pub height: u32,
+}
+
+/// Fits `width x height` into `target_width x target_height`, centred.
+pub fn placement(width: u32, height: u32, target_width: u32, target_height: u32) -> Placement {
+    if width == 0 || height == 0 || target_width == 0 || target_height == 0 {
+        return Placement::default();
+    }
+    let scale = (target_width as f32 / width as f32).min(target_height as f32 / height as f32);
+    let shown_width = ((width as f32 * scale) as u32).max(1);
+    let shown_height = ((height as f32 * scale) as u32).max(1);
+    Placement {
+        x: (target_width - shown_width) / 2,
+        y: (target_height - shown_height) / 2,
+        width: shown_width,
+        height: shown_height,
+    }
+}
+
+/// The WGSL that blits a `vec4<f32>` storage buffer onto the surface.
+pub const BLIT: &str = "
+struct Frame {
+    // window width, window height, image width, image height
+    sizes: vec4<f32>,
+    // placement x, y, width, height
+    place: vec4<f32>,
+    // 1 when the surface encodes sRGB itself (values are written linear)
+    flags: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> frame: Frame;
+@group(0) @binding(1) var<storage, read> image: array<vec4<f32>>;
+
+struct Vertex { @builtin(position) position: vec4<f32> };
+
+@vertex
+fn vs(@builtin(vertex_index) index: u32) -> Vertex {
+    // One triangle covering the clip space.
+    var corners = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    return Vertex(vec4<f32>(corners[index], 0.0, 1.0));
+}
+
+@fragment
+fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = position.xy - frame.place.xy;
+    if (p.x < 0.0 || p.y < 0.0 || p.x >= frame.place.z || p.y >= frame.place.w) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let w = u32(frame.sizes.z);
+    let h = u32(frame.sizes.w);
+    let x = min(u32(p.x * frame.sizes.z / frame.place.z), w - 1u);
+    let y = min(u32(p.y * frame.sizes.w / frame.place.w), h - 1u);
+    let c = clamp(image[y * w + x].rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    if (frame.flags.x > 0.5) {
+        return vec4<f32>(pow(c, vec3<f32>(2.2)), 1.0);
+    }
+    return vec4<f32>(c, 1.0);
+}
+";
+
+/// A window surface the backend draws resident images into.
+pub struct Presenter {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    srgb: bool,
+}
+
+impl GpuBackend {
+    /// Configures a surface on `target` (a window handle the backend may
+    /// keep) of the given size.
+    pub fn presenter(
+        &self,
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Presenter, String> {
+        let (instance, adapter, device, _) = self.parts();
+        let surface = instance
+            .create_surface(target)
+            .map_err(|error| error.to_string())?;
+        let capabilities = surface.get_capabilities(adapter);
+        let format = capabilities
+            .formats
+            .iter()
+            .copied()
+            .find(|format| !format.is_srgb())
+            .or_else(|| capabilities.formats.first().copied())
+            .ok_or_else(|| "the surface offers no formats".to_string())?;
+        let mut config = surface
+            .get_default_config(adapter, width.max(1), height.max(1))
+            .ok_or_else(|| "the adapter cannot present to this surface".to_string())?;
+        config.format = format;
+        surface.configure(device, &config);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("orla blit"),
+            source: wgpu::ShaderSource::Wgsl(BLIT.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("orla blit"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("orla blit"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("orla blit"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        Ok(Presenter {
+            surface,
+            config,
+            pipeline,
+            layout,
+            srgb: format.is_srgb(),
+        })
+    }
+
+    /// Draws a resident image into the presenter's surface. `device` is the
+    /// image's resident object from the Host. Returns where the image was
+    /// placed, or `None` when the window cannot take a frame right now
+    /// (occluded, or the surface timed out). Nothing is read back.
+    pub fn present(
+        &self,
+        presenter: &mut Presenter,
+        device: &(dyn Any + Send + Sync),
+        width: u32,
+        height: u32,
+        window_width: u32,
+        window_height: u32,
+    ) -> Result<Option<Placement>, String> {
+        let image = device
+            .downcast_ref::<DeviceImage>()
+            .ok_or_else(|| "image is resident on a different backend".to_string())?;
+        let (_, _, gpu_device, queue) = self.parts();
+        if (presenter.config.width, presenter.config.height) != (window_width, window_height)
+            && window_width > 0
+            && window_height > 0
+        {
+            presenter.config.width = window_width;
+            presenter.config.height = window_height;
+            presenter.surface.configure(gpu_device, &presenter.config);
+        }
+        let placement = placement(width, height, window_width, window_height);
+        let frame: [f32; 12] = [
+            window_width as f32,
+            window_height as f32,
+            width as f32,
+            height as f32,
+            placement.x as f32,
+            placement.y as f32,
+            placement.width as f32,
+            placement.height as f32,
+            presenter.srgb as u8 as f32,
+            0.0,
+            0.0,
+            0.0,
+        ];
+        let bytes: Vec<u8> = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let uniform = self.buffer("blit frame", &bytes, wgpu::BufferUsages::UNIFORM);
+        let bind_group = gpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("orla blit"),
+            layout: &presenter.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: image.buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let texture = match presenter.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(None);
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                presenter.surface.configure(gpu_device, &presenter.config);
+                return Ok(None);
+            }
+            other => return Err(format!("no surface texture: {other:?}")),
+        };
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("orla present"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("orla blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&presenter.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit(Some(encoder.finish()));
+        queue.present(texture);
+        Ok(Some(placement))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_fits_and_centres() {
+        assert_eq!(
+            placement(2, 1, 8, 2),
+            Placement {
+                x: 2,
+                y: 0,
+                width: 4,
+                height: 2
+            }
+        );
+        assert_eq!(
+            placement(2, 1, 4, 4),
+            Placement {
+                x: 0,
+                y: 1,
+                width: 4,
+                height: 2
+            }
+        );
+        assert_eq!(placement(0, 1, 4, 4), Placement::default());
+    }
+
+    #[test]
+    fn the_blit_shader_compiles() {
+        let Ok(gpu) = GpuBackend::new() else {
+            eprintln!("skipping: no gpu");
+            return;
+        };
+        let (_, _, device, _) = gpu.parts();
+        let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("orla blit"),
+            source: wgpu::ShaderSource::Wgsl(BLIT.into()),
+        });
+        assert!(pollster::block_on(guard.pop()).is_none());
+    }
+}
