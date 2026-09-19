@@ -40,3 +40,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [exposure](exposure/README.md): the first reduction. A `merge` Kernel
   meters a frame's luma into one element and a second Kernel tone-maps by
   it; both backends fold in the same tree.
+- [sort](sort/README.md): sorting as two map Kernels, rank then gather,
+  each a bounded loop over the rows; no primitive, quadratic, exact on
+  both backends.

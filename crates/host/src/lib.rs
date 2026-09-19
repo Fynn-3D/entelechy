@@ -15,7 +15,9 @@
 use std::any::Any;
 use std::fmt;
 
-/// Opaque handle to a resource owned by the Host.
+/// Opaque handle to a resource owned by the Host: any Field, an image
+/// included. The name is the architecture documents' and is kept for
+/// that reason.
 ///
 /// The handle carries a generation so that a released slot cannot be reached
 /// through a stale copy of the handle.

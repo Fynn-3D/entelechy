@@ -1,0 +1,73 @@
+// Sorting without a primitive: rank each value by counting the values
+// below it, then gather the value whose rank is this element's index.
+// Two map Kernels, each a bounded loop over the rows; exact on both
+// backends, and enough for rows in the thousands. Larger sorts wait for
+// a scatter primitive, which the map mode does not have.
+
+// Values to sort: a deterministic hash of the index, shuffled by time.
+kernel sort.values@1 {
+    requires { field.write; time.read; }
+    output result: Rows<Float>;
+
+    fn hash(n: Float) -> Float {
+        let q = fract(n * 0.1031);
+        let r = q + q * (q + 33.33);
+        return fract(r * r * 2.0);
+    }
+
+    compute {
+        return hash(float(element()) + floor(time() * 2.0) * 977.0);
+    }
+}
+
+// The rank of each value: how many are smaller, ties broken by index so
+// every rank is used exactly once.
+kernel sort.rank@1 {
+    requires { field.read; field.write; }
+    input values: Rows<Float>;
+    output result: Rows<Int>;
+
+    compute {
+        let me = sample(values);
+        let i = element();
+        return loop 4096 with below = 0 until index() >= count(values) {
+            let other = at(values, index());
+            if other < me || (other == me && index() < i) { below + 1 } else { below }
+        };
+    }
+}
+
+// The value at this rank: the one element whose rank is this index.
+kernel sort.gather@1 {
+    requires { field.read; field.write; }
+    input values: Rows<Float>;
+    input ranks: Rows<Int>;
+    output result: Rows<Float>;
+
+    compute {
+        let i = element();
+        return loop 4096 with found = 0.0 until index() >= count(ranks) {
+            if at(ranks, index()) == i { at(values, index()) } else { found }
+        };
+    }
+}
+
+// Bars: one column per value, height by value, before and after sorting.
+kernel sort.bars@1 {
+    requires { field.read; field.write; }
+    input before: Rows<Float>;
+    input after: Rows<Float>;
+    output result: Image;
+
+    compute {
+        let c = coord();
+        let d = domain();
+        let column = int(floor(c.x / d.x * float(count(after))));
+        let top = c.y < d.y * 0.5;
+        let value = if top { at(before, column) } else { at(after, column) };
+        let base = if top { d.y * 0.5 } else { d.y };
+        let lit = c.y > base - value * d.y * 0.45;
+        let color = if lit { mix(vec3(0.2, 0.5, 0.9), vec3(1.0, 0.8, 0.3), value) } else { vec3(0.06, 0.07, 0.1) };
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}

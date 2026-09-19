@@ -102,12 +102,14 @@ about 70 ms and now holds none; the swap lands about 110 ms later.
 
 Every device the architecture named has an adapter and all three
 execution modes exist: map, reduce, and scan. The language is complete
-for the architecture's Phase 1 and the resource model is converged. What
-remains is smaller and can be picked by need: reductions and scans that
-keep their scratch resident across frames; a parallel scan for
-associative bodies (prefix sums at image scale) that reuses the reduce
-tree; sorting as a native operation or as map passes. Sorting is the one
-named computation with no home yet.
+for the architecture's Phase 1 and the resource model is converged. Sorting's home is a Kernel pattern, not a primitive: rank then gather,
+two bounded loops over the rows (the sort example), quadratic and exact;
+a native sort would be an algorithm, which native operations are not
+for, and a scatter primitive is deliberately absent from the map mode.
+What remains is optional and can be picked by need: reductions and scans
+that keep their scratch resident across frames; a parallel scan for
+bodies the author declares associative, reusing the reduce tree; an
+image sampling authority (bilinear, mips) as builtins gated by layout.
 
 ## Open
 
@@ -124,5 +126,7 @@ ring can take a block, so a slow evaluation is still an underrun. The
 device is opened at 48 kHz when offered and otherwise at its default
 rate, which Kernels see through `rate()`.
 Native manifests print their element types as anonymous structs (`S0`);
-the contract text names the fields. The handle type is still called
-`ImageHandle` although it names any Field.
+the contract text names the fields. The handle type keeps the
+architecture documents' name, `ImageHandle`, although it names any
+Field; the documents are authoritative and are not edited, so the code
+follows them and the Host's doc says what the handle is.

@@ -1,0 +1,13 @@
+scene sort.osn
+
+# The lower half shows the sorted values as bars: heights rise from left
+# to right, and the colour runs from blue (small) to yellow (large). A
+# pixel just inside a bar is lit; one just above it is background.
+frame 0.0
+expect 2 235 = 0.059 0.071 0.102 0.03
+expect 80 225 = 0.416 0.58 0.737 0.06
+expect 80 205 = 0.059 0.071 0.102 0.03
+expect 160 200 = 0.6 0.651 0.6 0.06
+expect 160 180 = 0.059 0.071 0.102 0.03
+expect 317 180 = 0.984 0.796 0.31 0.06
+expect 317 128 = 0.059 0.071 0.102 0.03
