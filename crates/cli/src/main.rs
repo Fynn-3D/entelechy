@@ -19,6 +19,8 @@ usage:
       running version.
   orla replay <file.replay>... [--backend cpu|gpu]
       Drive scenes through scripted frames and inputs and check pixels.
+  orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
+      Print the flattened graph and what would execute, fused groups marked.
   orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu]
       Serve the creation protocol: JSON requests on stdin, one response per
       line on stdout. See crates/cli/src/protocol.rs for the operations.";
@@ -30,6 +32,7 @@ fn main() -> ExitCode {
         Some("run") => run(&args[1..]),
         Some("replay") => replay(&args[1..]),
         Some("serve") => serve(&args[1..]),
+        Some("graph") => graph(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -237,6 +240,80 @@ fn run(args: &[String]) -> Result<(), String> {
             healthy =
                 evaluate_and_export(&mut session, &options.out, clock.elapsed().as_secs_f32());
         }
+    }
+}
+
+fn graph(args: &[String]) -> Result<(), String> {
+    let mut library = None;
+    let mut scene = None;
+    let mut fusion = true;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--library" => {
+                library = Some(PathBuf::from(
+                    iter.next()
+                        .ok_or_else(|| "--library needs a value".to_string())?,
+                ));
+            }
+            "--no-fusion" => fusion = false,
+            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
+            other => {
+                if scene.replace(PathBuf::from(other)).is_some() {
+                    return Err("graph takes exactly one scene file".into());
+                }
+            }
+        }
+    }
+    let scene = scene.ok_or_else(|| "graph needs a scene file".to_string())?;
+    let mut session = Session::open(
+        &scene,
+        library.as_deref(),
+        orla::session::DEFAULT_BUDGET_PIXELS,
+    );
+    session.set_fusion(fusion);
+    let events = session.sync();
+    for event in &events {
+        if matches!(event, Event::Rejected { .. } | Event::SceneRejected(_)) {
+            eprintln!("{event}");
+        }
+    }
+    let graph = session
+        .graph()
+        .ok_or_else(|| "the scene did not load".to_string())?;
+    print!("{graph}");
+    let kernels: Vec<String> = session
+        .runtime()
+        .kernels()
+        .map(|version| format!("{} {}", version.id(), version.generation()))
+        .collect();
+    println!("\n// published: {}", kernels.join(", "));
+    match session.plan() {
+        Ok(plan) => {
+            println!("// plan: {} group(s)", plan.len());
+            for entry in &plan {
+                let absorbed = if entry.absorbed.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " + {}",
+                        entry
+                            .absorbed
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" + ")
+                    )
+                };
+                let domain = entry
+                    .domain
+                    .map(|d| format!(" {}x{}", d.width, d.height))
+                    .unwrap_or_default();
+                println!("//   {}{absorbed}: {}{domain}", entry.node, entry.kernel);
+            }
+            Ok(())
+        }
+        Err(error) => Err(format!("cannot plan: {error}")),
     }
 }
 

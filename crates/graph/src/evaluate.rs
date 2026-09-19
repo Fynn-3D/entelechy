@@ -217,6 +217,22 @@ struct Group {
     absorbed: Vec<NodeId>,
 }
 
+/// One executing unit as the planner sees it, for inspection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlanEntry {
+    /// The node that executes.
+    pub node: NodeId,
+    /// The Kernel it runs; a fused group runs a detached fused version.
+    pub kernel: KernelId,
+    /// Producers inlined into it, whose images are never written.
+    pub absorbed: Vec<NodeId>,
+    /// The bindings the group executes with, absorbed producers' inputs
+    /// renamed `producer/port`.
+    pub inputs: BTreeMap<String, Binding>,
+    /// The explicit or planned domain, when known before execution.
+    pub domain: Option<Domain>,
+}
+
 /// Evaluates graphs and owns the cached node outputs and committed state.
 #[derive(Default)]
 pub struct Evaluator {
@@ -323,6 +339,29 @@ impl Evaluator {
         self.committed
             .values()
             .any(|committed| *committed == handle)
+    }
+
+    /// What would execute for `graph` right now: the groups in evaluation
+    /// order with what each absorbed. Prepares fused versions as evaluation
+    /// would, but executes nothing.
+    pub fn plan_summary(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, ImageHandle>,
+    ) -> Result<Vec<PlanEntry>, EvaluateError> {
+        let order = graph.order()?;
+        let groups = self.plan(graph, &order, runtime, externals)?;
+        Ok(groups
+            .into_iter()
+            .map(|group| PlanEntry {
+                node: group.node.id.clone(),
+                kernel: group.version.id().clone(),
+                absorbed: group.absorbed,
+                inputs: group.node.inputs,
+                domain: group.node.domain,
+            })
+            .collect())
     }
 
     /// Evaluates `graph` under `context`, executing only nodes whose inputs

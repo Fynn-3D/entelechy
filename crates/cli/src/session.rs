@@ -613,6 +613,17 @@ impl Session {
         self.evaluator.pin(node);
     }
 
+    /// What would execute right now, in order, with fusion applied.
+    pub fn plan(&mut self) -> Result<Vec<orla_graph::PlanEntry>, EvaluateError> {
+        let graph = self.graph.as_ref().ok_or_else(|| {
+            EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(
+                orla_graph::Source::External("<no scene>".into()),
+            ))
+        })?;
+        self.evaluator
+            .plan_summary(graph, &mut self.runtime, &self.externals)
+    }
+
     /// Lets a node be fused away again.
     pub fn unpin(&mut self, node: &orla_graph::NodeId) {
         self.evaluator.unpin(node);

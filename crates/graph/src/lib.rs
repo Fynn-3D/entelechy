@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub use document::{DocumentError, InlineKernel, Loader, Lowered, anonymous_id};
-pub use evaluate::{EvaluateError, Evaluator, Report};
+pub use evaluate::{EvaluateError, Evaluator, PlanEntry, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
 

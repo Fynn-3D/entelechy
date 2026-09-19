@@ -362,3 +362,34 @@ fn every_example_document_checks() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{stdout}");
 }
+
+#[test]
+fn the_graph_command_prints_the_plan() {
+    let dir = scratch("graph");
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let output = Command::new(orla)
+        .arg("graph")
+        .arg(dir.join("scene.osn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("node gray: image.grayscale@1 {"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("// plan: 2 group(s)"), "{stdout}");
+    assert!(
+        stdout.contains("//   gray + source: fused.gray@1 128x128"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("//   blocks: image.pixelate@1"), "{stdout}");
+    let output = Command::new(orla)
+        .args(["graph", "--no-fusion"])
+        .arg(dir.join("scene.osn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("// plan: 3 group(s)"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
