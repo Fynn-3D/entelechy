@@ -56,19 +56,21 @@ The Player serves the protocol with `--serve`: requests arrive on stdin
 between frames, `evaluate` answers with a window frame under the person's
 input, and `read` observes the shown output.
 
+Typed Fields exist as Rows of one element layout: `Field<Element>` ports,
+`element()`, `sample`, `at`, `count`, `domain = count;`, document-level
+structs, exact integer transport, GPU residency, and the particles example.
+Grid Fields of non-`Vec4` elements, audio sample blocks, and geometry
+attributes are the same model with more domain kinds and device adapters.
+
 ## Next
 
-The next capability is numerical resources beyond images, following the
-Typed Field decision: a `Field` port type with an element schema and a
-Rows or Grid domain, stored by the backend, so Kernels can produce and
-consume point sets, audio blocks, and geometry attributes through the same
-handles, budgets, residency, and commit rules images use. Start from one
-demo that cannot be an image (particles as a Rows field of a struct schema)
-and let it pull the primitives; do not add a second resource lifecycle.
-
-Two smaller items first if they block a demo: prepare fused groups on a
-worker thread so republishing a fused Kernel cannot hitch a frame, and let
-the Player accept `--param` and `--library` like `run` does.
+Pick the next demo that pulls a primitive: audio (a Rows Field of samples
+written by a Kernel per block, played by a device adapter that respects
+deadlines and never waits on the GPU) or geometry (a Field of vertices
+rasterized into an image by a native adapter). Either one starts by reusing
+the Field lifecycle exactly as it is; a new adapter provides device access,
+not algorithms. Before that, prepare fused groups on a worker thread so a
+republish cannot hitch a frame.
 
 ## Open
 

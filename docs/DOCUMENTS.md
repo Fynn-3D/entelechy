@@ -15,6 +15,8 @@ Diagnostics are `file:line:column: message` for both.
 ## Kernel
 
 ```text
+struct Particle { position: Vec2; velocity: Vec2; }   // a document struct: every
+                                                       // Kernel below sees it
 kernel image.grayscale@1 {
     requires { image.read; image.write; }
     input source: Image;
@@ -31,8 +33,13 @@ kernel image.grayscale@1 {
 ```
 
 The id `name@version` is the Kernel's identity; graphs bind to it and never
-to a file. The exact language is defined by [the frontend](../crates/language/src/lib.rs)
-and its tests.
+to a file. Ports are `Image` (a grid of `Vec4`, read with `sample`, `fetch`,
+`size`) or `Field<Element>` (rows of one element type, read with `sample`,
+`at`, `count`; the current row is `element()`). A Field's element may be a
+scalar, a vector, or a struct; its layout is the struct's scalars in order,
+integers exact. A struct declared at the top of a document is shared by
+every Kernel in it. The exact language is defined by
+[the frontend](../crates/language/src/lib.rs) and its tests.
 
 ## Graph
 
@@ -82,8 +89,10 @@ output result <- display.result;      // named graph output; sub-graph outputs
    declare is an error; both are reported before anything runs.
 4. Values use `=`: numbers, `true`/`false`, negation, `vec2`/`vec3`/`vec4`.
    An integer literal is accepted where a Float is expected.
-5. `domain = vec2(width, height);` sets a node's output size; nodes with an
-   image input default to the size of their first declared input.
+5. `domain = vec2(width, height);` sets a node's grid output size and
+   `domain = count;` its Field output size; nodes with an input default to
+   the size of their first declared input. Bindings must match the port's
+   kind and, for Fields, its element layout.
 6. A Kernel id is unique across everything a graph loads; the same id from
    two documents is an error, never a silent override. An anonymous inline
    Kernel is named `<document>.<node>@1`.

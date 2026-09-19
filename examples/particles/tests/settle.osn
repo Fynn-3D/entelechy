@@ -1,0 +1,22 @@
+// One particle (element 0 starts moving straight right) under strong
+// gravity, so its path is predictable.
+use "../kernels/";
+
+node seed: particles.seed@1 {
+    domain = 1;
+    spread = 0.0;
+}
+
+node step: particles.step@1 {
+    previous <~ step.result from seed.result;
+    gravity = 10.0;
+    dt = 0.02;
+}
+
+node draw: particles.draw@1 {
+    particles <- step.result;
+    domain = vec2(32, 32);
+    radius = 2.0;
+}
+
+output result <- draw.result;

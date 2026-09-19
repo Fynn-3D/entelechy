@@ -21,3 +21,5 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   seconds per frame on the CPU.
 - [life](life/README.md): Conway's Life through a feedback binding, painted
   with the pointer, with a declarative replay test.
+- [particles](particles/README.md): a `Field<Particle>` advanced per element
+  and gathered into an image; the first scene whose data is not an image.

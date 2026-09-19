@@ -1,0 +1,20 @@
+scene settle.osn
+
+# The particle starts at the centre and moves less than a pixel in the first
+# step, so the centre pixel glows (its tint depends on the seeded age, hence
+# the wide tolerance) and a far pixel shows only the background.
+frame 0.0
+expect 16 16 = 0.55 0.5 0.55 0.4
+expect 16 24 = 0.05 0.06 0.1
+
+# Eight frames of gravity move it about 4.6 pixels down and 0.8 right: the
+# centre is background again and (17, 21) glows.
+frame 0.1
+frame 0.2
+frame 0.3
+frame 0.4
+frame 0.5
+frame 0.6
+frame 0.7
+expect 16 16 = 0.05 0.06 0.1
+expect 17 21 = 0.45 0.4 0.45 0.4

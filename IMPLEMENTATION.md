@@ -33,6 +33,17 @@ capability claim.
 
 ## Contracts worth knowing
 
+- Fields follow [the Typed Field decision](Orla%20Typed%20Field%20Architecture.md):
+  a `Field<Element>` port carries rows of one element layout
+  ([schema](crates/host/src/lib.rs)), shares the Host's handles, budget,
+  residency, and commit rules with images, and executes as a Rows domain of
+  height one. The CPU backend encodes elements as words with exact integers
+  ([execution test](crates/cpu/tests/execute.rs)); the GPU backend binds
+  Field buffers as `array<u32>` and stays resident across frames
+  ([parity test](crates/gpu/tests/parity.rs)). Image remains the grid view
+  with its own sampling. The [particles example](examples/particles/README.md)
+  is the working proof.
+
 - Presentation is an observation the GPU can do itself: the Player gives the
   GPU backend its window, and a resident output is drawn onto the surface by
   a blit shader that reads the image's storage buffer; the frame never

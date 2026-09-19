@@ -1,0 +1,82 @@
+// A particle system: a Field of Particle structs advanced every frame and
+// drawn into an image. The Field never becomes an image until `draw`.
+
+struct Particle { position: Vec2; velocity: Vec2; age: Float; }
+
+kernel particles.seed@1 {
+    requires { field.write; }
+    param spread: Float = 0.6;
+    output result: Field<Particle>;
+
+    fn hash(n: Float) -> Float {
+        return fract(sin(n * 12.9898) * 43758.5453);
+    }
+
+    compute {
+        let i = float(element());
+        let angle = hash(i) * 6.2831853;
+        let speed = 0.15 + hash(i + 7.0) * spread;
+        return Particle {
+            position: vec2(0.5, 0.5),
+            velocity: vec2(cos(angle), sin(angle)) * speed,
+            age: hash(i + 13.0) * 4.0,
+        };
+    }
+}
+
+kernel particles.step@1 {
+    requires { field.read; field.write; time.read; input.read; }
+    input previous: Field<Particle>;
+    param gravity: Float = 0.4;
+    param dt: Float = 0.016;
+    param pull: Float = 1.2;
+    output result: Field<Particle>;
+
+    fn respawn(p: Particle, seed: Float) -> Particle {
+        let angle = fract(sin(seed * 12.9898) * 43758.5453) * 6.2831853;
+        return Particle {
+            position: vec2(0.5, 0.5),
+            velocity: vec2(cos(angle), sin(angle)) * 0.4,
+            age: 0.0,
+        };
+    }
+
+    compute {
+        let p = sample(previous);
+        // Pointer position in the unit square attracts particles while held.
+        let target = pointer() / vec2(320.0, 240.0);
+        let toward = target - p.position;
+        let attract = if pointer_down() { toward * pull } else { vec2(0.0, 0.0) };
+        let pushed = p.velocity + (vec2(0.0, gravity) + attract) * dt;
+        let moved = p.position + pushed * dt;
+        // Bounce off the floor and the walls.
+        let floored = if moved.y > 1.0 { vec2(pushed.x * 0.9, -pushed.y * 0.8) } else { pushed };
+        let walled = if moved.x < 0.0 || moved.x > 1.0 { vec2(-floored.x, floored.y) } else { floored };
+        let inside = clamp(moved, vec2(0.0, 0.0), vec2(1.0, 1.0));
+        let next = Particle { position: inside, velocity: walled, age: p.age + dt };
+        return if next.age > 6.0 { respawn(next, float(element()) + time()) } else { next };
+    }
+}
+
+kernel particles.draw@1 {
+    requires { field.read; image.write; }
+    input particles: Field<Particle>;
+    param radius: Float = 3.0;
+    output result: Image;
+
+    compute {
+        let px = coord();
+        let extent = domain();
+        // Gather: every pixel walks the particles; the count is bounded.
+        let glow = loop 256 with acc = vec3(0.0, 0.0, 0.0) until index() >= count(particles) {
+            let p = at(particles, index());
+            let d = length(px - p.position * extent);
+            let heat = clamp(1.0 - d / radius, 0.0, 1.0);
+            let tint = mix(vec3(1.0, 0.85, 0.3), vec3(0.3, 0.5, 1.0), clamp(p.age / 6.0, 0.0, 1.0));
+            acc + tint * heat * heat
+        };
+        let background = vec3(0.05, 0.06, 0.1);
+        let color = background + glow;
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}

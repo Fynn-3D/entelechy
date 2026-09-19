@@ -1,0 +1,17 @@
+// seed -> step (fed back) -> draw
+use "kernels/";
+
+node seed: particles.seed@1 {
+    domain = 256;
+}
+
+node step: particles.step@1 {
+    previous <~ step.result from seed.result;
+}
+
+node draw: particles.draw@1 {
+    particles <- step.result;
+    domain = vec2(320, 240);
+}
+
+output result <- draw.result;
