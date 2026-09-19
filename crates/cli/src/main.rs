@@ -13,7 +13,7 @@ usage:
       Parse documents, compile their Kernels, and print manifests or diagnostics.
   orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu]
-                       [--param <name>=<literal>]...
+                       [--param <name>=<literal>]... [--no-fusion]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version.
@@ -132,6 +132,7 @@ struct RunOptions {
     watch: bool,
     backend: String,
     params: Vec<(String, orla_runtime::Value)>,
+    fusion: bool,
 }
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {
@@ -143,6 +144,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         watch: false,
         backend: "cpu".into(),
         params: Vec::new(),
+        fusion: true,
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -156,6 +158,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
+            "--no-fusion" => options.fusion = false,
             "--backend" => options.backend = value("--backend")?,
             "--param" => {
                 let binding = value("--param")?;
@@ -197,6 +200,7 @@ fn run(args: &[String]) -> Result<(), String> {
     for (name, value) in &options.params {
         session.set_param(name, *value);
     }
+    session.set_fusion(options.fusion);
     let events = session.sync();
     report_events(&events);
     let clock = Instant::now();
@@ -349,7 +353,19 @@ fn evaluate_and_export(session: &mut Session, out: &Path, time: f32) -> bool {
             let executed = report
                 .executed
                 .iter()
-                .map(ToString::to_string)
+                .map(
+                    |node| match report.fused.iter().find(|(consumer, _)| consumer == node) {
+                        Some((_, absorbed)) => format!(
+                            "{node}+{}",
+                            absorbed
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join("+")
+                        ),
+                        None => node.to_string(),
+                    },
+                )
                 .collect::<Vec<_>>()
                 .join(", ");
             match session.export(report.output, out) {

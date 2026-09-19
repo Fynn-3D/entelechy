@@ -27,6 +27,7 @@
 //! | `evaluate` | `time`?, `pointer`?, `down`?, `keys`? | executed, reused, committed, outputs |
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` | width, height, format, data (base64) |
 //! | `reset` | | ok |
+//! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
 //! | `quit` | | bye |
 
 use std::io::{BufRead, Write};
@@ -114,6 +115,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             "watched": session.watched().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             "kernels": session.runtime().kernels().count(),
             "nodes": session.graph().map_or(0, |graph| graph.nodes.len()),
+            "fusion": session.fusion(),
         })),
         "kernels" => Ok(json!({
             "kernels": session
@@ -234,6 +236,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 "executed": report.executed.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "reused": report.reused.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "committed": report.committed.iter().map(|(node, port)| json!([node.to_string(), port])).collect::<Vec<_>>(),
+                "fused": report.fused.iter().map(|(node, absorbed)| json!({ "node": node.to_string(), "absorbed": absorbed.iter().map(ToString::to_string).collect::<Vec<_>>() })).collect::<Vec<_>>(),
                 "outputs": outputs,
             }))
         }
@@ -248,7 +251,11 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     .unwrap_or("result");
                 session
                     .cached(&orla_graph::NodeId(node.to_owned()), port)
-                    .ok_or_else(|| failure(format!("node `{node}` has no evaluated `{port}`")))?
+                    .ok_or_else(|| {
+                        failure(format!(
+                            "node `{node}` has no materialized `{port}`; pin it and evaluate again"
+                        ))
+                    })?
             } else {
                 let name = request
                     .get("output")
@@ -300,6 +307,16 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "reset" => {
             session.reset_state();
             Ok(json!({ "reset": true }))
+        }
+        "pin" => {
+            let node = text_field("node")?;
+            session.pin(orla_graph::NodeId(node.clone()));
+            Ok(json!({ "pinned": node }))
+        }
+        "unpin" => {
+            let node = text_field("node")?;
+            session.unpin(&orla_graph::NodeId(node.clone()));
+            Ok(json!({ "unpinned": node }))
         }
         "quit" => Ok(json!({ "bye": true })),
         other => Err(failure(format!("unknown op `{other}`"))),

@@ -43,6 +43,7 @@ fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
     let graph = Graph::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
     let report = evaluator
         .evaluate(
             &graph,
@@ -77,6 +78,7 @@ fn republishing_a_kernel_invalidates_only_its_dependents() {
     let graph = Graph::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
     evaluator
         .evaluate(
             &graph,
@@ -122,6 +124,7 @@ fn parameter_and_structure_changes_are_tracked() {
     let mut graph = Graph::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
     evaluator
         .evaluate(
             &graph,
@@ -328,6 +331,7 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
         .unwrap();
     let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
     let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
     let first = evaluator
         .evaluate(
             &graph,
@@ -646,5 +650,172 @@ fn graph_params_feed_nodes_and_can_be_overridden() {
     assert!(
         fourth.executed.is_empty(),
         "unknown overrides change nothing"
+    );
+}
+
+fn pixels(runtime: &Runtime, handle: orla_runtime::ImageHandle) -> Vec<[f32; 4]> {
+    runtime.host().image(handle).unwrap().pixels().to_vec()
+}
+
+#[test]
+fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
+    let mut runtime = runtime();
+    runtime
+        .load("kernel image.pixelate@1 { requires { image.read; image.write; } input source: Image; param size: Int = 2; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }")
+        .unwrap();
+    // gradient -> gray -> inv -> blocks: gray and inv are pointwise; blocks
+    // fetches, so it stays separate and absorbs nothing.
+    let graph = Graph::parse(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node gray: image.grayscale@1 { source <- source.result; amount = 0.5; }
+         node inv: image.invert@1 { source <- gray.result; }
+         node blocks: image.pixelate@1 { source <- inv.result; }
+         output result <- blocks.result;",
+    )
+    .unwrap();
+    let mut plain = Evaluator::new();
+    plain.set_fusion(false);
+    let reference = plain
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(reference.fused.is_empty());
+    let expected = pixels(&runtime, reference.output);
+    plain.clear(&mut runtime);
+
+    let mut fused = Evaluator::new();
+    let report = fused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(pixels(&runtime, report.output), expected, "bit-identical");
+    assert_eq!(report.executed, ids(&["inv", "blocks"]));
+    assert_eq!(
+        report.fused,
+        vec![(NodeId("inv".into()), ids(&["gray", "source"]))]
+    );
+    assert_eq!(
+        runtime.host().live_images(),
+        2,
+        "only the fused group and blocks are materialized"
+    );
+    assert!(fused.cached(&NodeId("gray".into()), "result").is_none());
+    assert!(
+        runtime.kernel(&"fused.inv@1".parse().unwrap()).is_none(),
+        "fused versions are not registered"
+    );
+
+    // Republishing an absorbed producer rebuilds the group.
+    runtime.load(&GRAYSCALE.replace("0.2126", "1.0")).unwrap();
+    let report = fused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(report.executed, ids(&["inv", "blocks"]));
+    assert_ne!(pixels(&runtime, report.output), expected);
+    let again = fused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(again.executed.is_empty(), "the rebuilt group is cached");
+
+    // Pinning materializes the node again; unpinning absorbs it.
+    fused.pin(NodeId("gray".into()));
+    let report = fused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        report.fused,
+        vec![(NodeId("gray".into()), ids(&["source"]))]
+    );
+    assert!(fused.cached(&NodeId("gray".into()), "result").is_some());
+    fused.unpin(&NodeId("gray".into()));
+    let report = fused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(report.fused[0].1, ids(&["gray", "source"]));
+    fused.clear(&mut runtime);
+    assert_eq!(runtime.host().live_images(), 0);
+}
+
+#[test]
+fn outputs_state_sources_and_shared_producers_stay_materialized() {
+    let mut runtime = runtime();
+    runtime.load(ZERO).unwrap();
+    runtime.load(INCREMENT).unwrap();
+    let graph = Graph::parse(
+        "node seed: test.zero@1 { domain = vec2(2, 2); }
+         node count: test.increment@1 { previous <~ count.result from seed.result; }
+         node a: image.invert@1 { source <- count.result; }
+         node b: image.invert@1 { source <- count.result; }
+         node c: image.invert@1 { source <- a.result; }
+         output result <- c.result;
+         output other <- b.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    // count is a state source, so it is materialized; seed is its initial
+    // source and count's `previous` counts as a reader, so seed stays too.
+    // a is c's sole reader and pointwise: absorbed. b is an output: kept.
+    assert_eq!(report.fused, vec![(NodeId("c".into()), ids(&["a"]))]);
+    assert_eq!(report.executed, ids(&["seed", "count", "b", "c"]));
+    assert_eq!(
+        report.committed,
+        vec![(NodeId("count".into()), "result".into())]
+    );
+    let second = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        red(&runtime, second.outputs[1].1),
+        1.0 - 2.0,
+        "state advanced through the fused frame"
     );
 }

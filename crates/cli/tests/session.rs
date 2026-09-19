@@ -47,6 +47,7 @@ const INVERT: &str = "kernel image.invert@1 { requires { image.read; image.write
 fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     let dir = scratch("session");
     let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    session.set_fusion(false);
     let events = session.sync();
     assert!(events.contains(&Event::SceneLoaded));
     assert_eq!(
@@ -284,7 +285,7 @@ fn the_binary_checks_and_runs() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(
-        stderr.contains("executed [source, gray, blocks]"),
+        stderr.contains("executed [gray+source, blocks]"),
         "{stderr}"
     );
     assert!(

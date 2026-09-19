@@ -1,5 +1,5 @@
 //! Cached, dirty-tracked evaluation of a graph against a runtime, with
-//! state committed between evaluations.
+//! state committed between evaluations and pointwise chains fused.
 //!
 //! Every node's outputs are cached and reused while its Kernel generation,
 //! parameters, domain, context, and upstream results are unchanged. State
@@ -8,13 +8,21 @@
 //! evaluation read the same committed state; the evaluation commits
 //! atomically at its end, and a failed evaluation commits nothing, so state
 //! never advances past a failure.
+//!
+//! Fusion: a producer whose single output is read by exactly one consumer,
+//! only through `sample`, over the same domain, and which is neither a graph
+//! output, a state source, nor pinned, is inlined into that consumer. The
+//! fused group executes as one Kernel and is one cache unit; the
+//! producer's image is never materialized. Pin a node to observe it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
 use orla_abi::{Capability, Context, Domain, ImageHandle, Invocation, Type, Value};
-use orla_runtime::{ExecutionError, Generation, HostError, KernelId, KernelVersion, Runtime};
+use orla_runtime::{
+    ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Runtime,
+};
 
 use crate::{Binding, Graph, GraphError, Node, NodeId, ParamValue, Source};
 
@@ -80,6 +88,13 @@ pub enum EvaluateError {
         /// The failure.
         error: ExecutionError,
     },
+    /// A fused group could not be prepared by the backend.
+    Fusion {
+        /// The consuming node.
+        node: NodeId,
+        /// The failure.
+        message: String,
+    },
     /// The Host rejected a resource operation.
     Host(HostError),
 }
@@ -116,9 +131,12 @@ impl fmt::Display for EvaluateError {
             }
             Self::NoDomain(node) => write!(
                 f,
-                "node `{node}` has no image inputs; add `domain <width> <height>`"
+                "node `{node}` has no image inputs; add `domain = vec2(width, height);`"
             ),
             Self::Execution { node, error } => write!(f, "node `{node}` failed: {error}"),
+            Self::Fusion { node, message } => {
+                write!(f, "fused group at `{node}` was rejected: {message}")
+            }
             Self::Host(error) => write!(f, "{error}"),
         }
     }
@@ -151,6 +169,9 @@ pub struct Report {
     pub committed: Vec<(NodeId, String)>,
     /// Every declared output by name.
     pub outputs: Vec<(String, ImageHandle)>,
+    /// Groups that ran as one Kernel: the executing node and the nodes it
+    /// absorbed, whose images were never materialized.
+    pub fused: Vec<(NodeId, Vec<NodeId>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -182,8 +203,22 @@ struct Cached {
     epoch: u64,
 }
 
+/// A fused version kept while its constituents are unchanged.
+struct Fused {
+    parts: Vec<(NodeId, Generation)>,
+    version: Arc<KernelVersion>,
+}
+
+/// One executing unit: a node, or a node with producers inlined.
+struct Group {
+    node: Node,
+    version: Arc<KernelVersion>,
+    parts: Vec<(NodeId, Generation)>,
+    absorbed: Vec<NodeId>,
+}
+
 /// Evaluates graphs and owns the cached node outputs and committed state.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Evaluator {
     cache: BTreeMap<NodeId, Cached>,
     /// State as of the last successful evaluation, by producing node and
@@ -191,19 +226,56 @@ pub struct Evaluator {
     /// it is released only when neither refers to it any more.
     committed: BTreeMap<(NodeId, String), ImageHandle>,
     epoch: u64,
+    fusion: bool,
+    pinned: BTreeSet<NodeId>,
+    fused: BTreeMap<NodeId, Fused>,
+}
+
+impl fmt::Debug for Evaluator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Evaluator")
+            .field("cached", &self.cache.len())
+            .field("committed", &self.committed.len())
+            .field("fusion", &self.fusion)
+            .finish()
+    }
 }
 
 impl Evaluator {
-    /// An evaluator with an empty cache and no state.
+    /// An evaluator with an empty cache, no state, and fusion enabled.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            fusion: true,
+            ..Self::default()
+        }
+    }
+
+    /// Enables or disables fusion for later evaluations.
+    pub fn set_fusion(&mut self, enabled: bool) {
+        self.fusion = enabled;
+    }
+
+    /// Whether fusion is enabled.
+    pub fn fusion(&self) -> bool {
+        self.fusion
+    }
+
+    /// Keeps a node materialized so its image can be observed.
+    pub fn pin(&mut self, node: NodeId) {
+        self.pinned.insert(node);
+    }
+
+    /// Lets a node be absorbed again.
+    pub fn unpin(&mut self, node: &NodeId) {
+        self.pinned.remove(node);
     }
 
     /// Releases every cached image and all committed state.
     pub fn clear(&mut self, runtime: &mut Runtime) {
         let cache = std::mem::take(&mut self.cache);
         let committed = std::mem::take(&mut self.committed);
-        let mut released = std::collections::BTreeSet::new();
+        self.fused.clear();
+        let mut released = BTreeSet::new();
         for cached in cache.into_values() {
             for output in cached.outputs {
                 if released.insert(output) {
@@ -233,7 +305,8 @@ impl Evaluator {
         !self.committed.is_empty()
     }
 
-    /// The cached image for a node's output port, if it was evaluated.
+    /// The cached image for a node's output port, if it was evaluated and
+    /// materialized. Absorbed nodes have none; pin them to observe them.
     pub fn cached(&self, node: &NodeId, port: &str) -> Option<ImageHandle> {
         let cached = self.cache.get(node)?;
         let index = cached.output_names.iter().position(|name| name == port)?;
@@ -265,19 +338,35 @@ impl Evaluator {
     ) -> Result<Report, EvaluateError> {
         let order = graph.order()?;
         self.prune(graph, runtime);
+        let groups = self.plan(graph, &order, runtime, externals)?;
+        // Nodes absorbed into a group are no longer materialized.
+        let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
+        let stale: Vec<NodeId> = self
+            .cache
+            .keys()
+            .filter(|id| absorbed.contains(id))
+            .cloned()
+            .collect();
+        for id in stale {
+            self.drop_cache(&id, runtime);
+        }
         let mut executed = Vec::new();
         let mut reused = Vec::new();
-        for index in order {
-            let node = &graph.nodes[index];
-            let version =
-                runtime
-                    .kernel(&node.kernel)
-                    .ok_or_else(|| EvaluateError::UnknownKernel {
-                        node: node.id.clone(),
-                        kernel: node.kernel.clone(),
-                    })?;
-            let (invocation, key) =
-                self.bind(graph, node, &version, runtime, externals, context, params)?;
+        let mut fused = Vec::new();
+        for group in &groups {
+            let node = &group.node;
+            let (invocation, key) = self.bind(
+                graph,
+                node,
+                &group.version,
+                runtime,
+                externals,
+                context,
+                params,
+            )?;
+            if !group.absorbed.is_empty() {
+                fused.push((node.id.clone(), group.absorbed.clone()));
+            }
             if self
                 .cache
                 .get(&node.id)
@@ -286,17 +375,18 @@ impl Evaluator {
                 reused.push(node.id.clone());
                 continue;
             }
-            let outputs = runtime.execute(&version, &invocation).map_err(|error| {
-                EvaluateError::Execution {
+            let outputs = runtime
+                .execute(&group.version, &invocation)
+                .map_err(|error| EvaluateError::Execution {
                     node: node.id.clone(),
                     error,
-                }
-            })?;
+                })?;
             self.epoch += 1;
             let fresh = Cached {
                 key,
                 outputs,
-                output_names: version
+                output_names: group
+                    .version
                     .manifest()
                     .outputs
                     .iter()
@@ -345,7 +435,243 @@ impl Evaluator {
             reused,
             committed,
             outputs,
+            fused,
         })
+    }
+
+    /// Decides what executes: every node as its own group, then producers
+    /// folded into their sole pointwise consumers when fusion is on.
+    fn plan(
+        &mut self,
+        graph: &Graph,
+        order: &[usize],
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, ImageHandle>,
+    ) -> Result<Vec<Group>, EvaluateError> {
+        let mut groups: Vec<Group> = Vec::with_capacity(order.len());
+        for index in order {
+            let node = &graph.nodes[*index];
+            let version =
+                runtime
+                    .kernel(&node.kernel)
+                    .ok_or_else(|| EvaluateError::UnknownKernel {
+                        node: node.id.clone(),
+                        kernel: node.kernel.clone(),
+                    })?;
+            let parts = vec![(node.id.clone(), version.generation())];
+            groups.push(Group {
+                node: node.clone(),
+                version,
+                parts,
+                absorbed: Vec::new(),
+            });
+        }
+        if !self.fusion {
+            self.fused.clear();
+            return Ok(groups);
+        }
+        // How many readers each output has: bindings and graph outputs.
+        let mut readers: BTreeMap<(NodeId, String), usize> = BTreeMap::new();
+        let mut count = |source: &Source| {
+            if let Source::Node { node, port } = source {
+                *readers.entry((node.clone(), port.clone())).or_default() += 1;
+            }
+        };
+        for node in &graph.nodes {
+            for binding in node.inputs.values() {
+                match binding {
+                    Binding::Now(source) => count(source),
+                    Binding::Previous { source, initial } => {
+                        count(source);
+                        count(initial);
+                        // State sources must be materialized; count twice.
+                        count(source);
+                    }
+                }
+            }
+        }
+        for (_, source) in &graph.outputs {
+            count(source);
+        }
+        let mut domains: BTreeMap<NodeId, Domain> = BTreeMap::new();
+        let mut absorbed_into: BTreeMap<NodeId, usize> = BTreeMap::new();
+        for position in 0..groups.len() {
+            // Planned domain of this group, for the equality check.
+            let planned = self.planned_domain(&groups[position], runtime, externals, &domains);
+            let ports: Vec<(String, Binding)> = groups[position]
+                .node
+                .inputs
+                .iter()
+                .map(|(port, binding)| (port.clone(), binding.clone()))
+                .collect();
+            for (port, binding) in ports {
+                let Binding::Now(Source::Node {
+                    node: producer_id,
+                    port: producer_port,
+                }) = binding
+                else {
+                    continue;
+                };
+                if readers
+                    .get(&(producer_id.clone(), producer_port.clone()))
+                    .copied()
+                    != Some(1)
+                    || self.pinned.contains(&producer_id)
+                    || absorbed_into.contains_key(&producer_id)
+                {
+                    continue;
+                }
+                let Some(producer_position) = groups.iter().position(|g| g.node.id == producer_id)
+                else {
+                    continue;
+                };
+                let producer_domain = domains.get(&producer_id).copied();
+                if producer_domain.is_none() || producer_domain != planned {
+                    continue;
+                }
+                let consumer = &groups[position];
+                let Some(input_index) = consumer
+                    .version
+                    .manifest()
+                    .inputs
+                    .iter()
+                    .position(|input| input.name == port)
+                else {
+                    continue;
+                };
+                if !orla_ir::samples_only(consumer.version.module(), input_index as u32)
+                    || groups[producer_position].version.manifest().outputs.len() != 1
+                {
+                    continue;
+                }
+                let producer = &groups[producer_position];
+                let mut parts = consumer.parts.clone();
+                parts.extend(producer.parts.iter().cloned());
+                let version = match self.fused.get(&consumer.node.id) {
+                    Some(existing) if existing.parts == parts => Arc::clone(&existing.version),
+                    _ => {
+                        let module = orla_ir::fuse(
+                            consumer.version.module(),
+                            input_index as u32,
+                            producer.version.module(),
+                            &producer.node.id.0,
+                        )
+                        .map_err(|error| EvaluateError::Fusion {
+                            node: consumer.node.id.clone(),
+                            message: error.to_string(),
+                        })?;
+                        let id = fused_id(&consumer.node.id);
+                        let source = format!(
+                            "// fused: {}\n",
+                            parts
+                                .iter()
+                                .map(|(node, generation)| format!("{node}@{generation}"))
+                                .collect::<Vec<_>>()
+                                .join(" + ")
+                        );
+                        let version = runtime.prepare_detached(module, id, source).map_err(
+                            |error: PrepareError| EvaluateError::Fusion {
+                                node: consumer.node.id.clone(),
+                                message: error.to_string(),
+                            },
+                        )?;
+                        self.fused.insert(
+                            consumer.node.id.clone(),
+                            Fused {
+                                parts: parts.clone(),
+                                version: Arc::clone(&version),
+                            },
+                        );
+                        version
+                    }
+                };
+                // Rewire: the fused input disappears; the producer's inputs
+                // and params join under `producer/name`.
+                let producer = &groups[producer_position];
+                let prefix = producer.node.id.0.clone();
+                let mut inputs = consumer.node.inputs.clone();
+                inputs.remove(&port);
+                for (name, binding) in &producer.node.inputs {
+                    inputs.insert(format!("{prefix}/{name}"), binding.clone());
+                }
+                let mut params = consumer.node.params.clone();
+                for (name, value) in &producer.node.params {
+                    params.insert(format!("{prefix}/{name}"), value.clone());
+                }
+                let mut absorbed = consumer.absorbed.clone();
+                absorbed.push(producer_id.clone());
+                absorbed.extend(producer.absorbed.iter().cloned());
+                let group = &mut groups[position];
+                group.version = version;
+                group.parts = parts;
+                group.absorbed = absorbed;
+                group.node.inputs = inputs;
+                group.node.params = params;
+                if group.node.domain.is_none() {
+                    group.node.domain = planned;
+                }
+                absorbed_into.insert(producer_id, position);
+            }
+            if let Some(domain) = planned {
+                domains.insert(groups[position].node.id.clone(), domain);
+            }
+        }
+        let executing: Vec<Group> = groups
+            .into_iter()
+            .filter(|group| !absorbed_into.contains_key(&group.node.id))
+            .collect();
+        let live: BTreeSet<&NodeId> = executing.iter().map(|g| &g.node.id).collect();
+        self.fused.retain(|node, _| live.contains(node));
+        Ok(executing)
+    }
+
+    /// The domain a group will execute over, when it can be known before
+    /// execution: explicit, or the size of its first bound image.
+    fn planned_domain(
+        &self,
+        group: &Group,
+        runtime: &Runtime,
+        externals: &BTreeMap<String, ImageHandle>,
+        domains: &BTreeMap<NodeId, Domain>,
+    ) -> Option<Domain> {
+        if let Some(domain) = group.node.domain {
+            return Some(domain);
+        }
+        let first = group.version.manifest().inputs.first()?;
+        let binding = group.node.inputs.get(&first.name)?;
+        let size = |handle: ImageHandle| {
+            runtime
+                .host()
+                .image_size(handle)
+                .ok()
+                .map(|(width, height)| Domain { width, height })
+        };
+        let of_source = |source: &Source| match source {
+            Source::External(name) => externals.get(name).and_then(|h| size(*h)),
+            Source::Node { node, .. } => domains.get(node).copied(),
+        };
+        match binding {
+            Binding::Now(source) => of_source(source),
+            Binding::Previous {
+                source: Source::Node { node, port },
+                initial,
+            } => self
+                .committed
+                .get(&(node.clone(), port.clone()))
+                .and_then(|h| size(*h))
+                .or_else(|| of_source(initial)),
+            Binding::Previous { .. } => None,
+        }
+    }
+
+    fn drop_cache(&mut self, id: &NodeId, runtime: &mut Runtime) {
+        if let Some(cached) = self.cache.remove(id) {
+            for output in cached.outputs {
+                if !self.is_committed(output) {
+                    release(runtime, output);
+                }
+            }
+        }
     }
 
     /// Releases cache entries and state of nodes that left the graph.
@@ -357,13 +683,7 @@ impl Evaluator {
             .cloned()
             .collect();
         for id in stale {
-            if let Some(cached) = self.cache.remove(&id) {
-                for output in cached.outputs {
-                    if !self.is_committed(output) {
-                        release(runtime, output);
-                    }
-                }
-            }
+            self.drop_cache(&id, runtime);
         }
         let stale_state: Vec<(NodeId, String)> = self
             .committed
@@ -378,6 +698,7 @@ impl Evaluator {
                 release(runtime, handle);
             }
         }
+        self.pinned.retain(|node| graph.node(node).is_some());
     }
 
     /// Makes every `<~` source's current output the committed state.
@@ -591,6 +912,25 @@ impl Evaluator {
             }
         }
     }
+}
+
+/// The id a fused group executes under: `fused.<node>@1` with the node
+/// name made id-safe.
+fn fused_id(node: &NodeId) -> KernelId {
+    let segment: String = node
+        .0
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9' | '_') => c,
+            _ => '_',
+        })
+        .collect();
+    let segment = if segment.starts_with(|c: char| c.is_ascii_digit()) || segment.is_empty() {
+        format!("n{segment}")
+    } else {
+        segment
+    };
+    KernelId::new(&format!("fused.{segment}"), 1).expect("sanitized segment forms a valid id")
 }
 
 fn release(runtime: &mut Runtime, handle: ImageHandle) {

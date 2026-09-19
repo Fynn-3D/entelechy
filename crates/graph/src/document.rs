@@ -164,7 +164,7 @@ pub(crate) fn lower(
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
     lowering.out.graph.externals = level.externals;
     lowering.out.graph.params = level.params;
-    lowering.out.graph.outputs = level.outputs.into_iter().collect();
+    lowering.out.graph.outputs = level.outputs;
     Ok(lowering.out)
 }
 
@@ -172,7 +172,8 @@ pub(crate) fn lower(
 struct Level {
     externals: Vec<String>,
     params: Vec<GraphParam>,
-    outputs: BTreeMap<String, Source>,
+    /// Outputs in declaration order; the first is the primary.
+    outputs: Vec<(String, Source)>,
 }
 
 impl Lowering<'_, '_> {
@@ -340,7 +341,7 @@ impl Lowering<'_, '_> {
                     initial,
                 })
             };
-        let mut aliases: BTreeMap<String, BTreeMap<String, Source>> = BTreeMap::new();
+        let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
         for decl in &document.nodes {
             let id = NodeId(format!("{prefix}{}", decl.name.value));
@@ -516,12 +517,16 @@ impl Lowering<'_, '_> {
             if let Source::Node { node, port } = source
                 && let Some(outputs) = aliases.get(&node.0)
             {
-                *source = outputs.get(port).cloned().ok_or_else(|| {
-                    error(
-                        Span::default(),
-                        format!("sub-graph `{node}` has no output `{port}`"),
-                    )
-                })?;
+                *source = outputs
+                    .iter()
+                    .find(|(name, _)| name == port)
+                    .map(|(_, source)| source.clone())
+                    .ok_or_else(|| {
+                        error(
+                            Span::default(),
+                            format!("sub-graph `{node}` has no output `{port}`"),
+                        )
+                    })?;
             }
             Ok(())
         };
@@ -536,7 +541,7 @@ impl Lowering<'_, '_> {
                 }
             }
         }
-        let mut outputs = BTreeMap::new();
+        let mut outputs: Vec<(String, Source)> = Vec::new();
         for (output, reference) in &document.outputs {
             let mut source = match rewrite_now(reference)? {
                 Binding::Now(source) => source,
@@ -545,12 +550,13 @@ impl Lowering<'_, '_> {
                 }
             };
             resolve(&mut source)?;
-            if outputs.insert(output.value.clone(), source).is_some() {
+            if outputs.iter().any(|(name, _)| name == &output.value) {
                 return Err(error(
                     output.span,
                     format!("output `{}` is declared twice", output.value),
                 ));
             }
+            outputs.push((output.value.clone(), source));
         }
         Ok(Level {
             externals,

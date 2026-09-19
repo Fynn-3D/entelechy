@@ -590,6 +590,26 @@ impl Session {
         self.evaluator.reset_state(&mut self.runtime);
     }
 
+    /// Enables or disables fusion of pointwise chains.
+    pub fn set_fusion(&mut self, enabled: bool) {
+        self.evaluator.set_fusion(enabled);
+    }
+
+    /// Whether fusion is enabled.
+    pub fn fusion(&self) -> bool {
+        self.evaluator.fusion()
+    }
+
+    /// Keeps a node materialized so its image can be read.
+    pub fn pin(&mut self, node: orla_graph::NodeId) {
+        self.evaluator.pin(node);
+    }
+
+    /// Lets a node be fused away again.
+    pub fn unpin(&mut self, node: &orla_graph::NodeId) {
+        self.evaluator.unpin(node);
+    }
+
     /// Writes a cached image to a PPM file.
     pub fn export(&self, image: ImageHandle, path: &Path) -> Result<(), SessionError> {
         let image = self
