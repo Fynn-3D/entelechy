@@ -1,0 +1,38 @@
+scene showcase.osn
+
+# A sixteenth of the pixels; the toolbar sits at x 14..306, y 124..172.
+frame 0.0
+expect state.result[0].scheme = 0
+expect state.result[0].spin = true
+expect 4 4 = 0.484 0.492 0.539 0.02          # the sky behind, top-left
+
+# A click on the first item cycles the colour; on the third stops the turntable.
+pointer 46 148 down
+frame 0.02
+pointer up
+frame 0.03
+expect state.result[0].scheme = 1
+pointer 198 148 down
+frame 0.05
+pointer up
+frame 0.07
+expect state.result[0].spin = false
+expect state.result[0].hover = 2
+
+# A drag on the picture orbits the camera: forty pixels are 0.32 of yaw.
+pointer 100 60 down
+frame 0.08
+pointer 140 60 down
+frame 0.1
+pointer up
+frame 0.12
+expect state.result[0].yaw = 0.92 0.001
+expect state.result[0].dragging = false
+
+# The last item resets the view.
+pointer 274 148 down
+frame 0.13
+pointer up
+frame 0.15
+expect state.result[0].yaw = 0.6 0.001
+expect state.result[0].spun = 0.0 0.001

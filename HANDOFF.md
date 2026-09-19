@@ -115,6 +115,11 @@ plus a hit sound the rules trigger, played by the sound card with the
 device pacing the game at sixty blocks a second; six seconds on the GPU
 ran with no underruns and no drops. A gamepad maps to the keyboard's
 codes in the Player (untested on hardware here: none was connected).
+The showcase is a product page at 720p: a gamepad as a signed-distance
+model with GGX shading, a soft shadow, a floor reflection and a toolbar,
+orbited by the pointer, at 27 ms a frame on the GPU including the read
+back; the state row and the picture are two Kernels, and the toolbar's
+geometry is parameters so the fixture is a sixteenth of the pixels.
 SLG (a tactics game) is the second whole application and the larger
 one: a turn state machine over one row, orders applied by a unit row,
 movement ranges as a relaxation Kernel placed through a sub-graph that
