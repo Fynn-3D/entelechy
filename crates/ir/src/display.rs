@@ -122,15 +122,11 @@ impl fmt::Display for Op {
             Self::Pointer => f.write_str("context pointer"),
             Self::PointerDown => f.write_str("context pointer.down"),
             Self::Key(code) => write!(f, "context key {code}"),
-            Self::ImageSize(input) => write!(f, "host image.size input{input}"),
-            Self::ImageSample(input) => write!(f, "host image.sample input{input}"),
-            Self::ImageFetch(input, coord) => {
-                write!(f, "host image.fetch input{input} {coord}")
-            }
             Self::Element => f.write_str("element"),
-            Self::FieldSample(input) => write!(f, "host field.sample input{input}"),
-            Self::FieldAt(input, index) => write!(f, "host field.at input{input} {index}"),
-            Self::FieldCount(input) => write!(f, "host field.count input{input}"),
+            Self::Sample(input) => write!(f, "host sample input{input}"),
+            Self::At(input, index) => write!(f, "host at input{input} {index}"),
+            Self::Count(input) => write!(f, "host count input{input}"),
+            Self::Size(input) => write!(f, "host size input{input}"),
         }
     }
 }

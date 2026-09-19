@@ -7,9 +7,9 @@ fn granted() -> orla_abi::Capabilities {
     Capability::ALL.into_iter().collect()
 }
 
-const GRADIENT: &str = "kernel image.gradient@1 { requires { image.write; time.read; } param depth: Float = 0.5; output result: Image; struct Uv { u: Float; v: Float; } fn make(c: Vec2, d: Vec2) -> Uv { return Uv { u: c.x / d.x, v: c.y / d.y }; } compute { let uv = make(coord(), domain()); let t = loop 3 with s = 0.0 { s + time() }; return vec4(uv.u, uv.v, depth + t, 1.0); } }";
-const GRAYSCALE: &str = "kernel image.grayscale@1 { requires { image.read; image.write; } input source: Image; param amount: Float = 1.0; output result: Image; fn luma(c: Vec4) -> Float { return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; } compute { let c = sample(source); let g = luma(c); let k = if g > 0.5 { 1.0 } else { amount }; return mix(c, vec4(g, g, g, c.a), k); } }";
-const PIXELATE: &str = "kernel image.pixelate@1 { requires { image.read; image.write; } input source: Image; param size: Int = 4; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }";
+const GRADIENT: &str = "kernel image.gradient@1 { requires { field.write; time.read; } param depth: Float = 0.5; output result: Image; struct Uv { u: Float; v: Float; } fn make(c: Vec2, d: Vec2) -> Uv { return Uv { u: c.x / d.x, v: c.y / d.y }; } compute { let uv = make(coord(), domain()); let t = loop 3 with s = 0.0 { s + time() }; return vec4(uv.u, uv.v, depth + t, 1.0); } }";
+const GRAYSCALE: &str = "kernel image.grayscale@1 { requires { field.read; field.write; } input source: Image; param amount: Float = 1.0; output result: Image; fn luma(c: Vec4) -> Float { return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; } compute { let c = sample(source); let g = luma(c); let k = if g > 0.5 { 1.0 } else { amount }; return mix(c, vec4(g, g, g, c.a), k); } }";
+const PIXELATE: &str = "kernel image.pixelate@1 { requires { field.read; field.write; } input source: Image; param size: Int = 4; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }";
 
 fn run(
     module: &orla_ir::Validated,
@@ -20,10 +20,7 @@ fn run(
     let invocation = Invocation {
         inputs,
         params,
-        domain: Domain {
-            width: 5,
-            height: 4,
-        },
+        domain: Domain::Grid(5, 4),
         context: Context {
             time: 0.25,
             ..Context::default()
@@ -74,6 +71,6 @@ fn addressed_inputs_do_not_fuse() {
     let pixelate = compile(PIXELATE).unwrap();
     assert!(!samples_only(&pixelate, 0));
     let error = fuse(&pixelate, 0, &gradient, "source").unwrap_err();
-    assert!(error.to_string().contains("fetch or size"), "{error}");
+    assert!(error.to_string().contains("address or size"), "{error}");
     assert!(samples_only(&compile(GRAYSCALE).unwrap(), 0));
 }

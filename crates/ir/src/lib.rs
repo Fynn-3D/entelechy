@@ -17,7 +17,9 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use fuse::{FuseError, InputUse, fuse, input_use, samples_only};
-pub use orla_abi::{Capabilities, Capability, PortType, Scalar, Schema, Type, Value};
+pub use orla_abi::{
+    Capabilities, Capability, PortType, Scalar, Schema, Shape, ShapeIndex, Type, Value,
+};
 pub use validate::{Validated, ValidationError, validate};
 
 /// Stable identity of a Kernel: a dotted name and a version, e.g.
@@ -106,22 +108,19 @@ pub struct Port {
 
 impl Port {
     /// The value type the entry point produces or `sample` yields for this
-    /// port: `Vec4` for an image, the element type for a Field.
+    /// port: its element type.
     pub fn element(&self) -> Type {
-        match &self.ty {
-            PortType::Image => Type::Vec4,
-            PortType::Field { element, .. } => *element,
-        }
+        self.ty.element
     }
 
-    /// Whether the port carries a Field.
-    pub fn is_field(&self) -> bool {
-        matches!(self.ty, PortType::Field { .. })
+    /// How the port's elements are addressed.
+    pub fn shape(&self) -> Shape {
+        self.ty.shape
     }
 }
 
 /// The storage layout of a value type: vectors and structs flattened to
-/// scalars in declaration order. `None` for images and unknown structs.
+/// scalars in declaration order. `None` for unknown structs.
 pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
     fn push(ty: Type, structs: &[StructDef], out: &mut Vec<Scalar>) -> Option<()> {
         match ty {
@@ -131,7 +130,6 @@ pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
             Type::Vec2 => out.extend([Scalar::Float; 2]),
             Type::Vec3 => out.extend([Scalar::Float; 3]),
             Type::Vec4 => out.extend([Scalar::Float; 4]),
-            Type::Image => return None,
             Type::Struct(index) => {
                 for field in &structs.get(index as usize)?.fields {
                     push(field.ty, structs, out)?;
@@ -510,9 +508,11 @@ pub enum Op {
     Carried,
     /// The iteration index of the innermost enclosing loop as `Int`.
     Index,
-    /// The current output pixel as `Vec2`. Entry point only.
+    /// The current element's coordinate: `Vec2` over a grid, `Vec3` over a
+    /// volume; rows have `element()` instead. Entry point only.
     Coord,
-    /// The output domain size as `Vec2`. Entry point only.
+    /// The output domain's extent: `Int` for rows, `Vec2` for a grid,
+    /// `Vec3` for a volume. Entry point only.
     Domain,
     /// Session time in seconds as `Float`. Context: `time.read`.
     Time,
@@ -523,25 +523,20 @@ pub enum Op {
     /// Whether the key with the given `Int` code is held, as `Bool`.
     /// Context: `input.read`.
     Key(ValueId),
-    /// Size of an input image as `Vec2`. Host call: `image.read`.
-    ImageSize(u32),
-    /// Pixel of an input image at the current coordinate as `Vec4`.
-    /// Host call: `image.read`. Entry point only.
-    ImageSample(u32),
-    /// Pixel of an input image at a `Vec2` coordinate (clamped to the image)
-    /// as `Vec4`. Host call: `image.read`.
-    ImageFetch(u32, ValueId),
-    /// The current element index as `Int`. Entry point only, over a Rows
-    /// domain.
+    /// The current element's linear index as `Int`. Entry point only.
     Element,
-    /// Element of an input Field at the current index, as the Field's
-    /// element type. Host call: `field.read`. Entry point only.
-    FieldSample(u32),
-    /// Element of an input Field at an `Int` index (clamped), as the Field's
-    /// element type. Host call: `field.read`.
-    FieldAt(u32, ValueId),
-    /// Number of elements of an input Field as `Int`. Host call: `field.read`.
-    FieldCount(u32),
+    /// The element of an input at the current coordinate, clamped to the
+    /// input's extent, as its element type. The input's shape must match
+    /// the output's. Host call: `field.read`. Entry point only.
+    Sample(u32),
+    /// The element of an input at an address of the input's index type
+    /// (`Int`, `Vec2`, or `Vec3`; clamped), as its element type. Host call:
+    /// `field.read`.
+    At(u32, ValueId),
+    /// Number of elements of an input as `Int`. Host call: `field.read`.
+    Count(u32),
+    /// Extent of an input as its index type. Host call: `field.read`.
+    Size(u32),
 }
 
 /// An instruction: a typed value defined by an operation.

@@ -10,7 +10,7 @@ use std::ops::Deref;
 
 use crate::{
     Block, Capability, Function, Instruction, MAX_LOOP_COUNT, Manifest, Module, Op, Port, PortType,
-    StructDef, Type, UnaryOp, ValueId, schema_of,
+    Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
 };
 
 /// A module that passed [`validate`].
@@ -102,16 +102,10 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
         }
     }
     let requires = &module.manifest.requires;
-    if outputs.iter().any(|o| !o.is_field()) && !requires.contains(Capability::ImageWrite) {
+    if !outputs.is_empty() && !requires.contains(Capability::FieldWrite) {
         return Err(error(
             "manifest",
-            "writing an image output requires `image.write`".to_owned(),
-        ));
-    }
-    if outputs.iter().any(Port::is_field) && !requires.contains(Capability::FieldWrite) {
-        return Err(error(
-            "manifest",
-            "writing a Field output requires `field.write`".to_owned(),
+            "writing an output requires `field.write`".to_owned(),
         ));
     }
     Ok(Validated(module))
@@ -138,15 +132,6 @@ fn validate_structs(structs: &[StructDef]) -> Result<(), ValidationError> {
                 ));
             }
             match field.ty {
-                Type::Image => {
-                    return Err(error(
-                        "structs",
-                        format!(
-                            "struct `{}` field `{}` cannot be an Image",
-                            def.name, field.name
-                        ),
-                    ));
-                }
                 Type::Struct(inner) if inner as usize >= index => {
                     return Err(error(
                         "structs",
@@ -186,25 +171,26 @@ fn validate_manifest(manifest: &Manifest, structs: &[StructDef]) -> Result<(), V
         }
     }
     for port in manifest.inputs.iter().chain(&manifest.outputs) {
-        if let PortType::Field { element, schema } = &port.ty {
-            let expected = schema_of(*element, structs).ok_or_else(|| {
-                error(
-                    "manifest",
-                    format!(
-                        "port `{}` has element type {element}, which has no layout",
-                        port.name
-                    ),
-                )
-            })?;
-            if *schema != expected {
-                return Err(error(
-                    "manifest",
-                    format!(
-                        "port `{}` declares schema {schema} but its element lays out as {expected}",
-                        port.name
-                    ),
-                ));
-            }
+        let PortType {
+            element, schema, ..
+        } = &port.ty;
+        let expected = schema_of(*element, structs).ok_or_else(|| {
+            error(
+                "manifest",
+                format!(
+                    "port `{}` has element type {element}, which has no layout",
+                    port.name
+                ),
+            )
+        })?;
+        if *schema != expected {
+            return Err(error(
+                "manifest",
+                format!(
+                    "port `{}` declares schema {schema} but its element lays out as {expected}",
+                    port.name
+                ),
+            ));
         }
     }
     for param in &manifest.params {
@@ -234,7 +220,7 @@ struct Checker<'a> {
     loops: Vec<Type>,
 }
 
-impl Checker<'_> {
+impl<'a> Checker<'a> {
     fn fail(&self, message: impl Into<String>) -> ValidationError {
         error(&self.function.name, message)
     }
@@ -258,22 +244,21 @@ impl Checker<'_> {
         }
     }
 
-    fn input(&self, input: u32, position: ValueId, field: bool) -> Result<Type, ValidationError> {
-        let port = self
-            .module
+    fn input(&self, input: u32, position: ValueId) -> Result<&'a Port, ValidationError> {
+        self.module
             .manifest
             .inputs
             .get(input as usize)
-            .ok_or_else(|| self.fail(format!("{position} reads unknown input {input}")))?;
-        if port.is_field() != field {
-            return Err(self.fail(format!(
-                "{position} reads input `{}` as {} but it is {}",
-                port.name,
-                if field { "a Field" } else { "an image" },
-                port.ty
-            )));
-        }
-        Ok(port.element())
+            .ok_or_else(|| self.fail(format!("{position} reads unknown input {input}")))
+    }
+
+    /// The shape the entry point maps over.
+    fn output_shape(&self) -> Shape {
+        self.module
+            .manifest
+            .outputs
+            .first()
+            .map_or(Shape::Grid, Port::shape)
     }
 
     fn entry_only(&self, position: ValueId) -> Result<(), ValidationError> {
@@ -514,9 +499,20 @@ impl Checker<'_> {
                 }
                 Type::Int
             }
-            Op::Coord | Op::Domain => {
+            Op::Coord => {
                 self.entry_only(position)?;
-                Type::Vec2
+                match self.output_shape() {
+                    Shape::Rows => {
+                        return Err(
+                            self.fail(format!("{position} reads coord() over rows; use element()"))
+                        );
+                    }
+                    shape => shape.index_type(),
+                }
+            }
+            Op::Domain => {
+                self.entry_only(position)?;
+                self.output_shape().index_type()
             }
             Op::Pointer => {
                 self.require(Capability::InputRead, position)?;
@@ -537,45 +533,46 @@ impl Checker<'_> {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float
             }
-            Op::ImageSize(image) => {
-                self.input(*image, position, false)?;
-                self.require(Capability::ImageRead, position)?;
-                Type::Vec2
-            }
-            Op::ImageSample(image) => {
-                self.entry_only(position)?;
-                self.input(*image, position, false)?;
-                self.require(Capability::ImageRead, position)?;
-                Type::Vec4
-            }
             Op::Element => {
                 self.entry_only(position)?;
                 Type::Int
             }
-            Op::FieldSample(field) => {
+            Op::Sample(input) => {
                 self.entry_only(position)?;
                 self.require(Capability::FieldRead, position)?;
-                self.input(*field, position, true)?
-            }
-            Op::FieldAt(field, index) => {
-                self.require(Capability::FieldRead, position)?;
-                if self.operand(*index, position)? != Type::Int {
-                    return Err(self.fail(format!("{position} indexes a Field with a non-Int")));
+                let port = self.input(*input, position)?;
+                if port.shape() != self.output_shape() {
+                    return Err(self.fail(format!(
+                        "{position} samples input `{}`, a {}, over a {} output; use at()",
+                        port.name,
+                        port.shape(),
+                        self.output_shape()
+                    )));
                 }
-                self.input(*field, position, true)?
+                port.element()
             }
-            Op::FieldCount(field) => {
+            Op::At(input, index) => {
                 self.require(Capability::FieldRead, position)?;
-                self.input(*field, position, true)?;
+                let port = self.input(*input, position)?;
+                let actual = self.operand(*index, position)?;
+                if actual != port.ty.index_type() {
+                    return Err(self.fail(format!(
+                        "{position} addresses input `{}`, a {}, with {actual} instead of {}",
+                        port.name,
+                        port.shape(),
+                        port.ty.index_type()
+                    )));
+                }
+                port.element()
+            }
+            Op::Count(input) => {
+                self.require(Capability::FieldRead, position)?;
+                self.input(*input, position)?;
                 Type::Int
             }
-            Op::ImageFetch(image, coord) => {
-                self.input(*image, position, false)?;
-                self.require(Capability::ImageRead, position)?;
-                if self.operand(*coord, position)? != Type::Vec2 {
-                    return Err(self.fail(format!("{position} fetches with a non-Vec2 coordinate")));
-                }
-                Type::Vec4
+            Op::Size(input) => {
+                self.require(Capability::FieldRead, position)?;
+                self.input(*input, position)?.ty.index_type()
             }
         };
         if actual != *ty {
@@ -658,12 +655,12 @@ mod tests {
             requires: requires.iter().copied().collect(),
             inputs: vec![Port {
                 name: "source".into(),
-                ty: PortType::Image,
+                ty: PortType::image(),
             }],
             params: vec![],
             outputs: vec![Port {
                 name: "result".into(),
-                ty: PortType::Image,
+                ty: PortType::image(),
             }],
         }
     }
@@ -684,7 +681,7 @@ mod tests {
             entry: Function {
                 name: "compute".into(),
                 args: vec![],
-                body: vec![instruction(0, Type::Vec4, Op::ImageSample(0))],
+                body: vec![instruction(0, Type::Vec4, Op::Sample(0))],
                 results: vec![ValueId(0)],
             },
         }
@@ -692,16 +689,16 @@ mod tests {
 
     #[test]
     fn host_access_needs_declared_capabilities() {
-        let module = sample_module(&[Capability::ImageWrite]);
+        let module = sample_module(&[Capability::FieldWrite]);
         let error = validate(module).unwrap_err();
-        assert!(error.message.contains("needs `image.read`"), "{error}");
-        let module = sample_module(&[Capability::ImageRead]);
+        assert!(error.message.contains("needs `field.read`"), "{error}");
+        let module = sample_module(&[Capability::FieldRead]);
         let error = validate(module).unwrap_err();
-        assert!(error.message.contains("`image.write`"), "{error}");
+        assert!(error.message.contains("`field.write`"), "{error}");
         assert!(
             validate(sample_module(&[
-                Capability::ImageRead,
-                Capability::ImageWrite
+                Capability::FieldRead,
+                Capability::FieldWrite
             ]))
             .is_ok()
         );
@@ -709,7 +706,7 @@ mod tests {
 
     #[test]
     fn ids_are_pre_order_and_block_values_go_out_of_scope() {
-        let mut module = sample_module(&[Capability::ImageRead, Capability::ImageWrite]);
+        let mut module = sample_module(&[Capability::FieldRead, Capability::FieldWrite]);
         // %1: if true { %2 = const 1.0; %2 } else { %3 = const 2.0; %3 }
         // %4: uses %2 after the block closed: rejected.
         module.entry.body = vec![
@@ -753,7 +750,7 @@ mod tests {
 
     #[test]
     fn loops_are_bounded_and_carry_one_type() {
-        let mut module = sample_module(&[Capability::ImageRead, Capability::ImageWrite]);
+        let mut module = sample_module(&[Capability::FieldRead, Capability::FieldWrite]);
         let body = |ty: Type, op: Op| Block {
             body: vec![instruction(2, ty, op)],
             result: ValueId(2),
@@ -812,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn field_ports_carry_their_layout_and_gate_their_ops() {
+    fn ports_carry_their_layout_and_shape_and_gate_their_ops() {
         let mut module = sample_module(&[Capability::FieldRead, Capability::FieldWrite]);
         module.structs = vec![StructDef {
             name: "P".into(),
@@ -829,25 +826,55 @@ mod tests {
         }];
         let schema = schema_of(Type::Struct(0), &module.structs).unwrap();
         assert_eq!(schema.to_string(), "f,f,i");
-        let field = PortType::Field {
+        let rows = PortType {
             element: Type::Struct(0),
+            shape: Shape::Rows,
             schema: schema.clone(),
         };
-        module.manifest.inputs[0].ty = field.clone();
-        module.manifest.outputs[0].ty = field;
-        module.entry.body = vec![instruction(0, Type::Struct(0), Op::FieldSample(0))];
+        module.manifest.inputs[0].ty = rows.clone();
+        module.manifest.outputs[0].ty = rows;
+        module.entry.body = vec![instruction(0, Type::Struct(0), Op::Sample(0))];
         assert!(validate(module.clone()).is_ok());
 
-        module.entry.body = vec![instruction(0, Type::Vec4, Op::ImageSample(0))];
+        // Rows have no coordinate.
+        module.entry.body = vec![
+            instruction(0, Type::Vec2, Op::Coord),
+            instruction(1, Type::Struct(0), Op::Sample(0)),
+        ];
+        module.entry.results = vec![ValueId(1)];
+        let error = validate(module.clone()).unwrap_err();
+        assert!(error.message.contains("use element()"), "{error}");
+
+        // Sampling needs matching shapes; addressing needs the index type.
+        module.manifest.outputs[0].ty = PortType {
+            element: Type::Struct(0),
+            shape: Shape::Grid,
+            schema: schema.clone(),
+        };
+        module.entry.body = vec![instruction(0, Type::Struct(0), Op::Sample(0))];
+        module.entry.results = vec![ValueId(0)];
+        let error = validate(module.clone()).unwrap_err();
+        assert!(error.message.contains("over a Grid output"), "{error}");
+        module.entry.body = vec![
+            instruction(0, Type::Vec2, Op::Coord),
+            instruction(1, Type::Struct(0), Op::At(0, ValueId(0))),
+        ];
+        module.entry.results = vec![ValueId(1)];
         let error = validate(module.clone()).unwrap_err();
         assert!(
-            error.message.contains("as an image but it is Field"),
+            error.message.contains("with Vec2 instead of Int"),
             "{error}"
         );
 
-        module.entry.body = vec![instruction(0, Type::Struct(0), Op::FieldSample(0))];
-        module.manifest.inputs[0].ty = PortType::Field {
+        module.entry.body = vec![
+            instruction(0, Type::Int, Op::Element),
+            instruction(1, Type::Struct(0), Op::At(0, ValueId(0))),
+        ];
+        assert!(validate(module.clone()).is_ok());
+
+        module.manifest.inputs[0].ty = PortType {
             element: Type::Struct(0),
+            shape: Shape::Rows,
             schema: crate::Schema::new(vec![Scalar::Float]),
         };
         let error = validate(module).unwrap_err();

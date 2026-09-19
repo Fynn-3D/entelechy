@@ -4,7 +4,7 @@ use orla_language::Span;
 
 const GRAYSCALE: &str = r#"
 kernel image.grayscale@1 {
-    requires { image.read; image.write; }
+    requires { field.read; field.write; }
     input source: Image;
     param amount: Float = 1.0;
     output result: Image;
@@ -31,13 +31,13 @@ fn grayscale_compiles_to_validated_ir() {
     let module = compile(GRAYSCALE).unwrap();
     let manifest = &module.manifest;
     assert_eq!(manifest.id.to_string(), "image.grayscale@1");
-    assert!(manifest.requires.contains(Capability::ImageRead));
+    assert!(manifest.requires.contains(Capability::FieldRead));
     assert_eq!(manifest.inputs[0].name, "source");
     assert_eq!(manifest.params[0].name, "amount");
-    assert_eq!(manifest.outputs[0].ty, orla_ir::PortType::Image);
+    assert_eq!(manifest.outputs[0].ty, orla_ir::PortType::image());
     assert_eq!(module.functions.len(), 1);
     assert_eq!(module.functions[0].args, vec![Type::Vec4]);
-    assert!(module.entry.body.iter().any(|i| i.op == Op::ImageSample(0)));
+    assert!(module.entry.body.iter().any(|i| i.op == Op::Sample(0)));
     assert!(
         module
             .entry
@@ -46,30 +46,30 @@ fn grayscale_compiles_to_validated_ir() {
             .any(|i| matches!(i.op, Op::Call(0, _)))
     );
     let text = module.to_string();
-    assert!(text.contains("host image.sample input0"), "{text}");
+    assert!(text.contains("host sample input0"), "{text}");
     assert!(text.contains("mix("), "{text}");
 }
 
 #[test]
 fn diagnostics_name_the_problem_and_the_position() {
     let (span, message) = semantic(
-        "kernel t.k@1 { requires { image.read; image.write; } input a: Image; output r: Image; compute { return sample(b); } }",
+        "kernel t.k@1 { requires { field.read; field.write; } input a: Image; output r: Image; compute { return sample(b); } }",
     );
     assert_eq!(message, "`b` is not an input");
     assert_eq!(span.column, 111);
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { return 1.0; } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { return 1.0; } }",
     );
-    assert!(message.contains("needs a Vec4 per pixel"), "{message}");
+    assert!(message.contains("needs a Vec4 per element"), "{message}");
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { return vec4(1, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(1, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("must be Float, found Int"), "{message}");
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; fn f(x: Float) -> Float { return coord().x; } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; fn f(x: Float) -> Float { return coord().x; } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",
     );
     assert!(
         message.contains("only available inside `compute`"),
@@ -77,7 +77,7 @@ fn diagnostics_name_the_problem_and_the_position() {
     );
 
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; fn f(x: Float) -> Float { return g(x); } fn g(x: Float) -> Float { return x; } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; fn f(x: Float) -> Float { return g(x); } fn g(x: Float) -> Float { return x; } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("defined above"), "{message}");
 
@@ -89,20 +89,20 @@ fn diagnostics_name_the_problem_and_the_position() {
 
 #[test]
 fn undeclared_capabilities_are_rejected_before_execution() {
-    let source = "kernel t.k@1 { requires { image.write; } input a: Image; output r: Image; compute { return sample(a); } }";
+    let source = "kernel t.k@1 { requires { field.write; } input a: Image; output r: Image; compute { return sample(a); } }";
     let (span, message) = semantic(source);
-    assert_eq!(message, "`sample` needs `image.read`; add it to `requires`");
+    assert_eq!(message, "`sample` needs `field.read`; add it to `requires`");
     assert_eq!(span.column, 92);
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.read; } output r: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.read; } output r: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
     );
-    assert!(message.contains("`image.write`"), "{message}");
+    assert!(message.contains("`field.write`"), "{message}");
 }
 
 #[test]
 fn parameter_defaults_are_constants_of_the_declared_type() {
     let module = compile(
-        "kernel t.k@1 { requires { image.write; } param scale: Vec2 = vec2(1.0, -2.0); param n: Int = -3; param f: Float = 2; output r: Image; compute { return vec4(scale.x, float(n), f, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } param scale: Vec2 = vec2(1.0, -2.0); param n: Int = -3; param f: Float = 2; output r: Image; compute { return vec4(scale.x, float(n), f, 1.0); } }",
     )
     .unwrap();
     assert_eq!(
@@ -115,7 +115,7 @@ fn parameter_defaults_are_constants_of_the_declared_type() {
         orla_ir::Value::Float(2.0)
     );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } param f: Float = 1.0 + 1.0; output r: Image; compute { return vec4(f, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } param f: Float = 1.0 + 1.0; output r: Image; compute { return vec4(f, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("must be a literal"), "{message}");
 }
@@ -123,11 +123,11 @@ fn parameter_defaults_are_constants_of_the_declared_type() {
 #[test]
 fn time_and_vec3_are_typed_and_gated() {
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { return vec4(time(), 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(time(), 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("`time.read`"), "{message}");
     let module = compile(
-        "kernel t.k@1 { requires { image.write; time.read; } param tint: Vec3 = vec3(1.0, 0.5, 0.25); output r: Image; compute { let c = tint * time(); return vec4(c.x, c.y, c.z, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; time.read; } param tint: Vec3 = vec3(1.0, 0.5, 0.25); output r: Image; compute { let c = tint * time(); return vec4(c.x, c.y, c.z, 1.0); } }",
     )
     .unwrap();
     assert_eq!(
@@ -136,11 +136,11 @@ fn time_and_vec3_are_typed_and_gated() {
     );
     assert!(module.to_string().contains("context time"));
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let v = vec3(1.0, 0.0, 0.0); return vec4(v.w, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let v = vec3(1.0, 0.0, 0.0); return vec4(v.w, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("no component `.w`"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let d = dot(vec3(1.0, 0.0, 0.0), vec2(0.0, 1.0)); return vec4(d, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let d = dot(vec3(1.0, 0.0, 0.0), vec2(0.0, 1.0)); return vec4(d, 0.0, 0.0, 1.0); } }",
     );
     assert!(
         message.contains("`dot` cannot be applied to (Vec3, Vec2)"),
@@ -151,38 +151,38 @@ fn time_and_vec3_are_typed_and_gated() {
 #[test]
 fn control_flow_is_scoped_and_typed() {
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = if 1.0 { 1.0 } else { 2.0 }; return vec4(a, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = if 1.0 { 1.0 } else { 2.0 }; return vec4(a, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("needs a Bool condition"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = if true { 1.0 } else { 2 }; return vec4(a, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = if true { 1.0 } else { 2 }; return vec4(a, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("branches give Float and Int"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = if true { let z = 1.0; z } else { 2.0 }; return vec4(z, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = if true { let z = 1.0; z } else { 2.0 }; return vec4(z, 0.0, 0.0, 1.0); } }",
     );
     assert_eq!(message, "`z` is not defined");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { 2 }; return vec4(a, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { 2 }; return vec4(a, 0.0, 0.0, 1.0); } }",
     );
     assert!(
         message.contains("carries Float but the body gives Int"),
         "{message}"
     );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { loop 2 with y = 0.0 { x } }; return vec4(a, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { loop 2 with y = 0.0 { x } }; return vec4(a, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("carried by an outer loop"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let i = index(); return vec4(float(i), 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let i = index(); return vec4(float(i), 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("inside a loop"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; compute { let a = loop 4 with x = 1.0 until x { x }; return vec4(a, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = loop 4 with x = 1.0 until x { x }; return vec4(a, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("`until` needs a Bool"), "{message}");
     let module = compile(
-        "kernel t.k@1 { requires { image.write; } param on: Bool = true; output r: Image; compute { let a = if on && !(1 > 2) { 1.0 } else { 0.0 }; return vec4(a, a, a, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } param on: Bool = true; output r: Image; compute { let a = if on && !(1 > 2) { 1.0 } else { 0.0 }; return vec4(a, a, a, 1.0); } }",
     )
     .unwrap();
     assert_eq!(
@@ -195,7 +195,7 @@ fn control_flow_is_scoped_and_typed() {
 
 #[test]
 fn structs_are_checked_by_name_and_field() {
-    let prefix = "kernel t.k@1 { requires { image.write; } output r: Image; struct Hit { t: Float; id: Int; }";
+    let prefix = "kernel t.k@1 { requires { field.write; } output r: Image; struct Hit { t: Float; id: Int; }";
     let ok = compile(&format!("{prefix} compute {{ let h = Hit {{ t: 1.0, id: 2 }}; let g = Hit {{ ..h, t: 3.0 }}; return vec4(g.t, float(g.id), 0.0, 1.0); }} }}")).unwrap();
     assert!(
         ok.to_string()
@@ -234,13 +234,13 @@ fn structs_are_checked_by_name_and_field() {
         "{message}"
     );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; struct Hit { t: Float; } param h: Hit = 1.0; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; struct Hit { t: Float; } param h: Hit = 1.0; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("cannot be structs"), "{message}");
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { image.write; } output r: Image; struct Node { next: Node; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; struct Node { next: Node; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
     );
     assert!(message.contains("cannot contain itself"), "{message}");
-    let error = compile("kernel t.k@1 { requires { image.write; } output r: Image; struct hit { t: Float; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }").unwrap_err();
+    let error = compile("kernel t.k@1 { requires { field.write; } output r: Image; struct hit { t: Float; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }").unwrap_err();
     assert!(error.to_string().contains("uppercase"), "{error}");
 }

@@ -41,16 +41,8 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
     fn walk(instructions: &[Instruction], input: u32, use_: &mut InputUse) {
         for instruction in instructions {
             match &instruction.op {
-                Op::ImageSample(i) if *i == input => use_.sampled = true,
-                Op::ImageFetch(i, _)
-                | Op::ImageSize(i)
-                | Op::FieldSample(i)
-                | Op::FieldAt(i, _)
-                | Op::FieldCount(i)
-                    if *i == input =>
-                {
-                    use_.addressed = true
-                }
+                Op::Sample(i) if *i == input => use_.sampled = true,
+                Op::At(i, _) | Op::Count(i) | Op::Size(i) if *i == input => use_.addressed = true,
                 Op::If {
                     then, otherwise, ..
                 } => {
@@ -101,12 +93,18 @@ pub fn fuse(
     }
     if !samples_only(consumer, input) {
         return Err(FuseError(format!(
-            "consumer reads input `{}` by fetch or size, not only by sample",
+            "consumer reads input `{}` by address or size, not only by sample",
             consumer_manifest.inputs[input as usize].name
         )));
     }
     if producer_manifest.outputs.len() != 1 {
         return Err(FuseError("producer must have exactly one output".into()));
+    }
+    if producer_manifest.outputs[0].ty != consumer_manifest.inputs[input as usize].ty {
+        return Err(FuseError(format!(
+            "producer writes {} but the consumer reads {}",
+            producer_manifest.outputs[0].ty, consumer_manifest.inputs[input as usize].ty
+        )));
     }
     let consumer_inputs = consumer_manifest.inputs.len() as u32;
     let consumer_params = consumer_manifest.params.len() as u32;
@@ -165,12 +163,10 @@ pub fn fuse(
     let consumer_ops = move |op: &Op| -> Op {
         let index = |i: u32| if i > input { i - 1 } else { i };
         match op {
-            Op::ImageSample(i) => Op::ImageSample(index(*i)),
-            Op::ImageFetch(i, c) => Op::ImageFetch(index(*i), *c),
-            Op::ImageSize(i) => Op::ImageSize(index(*i)),
-            Op::FieldSample(i) => Op::FieldSample(index(*i)),
-            Op::FieldAt(i, c) => Op::FieldAt(index(*i), *c),
-            Op::FieldCount(i) => Op::FieldCount(index(*i)),
+            Op::Sample(i) => Op::Sample(index(*i)),
+            Op::At(i, c) => Op::At(index(*i), *c),
+            Op::Count(i) => Op::Count(index(*i)),
+            Op::Size(i) => Op::Size(index(*i)),
             other => other.clone(),
         }
     };
@@ -179,12 +175,10 @@ pub fn fuse(
     let producer_ops = move |op: &Op| -> Op {
         let index = |i: u32| i + consumer_inputs - 1;
         match op {
-            Op::ImageSample(i) => Op::ImageSample(index(*i)),
-            Op::ImageFetch(i, c) => Op::ImageFetch(index(*i), *c),
-            Op::ImageSize(i) => Op::ImageSize(index(*i)),
-            Op::FieldSample(i) => Op::FieldSample(index(*i)),
-            Op::FieldAt(i, c) => Op::FieldAt(index(*i), *c),
-            Op::FieldCount(i) => Op::FieldCount(index(*i)),
+            Op::Sample(i) => Op::Sample(index(*i)),
+            Op::At(i, c) => Op::At(index(*i), *c),
+            Op::Count(i) => Op::Count(index(*i)),
+            Op::Size(i) => Op::Size(index(*i)),
             Op::Param(k) => Op::Param(k + consumer_params),
             Op::Call(f, args) => Op::Call(f + consumer_functions, args.clone()),
             other => other.clone(),
@@ -288,8 +282,7 @@ impl<'a> Renumber<'a> {
     fn block(&mut self, instructions: &[Instruction]) -> Vec<Instruction> {
         let mut out = Vec::with_capacity(instructions.len());
         for instruction in instructions {
-            if let (Some((input, replacement)), Op::ImageSample(i)) =
-                (self.replace, &instruction.op)
+            if let (Some((input, replacement)), Op::Sample(i)) = (self.replace, &instruction.op)
                 && *i == input
             {
                 self.ids.insert(instruction.id.0, replacement.0);
@@ -352,7 +345,7 @@ impl<'a> Renumber<'a> {
                     *arg = self.map(*arg);
                 }
             }
-            Op::ImageFetch(_, coord) | Op::FieldAt(_, coord) => *coord = self.map(*coord),
+            Op::At(_, coord) => *coord = self.map(*coord),
             Op::Key(code) => *code = self.map(*code),
             Op::Const(_)
             | Op::Param(_)
@@ -364,11 +357,10 @@ impl<'a> Renumber<'a> {
             | Op::Time
             | Op::Pointer
             | Op::PointerDown
-            | Op::ImageSize(_)
-            | Op::ImageSample(_)
             | Op::Element
-            | Op::FieldSample(_)
-            | Op::FieldCount(_) => {}
+            | Op::Sample(_)
+            | Op::Count(_)
+            | Op::Size(_) => {}
             Op::If { .. } | Op::Loop { .. } => unreachable!("blocks are rewritten separately"),
         }
     }

@@ -3,7 +3,8 @@
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
     BinaryOp, BindingDecl, Block, Document, Expr, ExprKind, FnDecl, Kernel, NodeDecl, NodeKind,
-    NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned, StructDecl, Use,
+    NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias,
+    Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -16,6 +17,7 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
     let mut document = Document {
         uses: Vec::new(),
         structs: Vec::new(),
+        types: Vec::new(),
         kernels: Vec::new(),
         inputs: Vec::new(),
         params: Vec::new(),
@@ -46,6 +48,10 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
                 parser.next();
                 document.structs.push(parser.struct_decl()?);
             }
+            Token::Ident(word) if word == "type" => {
+                parser.next();
+                document.types.push(parser.type_alias()?);
+            }
             Token::Ident(word) if word == "input" => {
                 parser.next();
                 document.inputs.push(parser.port(false)?);
@@ -68,19 +74,23 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
             }
             _ => {
                 return Err(parser.unexpected(
-                    "`use`, `struct`, `kernel`, `input`, `param`, `output`, or `node`",
+                    "`use`, `struct`, `type`, `kernel`, `input`, `param`, `output`, or `node`",
                 ));
             }
         }
     }
-    // Document structs come first in every Kernel, so a Field<Particle>
-    // declared once means the same layout in all of them.
-    if !document.structs.is_empty() {
+    // Document structs and aliases come first in every Kernel, so a
+    // Rows<Particle> declared once means the same layout in all of them.
+    if !document.structs.is_empty() || !document.types.is_empty() {
         let shared = document.structs.clone();
+        let shared_types = document.types.clone();
         let prepend = |kernel: &mut Kernel| {
             let mut structs = shared.clone();
             structs.append(&mut kernel.structs);
             kernel.structs = structs;
+            let mut types = shared_types.clone();
+            types.append(&mut kernel.types);
+            kernel.types = types;
         };
         for kernel in &mut document.kernels {
             prepend(kernel);
@@ -118,6 +128,7 @@ pub fn parse(source: &str) -> Result<Kernel, ParseError> {
         || !document.params.is_empty()
         || !document.outputs.is_empty()
         || !document.structs.is_empty()
+        || !document.types.is_empty()
     {
         return Err(ParseError {
             span: Span { line: 1, column: 1 },
@@ -291,6 +302,7 @@ impl Parser {
         let mut params = Vec::new();
         let mut outputs = Vec::new();
         let mut structs = Vec::new();
+        let mut types = Vec::new();
         let mut functions = Vec::new();
         let mut compute = None;
         while !self.is_punct("}") {
@@ -335,6 +347,10 @@ impl Parser {
                     self.next();
                     structs.push(self.struct_decl()?);
                 }
+                "type" => {
+                    self.next();
+                    types.push(self.type_alias()?);
+                }
                 "compute" => {
                     if compute.is_some() {
                         return Err(self.error("`compute` is declared twice"));
@@ -346,7 +362,7 @@ impl Parser {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `struct`, `fn`, or `compute`, found `{keyword}`"
+                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, or `compute`, found `{keyword}`"
                         ),
                     });
                 }
@@ -364,9 +380,40 @@ impl Parser {
             params,
             outputs,
             structs,
+            types,
             functions,
             compute,
         })
+    }
+
+    /// `type Name = Shape<Element>;` after the `type` keyword.
+    fn type_alias(&mut self) -> Result<TypeAlias, ParseError> {
+        let name = self.ident("a type name")?;
+        if !name.value.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return Err(ParseError {
+                span: name.span,
+                message: format!(
+                    "type name `{}` must start with an uppercase letter",
+                    name.value
+                ),
+            });
+        }
+        self.expect_punct("=")?;
+        let target = self.port_type()?;
+        self.expect_punct(";")?;
+        Ok(TypeAlias { name, target })
+    }
+
+    /// A port type as written: `Name` or `Name<Element>`.
+    fn port_type(&mut self) -> Result<Spanned<String>, ParseError> {
+        let mut ty = self.ident("a type")?;
+        if self.is_punct("<") {
+            self.next();
+            let element = self.ident("an element type")?;
+            self.expect_punct(">")?;
+            ty.value = format!("{}<{}>", ty.value, element.value);
+        }
+        Ok(ty)
     }
 
     fn struct_decl(&mut self) -> Result<StructDecl, ParseError> {
@@ -536,14 +583,7 @@ impl Parser {
     fn port(&mut self, wired: bool) -> Result<PortDecl, ParseError> {
         let name = self.ident("a port name")?;
         self.expect_punct(":")?;
-        let mut ty = self.ident("a type")?;
-        // `Field<Element>` names the element type of a Field port.
-        if self.is_punct("<") {
-            self.next();
-            let element = self.ident("an element type")?;
-            self.expect_punct(">")?;
-            ty.value = format!("{}<{}>", ty.value, element.value);
-        }
+        let ty = self.port_type()?;
         let binding = if wired && self.eat_punct("<-") {
             Some(BindingDecl::Now(self.source_ref()?))
         } else if wired && self.eat_punct("<~") {
@@ -865,9 +905,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 15] = [
-    "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "node", "use",
-    "from", "input", "output", "graph",
+const RESERVED: [&str; 16] = [
+    "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "type", "node",
+    "use", "from", "input", "output", "graph",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -883,7 +923,7 @@ mod tests {
 
     const GRAYSCALE: &str = r#"
 kernel image.grayscale@1 {
-    requires { image.read; image.write; }
+    requires { field.read; field.write; }
     input source: Image;
     param amount: Float = 1.0;
     output result: Image;
@@ -909,7 +949,7 @@ kernel image.grayscale@1 {
                 .iter()
                 .map(|r| r.value.as_str())
                 .collect::<Vec<_>>(),
-            ["image.read", "image.write"]
+            ["field.read", "field.write"]
         );
         assert_eq!(kernel.inputs[0].name.value, "source");
         assert_eq!(kernel.params[0].ty.value, "Float");
@@ -1031,8 +1071,8 @@ mod document_tests {
     fn document_structs_are_shared_by_every_kernel() {
         let document = parse_document(
             "struct P { x: Float; }
-             kernel a.k@1 { requires { field.write; } output r: Field<P>; compute { return P { x: 1.0 }; } }
-             node b: kernel { requires { field.read; field.write; } input p: Field<P> <- a.r; output r: Field<P>; struct Q { y: Int; } compute { return sample(p); } }
+             kernel a.k@1 { requires { field.write; } output r: Rows<P>; compute { return P { x: 1.0 }; } }
+             node b: kernel { requires { field.read; field.write; } input p: Rows<P> <- a.r; output r: Rows<P>; struct Q { y: Int; } compute { return sample(p); } }
              output r <- b.r;",
         )
         .unwrap();

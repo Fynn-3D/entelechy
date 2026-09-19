@@ -17,7 +17,7 @@
 //!     amount = 1.0;
 //! }
 //! node trail: kernel {
-//!     requires { image.read; image.write; }
+//!     requires { field.read; field.write; }
 //!     input current: Image <- gray.result;
 //!     input previous: Image <~ trail.result from gray.result;
 //!     output result: Image;
@@ -35,7 +35,7 @@
 //!
 //! ```text
 //! kernel image.grayscale@1 {
-//!     requires { image.read; image.write; }
+//!     requires { field.read; field.write; }
 //!     input source: Image;
 //!     param amount: Float = 1.0;
 //!     output result: Image;
@@ -67,6 +67,8 @@ pub struct Document {
     /// Struct types declared at the top level; every Kernel of the
     /// document sees them before its own.
     pub structs: Vec<StructDecl>,
+    /// Port type aliases declared at the top level, shared the same way.
+    pub types: Vec<TypeAlias>,
     /// Kernels defined at the top level, document structs already prepended.
     pub kernels: Vec<Kernel>,
     /// External images the caller supplies: `input name: Image;`.
@@ -203,10 +205,22 @@ pub struct Kernel {
     pub outputs: Vec<PortDecl>,
     /// Struct types in declaration order.
     pub structs: Vec<StructDecl>,
+    /// Port type aliases in declaration order.
+    pub types: Vec<TypeAlias>,
     /// Helper functions in declaration order.
     pub functions: Vec<FnDecl>,
-    /// The per-pixel body.
+    /// The per-element body.
     pub compute: Block,
+}
+
+/// `type Name = Shape<Element>;`: another spelling of a port type. Aliases
+/// are transparent; the compiler checks the structure they name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeAlias {
+    /// Alias name; must start with an uppercase letter.
+    pub name: Spanned<String>,
+    /// The port type it stands for, as written, e.g. `Grid<Tile>`.
+    pub target: Spanned<String>,
 }
 
 /// `struct Name { field: Type; ... }`
