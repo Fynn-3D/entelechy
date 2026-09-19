@@ -2,8 +2,10 @@
 
 A synthesizer that never mentions a sound card. `audio.voice` produces a
 block of 800 frames per evaluation as `Rows<Voice>`, continuing the phase
-from the previous block through the Graph's `<~` state; `audio.mix` pans
-it into `Rows<Vec2>`; `audio.scope` draws the block. The graph has two
+from the previous block through the Graph's `<~` state; `audio.filter`
+is a one-pole low-pass written as a `scan`, ordered work whose carried
+value starts from the previous block's last output; `audio.mix` pans the
+result into `Rows<Vec2>`; `audio.scope` draws the block. The graph has two
 outputs, `view` and `sound`. The Player shows the first output that is a
 grid of pixels and plays the first that is rows of one or two floats, so
 both are claimed by structure, not by name.

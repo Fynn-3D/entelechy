@@ -33,8 +33,9 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   a Kernel, rasterized by the backend's native `native.rasterize@1`, and
   shaded by a Kernel; the CPU and GPU rasterizers agree.
 - [audio](audio/README.md): a synthesizer as rows, its phase carried across
-  blocks by Graph state, mixed to stereo and drawn as an oscilloscope; the
-  Player plays the stereo rows and shows the scope.
+  blocks by Graph state, low-passed by a `scan` whose memory crosses blocks
+  the same way, mixed to stereo and drawn as an oscilloscope; the Player
+  plays the stereo rows and shows the scope.
 - [exposure](exposure/README.md): the first reduction. A `merge` Kernel
   meters a frame's luma into one element and a second Kernel tone-maps by
   it; both backends fold in the same tree.

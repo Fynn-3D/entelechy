@@ -31,6 +31,23 @@ kernel audio.voice@1 {
     }
 }
 
+// A one-pole low-pass: ordered work, each sample from the one before.
+// `scan` walks the block in order; the carried value starts from the last
+// output of the previous block, so the filter's memory crosses blocks as
+// the oscillator's phase does.
+kernel audio.filter@1 {
+    requires { field.read; field.write; }
+    input voice: Block;
+    input previous: Block;
+    param cutoff: Float = 0.25;
+    output result: Block;
+
+    scan with y = at(previous, count(previous) - 1) {
+        let x = sample(voice);
+        return Voice { sample: y.sample + (x.sample - y.sample) * cutoff, phase: x.phase };
+    }
+}
+
 // Pans the voice into two channels; the pointer's y pans while held.
 kernel audio.mix@1 {
     requires { field.read; field.write; input.read; }

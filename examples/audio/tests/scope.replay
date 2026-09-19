@@ -1,16 +1,18 @@
 scene scope.osn
 
-# 220 Hz at 48 kHz over 800 frames is 3.67 cycles per block. Column 22 is
-# near the first peak: the trace sits about 35 pixels above the axis.
-# Column 44 is back near the axis. Corners are background.
+# 220 Hz at 48 kHz over 800 frames is 3.67 cycles per block, low-passed
+# by the scan filter (cutoff 0.25 per sample lags the wave a little).
+# Column 22 sits near the first peak, column 44 back at the axis, and the
+# corners show the background.
 frame 0.0
 expect 5 5 = 0.05 0.06 0.09 0.02
-expect 22 85 = 0.4 1.0 0.6 0.05
+expect 22 83 = 0.4 1.0 0.6 0.05
 expect 22 120 = 0.2 0.25 0.3 0.05
-expect 44 121 = 0.4 1.0 0.6 0.05
+expect 44 120 = 0.4 1.0 0.6 0.05
 
-# The next block continues the phase where the last one stopped (0.667 of
-# a cycle), so its first frame is well below the axis instead of on it.
+# The next block continues both the oscillator's phase and the filter's
+# memory from the previous block's last frame: its first sample is well
+# below the axis, where a restarted filter would sit near it.
 frame 0.0167
-expect 0 143 = 0.4 1.0 0.6 0.05
+expect 0 140 = 0.4 1.0 0.6 0.05
 expect 0 118 = 0.05 0.06 0.09 0.05
