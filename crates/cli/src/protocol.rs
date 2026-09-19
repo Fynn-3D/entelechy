@@ -51,29 +51,62 @@ pub fn serve(
         if line.trim().is_empty() {
             continue;
         }
-        let (id, response, quit) = match serde_json::from_str::<Json>(&line) {
-            Ok(request) => {
-                let id = request.get("id").cloned().unwrap_or(Json::Null);
-                let quit = request.get("op").and_then(Json::as_str) == Some("quit");
-                (id, handle(session, &request), quit)
-            }
-            Err(error) => (
-                Json::Null,
-                Err(failure(format!("request is not JSON: {error}"))),
-                false,
-            ),
-        };
-        let envelope = match response {
-            Ok(ok) => json!({ "id": id, "ok": ok }),
-            Err(error) => json!({ "id": id, "error": error }),
-        };
-        writeln!(output, "{envelope}")?;
+        let (response, quit) = respond_line(session, &line);
+        writeln!(output, "{response}")?;
         output.flush()?;
         if quit {
             break;
         }
     }
     Ok(())
+}
+
+/// Parses one request line and returns the request and its echoed id, or
+/// an error envelope's payload.
+pub fn parse_request(line: &str) -> Result<(Json, Json), Json> {
+    let request = serde_json::from_str::<Json>(line)
+        .map_err(|error| failure(format!("request is not JSON: {error}")))?;
+    let id = request.get("id").cloned().unwrap_or(Json::Null);
+    Ok((id, request))
+}
+
+/// The response line for a result.
+pub fn envelope(id: &Json, response: Result<Json, Json>) -> String {
+    match response {
+        Ok(ok) => json!({ "id": id, "ok": ok }).to_string(),
+        Err(error) => json!({ "id": id, "error": error }).to_string(),
+    }
+}
+
+/// Answers one request line; the flag says whether it asked to quit.
+pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
+    match parse_request(line) {
+        Ok((id, request)) => {
+            let quit = request.get("op").and_then(Json::as_str) == Some("quit");
+            (envelope(&id, handle(session, &request)), quit)
+        }
+        Err(error) => (envelope(&Json::Null, Err(error)), false),
+    }
+}
+
+/// The JSON form of an evaluation report.
+pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
+    let host = session.runtime().host();
+    let outputs = report
+        .outputs
+        .iter()
+        .map(|(name, handle)| {
+            let (width, height) = host.image_size(*handle).unwrap_or((0, 0));
+            json!({ "name": name, "width": width, "height": height })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "executed": report.executed.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "reused": report.reused.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "committed": report.committed.iter().map(|(node, port)| json!([node.to_string(), port])).collect::<Vec<_>>(),
+        "fused": report.fused.iter().map(|(node, absorbed)| json!({ "node": node.to_string(), "absorbed": absorbed.iter().map(ToString::to_string).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "outputs": outputs,
+    })
 }
 
 fn failure(message: impl Into<String>) -> Json {
@@ -223,22 +256,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             let report = session
                 .evaluate(&context)
                 .map_err(|e| failure(e.to_string()))?;
-            let host = session.runtime().host();
-            let outputs = report
-                .outputs
-                .iter()
-                .map(|(name, handle)| {
-                    let (width, height) = host.image_size(*handle).unwrap_or((0, 0));
-                    json!({ "name": name, "width": width, "height": height })
-                })
-                .collect::<Vec<_>>();
-            Ok(json!({
-                "executed": report.executed.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "reused": report.reused.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "committed": report.committed.iter().map(|(node, port)| json!([node.to_string(), port])).collect::<Vec<_>>(),
-                "fused": report.fused.iter().map(|(node, absorbed)| json!({ "node": node.to_string(), "absorbed": absorbed.iter().map(ToString::to_string).collect::<Vec<_>>() })).collect::<Vec<_>>(),
-                "outputs": outputs,
-            }))
+            Ok(report_json(session, &report))
         }
         "read" => {
             let graph = session
