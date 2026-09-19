@@ -12,4 +12,5 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [material-ball](material-ball/README.md): a shaded sphere under an orbiting
   light, tone-mapped by a second Kernel, shown live in the Player.
 - [raymarch](raymarch/README.md): a signed-distance scene marched with `loop`
-  and shaded with `if`; the case that needs the GPU backend.
+  and shaded with `if`; interactive on the GPU backend, seconds per frame on
+  the CPU.

@@ -27,6 +27,17 @@ External images declared with `input <name>` in the scene are bound with
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
 ```
 
+## Backends
+
+`run` and the Player take `--backend cpu|gpu`. The CPU interpreter is the
+reference and reports per-pixel integer failures; the GPU backend runs the
+same IR as WGSL compute through wgpu and is the one to use for anything
+interactive. The Player defaults to the GPU when a device is available.
+
+```sh
+cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm
+```
+
 ## Hot reload
 
 Keep the scene running and republish Kernels as their files change:
@@ -50,8 +61,9 @@ frame, pure nodes stay cached. Use a release build for interactive frame rates.
 cargo run --release -p orla-player -- examples/material-ball/scene.osn
 ```
 
-`--scale <n>` sets the initial window magnification and `--input` binds
-external images as for `run`. Escape closes the window.
+`--scale <n>` sets the initial window magnification, `--backend` picks the
+backend, and `--input` binds external images as for `run`. Escape closes the
+window.
 
 ## Where the contracts live
 

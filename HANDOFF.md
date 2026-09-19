@@ -11,8 +11,10 @@ read-only reference; study its invariants, do not port it wholesale. Its typed
 Field decision remains the binding direction for numerical resources when they
 are introduced; the current Host exposes only images.
 
-The runtime crates have no external dependencies; only the Player depends on
-winit and softbuffer. The language covers the Phase 1 constructs plus
+The runtime crates have no external dependencies; the Player depends on winit
+and softbuffer and the GPU backend on wgpu. The runtime holds one backend
+chosen at construction; `prepare` builds backend state so `publish` stays a
+pointer swap. The language covers the Phase 1 constructs plus
 structured control flow: one `compute` block per Kernel, one Image output,
 helper functions without recursion, Float/Int/Bool/Vec2/Vec3/Vec4 parameters,
 vector intrinsics, `time()` behind `time.read`, `if` expressions, and bounded
@@ -23,26 +25,32 @@ filesystem by polling modification stamps.
 
 ## Next
 
-Add a GPU backend behind the same IR: emit WGSL from validated modules, run
-one compute dispatch per node through wgpu, and keep the Host's ownership of
-images by uploading inputs and reading outputs back per execution. Residency
-(images staying on the GPU between nodes) is a later optimization once the
-transfer cost dominates. Acceptance: the ray-march example renders
-interactively in the Player with `--backend gpu`, and a test compares GPU and
-CPU results of the same Kernels within a float tolerance, skipping cleanly
-when no adapter exists.
+Open the creation surface to external agents: a process-level protocol over
+stdin/stdout (JSON lines) on the `orla` binary that exposes the session
+operations already present in `crates/cli/src/session.rs`: list Kernels and
+manifests, inspect the graph, prepare a source and return diagnostics, publish
+against an expected generation, evaluate, and export. Acceptance: a test in
+`crates/cli/tests/` drives the binary as a client, receives structured
+diagnostics for a broken Kernel, and observes that the running version
+survived. Do not add product logic to the Host or the runtimes; the protocol is
+an interface over existing contracts.
 
-After that: the creation protocol for external agents over stdin/stdout, as
-described in README.
+Then, in the Graph layer and backend-neutral: fuse chains of pointwise nodes
+(those that only `sample` their inputs) into one module before execution,
+verified by exact equality against the unfused CPU result. GPU residency
+(images staying on the device between nodes, with explicit readback at
+observation boundaries) comes after fusion, once transfer cost is what
+remains.
 
 ## Open
 
 The watch loop polls every 200 ms and can observe a half-written file; the next
 write is picked up because the stamp changes again. Exports are PPM only.
-The CPU interpreter is the frame-rate ceiling: the material ball at 360x300
-takes roughly 50 ms per frame and the ray-march example over a second on a
-10-core machine in release. A GPU backend behind the same IR is the intended
-fix, not a faster interpreter.
+The CPU interpreter stays the reference and the frame-rate floor: the
+ray-march example takes over a second per frame there. On the GPU backend
+each node still uploads its inputs and reads its output back through the Host,
+which bounds frame rate by transfer at large domains; residency is the answer,
+after fusion.
 The example has no authored `tests/` directory yet: verification Kernels and
 declarative replay, as AGENTS.md requires for demos, need a comparison primitive
 that the language does not have. Add that before the second example.

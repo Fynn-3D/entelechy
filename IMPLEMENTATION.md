@@ -25,11 +25,19 @@ capability claim.
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [interpreter](crates/cpu/src/eval.rs) | [execution tests](crates/cpu/tests/execute.rs) |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
+| GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs) | [CPU/GPU parity tests](crates/gpu/tests/parity.rs) (skip without an adapter) |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [ppm](crates/cli/src/ppm.rs) | [session and binary tests](crates/cli/tests/session.rs) |
 | Player | [window loop](crates/player/src/main.rs), [presentation](crates/player/src/lib.rs) | Presentation unit tests; [material ball](examples/material-ball/README.md) for the live loop |
 
 ## Contracts worth knowing
+
+- Backends implement [`Backend`](crates/runtime/src/lib.rs): `prepare` does
+  the expensive work (the GPU backend compiles WGSL and builds the pipeline
+  there), so `publish` is a pointer swap. The GPU backend keeps Host ownership
+  of images by uploading inputs and reading outputs back per execution; GPU
+  and CPU results agree within float tolerance, and integer arithmetic
+  failures are reported only by the CPU backend.
 
 - Control flow is structured and expression-shaped: `if c { a } else { b }`
   and `loop N with x = init until done { next }` lower to [`Op::If` and
