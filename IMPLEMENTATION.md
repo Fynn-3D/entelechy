@@ -101,6 +101,17 @@ capability claim.
   shading stay Kernels on either side of it
   ([mesh example](examples/mesh/README.md)).
 
+- The sound card is a device adapter in the Player, not a runtime concept
+  ([audio](crates/player/src/audio.rs)): it claims the first graph output
+  that is rows of one or two floats, takes each evaluation's block into a
+  lock-free ring, and feeds the device from the ring in its real-time
+  callback, which never waits on the Graph or the GPU and never
+  allocates; a dry ring plays silence and counts an underrun. Materializing
+  the block is the observation boundary, on the frame thread. The
+  [audio example](examples/audio/README.md) carries the oscillator's
+  phase across blocks through `<~` state, and its replay pins the
+  oscilloscope, block continuity included.
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the

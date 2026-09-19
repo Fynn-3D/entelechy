@@ -106,7 +106,9 @@ output result <- display.result;      // named graph output; sub-graph outputs
    evaluation, is not a dependency, and reads `initial` until something has
    been committed.
 2. A source is a graph input by name or `node.port`. Inputs and nodes share
-   one namespace.
+   one namespace. A graph may declare several outputs; which device takes
+   which is decided by structure (a grid of pixels for the window, rows of
+   one or two floats for the sound card), never by an output's name.
 3. Every declared input port must be wired; a port the Kernel does not
    declare is an error; both are reported before anything runs.
 4. Values use `=`: numbers, `true`/`false`, negation, `vec2`/`vec3`/`vec4`.

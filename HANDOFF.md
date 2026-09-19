@@ -64,6 +64,12 @@ booleans are exact and the examples render identically on the CPU and the
 GPU. Audio sample blocks and geometry attributes are rows of this model
 plus device adapters, nothing more.
 
+Audio exists as a device adapter in the Player: a `Rows<Float>` or
+`Rows<Vec2>` graph output is played through a lock-free ring at the
+device's rate (48 kHz when offered), one block per frame; the callback
+never waits or allocates. The audio example is a synthesizer whose phase
+crosses blocks through Graph state; its oscilloscope replay pins that.
+
 Geometry exists as the first native operation: `native.rasterize@1` takes
 vertex and triangle rows and writes a surface grid (depth, normal, uv,
 triangle id); the CPU reference and the GPU render pipeline agree on
@@ -79,14 +85,14 @@ about 70 ms and now holds none; the swap lands about 110 ms later.
 
 ## Next
 
-Audio is the remaining adapter: a `Rows<Float>` or `Rows<Vec2>` output
-claimed by a device adapter in the Player that pulls materialized blocks
-through a ring buffer and never waits on the GPU or allocates in the
-callback; the runtime and the language need nothing new. Before or after
-it: the rasterizer's textures are created per call and could be cached by
-size; `domain` cannot yet be an expression, so topology-changing Kernels
-(subdivision) wait; a `reduce` execution mode for sums and extrema is the
-next language-level primitive.
+Every device the architecture named now has an adapter: window, sound
+card, rasterizer. The next primitives are in the language and the
+evaluator: a `reduce` execution mode for sums and extrema (the first
+non-map mode), `domain` as an expression so topology-changing Kernels
+(subdivision) can size their output, and the sample rate as context
+rather than a parameter the scene repeats. Also worth doing: let the
+audio device drive evaluation when a scene has sound, so blocks are
+produced when the ring asks instead of when the window redraws.
 
 ## Open
 
@@ -98,6 +104,11 @@ Life and particles have replay tests; the other examples are time-driven
 renders whose pixels a replay could still pin down at fixed times.
 The worker is one thread with a FIFO queue: a burst of edits prepares in
 order, and a superseded edit still occupies the queue until its turn.
+Audio blocks are produced at the window's frame rate: 800 frames at 60 fps
+is 48 kHz exactly, but a slow frame is an underrun and a fast one a
+dropped block; a six-second run showed three underruns at startup and no
+drops. The device is opened at 48 kHz when offered and otherwise at its
+default rate, which shifts pitch; the rate should become context.
 Native manifests print their element types as anonymous structs (`S0`);
 the contract text names the fields. The handle type is still called
 `ImageHandle` although it names any Field.
