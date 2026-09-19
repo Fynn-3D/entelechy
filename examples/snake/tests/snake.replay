@@ -47,6 +47,10 @@ frame 2.010
 expect 205 125 = 0.7 1.0 0.6 0.05     # head on the food's cell (20, 12)
 expect 265 85 = 0.95 0.3 0.3 0.05     # new food at (26, 8)
 expect 165 125 = 0.3 0.8 0.4 0.05     # (16, 12) still body: the tail did not shrink
+expect step.result[0].length = 5      # the state says so directly
+expect step.result[0].score = 1
+expect step.result[0].fx = 26
+expect step.result[0].fy = 8
 
 # On to the wall: the snake dies and the board reddens.
 frame 2.135
@@ -64,9 +68,13 @@ frame 3.510
 key 39 up
 expect 315 125 = 0.6 0.55 0.35 0.08   # head at (31, 12), dimmed
 expect 15 15 = 0.29 0.095 0.11 0.05    # empty cell, reddened
+expect step.result[0].alive = false
+expect step.result[0].hx = 31
 
 # Reset starts over.
 reset
 frame 3.635
 expect 205 125 = 0.95 0.3 0.3 0.05    # food back at (20, 12)
 expect 15 15 = 0.08 0.09 0.12 0.03
+expect step.result[0].alive = true
+expect step.result[0].length = 4

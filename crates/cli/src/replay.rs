@@ -13,7 +13,15 @@
 //! param exposure 1.5        # override a graph parameter (a literal)
 //! expect 11 10 = 1.0 1.0 1.0        # r g b of the last output, tolerance 0.01
 //! expect 11 10 = 1.0 1.0 1.0 0.05   # explicit tolerance
+//! expect step.result[0].score = 1   # a field of an element of a node's output:
+//!                                   # ints and bools exact, floats and vectors
+//!                                   # with an optional trailing tolerance
 //! ```
+//!
+//! An element expectation names the node's output as the Kernel declared
+//! it, so it reads as a statement about the application's state rather
+//! than about the picture. Nodes named that way are pinned before the
+//! first frame, so fusion never hides them.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -50,6 +58,22 @@ pub enum Step {
         name: String,
         /// The value.
         value: orla_runtime::Value,
+    },
+    /// Check a field of an element of a node's output after the last frame.
+    ExpectElement {
+        /// The node.
+        node: String,
+        /// Its output port.
+        port: String,
+        /// Element index.
+        index: u32,
+        /// Struct fields to follow, outermost first; empty for the element
+        /// itself.
+        path: Vec<String>,
+        /// Expected components as written.
+        values: Vec<String>,
+        /// Line number, for messages.
+        line: u32,
     },
     /// Check a pixel of the last frame.
     Expect {
@@ -148,6 +172,33 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     value,
                 });
             }
+            ["expect", target, "=", values @ ..] if target.contains('[') && !values.is_empty() => {
+                let (head, rest) = target
+                    .split_once('[')
+                    .ok_or_else(|| error("expect an element as `node.port[index]`".into()))?;
+                let (index, tail) = rest
+                    .split_once(']')
+                    .ok_or_else(|| error("expect an element as `node.port[index]`".into()))?;
+                let (node, port) = head
+                    .rsplit_once('.')
+                    .ok_or_else(|| error("expect names `node.port`".into()))?;
+                let index = index
+                    .parse::<u32>()
+                    .map_err(|_| error(format!("element index `{index}` is not an integer")))?;
+                let path: Vec<String> = tail
+                    .split('.')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                steps.push(Step::ExpectElement {
+                    node: node.to_owned(),
+                    port: port.to_owned(),
+                    index,
+                    path,
+                    values: values.iter().map(|v| (*v).to_owned()).collect(),
+                    line,
+                });
+            }
             ["expect", x, y, "=", r, g, b, rest @ ..] => {
                 let tolerance = match rest {
                     [] => 0.01,
@@ -204,6 +255,11 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     if !rejected.is_empty() {
         return Err(rejected.join("\n"));
     }
+    for step in &replay.steps {
+        if let Step::ExpectElement { node, .. } = step {
+            session.pin(orla_graph::NodeId(node.clone()));
+        }
+    }
     let mut input = InputState::default();
     let mut last: Option<Report> = None;
     let mut outcome = Outcome::default();
@@ -230,6 +286,30 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
             Step::Key { code, down } => input.set_key(*code, *down),
             Step::Reset => session.reset_state(),
             Step::Param { name, value } => session.set_param(name, *value),
+            Step::ExpectElement {
+                node,
+                port,
+                index,
+                path,
+                values,
+                line,
+            } => {
+                if last.is_none() {
+                    return Err(format!("line {line}: expect before any frame"));
+                }
+                outcome.checks += 1;
+                let target = format!(
+                    "{node}.{port}[{index}]{}",
+                    path.iter().map(|p| format!(".{p}")).collect::<String>()
+                );
+                match check_element(&mut session, node, port, *index, path, values) {
+                    Ok(None) => {}
+                    Ok(Some(mismatch)) => outcome
+                        .failures
+                        .push(format!("line {line}: {target} {mismatch}")),
+                    Err(message) => return Err(format!("line {line}: {target}: {message}")),
+                }
+            }
             Step::Expect {
                 x,
                 y,
@@ -261,6 +341,125 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     Ok(outcome)
 }
 
+/// Reads one element field of a node's output and compares it with the
+/// written values. `Ok(None)` means it matched; `Ok(Some(text))` says how
+/// it did not; `Err` means the expectation could not be read at all.
+fn check_element(
+    session: &mut Session,
+    node: &str,
+    port: &str,
+    index: u32,
+    path: &[String],
+    values: &[String],
+) -> Result<Option<String>, String> {
+    use orla_ir::Type;
+    let node_id = orla_graph::NodeId(node.to_owned());
+    let kernel = session
+        .graph()
+        .and_then(|graph| graph.nodes.iter().find(|n| n.id == node_id))
+        .map(|n| n.kernel.clone())
+        .ok_or_else(|| format!("no node `{node}` in the scene"))?;
+    let version = session
+        .runtime()
+        .kernel(&kernel)
+        .ok_or_else(|| format!("`{kernel}` is not published"))?;
+    let output = version
+        .manifest()
+        .outputs
+        .iter()
+        .find(|o| o.name == port)
+        .ok_or_else(|| format!("`{kernel}` has no output `{port}`"))?;
+    let structs: Vec<orla_ir::StructDef> = version
+        .module()
+        .map(|m| m.structs.clone())
+        .unwrap_or_default();
+    // Follow the field path through the struct table to a word offset
+    // and a type.
+    let mut ty = output.element();
+    let mut offset = 0usize;
+    let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.words());
+    for field in path {
+        let Type::Struct(id) = ty else {
+            return Err(format!("`{field}` names a field, but the value is a {ty}"));
+        };
+        let def = &structs[id as usize];
+        let mut found = None;
+        for f in &def.fields {
+            if &f.name == field {
+                found = Some(f.ty);
+                break;
+            }
+            offset += words_of(f.ty);
+        }
+        ty = found.ok_or_else(|| format!("struct `{}` has no field `{field}`", def.name))?;
+    }
+    let handle = session
+        .cached(&node_id, port)
+        .ok_or_else(|| "the node has no materialized output; is it wired?".to_string())?;
+    session
+        .runtime_mut()
+        .materialize(handle)
+        .map_err(|e| e.to_string())?;
+    let element = session
+        .runtime()
+        .host()
+        .element(handle, index)
+        .map_err(|e| e.to_string())?;
+    let words = &element[offset..offset + words_of(ty)];
+    let components = match ty {
+        Type::Float | Type::Int | Type::Bool => 1,
+        Type::Vec2 => 2,
+        Type::Vec3 => 3,
+        Type::Vec4 => 4,
+        Type::Struct(_) => {
+            return Err("name a field of the struct; whole structs are not compared".into());
+        }
+    };
+    let exact = matches!(ty, Type::Int | Type::Bool);
+    let tolerance = match values.len() {
+        n if n == components => 0.01,
+        n if n == components + 1 && !exact => values[components]
+            .parse::<f32>()
+            .map_err(|_| format!("tolerance `{}` is not a number", values[components]))?,
+        _ => {
+            return Err(format!(
+                "a {ty} takes {components} value(s){}",
+                if exact {
+                    ""
+                } else {
+                    " and an optional tolerance"
+                }
+            ));
+        }
+    };
+    let actual: Vec<String> = words
+        .iter()
+        .map(|w| match ty {
+            Type::Int => (*w as i32).to_string(),
+            Type::Bool => (*w != 0).to_string(),
+            _ => format!("{}", f32::from_bits(*w)),
+        })
+        .collect();
+    let matches = words.iter().zip(values).all(|(w, expected)| match ty {
+        Type::Int => expected.parse::<i32>().is_ok_and(|e| e == *w as i32),
+        Type::Bool => match expected.as_str() {
+            "true" => *w != 0,
+            "false" => *w == 0,
+            _ => false,
+        },
+        _ => expected
+            .parse::<f32>()
+            .is_ok_and(|e| (e - f32::from_bits(*w)).abs() <= tolerance),
+    });
+    Ok((!matches).then(|| {
+        format!(
+            "is {}, expected {}",
+            actual.join(" "),
+            values[..components].join(" ")
+        )
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +476,19 @@ mod tests {
         let _ = "library";
         assert_eq!(replay.steps.len(), 7);
         assert!(matches!(replay.steps[6], Step::Expect { tolerance, .. } if tolerance == 0.5));
+        let replay = parse(
+            "scene s.osn\nexpect step.result[0].score = 1\nexpect mix.result[3] = 0.5 0.25 0.02\n",
+            Path::new("."),
+        )
+        .unwrap();
+        assert!(matches!(
+            &replay.steps[0],
+            Step::ExpectElement { node, port, index: 0, path, values, .. }
+                if node == "step" && port == "result" && path == &["score"] && values == &["1"]
+        ));
+        assert!(
+            matches!(&replay.steps[1], Step::ExpectElement { path, values, .. } if path.is_empty() && values.len() == 3)
+        );
         let error = parse("frame 1\n", Path::new(".")).unwrap_err();
         assert!(error.message.contains("scene"), "{error}");
         let error = parse("scene s\nexpect 1 = 2\n", Path::new(".")).unwrap_err();
