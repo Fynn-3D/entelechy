@@ -511,3 +511,65 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
         &[5, 5, 1.5f32.to_bits(), 1]
     );
 }
+
+#[test]
+fn scans_thread_the_carried_value_in_order() {
+    // A prefix sum over ints (exact) and a one-pole filter over floats,
+    // both in one struct, with the element index available.
+    let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.5; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; last: Int; } scan with run = Run { total: 0, y: 0.0, last: -1 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k, last: index() }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(module.manifest.mode, orla_ir::Mode::Scan);
+    assert!(module.init.is_some());
+    let mut host = Host::new(1 << 16);
+    let count = 7u32;
+    let words: Vec<u32> = (0..count)
+        .flat_map(|i| [(i as i32 + 1) as u32, 1.0f32.to_bits()])
+        .collect();
+    let rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]),
+                Domain::Rows(count),
+                words,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![rows],
+        params: vec![Value::Float(0.5)],
+        domain: Domain::Rows(count),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.domain(output).unwrap(), Domain::Rows(count));
+    let totals: Vec<i32> = (0..count)
+        .map(|i| host.element(output, i).unwrap()[0] as i32)
+        .collect();
+    assert_eq!(totals, [1, 3, 6, 10, 15, 21, 28]);
+    let ys: Vec<f32> = (0..count)
+        .map(|i| f32::from_bits(host.element(output, i).unwrap()[1]))
+        .collect();
+    assert_eq!(ys, [0.5, 0.75, 0.875, 0.9375, 0.96875, 0.984375, 0.9921875]);
+    let lasts: Vec<i32> = (0..count)
+        .map(|i| host.element(output, i).unwrap()[2] as i32)
+        .collect();
+    assert_eq!(lasts, [0, 1, 2, 3, 4, 5, 6]);
+
+    // The domain must be the input's.
+    let bad = Invocation {
+        inputs: vec![rows],
+        params: vec![Value::Float(0.5)],
+        domain: Domain::Rows(3),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let error = CpuBackend.execute(&module, &bad, &mut scope).unwrap_err();
+    assert!(
+        error.to_string().contains("one element per element"),
+        "{error}"
+    );
+}

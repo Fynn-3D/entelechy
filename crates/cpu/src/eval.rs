@@ -55,6 +55,7 @@ struct Layouts {
     functions: Vec<FunctionLayout>,
     entry: FunctionLayout,
     merge: Option<FunctionLayout>,
+    init: Option<FunctionLayout>,
 }
 
 impl Layouts {
@@ -138,6 +139,7 @@ impl Layouts {
             functions: module.functions.iter().map(function_layout).collect(),
             entry: function_layout(&module.entry),
             merge: module.merge.as_ref().map(function_layout),
+            init: module.init.as_ref().map(function_layout),
             structs,
         }
     }
@@ -205,6 +207,91 @@ impl<'m> Machine<'m> {
                 &mut out[cursor..],
             );
         }
+        Ok(())
+    }
+
+    /// Runs the entry for element `index` of a scan with the carried value
+    /// `carried`, encoding the step's result (the next carried value) into
+    /// `out`.
+    pub(crate) fn run_scan_step(
+        &mut self,
+        scope: &Scope<'_>,
+        index: u32,
+        carried: &[u32],
+        out: &mut [u32],
+    ) -> Result<(), ExecutionError> {
+        let layout = &self.layouts.entry;
+        let entry = &self.module.entry;
+        let ty = self.module.manifest.outputs[0].element();
+        let carry_size = match ty {
+            Type::Struct(index) => self.layouts.structs[index as usize].size,
+            _ => 1,
+        };
+        self.stack.clear();
+        self.stack
+            .resize(carry_size + layout.values_size, Value::Float(0.0));
+        decode(self.module, &self.layouts, ty, carried, &mut self.stack, 0);
+        let mut frame = Frame {
+            module: self.module,
+            invocation: self.invocation,
+            domain: self.domain,
+            layouts: &self.layouts,
+            layout,
+            scope,
+            at: [index, 0, 0],
+            base: 0,
+            values: carry_size,
+            loops: vec![LoopState {
+                carried: 0,
+                index: index as i32,
+            }],
+        };
+        frame.instructions(&entry.body, &mut self.stack)?;
+        let result = entry.results[0];
+        encode(
+            self.module,
+            &self.layouts,
+            ty,
+            &self.stack[carry_size + layout.offsets[result.0 as usize]..],
+            out,
+        );
+        Ok(())
+    }
+
+    /// Runs the module's `init` and encodes the carried value into `out`.
+    pub(crate) fn run_init_words(
+        &mut self,
+        scope: &Scope<'_>,
+        out: &mut [u32],
+    ) -> Result<(), ExecutionError> {
+        let (init, layout) = match (&self.module.init, &self.layouts.init) {
+            (Some(init), Some(layout)) => (init, layout),
+            _ => unreachable!("only scan modules have an init"),
+        };
+        self.stack.clear();
+        self.stack.resize(layout.values_size, Value::Float(0.0));
+        let mut frame = Frame {
+            module: self.module,
+            invocation: self.invocation,
+            domain: self.domain,
+            layouts: &self.layouts,
+            layout,
+            scope,
+            at: [0; 3],
+            base: 0,
+            values: 0,
+            loops: Vec::new(),
+        };
+        frame.instructions(&init.body, &mut self.stack)?;
+        let result = init.results[0];
+        let ty = find_type(init, result).unwrap_or(Type::Float);
+        encode(
+            self.module,
+            &self.layouts,
+            ty,
+            &self.stack[layout.offsets[result.0 as usize]..],
+            out,
+        );
         Ok(())
     }
 
@@ -663,6 +750,10 @@ impl<'m> Frame<'_, 'm> {
             && std::ptr::eq(self.layout, layout)
         {
             merge
+        } else if let (Some(init), Some(layout)) = (&self.module.init, &self.layouts.init)
+            && std::ptr::eq(self.layout, layout)
+        {
+            init
         } else {
             let index = self
                 .layouts

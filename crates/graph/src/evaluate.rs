@@ -621,7 +621,9 @@ impl Evaluator {
                 ) else {
                     continue;
                 };
-                if consumer_module.merge.is_some() || producer_module.merge.is_some() {
+                if consumer_module.manifest.mode != orla_ir::Mode::Map
+                    || producer_module.manifest.mode != orla_ir::Mode::Map
+                {
                     continue;
                 }
                 if !orla_ir::samples_only(consumer_module, input_index as u32)

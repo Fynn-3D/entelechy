@@ -132,6 +132,9 @@ impl CpuBackend {
         if module.manifest.mode == Mode::Reduce {
             return reduce(module, invocation, scope, strides[0]);
         }
+        if module.manifest.mode == Mode::Scan {
+            return scan(module, invocation, scope, strides[0]);
+        }
         let results = compute(module, invocation, scope, &strides, invocation.domain)?;
         let domain = invocation.domain;
         let stride: usize = strides.iter().sum();
@@ -203,6 +206,49 @@ fn reduce(
     let port = &module.manifest.outputs[0];
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
     if let Err(error) = scope.write_all(output, &level) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// Checks a scan's invocation: it runs over its first input's rows and
+/// writes as many; the domain says so. Every backend applies this.
+pub fn check_scan(invocation: &Invocation, scope: &Scope<'_>) -> Result<Domain, ExecutionError> {
+    let domain = scope.size(invocation.inputs[0])?;
+    if domain != invocation.domain {
+        return Err(ExecutionError::Device(format!(
+            "a scan writes one element per element of its first input ({domain}); its domain cannot be {}",
+            invocation.domain
+        )));
+    }
+    Ok(domain)
+}
+
+/// A scan: the entry once per element of the first input, in order, each
+/// step reading the previous step's result and writing its own. Ordered
+/// work runs on one thread; that is its nature, not a limitation of the
+/// backend.
+fn scan(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+    stride: usize,
+) -> Result<Vec<ImageHandle>, ExecutionError> {
+    let domain = check_scan(invocation, scope)?;
+    let count = domain.count();
+    let mut machine = eval::Machine::new(module, invocation, domain);
+    let mut carried = vec![0u32; stride];
+    machine.run_init_words(scope, &mut carried)?;
+    let mut words = vec![0u32; count * stride];
+    for index in 0..count {
+        let out = &mut words[index * stride..(index + 1) * stride];
+        machine.run_scan_step(scope, index as u32, &carried, out)?;
+        carried.copy_from_slice(out);
+    }
+    let port = &module.manifest.outputs[0];
+    let output = scope.create(port.ty.schema.clone(), domain)?;
+    if let Err(error) = scope.write_all(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
     }

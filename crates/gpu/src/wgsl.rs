@@ -193,6 +193,32 @@ pub fn emit(module: &Module) -> String {
     if let Some(merge) = &module.merge {
         emit_function(&mut out, module, merge, "merge", false);
     }
+    if let Some(init) = &module.init {
+        emit_function(&mut out, module, init, "init", false);
+        // Ordered work: one invocation walks the rows, carrying the value.
+        let _ = writeln!(
+            out,
+            "
+@compute @workgroup_size(1, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if (gid.x != 0u) {{
+        return;
+    }}
+    let n = u32(ctx[0].x);
+    var carried: {} = init();
+    for (var i: u32 = 0u; i < n; i = i + 1u) {{
+        carried = entry(vec3<f32>(f32(i), 0.0, 0.0), i, carried);
+        store_out0(i, carried);
+    }}
+}}",
+            wgsl_type(
+                init.results
+                    .first()
+                    .map_or(Type::Float, |r| result_type_of(init, *r))
+            )
+        );
+        return out;
+    }
     let _ = writeln!(
         out,
         "
@@ -210,6 +236,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }}"
     );
     out
+}
+
+/// The type of one result of a function.
+fn result_type_of(function: &Function, id: ValueId) -> Type {
+    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
+        for instruction in instructions {
+            if instruction.id == id {
+                return Some(instruction.ty);
+            }
+            let nested = match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                Op::Loop { until, body, .. } => until
+                    .as_ref()
+                    .and_then(|block| find(&block.body, id))
+                    .or_else(|| find(&body.body, id)),
+                _ => None,
+            };
+            if nested.is_some() {
+                return nested;
+            }
+        }
+        None
+    }
+    find(&function.body, id).unwrap_or(Type::Float)
 }
 
 /// Binding index of the reduce step's count uniform.
@@ -405,7 +457,12 @@ fn store_lines(
 }
 
 fn emit_function(out: &mut String, module: &Module, function: &Function, name: &str, entry: bool) {
-    let args = if entry {
+    let args = if entry && module.manifest.mode == Mode::Scan {
+        format!(
+            "coord: vec3<f32>, element: u32, carried: {}",
+            wgsl_type(module.manifest.outputs[0].element())
+        )
+    } else if entry {
         "coord: vec3<f32>, element: u32".to_owned()
     } else {
         function
@@ -574,8 +631,14 @@ impl Emitter<'_> {
                 self.line(depth, "}");
                 return;
             }
-            Op::Carried => format!("v{}", self.loops.last().map_or(0, |id| id.0)),
-            Op::Index => format!("i{}", self.loops.last().map_or(0, |id| id.0)),
+            Op::Carried => match self.loops.last() {
+                Some(id) => format!("v{}", id.0),
+                None => "carried".to_owned(),
+            },
+            Op::Index => match self.loops.last() {
+                Some(id) => format!("i{}", id.0),
+                None => "i32(element)".to_owned(),
+            },
             Op::Coord => match self.output_shape() {
                 Shape::Volume => "coord".to_owned(),
                 _ => "coord.xy".to_owned(),
@@ -651,7 +714,7 @@ impl Emitter<'_> {
     fn output_shape(&self) -> Shape {
         let manifest = &self.module.manifest;
         match manifest.mode {
-            Mode::Reduce => manifest.inputs.first().map_or(Shape::Rows, |p| p.shape()),
+            Mode::Reduce | Mode::Scan => manifest.inputs.first().map_or(Shape::Rows, |p| p.shape()),
             Mode::Map => manifest.outputs.first().map_or(Shape::Grid, |p| p.shape()),
         }
     }

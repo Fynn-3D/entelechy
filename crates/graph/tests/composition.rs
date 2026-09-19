@@ -948,3 +948,65 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
     assert!(error.to_string().contains("remove its `domain`"), "{error}");
     evaluator.clear(&mut runtime);
 }
+
+#[test]
+fn scans_follow_their_input_and_stay_out_of_fusion() {
+    let mut runtime = runtime();
+    runtime
+        .load("kernel test.ramp@1 { requires { field.write; } output result: Rows<Int>; compute { return element() + 1; } }")
+        .unwrap();
+    runtime
+        .load("kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }")
+        .unwrap();
+    let graph = Graph::parse(
+        "node ramp: test.ramp@1 { domain = 5; }
+         node prefix: test.prefix@1 { rows <- ramp.result; }
+         output result <- prefix.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(
+        report.fused.is_empty(),
+        "a scan is not fused: {:?}",
+        report.fused
+    );
+    assert_eq!(
+        runtime.host().domain(report.output).unwrap(),
+        orla_runtime::Domain::Rows(5)
+    );
+    let totals: Vec<i32> = (0..5)
+        .map(|i| runtime.host().element(report.output, i).unwrap()[0] as i32)
+        .collect();
+    assert_eq!(totals, [1, 3, 6, 10, 15]);
+
+    // A domain other than the input's is refused by the backend.
+    let graph = Graph::parse(
+        "node ramp: test.ramp@1 { domain = 5; }
+         node prefix: test.prefix@1 { rows <- ramp.result; domain = 3; }
+         output result <- prefix.result;",
+    )
+    .unwrap();
+    let error = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("one element per element"),
+        "{error}"
+    );
+    evaluator.clear(&mut runtime);
+}

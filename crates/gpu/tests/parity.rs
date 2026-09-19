@@ -609,3 +609,62 @@ fn reductions_match_between_backends() {
             .count() as u32
     );
 }
+
+#[test]
+fn scans_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    // A prefix sum of ints (exact) and a one-pole filter (rounding only),
+    // over a block long enough to matter.
+    let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.1; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; } scan with run = Run { total: 0, y: 0.0 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let count = 801u32;
+    let words: Vec<u32> = (0..count)
+        .flat_map(|i| {
+            [
+                ((i * 7) % 13) as i32 as u32,
+                ((i as f32) * 0.05).sin().to_bits(),
+            ]
+        })
+        .collect();
+    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+    let mut host = Host::new(1 << 20);
+    let rows = host
+        .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(count), words).unwrap())
+        .unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![rows],
+        params: vec![Value::Float(0.1)],
+        domain: Domain::Rows(count),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu_out = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let prepared = Backend::prepare(&gpu, &module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let gpu_out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let byte_len =
+        host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+    let device = host.resident(gpu_out).unwrap().expect("resident");
+    let bytes = Backend::download(&gpu, device, byte_len).unwrap();
+    let gpu_words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    assert_eq!(host.domain(gpu_out).unwrap(), Domain::Rows(count));
+    for i in 0..count as usize {
+        assert_eq!(cpu_words[i * 2], gpu_words[i * 2], "total at {i}");
+        let (c, g) = (
+            f32::from_bits(cpu_words[i * 2 + 1]),
+            f32::from_bits(gpu_words[i * 2 + 1]),
+        );
+        assert!((c - g).abs() <= 1e-5, "y at {i}: cpu {c}, gpu {g}");
+    }
+    assert_eq!(
+        cpu_words[(count as usize - 1) * 2],
+        (0..count).map(|i| (i * 7) % 13).sum::<u32>()
+    );
+}

@@ -316,10 +316,14 @@ impl Backend for GpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // A reduction maps over its first input and folds afterwards.
+        // A reduction maps over its first input and folds afterwards; a
+        // scan walks its first input's rows in one invocation.
         let reducing = module.manifest.mode == orla_ir::Mode::Reduce;
+        let scanning = module.manifest.mode == orla_ir::Mode::Scan;
         let domain = if reducing {
             scope.size(invocation.inputs[0])?
+        } else if scanning {
+            orla_cpu::check_scan(invocation, scope)?
         } else {
             invocation.domain
         };
@@ -407,11 +411,15 @@ impl Backend for GpuBackend {
             });
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(
-                domain.width().div_ceil(wgsl::WORKGROUP),
-                domain.height().div_ceil(wgsl::WORKGROUP),
-                domain.depth(),
-            );
+            if scanning {
+                pass.dispatch_workgroups(1, 1, 1);
+            } else {
+                pass.dispatch_workgroups(
+                    domain.width().div_ceil(wgsl::WORKGROUP),
+                    domain.height().div_ceil(wgsl::WORKGROUP),
+                    domain.depth(),
+                );
+            }
         }
         // The fold: level by level into a second buffer, alternating, in
         // the same pairwise tree as the CPU reference.
