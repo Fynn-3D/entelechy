@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use orla::session::{Event, Session};
+use orla_runtime::Context;
 
 const USAGE: &str = "\
 usage:
@@ -14,13 +15,16 @@ usage:
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
-      running version.";
+      running version.
+  orla replay <file.replay>... [--backend cpu|gpu]
+      Drive scenes through scripted frames and inputs and check pixels.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("check") => check(&args[1..]),
         Some("run") => run(&args[1..]),
+        Some("replay") => replay(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -127,6 +131,7 @@ fn run(args: &[String]) -> Result<(), String> {
     report_events(&events);
     let clock = Instant::now();
     let mut healthy = evaluate_and_export(&mut session, &options.out, 0.0);
+    let _ = &clock;
     if !options.watch {
         return if healthy {
             Ok(())
@@ -159,6 +164,66 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
+fn replay(args: &[String]) -> Result<(), String> {
+    let mut backend = "cpu".to_string();
+    let mut files = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--backend" => {
+                backend = iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| "--backend needs a value".to_string())?;
+            }
+            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
+            other => files.push(PathBuf::from(other)),
+        }
+    }
+    if files.is_empty() {
+        return Err("replay needs at least one .replay file".into());
+    }
+    let mut failed = 0;
+    for file in &files {
+        let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let base = file.parent().unwrap_or_else(|| Path::new("."));
+        let replay = orla::replay::parse(&text, base)
+            .map_err(|error| format!("{}: {error}", file.display()))?;
+        let runtime = Session::runtime_for(&backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
+        match orla::replay::run(&replay, runtime) {
+            Ok(outcome) if outcome.failures.is_empty() => {
+                println!(
+                    "{}: ok ({} frames, {} checks)",
+                    file.display(),
+                    outcome.frames,
+                    outcome.checks
+                );
+            }
+            Ok(outcome) => {
+                failed += 1;
+                println!(
+                    "{}: {} of {} checks failed",
+                    file.display(),
+                    outcome.failures.len(),
+                    outcome.checks
+                );
+                for failure in &outcome.failures {
+                    println!("  {failure}");
+                }
+            }
+            Err(error) => {
+                failed += 1;
+                println!("{}: {error}", file.display());
+            }
+        }
+    }
+    if failed > 0 {
+        Err(format!("{failed} replay(s) failed"))
+    } else {
+        Ok(())
+    }
+}
+
 fn report_events(events: &[Event]) {
     for event in events {
         eprintln!("{event}");
@@ -167,7 +232,11 @@ fn report_events(events: &[Event]) {
 
 fn evaluate_and_export(session: &mut Session, out: &Path, time: f32) -> bool {
     let started = Instant::now();
-    match session.evaluate(time) {
+    let context = Context {
+        time,
+        ..Context::default()
+    };
+    match session.evaluate(&context) {
         Ok(report) => {
             let executed = report
                 .executed

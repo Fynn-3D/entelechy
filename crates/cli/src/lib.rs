@@ -7,4 +7,5 @@
 //! here, not in the runtimes.
 
 pub mod ppm;
+pub mod replay;
 pub mod session;

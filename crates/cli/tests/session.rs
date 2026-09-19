@@ -3,6 +3,7 @@ use std::process::Command;
 
 use orla::session::{Event, Session};
 use orla_graph::EvaluateError;
+use orla_runtime::Context;
 
 fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grayscale")
@@ -50,7 +51,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
         ["image.gradient@1", "image.grayscale@1", "image.pixelate@1"]
     );
     assert!(events.contains(&Event::SceneLoaded));
-    let report = session.evaluate(0.0).unwrap();
+    let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(report.executed.len(), 3);
     let out = dir.join("out.ppm");
     session.export(report.output, &out).unwrap();
@@ -79,7 +80,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     .unwrap();
     let events = session.sync();
     assert_eq!(published(&events), ["image.grayscale@1"]);
-    let report = session.evaluate(0.0).unwrap();
+    let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(
         report
             .executed
@@ -115,7 +116,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
             .generation(),
         generation
     );
-    let report = session.evaluate(0.0).unwrap();
+    let report = session.evaluate(&Context::default()).unwrap();
     assert!(report.executed.is_empty());
     assert_eq!(
         pixel,
@@ -132,7 +133,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     assert!(
         matches!(&events[..], [Event::Retired { id, .. }] if id.to_string() == "image.grayscale@1")
     );
-    let error = session.evaluate(0.0).unwrap_err();
+    let error = session.evaluate(&Context::default()).unwrap_err();
     assert!(
         matches!(error, EvaluateError::UnknownKernel { .. }),
         "{error}"
@@ -151,13 +152,13 @@ fn scene_edits_and_externals_flow_through_the_session() {
     let dir = scratch("scene");
     let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
     session.sync();
-    let first = session.evaluate(0.0).unwrap();
+    let first = session.evaluate(&Context::default()).unwrap();
 
     let scene = dir.join("scene.osn");
     let text = std::fs::read_to_string(&scene).unwrap();
     std::fs::write(&scene, text.replace("size = 8", "size = 32")).unwrap();
     assert_eq!(session.sync(), [Event::SceneLoaded]);
-    let report = session.evaluate(0.0).unwrap();
+    let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(
         report
             .executed
@@ -170,7 +171,7 @@ fn scene_edits_and_externals_flow_through_the_session() {
     std::fs::write(&scene, "graph broken\noutput nowhere").unwrap();
     let events = session.sync();
     assert!(matches!(&events[..], [Event::SceneRejected(_)]));
-    let report = session.evaluate(0.0).unwrap();
+    let report = session.evaluate(&Context::default()).unwrap();
     assert!(
         report.executed.is_empty(),
         "previous graph is still evaluated"
@@ -192,7 +193,7 @@ fn scene_edits_and_externals_flow_through_the_session() {
     session.bind_external("photo", &photo).unwrap();
     let events = session.sync();
     assert_eq!(published(&events), ["image.invert@1"]);
-    let report = session.evaluate(0.0).unwrap();
+    let report = session.evaluate(&Context::default()).unwrap();
     let original = session
         .runtime()
         .host()
@@ -256,5 +257,52 @@ fn the_binary_checks_and_runs() {
             .unwrap()
             .starts_with(b"P6\n128 128\n255\n")
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn every_example_replay_passes_and_failures_are_reported() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut replays = Vec::new();
+    for example in std::fs::read_dir(&examples).unwrap().flatten() {
+        let tests = example.path().join("tests");
+        let Ok(entries) = std::fs::read_dir(&tests) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "replay") {
+                replays.push(entry.path());
+            }
+        }
+    }
+    assert!(!replays.is_empty(), "examples ship replay tests");
+    let output = Command::new(orla)
+        .arg("replay")
+        .args(&replays)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("blinker.replay: ok"), "{stdout}");
+
+    let dir = scratch("replay");
+    std::fs::write(
+        dir.join("wrong.replay"),
+        "scene scene.osn\nframe 0.0\nexpect 0 0 = 9.0 9.0 9.0\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .arg("replay")
+        .arg(dir.join("wrong.replay"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("line 3: pixel (0, 0) is"), "{stdout}");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+default-run = "orla"
+
 [[bin]]
 name = "orla"
 path = "src/main.rs"

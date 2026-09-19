@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
-use orla_runtime::{Backend, Expect, Generation, ImageHandle, KernelId, Runtime};
+use orla_runtime::{Backend, Context, Expect, Generation, ImageHandle, KernelId, Runtime};
 
 use crate::ppm;
 
@@ -342,16 +342,22 @@ impl Session {
         }
     }
 
-    /// Evaluates the current graph at session time `time` (seconds).
-    /// Unchanged nodes are reused.
-    pub fn evaluate(&mut self, time: f32) -> Result<Report, EvaluateError> {
+    /// Evaluates the current graph under `context`. Unchanged nodes are
+    /// reused; state commits only when the whole evaluation succeeds.
+    pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
         let graph = self.graph.as_ref().ok_or_else(|| {
             EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(orla_graph::NodeId(
                 "<no scene>".into(),
             )))
         })?;
         self.evaluator
-            .evaluate(graph, &mut self.runtime, &self.externals, time)
+            .evaluate(graph, &mut self.runtime, &self.externals, context)
+    }
+
+    /// Forgets committed state; `<~` bindings restart from their initial
+    /// sources on the next evaluation.
+    pub fn reset_state(&mut self) {
+        self.evaluator.reset_state(&mut self.runtime);
     }
 
     /// Writes a cached image to a PPM file.

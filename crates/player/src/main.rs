@@ -6,10 +6,12 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use orla::session::{Event, Session};
+use orla::session::Session;
+use orla_player::{Placement, key_code};
+use orla_runtime::{Context, InputState};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -19,8 +21,9 @@ usage:
   orla-player <scene.osn> [--kernels <dir>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--backend gpu|cpu]
       Open a window showing the scene output. Kernel files are republished as
-      they change; a rejected change keeps the running version. Press Escape
-      or close the window to quit.";
+      they change; a rejected change keeps the running version. The pointer
+      and keys reach Kernels that declare `input.read`. F5 resets state.
+      Press Escape or close the window to quit.";
 
 struct Options {
     scene: PathBuf,
@@ -83,18 +86,29 @@ struct Player {
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     last_frame: Vec<[f32; 4]>,
     last_size: (u32, u32),
+    placement: Placement,
+    input: InputState,
+    cursor: (f32, f32),
     status: String,
     last_title: Instant,
 }
 
 impl Player {
+    fn context(&self) -> Context {
+        Context {
+            time: self.clock.elapsed().as_secs_f32(),
+            input: self.input,
+        }
+    }
+
     fn frame(&mut self) {
         let events = self.session.sync();
         for event in &events {
             eprintln!("{event}");
         }
         let started = Instant::now();
-        match self.session.evaluate(self.clock.elapsed().as_secs_f32()) {
+        let context = self.context();
+        match self.session.evaluate(&context) {
             Ok(report) => {
                 let host = self.session.runtime().host();
                 if let Ok(image) = host.image(report.output) {
@@ -123,7 +137,7 @@ impl Player {
                 }
             }
         }
-        self.blit(events.is_empty());
+        self.blit();
     }
 
     fn update_title(&self) {
@@ -137,7 +151,7 @@ impl Player {
         }
     }
 
-    fn blit(&mut self, _quiet: bool) {
+    fn blit(&mut self) {
         let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
             return;
         };
@@ -153,7 +167,7 @@ impl Player {
         let Ok(mut buffer) = surface.buffer_mut() else {
             return;
         };
-        orla_player::present(
+        self.placement = orla_player::present(
             &self.last_frame,
             self.last_size.0,
             self.last_size.1,
@@ -162,6 +176,15 @@ impl Player {
             &mut buffer,
         );
         let _ = buffer.present();
+    }
+
+    fn update_pointer(&mut self) {
+        self.input.pointer = self.placement.to_output(
+            self.cursor.0,
+            self.cursor.1,
+            self.last_size.0,
+            self.last_size.1,
+        );
     }
 }
 
@@ -204,15 +227,50 @@ impl ApplicationHandler for Player {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x as f32, position.y as f32);
+                self.update_pointer();
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.input.pointer_down = state == ElementState::Pressed;
+                self.update_pointer();
+            }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
-                        logical_key: Key::Named(NamedKey::Escape),
-                        state: ElementState::Pressed,
+                        logical_key,
+                        state,
+                        repeat: false,
                         ..
                     },
                 ..
-            } => event_loop.exit(),
+            } => {
+                let down = state == ElementState::Pressed;
+                match logical_key {
+                    Key::Named(NamedKey::Escape) => event_loop.exit(),
+                    Key::Named(NamedKey::F5) => {
+                        if down {
+                            self.session.reset_state();
+                            eprintln!("state reset");
+                        }
+                    }
+                    Key::Named(named) => {
+                        if let Some(code) = key_code(&format!("{named:?}")) {
+                            self.input.set_key(code, down);
+                        }
+                    }
+                    Key::Character(text) => {
+                        if let Some(code) = key_code(&text) {
+                            self.input.set_key(code, down);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             WindowEvent::RedrawRequested => self.frame(),
             _ => {}
         }
@@ -268,11 +326,15 @@ fn main() -> ExitCode {
         surface: None,
         last_frame: Vec::new(),
         last_size: (0, 0),
+        placement: Placement::default(),
+        input: InputState::default(),
+        cursor: (0.0, 0.0),
         status: "starting".into(),
         last_title: Instant::now(),
     };
     // Evaluate once before opening the window so it can take the output size.
-    match player.session.evaluate(0.0) {
+    let context = player.context();
+    match player.session.evaluate(&context) {
         Ok(report) => {
             if let Ok(image) = player.session.runtime().host().image(report.output) {
                 player.last_size = (image.width(), image.height());
@@ -281,7 +343,6 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("evaluation failed: {error}; the window opens when it succeeds");
-            let _ = Event::SceneLoaded;
         }
     }
     let event_loop = match EventLoop::new() {
