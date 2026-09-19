@@ -27,6 +27,22 @@ capability claim.
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [ppm](crates/cli/src/ppm.rs) | [session and binary tests](crates/cli/tests/session.rs) |
+| Player | [window loop](crates/player/src/main.rs), [presentation](crates/player/src/lib.rs) | Presentation unit tests; [material ball](examples/material-ball/README.md) for the live loop |
+
+## Contracts worth knowing
+
+- Vector math and the clock: `Vec3`, `dot`, `cross`, `normalize`, `pow`,
+  `step`, `smoothstep`, `reflect`, and `time()` are typed in
+  [the IR](crates/ir/src/lib.rs) and exercised by
+  [execution tests](crates/cpu/tests/execute.rs). `time()` needs `time.read`;
+  only nodes that declare it re-execute when time advances
+  ([clock caching test](crates/graph/tests/composition.rs)).
+- The CPU backend computes rows in parallel and writes sequentially; results
+  and error attribution match a single-threaded run
+  ([parallel rows test](crates/cpu/tests/execute.rs)).
+- Undeclared capabilities are compile-time diagnostics with positions
+  ([compile tests](crates/compiler/tests/compile.rs)); the IR validator remains
+  the backstop.
 
 Use [USAGE](docs/USAGE.md) for reproducible commands and [HANDOFF](HANDOFF.md) for
 the next action. Git preserves completed work. Do not maintain feature

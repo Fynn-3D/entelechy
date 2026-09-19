@@ -40,6 +40,19 @@ change re-execute; the output file is rewritten. A file that no longer compiles
 is reported and the previous version keeps running. Removing a file retires its
 Kernel. Editing the scene reloads the graph.
 
+## Player
+
+Open a scene in a window and keep it live. Kernel and scene files are watched
+exactly as in `--watch`; Kernels that declare `time.read` re-render every
+frame, pure nodes stay cached. Use a release build for interactive frame rates.
+
+```sh
+cargo run --release -p orla-player -- examples/material-ball/scene.osn
+```
+
+`--scale <n>` sets the initial window magnification and `--input` binds
+external images as for `run`. Escape closes the window.
+
 ## Where the contracts live
 
 - Language syntax: [the frontend](../crates/language/src/lib.rs) and its parser tests.

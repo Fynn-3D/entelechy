@@ -11,11 +11,14 @@ read-only reference; study its invariants, do not port it wholesale. Its typed
 Field decision remains the binding direction for numerical resources when they
 are introduced; the current Host exposes only images.
 
-The workspace has no external dependencies. The language covers the Phase 1
-constructs only: one `compute` block per Kernel, one Image output, helper
-functions without recursion, scalar and vector parameters, no control flow.
-`.osn` scenes bind nodes to `KernelId`s; the CLI session resolves sources from
-the filesystem by polling modification stamps.
+The runtime crates have no external dependencies; only the Player depends on
+winit and softbuffer. The language covers the Phase 1 constructs plus what the
+material ball needed: one `compute` block per Kernel, one Image output, helper
+functions without recursion, Float/Int/Vec2/Vec3/Vec4 parameters, vector
+intrinsics, `time()` behind `time.read`, and no control flow (selection is
+written with `step` and `mix`). `.osn` scenes bind nodes to `KernelId`s; the
+CLI session and the Player resolve sources from the filesystem by polling
+modification stamps.
 
 ## Next
 
@@ -35,6 +38,9 @@ After that, Phase 2 begins with a GPU backend behind the same IR.
 
 The watch loop polls every 200 ms and can observe a half-written file; the next
 write is picked up because the stamp changes again. Exports are PPM only.
+The CPU interpreter is the frame-rate ceiling: the material ball at 360x300
+takes roughly 50 ms per frame on a 10-core machine in release. A GPU backend
+behind the same IR is the intended fix, not a faster interpreter.
 The example has no authored `tests/` directory yet: verification Kernels and
 declarative replay, as AGENTS.md requires for demos, need a comparison primitive
 that the language does not have. Add that before the second example.
