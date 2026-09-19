@@ -17,7 +17,7 @@ node flood: tiles.flood@1 {
 node view: tiles.render@1 {
     map <- flood.result;
     atlas <- atlas.result;
-    domain = vec2(320, 240);
+    domain = size(map) * tile;     // 20x15 tiles at 16 pixels: 320x240
 }
 
 output result <- view.result;

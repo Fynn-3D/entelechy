@@ -59,6 +59,61 @@ kernel mesh.torus_faces@1 {
     }
 }
 
+// Midpoint subdivision, the topology-changing step: every triangle
+// becomes four. The new vertex rows hold the originals followed by three
+// edge midpoints per triangle, so the graph sizes them from the inputs:
+// `domain = count(mesh) + 3 * count(faces);` and `domain = 4 * count(faces);`.
+kernel mesh.split_vertices@1 {
+    requires { field.read; field.write; }
+    input mesh: Vertices;
+    input faces: Triangles;
+    output result: Vertices;
+
+    fn midpoint(a: Vertex, b: Vertex) -> Vertex {
+        return Vertex {
+            clip: (a.clip + b.clip) * 0.5,
+            normal: normalize(a.normal + b.normal),
+            uv: (a.uv + b.uv) * 0.5
+        };
+    }
+
+    compute {
+        let i = element();
+        let originals = count(mesh);
+        return if i < originals {
+            at(mesh, i)
+        } else {
+            let k = i - originals;
+            let t = at(faces, k / 3);
+            let edge = k - (k / 3) * 3;
+            if edge == 0 { midpoint(at(mesh, t.a), at(mesh, t.b)) }
+            else if edge == 1 { midpoint(at(mesh, t.b), at(mesh, t.c)) }
+            else { midpoint(at(mesh, t.c), at(mesh, t.a)) }
+        };
+    }
+}
+
+kernel mesh.split_faces@1 {
+    requires { field.read; field.write; }
+    input mesh: Vertices;
+    input faces: Triangles;
+    output result: Triangles;
+
+    compute {
+        let i = element();
+        let t = at(faces, i / 4);
+        let corner = i - (i / 4) * 4;
+        let base = count(mesh) + (i / 4) * 3;   // this triangle's midpoints
+        let ab = base;
+        let bc = base + 1;
+        let ca = base + 2;
+        return if corner == 0 { Tri { a: t.a, b: ab, c: ca } }
+            else if corner == 1 { Tri { a: ab, b: t.b, c: bc } }
+            else if corner == 2 { Tri { a: ca, b: bc, c: t.c } }
+            else { Tri { a: ab, b: bc, c: ca } };
+    }
+}
+
 // Rotate with time, look from `distance` down the z axis, and project
 // with a perspective whose depth spans [0, 1] from `near` to `far`.
 kernel mesh.project@1 {
