@@ -24,6 +24,11 @@ how record data will eventually cross the ABI. `.osn` scenes bind nodes to
 `KernelId`s; the CLI session and the Player resolve sources from the
 filesystem by polling modification stamps.
 
+State and input now exist: `<~ ... from ...` bindings hold Graph state with
+atomic end-of-evaluation commit, and `pointer()`, `pointer_down()`, `key()`
+read context behind `input.read`. `orla replay` runs an example's `.replay`
+tests; the Life example is the first with a `tests/` directory.
+
 ## Next
 
 Open the creation surface to external agents: a process-level protocol over
@@ -52,6 +57,8 @@ ray-march example takes over a second per frame there. On the GPU backend
 each node still uploads its inputs and reads its output back through the Host,
 which bounds frame rate by transfer at large domains; residency is the answer,
 after fusion.
-The example has no authored `tests/` directory yet: verification Kernels and
-declarative replay, as AGENTS.md requires for demos, need a comparison primitive
-that the language does not have. Add that before the second example.
+Only Life has replay tests; the other examples are time-driven renders whose
+pixels a replay could still pin down at fixed times.
+Committed state is read through the Host each frame; on the GPU backend that
+means the previous frame is uploaded again. Residency will make it a
+ping-pong pair.
