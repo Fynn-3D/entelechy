@@ -28,6 +28,19 @@ bound with `--input <name>=<file.ppm>`; graph parameters are overridden with
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
 ```
 
+## Inspecting a graph
+
+```sh
+cargo run -- graph examples/grayscale/scene.osn
+```
+
+prints the flattened graph in canonical form, the published Kernels with
+their generations, and the plan: which groups execute, in order, with the
+producers each one absorbed. In the Player, Tab cycles the preview through
+the nodes (pinning each so fusion keeps it materialized) and back to the
+output; the title shows the node in view, the frame time, what ran and what
+was fused, and how the frame reached the window.
+
 ## Fusion
 
 Chains of pointwise nodes run as one Kernel: a producer whose only reader
