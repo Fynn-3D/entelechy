@@ -192,15 +192,10 @@ impl Lowering<'_, '_> {
         }
         let mut externals = Vec::new();
         for input in &document.inputs {
-            if input.ty.value != "Image" {
-                return Err(error(
-                    input.ty.span,
-                    format!(
-                        "graph input `{}` must be an Image in this version",
-                        input.name.value
-                    ),
-                ));
-            }
+            // The type is documentation for the reader and the placing
+            // graph; what arrives is checked by shape and layout where it
+            // binds. A caller can supply images from files; a parent graph
+            // wires anything.
             if input.binding.is_some() {
                 return Err(error(
                     input.name.span,

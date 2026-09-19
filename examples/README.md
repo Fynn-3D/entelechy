@@ -46,3 +46,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [snake](snake/README.md): a whole game in five Kernels: a row of state
   and a grid of cells fed back through the Graph, arrow keys, ticks from
   the clock, food by hashing and probing; the replay plays it through.
+- [slg](slg/README.md): a tactics game in the NES manner: a turn machine
+  that issues orders, a unit row that applies them, movement ranges as a
+  relaxation sub-graph placed three times, an enemy that walks to the
+  fords; the replay asserts on the state rows.

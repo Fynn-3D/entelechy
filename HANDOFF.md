@@ -106,7 +106,12 @@ for the architecture's Phase 1 and the resource model is converged. Sorting's ho
 two bounded loops over the rows (the sort example), quadratic and exact;
 a native sort would be an algorithm, which native operations are not
 for, and a scatter primitive is deliberately absent from the map mode.
-Snake is the first whole application: five Kernels, a state row and a
+SLG (a tactics game) is the second whole application and the larger
+one: a turn state machine over one row, orders applied by a unit row,
+movement ranges as a relaxation Kernel placed through a sub-graph that
+takes Fields as inputs (graph inputs may now be any port type), an enemy
+that walks to the fords by a second range seeded at its prey; 37 nodes,
+one frame in 5 ms on the GPU and 56 ms on the CPU. Snake is the first whole application: five Kernels, a state row and a
 cell grid fed back through the Graph, keys and clock as context, food by
 hash and probe; it needed nothing new, which is the point of the
 example. Interpolation exists as `at_linear`, gated by an all-float layout rather

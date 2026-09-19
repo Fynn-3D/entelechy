@@ -1,0 +1,414 @@
+// A small tactics game in the NES manner. One row of state holds the turn
+// machine, one row of units holds the armies, a grid holds the terrain,
+// and the movement range is six relaxation passes over that grid. The
+// rules only issue orders; the unit row applies them; the picture is the
+// last node. Arrows move the cursor, Z confirms, X cancels, Enter ends
+// the turn.
+struct Tile { kind: Int; cost: Int; }        // 0 grass 1 forest 2 mountain 3 water 4 fort
+struct Unit {
+    x: Int; y: Int;
+    team: Int;                                // 0 player, 1 enemy
+    hp: Int; attack: Int; defense: Int; move: Int;
+    moved: Bool; alive: Bool;
+}
+struct Game {
+    phase: Int;        // 0 pick a unit, 1 pick a destination, 2 pick a target,
+                       // 3 enemy: choose, 4 enemy: moving, 5 enemy: striking, 6 won, 7 lost
+    cx: Int; cy: Int;  // cursor
+    selected: Int;     // acting unit, or -1
+    order: Int;        // for the unit row: 0 none, 1 move, 2 attack, 3 wait, 4 new turn
+    ox: Int; oy: Int;  // move destination
+    target: Int;       // attack target
+    turn: Int;
+    timer: Int;        // frames left in an enemy animation
+    held: Int;         // key bits held last frame, for edges
+    prey: Int;         // the player unit the acting enemy walks toward
+}
+type Map = Grid<Tile>;
+type Units = Rows<Unit>;
+type State = Rows<Game>;
+type Range = Grid<Int>;
+
+// Terrain: a river down the middle with two fords, forests and peaks
+// scattered by a hash, forts at both camps.
+kernel slg.map@1 {
+    requires { field.write; }
+    output result: Map;
+
+    fn hash(p: Vec2) -> Float {
+        let q = fract(p * vec2(0.1031, 0.1030));
+        let d = dot(q, vec2(q.y, q.x) + vec2(33.33, 33.33));
+        let r = q + vec2(d, d);
+        return fract((r.x + r.y) * (r.x - r.y + 1.0));
+    }
+
+    compute {
+        let c = coord();
+        let x = int(c.x);
+        let y = int(c.y);
+        let h = hash(c);
+        let river = x == 8 && y != 3 && y != 8;
+        let fort = (x == 1 && y == 5) || (x == 14 && y == 6);
+        let kind = if river { 3 } else if fort { 4 } else if h < 0.12 { 2 } else if h < 0.35 { 1 } else { 0 };
+        let cost = if kind == 3 { 99 } else if kind == 2 { 3 } else if kind == 1 { 2 } else { 1 };
+        return Tile { kind: kind, cost: cost };
+    }
+}
+
+// Two armies of four: the player on the left, the enemy on the right.
+kernel slg.spawn@1 {
+    requires { field.write; }
+    param enemy_x: Int = 13;
+    output result: Units;
+    compute {
+        let i = element();
+        let team = i / 4;
+        let k = i % 4;
+        return Unit {
+            x: if team == 0 { 1 + k % 2 } else { enemy_x + k % 2 },
+            y: 4 + k * 1 + (if team == 0 { 0 } else { 1 }),
+            team: team,
+            hp: 10,
+            attack: if k == 0 { 7 } else { 5 },
+            defense: if k == 3 { 3 } else { 2 },
+            move: if k == 1 { 5 } else { 4 },
+            moved: false,
+            alive: true
+        };
+    }
+}
+
+// Where a game begins: the cursor on the first unit, turn one.
+kernel slg.begin@1 {
+    requires { field.write; }
+    output result: State;
+    compute {
+        return Game { phase: 0, cx: 1, cy: 4, selected: -1, order: 0, ox: 0, oy: 0, target: -1, turn: 1, timer: 0, held: 0, prey: -1 };
+    }
+}
+
+// A range's first pass: zero at one unit, unreachable elsewhere. `who`
+// picks the unit: 0 the acting unit, 1 the enemy's prey, so the same
+// passes measure both how far a unit can go and how far the prey is.
+kernel slg.seed@1 {
+    requires { field.read; field.write; }
+    input game: State;
+    input units: Units;
+    param who: Int = 0;
+    output result: Range;
+    compute {
+        let g = at(game, 0);
+        let index = if who == 0 { g.selected } else { g.prey };
+        let c = coord();
+        let here = vec2(int(c.x), int(c.y));
+        return if index >= 0 {
+            let u = at(units, index);
+            if here == vec2(u.x, u.y) { 0 } else { 999 }
+        } else { 999 };
+    }
+}
+
+// One relaxation pass: the cheapest way in from a neighbour. Water and
+// units of the other team block; friends may be passed through.
+kernel slg.relax@1 {
+    requires { field.read; field.write; }
+    input previous: Range;
+    input map: Map;
+    input units: Units;
+    input game: State;
+    output result: Range;
+
+    fn blocked(x: Int, y: Int, team: Int) -> Bool {
+        return loop 16 with hit = false until index() >= count(units) {
+            let u = at(units, index());
+            hit || (u.alive && u.team != team && u.x == x && u.y == y)
+        };
+    }
+
+    fn enter(x: Int, y: Int, extent: Vec2) -> Int {
+        return if x < 0 || y < 0 || x >= int(extent.x) || y >= int(extent.y) { 999 } else { at(previous, vec2(x, y)) };
+    }
+
+    compute {
+        let g = at(game, 0);
+        let c = coord();
+        let x = int(c.x);
+        let y = int(c.y);
+        let extent = domain();
+        let mine = sample(previous);
+        let team = if g.selected >= 0 { at(units, g.selected).team } else { 0 };
+        let cost = sample(map).cost;
+        let best = min(min(enter(x - 1, y, extent), enter(x + 1, y, extent)), min(enter(x, y - 1, extent), enter(x, y + 1, extent)));
+        let entered = if blocked(x, y, team) { 999 } else { min(best + cost, 999) };
+        return min(mine, entered);
+    }
+}
+
+// Nothing reachable: what the rules read before any range exists.
+kernel slg.blank@1 {
+    requires { field.write; }
+    output result: Range;
+    compute { return 999; }
+}
+
+// The turn machine. It reads last frame's units and range, the keys and
+// the clock, and writes an order for the unit row to apply this frame.
+kernel slg.game@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: State;
+    input units: Units;
+    input range: Range;
+    input hunt: Range;
+    input map: Map;
+    output result: State;
+
+    fn bit(mask: Int, k: Int) -> Bool {
+        let p = if k == 0 { 1 } else if k == 1 { 2 } else if k == 2 { 4 } else if k == 3 { 8 } else if k == 4 { 16 } else if k == 5 { 32 } else { 64 };
+        return (mask / p) % 2 == 1;
+    }
+
+    fn unit_at(x: Int, y: Int) -> Int {
+        return loop 16 with found = -1 until index() >= count(units) {
+            let u = at(units, index());
+            if found < 0 && u.alive && u.x == x && u.y == y { index() } else { found }
+        };
+    }
+
+    fn alive_of(team: Int) -> Int {
+        return loop 16 with n = 0 until index() >= count(units) {
+            let u = at(units, index());
+            if u.alive && u.team == team { n + 1 } else { n }
+        };
+    }
+
+    fn next_ready(team: Int) -> Int {
+        return loop 16 with found = -1 until index() >= count(units) {
+            let u = at(units, index());
+            if found < 0 && u.alive && u.team == team && !u.moved { index() } else { found }
+        };
+    }
+
+    fn nearest_foe(x: Int, y: Int, team: Int) -> Int {
+        return loop 16 with best = -1 until index() >= count(units) {
+            let u = at(units, index());
+            let d = abs(u.x - x) + abs(u.y - y);
+            let bd = if best < 0 { 999 } else { abs(at(units, best).x - x) + abs(at(units, best).y - y) };
+            if u.alive && u.team != team && d < bd { index() } else { best }
+        };
+    }
+
+    fn adjacent_foe(x: Int, y: Int, team: Int) -> Int {
+        let a = unit_at(x - 1, y);
+        let b = unit_at(x + 1, y);
+        let c = unit_at(x, y - 1);
+        let d = unit_at(x, y + 1);
+        let foe = if a >= 0 && at(units, a).team != team { a }
+            else if b >= 0 && at(units, b).team != team { b }
+            else if c >= 0 && at(units, c).team != team { c }
+            else if d >= 0 && at(units, d).team != team { d }
+            else { -1 };
+        return foe;
+    }
+
+    compute {
+        let g = sample(previous);
+        let extent = size(map);
+        let w = int(extent.x);
+        let h = int(extent.y);
+        // Keys as bits: left, up, right, down, Z, X, Enter. An edge is a
+        // key held now that was not held last frame.
+        let now = (if key(37) { 1 } else { 0 }) + (if key(38) { 2 } else { 0 }) + (if key(39) { 4 } else { 0 })
+            + (if key(40) { 8 } else { 0 }) + (if key(90) { 16 } else { 0 }) + (if key(88) { 32 } else { 0 })
+            + (if key(13) { 64 } else { 0 });
+        let left = bit(now, 0) && !bit(g.held, 0);
+        let up = bit(now, 1) && !bit(g.held, 1);
+        let right = bit(now, 2) && !bit(g.held, 2);
+        let down = bit(now, 3) && !bit(g.held, 3);
+        let confirm = bit(now, 4) && !bit(g.held, 4);
+        let cancel = bit(now, 5) && !bit(g.held, 5);
+        let end_turn = bit(now, 6) && !bit(g.held, 6);
+        let cx = clamp(g.cx + (if right { 1 } else { 0 }) - (if left { 1 } else { 0 }), 0, w - 1);
+        let cy = clamp(g.cy + (if down { 1 } else { 0 }) - (if up { 1 } else { 0 }), 0, h - 1);
+        // An order names `selected` for the unit row this frame; the
+        // selection clears on the next quiet frame of phase 0.
+        let base = Game { ..g, cx: cx, cy: cy, order: 0, held: now, selected: if g.phase == 0 && g.order != 0 { -1 } else { g.selected } };
+        let players = alive_of(0);
+        let enemies = alive_of(1);
+        return if g.phase == 6 || g.phase == 7 {
+            base
+        } else if enemies == 0 {
+            Game { ..base, phase: 6 }
+        } else if players == 0 {
+            Game { ..base, phase: 7 }
+        } else if g.phase == 0 {
+            let under = unit_at(cx, cy);
+            if end_turn {
+                Game { ..base, phase: 3, selected: -1 }
+            } else if confirm && under >= 0 && at(units, under).team == 0 && !at(units, under).moved {
+                Game { ..base, phase: 1, selected: under }
+            } else { base }
+        } else if g.phase == 1 {
+            let u = at(units, g.selected);
+            let reach = at(range, vec2(cx, cy));
+            let occupant = unit_at(cx, cy);
+            if cancel {
+                Game { ..base, phase: 0, selected: -1 }
+            } else if confirm && reach <= u.move && (occupant < 0 || occupant == g.selected) {
+                Game { ..base, phase: 2, order: 1, ox: cx, oy: cy }
+            } else { base }
+        } else if g.phase == 2 {
+            let u = at(units, g.selected);
+            let foe = unit_at(cx, cy);
+            let adjacent = abs(u.x - cx) + abs(u.y - cy) == 1;
+            if confirm && foe >= 0 && at(units, foe).team == 1 && adjacent {
+                Game { ..base, phase: 0, order: 2, target: foe }
+            } else if confirm || cancel {
+                Game { ..base, phase: 0, order: 3 }
+            } else { base }
+        } else if g.phase == 3 {
+            let who = next_ready(1);
+            if who < 0 {
+                Game { ..base, phase: 0, order: 4, selected: -1, turn: g.turn + 1 }
+            } else {
+                let u = at(units, who);
+                Game { ..base, phase: 4, selected: who, prey: nearest_foe(u.x, u.y, 1), timer: 12, cx: u.x, cy: u.y }
+            }
+        } else if g.phase == 4 {
+            // Both ranges were seeded last frame; give the passes a
+            // moment, then step to the reachable cell with the shortest
+            // walk to the prey, rivers and all.
+            let u = at(units, g.selected);
+            if g.timer > 0 {
+                Game { ..base, timer: g.timer - 1 }
+            } else {
+                let best = loop 256 with pick = u.y * w + u.x until index() >= w * h {
+                    let x = index() % w;
+                    let y = index() / w;
+                    let reach = at(range, vec2(x, y));
+                    let free = unit_at(x, y) < 0 || (x == u.x && y == u.y);
+                    let walk = at(hunt, vec2(x, y));
+                    let best_walk = at(hunt, vec2(pick % w, pick / w));
+                    if reach <= u.move && free && walk < best_walk { index() } else { pick }
+                };
+                Game { ..base, phase: 5, order: 1, ox: best % w, oy: best / w, cx: best % w, cy: best / w, timer: 12 }
+            }
+        } else if g.phase == 5 {
+            let u = at(units, g.selected);
+            if g.timer > 0 {
+                Game { ..base, timer: g.timer - 1 }
+            } else {
+                let foe = adjacent_foe(u.x, u.y, 1);
+                if foe >= 0 {
+                    Game { ..base, phase: 3, order: 2, target: foe, cx: at(units, foe).x, cy: at(units, foe).y }
+                } else {
+                    Game { ..base, phase: 3, order: 3 }
+                }
+            }
+        } else { base };
+    }
+}
+
+// The unit row applies this frame's order. Damage is attack less
+// defense, never below one; a unit that acted is spent until the turn ends.
+kernel slg.units@1 {
+    requires { field.read; field.write; }
+    input previous: Units;
+    input game: State;
+    output result: Units;
+    compute {
+        let u = sample(previous);
+        let g = at(game, 0);
+        let i = element();
+        return if g.order == 1 && i == g.selected {
+            Unit { ..u, x: g.ox, y: g.oy }
+        } else if g.order == 2 && i == g.target {
+            let a = at(previous, g.selected);
+            let hp = u.hp - max(a.attack - u.defense, 1);
+            Unit { ..u, hp: max(hp, 0), alive: hp > 0 }
+        } else if g.order == 2 && i == g.selected {
+            Unit { ..u, moved: true }
+        } else if g.order == 3 && i == g.selected {
+            Unit { ..u, moved: true }
+        } else if g.order == 4 {
+            Unit { ..u, moved: false }
+        } else { u };
+    }
+}
+
+// Sixteen-pixel tiles, sprites drawn from arithmetic, a cursor that
+// blinks with the clock, a bar at the bottom for the turn and the phase.
+kernel slg.draw@1 {
+    requires { field.read; field.write; time.read; }
+    input map: Map;
+    input units: Units;
+    input game: State;
+    input range: Range;
+    output result: Image;
+
+    fn terrain(kind: Int, px: Int, py: Int) -> Vec3 {
+        let dot = (px * 7 + py * 3) % 5 == 0;
+        return if kind == 3 { if (px + py) % 8 < 2 { vec3(0.55, 0.75, 1.0) } else { vec3(0.2, 0.4, 0.9) } }
+            else if kind == 2 { if py > 14 - (px - 8) * (if px < 8 { -1 } else { 1 }) { vec3(0.45, 0.4, 0.35) } else { vec3(0.6, 0.55, 0.5) } }
+            else if kind == 1 { if (px % 8 - 4) * (px % 8 - 4) + (py % 8 - 4) * (py % 8 - 4) < 9 { vec3(0.1, 0.45, 0.15) } else { vec3(0.25, 0.65, 0.25) } }
+            else if kind == 4 { if px % 8 < 1 || py % 4 < 1 { vec3(0.5, 0.45, 0.45) } else { vec3(0.7, 0.6, 0.55) } }
+            else { if dot { vec3(0.4, 0.8, 0.35) } else { vec3(0.35, 0.7, 0.3) } };
+    }
+
+    fn sprite(u: Unit, px: Int, py: Int) -> Vec4 {
+        let body = if u.team == 0 { vec3(0.3, 0.45, 1.0) } else { vec3(1.0, 0.35, 0.3) };
+        let skin = vec3(1.0, 0.85, 0.7);
+        let dark = vec3(0.1, 0.1, 0.15);
+        let helmet = py >= 2 && py <= 5 && px >= 5 && px <= 10;
+        let face = py >= 6 && py <= 8 && px >= 6 && px <= 9;
+        let eye = py == 7 && (px == 6 || px == 9);
+        let torso = py >= 9 && py <= 12 && px >= 4 && px <= 11;
+        let legs = py >= 13 && py <= 14 && (px == 5 || px == 6 || px == 9 || px == 10);
+        let weapon = px == 12 && py >= 4 && py <= 12;
+        let color = if eye { dark } else if face { skin } else if helmet || torso { body } else if legs { dark } else if weapon { vec3(0.85, 0.85, 0.9) } else { vec3(0.0, 0.0, 0.0) };
+        let solid = eye || face || helmet || torso || legs || weapon;
+        let shaded = if u.moved { mix(color, vec3(0.3, 0.3, 0.3), 0.5) } else { color };
+        return vec4(shaded.x, shaded.y, shaded.z, if solid { 1.0 } else { 0.0 });
+    }
+
+    compute {
+        let g = at(game, 0);
+        let c = coord();
+        let x = int(c.x);
+        let y = int(c.y);
+        let tx = x / 16;
+        let ty = y / 16;
+        let px = x % 16;
+        let py = y % 16;
+        let extent = size(map);
+        let on_map = ty < int(extent.y);
+        let tile = if on_map { at(map, vec2(tx, ty)) } else { Tile { kind: 0, cost: 1 } };
+        let ground = terrain(tile.kind, px, py);
+        // Reachable cells glow while a destination is being chosen.
+        let reach = if on_map && (g.phase == 1 || g.phase == 4) && g.selected >= 0 { at(range, vec2(tx, ty)) <= at(units, g.selected).move } else { false };
+        let lit = if reach { mix(ground, vec3(0.5, 0.7, 1.0), 0.45) } else { ground };
+        // Units, with a health bar underneath.
+        let here = loop 16 with drawn = vec4(0.0, 0.0, 0.0, 0.0) until index() >= count(units) {
+            let u = at(units, index());
+            if u.alive && u.x == tx && u.y == ty && on_map {
+                let s = sprite(u, px, py);
+                let bar = py == 15 && px >= 2 && px < 2 + (u.hp * 12) / 10;
+                if bar { vec4(0.2, 1.0, 0.3, 1.0) } else if s.a > 0.5 { s } else { drawn }
+            } else { drawn }
+        };
+        let with_units = if here.a > 0.5 { vec3(here.x, here.y, here.z) } else { lit };
+        // The cursor: a blinking frame.
+        let blink = int(floor(time() * 6.0)) % 2 == 0;
+        let frame = on_map && tx == g.cx && ty == g.cy && (px == 0 || px == 15 || py == 0 || py == 15) && blink && g.phase < 3;
+        let enemy_mark = on_map && tx == g.cx && ty == g.cy && (px == 0 || px == 15 || py == 0 || py == 15) && g.phase >= 3 && g.phase <= 5;
+        let scene = if frame { vec3(1.0, 1.0, 1.0) } else if enemy_mark { vec3(1.0, 0.5, 0.2) } else { with_units };
+        // The status bar: turn as ticks, phase as a colour block, ends as a tint.
+        let bar = if ty >= int(extent.y) {
+            let ticks = (x - 8) / 8 < g.turn && (x - 8) % 8 < 5 && x >= 8 && y >= 200 && y < 208;
+            let phase_color = if g.phase < 3 { vec3(0.3, 0.45, 1.0) } else { vec3(1.0, 0.35, 0.3) };
+            let block = x >= 200 && x < 248 && y >= 200 && y < 208;
+            if ticks { vec3(1.0, 1.0, 1.0) } else if block { phase_color } else { vec3(0.05, 0.05, 0.08) }
+        } else { scene };
+        let ended = if g.phase == 6 { mix(bar, vec3(1.0, 0.9, 0.3), 0.4) } else if g.phase == 7 { mix(bar, vec3(0.5, 0.1, 0.1), 0.5) } else { bar };
+        return vec4(ended.x, ended.y, ended.z, 1.0);
+    }
+}

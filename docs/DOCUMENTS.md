@@ -195,6 +195,9 @@ output result <- display.result;      // named graph output; sub-graph outputs
    Kernel is named `<document>.<node>@1`.
 7. A `use` path is relative to the document; a trailing `/` means the
    directory's `.orla` files. Used documents must hold Kernels only.
+   A graph's `input` may be declared with any port type; a parent graph
+   wires it like a node port, and what arrives is checked by shape and
+   layout where it binds. Only images can be supplied from files.
 8. A node may bind a native operation of the backend by id, exactly as it
    binds a Kernel: `node raster: native.rasterize@1 { ... }`. Native
    operations are published by the runtime itself, cannot be republished

@@ -1,0 +1,182 @@
+scene skirmish.osn
+
+# Sixty frames a second. The cursor starts on unit 0 at (1, 4); unit 1 at
+# (2, 5) stands next to enemy 0 at (3, 5). Keys are held for one frame.
+frame 0.0167
+expect game.result[0].phase = 0
+expect units.result[4].x = 3
+expect units.result[4].y = 5
+
+# Down and right put the cursor on unit 1; Z selects it, Z again keeps it in place.
+key 40 down
+frame 0.0333
+key 40 up
+frame 0.0500
+key 39 down
+frame 0.0667
+key 39 up
+frame 0.0833
+key 90 down
+frame 0.1000
+key 90 up
+frame 0.1167
+expect game.result[0].phase = 1
+expect game.result[0].selected = 1
+key 90 down
+frame 0.1333
+key 90 up
+frame 0.1500
+expect game.result[0].phase = 2
+
+# Right puts the cursor on enemy 0; Z strikes: 5 attack against 2 defense.
+key 39 down
+frame 0.1667
+key 39 up
+frame 0.1833
+key 90 down
+frame 0.2000
+key 90 up
+frame 0.2167
+expect game.result[0].phase = 0
+expect units.result[4].hp = 7
+expect units.result[1].moved = true
+
+# Enter ends the turn; the enemies act one by one on timers and strike back.
+key 13 down
+frame 0.2333
+key 13 up
+frame 0.2500
+frame 0.2667
+frame 0.2833
+frame 0.3000
+frame 0.3167
+frame 0.3333
+frame 0.3500
+frame 0.3667
+frame 0.3833
+frame 0.4000
+frame 0.4167
+frame 0.4333
+frame 0.4500
+frame 0.4667
+frame 0.4833
+frame 0.5000
+frame 0.5167
+frame 0.5333
+frame 0.5500
+frame 0.5667
+frame 0.5833
+frame 0.6000
+frame 0.6167
+frame 0.6333
+frame 0.6500
+frame 0.6667
+frame 0.6833
+frame 0.7000
+frame 0.7167
+frame 0.7333
+frame 0.7500
+frame 0.7667
+frame 0.7833
+frame 0.8000
+frame 0.8167
+frame 0.8333
+frame 0.8500
+frame 0.8667
+frame 0.8833
+frame 0.9000
+frame 0.9167
+frame 0.9333
+frame 0.9500
+frame 0.9667
+frame 0.9833
+frame 1.0000
+frame 1.0167
+frame 1.0333
+frame 1.0500
+frame 1.0667
+frame 1.0833
+frame 1.1000
+frame 1.1167
+frame 1.1333
+frame 1.1500
+frame 1.1667
+frame 1.1833
+frame 1.2000
+frame 1.2167
+frame 1.2333
+frame 1.2500
+frame 1.2667
+frame 1.2833
+frame 1.3000
+frame 1.3167
+frame 1.3333
+frame 1.3500
+frame 1.3667
+frame 1.3833
+frame 1.4000
+frame 1.4167
+frame 1.4333
+frame 1.4500
+frame 1.4667
+frame 1.4833
+frame 1.5000
+frame 1.5167
+frame 1.5333
+frame 1.5500
+frame 1.5667
+frame 1.5833
+frame 1.6000
+frame 1.6167
+frame 1.6333
+frame 1.6500
+frame 1.6667
+frame 1.6833
+frame 1.7000
+frame 1.7167
+frame 1.7333
+frame 1.7500
+frame 1.7667
+frame 1.7833
+frame 1.8000
+frame 1.8167
+frame 1.8333
+frame 1.8500
+frame 1.8667
+frame 1.8833
+frame 1.9000
+frame 1.9167
+frame 1.9333
+frame 1.9500
+frame 1.9667
+frame 1.9833
+frame 2.0000
+frame 2.0167
+frame 2.0333
+frame 2.0500
+frame 2.0667
+frame 2.0833
+frame 2.1000
+frame 2.1167
+frame 2.1333
+frame 2.1500
+frame 2.1667
+frame 2.1833
+frame 2.2000
+frame 2.2167
+frame 2.2333
+frame 2.2500
+frame 2.2667
+frame 2.2833
+frame 2.3000
+frame 2.3167
+frame 2.3333
+frame 2.3500
+frame 2.3667
+frame 2.3833
+frame 2.4000
+frame 2.4167
+expect game.result[0].phase = 0
+expect game.result[0].turn = 2
+expect units.result[1].hp = 5
+expect units.result[1].moved = false

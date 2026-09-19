@@ -66,7 +66,10 @@ fn diagnostics_name_the_problem_and_the_position() {
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(true, 0.0, 0.0, 1.0); } }",
     );
-    assert!(message.contains("must be Float or Int, found Bool"), "{message}");
+    assert!(
+        message.contains("must be Float or Int, found Bool"),
+        "{message}"
+    );
 
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output r: Image; fn f(x: Float) -> Float { return coord().x; } compute { return vec4(f(1.0), 0.0, 0.0, 1.0); } }",

@@ -1,0 +1,46 @@
+// The scene with the enemy camp moved next to the player's, so contact
+// comes on the first turn.
+use "../kernels/";
+
+node map: slg.map@1 { domain = vec2(16, 12); }
+node spawn: slg.spawn@1 { domain = 8; enemy_x = 3; }   // the armies start in reach
+node blank: slg.blank@1 { domain = vec2(16, 12); }
+node begin: slg.begin@1 { domain = 1; }
+
+node game: slg.game@1 {
+    previous <~ game.result from begin.result;
+    units <~ units.result from spawn.result;
+    range <~ range.result from blank.result;
+    hunt <~ hunt2.result from blank.result;
+    map <- map.result;
+}
+
+node units: slg.units@1 {
+    previous <~ units.result from spawn.result;
+    game <- game.result;
+}
+
+// How far the acting unit can go.
+node seed: slg.seed@1 { game <- game.result; units <- units.result; domain = vec2(16, 12); }
+node range: graph "../passes.osn" {
+    start <- seed.result; map <- map.result; units <- units.result; game <- game.result;
+}
+
+// How far every cell is from the enemy's prey: twelve passes span the map.
+node lure: slg.seed@1 { game <- game.result; units <- units.result; who = 1; domain = vec2(16, 12); }
+node hunt1: graph "../passes.osn" {
+    start <- lure.result; map <- map.result; units <- units.result; game <- game.result;
+}
+node hunt2: graph "../passes.osn" {
+    start <- hunt1.result; map <- map.result; units <- units.result; game <- game.result;
+}
+
+node view: slg.draw@1 {
+    map <- map.result;
+    units <- units.result;
+    game <- game.result;
+    range <- range.result;
+    domain = vec2(256, 240);
+}
+
+output result <- view.result;
