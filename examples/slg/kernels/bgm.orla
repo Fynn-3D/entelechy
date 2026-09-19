@@ -3,12 +3,10 @@
 // crosses blocks through Graph state, so the tune never skips; the hit
 // sound starts when the rules issue a strike, so the sound follows the
 // game rather than the picture.
-// The game's state row, as slg.orla declares it: the layout is what
-// matters, and only `order` is read here.
-struct Game {
-    phase: Int; cx: Int; cy: Int; selected: Int; order: Int; ox: Int; oy: Int;
-    target: Int; turn: Int; timer: Int; held: Int; prey: Int;
-}
+// The game's state row is declared once, in slg.orla; `use` brings the
+// declaration here so `order` is read from the same layout.
+use "slg.orla";
+
 struct Tone { left: Float; right: Float; count: Int; lead: Float; bass: Float; hit: Float; }
 type Music = Rows<Tone>;
 

@@ -474,3 +474,47 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
     assert!(session.evaluate(&Context::default()).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn libraries_share_declarations_through_use_and_refuse_conflicts() {
+    let dir = std::env::temp_dir().join(format!("orla-shared-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(
+        dir.join("lib/types.orla"),
+        "struct Cell { kind: Int; ttl: Int; }\ntype Board = Grid<Cell>;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("lib/rules.orla"),
+        "use \"types.orla\";\nkernel t.seed@1 { requires { field.write; } output result: Board; compute { return Cell { kind: 1, ttl: int(coord().x) }; } }\n",
+    )
+    .unwrap();
+    // The scene's inline Kernel sees the declarations through `use` as well.
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"lib/\";\nnode seed: t.seed@1 { domain = vec2(4, 2); }\nnode show: kernel { requires { field.read; field.write; } input board: Board <- seed.result; output result: Image; compute { let c = sample(board); return vec4(float(c.ttl) / 4.0, float(c.kind), 0.0, 1.0); } }\noutput result <- show.result;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert_eq!(rejected(&events), Vec::<String>::new(), "{events:?}");
+    let report = session.evaluate(&Context::default()).unwrap();
+    let pixel = session.read_pixel(report.output, 3, 0).unwrap();
+    assert_eq!(pixel, [0.75, 1.0, 0.0, 1.0]);
+
+    // A second declaration of the same struct with other fields is refused.
+    std::fs::write(
+        dir.join("lib/other.orla"),
+        "struct Cell { kind: Int; }\nkernel t.other@1 { requires { field.write; } output result: Rows<Cell>; compute { return Cell { kind: 0 }; } }\n",
+    )
+    .unwrap();
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|e| e.to_string().contains("declared differently")),
+        "{events:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

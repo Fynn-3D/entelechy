@@ -72,7 +72,16 @@ fn check(args: &[String]) -> Result<(), String> {
         let mut loader = |path: &Path| -> Result<String, String> {
             std::fs::read_to_string(path).map_err(|error| error.to_string())
         };
-        let lowered = match orla_graph::Graph::load(&document, &text, name, base, &mut loader) {
+        let mut declare =
+            |base: &Path, uses: &[orla_language::Use]| orla::session::declarations_for(base, uses);
+        let lowered = match orla_graph::Graph::load_with(
+            &document,
+            &text,
+            name,
+            base,
+            &mut loader,
+            &mut declare,
+        ) {
             Ok(lowered) => lowered,
             Err(error) => {
                 failures += 1;
@@ -80,6 +89,10 @@ fn check(args: &[String]) -> Result<(), String> {
                 continue;
             }
         };
+        let mut document = document;
+        if let Ok((structs, types)) = orla::session::declarations_for(base, &document.uses) {
+            document.inherit(&structs, &types);
+        }
         let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
             .kernels
             .iter()

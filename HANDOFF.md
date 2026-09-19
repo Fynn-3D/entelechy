@@ -106,7 +106,11 @@ for the architecture's Phase 1 and the resource model is converged. Sorting's ho
 two bounded loops over the rows (the sort example), quadratic and exact;
 a native sort would be an algorithm, which native operations are not
 for, and a scatter primitive is deliberately absent from the map mode.
-The SLG has music: a chiptune sequencer as a row carried across blocks
+Declarations cross files: a `.orla` may `use` another for its structs
+and aliases, a scene's `use` gives them to its inline Kernels, changes
+republish dependents, and conflicting declarations are refused. The
+music library reads the game's state row through the game's own
+declaration. The SLG has music: a chiptune sequencer as a row carried across blocks
 plus a hit sound the rules trigger, played by the sound card with the
 device pacing the game at sixty blocks a second; six seconds on the GPU
 ran with no underruns and no drops. A gamepad maps to the keyboard's

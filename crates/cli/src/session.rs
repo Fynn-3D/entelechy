@@ -142,6 +142,87 @@ fn expand_use(path: &Path, trailing_slash: bool) -> Vec<PathBuf> {
     }
 }
 
+/// The structs and type aliases a document's `use` items bring in, from
+/// the used files and directories and, recursively, what they use. The
+/// same declaration reached twice is one; two different declarations of
+/// one name are refused.
+pub fn declarations_for(
+    base: &Path,
+    uses: &[orla_language::Use],
+) -> Result<
+    (
+        Vec<orla_language::StructDecl>,
+        Vec<orla_language::TypeAlias>,
+    ),
+    String,
+> {
+    fn gather(
+        base: &Path,
+        uses: &[orla_language::Use],
+        visited: &mut std::collections::BTreeSet<PathBuf>,
+        structs: &mut Vec<(orla_language::StructDecl, PathBuf)>,
+        types: &mut Vec<(orla_language::TypeAlias, PathBuf)>,
+    ) -> Result<(), String> {
+        for item in uses {
+            let path = base.join(&item.path.value);
+            for file in expand_use(&path, item.path.value.ends_with('/')) {
+                let key = file.canonicalize().unwrap_or_else(|_| file.clone());
+                if !visited.insert(key) {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&file)
+                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                let document = orla_language::parse_document(&text)
+                    .map_err(|e| format!("{}:{e}", file.display()))?;
+                let dir = file
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf();
+                gather(&dir, &document.uses, visited, structs, types)?;
+                for decl in &document.structs {
+                    match structs
+                        .iter()
+                        .find(|(s, _)| s.name.value == decl.name.value)
+                    {
+                        Some((same, _)) if same.fields == decl.fields => {}
+                        Some((_, other)) => {
+                            return Err(format!(
+                                "struct `{}` is declared differently by {} and {}",
+                                decl.name.value,
+                                other.display(),
+                                file.display()
+                            ));
+                        }
+                        None => structs.push((decl.clone(), file.clone())),
+                    }
+                }
+                for decl in &document.types {
+                    match types.iter().find(|(t, _)| t.name.value == decl.name.value) {
+                        Some((same, _)) if same.target.value == decl.target.value => {}
+                        Some((_, other)) => {
+                            return Err(format!(
+                                "type `{}` is declared differently by {} and {}",
+                                decl.name.value,
+                                other.display(),
+                                file.display()
+                            ));
+                        }
+                        None => types.push((decl.clone(), file.clone())),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut visited = std::collections::BTreeSet::new();
+    let (mut structs, mut types) = (Vec::new(), Vec::new());
+    gather(base, uses, &mut visited, &mut structs, &mut types)?;
+    Ok((
+        structs.into_iter().map(|(s, _)| s).collect(),
+        types.into_iter().map(|(t, _)| t).collect(),
+    ))
+}
+
 /// Kernels a document defines: id, source text, and the parsed Kernel.
 struct Defined {
     id: KernelId,
@@ -184,6 +265,18 @@ struct PendingPublish {
 struct DocumentState {
     stamp: Option<Stamp>,
     kernels: BTreeMap<KernelId, String>,
+    /// The shared declarations the document's Kernels were compiled
+    /// with; when they change, every Kernel republishes even though its
+    /// own text did not.
+    declarations: String,
+}
+
+/// A key for a set of shared declarations.
+fn declarations_key(
+    structs: &[orla_language::StructDecl],
+    types: &[orla_language::TypeAlias],
+) -> String {
+    format!("{structs:?}{types:?}")
 }
 
 impl Session {
@@ -282,7 +375,12 @@ impl Session {
         let mut events = Vec::new();
         self.collect_pending(&mut events);
         self.sync_root(&mut events);
-        self.sync_libraries(&mut events);
+        // A library that changed may have changed a declaration the root's
+        // Kernels inherit, so the root is read again after the libraries.
+        if self.sync_libraries(&mut events) {
+            self.root_stamp = None;
+            self.sync_root(&mut events);
+        }
         events
     }
 
@@ -372,19 +470,34 @@ impl Session {
         let mut loader = |path: &Path| -> Result<String, String> {
             std::fs::read_to_string(path).map_err(|error| error.to_string())
         };
-        let lowered = match Graph::load(&document, &text, &name, &base, &mut loader) {
-            Ok(lowered) => lowered,
-            Err(error) => {
-                events.push(Event::SceneRejected(error.to_string()));
-                return;
-            }
-        };
+        let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
+        let lowered =
+            match Graph::load_with(&document, &text, &name, &base, &mut loader, &mut declare) {
+                Ok(lowered) => lowered,
+                Err(error) => {
+                    events.push(Event::SceneRejected(error.to_string()));
+                    return;
+                }
+            };
         // Kernels defined by the root: its top-level ones and the inline
         // ones of its own nodes. Inline Kernels of sub-graphs belong to
         // their documents.
         let mut by_document: BTreeMap<PathBuf, Vec<Defined>> = BTreeMap::new();
         let root = self.root.clone();
         let root_key = PathBuf::from(&name);
+        // The root's own top-level Kernels see the shared declarations too.
+        let mut document = document;
+        let mut declarations = String::new();
+        match declarations_for(&base, &document.uses) {
+            Ok((structs, types)) => {
+                declarations = declarations_key(&structs, &types);
+                document.inherit(&structs, &types);
+            }
+            Err(error) => events.push(Event::Rejected {
+                path: root.clone(),
+                error: format!(" {error}"),
+            }),
+        }
         for kernel in &document.kernels {
             match named_id(kernel) {
                 Ok(id) => by_document.entry(root.clone()).or_default().push(Defined {
@@ -429,7 +542,23 @@ impl Session {
         }
         for (path, defined) in by_document {
             let current = if path == root { current } else { stamp(&path) };
-            self.publish_document(&path, current, defined, events);
+            let key = if path == root {
+                declarations.clone()
+            } else {
+                // A sub-graph document's inline Kernels inherit through
+                // its own `use` items, resolved during lowering.
+                let dir = path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf();
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|text| orla_language::parse_document(&text).ok())
+                    .and_then(|doc| declarations_for(&dir, &doc.uses).ok())
+                    .map(|(s, t)| declarations_key(&s, &t))
+                    .unwrap_or_default()
+            };
+            self.publish_document(&path, current, defined, &key, events);
         }
         self.sub_graphs = sub_graphs;
         self.root_uses = lowered.uses;
@@ -437,7 +566,9 @@ impl Session {
         events.push(Event::SceneLoaded);
     }
 
-    fn sync_libraries(&mut self, events: &mut Vec<Event>) {
+    /// Loads the libraries the root uses; returns whether any changed.
+    fn sync_libraries(&mut self, events: &mut Vec<Event>) -> bool {
+        let mut changed = false;
         let mut wanted: Vec<PathBuf> = Vec::new();
         for (path, trailing_slash) in &self.root_uses {
             wanted.extend(expand_use(path, *trailing_slash));
@@ -470,6 +601,7 @@ impl Session {
             {
                 continue;
             }
+            changed = true;
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,
                 Err(error) => {
@@ -500,6 +632,26 @@ impl Session {
                 self.documents.entry(path).or_default().stamp = current;
                 continue;
             }
+            // A library's own `use` items bring in shared declarations.
+            let dir = path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf();
+            let mut document = document;
+            let declarations = match declarations_for(&dir, &document.uses) {
+                Ok((structs, types)) => {
+                    document.inherit(&structs, &types);
+                    declarations_key(&structs, &types)
+                }
+                Err(error) => {
+                    events.push(Event::Rejected {
+                        path: path.clone(),
+                        error: format!(" {error}"),
+                    });
+                    self.documents.entry(path).or_default().stamp = current;
+                    continue;
+                }
+            };
             let mut defined = Vec::new();
             for kernel in &document.kernels {
                 match named_id(kernel) {
@@ -514,24 +666,29 @@ impl Session {
                     }),
                 }
             }
-            self.publish_document(&path, current, defined, events);
+            self.publish_document(&path, current, defined, &declarations, events);
         }
+        changed
     }
 
     /// Publishes the Kernels a document now defines: retires the ones that
     /// left, keeps the unchanged, republishes the changed, and reports each.
+    /// `declarations` keys what the Kernels inherit; a change there
+    /// republishes them all.
     fn publish_document(
         &mut self,
         path: &Path,
         current: Option<Stamp>,
         defined: Vec<Defined>,
+        declarations: &str,
         events: &mut Vec<Event>,
     ) {
-        let previous = self
-            .documents
-            .remove(path)
-            .map(|state| state.kernels)
-            .unwrap_or_default();
+        let previous_state = self.documents.remove(path).unwrap_or_default();
+        let previous = if previous_state.declarations == declarations {
+            previous_state.kernels
+        } else {
+            BTreeMap::new()
+        };
         let mut kernels = BTreeMap::new();
         for id in previous.keys() {
             if !defined.iter().any(|d| &d.id == id) {
@@ -620,6 +777,7 @@ impl Session {
             DocumentState {
                 stamp: current,
                 kernels,
+                declarations: declarations.to_owned(),
             },
         );
     }
@@ -781,6 +939,5 @@ fn is_library(document: &Document) -> bool {
     document.nodes.is_empty()
         && document.inputs.is_empty()
         && document.outputs.is_empty()
-        && document.uses.is_empty()
         && document.params.is_empty()
 }

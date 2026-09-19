@@ -169,6 +169,16 @@ capability claim.
   [WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs)).
   The [volume example](examples/volume/README.md) reads its cloud that way.
 
+- Declarations cross files through `use`: a document's used files (and
+  theirs) contribute their top-level structs and type aliases to every
+  Kernel the document holds, resolved by the session and `check` through
+  a `declare` callback the graph loader applies to the root and each
+  sub-graph ([graph](crates/graph/src/document.rs),
+  [session](crates/cli/src/session.rs)). A changed library republishes
+  the Kernels that inherit from it and re-reads the root; two different
+  declarations of one name are refused with both files named
+  ([session test](crates/cli/tests/session.rs)).
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the

@@ -21,7 +21,7 @@ mod evaluate;
 use std::collections::BTreeMap;
 use std::fmt;
 
-pub use document::{DocumentError, InlineKernel, Loader, Lowered, anonymous_id};
+pub use document::{Declare, DocumentError, InlineKernel, Loader, Lowered, anonymous_id};
 pub use domain::{DomainError, DomainExpr, DomainOp, DomainSpec};
 pub use evaluate::{EvaluateError, Evaluator, PlanEntry, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
@@ -209,12 +209,14 @@ impl Graph {
                 path.display()
             ))
         };
+        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new())));
         let lowered = document::lower(
             &document,
             text,
             "graph",
             std::path::Path::new("."),
             &mut loader,
+            &mut none,
         )?;
         if let Some(inline) = lowered.inline.first() {
             return Err(DocumentError {
@@ -246,7 +248,15 @@ impl Graph {
                 path.display()
             ))
         };
-        document::lower(document, "", name, std::path::Path::new("."), &mut loader)
+        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new())));
+        document::lower(
+            document,
+            "",
+            name,
+            std::path::Path::new("."),
+            &mut loader,
+            &mut none,
+        )
     }
 
     /// Lowers a parsed document into a Graph, loading the sub-graphs it
@@ -261,7 +271,22 @@ impl Graph {
         base: &std::path::Path,
         loader: &mut Loader<'_>,
     ) -> Result<Lowered, DocumentError> {
-        document::lower(document, text, name, base, loader)
+        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new())));
+        document::lower(document, text, name, base, loader, &mut none)
+    }
+
+    /// Loads like [`Graph::load`] and also resolves every document's `use`
+    /// items to shared struct and type declarations through `declare`,
+    /// which every Kernel of that document then sees.
+    pub fn load_with(
+        document: &orla_language::Document,
+        text: &str,
+        name: &str,
+        base: &std::path::Path,
+        loader: &mut Loader<'_>,
+        declare: &mut Declare<'_>,
+    ) -> Result<Lowered, DocumentError> {
+        document::lower(document, text, name, base, loader, declare)
     }
 
     /// The first declared output.

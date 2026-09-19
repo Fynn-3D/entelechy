@@ -62,6 +62,14 @@ componentwise on vectors) with `Int` and `Float` kept apart except that
 `if c { a } else { b }` and `loop n with x = init until done { next }` are
 expressions; `Name { a: .., b: .. }` builds a struct and
 `Name { ..base, a: .. }` copies one with some fields replaced.
+
+A `.orla` file may `use` other `.orla` files or directories for their
+declarations: the structs and `type` aliases they declare at the top,
+and what those files use in turn, come before the file's own, so a
+layout declared once is the same layout wherever it is read. A scene's
+`use` brings the same declarations to its inline Kernels. The same
+declaration reached twice is one; two different declarations of one name
+are refused with both files named.
 `sample(f)` reads an input at this element's own address (its shape must
 match the output's), `at(f, address)` reads anywhere (clamped into range;
 `fetch` is the same word for grids), `at_linear(f, position)` reads

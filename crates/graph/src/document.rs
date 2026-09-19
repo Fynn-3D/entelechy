@@ -43,6 +43,20 @@ impl From<ParseError> for DocumentError {
 /// Reads the text of a document at a resolved path.
 pub type Loader<'a> = dyn FnMut(&Path) -> Result<String, String> + 'a;
 
+/// Resolves a document's `use` items to the structs and type aliases they
+/// declare, given the document's directory, so every Kernel the document
+/// holds sees them. The caller reads the files; the graph only asks.
+pub type Declare<'a> = dyn FnMut(
+        &Path,
+        &[orla_language::Use],
+    ) -> Result<
+        (
+            Vec<orla_language::StructDecl>,
+            Vec<orla_language::TypeAlias>,
+        ),
+        String,
+    > + 'a;
+
 /// A Kernel written inside a node, for the loader to publish before the
 /// graph runs.
 #[derive(Clone, Debug, PartialEq)]
@@ -129,6 +143,7 @@ struct Placement {
 /// State shared across one lowering.
 struct Lowering<'a, 'b> {
     loader: &'a mut Loader<'b>,
+    declare: &'a mut Declare<'b>,
     out: Lowered,
     /// Documents on the current placement path, to refuse recursion.
     stack: Vec<PathBuf>,
@@ -140,9 +155,16 @@ pub(crate) fn lower(
     name: &str,
     base: &Path,
     loader: &mut Loader<'_>,
+    declare: &mut Declare<'_>,
 ) -> Result<Lowered, DocumentError> {
+    let mut document = document.clone();
+    let (structs, types) =
+        declare(base, &document.uses).map_err(|message| error(Span::default(), message))?;
+    document.inherit(&structs, &types);
+    let document = &document;
     let mut lowering = Lowering {
         loader,
+        declare,
         out: Lowered {
             graph: Graph {
                 name: name.to_owned(),
@@ -468,8 +490,12 @@ impl Lowering<'_, '_> {
                             format!("cannot load `{}`: {message}", sub_path.value),
                         )
                     })?;
-                    let sub_document = orla_language::parse_document(&text)
+                    let mut sub_document = orla_language::parse_document(&text)
                         .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
+                    let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
+                    let (structs, types) = (self.declare)(sub_base, &sub_document.uses)
+                        .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
+                    sub_document.inherit(&structs, &types);
                     let sub_name = resolved
                         .file_stem()
                         .and_then(|stem| stem.to_str())

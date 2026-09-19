@@ -82,6 +82,33 @@ pub struct Document {
     pub nodes: Vec<NodeDecl>,
 }
 
+impl Document {
+    /// Puts declarations from used documents in front of every Kernel's
+    /// own, so a struct or type declared once is the same layout in every
+    /// file that uses it.
+    pub fn inherit(&mut self, structs: &[StructDecl], types: &[TypeAlias]) {
+        if structs.is_empty() && types.is_empty() {
+            return;
+        }
+        let prepend = |kernel: &mut Kernel| {
+            let mut all = structs.to_vec();
+            all.append(&mut kernel.structs);
+            kernel.structs = all;
+            let mut aliases = types.to_vec();
+            aliases.append(&mut kernel.types);
+            kernel.types = aliases;
+        };
+        for kernel in &mut self.kernels {
+            prepend(kernel);
+        }
+        for node in &mut self.nodes {
+            if let NodeKind::Inline(kernel) = &mut node.kind {
+                prepend(kernel);
+            }
+        }
+    }
+}
+
 /// `use "path";`: a file of Kernels, or a directory of such files when the
 /// path ends with `/`.
 #[derive(Clone, Debug, PartialEq, Eq)]
