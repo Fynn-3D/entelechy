@@ -28,9 +28,16 @@ capability claim.
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs) | [CPU/GPU parity tests](crates/gpu/tests/parity.rs) (skip without an adapter) |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
+| Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [end-to-end client test](crates/cli/tests/protocol.rs) |
 | Player | [window loop](crates/player/src/main.rs), [presentation](crates/player/src/lib.rs) | Presentation unit tests; [material ball](examples/material-ball/README.md) for the live loop |
 
 ## Contracts worth knowing
+
+- The creation protocol is an interface over the session, not a new
+  authority: `prepare` never publishes, `publish` checks an expected
+  generation, `compose` rewrites the scene document so the file stays the
+  source of truth, and diagnostics carry line and column
+  ([protocol](crates/cli/src/protocol.rs)).
 
 - Documents: one grammar for `.orla` libraries and `.osn` graphs
   ([contract](docs/DOCUMENTS.md), [frontend](crates/language/src/lib.rs),

@@ -37,24 +37,23 @@ atomic end-of-evaluation commit, and `pointer()`, `pointer_down()`, `key()`
 read context behind `input.read`. `orla replay` runs an example's `.replay`
 tests; the Life example is the first with a `tests/` directory.
 
+The creation protocol exists: `orla serve` speaks JSON lines over stdin and
+stdout ([docs/PROTOCOL.md](docs/PROTOCOL.md)); the end-to-end test drives
+the binary as a client.
+
 ## Next
 
-Open the creation surface to external agents: a process-level protocol over
-stdin/stdout (JSON lines) on the `orla` binary that exposes the session
-operations already present in `crates/cli/src/session.rs`: list Kernels and
-manifests, inspect the graph, prepare a source and return diagnostics, publish
-against an expected generation, evaluate, and export. Acceptance: a test in
-`crates/cli/tests/` drives the binary as a client, receives structured
-diagnostics for a broken Kernel, and observes that the running version
-survived. Do not add product logic to the Host or the runtimes; the protocol is
-an interface over existing contracts.
-
-Then, in the Graph layer and backend-neutral: fuse chains of pointwise nodes
+In the Graph layer and backend-neutral: fuse chains of pointwise nodes
 (those that only `sample` their inputs) into one module before execution,
-verified by exact equality against the unfused CPU result. GPU residency
-(images staying on the device between nodes, with explicit readback at
+verified by exact equality against the unfused CPU result. A fused group is
+one cache unit; an interface that asks for an intermediate node's image
+forces materialization. GPU residency (images staying on the device between
+nodes, with committed state as a ping-pong pair and explicit readback at
 observation boundaries) comes after fusion, once transfer cost is what
 remains.
+
+Then let the protocol drive the Player: the Player as a `serve` client that
+shows frames, so an agent and a person watch the same window.
 
 ## Open
 

@@ -170,6 +170,8 @@ The roadmaps describe acceptance criteria, not a promise of universal support.
   the computational model and layer boundaries.
 - [Engineering principles](AGENTS.md): rules for preserving those boundaries.
 - [Document format](docs/DOCUMENTS.md): `.orla` libraries and `.osn` graphs.
+- [Creation protocol](docs/PROTOCOL.md): how agents inspect, propose,
+  publish, compose, and observe over stdin and stdout.
 - [Implementation evidence](IMPLEMENTATION.md): code and test entry points.
 - [Usage guide](docs/USAGE.md): setup, examples, and technical reference.
 - [Current handoff](HANDOFF.md): session context and the next action.

@@ -89,6 +89,16 @@ arrows 37 to 40.
 graphs: one grammar, wiring written at the consumer, inline Kernels, and
 `use` for reuse.
 
+## Creation protocol
+
+Agents drive a session over stdin and stdout with JSON lines:
+
+```sh
+cargo run -- serve examples/life/scene.osn
+```
+
+See [the protocol](PROTOCOL.md) for the operations.
+
 ## Where the contracts live
 
 - Language syntax: [the frontend](../crates/language/src/lib.rs) and its parser tests.
