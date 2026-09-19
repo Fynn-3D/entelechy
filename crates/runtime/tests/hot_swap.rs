@@ -125,3 +125,51 @@ fn execution_is_scoped_to_the_manifest_capabilities() {
     assert_eq!(runtime.kernels().count(), 1);
     let _ = Value::Float(0.0);
 }
+
+#[test]
+fn background_preparation_resolves_through_tickets() {
+    let mut runtime = Runtime::new(64);
+    let input = runtime.host_mut().create_image(1, 1).unwrap();
+    // Inline: a ticket is ready as soon as it is issued.
+    let module = orla_compiler::compile(&source("0.25")).unwrap();
+    let ticket = runtime.prepare_later(module, source("0.25"));
+    let candidate = runtime.poll(ticket).unwrap().unwrap();
+    assert_eq!(candidate.id(), &id());
+    assert!(runtime.poll(ticket).is_none(), "a ticket is redeemed once");
+
+    // With a worker: the running version keeps executing until the
+    // replacement is collected and published.
+    runtime.set_background(true);
+    assert!(runtime.background());
+    let running = runtime.load(&source("0.5")).unwrap();
+    let module = orla_compiler::compile(&source("0.75")).unwrap();
+    let ticket = runtime.prepare_later(module, source("0.75"));
+    let mut candidate = None;
+    for _ in 0..2000 {
+        assert_eq!(run(&mut runtime, &running, input)[0], 0.5);
+        if let Some(result) = runtime.poll(ticket) {
+            candidate = Some(result.unwrap());
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let candidate = candidate.expect("the worker finishes");
+    let published = runtime
+        .publish(candidate, Expect::Generation(running.generation()))
+        .unwrap();
+    assert_eq!(run(&mut runtime, &published, input)[0], 0.75);
+
+    // A discarded ticket never surfaces, and stopping the worker keeps
+    // what it finished.
+    let module = orla_compiler::compile(&source("0.1")).unwrap();
+    let dropped = runtime.prepare_later(module, source("0.1"));
+    runtime.discard(dropped);
+    let module = orla_compiler::compile(&source("0.2")).unwrap();
+    let kept = runtime.prepare_later(module, source("0.2"));
+    runtime.set_background(false);
+    assert!(runtime.poll(dropped).is_none());
+    let kept = runtime.poll(kept).unwrap().unwrap();
+    let detached = runtime.detach(kept, "fused.k@1".parse().unwrap());
+    assert_eq!(run(&mut runtime, &detached, input)[0], 0.2);
+    assert!(runtime.kernel(&"fused.k@1".parse().unwrap()).is_none());
+}

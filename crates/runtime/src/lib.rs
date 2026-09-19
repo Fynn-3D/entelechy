@@ -10,11 +10,20 @@
 //! generation still holds. A failed preparation leaves the running Kernel
 //! untouched. Callers that hold an `Arc<KernelVersion>` keep executing the
 //! version they pinned, whatever the registry does afterwards.
+//!
+//! Preparation is the only slow step (a device compiles a pipeline), so it
+//! can leave the calling thread: [`Runtime::prepare_later`] hands a module
+//! to a worker and returns a [`Ticket`]; [`Runtime::poll`] collects the
+//! [`Candidate`] when it is done. Whatever was running keeps running in the
+//! meantime. Without a worker the same calls prepare inline, so tools that
+//! want determinism get it by never enabling one.
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::thread::JoinHandle;
 
 pub use orla_abi::{
     Context, Domain, Host, HostError, Image, ImageHandle, InputState, Invocation, Pixel, Scope,
@@ -269,12 +278,63 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
+/// A preparation handed to the worker; redeemed with [`Runtime::poll`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ticket(u64);
+
+impl fmt::Display for Ticket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "t{}", self.0)
+    }
+}
+
+struct Job {
+    ticket: Ticket,
+    module: Validated,
+    source: String,
+}
+
+struct Done {
+    ticket: Ticket,
+    result: Result<Candidate, PrepareError>,
+}
+
+/// The thread that prepares modules while frames keep going.
+struct Worker {
+    jobs: Sender<Job>,
+    done: Receiver<Done>,
+    handle: JoinHandle<()>,
+}
+
+fn prepare_on(
+    backend: &dyn Backend,
+    module: Validated,
+    source: String,
+) -> Result<Candidate, PrepareError> {
+    let prepared = backend.prepare(&module).map_err(PrepareError::Backend)?;
+    Ok(Candidate {
+        module,
+        source,
+        prepared,
+    })
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        self.stop_worker();
+    }
+}
+
 /// The Kernel Runtime.
 pub struct Runtime {
     host: Host,
-    backend: Box<dyn Backend>,
+    backend: Arc<dyn Backend>,
     kernels: BTreeMap<KernelId, Arc<KernelVersion>>,
     next_generation: u64,
+    worker: Option<Worker>,
+    next_ticket: u64,
+    ready: BTreeMap<Ticket, Result<Candidate, PrepareError>>,
+    discarded: BTreeSet<Ticket>,
 }
 
 impl Runtime {
@@ -288,10 +348,135 @@ impl Runtime {
     pub fn with_backend(budget_pixels: usize, backend: Box<dyn Backend>) -> Self {
         Self {
             host: Host::new(budget_pixels),
-            backend,
+            backend: Arc::from(backend),
             kernels: BTreeMap::new(),
             next_generation: 1,
+            worker: None,
+            next_ticket: 1,
+            ready: BTreeMap::new(),
+            discarded: BTreeSet::new(),
         }
+    }
+
+    /// Starts or stops the preparation worker. With a worker,
+    /// [`Runtime::prepare_later`] returns before the backend has built
+    /// anything; without one it prepares inline. Stopping waits for the
+    /// jobs in flight and keeps their results for [`Runtime::poll`].
+    pub fn set_background(&mut self, enabled: bool) {
+        if enabled == self.worker.is_some() {
+            return;
+        }
+        if !enabled {
+            self.stop_worker();
+            return;
+        }
+        let (jobs, inbox) = channel::<Job>();
+        let (outbox, done) = channel::<Done>();
+        let backend = Arc::clone(&self.backend);
+        let handle = std::thread::Builder::new()
+            .name("orla-prepare".into())
+            .spawn(move || {
+                for job in inbox {
+                    let result = prepare_on(backend.as_ref(), job.module, job.source);
+                    if outbox
+                        .send(Done {
+                            ticket: job.ticket,
+                            result,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .expect("the preparation thread can be spawned");
+        self.worker = Some(Worker { jobs, done, handle });
+    }
+
+    /// Whether a preparation worker is running.
+    pub fn background(&self) -> bool {
+        self.worker.is_some()
+    }
+
+    fn stop_worker(&mut self) {
+        if let Some(Worker { jobs, done, handle }) = self.worker.take() {
+            drop(jobs);
+            let _ = handle.join();
+            for finished in done.try_iter() {
+                self.file(finished);
+            }
+        }
+    }
+
+    fn file(&mut self, finished: Done) {
+        if !self.discarded.remove(&finished.ticket) {
+            self.ready.insert(finished.ticket, finished.result);
+        }
+    }
+
+    fn collect(&mut self) {
+        let finished: Vec<Done> = match &self.worker {
+            Some(worker) => worker.done.try_iter().collect(),
+            None => Vec::new(),
+        };
+        for done in finished {
+            self.file(done);
+        }
+    }
+
+    /// Hands a validated module to the worker, or prepares it now when
+    /// there is none. `source` is kept for inspection.
+    pub fn prepare_later(&mut self, module: Validated, source: String) -> Ticket {
+        let ticket = Ticket(self.next_ticket);
+        self.next_ticket += 1;
+        match &self.worker {
+            Some(worker) => {
+                if let Err(unsent) = worker.jobs.send(Job {
+                    ticket,
+                    module,
+                    source,
+                }) {
+                    let Job { module, source, .. } = unsent.0;
+                    let result = prepare_on(self.backend.as_ref(), module, source);
+                    self.ready.insert(ticket, result);
+                }
+            }
+            None => {
+                let result = prepare_on(self.backend.as_ref(), module, source);
+                self.ready.insert(ticket, result);
+            }
+        }
+        ticket
+    }
+
+    /// Takes a finished preparation, or `None` while it is still running.
+    /// A ticket is redeemed once.
+    pub fn poll(&mut self, ticket: Ticket) -> Option<Result<Candidate, PrepareError>> {
+        self.collect();
+        self.ready.remove(&ticket)
+    }
+
+    /// Forgets a preparation whose result is no longer wanted.
+    pub fn discard(&mut self, ticket: Ticket) {
+        self.collect();
+        if self.ready.remove(&ticket).is_none() {
+            self.discarded.insert(ticket);
+        }
+    }
+
+    /// Turns a candidate into a version that is never registered, under
+    /// the given id: it executes like any pinned version but does not
+    /// appear in the registry.
+    pub fn detach(&mut self, candidate: Candidate, id: KernelId) -> Arc<KernelVersion> {
+        let generation = Generation(self.next_generation);
+        self.next_generation += 1;
+        Arc::new(KernelVersion {
+            id,
+            generation,
+            module: candidate.module,
+            source: candidate.source,
+            prepared: candidate.prepared,
+        })
     }
 
     /// Name of the backend executing Kernels.
@@ -394,20 +579,11 @@ impl Runtime {
     }
 
     fn prepare_module(&self, module: Validated, source: &str) -> Result<Candidate, PrepareError> {
-        let prepared = self
-            .backend
-            .prepare(&module)
-            .map_err(PrepareError::Backend)?;
-        Ok(Candidate {
-            module,
-            source: source.to_owned(),
-            prepared,
-        })
+        prepare_on(self.backend.as_ref(), module, source.to_owned())
     }
 
     /// Prepares a module the runtime did not compile from source (a fused
-    /// group, say) as a version that is never registered: it executes like
-    /// any pinned version but does not appear in the registry.
+    /// group, say) inline, as a detached version; see [`Runtime::detach`].
     pub fn prepare_detached(
         &mut self,
         module: Validated,
@@ -415,15 +591,7 @@ impl Runtime {
         source: String,
     ) -> Result<Arc<KernelVersion>, PrepareError> {
         let candidate = self.prepare_module(module, &source)?;
-        let generation = Generation(self.next_generation);
-        self.next_generation += 1;
-        Ok(Arc::new(KernelVersion {
-            id,
-            generation,
-            module: candidate.module,
-            source,
-            prepared: candidate.prepared,
-        }))
+        Ok(self.detach(candidate, id))
     }
 
     /// Atomically publishes a candidate if `expect` matches the registry.
