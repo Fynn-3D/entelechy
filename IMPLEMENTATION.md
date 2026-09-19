@@ -129,6 +129,18 @@ capability claim.
   [exposure example](examples/exposure/README.md) meters a frame and
   tone-maps by the result.
 
+- Ordered work is the third execution mode, declared by `scan with name =
+  init { ... }` in place of `compute`: the entry runs once per element of
+  the first input, in order, reading the previous result through the same
+  `Carried` op a loop body uses (`init`, a module function, supplies the
+  first) and writing every step as that element of a `Rows` output of the
+  input's count. The CPU walks the rows on one thread; the GPU walks them
+  in one invocation, so the two agree exactly on integers and to rounding
+  on floats ([CPU](crates/cpu/src/lib.rs), [WGSL](crates/gpu/src/wgsl.rs),
+  [parity test](crates/gpu/tests/parity.rs)). Scans are never fused. The
+  [audio example](examples/audio/README.md) filters each block with one
+  and carries the filter's memory across blocks through Graph state.
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the

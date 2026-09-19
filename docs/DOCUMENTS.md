@@ -86,8 +86,32 @@ kernel stats.luma@1 {
 single element of a `Rows` output. `merge` must be associative and
 commutative: the fold's tree belongs to the backend, integers and
 booleans come out exact, floats agree to rounding. A reduce node takes no
-`domain` and is never fused. The exact language is defined by
-[the frontend](../crates/language/src/lib.rs) and its tests.
+`domain` and is never fused.
+
+A Kernel with `scan` in place of `compute` is ordered work, the third and
+last execution mode:
+
+```text
+kernel audio.lowpass@1 {
+    requires { field.read; field.write; }
+    input samples: Rows<Float>;
+    param k: Float = 0.1;
+    output result: Rows<Float>;        // one element per input element
+    scan with y = 0.0 {                // the carried value, and its start
+        return y + (sample(samples) - y) * k;
+    }
+}
+```
+
+The body runs once per element of the first input, in order, exactly as a
+`loop` body runs once per iteration: `y` is the previous step's result
+(`init` before the first), the result becomes this element of the output
+and the next step's `y`, and `index()` is the element index. A scan writes
+as many elements as its input has, so a node's `domain`, if written, must
+say so. Ordered work runs on one thread on either backend; that is its
+nature, not a limit of the backend, and a scan is never fused. The exact
+language is defined by [the frontend](../crates/language/src/lib.rs) and
+its tests.
 
 ## Graph
 
