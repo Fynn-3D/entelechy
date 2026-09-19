@@ -29,3 +29,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   of different element types in one Kernel.
 - [volume](volume/README.md): a `Volume<Float>` of cloud density ray-marched
   into an image; the volume never leaves the GPU.
+- [mesh](mesh/README.md): a torus as vertex and triangle rows, projected by
+  a Kernel, rasterized by the backend's native `native.rasterize@1`, and
+  shaded by a Kernel; the CPU and GPU rasterizers agree.

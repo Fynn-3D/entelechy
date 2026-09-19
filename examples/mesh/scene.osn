@@ -1,0 +1,21 @@
+// torus + faces -> project -> rasterize (native) -> shade
+use "kernels/";
+
+node torus: mesh.torus@1 { domain = 1152; }        // 48 segments x 24 rings
+node faces: mesh.torus_faces@1 { domain = 2304; }  // two triangles per cell
+
+node project: mesh.project@1 {
+    mesh <- torus.result;
+}
+
+node raster: native.rasterize@1 {
+    vertices <- project.result;
+    triangles <- faces.result;
+    domain = vec2(320, 240);
+}
+
+node view: mesh.shade@1 {
+    surface <- raster.surface;
+}
+
+output result <- view.result;
