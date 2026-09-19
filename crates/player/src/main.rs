@@ -26,7 +26,8 @@ usage:
               [--backend gpu|cpu]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
-      and keys reach Kernels that declare `input.read`. F5 resets state.
+      and keys reach Kernels that declare `input.read`. F5 resets state;
+      Tab cycles the preview through the graph's nodes and back to the output.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window: an agent's publish, compose, and param land in the frame a
@@ -39,6 +40,7 @@ struct Options {
     scale: u32,
     backend: Option<String>,
     serve: bool,
+    params: Vec<(String, orla_runtime::Value)>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -49,6 +51,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         scale: 2,
         backend: None,
         serve: false,
+        params: Vec::new(),
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -62,6 +65,15 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--backend" => options.backend = Some(value("--backend")?),
             "--serve" => options.serve = true,
+            "--param" => {
+                let binding = value("--param")?;
+                let (name, text) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
+                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
+                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
+                options.params.push((name.to_owned(), literal));
+            }
             "--scale" => {
                 options.scale = value("--scale")?
                     .parse::<u32>()
@@ -107,6 +119,8 @@ struct Player {
     last_title: Instant,
     /// Protocol requests arriving from stdin, when serving.
     requests: Option<Receiver<String>>,
+    /// The node whose image is shown instead of the graph output.
+    preview: Option<orla_graph::NodeId>,
 }
 
 impl Player {
@@ -127,12 +141,36 @@ impl Player {
         match self.session.evaluate(&context) {
             Ok(report) => {
                 let elapsed = started.elapsed();
-                let shown = self.show(report.output);
+                let target = self
+                    .preview
+                    .as_ref()
+                    .and_then(|node| self.session.cached(node, "result"))
+                    .unwrap_or(report.output);
+                let shown = self.show(target);
                 if self.last_title.elapsed() > Duration::from_millis(250) {
+                    let executed = report
+                        .executed
+                        .iter()
+                        .map(|node| match report.fused.iter().find(|(c, _)| c == node) {
+                            Some((_, absorbed)) => format!(
+                                "{node}+{}",
+                                absorbed
+                                    .iter()
+                                    .map(ToString::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join("+")
+                            ),
+                            None => node.to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let view = match &self.preview {
+                        Some(node) => format!("view {node}"),
+                        None => "view output".to_string(),
+                    };
                     self.status = format!(
-                        "{:.1} ms, {} executed, {} reused, {}, {} downloads",
+                        "{view} | {:.1} ms | ran [{executed}] reused {} | {}, {} downloads",
                         elapsed.as_secs_f64() * 1000.0,
-                        report.executed.len(),
                         report.reused.len(),
                         shown,
                         self.downloads
@@ -181,6 +219,35 @@ impl Player {
                 event_loop.exit();
             }
         }
+    }
+
+    /// Moves the preview to the next node, or back to the graph output
+    /// after the last one. Previewed nodes are pinned so fusion keeps them
+    /// materialized.
+    fn cycle_preview(&mut self) {
+        let nodes: Vec<orla_graph::NodeId> = self
+            .session
+            .graph()
+            .map(|graph| graph.nodes.iter().map(|node| node.id.clone()).collect())
+            .unwrap_or_default();
+        if let Some(current) = self.preview.take() {
+            self.session.unpin(&current);
+            let position = nodes.iter().position(|node| *node == current);
+            if let Some(next) = position.and_then(|p| nodes.get(p + 1)) {
+                self.preview = Some(next.clone());
+            }
+        } else {
+            self.preview = nodes.first().cloned();
+        }
+        if let Some(node) = &self.preview {
+            self.session.pin(node.clone());
+        }
+        let view = self
+            .preview
+            .as_ref()
+            .map_or("output".to_string(), ToString::to_string);
+        eprintln!("previewing {view}");
+        self.last_title = Instant::now() - Duration::from_secs(1);
     }
 
     /// Shows an output image: directly from the device when it is resident
@@ -354,6 +421,11 @@ impl ApplicationHandler for Player {
                             eprintln!("state reset");
                         }
                     }
+                    Key::Named(NamedKey::Tab) => {
+                        if down {
+                            self.cycle_preview();
+                        }
+                    }
                     Key::Named(named) => {
                         if let Some(code) = key_code(&format!("{named:?}")) {
                             self.input.set_key(code, down);
@@ -433,7 +505,11 @@ fn main() -> ExitCode {
         status: "starting".into(),
         last_title: Instant::now(),
         requests: None,
+        preview: None,
     };
+    for (name, value) in &options.params {
+        player.session.set_param(name, *value);
+    }
     if options.serve {
         let (sender, receiver) = channel();
         std::thread::spawn(move || {

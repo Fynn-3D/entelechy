@@ -1271,8 +1271,10 @@ name = "orla-player"
 version = "0.1.0"
 dependencies = [
  "orla",
+ "orla-compiler",
  "orla-gpu",
  "orla-graph",
+ "orla-language",
  "orla-runtime",
  "serde_json",
  "softbuffer",
