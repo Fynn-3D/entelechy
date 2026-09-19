@@ -144,7 +144,7 @@ The ABI is sacred.
 Kernels access the Host through explicit capabilities and opaque handles.
 
 ```text
-ImageHandle
+Handle          (the one handle in code: any Field, images included)
 TextureHandle
 BufferHandle
 ResourceHandle
