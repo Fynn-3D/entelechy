@@ -1,15 +1,18 @@
-# gradient -> grayscale -> pixelate
-graph grayscale
+// gradient -> grayscale -> pixelate
+use "kernels/";
 
-node source = image.gradient@1
-  domain 128 128
+node source: image.gradient@1 {
+    domain = vec2(128, 128);
+}
 
-node gray = image.grayscale@1
-  source <- source.result
-  amount = 1.0
+node gray: image.grayscale@1 {
+    source <- source.result;
+    amount = 1.0;
+}
 
-node blocks = image.pixelate@1
-  source <- gray.result
-  size = 8
+node blocks: image.pixelate@1 {
+    source <- gray.result;
+    size = 8;
+}
 
-output blocks.result
+output result <- blocks.result;

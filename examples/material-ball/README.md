@@ -13,11 +13,12 @@ Open it in the Player (release builds keep the frame rate up):
 cargo run --release -p orla-player -- examples/material-ball/scene.osn
 ```
 
-While the window is open, edit and save:
+The whole scene is one file: both Kernels are written inline in `scene.osn`,
+so it can be shared as is. While the window is open, edit and save:
 
-- `albedo`, `roughness`, or `metallic` in `scene.osn` to change the material;
-- `kernels/ball.orla` to change the lighting or the floor;
-- `exposure` in `scene.osn` or the curve in `kernels/tonemap.orla`.
+- `albedo`, `roughness`, or `metallic` defaults in the `ball` node;
+- the lighting or the floor in its `compute` block;
+- `exposure` or the curve in the `display` node.
 
 The light orbits because the ball Kernel declares `time.read`; the tone-mapping
 node is pure and is reused until its input changes. Save a Kernel that does

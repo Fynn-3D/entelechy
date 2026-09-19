@@ -1,16 +1,19 @@
-# A blinker alone, for deterministic checks.
-graph life-blinker
+// A blinker alone, for deterministic checks.
+use "../kernels/";
 
-node seed = life.seed@1
-  domain 32 24
-  noise = 0.0
-  blinker = 10.0 10.0
+node seed: life.seed@1 {
+    domain = vec2(32, 24);
+    noise = 0.0;
+    blinker = vec2(10, 10);
+}
 
-node life = life.step@1
-  previous <~ life.result from seed.result
-  brush = 2.0
+node life: life.step@1 {
+    previous <~ life.result from seed.result;
+    brush = 2.0;
+}
 
-node show = life.show@1
-  cells <- life.result
+node show: life.show@1 {
+    cells <- life.result;
+}
 
-output show.result
+output result <- show.result;

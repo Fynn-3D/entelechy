@@ -1,15 +1,18 @@
-# seed -> life (fed back to itself) -> show
-graph life
+// seed -> life (fed back to itself) -> show
+use "kernels/";
 
-node seed = life.seed@1
-  domain 160 120
-  noise = 0.3
+node seed: life.seed@1 {
+    domain = vec2(160, 120);
+    noise = 0.3;
+}
 
-node life = life.step@1
-  previous <~ life.result from seed.result
-  brush = 2.0
+node life: life.step@1 {
+    previous <~ life.result from seed.result;
+    brush = 2.0;
+}
 
-node show = life.show@1
-  cells <- life.result
+node show: life.show@1 {
+    cells <- life.result;
+}
 
-output show.result
+output result <- show.result;

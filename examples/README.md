@@ -1,8 +1,9 @@
 # Examples
 
-Each example is a directory with a `scene.osn` entry, a `kernels/` directory
-of `.orla` sources, and, once it has behavior worth pinning down, a `tests/`
-directory of `.replay` scripts with their fixture scenes. Documentation for an
+Each example is a directory with a `scene.osn` entry, usually a `kernels/`
+directory of `.orla` libraries it uses, and, once it has behavior worth
+pinning down, a `tests/` directory of `.replay` scripts with their fixture
+scenes. `shared/` holds libraries several examples use. Documentation for an
 example belongs in its own `README.md`.
 
 ```sh
@@ -12,7 +13,8 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [grayscale](grayscale/README.md): the first proof. A generated gradient flows
   through grayscale and pixelate Kernels; edit any Kernel while it runs.
 - [material-ball](material-ball/README.md): a shaded sphere under an orbiting
-  light, tone-mapped by a second Kernel, shown live in the Player.
+  light, tone-mapped by a second Kernel; one self-contained file with both
+  Kernels inline.
 - [raymarch](raymarch/README.md): a signed-distance scene marched with `loop`
   and shaded with `if`; interactive on the GPU backend, seconds per frame on
   the CPU.

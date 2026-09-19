@@ -1,5 +1,4 @@
 scene blinker.osn
-kernels ../kernels
 
 # The seed holds a horizontal blinker at (10..12, 10). The first frame steps it
 # once, so it stands vertical; the second frame lays it flat again. Live cells

@@ -1,12 +1,15 @@
-# signed-distance scene -> tone mapping -> output
-graph raymarch
+// signed-distance scene -> tone mapping -> output
+use "kernels/";
+use "../shared/tonemap.orla";
 
-node scene = scene.march@1
-  domain 400 260
-  steps = 96
+node scene: scene.march@1 {
+    domain = vec2(400, 260);
+    steps = 96;
+}
 
-node display = image.tonemap@1
-  source <- scene.result
-  exposure = 1.1
+node display: image.tonemap@1 {
+    source <- scene.result;
+    exposure = 1.1;
+}
 
-output display.result
+output result <- display.result;
