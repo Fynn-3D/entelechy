@@ -725,7 +725,7 @@ impl Session {
             ))
         })?;
         self.evaluator
-            .plan_summary(graph, &mut self.runtime, &self.externals)
+            .plan_summary(graph, &mut self.runtime, &self.externals, &self.params)
     }
 
     /// Lets a node be fused away again.

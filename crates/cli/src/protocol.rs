@@ -408,10 +408,11 @@ fn graph_json(
                 ParamValue::Literal(v) => value_json(v),
                 ParamValue::Graph(p) => json!({ "param": p }),
             })).collect::<serde_json::Map<_, _>>(),
-            "domain": node.domain.map(|d| match d {
-                orla_runtime::Domain::Rows(n) => json!([n]),
-                orla_runtime::Domain::Grid(w, h) => json!([w, h]),
-                orla_runtime::Domain::Volume(w, h, d) => json!([w, h, d]),
+            "domain": node.domain.as_ref().map(|d| match d {
+                orla_graph::DomainSpec::Literal(orla_runtime::Domain::Rows(n)) => json!([n]),
+                orla_graph::DomainSpec::Literal(orla_runtime::Domain::Grid(w, h)) => json!([w, h]),
+                orla_graph::DomainSpec::Literal(orla_runtime::Domain::Volume(w, h, d)) => json!([w, h, d]),
+                orla_graph::DomainSpec::Expr(expr) => json!(expr.to_string()),
             }),
         })).collect::<Vec<_>>(),
         "outputs": graph.outputs.iter().map(|(name, s)| json!({ "name": name, "source": source(s) })).collect::<Vec<_>>(),

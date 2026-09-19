@@ -5,14 +5,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use orla_abi::{Domain, Value};
+use orla_abi::Value;
 use orla_ir::KernelId;
 use orla_language::{
     BindingDecl, Document, Expr, ExprKind, Kernel, NodeKind, NodeMember, ParseError, SourceRef,
     Span,
 };
 
-use crate::{Binding, Graph, GraphParam, Node, NodeId, ParamValue, Source};
+use crate::{Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source};
 
 /// A document does not parse or does not describe a valid graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,28 +101,18 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
     }
 }
 
-fn domain_value(value: Value, span: Span) -> Result<Domain, DocumentError> {
-    // The literal's arity is the shape: a count for rows, a pair for a
-    // grid, a triple for a volume.
-    let side = |v: f32| {
-        (v > 0.0 && v.fract() == 0.0 && v <= u32::MAX as f32)
-            .then_some(v as u32)
-            .ok_or_else(|| error(span, "`domain` sides must be positive whole numbers"))
-    };
-    Ok(match value {
-        Value::Int(count) => Domain::Rows(side(count as f32)?),
-        Value::Float(count) => Domain::Rows(side(count)?),
-        Value::Vec2([width, height]) => Domain::Grid(side(width)?, side(height)?),
-        Value::Vec3([width, height, depth]) => {
-            Domain::Volume(side(width)?, side(height)?, side(depth)?)
-        }
-        _ => {
-            return Err(error(
-                span,
-                "`domain` needs a count for rows, `vec2(width, height)` for a grid, or `vec3(width, height, depth)` for a volume",
-            ));
-        }
-    })
+/// A node's `domain` as written: a literal resolves now, an expression
+/// over the node's inputs and parameters resolves when the node binds.
+fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> {
+    let domain = DomainExpr::from_expr(expr).map_err(|e| error(expr.span, e.message))?;
+    if domain.is_constant() {
+        let literal = domain
+            .resolve(&|_| None, &|_| None)
+            .map_err(|e| error(expr.span, e.message))?;
+        Ok(DomainSpec::Literal(literal))
+    } else {
+        Ok(DomainSpec::Expr(domain))
+    }
 }
 
 /// What a placed sub-graph receives from its parent.
@@ -366,9 +356,7 @@ impl Lowering<'_, '_> {
             for member in &decl.members {
                 match member {
                     NodeMember::Set(name, expr) if name.value == "domain" => {
-                        let value = orla_compiler::literal(expr)
-                            .map_err(|e| error(expr.span, e.to_string()))?;
-                        if domain.replace(domain_value(value, expr.span)?).is_some() {
+                        if domain.replace(domain_spec(expr)?).is_some() {
                             return Err(error(name.span, "`domain` is set twice"));
                         }
                     }
@@ -433,9 +421,7 @@ impl Lowering<'_, '_> {
                         }
                     }
                     if let Some(expr) = &kernel.domain {
-                        let value = orla_compiler::literal(expr)
-                            .map_err(|e| error(expr.span, e.to_string()))?;
-                        domain = Some(domain_value(value, expr.span)?);
+                        domain = Some(domain_spec(expr)?);
                     }
                     // Param defaults that name a graph param become node
                     // values; the compiled Kernel keeps a literal default.
@@ -594,6 +580,7 @@ fn literal_expr(value: Value, span: Span) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orla_abi::Domain;
 
     const DOCUMENT: &str = "
 // a comment
@@ -630,7 +617,10 @@ output result <- blocks.result;
             graph.nodes[1].params["size"],
             ParamValue::Literal(Value::Int(8))
         );
-        assert_eq!(graph.nodes[1].domain, Some(Domain::Grid(64, 32)));
+        assert_eq!(
+            graph.nodes[1].domain,
+            Some(DomainSpec::Literal(Domain::Grid(64, 32)))
+        );
         let text = graph.to_string();
         assert_eq!(Graph::parse(&text).unwrap(), graph);
     }
@@ -670,7 +660,7 @@ output result <- blocks.result;
         let trail = &lowered.graph.nodes[0];
         assert_eq!(trail.kernel.to_string(), "my_scene.trail@1");
         assert!(matches!(trail.inputs["previous"], Binding::Previous { .. }));
-        assert_eq!(trail.domain, Some(Domain::Grid(4, 4)));
+        assert_eq!(trail.domain, Some(DomainSpec::Literal(Domain::Grid(4, 4))));
         assert_eq!(trail.params["fade"], ParamValue::Graph("decay".into()));
         let compiled =
             orla_compiler::compile_kernel(&lowered.inline[0].kernel, Some(&lowered.inline[0].id))
@@ -762,7 +752,7 @@ output result <- blocks.result;
             Graph::parse("node a: t.k@1 { x <- y; x <- z; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("bound twice"), "{error}");
         let error = Graph::parse("node a: t.k@1 { domain = true; }\noutput r <- a.r;").unwrap_err();
-        assert!(error.message.contains("vec2(width, height)"), "{error}");
+        assert!(error.message.contains("`domain` is a count"), "{error}");
         let error = Graph::parse("node a: kernel { requires { field.write; } input s: Image; output result: Image; compute { return sample(s); } }\noutput r <- a.result;").unwrap_err();
         assert!(error.message.contains("must be wired"), "{error}");
         let error = Graph::parse("node a: t.k@1 { y = 1.0 + 2.0; }\noutput r <- a.r;").unwrap_err();

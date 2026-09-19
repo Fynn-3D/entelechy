@@ -15,12 +15,14 @@
 //! id and never holds Kernel bodies.
 
 mod document;
+mod domain;
 mod evaluate;
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 pub use document::{DocumentError, InlineKernel, Loader, Lowered, anonymous_id};
+pub use domain::{DomainError, DomainExpr, DomainOp, DomainSpec};
 pub use evaluate::{EvaluateError, Evaluator, PlanEntry, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
@@ -115,8 +117,9 @@ pub struct Node {
     pub inputs: BTreeMap<String, Binding>,
     /// Parameter overrides; unlisted parameters use manifest defaults.
     pub params: BTreeMap<String, ParamValue>,
-    /// Explicit output domain; defaults to the first image input's size.
-    pub domain: Option<Domain>,
+    /// Explicit output extent, literal or computed from the node's inputs
+    /// and parameters; defaults to the first input's extent.
+    pub domain: Option<DomainSpec>,
 }
 
 /// A graph document.
@@ -420,7 +423,7 @@ impl fmt::Display for Graph {
                     ParamValue::Graph(param) => writeln!(f, "    {name} = {param};")?,
                 }
             }
-            if let Some(domain) = node.domain {
+            if let Some(domain) = &node.domain {
                 writeln!(f, "    domain = {domain};")?;
             }
             writeln!(f, "}}")?;

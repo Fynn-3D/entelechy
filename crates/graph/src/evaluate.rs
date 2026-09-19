@@ -24,7 +24,7 @@ use orla_runtime::{
     ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Runtime, Ticket,
 };
 
-use crate::{Binding, Graph, GraphError, Node, NodeId, ParamValue, Source};
+use crate::{Binding, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue, Source};
 
 /// Why evaluation stopped. Nodes evaluated before the failure keep their new
 /// results; the failing node keeps its last successful result, if any; no
@@ -91,6 +91,13 @@ pub enum EvaluateError {
     /// A reduction node was given a `domain`; a reduction produces one
     /// element and maps over its first input.
     ReduceDomain(NodeId),
+    /// A node's `domain` expression could not be resolved.
+    Domain {
+        /// The node.
+        node: NodeId,
+        /// What is wrong.
+        message: String,
+    },
     /// A port is bound to a resource of the other kind, or to a Field with
     /// a different element layout.
     PortKind {
@@ -150,6 +157,7 @@ impl fmt::Display for EvaluateError {
             Self::Fusion { node, message } => {
                 write!(f, "fused group at `{node}` was rejected: {message}")
             }
+            Self::Domain { node, message } => write!(f, "node `{node}`: {message}"),
             Self::ReduceDomain(node) => write!(
                 f,
                 "node `{node}` is a reduction, which produces one element; remove its `domain`"
@@ -223,6 +231,17 @@ struct Cached {
     outputs: Vec<ImageHandle>,
     output_names: Vec<String>,
     epoch: u64,
+}
+
+/// A graph parameter's value: the caller's override, or its default.
+fn graph_param(graph: &Graph, name: &str, overrides: &BTreeMap<String, Value>) -> Option<Value> {
+    overrides.get(name).copied().or_else(|| {
+        graph
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.default)
+    })
 }
 
 /// A fused version kept while its constituents are unchanged.
@@ -382,9 +401,10 @@ impl Evaluator {
         graph: &Graph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, ImageHandle>,
+        overrides: &BTreeMap<String, Value>,
     ) -> Result<Vec<PlanEntry>, EvaluateError> {
         let order = graph.order()?;
-        let groups = self.plan(graph, &order, runtime, externals)?;
+        let groups = self.plan(graph, &order, runtime, externals, overrides)?;
         Ok(groups
             .into_iter()
             .map(|group| PlanEntry {
@@ -392,7 +412,7 @@ impl Evaluator {
                 kernel: group.version.id().clone(),
                 absorbed: group.absorbed,
                 inputs: group.node.inputs,
-                domain: group.node.domain,
+                domain: group.node.domain.as_ref().and_then(DomainSpec::literal),
             })
             .collect())
     }
@@ -410,7 +430,7 @@ impl Evaluator {
     ) -> Result<Report, EvaluateError> {
         let order = graph.order()?;
         self.prune(graph, runtime);
-        let groups = self.plan(graph, &order, runtime, externals)?;
+        let groups = self.plan(graph, &order, runtime, externals, params)?;
         // Nodes absorbed into a group are no longer materialized.
         let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
         let stale: Vec<NodeId> = self
@@ -519,6 +539,7 @@ impl Evaluator {
         order: &[usize],
         runtime: &mut Runtime,
         externals: &BTreeMap<String, ImageHandle>,
+        overrides: &BTreeMap<String, Value>,
     ) -> Result<Vec<Group>, EvaluateError> {
         let mut groups: Vec<Group> = Vec::with_capacity(order.len());
         for index in order {
@@ -570,7 +591,14 @@ impl Evaluator {
         let mut absorbed_into: BTreeMap<NodeId, usize> = BTreeMap::new();
         for position in 0..groups.len() {
             // Planned domain of this group, for the equality check.
-            let planned = self.planned_domain(&groups[position], runtime, externals, &domains);
+            let planned = self.planned_domain(
+                graph,
+                &groups[position],
+                runtime,
+                externals,
+                &domains,
+                overrides,
+            );
             let ports: Vec<(String, Binding)> = groups[position]
                 .node
                 .inputs
@@ -670,12 +698,16 @@ impl Evaluator {
                 group.node.inputs = inputs;
                 group.node.params = params;
                 if group.node.domain.is_none() {
-                    group.node.domain = planned;
+                    group.node.domain = planned.map(DomainSpec::Literal);
                 }
                 absorbed_into.insert(producer_id, position);
             }
             if let Some(domain) = planned {
                 domains.insert(groups[position].node.id.clone(), domain);
+                // The plan reports what an expression resolved to.
+                if matches!(groups[position].node.domain, Some(DomainSpec::Expr(_))) {
+                    groups[position].node.domain = Some(DomainSpec::Literal(domain));
+                }
             }
         }
         let executing: Vec<Group> = groups
@@ -770,27 +802,26 @@ impl Evaluator {
 
     /// The domain a group will execute over, when it can be known before
     /// execution: explicit, or the size of its first bound image.
+    #[allow(clippy::too_many_arguments)]
     fn planned_domain(
         &self,
+        graph: &Graph,
         group: &Group,
         runtime: &Runtime,
         externals: &BTreeMap<String, ImageHandle>,
         domains: &BTreeMap<NodeId, Domain>,
+        overrides: &BTreeMap<String, Value>,
     ) -> Option<Domain> {
-        if group.version.manifest().mode == orla_ir::Mode::Reduce {
+        let manifest = group.version.manifest();
+        if manifest.mode == orla_ir::Mode::Reduce {
             return Some(Domain::Rows(1));
         }
-        if let Some(domain) = group.node.domain {
-            return Some(domain);
-        }
-        let first = group.version.manifest().inputs.first()?;
-        let binding = group.node.inputs.get(&first.name)?;
         let size = |handle: ImageHandle| runtime.host().domain(handle).ok();
         let of_source = |source: &Source| match source {
             Source::External(name) => externals.get(name).and_then(|h| size(*h)),
             Source::Node { node, .. } => domains.get(node).copied(),
         };
-        match binding {
+        let of_binding = |binding: &Binding| match binding {
             Binding::Now(source) => of_source(source),
             Binding::Previous {
                 source: Source::Node { node, port },
@@ -801,6 +832,29 @@ impl Evaluator {
                 .and_then(|h| size(*h))
                 .or_else(|| of_source(initial)),
             Binding::Previous { .. } => None,
+        };
+        match &group.node.domain {
+            Some(DomainSpec::Literal(domain)) => Some(*domain),
+            Some(DomainSpec::Expr(expr)) => {
+                let port = |name: &str| group.node.inputs.get(name).and_then(of_binding);
+                let param = |name: &str| {
+                    let manifest_default = manifest
+                        .params
+                        .iter()
+                        .find(|p| p.name == name)
+                        .map(|p| p.default);
+                    match group.node.params.get(name) {
+                        Some(ParamValue::Literal(value)) => Some(*value),
+                        Some(ParamValue::Graph(name)) => graph_param(graph, name, overrides),
+                        None => manifest_default.or_else(|| graph_param(graph, name, overrides)),
+                    }
+                };
+                expr.resolve(&port, &param).ok()
+            }
+            None => {
+                let first = manifest.inputs.first()?;
+                of_binding(group.node.inputs.get(&first.name)?)
+            }
         }
     }
 
@@ -1007,8 +1061,30 @@ impl Evaluator {
             }
             Domain::Rows(1)
         } else {
-            match (node.domain, inputs.first()) {
-                (Some(domain), _) => domain,
+            match (&node.domain, inputs.first()) {
+                (Some(DomainSpec::Literal(domain)), _) => *domain,
+                (Some(DomainSpec::Expr(expr)), _) => {
+                    let port = |name: &str| {
+                        manifest
+                            .inputs
+                            .iter()
+                            .position(|input| input.name == name)
+                            .and_then(|index| runtime.host().domain(inputs[index]).ok())
+                    };
+                    let param = |name: &str| {
+                        manifest
+                            .params
+                            .iter()
+                            .position(|p| p.name == name)
+                            .map(|index| params[index])
+                            .or_else(|| graph_param(graph, name, overrides))
+                    };
+                    expr.resolve(&port, &param)
+                        .map_err(|e| EvaluateError::Domain {
+                            node: node.id.clone(),
+                            message: e.message,
+                        })?
+                }
                 (None, Some(first)) => runtime.host().domain(*first)?,
                 (None, None) => return Err(EvaluateError::NoDomain(node.id.clone())),
             }
