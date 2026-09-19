@@ -288,6 +288,23 @@ impl Host {
         Ok(())
     }
 
+    /// Replaces every pixel of an image; the slice length must match.
+    pub fn write_image(&mut self, handle: ImageHandle, pixels: &[Pixel]) -> Result<(), HostError> {
+        let slot = self.slot_mut(handle)?;
+        let image = slot
+            .image
+            .as_mut()
+            .ok_or(HostError::InvalidHandle(handle))?;
+        if pixels.len() != image.pixels.len() {
+            return Err(HostError::PixelCount {
+                expected: image.pixels.len(),
+                actual: pixels.len(),
+            });
+        }
+        image.pixels.copy_from_slice(pixels);
+        Ok(())
+    }
+
     fn slot_mut(&mut self, handle: ImageHandle) -> Result<&mut Slot, HostError> {
         self.slots
             .get_mut(handle.index as usize)

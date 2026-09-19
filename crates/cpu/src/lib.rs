@@ -51,6 +51,8 @@ pub enum ExecutionError {
     EmptyDomain,
     /// A Host call was denied or rejected.
     Abi(AbiError),
+    /// The backend device failed; the message is backend specific.
+    Device(String),
     /// Integer arithmetic failed at the given pixel.
     Arithmetic {
         /// Pixel column.
@@ -87,6 +89,7 @@ impl fmt::Display for ExecutionError {
             ),
             Self::EmptyDomain => write!(f, "output domain has no pixels"),
             Self::Abi(error) => write!(f, "{error}"),
+            Self::Device(message) => write!(f, "device failed: {message}"),
             Self::Arithmetic { x, y, error } => write!(f, "at pixel ({x}, {y}): {error}"),
         }
     }
@@ -208,7 +211,10 @@ fn compute(
     Ok(results)
 }
 
-fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(), ExecutionError> {
+/// Checks that an invocation matches the manifest: input and parameter
+/// counts, parameter types, and a non-empty domain. Every backend applies
+/// the same rule.
+pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(), ExecutionError> {
     let manifest = &module.manifest;
     if invocation.inputs.len() != manifest.inputs.len() {
         return Err(ExecutionError::InputCount {

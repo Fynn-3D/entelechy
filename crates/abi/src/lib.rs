@@ -343,6 +343,22 @@ impl<'a> Scope<'a> {
         Ok(self.host.read_pixel(image, x, y)?)
     }
 
+    /// Every pixel of an image, row-major. Requires `image.read`.
+    pub fn image_pixels(&self, image: ImageHandle) -> Result<&[Pixel], AbiError> {
+        self.require(Capability::ImageRead)?;
+        Ok(self.host.image(image)?.pixels())
+    }
+
+    /// Replaces every pixel of an image. Requires `image.write`.
+    pub fn image_write_all(
+        &mut self,
+        image: ImageHandle,
+        pixels: &[Pixel],
+    ) -> Result<(), AbiError> {
+        self.require(Capability::ImageWrite)?;
+        Ok(self.host.write_image(image, pixels)?)
+    }
+
     /// A new black image. Requires `image.write`.
     pub fn image_create(&mut self, width: u32, height: u32) -> Result<ImageHandle, AbiError> {
         self.require(Capability::ImageWrite)?;

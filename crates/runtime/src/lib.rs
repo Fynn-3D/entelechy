@@ -1,15 +1,17 @@
 #![warn(missing_docs)]
 //! Kernel Runtime (L4).
 //!
-//! The runtime owns the Host, the backend, and the registry of published
+//! The runtime owns the Host, one backend, and the registry of published
 //! Kernel versions. A version is immutable once published. Replacing a Kernel
-//! is a two-step act: [`Runtime::prepare`] compiles and validates a
+//! is a two-step act: [`Runtime::prepare`] compiles, validates, and lets the
+//! backend build whatever it needs (a shader pipeline, say) into a
 //! [`Candidate`] without touching the registry; [`Runtime::publish`] swaps it
 //! in atomically, and only if the caller's expectation about the current
 //! generation still holds. A failed preparation leaves the running Kernel
 //! untouched. Callers that hold an `Arc<KernelVersion>` keep executing the
 //! version they pinned, whatever the registry does afterwards.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -18,6 +20,60 @@ pub use orla_abi::{Domain, Host, HostError, Image, ImageHandle, Invocation, Scop
 pub use orla_compiler::CompileError;
 pub use orla_cpu::ExecutionError;
 pub use orla_ir::{KernelId, Manifest, Validated};
+
+/// Backend-owned state built from a module at preparation time.
+pub trait Prepared: Any + Send + Sync {
+    /// For downcasting by the backend that built it.
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// An execution backend. `prepare` does all expensive work so that
+/// publishing is a pointer swap.
+pub trait Backend: Send + Sync {
+    /// Short backend name for diagnostics, e.g. `cpu`.
+    fn name(&self) -> &'static str;
+
+    /// Builds backend state for a validated module.
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
+
+    /// Executes a prepared module over the invocation's domain, returning one
+    /// image handle per manifest output, owned by the scope's Host.
+    fn execute(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<ImageHandle>, ExecutionError>;
+}
+
+struct NothingPrepared;
+
+impl Prepared for NothingPrepared {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl Backend for orla_cpu::CpuBackend {
+    fn name(&self) -> &'static str {
+        "cpu"
+    }
+
+    fn prepare(&self, _module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        Ok(Box::new(NothingPrepared))
+    }
+
+    fn execute(
+        &self,
+        _prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<ImageHandle>, ExecutionError> {
+        orla_cpu::CpuBackend::execute(self, module, invocation, scope)
+    }
+}
 
 /// Monotonic counter identifying one published version. Generations are
 /// unique across all Kernels in a runtime.
@@ -31,12 +87,18 @@ impl fmt::Display for Generation {
 }
 
 /// An immutable published Kernel version.
-#[derive(Debug)]
 pub struct KernelVersion {
     id: KernelId,
     generation: Generation,
     module: Validated,
     source: String,
+    prepared: Box<dyn Prepared>,
+}
+
+impl fmt::Debug for KernelVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "KernelVersion({} {})", self.id, self.generation)
+    }
 }
 
 impl KernelVersion {
@@ -66,11 +128,18 @@ impl KernelVersion {
     }
 }
 
-/// A compiled and validated Kernel that has not been published.
-#[derive(Debug)]
+/// A compiled, validated, and backend-prepared Kernel that has not been
+/// published.
 pub struct Candidate {
     module: Validated,
     source: String,
+    prepared: Box<dyn Prepared>,
+}
+
+impl fmt::Debug for Candidate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Candidate({})", self.id())
+    }
 }
 
 impl Candidate {
@@ -89,6 +158,26 @@ impl Candidate {
         &self.module
     }
 }
+
+/// Why a candidate could not be prepared.
+#[derive(Debug)]
+pub enum PrepareError {
+    /// The source did not compile.
+    Compile(CompileError),
+    /// The backend rejected the module; the message is backend specific.
+    Backend(String),
+}
+
+impl fmt::Display for PrepareError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Compile(error) => write!(f, "{error}"),
+            Self::Backend(message) => write!(f, "backend rejected the kernel: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for PrepareError {}
 
 /// What the publisher believes the registry currently holds for the id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,8 +228,8 @@ impl std::error::Error for StaleCandidate {}
 /// Errors from the combined prepare-and-publish path.
 #[derive(Debug)]
 pub enum LoadError {
-    /// The source did not compile.
-    Compile(CompileError),
+    /// The candidate could not be prepared.
+    Prepare(PrepareError),
     /// The registry state did not match.
     Stale(StaleCandidate),
 }
@@ -148,7 +237,7 @@ pub enum LoadError {
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Compile(error) => write!(f, "{error}"),
+            Self::Prepare(error) => write!(f, "{error}"),
             Self::Stale(error) => write!(f, "{error}"),
         }
     }
@@ -159,20 +248,31 @@ impl std::error::Error for LoadError {}
 /// The Kernel Runtime.
 pub struct Runtime {
     host: Host,
-    backend: orla_cpu::CpuBackend,
+    backend: Box<dyn Backend>,
     kernels: BTreeMap<KernelId, Arc<KernelVersion>>,
     next_generation: u64,
 }
 
 impl Runtime {
-    /// Creates a runtime whose Host may hold at most `budget_pixels`.
+    /// Creates a CPU-backed runtime whose Host may hold at most
+    /// `budget_pixels`.
     pub fn new(budget_pixels: usize) -> Self {
+        Self::with_backend(budget_pixels, Box::new(orla_cpu::CpuBackend))
+    }
+
+    /// Creates a runtime over the given backend.
+    pub fn with_backend(budget_pixels: usize, backend: Box<dyn Backend>) -> Self {
         Self {
             host: Host::new(budget_pixels),
-            backend: orla_cpu::CpuBackend,
+            backend,
             kernels: BTreeMap::new(),
             next_generation: 1,
         }
+    }
+
+    /// Name of the backend executing Kernels.
+    pub fn backend_name(&self) -> &'static str {
+        self.backend.name()
     }
 
     /// The Host, for interfaces that import and export resources.
@@ -185,12 +285,18 @@ impl Runtime {
         &mut self.host
     }
 
-    /// Compiles and validates source without touching the registry.
-    pub fn prepare(&self, source: &str) -> Result<Candidate, CompileError> {
-        let module = orla_compiler::compile(source)?;
+    /// Compiles, validates, and backend-prepares source without touching the
+    /// registry.
+    pub fn prepare(&self, source: &str) -> Result<Candidate, PrepareError> {
+        let module = orla_compiler::compile(source).map_err(PrepareError::Compile)?;
+        let prepared = self
+            .backend
+            .prepare(&module)
+            .map_err(PrepareError::Backend)?;
         Ok(Candidate {
             module,
             source: source.to_owned(),
+            prepared,
         })
     }
 
@@ -222,6 +328,7 @@ impl Runtime {
             generation,
             module: candidate.module,
             source: candidate.source,
+            prepared: candidate.prepared,
         });
         self.kernels.insert(id, Arc::clone(&version));
         Ok(version)
@@ -229,7 +336,7 @@ impl Runtime {
 
     /// Prepares and publishes in one step, replacing any current version.
     pub fn load(&mut self, source: &str) -> Result<Arc<KernelVersion>, LoadError> {
-        let candidate = self.prepare(source).map_err(LoadError::Compile)?;
+        let candidate = self.prepare(source).map_err(LoadError::Prepare)?;
         self.publish(candidate, Expect::Any)
             .map_err(LoadError::Stale)
     }
@@ -258,7 +365,11 @@ impl Runtime {
     ) -> Result<Vec<ImageHandle>, ExecutionError> {
         let granted = version.manifest().requires.clone();
         let mut scope = Scope::new(&mut self.host, granted);
-        self.backend
-            .execute(&version.module, invocation, &mut scope)
+        self.backend.execute(
+            version.prepared.as_ref(),
+            &version.module,
+            invocation,
+            &mut scope,
+        )
     }
 }
