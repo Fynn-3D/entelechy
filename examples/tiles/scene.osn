@@ -1,0 +1,23 @@
+// generate -> flood (fed back) -> render, with a generated atlas
+use "kernels/";
+
+node atlas: tiles.atlas@1 {
+    domain = vec2(64, 16);
+}
+
+node map: tiles.generate@1 {
+    domain = vec2(20, 15);
+    source = vec2(3.0, 7.0);
+}
+
+node flood: tiles.flood@1 {
+    previous <~ flood.result from map.result;
+}
+
+node view: tiles.render@1 {
+    map <- flood.result;
+    atlas <- atlas.result;
+    domain = vec2(320, 240);
+}
+
+output result <- view.result;

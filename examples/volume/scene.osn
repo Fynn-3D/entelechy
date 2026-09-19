@@ -1,0 +1,13 @@
+// density (a volume) -> render
+use "kernels/";
+
+node cloud: cloud.density@1 {
+    domain = vec3(48, 48, 32);
+}
+
+node view: cloud.render@1 {
+    density <- cloud.result;
+    domain = vec2(320, 240);
+}
+
+output result <- view.result;

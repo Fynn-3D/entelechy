@@ -1,0 +1,23 @@
+scene flood.osn
+
+# Tile centres are 8 pixels in from a tile's corner. Sprites are flat there,
+# and the height shade is at most 15%, so colours are checked loosely.
+# Rock lies where (3x + 5y) mod 7 == 1: tile (5, 0) is rock, (0..4, 0) are
+# not. The first frame floods one step from the spring at (0, 0).
+frame 0.0
+expect 8 8 = 0.2 0.45 0.85 0.15
+expect 24 8 = 0.2 0.45 0.85 0.15
+expect 88 8 = 0.45 0.45 0.5 0.1
+
+# Four more steps carry water to (4, 0); the rock at (5, 0) never floods.
+frame 0.1
+frame 0.2
+frame 0.3
+frame 0.4
+expect 72 8 = 0.2 0.45 0.85 0.15
+expect 88 8 = 0.45 0.45 0.5 0.1
+
+# Reset returns to the spring alone.
+reset
+frame 0.5
+expect 8 8 = 0.2 0.45 0.85 0.15

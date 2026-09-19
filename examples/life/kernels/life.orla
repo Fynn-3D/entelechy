@@ -1,0 +1,71 @@
+// Conway's Life on a grid of cells. The state is a Grid<Cell>, not an
+// image: `alive` is a real Bool and `age` an exact Int. Only `show` makes
+// pixels.
+struct Cell { alive: Bool; age: Int; }
+type Cells = Grid<Cell>;
+
+// Initial cells: a blinker at a fixed spot plus deterministic noise.
+kernel life.seed@1 {
+    requires { field.write; }
+    param noise: Float = 0.3;
+    param blinker: Vec2 = vec2(10.0, 10.0);
+    output result: Cells;
+
+    fn hash(p: Vec2) -> Float {
+        // Sin-free so the CPU and GPU agree on every cell.
+        let q = fract(p * vec2(0.1031, 0.1030));
+        let d = dot(q, vec2(q.y, q.x) + vec2(33.33, 33.33));
+        let r = q + vec2(d, d);
+        return fract((r.x + r.y) * (r.x - r.y + 1.0));
+    }
+
+    compute {
+        let c = coord();
+        let in_blinker = c.y == blinker.y && c.x >= blinker.x && c.x <= blinker.x + 2.0;
+        let alive = in_blinker || hash(c) < noise;
+        return Cell { alive: alive, age: 0 };
+    }
+}
+
+// One generation. `previous` is this node's own output from the last frame,
+// so the Kernel stays pure while the Graph carries the state.
+// Hold the pointer to paint live cells; hold C to clear.
+kernel life.step@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Cells;
+    param brush: Float = 2.0;
+    output result: Cells;
+
+    fn alive_at(x: Float, y: Float) -> Int {
+        return if at(previous, vec2(x, y)).alive { 1 } else { 0 };
+    }
+
+    compute {
+        let c = coord();
+        let me = sample(previous);
+        let n = alive_at(c.x - 1.0, c.y - 1.0) + alive_at(c.x, c.y - 1.0) + alive_at(c.x + 1.0, c.y - 1.0)
+              + alive_at(c.x - 1.0, c.y) + alive_at(c.x + 1.0, c.y)
+              + alive_at(c.x - 1.0, c.y + 1.0) + alive_at(c.x, c.y + 1.0) + alive_at(c.x + 1.0, c.y + 1.0);
+        let survives = me.alive && (n == 2 || n == 3);
+        let born = !me.alive && n == 3;
+        let painted = pointer_down() && length(c - pointer()) <= brush;
+        let alive = (survives || born || painted) && !key(67);
+        let age = if alive { min(me.age + 1, 60) } else { 0 };
+        return Cell { alive: alive, age: age };
+    }
+}
+
+// Colors cells by age: fresh cells glow, old cells settle.
+kernel life.show@1 {
+    requires { field.read; field.write; }
+    input cells: Cells;
+    output result: Image;
+    compute {
+        let cell = sample(cells);
+        let dead = vec3(0.07, 0.09, 0.14);
+        let fresh = vec3(1.0, 0.85, 0.45);
+        let old = vec3(0.55, 0.75, 0.95);
+        let color = if cell.alive { mix(fresh, old, clamp(float(cell.age) / 20.0, 0.0, 1.0)) } else { dead };
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}

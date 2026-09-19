@@ -6,10 +6,13 @@ struct Particle { position: Vec2; velocity: Vec2; age: Float; }
 kernel particles.seed@1 {
     requires { field.write; }
     param spread: Float = 0.6;
-    output result: Field<Particle>;
+    output result: Rows<Particle>;
 
     fn hash(n: Float) -> Float {
-        return fract(sin(n * 12.9898) * 43758.5453);
+        // Sin-free so the CPU and GPU agree on every particle.
+        let q = fract(n * 0.1031);
+        let r = q + q * (q + 33.33);
+        return fract(r * r * 2.0);
     }
 
     compute {
@@ -26,14 +29,16 @@ kernel particles.seed@1 {
 
 kernel particles.step@1 {
     requires { field.read; field.write; time.read; input.read; }
-    input previous: Field<Particle>;
+    input previous: Rows<Particle>;
     param gravity: Float = 0.4;
     param dt: Float = 0.016;
     param pull: Float = 1.2;
-    output result: Field<Particle>;
+    output result: Rows<Particle>;
 
     fn respawn(p: Particle, seed: Float) -> Particle {
-        let angle = fract(sin(seed * 12.9898) * 43758.5453) * 6.2831853;
+        let q = fract(seed * 0.1031);
+        let r = q + q * (q + 33.33);
+        let angle = fract(r * r * 2.0) * 6.2831853;
         return Particle {
             position: vec2(0.5, 0.5),
             velocity: vec2(cos(angle), sin(angle)) * 0.4,
@@ -59,8 +64,8 @@ kernel particles.step@1 {
 }
 
 kernel particles.draw@1 {
-    requires { field.read; image.write; }
-    input particles: Field<Particle>;
+    requires { field.read; field.write; }
+    input particles: Rows<Particle>;
     param radius: Float = 3.0;
     output result: Image;
 

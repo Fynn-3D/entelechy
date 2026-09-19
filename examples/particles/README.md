@@ -1,10 +1,10 @@
 # Particles
 
-The first scene whose data cannot be an image: a `Field<Particle>` of
+The first scene whose data cannot be an image: a `Rows<Particle>` of
 structs advanced every frame and drawn only at the end.
 
 ```text
-seed (Field) -> step (Field, fed back) -> draw (Image)
+seed (Rows) -> step (Rows, fed back) -> draw (Image)
 ```
 
 `particles.step@1` runs once per element, reads its own previous element

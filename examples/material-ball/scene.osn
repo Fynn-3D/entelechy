@@ -2,7 +2,7 @@
 // whole program. Edit anything here while the Player runs.
 
 node ball: kernel material.ball@1 {
-    requires { image.write; time.read; }
+    requires { field.write; time.read; }
     param albedo: Vec3 = vec3(0.86, 0.32, 0.18);
     param roughness: Float = 0.35;
     param metallic: Float = 0.0;
@@ -92,7 +92,7 @@ node ball: kernel material.ball@1 {
 }
 
 node display: kernel image.tonemap@1 {
-    requires { image.read; image.write; }
+    requires { field.read; field.write; }
     input source: Image <- ball.result;
     param exposure: Float = 1.0;
     output result: Image;

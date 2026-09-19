@@ -1,5 +1,5 @@
 kernel image.pixelate@1 {
-    requires { image.read; image.write; }
+    requires { field.read; field.write; }
     input source: Image;
     param size: Int = 8;
     output result: Image;

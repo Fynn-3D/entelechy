@@ -1,0 +1,9 @@
+// An 8x6 map at 16 pixels per tile; the spring is the top-left tile.
+use "../kernels/";
+
+node atlas: tiles.atlas@1 { domain = vec2(64, 16); }
+node map: tiles.generate@1 { domain = vec2(8, 6); source = vec2(0.0, 0.0); }
+node flood: tiles.flood@1 { previous <~ flood.result from map.result; }
+node view: tiles.render@1 { map <- flood.result; atlas <- atlas.result; domain = vec2(128, 96); }
+
+output result <- view.result;

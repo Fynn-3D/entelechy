@@ -1,6 +1,6 @@
 // A generator: no inputs, so the scene must give the node a domain.
 kernel image.gradient@1 {
-    requires { image.write; }
+    requires { field.write; }
     param depth: Float = 0.5;
     output result: Image;
     compute {
