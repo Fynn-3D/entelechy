@@ -20,7 +20,7 @@ pub use fuse::{FuseError, InputUse, fuse, input_use, samples_only};
 pub use orla_abi::{
     Capabilities, Capability, PortType, Scalar, Schema, Shape, ShapeIndex, Type, Value,
 };
-pub use validate::{Validated, ValidationError, validate};
+pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
 /// Stable identity of a Kernel: a dotted name and a version, e.g.
 /// `image.grayscale@1`. Graphs bind to this, never to source paths.
@@ -575,6 +575,12 @@ pub enum Op {
     /// (`Int`, `Vec2`, or `Vec3`; clamped), as its element type. Host call:
     /// `field.read`.
     At(u32, ValueId),
+    /// The element of an input at an address of the input's index type,
+    /// interpolated linearly between the neighbouring elements (bilinear
+    /// over a grid, trilinear over a volume; clamped at the edges), as
+    /// its element type. Only for inputs whose layout is all floats.
+    /// Host call: `field.read`.
+    AtLinear(u32, ValueId),
     /// Number of elements of an input as `Int`. Host call: `field.read`.
     Count(u32),
     /// Extent of an input as its index type. Host call: `field.read`.

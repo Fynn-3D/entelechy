@@ -657,6 +657,32 @@ impl<'a> Checker<'a> {
                 }
                 port.element()
             }
+            Op::AtLinear(input, index) => {
+                self.require(Capability::FieldRead, position)?;
+                let port = self.input(*input, position)?;
+                let actual = self.operand(*index, position)?;
+                let expected = linear_index_type(port.shape());
+                if actual != expected {
+                    return Err(self.fail(format!(
+                        "{position} interpolates input `{}`, a {}, at {actual} instead of {expected}",
+                        port.name,
+                        port.shape(),
+                    )));
+                }
+                if !port
+                    .ty
+                    .schema
+                    .scalars()
+                    .iter()
+                    .all(|s| *s == crate::Scalar::Float)
+                {
+                    return Err(self.fail(format!(
+                        "{position} interpolates input `{}`, whose layout {} is not all floats",
+                        port.name, port.ty.schema
+                    )));
+                }
+                port.element()
+            }
             Op::Count(input) => {
                 self.require(Capability::FieldRead, position)?;
                 self.input(*input, position)?;
@@ -709,6 +735,16 @@ fn result_type(function: &Function) -> Type {
         None
     }
     find(&function.body, function.results[0]).unwrap_or(Type::Float)
+}
+
+/// The address type of a linear interpolation: a fractional position, so
+/// `Float` over rows where `at` takes an `Int`.
+pub fn linear_index_type(shape: Shape) -> Type {
+    match shape {
+        Shape::Rows => Type::Float,
+        Shape::Grid => Type::Vec2,
+        Shape::Volume => Type::Vec3,
+    }
 }
 
 /// Checks one function and returns the type of every slot.

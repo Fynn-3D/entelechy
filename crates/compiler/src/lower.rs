@@ -1168,6 +1168,38 @@ impl<'a> Builder<'a> {
                 }
                 Ok(self.emit(element, Op::At(input, index)))
             }
+            "at_linear" => {
+                self.require(name, Capability::FieldRead, span)?;
+                self.arity(name, args, 2, span)?;
+                let (input, port) = self.input_index(&args[0], name)?;
+                let element = port.element();
+                let expected = orla_ir::linear_index_type(port.shape());
+                let (port_name, shape) = (port.name.clone(), port.shape());
+                let index = self.value(&args[1])?;
+                if self.ty(index) != expected {
+                    return Err(semantic(
+                        args[1].span,
+                        format!(
+                            "`{name}` addresses `{port_name}`, a {shape}, with {expected}, found {}",
+                            self.describe(self.ty(index))
+                        ),
+                    ));
+                }
+                let layout = self.manifest.inputs[input as usize].ty.schema.clone();
+                if !layout
+                    .scalars()
+                    .iter()
+                    .all(|s| *s == orla_ir::Scalar::Float)
+                {
+                    return Err(semantic(
+                        args[0].span,
+                        format!(
+                            "`at_linear` interpolates floats, but `{port_name}` lays out as {layout}"
+                        ),
+                    ));
+                }
+                Ok(self.emit(element, Op::AtLinear(input, index)))
+            }
             "count" => {
                 self.require(name, Capability::FieldRead, span)?;
                 self.arity(name, args, 1, span)?;

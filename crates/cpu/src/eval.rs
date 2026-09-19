@@ -706,6 +706,63 @@ impl<'m> Frame<'_, 'm> {
                 );
                 return Ok(Produced::Done);
             }
+            Op::AtLinear(input, index) => {
+                let handle = self.invocation.inputs[*input as usize];
+                let domain = self.scope.size(handle)?;
+                let address = match at(stack, index) {
+                    Value::Float(x) => [x, 0.5, 0.5],
+                    Value::Vec2([x, y]) => [x, y, 0.5],
+                    Value::Vec3([x, y, z]) => [x, y, z],
+                    _ => unreachable!("validation guarantees a position"),
+                };
+                let stride = self.scope.schema(handle)?.words();
+                let mut words = vec![0.0f32; stride];
+                // Element centres sit at half-integers: the position is
+                // moved by a half, split into the lower neighbour and a
+                // weight, and each axis is clamped at the edges.
+                let axis = |v: f32, n: u32| -> (u32, u32, f32) {
+                    let t = if v.is_nan() { 0.0 } else { v - 0.5 };
+                    let lower = t.floor().clamp(0.0, (n - 1) as f32);
+                    let upper = (lower + 1.0).min((n - 1) as f32);
+                    let weight = (t - t.floor()).clamp(0.0, 1.0);
+                    let weight = if t < 0.0 { 0.0 } else { weight };
+                    (lower as u32, upper as u32, weight)
+                };
+                let (x0, x1, fx) = axis(address[0], domain.width());
+                let (y0, y1, fy) = axis(address[1], domain.height());
+                let (z0, z1, fz) = axis(address[2], domain.depth());
+                for (corner, weight) in [
+                    ((x0, y0, z0), (1.0 - fx) * (1.0 - fy) * (1.0 - fz)),
+                    ((x1, y0, z0), fx * (1.0 - fy) * (1.0 - fz)),
+                    ((x0, y1, z0), (1.0 - fx) * fy * (1.0 - fz)),
+                    ((x1, y1, z0), fx * fy * (1.0 - fz)),
+                    ((x0, y0, z1), (1.0 - fx) * (1.0 - fy) * fz),
+                    ((x1, y0, z1), fx * (1.0 - fy) * fz),
+                    ((x0, y1, z1), (1.0 - fx) * fy * fz),
+                    ((x1, y1, z1), fx * fy * fz),
+                ] {
+                    if weight == 0.0 {
+                        continue;
+                    }
+                    let (cx, cy, cz) = corner;
+                    let linear_index = (cz * domain.height() + cy) * domain.width() + cx;
+                    let element = self.scope.element(handle, linear_index)?;
+                    for (slot, word) in words.iter_mut().zip(element) {
+                        *slot += f32::from_bits(*word) * weight;
+                    }
+                }
+                let encoded: Vec<u32> = words.iter().map(|v| v.to_bits()).collect();
+                let destination = self.slot(&instruction.id);
+                decode(
+                    self.module,
+                    self.layouts,
+                    instruction.ty,
+                    &encoded,
+                    stack,
+                    destination,
+                );
+                return Ok(Produced::Done);
+            }
             Op::Coord => {
                 let [x, y, z] = self.at;
                 match self.domain {

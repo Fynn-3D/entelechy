@@ -601,3 +601,79 @@ fn the_device_rate_reaches_kernels_as_context() {
         .unwrap()[0];
     assert_eq!(f32::from_bits(host.element(output, 0).unwrap()[0]), 48000.0);
 }
+
+#[test]
+fn linear_interpolation_blends_neighbours_and_clamps() {
+    // A 2x2 image: reading at pixel centres is exact, halfway blends, and
+    // beyond the edge clamps.
+    let module = compile(
+        "kernel test.lerp@1 { requires { field.read; field.write; } input source: Image; param at: Vec2 = vec2(0.5, 0.5); output result: Rows<Vec4>; compute { return at_linear(source, at); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 12);
+    let image = host.create_image(2, 2).unwrap();
+    host.write_pixel(image, 0, 0, [0.0, 0.0, 0.0, 1.0]).unwrap();
+    host.write_pixel(image, 1, 0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+    host.write_pixel(image, 0, 1, [0.0, 1.0, 0.0, 1.0]).unwrap();
+    host.write_pixel(image, 1, 1, [1.0, 1.0, 0.0, 1.0]).unwrap();
+    let read = |host: &mut Host, at: [f32; 2]| -> [f32; 4] {
+        let invocation = Invocation {
+            inputs: vec![image],
+            params: vec![Value::Vec2(at)],
+            domain: Domain::Rows(1),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(host, granted());
+        let output = CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0];
+        let words = host.element(output, 0).unwrap();
+        std::array::from_fn(|k| f32::from_bits(words[k]))
+    };
+    assert_eq!(read(&mut host, [0.5, 0.5]), [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(read(&mut host, [1.5, 0.5]), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(read(&mut host, [1.0, 1.0]), [0.5, 0.5, 0.0, 1.0]);
+    assert_eq!(read(&mut host, [1.25, 0.5]), [0.75, 0.0, 0.0, 1.0]);
+    assert_eq!(
+        read(&mut host, [-3.0, 9.0]),
+        [0.0, 1.0, 0.0, 1.0],
+        "clamped to a corner"
+    );
+
+    // Rows take a fractional position; an integer layout cannot blend.
+    let rows = compile(
+        "kernel test.lerp_rows@1 { requires { field.read; field.write; } input samples: Rows<Float>; output result: Rows<Float>; compute { return at_linear(samples, float(element()) + 1.0); } }",
+    )
+    .unwrap();
+    let samples = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
+                Domain::Rows(3),
+                vec![0.0f32.to_bits(), 2.0f32.to_bits(), 4.0f32.to_bits()],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![samples],
+        params: vec![],
+        domain: Domain::Rows(3),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend.execute(&rows, &invocation, &mut scope).unwrap()[0];
+    let values: Vec<f32> = (0..3)
+        .map(|i| f32::from_bits(host.element(output, i).unwrap()[0]))
+        .collect();
+    assert_eq!(
+        values,
+        [1.0, 3.0, 4.0],
+        "halfway between neighbours, clamped at the end"
+    );
+    let error = compile(
+        "kernel test.bad@1 { requires { field.read; field.write; } input ids: Rows<Int>; output result: Rows<Int>; compute { return at_linear(ids, 0.5); } }",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("lays out as i"), "{error}");
+}

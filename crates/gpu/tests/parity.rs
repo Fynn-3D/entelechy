@@ -672,3 +672,79 @@ fn scans_match_between_backends() {
         (0..count).map(|i| (i * 7) % 13).sum::<u32>()
     );
 }
+
+#[test]
+fn linear_interpolation_matches_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    // Every pixel of a larger grid reads the small image at a fractional
+    // position, so both bilinear paths run at every weight; a struct of
+    // floats over rows exercises the fieldwise mixer.
+    let source = "kernel test.zoom@1 { requires { field.read; field.write; } input small: Image; output result: Image; compute { let p = (coord() + vec2(0.5, 0.5)) / domain() * size(small); return at_linear(small, p); } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let small: Vec<[f32; 4]> = (0..12)
+        .map(|i| {
+            [
+                (i % 4) as f32 / 3.0,
+                (i / 4) as f32 / 2.0,
+                ((i * 5) % 7) as f32 / 6.0,
+                1.0,
+            ]
+        })
+        .collect();
+    let (cpu, device) = both_module(
+        &gpu,
+        &module,
+        &[small],
+        (4, 3),
+        vec![],
+        Domain::Grid(40, 30),
+    );
+    assert!(mismatch(&cpu, &device, 1e-5) <= 1e-5);
+    assert!(
+        (cpu[0][0] - 0.0).abs() < 1e-6 && cpu[0][0] < cpu[39][0],
+        "left to right ramps"
+    );
+
+    let rows = "kernel test.lerp_struct@1 { requires { field.read; field.write; } input points: Rows<P>; output result: Rows<P>; struct P { a: Vec2; b: Float; } compute { return at_linear(points, float(element()) * 0.37 + 0.5); } }";
+    let module = compile(rows).unwrap_or_else(|error| panic!("{error}"));
+    let words: Vec<u32> = (0..9)
+        .flat_map(|i| {
+            [
+                (i as f32).to_bits(),
+                (i as f32 * 2.0).to_bits(),
+                (10.0 - i as f32).to_bits(),
+            ]
+        })
+        .collect();
+    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float; 3]);
+    let mut host = Host::new(1 << 16);
+    let points = host
+        .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(9), words).unwrap())
+        .unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![points],
+        params: vec![],
+        domain: Domain::Rows(9),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu_out = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let prepared = Backend::prepare(&gpu, &module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let gpu_out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let bytes =
+        Backend::download(&gpu, host.resident(gpu_out).unwrap().unwrap(), 9 * 3 * 4).unwrap();
+    for (k, chunk) in bytes.chunks_exact(4).enumerate() {
+        let g = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let c = f32::from_bits(cpu_words[k]);
+        assert!((c - g).abs() <= 1e-5, "word {k}: cpu {c}, gpu {g}");
+    }
+    assert!(
+        (f32::from_bits(cpu_words[3]) - 0.37).abs() < 1e-5,
+        "element 1 sits 0.37 past element 0"
+    );
+}

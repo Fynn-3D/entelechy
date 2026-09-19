@@ -169,6 +169,10 @@ pub fn emit(module: &Module) -> String {
             ty.components().unwrap_or(0)
         );
     }
+    emit_mixers(&mut out, module);
+    for (index, port) in manifest.inputs.iter().enumerate() {
+        emit_linear(&mut out, module, index, port);
+    }
     out.push('\n');
     if let Some(port) = manifest.outputs.first() {
         let element = port.element();
@@ -370,6 +374,144 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }}"
     );
     out
+}
+
+/// Whether a type is floats all the way down, so it can be interpolated.
+fn all_floats(module: &Module, ty: Type) -> bool {
+    match ty {
+        Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4 => true,
+        Type::Int | Type::Bool => false,
+        Type::Struct(index) => module.structs[index as usize]
+            .fields
+            .iter()
+            .all(|field| all_floats(module, field.ty)),
+    }
+}
+
+/// `mix` over a type: WGSL's own for scalars and vectors, a generated
+/// fieldwise one for structs of floats.
+fn mix_call(module: &Module, ty: Type, a: &str, b: &str, t: &str) -> String {
+    match ty {
+        Type::Struct(index) => format!("mix_S{index}({a}, {b}, {t})"),
+        _ => {
+            let _ = module;
+            format!("mix({a}, {b}, {t})")
+        }
+    }
+}
+
+/// Emits `mix_S{k}` for every struct of floats, in table order so nested
+/// structs come first.
+fn emit_mixers(out: &mut String, module: &Module) {
+    for (index, def) in module.structs.iter().enumerate() {
+        if !all_floats(module, Type::Struct(index as u32)) {
+            continue;
+        }
+        let fields = def
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(k, field)| {
+                mix_call(
+                    module,
+                    field.ty,
+                    &format!("a.f{k}"),
+                    &format!("b.f{k}"),
+                    "t",
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            out,
+            "fn mix_S{index}(a: S{index}, b: S{index}, t: f32) -> S{index} {{ return S{index}({fields}); }}"
+        );
+    }
+}
+
+/// Emits `linear_in{i}(c)`: the input interpolated at a fractional
+/// position, element centres at half-integers, clamped at the edges.
+fn emit_linear(out: &mut String, module: &Module, index: usize, port: &orla_ir::Port) {
+    let element = port.element();
+    if !all_floats(module, element) {
+        return;
+    }
+    let slot = CONTEXT_HEAD + index;
+    let ty = wgsl_type(element);
+    let load = |x: &str, y: &str, z: &str| {
+        format!("load_in{index}((({z}) * u32(h) + ({y})) * u32(w) + ({x}))")
+    };
+    let mix = |a: String, b: String, t: &str| mix_call(module, element, &a, &b, t);
+    match port.shape() {
+        Shape::Rows => {
+            let _ = writeln!(
+                out,
+                "fn linear_in{index}(c: f32) -> {ty} {{
+    let w = ctx[{slot}].x;
+    let h = 1.0;
+    let t = select(c - 0.5, -1.0, c != c);
+    let lower = clamp(floor(t), 0.0, w - 1.0);
+    let upper = min(lower + 1.0, w - 1.0);
+    let f = select(clamp(t - floor(t), 0.0, 1.0), 0.0, t < 0.0);
+    return {};
+}}",
+                mix(
+                    load("u32(lower)", "0u", "0u"),
+                    load("u32(upper)", "0u", "0u"),
+                    "f"
+                )
+            );
+        }
+        Shape::Grid => {
+            let _ = writeln!(
+                out,
+                "fn linear_in{index}(c: vec2<f32>) -> {ty} {{
+    let w = ctx[{slot}].x;
+    let h = ctx[{slot}].y;
+    let t = select(c - vec2<f32>(0.5, 0.5), vec2<f32>(-1.0, -1.0), c != c);
+    let lower = clamp(floor(t), vec2<f32>(0.0, 0.0), vec2<f32>(w - 1.0, h - 1.0));
+    let upper = min(lower + vec2<f32>(1.0, 1.0), vec2<f32>(w - 1.0, h - 1.0));
+    let f = select(clamp(t - floor(t), vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0)), vec2<f32>(0.0, 0.0), t < vec2<f32>(0.0, 0.0));
+    let x0 = u32(lower.x); let x1 = u32(upper.x); let y0 = u32(lower.y); let y1 = u32(upper.y);
+    let top = {};
+    let bottom = {};
+    return {};
+}}",
+                mix(load("x0", "y0", "0u"), load("x1", "y0", "0u"), "f.x"),
+                mix(load("x0", "y1", "0u"), load("x1", "y1", "0u"), "f.x"),
+                mix("top".into(), "bottom".into(), "f.y")
+            );
+        }
+        Shape::Volume => {
+            let _ = writeln!(
+                out,
+                "fn linear_in{index}(c: vec3<f32>) -> {ty} {{
+    let w = ctx[{slot}].x;
+    let h = ctx[{slot}].y;
+    let d = ctx[{slot}].z;
+    let t = select(c - vec3<f32>(0.5, 0.5, 0.5), vec3<f32>(-1.0, -1.0, -1.0), c != c);
+    let lower = clamp(floor(t), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(w - 1.0, h - 1.0, d - 1.0));
+    let upper = min(lower + vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(w - 1.0, h - 1.0, d - 1.0));
+    let f = select(clamp(t - floor(t), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0)), vec3<f32>(0.0, 0.0, 0.0), t < vec3<f32>(0.0, 0.0, 0.0));
+    let x0 = u32(lower.x); let x1 = u32(upper.x); let y0 = u32(lower.y); let y1 = u32(upper.y); let z0 = u32(lower.z); let z1 = u32(upper.z);
+    let near_top = {};
+    let near_bottom = {};
+    let far_top = {};
+    let far_bottom = {};
+    let near = {};
+    let far = {};
+    return {};
+}}",
+                mix(load("x0", "y0", "z0"), load("x1", "y0", "z0"), "f.x"),
+                mix(load("x0", "y1", "z0"), load("x1", "y1", "z0"), "f.x"),
+                mix(load("x0", "y0", "z1"), load("x1", "y0", "z1"), "f.x"),
+                mix(load("x0", "y1", "z1"), load("x1", "y1", "z1"), "f.x"),
+                mix("near_top".into(), "near_bottom".into(), "f.y"),
+                mix("far_top".into(), "far_bottom".into(), "f.y"),
+                mix("near".into(), "far".into(), "f.z")
+            );
+        }
+    }
 }
 
 /// An expression loading a value of type `ty` from `buffer[base + offset..]`,
@@ -677,6 +819,7 @@ impl Emitter<'_> {
                 format!("load_in{input}(index_in{input}({own}))")
             }
             Op::At(input, index) => format!("load_in{input}(index_in{input}({}))", v(index)),
+            Op::AtLinear(input, index) => format!("linear_in{input}({})", v(index)),
         };
         let _ = self.function;
         self.line(depth, &format!("let v{}: {ty_name} = {expression};", id.0));

@@ -42,7 +42,9 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
         for instruction in instructions {
             match &instruction.op {
                 Op::Sample(i) if *i == input => use_.sampled = true,
-                Op::At(i, _) | Op::Count(i) | Op::Size(i) if *i == input => use_.addressed = true,
+                Op::At(i, _) | Op::AtLinear(i, _) | Op::Count(i) | Op::Size(i) if *i == input => {
+                    use_.addressed = true
+                }
                 Op::If {
                     then, otherwise, ..
                 } => {
@@ -180,6 +182,7 @@ pub fn fuse(
         match op {
             Op::Sample(i) => Op::Sample(index(*i)),
             Op::At(i, c) => Op::At(index(*i), *c),
+            Op::AtLinear(i, c) => Op::AtLinear(index(*i), *c),
             Op::Count(i) => Op::Count(index(*i)),
             Op::Size(i) => Op::Size(index(*i)),
             other => other.clone(),
@@ -192,6 +195,7 @@ pub fn fuse(
         match op {
             Op::Sample(i) => Op::Sample(index(*i)),
             Op::At(i, c) => Op::At(index(*i), *c),
+            Op::AtLinear(i, c) => Op::AtLinear(index(*i), *c),
             Op::Count(i) => Op::Count(index(*i)),
             Op::Size(i) => Op::Size(index(*i)),
             Op::Param(k) => Op::Param(k + consumer_params),
@@ -364,7 +368,7 @@ impl<'a> Renumber<'a> {
                     *arg = self.map(*arg);
                 }
             }
-            Op::At(_, coord) => *coord = self.map(*coord),
+            Op::At(_, coord) | Op::AtLinear(_, coord) => *coord = self.map(*coord),
             Op::Key(code) => *code = self.map(*code),
             Op::Const(_)
             | Op::Param(_)

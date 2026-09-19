@@ -129,6 +129,7 @@ impl fmt::Display for Op {
             Self::Element => f.write_str("element"),
             Self::Sample(input) => write!(f, "host sample input{input}"),
             Self::At(input, index) => write!(f, "host at input{input} {index}"),
+            Self::AtLinear(input, index) => write!(f, "host at.linear input{input} {index}"),
             Self::Count(input) => write!(f, "host count input{input}"),
             Self::Size(input) => write!(f, "host size input{input}"),
         }
