@@ -34,7 +34,7 @@ fn grayscale_compiles_to_validated_ir() {
     assert!(manifest.requires.contains(Capability::ImageRead));
     assert_eq!(manifest.inputs[0].name, "source");
     assert_eq!(manifest.params[0].name, "amount");
-    assert_eq!(manifest.outputs[0].ty, Type::Image);
+    assert_eq!(manifest.outputs[0].ty, orla_ir::PortType::Image);
     assert_eq!(module.functions.len(), 1);
     assert_eq!(module.functions[0].args, vec![Type::Vec4]);
     assert!(module.entry.body.iter().any(|i| i.op == Op::ImageSample(0)));
@@ -55,7 +55,7 @@ fn diagnostics_name_the_problem_and_the_position() {
     let (span, message) = semantic(
         "kernel t.k@1 { requires { image.read; image.write; } input a: Image; output r: Image; compute { return sample(b); } }",
     );
-    assert_eq!(message, "`b` is not an input image");
+    assert_eq!(message, "`b` is not an input");
     assert_eq!(span.column, 111);
 
     let (_, message) = semantic(

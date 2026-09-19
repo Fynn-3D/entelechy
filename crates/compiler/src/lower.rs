@@ -4,7 +4,8 @@ use std::str::FromStr;
 
 use orla_ir::{
     BinaryOp, Block as IrBlock, Capability, Field, Function, Instruction, Intrinsic, KernelId,
-    MAX_LOOP_COUNT, Manifest, Module, Op, Param, Port, StructDef, Type, UnaryOp, Value, ValueId,
+    MAX_LOOP_COUNT, Manifest, Module, Op, Param, Port, PortType, StructDef, Type, UnaryOp, Value,
+    ValueId, schema_of,
 };
 use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 
@@ -124,8 +125,8 @@ pub(crate) fn literal(expr: &Expr) -> Result<Value, CompileError> {
 }
 
 pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, CompileError> {
-    let manifest = manifest(kernel, id)?;
     let structs = structs(kernel)?;
+    let manifest = manifest(kernel, id, &structs)?;
     let mut functions: Vec<(String, Function)> = Vec::new();
     for declaration in &kernel.functions {
         if functions
@@ -144,8 +145,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         let mut builder = Builder::new(&manifest, &structs, &functions, true, "compute");
         let result = builder.block(&kernel.compute)?;
         let expected = match manifest.outputs.first() {
-            Some(port) if port.ty == Type::Image => Type::Vec4,
-            Some(port) => port.ty,
+            Some(port) => port.element(),
             None => {
                 return Err(semantic(
                     kernel.id.as_ref().map(|id| id.span).unwrap_or_default(),
@@ -174,7 +174,11 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     })
 }
 
-fn manifest(kernel: &Kernel, given: Option<&KernelId>) -> Result<Manifest, CompileError> {
+fn manifest(
+    kernel: &Kernel,
+    given: Option<&KernelId>,
+    structs: &[StructDef],
+) -> Result<Manifest, CompileError> {
     let id = match (&kernel.id, given) {
         (Some(written), _) => KernelId::from_str(&written.value)
             .map_err(|error| semantic(written.span, error.to_string()))?,
@@ -198,16 +202,36 @@ fn manifest(kernel: &Kernel, given: Option<&KernelId>) -> Result<Manifest, Compi
         decls
             .iter()
             .map(|decl| {
-                let ty = parse_type(&decl.ty)?;
-                if ty != Type::Image {
+                let text = decl.ty.value.as_str();
+                let ty = if text == "Image" {
+                    PortType::Image
+                } else if let Some(element) = text
+                    .strip_prefix("Field<")
+                    .and_then(|rest| rest.strip_suffix('>'))
+                {
+                    let element = resolve_type(
+                        &Spanned {
+                            value: element.to_owned(),
+                            span: decl.ty.span,
+                        },
+                        structs,
+                    )?;
+                    let schema = schema_of(element, structs).ok_or_else(|| {
+                        semantic(
+                            decl.ty.span,
+                            format!("`{element}` cannot be a Field element"),
+                        )
+                    })?;
+                    PortType::Field { element, schema }
+                } else {
                     return Err(semantic(
                         decl.ty.span,
                         format!(
-                            "{kind} `{}` must be an Image in this language version",
+                            "{kind} `{}` must be `Image` or `Field<Element>`, found `{text}`",
                             decl.name.value
                         ),
                     ));
-                }
+                };
                 Ok(Port {
                     name: decl.name.value.clone(),
                     ty,
@@ -217,13 +241,18 @@ fn manifest(kernel: &Kernel, given: Option<&KernelId>) -> Result<Manifest, Compi
     };
     let inputs = ports(&kernel.inputs, "input")?;
     let outputs = ports(&kernel.outputs, "output")?;
-    if let Some(output) = kernel.outputs.first()
-        && !requires.contains(Capability::ImageWrite)
-    {
-        return Err(semantic(
-            output.name.span,
-            "writing an output needs `image.write`; add it to `requires`",
-        ));
+    for (decl, port) in kernel.outputs.iter().zip(&outputs) {
+        let (needed, what) = if port.is_field() {
+            (Capability::FieldWrite, "a Field")
+        } else {
+            (Capability::ImageWrite, "an image")
+        };
+        if !requires.contains(needed) {
+            return Err(semantic(
+                decl.name.span,
+                format!("writing {what} output needs `{needed}`; add it to `requires`"),
+            ));
+        }
     }
     if outputs.len() != 1 {
         return Err(semantic(
@@ -846,7 +875,7 @@ impl<'a> Builder<'a> {
             return Err(semantic(
                 span,
                 format!(
-                    "`{name}` is an image; read it with sample({name}), fetch({name}, coord) or size({name})"
+                    "`{name}` is an input port; read it with sample({name}), fetch({name}, coord), size({name}), at({name}, i) or count({name})"
                 ),
             ));
         }
@@ -864,19 +893,40 @@ impl<'a> Builder<'a> {
         Err(semantic(span, format!("`{name}` is not defined")))
     }
 
-    fn input_index(&self, expr: &Expr, what: &str) -> Result<u32, CompileError> {
+    /// Resolves an input port by name; `field` says which kind the caller
+    /// needs, or `None` for either.
+    fn input_index(
+        &self,
+        expr: &Expr,
+        what: &str,
+        field: Option<bool>,
+    ) -> Result<(u32, &Port), CompileError> {
         let ExprKind::Name(name) = &expr.kind else {
             return Err(semantic(
                 expr.span,
-                format!("`{what}` expects an input image name"),
+                format!("`{what}` expects an input port name"),
             ));
         };
-        self.manifest
+        let index = self
+            .manifest
             .inputs
             .iter()
             .position(|input| &input.name == name)
-            .map(|index| index as u32)
-            .ok_or_else(|| semantic(expr.span, format!("`{name}` is not an input image")))
+            .ok_or_else(|| semantic(expr.span, format!("`{name}` is not an input")))?;
+        let port = &self.manifest.inputs[index];
+        if let Some(field) = field
+            && port.is_field() != field
+        {
+            return Err(semantic(
+                expr.span,
+                format!(
+                    "`{what}` needs {} but `{name}` is {}",
+                    if field { "a Field" } else { "an image" },
+                    port.ty
+                ),
+            ));
+        }
+        Ok((index as u32, port))
     }
 
     fn entry_only(&self, name: &str, span: Span) -> Result<(), CompileError> {
@@ -924,15 +974,49 @@ impl<'a> Builder<'a> {
         match name {
             "sample" => {
                 self.entry_only(name, span)?;
-                self.require(name, Capability::ImageRead, span)?;
                 self.arity(name, args, 1, span)?;
-                let input = self.input_index(&args[0], name)?;
-                Ok(self.emit(Type::Vec4, Op::ImageSample(input)))
+                let (input, port) = self.input_index(&args[0], name, None)?;
+                if port.is_field() {
+                    let element = port.element();
+                    self.require(name, Capability::FieldRead, span)?;
+                    Ok(self.emit(element, Op::FieldSample(input)))
+                } else {
+                    self.require(name, Capability::ImageRead, span)?;
+                    Ok(self.emit(Type::Vec4, Op::ImageSample(input)))
+                }
+            }
+            "at" => {
+                self.require(name, Capability::FieldRead, span)?;
+                self.arity(name, args, 2, span)?;
+                let (input, port) = self.input_index(&args[0], name, Some(true))?;
+                let element = port.element();
+                let index = self.value(&args[1])?;
+                if self.ty(index) != Type::Int {
+                    return Err(semantic(
+                        args[1].span,
+                        format!(
+                            "`at` needs an Int index, found {}",
+                            self.describe(self.ty(index))
+                        ),
+                    ));
+                }
+                Ok(self.emit(element, Op::FieldAt(input, index)))
+            }
+            "count" => {
+                self.require(name, Capability::FieldRead, span)?;
+                self.arity(name, args, 1, span)?;
+                let (input, _) = self.input_index(&args[0], name, Some(true))?;
+                Ok(self.emit(Type::Int, Op::FieldCount(input)))
+            }
+            "element" => {
+                self.entry_only(name, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Int, Op::Element))
             }
             "fetch" => {
                 self.require(name, Capability::ImageRead, span)?;
                 self.arity(name, args, 2, span)?;
-                let input = self.input_index(&args[0], name)?;
+                let (input, _) = self.input_index(&args[0], name, Some(false))?;
                 let coord = self.value(&args[1])?;
                 if self.ty(coord) != Type::Vec2 {
                     return Err(semantic(
@@ -945,7 +1029,7 @@ impl<'a> Builder<'a> {
             "size" => {
                 self.require(name, Capability::ImageRead, span)?;
                 self.arity(name, args, 1, span)?;
-                let input = self.input_index(&args[0], name)?;
+                let (input, _) = self.input_index(&args[0], name, Some(false))?;
                 Ok(self.emit(Type::Vec2, Op::ImageSize(input)))
             }
             "coord" => {

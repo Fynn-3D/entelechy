@@ -42,7 +42,15 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
         for instruction in instructions {
             match &instruction.op {
                 Op::ImageSample(i) if *i == input => use_.sampled = true,
-                Op::ImageFetch(i, _) | Op::ImageSize(i) if *i == input => use_.addressed = true,
+                Op::ImageFetch(i, _)
+                | Op::ImageSize(i)
+                | Op::FieldSample(i)
+                | Op::FieldAt(i, _)
+                | Op::FieldCount(i)
+                    if *i == input =>
+                {
+                    use_.addressed = true
+                }
                 Op::If {
                     then, otherwise, ..
                 } => {
@@ -115,7 +123,7 @@ pub fn fuse(
         .collect();
     inputs.extend(producer_manifest.inputs.iter().map(|port| Port {
         name: rename(&port.name),
-        ty: port.ty,
+        ty: port.ty.clone(),
     }));
     let mut params: Vec<Param> = consumer_manifest.params.clone();
     params.extend(producer_manifest.params.iter().map(|param| Param {
@@ -160,6 +168,9 @@ pub fn fuse(
             Op::ImageSample(i) => Op::ImageSample(index(*i)),
             Op::ImageFetch(i, c) => Op::ImageFetch(index(*i), *c),
             Op::ImageSize(i) => Op::ImageSize(index(*i)),
+            Op::FieldSample(i) => Op::FieldSample(index(*i)),
+            Op::FieldAt(i, c) => Op::FieldAt(index(*i), *c),
+            Op::FieldCount(i) => Op::FieldCount(index(*i)),
             other => other.clone(),
         }
     };
@@ -171,6 +182,9 @@ pub fn fuse(
             Op::ImageSample(i) => Op::ImageSample(index(*i)),
             Op::ImageFetch(i, c) => Op::ImageFetch(index(*i), *c),
             Op::ImageSize(i) => Op::ImageSize(index(*i)),
+            Op::FieldSample(i) => Op::FieldSample(index(*i)),
+            Op::FieldAt(i, c) => Op::FieldAt(index(*i), *c),
+            Op::FieldCount(i) => Op::FieldCount(index(*i)),
             Op::Param(k) => Op::Param(k + consumer_params),
             Op::Call(f, args) => Op::Call(f + consumer_functions, args.clone()),
             other => other.clone(),
@@ -338,7 +352,7 @@ impl<'a> Renumber<'a> {
                     *arg = self.map(*arg);
                 }
             }
-            Op::ImageFetch(_, coord) => *coord = self.map(*coord),
+            Op::ImageFetch(_, coord) | Op::FieldAt(_, coord) => *coord = self.map(*coord),
             Op::Key(code) => *code = self.map(*code),
             Op::Const(_)
             | Op::Param(_)
@@ -351,7 +365,10 @@ impl<'a> Renumber<'a> {
             | Op::Pointer
             | Op::PointerDown
             | Op::ImageSize(_)
-            | Op::ImageSample(_) => {}
+            | Op::ImageSample(_)
+            | Op::Element
+            | Op::FieldSample(_)
+            | Op::FieldCount(_) => {}
             Op::If { .. } | Op::Loop { .. } => unreachable!("blocks are rewritten separately"),
         }
     }

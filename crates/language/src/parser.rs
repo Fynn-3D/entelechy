@@ -15,6 +15,7 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
     };
     let mut document = Document {
         uses: Vec::new(),
+        structs: Vec::new(),
         kernels: Vec::new(),
         inputs: Vec::new(),
         params: Vec::new(),
@@ -41,6 +42,10 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
             Token::Ident(word) if word == "kernel" => {
                 document.kernels.push(parser.kernel(false)?);
             }
+            Token::Ident(word) if word == "struct" => {
+                parser.next();
+                document.structs.push(parser.struct_decl()?);
+            }
             Token::Ident(word) if word == "input" => {
                 parser.next();
                 document.inputs.push(parser.port(false)?);
@@ -62,9 +67,27 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
                 document.nodes.push(parser.node()?);
             }
             _ => {
-                return Err(
-                    parser.unexpected("`use`, `kernel`, `input`, `param`, `output`, or `node`")
-                );
+                return Err(parser.unexpected(
+                    "`use`, `struct`, `kernel`, `input`, `param`, `output`, or `node`",
+                ));
+            }
+        }
+    }
+    // Document structs come first in every Kernel, so a Field<Particle>
+    // declared once means the same layout in all of them.
+    if !document.structs.is_empty() {
+        let shared = document.structs.clone();
+        let prepend = |kernel: &mut Kernel| {
+            let mut structs = shared.clone();
+            structs.append(&mut kernel.structs);
+            kernel.structs = structs;
+        };
+        for kernel in &mut document.kernels {
+            prepend(kernel);
+        }
+        for node in &mut document.nodes {
+            if let NodeKind::Inline(kernel) = &mut node.kind {
+                prepend(kernel);
             }
         }
     }
@@ -94,6 +117,7 @@ pub fn parse(source: &str) -> Result<Kernel, ParseError> {
         || !document.inputs.is_empty()
         || !document.params.is_empty()
         || !document.outputs.is_empty()
+        || !document.structs.is_empty()
     {
         return Err(ParseError {
             span: Span { line: 1, column: 1 },
@@ -512,7 +536,14 @@ impl Parser {
     fn port(&mut self, wired: bool) -> Result<PortDecl, ParseError> {
         let name = self.ident("a port name")?;
         self.expect_punct(":")?;
-        let ty = self.ident("a type")?;
+        let mut ty = self.ident("a type")?;
+        // `Field<Element>` names the element type of a Field port.
+        if self.is_punct("<") {
+            self.next();
+            let element = self.ident("an element type")?;
+            self.expect_punct(">")?;
+            ty.value = format!("{}<{}>", ty.value, element.value);
+        }
         let binding = if wired && self.eat_punct("<-") {
             Some(BindingDecl::Now(self.source_ref()?))
         } else if wired && self.eat_punct("<~") {
@@ -989,5 +1020,34 @@ kernel image.grayscale@1 {
 
         let error = parse("kernel t.k@1 { compute { let x = 1 $ 2; return x; } }").unwrap_err();
         assert_eq!(error.message, "unexpected character `$`");
+    }
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::*;
+
+    #[test]
+    fn document_structs_are_shared_by_every_kernel() {
+        let document = parse_document(
+            "struct P { x: Float; }
+             kernel a.k@1 { requires { field.write; } output r: Field<P>; compute { return P { x: 1.0 }; } }
+             node b: kernel { requires { field.read; field.write; } input p: Field<P> <- a.r; output r: Field<P>; struct Q { y: Int; } compute { return sample(p); } }
+             output r <- b.r;",
+        )
+        .unwrap();
+        assert_eq!(document.structs.len(), 1);
+        assert_eq!(document.kernels[0].structs[0].name.value, "P");
+        let NodeKind::Inline(kernel) = &document.nodes[0].kind else {
+            panic!("inline");
+        };
+        assert_eq!(
+            kernel
+                .structs
+                .iter()
+                .map(|s| s.name.value.as_str())
+                .collect::<Vec<_>>(),
+            ["P", "Q"]
+        );
     }
 }

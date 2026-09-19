@@ -64,7 +64,10 @@ pub use parser::{parse, parse_document, parse_literal};
 pub struct Document {
     /// Files or directories whose Kernels this document uses.
     pub uses: Vec<Use>,
-    /// Kernels defined at the top level.
+    /// Struct types declared at the top level; every Kernel of the
+    /// document sees them before its own.
+    pub structs: Vec<StructDecl>,
+    /// Kernels defined at the top level, document structs already prepended.
     pub kernels: Vec<Kernel>,
     /// External images the caller supplies: `input name: Image;`.
     pub inputs: Vec<PortDecl>,

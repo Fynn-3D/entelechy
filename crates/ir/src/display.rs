@@ -127,6 +127,10 @@ impl fmt::Display for Op {
             Self::ImageFetch(input, coord) => {
                 write!(f, "host image.fetch input{input} {coord}")
             }
+            Self::Element => f.write_str("element"),
+            Self::FieldSample(input) => write!(f, "host field.sample input{input}"),
+            Self::FieldAt(input, index) => write!(f, "host field.at input{input} {index}"),
+            Self::FieldCount(input) => write!(f, "host field.count input{input}"),
         }
     }
 }

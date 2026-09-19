@@ -17,7 +17,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use fuse::{FuseError, InputUse, fuse, input_use, samples_only};
-pub use orla_abi::{Capabilities, Capability, Type, Value};
+pub use orla_abi::{Capabilities, Capability, PortType, Scalar, Schema, Type, Value};
 pub use validate::{Validated, ValidationError, validate};
 
 /// Stable identity of a Kernel: a dotted name and a version, e.g.
@@ -100,8 +100,49 @@ impl FromStr for KernelId {
 pub struct Port {
     /// Port name.
     pub name: String,
-    /// Port type.
-    pub ty: Type,
+    /// What the port carries.
+    pub ty: PortType,
+}
+
+impl Port {
+    /// The value type the entry point produces or `sample` yields for this
+    /// port: `Vec4` for an image, the element type for a Field.
+    pub fn element(&self) -> Type {
+        match &self.ty {
+            PortType::Image => Type::Vec4,
+            PortType::Field { element, .. } => *element,
+        }
+    }
+
+    /// Whether the port carries a Field.
+    pub fn is_field(&self) -> bool {
+        matches!(self.ty, PortType::Field { .. })
+    }
+}
+
+/// The storage layout of a value type: vectors and structs flattened to
+/// scalars in declaration order. `None` for images and unknown structs.
+pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
+    fn push(ty: Type, structs: &[StructDef], out: &mut Vec<Scalar>) -> Option<()> {
+        match ty {
+            Type::Float => out.push(Scalar::Float),
+            Type::Int => out.push(Scalar::Int),
+            Type::Bool => out.push(Scalar::Bool),
+            Type::Vec2 => out.extend([Scalar::Float; 2]),
+            Type::Vec3 => out.extend([Scalar::Float; 3]),
+            Type::Vec4 => out.extend([Scalar::Float; 4]),
+            Type::Image => return None,
+            Type::Struct(index) => {
+                for field in &structs.get(index as usize)?.fields {
+                    push(field.ty, structs, out)?;
+                }
+            }
+        }
+        Some(())
+    }
+    let mut scalars = Vec::new();
+    push(ty, structs, &mut scalars)?;
+    Some(Schema::new(scalars))
 }
 
 /// A named parameter with a default value.
@@ -490,6 +531,17 @@ pub enum Op {
     /// Pixel of an input image at a `Vec2` coordinate (clamped to the image)
     /// as `Vec4`. Host call: `image.read`.
     ImageFetch(u32, ValueId),
+    /// The current element index as `Int`. Entry point only, over a Rows
+    /// domain.
+    Element,
+    /// Element of an input Field at the current index, as the Field's
+    /// element type. Host call: `field.read`. Entry point only.
+    FieldSample(u32),
+    /// Element of an input Field at an `Int` index (clamped), as the Field's
+    /// element type. Host call: `field.read`.
+    FieldAt(u32, ValueId),
+    /// Number of elements of an input Field as `Int`. Host call: `field.read`.
+    FieldCount(u32),
 }
 
 /// An instruction: a typed value defined by an operation.
