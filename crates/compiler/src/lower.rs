@@ -150,6 +150,15 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     };
     let entry = {
         let mut builder = Builder::new(&manifest, &structs, &functions, true, "compute");
+        if let Some(carry) = &kernel.carry {
+            builder.locals.push((
+                carry.name.value.clone(),
+                Local::Carried {
+                    depth: 0,
+                    ty: expected,
+                },
+            ));
+        }
         let result = builder.block(&kernel.compute)?;
         let actual = builder.ty(result);
         if actual != expected {
@@ -192,12 +201,32 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             Some(builder.finish(vec![result]))
         }
     };
+    let init = match &kernel.carry {
+        None => None,
+        Some(carry) => {
+            let mut builder = Builder::new(&manifest, &structs, &functions, false, "init");
+            let result = builder.value(&carry.init)?;
+            let actual = builder.ty(result);
+            if actual != expected {
+                return Err(semantic(
+                    carry.init.span,
+                    format!(
+                        "`scan` carries a {} like its output, but the initial value is {}",
+                        describe(expected, &structs),
+                        describe(actual, &structs)
+                    ),
+                ));
+            }
+            Some(builder.finish(vec![result]))
+        }
+    };
     Ok(Module {
         manifest,
         structs,
         functions: functions.into_iter().map(|(_, f)| f).collect(),
         entry,
         merge,
+        init,
     })
 }
 
@@ -347,7 +376,25 @@ fn manifest(
     };
     let inputs = ports(&kernel.inputs)?;
     let outputs = ports(&kernel.outputs)?;
-    let mode = if let Some(merge) = &kernel.merge {
+    if let (Some(merge), Some(_)) = (&kernel.merge, &kernel.carry) {
+        return Err(semantic(
+            merge.span,
+            "a kernel is a reduction (`merge`) or a scan (`scan`), not both",
+        ));
+    }
+    let mode = if let Some(carry) = &kernel.carry {
+        match (inputs.first(), outputs.first()) {
+            (Some(first), Some(port))
+                if first.shape() == Shape::Rows && port.shape() == Shape::Rows => {}
+            _ => {
+                return Err(semantic(
+                    carry.span,
+                    "a scan runs over a `Rows<T>` input, its first, and produces a `Rows` output of the same count",
+                ));
+            }
+        }
+        Mode::Scan
+    } else if let Some(merge) = &kernel.merge {
         if inputs.is_empty() {
             return Err(semantic(
                 merge.span,
@@ -1027,7 +1074,7 @@ impl<'a> Builder<'a> {
     /// input's for a reduction.
     fn output_shape(&self) -> Shape {
         match self.manifest.mode {
-            Mode::Reduce => self
+            Mode::Reduce | Mode::Scan => self
                 .manifest
                 .inputs
                 .first()
@@ -1189,8 +1236,12 @@ impl<'a> Builder<'a> {
             }
             "index" => {
                 self.arity(name, args, 0, span)?;
-                if self.loops.is_empty() {
-                    return Err(semantic(span, "`index()` is only available inside a loop"));
+                let scanning = self.is_entry && self.manifest.mode == Mode::Scan;
+                if self.loops.is_empty() && !scanning {
+                    return Err(semantic(
+                        span,
+                        "`index()` is only available inside a loop or a `scan`",
+                    ));
                 }
                 Ok(self.emit(Type::Int, Op::Index))
             }

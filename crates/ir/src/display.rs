@@ -156,6 +156,10 @@ impl fmt::Display for Module {
             writeln!(f)?;
             write!(f, "{merge}")?;
         }
+        if let Some(init) = &self.init {
+            writeln!(f)?;
+            write!(f, "{init}")?;
+        }
         Ok(())
     }
 }

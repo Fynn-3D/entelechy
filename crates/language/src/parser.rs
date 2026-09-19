@@ -2,9 +2,9 @@
 
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
-    BinaryOp, BindingDecl, Block, Document, Expr, ExprKind, FnDecl, Kernel, MergeDecl, NodeDecl,
-    NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned, StructDecl,
-    TypeAlias, Use,
+    BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, Kernel, MergeDecl,
+    NodeDecl, NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned,
+    StructDecl, TypeAlias, Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -306,6 +306,7 @@ impl Parser {
         let mut functions = Vec::new();
         let mut compute = None;
         let mut merge = None;
+        let mut carry = None;
         while !self.is_punct("}") {
             let span = self.span();
             let Token::Ident(keyword) = self.peek().clone() else {
@@ -354,10 +355,26 @@ impl Parser {
                 }
                 "compute" => {
                     if compute.is_some() {
-                        return Err(self.error("`compute` is declared twice"));
+                        return Err(self.error(if carry.is_some() {
+                            "a kernel has either `compute` or `scan`"
+                        } else {
+                            "`compute` is declared twice"
+                        }));
                     }
                     self.next();
                     compute = Some(self.block()?);
+                }
+                "scan" => {
+                    if compute.is_some() {
+                        return Err(self.error("a kernel has either `compute` or `scan`"));
+                    }
+                    self.next();
+                    self.keyword("with")?;
+                    let name = self.ident("a carried value name")?;
+                    self.expect_punct("=")?;
+                    let init = self.expr()?;
+                    compute = Some(self.block()?);
+                    carry = Some(CarryDecl { name, init, span });
                 }
                 "merge" => {
                     if merge.is_some() {
@@ -376,13 +393,14 @@ impl Parser {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, `compute`, or `merge`, found `{keyword}`"
+                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, `compute`, `scan`, or `merge`, found `{keyword}`"
                         ),
                     });
                 }
             }
         }
-        let compute = compute.ok_or_else(|| self.error("kernel has no `compute` block"))?;
+        let compute =
+            compute.ok_or_else(|| self.error("kernel has no `compute` or `scan` block"))?;
         self.expect_punct("}")?;
         let end = self.previous_end();
         Ok(Kernel {
@@ -398,6 +416,7 @@ impl Parser {
             functions,
             compute,
             merge,
+            carry,
         })
     }
 
@@ -920,9 +939,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 17] = [
+const RESERVED: [&str; 18] = [
     "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "type", "node",
-    "use", "from", "input", "output", "graph", "merge",
+    "use", "from", "input", "output", "graph", "merge", "scan",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

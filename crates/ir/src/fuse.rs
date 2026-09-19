@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::{
-    Block, Capabilities, Function, Instruction, Manifest, Module, Op, Param, Port, StructDef, Type,
-    Validated, ValueId, validate,
+    Block, Capabilities, Function, Instruction, Manifest, Mode, Module, Op, Param, Port, StructDef,
+    Type, Validated, ValueId, validate,
 };
 
 /// Why two modules cannot fuse.
@@ -100,9 +100,9 @@ pub fn fuse(
     if producer_manifest.outputs.len() != 1 {
         return Err(FuseError("producer must have exactly one output".into()));
     }
-    if consumer.merge.is_some() || producer.merge.is_some() {
+    if consumer.manifest.mode != Mode::Map || producer.manifest.mode != Mode::Map {
         return Err(FuseError(
-            "a reduction neither absorbs a producer nor is absorbed".into(),
+            "only map Kernels fuse; reductions and scans run on their own".into(),
         ));
     }
     if producer_manifest.outputs[0].ty != consumer_manifest.inputs[input as usize].ty {
@@ -234,6 +234,7 @@ pub fn fuse(
         functions,
         entry,
         merge: None,
+        init: None,
     })
     .map_err(|error| FuseError(format!("fused module is invalid: {error}")))
 }

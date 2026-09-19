@@ -78,13 +78,49 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
         return Err(error(&entry.name, "the entry point takes no arguments"));
     }
     let outputs = &module.manifest.outputs;
+    if module.manifest.mode != Mode::Scan && module.init.is_some() {
+        return Err(error("manifest", "only a scan Kernel has an `init`"));
+    }
     match (module.manifest.mode, &module.merge) {
         (Mode::Map, None) => {}
-        (Mode::Map, Some(_)) => {
-            return Err(error("manifest", "a map Kernel has no `merge`"));
+        (Mode::Map | Mode::Scan, Some(_)) => {
+            return Err(error("manifest", "only a reduce Kernel has a `merge`"));
         }
         (Mode::Reduce, None) => {
             return Err(error("manifest", "a reduce Kernel needs a `merge`"));
+        }
+        (Mode::Scan, None) => {
+            let init = module
+                .init
+                .as_ref()
+                .ok_or_else(|| error("manifest", "a scan Kernel needs an `init`"))?;
+            let first = module.manifest.inputs.first().ok_or_else(|| {
+                error(
+                    "manifest",
+                    "a scan runs over its first input, so it needs one",
+                )
+            })?;
+            let output = outputs
+                .first()
+                .ok_or_else(|| error("manifest", "a scan produces one `Rows` output"))?;
+            if outputs.len() != 1 || output.shape() != Shape::Rows || first.shape() != Shape::Rows {
+                return Err(error(
+                    "manifest",
+                    "a scan runs over a `Rows` input and produces a `Rows` output of the same count",
+                ));
+            }
+            let element = output.element();
+            if !init.args.is_empty() {
+                return Err(error(&init.name, "`init` takes no arguments"));
+            }
+            let init_types = validate_function(&module, init, module.functions.len() + 1, false)?;
+            let actual = init.results.first().map(|r| init_types[r.0 as usize]);
+            if init.results.len() != 1 || actual != Some(element) {
+                return Err(error(
+                    &init.name,
+                    format!("`init` gives one value of the output element type {element}"),
+                ));
+            }
         }
         (Mode::Reduce, Some(merge)) => {
             if module.manifest.inputs.is_empty() {
@@ -294,13 +330,20 @@ impl<'a> Checker<'a> {
     }
 
     /// The shape the entry point maps over: the output's, or the first
-    /// input's for a reduction.
+    /// input's for a reduction or a scan.
     fn output_shape(&self) -> Shape {
         let manifest = &self.module.manifest;
         match manifest.mode {
-            Mode::Reduce => manifest.inputs.first().map_or(Shape::Rows, Port::shape),
+            Mode::Reduce | Mode::Scan => manifest.inputs.first().map_or(Shape::Rows, Port::shape),
             Mode::Map => manifest.outputs.first().map_or(Shape::Grid, Port::shape),
         }
+    }
+
+    /// The type a scan carries, when this is a scan's entry point.
+    fn scan_carry(&self) -> Option<Type> {
+        (self.is_entry && self.module.manifest.mode == Mode::Scan)
+            .then(|| self.module.manifest.outputs.first().map(Port::element))
+            .flatten()
     }
 
     fn entry_only(&self, position: ValueId) -> Result<(), ValidationError> {
@@ -530,11 +573,14 @@ impl<'a> Checker<'a> {
                 }
                 carried
             }
-            Op::Carried => *self.loops.last().ok_or_else(|| {
-                self.fail(format!("{position} reads a carried value outside a loop"))
-            })?,
+            Op::Carried => match self.loops.last() {
+                Some(carried) => *carried,
+                None => self.scan_carry().ok_or_else(|| {
+                    self.fail(format!("{position} reads a carried value outside a loop"))
+                })?,
+            },
             Op::Index => {
-                if self.loops.is_empty() {
+                if self.loops.is_empty() && self.scan_carry().is_none() {
                     return Err(
                         self.fail(format!("{position} reads the loop index outside a loop"))
                     );
@@ -728,6 +774,7 @@ mod tests {
                 results: vec![ValueId(0)],
             },
             merge: None,
+            init: None,
         }
     }
 

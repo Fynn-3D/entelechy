@@ -180,6 +180,11 @@ pub enum Mode {
     /// into the single element of a `Rows` output. `merge` must be
     /// associative and commutative: the fold's tree is the backend's.
     Reduce,
+    /// The entry runs once per element of the first input's rows, in
+    /// order, reading the previous step's result through [`Op::Carried`]
+    /// (the module's `init` before the first) and writing each step's
+    /// result as that element of a `Rows` output of the same count.
+    Scan,
 }
 
 impl Mode {
@@ -188,6 +193,7 @@ impl Mode {
         match self {
             Self::Map => "map",
             Self::Reduce => "reduce",
+            Self::Scan => "scan",
         }
     }
 }
@@ -535,9 +541,11 @@ pub enum Op {
         /// The body, yielding the next carried value.
         body: Block,
     },
-    /// The carried value of the innermost enclosing loop.
+    /// The carried value of the innermost enclosing loop, or, outside any
+    /// loop in a scan's entry, the scan's carried value.
     Carried,
-    /// The iteration index of the innermost enclosing loop as `Int`.
+    /// The iteration index of the innermost enclosing loop as `Int`, or,
+    /// outside any loop in a scan's entry, the element index.
     Index,
     /// The current element's coordinate: `Vec2` over a grid, `Vec3` over a
     /// volume; rows have `element()` instead. Entry point only.
@@ -635,6 +643,9 @@ pub struct Module {
     /// In [`Mode::Reduce`], the fold: `(T, T) -> T` over the entry's
     /// result type `T`. Present exactly when the mode is `Reduce`.
     pub merge: Option<Function>,
+    /// In [`Mode::Scan`], the carried value before the first element:
+    /// `() -> T`. Present exactly when the mode is `Scan`.
+    pub init: Option<Function>,
 }
 
 #[cfg(test)]

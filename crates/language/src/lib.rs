@@ -214,6 +214,22 @@ pub struct Kernel {
     /// `merge(a, b) { ... }`: present for a reduction, folding two
     /// `compute` results into one.
     pub merge: Option<MergeDecl>,
+    /// `scan with name = init { ... }`: present for a scan, whose body is
+    /// `compute` and whose carried value threads through the elements in
+    /// order.
+    pub carry: Option<CarryDecl>,
+}
+
+/// The carried value of a scan: its name and its value before the first
+/// element.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CarryDecl {
+    /// Name of the carried value inside the body.
+    pub name: Spanned<String>,
+    /// Its value before the first element; evaluated once.
+    pub init: Expr,
+    /// Where `scan` was written.
+    pub span: Span,
 }
 
 /// `merge(a, b) { ... }`: the fold of a reduce Kernel. Both arguments and

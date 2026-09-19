@@ -273,3 +273,37 @@ fn merge_makes_a_reduction_and_is_checked() {
     );
     assert!(message.contains("use `element()`"), "{message}");
 }
+
+#[test]
+fn scan_carries_a_value_and_is_checked() {
+    let module = compile(
+        "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(module.manifest.mode, orla_ir::Mode::Scan);
+    let text = module.to_string();
+    assert!(text.contains("mode scan"), "{text}");
+    assert!(text.contains("fn init()"), "{text}");
+    assert!(text.contains("carried"), "{text}");
+
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Image; scan with total = 0 { return total; } }",
+    );
+    assert!(message.contains("produces a `Rows` output"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0.5 { return total; } }",
+    );
+    assert!(message.contains("initial value is Float"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total; } merge(a, b) { return a + b; } }",
+    );
+    assert!(message.contains("not both"), "{message}");
+    let error = compile(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return 1; } scan with total = 0 { return total; } }",
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("either `compute` or `scan`"),
+        "{error}"
+    );
+}
