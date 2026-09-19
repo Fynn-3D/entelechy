@@ -48,18 +48,19 @@ Residency exists: GPU images stay on the device between nodes and frames;
 the Host owns them as resident slots; `Runtime::image` is the observation
 boundary.
 
+The Player presents resident outputs on the device through a blit shader;
+downloads happen only on the CPU path or when the window cannot take a
+frame.
+
 ## Next
 
-Present without readback: the Player still downloads the output image every
-frame to blit it through softbuffer. Give the Player a wgpu surface and let
-the GPU backend present a resident output directly, so a frame never
-crosses to the Host unless something else observes it. Keep the CPU path as
-the fallback. Acceptance: the Player on the GPU shows the ray-march scene
-with zero downloads per frame (the Host's resident count stays equal to its
-live count while the window runs).
-
-Then let the protocol drive the Player: the Player as a `serve` client that
-shows frames, so an agent and a person watch the same window.
+Let the protocol drive the Player: run the creation protocol inside the
+Player process (a `--serve` flag reading stdin) so an agent's publish,
+compose, and param operations land in the window a person is watching, and
+the person's pointer and keys are what the agent's `evaluate` observes.
+Acceptance: the protocol test can be pointed at `orla-player --serve` and
+pass unchanged for every operation that does not read pixels, and a `read`
+returns the frame the window shows.
 
 ## Open
 

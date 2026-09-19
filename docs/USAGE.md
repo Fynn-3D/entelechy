@@ -74,7 +74,9 @@ cargo run --release -p orla-player -- examples/material-ball/scene.osn
 ```
 
 `--scale <n>` sets the initial window magnification, `--backend` picks the
-backend, and `--input` binds external images as for `run`. The pointer and
+backend, and `--input` binds external images as for `run`. On the GPU the
+window is drawn from the resident output directly; the title shows the
+presentation path and how many frames had to be downloaded. The pointer and
 keys reach Kernels that declare `input.read`; F5 resets Graph state; Escape
 closes the window.
 

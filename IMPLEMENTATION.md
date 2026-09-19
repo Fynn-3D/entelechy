@@ -29,9 +29,16 @@ capability claim.
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
 | Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [end-to-end client test](crates/cli/tests/protocol.rs) |
-| Player | [window loop](crates/player/src/main.rs), [presentation](crates/player/src/lib.rs) | Presentation unit tests; [material ball](examples/material-ball/README.md) for the live loop |
+| Player | [window loop](crates/player/src/main.rs), [CPU blit](crates/player/src/lib.rs), [device presenter](crates/gpu/src/present.rs) | Presentation unit tests, blit shader compile test; [material ball](examples/material-ball/README.md) for the live loop |
 
 ## Contracts worth knowing
+
+- Presentation is an observation the GPU can do itself: the Player gives the
+  GPU backend its window, and a resident output is drawn onto the surface by
+  a blit shader that reads the image's storage buffer; the frame never
+  crosses to the Host. The title reports the path taken and the download
+  count. Without a GPU, or when the surface cannot be configured, the Player
+  downloads and blits through softbuffer ([presenter](crates/gpu/src/present.rs)).
 
 - Residency: the Host owns every image, but a slot may hold its pixels on a
   device as an opaque object the backend understands
