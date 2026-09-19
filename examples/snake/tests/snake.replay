@@ -1,0 +1,72 @@
+scene snake.osn
+
+# Eight ticks per second; cells are 10 pixels, centres at (10x + 5, 10y + 5).
+# The snake starts at (5..8, 12) heading right with food at (20, 12).
+frame 0.0
+expect 85 125 = 0.7 1.0 0.6 0.05      # head (8, 12)
+expect 55 125 = 0.3 0.8 0.4 0.05      # tail (5, 12)
+expect 205 125 = 0.95 0.3 0.3 0.05    # food (20, 12)
+expect 15 15 = 0.08 0.09 0.12 0.03    # empty
+
+# Tick 1 moves the head right; the tail cell empties.
+frame 0.13
+expect 95 125 = 0.7 1.0 0.6 0.05      # head (9, 12)
+expect 85 125 = 0.3 0.8 0.4 0.05      # body (8, 12)
+expect 55 125 = 0.08 0.09 0.12 0.03   # (5, 12) empty
+
+# Down turns; up would reverse into the body and is ignored.
+key 40 down
+frame 0.26
+key 40 up
+expect 95 135 = 0.7 1.0 0.6 0.05      # head (9, 13)
+key 38 down
+frame 0.38
+key 38 up
+expect 95 145 = 0.7 1.0 0.6 0.05      # head (9, 14): still going down
+
+# Right, then up twice, then right along row 12 into the food.
+key 39 down
+frame 0.5
+key 39 up
+key 38 down
+frame 0.63
+frame 0.76
+key 38 up
+expect 105 125 = 0.7 1.0 0.6 0.05     # head (10, 12)
+key 39 down
+frame 0.885
+frame 1.010
+frame 1.135
+frame 1.260
+frame 1.385
+frame 1.510
+frame 1.635
+frame 1.760
+frame 1.885
+frame 2.010
+expect 205 125 = 0.7 1.0 0.6 0.05     # head on the food's cell (20, 12)
+expect 265 85 = 0.95 0.3 0.3 0.05     # new food at (26, 8)
+expect 165 125 = 0.3 0.8 0.4 0.05     # (16, 12) still body: the tail did not shrink
+
+# On to the wall: the snake dies and the board reddens.
+frame 2.135
+frame 2.260
+frame 2.385
+frame 2.510
+frame 2.635
+frame 2.760
+frame 2.885
+frame 3.010
+frame 3.135
+frame 3.260
+frame 3.385
+frame 3.510
+key 39 up
+expect 315 125 = 0.6 0.55 0.35 0.08   # head at (31, 12), dimmed
+expect 15 15 = 0.29 0.095 0.11 0.05    # empty cell, reddened
+
+# Reset starts over.
+reset
+frame 3.635
+expect 205 125 = 0.95 0.3 0.3 0.05    # food back at (20, 12)
+expect 15 15 = 0.08 0.09 0.12 0.03

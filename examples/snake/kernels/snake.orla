@@ -1,0 +1,168 @@
+// Snake. The game is one row of state and one grid of cells, both carried
+// by Graph feedback; every rule is a pure Kernel. Arrows steer, ticks come
+// from the clock, food is found by hashing and probing, and the body is a
+// time-to-live that counts down from the head.
+struct Game {
+    hx: Int; hy: Int;          // head
+    dx: Int; dy: Int;          // direction
+    length: Int;
+    alive: Bool;
+    fx: Int; fy: Int;          // food
+    tick: Int;
+    score: Int;
+    advanced: Bool;            // this evaluation moved the head
+    ate: Bool;                 // and reached the food
+}
+struct Cell { kind: Int; ttl: Int; }    // kind: 0 empty, 1 snake, 2 food
+type State = Rows<Game>;
+type Board = Grid<Cell>;
+
+// Where a game begins: a four-long snake heading right, food ahead.
+kernel snake.start@1 {
+    requires { field.write; }
+    output result: State;
+    compute {
+        return Game {
+            hx: 8, hy: 12, dx: 1, dy: 0, length: 4, alive: true,
+            fx: 20, fy: 12, tick: 0, score: 0, advanced: false, ate: false
+        };
+    }
+}
+
+// The matching board: the body behind the head, oldest at the tail.
+kernel snake.empty@1 {
+    requires { field.write; }
+    output result: Board;
+    compute {
+        let c = coord();
+        let x = int(c.x);
+        let y = int(c.y);
+        return if y == 12 && x >= 5 && x <= 8 { Cell { kind: 1, ttl: x - 4 } }
+            else if x == 20 && y == 12 { Cell { kind: 2, ttl: 0 } }
+            else { Cell { kind: 0, ttl: 0 } };
+    }
+}
+
+// One evaluation of the rules: steer, advance on a tick, collide, eat.
+kernel snake.step@1 {
+    requires { field.read; field.write; time.read; input.read; }
+    input previous: State;
+    input board: Board;
+    param speed: Float = 8.0;
+    output result: State;
+
+    fn hash(n: Float) -> Float {
+        let q = fract(n * 0.1031);
+        let r = q + q * (q + 33.33);
+        return fract(r * r * 2.0);
+    }
+
+    // Whether cell `probe` can take the food: empty, and not the new head.
+    fn free(probe: Int, width: Int, nx: Int, ny: Int) -> Bool {
+        let px = probe - (probe / width) * width;
+        let py = probe / width;
+        let c = at(board, vec2(float(px), float(py)));
+        return c.kind == 0 && !(px == nx && py == ny);
+    }
+
+    compute {
+        let g = sample(previous);
+        let extent = size(board);
+        let width = int(extent.x);
+        let height = int(extent.y);
+        // Steering: the last arrow held wins; reversing into the body is ignored.
+        let horizontal = key(37) || key(39);
+        let vertical = key(38) || key(40);
+        let wdx = if key(37) { -1 } else if key(39) { 1 } else { g.dx };
+        let wdy = if key(38) { -1 } else if key(40) { 1 } else { g.dy };
+        let ndx = if horizontal { wdx } else if vertical { 0 } else { g.dx };
+        let ndy = if vertical && !horizontal { wdy } else if horizontal { 0 } else { g.dy };
+        let reversing = ndx == -g.dx && ndy == -g.dy && g.length > 1;
+        let dx = if reversing { g.dx } else { ndx };
+        let dy = if reversing { g.dy } else { ndy };
+        // Ticks: the clock, quantized; one move per tick.
+        let tick = int(floor(time() * speed));
+        let advancing = g.alive && tick != g.tick;
+        let nx = g.hx + dx;
+        let ny = g.hy + dy;
+        let inside = nx >= 0 && nx < width && ny >= 0 && ny < height;
+        let target = if inside { at(board, vec2(float(nx), float(ny))) } else { Cell { kind: 0, ttl: 0 } };
+        // A body cell with time left after this tick is still there to hit.
+        let alive = g.alive && (!advancing || (inside && !(target.kind == 1 && target.ttl > 1)));
+        let moved = advancing && alive;
+        let ate = moved && nx == g.fx && ny == g.fy;
+        let cells = width * height;
+        let seed = int(hash(float(tick) * 3.0 + float(g.score) * 7.0 + 1.0) * float(cells));
+        let food = if ate {
+            loop 4096 with probe = seed until free(probe, width, nx, ny) {
+                if probe + 1 >= cells { 0 } else { probe + 1 }
+            }
+        } else { g.fy * width + g.fx };
+        return Game {
+            hx: if moved { nx } else { g.hx },
+            hy: if moved { ny } else { g.hy },
+            dx: dx, dy: dy,
+            length: if ate { g.length + 1 } else { g.length },
+            alive: alive,
+            fx: food - (food / width) * width,
+            fy: food / width,
+            tick: tick,
+            score: if ate { g.score + 1 } else { g.score },
+            advanced: moved,
+            ate: ate
+        };
+    }
+}
+
+// The board after the rules: the head is written, the body ages unless
+// the snake ate, and the food sits where the rules put it.
+kernel snake.board@1 {
+    requires { field.read; field.write; }
+    input previous: Board;
+    input game: State;
+    output result: Board;
+
+    compute {
+        let g = at(game, 0);
+        let c = coord();
+        let x = int(c.x);
+        let y = int(c.y);
+        let cell = sample(previous);
+        let is_head = g.advanced && x == g.hx && y == g.hy;
+        let is_food = x == g.fx && y == g.fy;
+        let body = if g.advanced && cell.kind == 1 && !g.ate {
+            Cell { kind: if cell.ttl > 1 { 1 } else { 0 }, ttl: cell.ttl - 1 }
+        } else { cell };
+        return if is_head { Cell { kind: 1, ttl: g.length } }
+            else if body.kind == 1 { body }
+            else if is_food { Cell { kind: 2, ttl: 0 } }
+            else { Cell { kind: 0, ttl: 0 } };
+    }
+}
+
+// Pixels: cells with faint grid lines, the head brighter than the body,
+// the food red, everything dimmed and reddened once the snake is dead.
+kernel snake.draw@1 {
+    requires { field.read; field.write; }
+    input board: Board;
+    input game: State;
+    param cell: Float = 10.0;
+    output result: Image;
+
+    compute {
+        let g = at(game, 0);
+        let c = coord();
+        let which = floor(c / cell);
+        let local = c - which * cell;
+        let it = at(board, which);
+        let on_line = local.x < 1.0 || local.y < 1.0;
+        let is_head = it.kind == 1 && it.ttl == g.length;
+        let color = if it.kind == 2 { vec3(0.95, 0.3, 0.3) }
+            else if is_head { vec3(0.7, 1.0, 0.6) }
+            else if it.kind == 1 { vec3(0.3, 0.8, 0.4) }
+            else if on_line { vec3(0.11, 0.12, 0.16) }
+            else { vec3(0.08, 0.09, 0.12) };
+        let shown = if g.alive { color } else { mix(color, vec3(0.5, 0.1, 0.1), 0.5) };
+        return vec4(shown.x, shown.y, shown.z, 1.0);
+    }
+}

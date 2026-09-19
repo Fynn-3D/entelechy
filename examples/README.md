@@ -43,3 +43,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [sort](sort/README.md): sorting as two map Kernels, rank then gather,
   each a bounded loop over the rows; no primitive, quadratic, exact on
   both backends.
+- [snake](snake/README.md): a whole game in five Kernels: a row of state
+  and a grid of cells fed back through the Graph, arrow keys, ticks from
+  the clock, food by hashing and probing; the replay plays it through.

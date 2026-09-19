@@ -106,7 +106,10 @@ for the architecture's Phase 1 and the resource model is converged. Sorting's ho
 two bounded loops over the rows (the sort example), quadratic and exact;
 a native sort would be an algorithm, which native operations are not
 for, and a scatter primitive is deliberately absent from the map mode.
-Interpolation exists as `at_linear`, gated by an all-float layout rather
+Snake is the first whole application: five Kernels, a state row and a
+cell grid fed back through the Graph, keys and clock as context, food by
+hash and probe; it needed nothing new, which is the point of the
+example. Interpolation exists as `at_linear`, gated by an all-float layout rather
 than by the word `Image`. What remains is optional and can be picked by
 need: reductions and scans that keep their scratch resident across
 frames; a parallel scan for bodies the author declares associative,

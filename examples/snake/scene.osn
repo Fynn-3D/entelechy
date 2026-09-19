@@ -1,0 +1,23 @@
+// start/empty seed the state; step and board feed back; draw shows it.
+use "kernels/";
+
+node start: snake.start@1 { domain = 1; }
+node empty: snake.empty@1 { domain = vec2(32, 24); }
+
+node step: snake.step@1 {
+    previous <~ step.result from start.result;
+    board <~ board.result from empty.result;
+}
+
+node board: snake.board@1 {
+    previous <~ board.result from empty.result;
+    game <- step.result;
+}
+
+node view: snake.draw@1 {
+    board <- board.result;
+    game <- step.result;
+    domain = size(board) * cell;     // 32x24 cells at 10 pixels
+}
+
+output result <- view.result;
