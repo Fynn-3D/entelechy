@@ -10,6 +10,7 @@ use orla::session::Session;
 use orla_gpu::GpuBackend;
 use orla_gpu::present::Presenter;
 use orla_player::audio::Audio;
+use orla_player::gamepad::Gamepad;
 use orla_player::{Placement, key_code, to_output};
 use orla_runtime::{Context, InputState};
 use serde_json::Value as Json;
@@ -128,6 +129,8 @@ struct Player {
     preview: Option<orla_graph::NodeId>,
     /// The sound card, opened when a scene has a sound-shaped output.
     audio: Option<Audio>,
+    /// The gamepads, when the system offers them.
+    gamepad: Option<Gamepad>,
     audio_allowed: bool,
     audio_failed: bool,
 }
@@ -148,6 +151,9 @@ impl Player {
     }
 
     fn frame(&mut self) -> Option<orla_graph::Report> {
+        if let Some(gamepad) = &mut self.gamepad {
+            gamepad.poll(&mut self.input);
+        }
         let events = self.session.sync();
         for event in &events {
             eprintln!("{event}");
@@ -593,6 +599,15 @@ fn main() -> ExitCode {
         }
     };
     eprintln!("backend: {}", runtime.backend_name());
+    let gamepad = Gamepad::open();
+    eprintln!(
+        "gamepad: {}",
+        match &gamepad {
+            Some(pad) if pad.connected() => "connected, mapped to arrows, Z, X, Enter",
+            Some(_) => "none connected; a pad plugged in later maps to arrows, Z, X, Enter",
+            None => "unavailable",
+        }
+    );
     let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         if let Err(error) = session.bind_external(name, path) {
@@ -623,6 +638,7 @@ fn main() -> ExitCode {
         requests: None,
         preview: None,
         audio: None,
+        gamepad,
         audio_allowed: !options.no_audio,
         audio_failed: false,
     };

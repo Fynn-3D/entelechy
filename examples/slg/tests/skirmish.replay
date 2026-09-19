@@ -40,6 +40,8 @@ frame 0.2167
 expect game.result[0].phase = 0
 expect units.result[4].hp = 7
 expect units.result[1].moved = true
+expect music.result[0].hit = 0.8957 0.002    # the strike started the hit last frame; one block later it has decayed by 800/7680
+expect music.result[799].count = 10399       # thirteen blocks of 800 frames, none skipped
 
 # Enter ends the turn; the enemies act one by one on timers and strike back.
 key 13 down

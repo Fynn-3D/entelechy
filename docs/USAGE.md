@@ -93,6 +93,12 @@ presentation path and how many frames had to be downloaded. The pointer and
 keys reach Kernels that declare `input.read`; F5 resets Graph state; Escape
 closes the window.
 
+A gamepad is another keyboard: the D-pad and the left stick are the
+arrow keys (37 to 40), South (A or Cross) is Z, East (B or Circle) is X,
+Start is Enter, and Select is Escape, so a scene written for keys plays
+on a pad without knowing one exists. The Player reports at start whether
+a pad is connected; one plugged in later is picked up.
+
 A graph may have several outputs. The window shows the first that is a
 grid of pixels; the sound card plays the first that is rows of one float
 (mono) or two (stereo), one block per frame, continuing across frames as

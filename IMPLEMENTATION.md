@@ -101,6 +101,12 @@ capability claim.
   shading stay Kernels on either side of it
   ([mesh example](examples/mesh/README.md)).
 
+- A gamepad is another keyboard ([gamepad](crates/player/src/gamepad.rs)):
+  the Player maps the D-pad, the left stick past a threshold, and the
+  face and Start buttons to the key codes a keyboard would produce, so
+  input stays one context and scenes need not know which device pressed
+  the key. Analog values are not context yet.
+
 - The sound card is a device adapter in the Player, not a runtime concept
   ([audio](crates/player/src/audio.rs)): it claims the first graph output
   that is rows of one or two floats, takes each evaluation's block into a

@@ -3,6 +3,7 @@
 //! be tested headlessly.
 
 pub mod audio;
+pub mod gamepad;
 
 pub use orla_gpu::present::{Placement, placement};
 
