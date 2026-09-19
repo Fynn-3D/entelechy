@@ -192,3 +192,55 @@ fn control_flow_is_scoped_and_typed() {
     let text = module.to_string();
     assert!(text.contains("= if %"), "{text}");
 }
+
+#[test]
+fn structs_are_checked_by_name_and_field() {
+    let prefix = "kernel t.k@1 { requires { image.write; } output r: Image; struct Hit { t: Float; id: Int; }";
+    let ok = compile(&format!("{prefix} compute {{ let h = Hit {{ t: 1.0, id: 2 }}; let g = Hit {{ ..h, t: 3.0 }}; return vec4(g.t, float(g.id), 0.0, 1.0); }} }}")).unwrap();
+    assert!(
+        ok.to_string()
+            .contains("struct S0 Hit { t: Float, id: Int }"),
+        "{ok}"
+    );
+
+    let (_, message) = semantic(&format!(
+        "{prefix} compute {{ let h = Hit {{ t: 1.0 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
+    ));
+    assert!(message.contains("needs field `id`"), "{message}");
+    let (_, message) = semantic(&format!(
+        "{prefix} compute {{ let h = Hit {{ t: 1.0, id: 2, z: 3 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
+    ));
+    assert!(message.contains("no field `z`"), "{message}");
+    let (_, message) = semantic(&format!(
+        "{prefix} compute {{ let h = Hit {{ t: 1, id: 2 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
+    ));
+    assert!(
+        message.contains("`Hit.t` expects Float, found Int"),
+        "{message}"
+    );
+    let (_, message) = semantic(&format!(
+        "{prefix} compute {{ let h = Hit {{ t: 1.0, id: 2 }}; return vec4(h.w, 0.0, 0.0, 1.0); }} }}"
+    ));
+    assert!(message.contains("`Hit` has no field `w`"), "{message}");
+    let (_, message) = semantic(&format!(
+        "{prefix} compute {{ let h = Hit {{ ..1.0, t: 1.0 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
+    ));
+    assert!(message.contains("`..base` must be a `Hit`"), "{message}");
+    let (_, message) = semantic(&format!(
+        "{prefix} fn f(h: Hit) -> Float {{ return h.t; }} compute {{ return vec4(f(1.0), 0.0, 0.0, 1.0); }} }}"
+    ));
+    assert!(
+        message.contains("expects Hit here, found Float"),
+        "{message}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; struct Hit { t: Float; } param h: Hit = 1.0; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.contains("cannot be structs"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { image.write; } output r: Image; struct Node { next: Node; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.contains("cannot contain itself"), "{message}");
+    let error = compile("kernel t.k@1 { requires { image.write; } output r: Image; struct hit { t: Float; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }").unwrap_err();
+    assert!(error.to_string().contains("uppercase"), "{error}");
+}

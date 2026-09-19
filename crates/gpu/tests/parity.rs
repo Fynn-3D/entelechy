@@ -194,3 +194,34 @@ fn rejected_shaders_report_the_backend_not_a_panic() {
     assert!(gpu.prepare(&module).is_ok());
     eprintln!("adapter: {}", gpu.adapter_name());
 }
+
+#[test]
+fn structs_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.structs@1 { requires { image.write; } output result: Image;
+        struct Ray { origin: Vec3; direction: Vec3; }
+        struct March { ray: Ray; t: Float; steps: Int; hit: Bool; }
+        fn advance(m: March, d: Float) -> March { return March { ..m, t: m.t + d, steps: m.steps + 1 }; }
+        compute {
+            let c = coord();
+            let init = March { ray: Ray { origin: vec3(0.0, 0.0, 0.0), direction: vec3(0.0, 0.0, -1.0) }, t: 0.0, steps: 0, hit: false };
+            let m = loop 32 with s = init until s.hit {
+                let next = advance(s, 0.5);
+                if next.t >= c.x { March { ..next, hit: true } } else { next }
+            };
+            let flipped = if c.y > 2.5 { Ray { ..m.ray, origin: vec3(9.0, 9.0, 9.0) } } else { m.ray };
+            return vec4(m.t, float(m.steps), flipped.origin.x + m.ray.direction.z, float(m.hit));
+        } }";
+    let (cpu, gpu_pixels) = both(
+        &gpu,
+        source,
+        &[],
+        (1, 1),
+        vec![],
+        Domain {
+            width: 8,
+            height: 6,
+        },
+    );
+    assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
+}

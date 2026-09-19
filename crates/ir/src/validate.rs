@@ -9,8 +9,8 @@ use std::fmt;
 use std::ops::Deref;
 
 use crate::{
-    Block, Capability, Function, Instruction, MAX_LOOP_COUNT, Manifest, Module, Op, Type, UnaryOp,
-    ValueId,
+    Block, Capability, Function, Instruction, MAX_LOOP_COUNT, Manifest, Module, Op, StructDef,
+    Type, UnaryOp, ValueId,
 };
 
 /// A module that passed [`validate`].
@@ -58,6 +58,7 @@ impl std::error::Error for ValidationError {}
 /// Checks a module and wraps it as [`Validated`].
 pub fn validate(module: Module) -> Result<Validated, ValidationError> {
     validate_manifest(&module.manifest)?;
+    validate_structs(&module.structs)?;
     for (index, function) in module.functions.iter().enumerate() {
         let types = validate_function(&module, function, index, false)?;
         if function.results.len() != 1 {
@@ -117,6 +118,51 @@ fn error(location: &str, message: impl Into<String>) -> ValidationError {
         location: location.to_owned(),
         message: message.into(),
     }
+}
+
+fn validate_structs(structs: &[StructDef]) -> Result<(), ValidationError> {
+    for (index, def) in structs.iter().enumerate() {
+        let mut names = std::collections::BTreeSet::new();
+        for field in &def.fields {
+            if !names.insert(&field.name) {
+                return Err(error(
+                    "structs",
+                    format!(
+                        "struct `{}` declares field `{}` twice",
+                        def.name, field.name
+                    ),
+                ));
+            }
+            match field.ty {
+                Type::Image => {
+                    return Err(error(
+                        "structs",
+                        format!(
+                            "struct `{}` field `{}` cannot be an Image",
+                            def.name, field.name
+                        ),
+                    ));
+                }
+                Type::Struct(inner) if inner as usize >= index => {
+                    return Err(error(
+                        "structs",
+                        format!(
+                            "struct `{}` field `{}` refers to struct {inner}, which is not defined earlier",
+                            def.name, field.name
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if def.fields.len() > u8::MAX as usize {
+            return Err(error(
+                "structs",
+                format!("struct `{}` has more than {} fields", def.name, u8::MAX),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), ValidationError> {
@@ -288,35 +334,70 @@ impl Checker<'_> {
                 })?
             }
             Op::Construct(parts) => {
-                let expected = ty
-                    .components()
-                    .ok_or_else(|| self.fail(format!("{position} constructs non-vector {ty}")))?;
-                if parts.len() != expected as usize {
-                    return Err(self.fail(format!(
-                        "{position} constructs {ty} from {} components",
-                        parts.len()
-                    )));
-                }
-                for part in parts {
-                    if self.operand(*part, position)? != Type::Float {
+                if let Type::Struct(index) = ty {
+                    let def = self.module.structs.get(*index as usize).ok_or_else(|| {
+                        self.fail(format!("{position} constructs unknown struct {index}"))
+                    })?;
+                    if parts.len() != def.fields.len() {
                         return Err(self.fail(format!(
-                            "{position} constructs {ty} from a non-float component"
+                            "{position} constructs `{}` from {} values, expected {}",
+                            def.name,
+                            parts.len(),
+                            def.fields.len()
                         )));
                     }
+                    for (part, field) in parts.iter().zip(&def.fields) {
+                        let actual = self.operand(*part, position)?;
+                        if actual != field.ty {
+                            return Err(self.fail(format!(
+                                "{position} gives `{}.{}` a {actual}, expected {}",
+                                def.name, field.name, field.ty
+                            )));
+                        }
+                    }
+                    *ty
+                } else {
+                    let expected = ty.components().ok_or_else(|| {
+                        self.fail(format!("{position} constructs non-vector {ty}"))
+                    })?;
+                    if parts.len() != expected as usize {
+                        return Err(self.fail(format!(
+                            "{position} constructs {ty} from {} components",
+                            parts.len()
+                        )));
+                    }
+                    for part in parts {
+                        if self.operand(*part, position)? != Type::Float {
+                            return Err(self.fail(format!(
+                                "{position} constructs {ty} from a non-float component"
+                            )));
+                        }
+                    }
+                    *ty
                 }
-                *ty
             }
-            Op::Extract(vector, component) => {
-                let vector = self.operand(*vector, position)?;
-                let count = vector.components().ok_or_else(|| {
-                    self.fail(format!("{position} extracts from non-vector {vector}"))
-                })?;
-                if *component >= count {
-                    return Err(self.fail(format!(
-                        "{position} extracts component {component} of {vector}"
-                    )));
+            Op::Extract(source, component) => {
+                let source = self.operand(*source, position)?;
+                if let Type::Struct(index) = source {
+                    let def = &self.module.structs[index as usize];
+                    let field = def.fields.get(*component as usize).ok_or_else(|| {
+                        self.fail(format!(
+                            "{position} extracts field {component} of `{}`",
+                            def.name
+                        ))
+                    })?;
+                    field.ty
+                } else {
+                    let count = source.components().ok_or_else(|| {
+                        self.fail(format!("{position} extracts from non-vector {source}"))
+                    })?;
+                    if *component >= count {
+                        return Err(self.fail(format!(
+                            "{position} extracts component {component} of {source}"
+                        )));
+                    }
+                    Type::Float
                 }
-                Type::Float
             }
             Op::Call(callee, args) => {
                 if *callee as usize >= self.index {
@@ -450,6 +531,11 @@ impl Checker<'_> {
         if actual != *ty {
             return Err(self.fail(format!("{position} is declared {ty} but computes {actual}")));
         }
+        if let Type::Struct(index) = ty
+            && *index as usize >= self.module.structs.len()
+        {
+            return Err(self.fail(format!("{position} has unknown struct type {ty}")));
+        }
         let slot = id.0 as usize;
         if slot >= self.types.len() {
             return Err(self.fail(format!("{position} exceeds the function's slot count")));
@@ -543,6 +629,7 @@ mod tests {
     fn sample_module(requires: &[Capability]) -> Module {
         Module {
             manifest: manifest(requires),
+            structs: vec![],
             functions: vec![],
             entry: Function {
                 name: "compute".into(),

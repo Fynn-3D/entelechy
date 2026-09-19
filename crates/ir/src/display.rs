@@ -131,6 +131,15 @@ impl fmt::Display for Op {
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.manifest)?;
+        for (index, def) in self.structs.iter().enumerate() {
+            let fields = def
+                .fields
+                .iter()
+                .map(|field| format!("{}: {}", field.name, field.ty))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(f, "struct S{index} {} {{ {fields} }}", def.name)?;
+        }
         for function in &self.functions {
             writeln!(f)?;
             write!(f, "{function}")?;

@@ -1,9 +1,16 @@
 //! The IR interpreter.
+//!
+//! Values live in one flat stack. A plain value takes one slot; a struct
+//! takes one slot per scalar field, nested structs flattened, so aggregate
+//! operations are range copies within the stack and nothing allocates
+//! per pixel.
 
 use std::fmt;
 
 use orla_abi::{ImageHandle, Invocation, Scope, Type, Value};
-use orla_ir::{BinaryOp, Block, Function, Instruction, Intrinsic, Op, UnaryOp, Validated};
+use orla_ir::{
+    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated, ValueId,
+};
 
 use crate::ExecutionError;
 
@@ -25,24 +32,134 @@ impl fmt::Display for ArithmeticError {
     }
 }
 
+/// Slot layout of one struct type.
+struct StructLayout {
+    size: usize,
+    field_offsets: Vec<usize>,
+}
+
+/// Slot layout of one function: where each argument and each value lives
+/// relative to the frame.
+struct FunctionLayout {
+    arg_offsets: Vec<usize>,
+    args_size: usize,
+    /// Offset of each value id within the value area.
+    offsets: Vec<usize>,
+    /// Slot count of each value id.
+    sizes: Vec<usize>,
+    values_size: usize,
+}
+
+struct Layouts {
+    structs: Vec<StructLayout>,
+    functions: Vec<FunctionLayout>,
+    entry: FunctionLayout,
+}
+
+impl Layouts {
+    fn new(module: &Module) -> Self {
+        let mut structs: Vec<StructLayout> = Vec::with_capacity(module.structs.len());
+        for def in &module.structs {
+            let mut field_offsets = Vec::with_capacity(def.fields.len());
+            let mut size = 0;
+            for field in &def.fields {
+                field_offsets.push(size);
+                size += match field.ty {
+                    Type::Struct(index) => structs[index as usize].size,
+                    _ => 1,
+                };
+            }
+            structs.push(StructLayout {
+                size,
+                field_offsets,
+            });
+        }
+        let size_of = |ty: Type| match ty {
+            Type::Struct(index) => structs[index as usize].size,
+            _ => 1,
+        };
+        let function_layout = |function: &Function| {
+            let mut arg_offsets = Vec::with_capacity(function.args.len());
+            let mut args_size = 0;
+            for arg in &function.args {
+                arg_offsets.push(args_size);
+                args_size += size_of(*arg);
+            }
+            let slots = function.slot_count();
+            let mut offsets = vec![0; slots];
+            let mut sizes = vec![1; slots];
+            let mut next = 0;
+            fn walk(
+                instructions: &[Instruction],
+                size_of: &dyn Fn(Type) -> usize,
+                offsets: &mut [usize],
+                sizes: &mut [usize],
+                next: &mut usize,
+            ) {
+                for instruction in instructions {
+                    let slot = instruction.id.0 as usize;
+                    offsets[slot] = *next;
+                    sizes[slot] = size_of(instruction.ty);
+                    *next += sizes[slot];
+                    match &instruction.op {
+                        Op::If {
+                            then, otherwise, ..
+                        } => {
+                            walk(&then.body, size_of, offsets, sizes, next);
+                            walk(&otherwise.body, size_of, offsets, sizes, next);
+                        }
+                        Op::Loop { until, body, .. } => {
+                            if let Some(until) = until {
+                                walk(&until.body, size_of, offsets, sizes, next);
+                            }
+                            walk(&body.body, size_of, offsets, sizes, next);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            walk(
+                &function.body,
+                &size_of,
+                &mut offsets,
+                &mut sizes,
+                &mut next,
+            );
+            FunctionLayout {
+                arg_offsets,
+                args_size,
+                offsets,
+                sizes,
+                values_size: next,
+            }
+        };
+        Self {
+            functions: module.functions.iter().map(function_layout).collect(),
+            entry: function_layout(&module.entry),
+            structs,
+        }
+    }
+}
+
 /// Interpreter state for one thread. All frames live on one value stack:
-/// a frame holds its arguments followed by one slot per instruction of the
+/// a frame holds its arguments followed by the slots of every value of the
 /// function, nested blocks included, so calls and loops allocate nothing.
 pub(crate) struct Machine<'m> {
     module: &'m Validated,
     invocation: &'m Invocation,
+    layouts: Layouts,
     stack: Vec<Value>,
-    entry_slots: usize,
 }
 
 impl<'m> Machine<'m> {
     pub(crate) fn new(module: &'m Validated, invocation: &'m Invocation) -> Self {
-        let entry_slots = module.entry.slot_count();
+        let layouts = Layouts::new(module);
+        let stack = Vec::with_capacity(layouts.entry.values_size * 2);
         Self {
             module,
             invocation,
-            stack: Vec::with_capacity(entry_slots * 2),
-            entry_slots,
+            layouts,
+            stack,
         }
     }
 
@@ -54,11 +171,14 @@ impl<'m> Machine<'m> {
         y: u32,
     ) -> Result<impl Iterator<Item = &Value>, ExecutionError> {
         self.stack.clear();
-        self.stack.resize(self.entry_slots, Value::Float(0.0));
+        let layout = &self.layouts.entry;
+        self.stack.resize(layout.values_size, Value::Float(0.0));
         let entry = &self.module.entry;
         let mut frame = Frame {
             module: self.module,
             invocation: self.invocation,
+            layouts: &self.layouts,
+            layout,
             scope,
             x,
             y,
@@ -66,38 +186,53 @@ impl<'m> Machine<'m> {
             values: 0,
             loops: Vec::new(),
         };
-        frame.run(entry, &mut self.stack)?;
+        frame.instructions(&entry.body, &mut self.stack)?;
         let stack = &self.stack;
-        Ok(entry.results.iter().map(move |id| &stack[id.0 as usize]))
+        Ok(entry
+            .results
+            .iter()
+            .map(move |id| &stack[layout.offsets[id.0 as usize]]))
     }
 }
 
 struct LoopState {
-    carried: Value,
+    /// Absolute slot where the carried value lives.
+    carried: usize,
     index: i32,
+}
+
+/// Where an instruction's result comes from before it is stored.
+enum Produced {
+    Scalar(Value),
+    /// A range starting at this absolute slot, `size` slots long.
+    Range(usize),
+    /// Already stored.
+    Done,
 }
 
 /// One activation of a function.
 struct Frame<'a, 'm> {
     module: &'m Validated,
     invocation: &'m Invocation,
+    layouts: &'a Layouts,
+    layout: &'a FunctionLayout,
     scope: &'a Scope<'a>,
     x: u32,
     y: u32,
     /// Where the arguments start.
     base: usize,
-    /// Where the instruction slots start.
+    /// Where the value area starts.
     values: usize,
     loops: Vec<LoopState>,
 }
 
 impl<'m> Frame<'_, 'm> {
-    fn run(
-        &mut self,
-        function: &'m Function,
-        stack: &mut Vec<Value>,
-    ) -> Result<(), ExecutionError> {
-        self.instructions(&function.body, stack)
+    fn slot(&self, id: &ValueId) -> usize {
+        self.values + self.layout.offsets[id.0 as usize]
+    }
+
+    fn size(&self, id: &ValueId) -> usize {
+        self.layout.sizes[id.0 as usize]
     }
 
     fn instructions(
@@ -106,30 +241,44 @@ impl<'m> Frame<'_, 'm> {
         stack: &mut Vec<Value>,
     ) -> Result<(), ExecutionError> {
         for instruction in instructions {
-            let value = self.instruction(instruction, stack)?;
-            stack[self.values + instruction.id.0 as usize] = value;
+            let produced = self.instruction(instruction, stack)?;
+            let destination = self.slot(&instruction.id);
+            match produced {
+                Produced::Scalar(value) => stack[destination] = value,
+                Produced::Range(source) => {
+                    if source != destination {
+                        let size = self.size(&instruction.id);
+                        stack.copy_within(source..source + size, destination);
+                    }
+                }
+                Produced::Done => {}
+            }
         }
         Ok(())
     }
 
-    fn block(&mut self, block: &'m Block, stack: &mut Vec<Value>) -> Result<Value, ExecutionError> {
+    /// Runs a block and returns the absolute slot of its result.
+    fn block(&mut self, block: &'m Block, stack: &mut Vec<Value>) -> Result<usize, ExecutionError> {
         self.instructions(&block.body, stack)?;
-        Ok(stack[self.values + block.result.0 as usize])
+        Ok(self.slot(&block.result))
     }
 
     fn instruction(
         &mut self,
         instruction: &'m Instruction,
         stack: &mut Vec<Value>,
-    ) -> Result<Value, ExecutionError> {
+    ) -> Result<Produced, ExecutionError> {
         let (x, y) = (self.x, self.y);
         let arithmetic = |error| ExecutionError::Arithmetic { x, y, error };
-        let values = self.values;
-        let at = |stack: &Vec<Value>, id: &orla_ir::ValueId| stack[values + id.0 as usize];
-        Ok(match &instruction.op {
+        let at = |stack: &Vec<Value>, id: &ValueId| stack[self.slot(id)];
+        Ok(Produced::Scalar(match &instruction.op {
             Op::Const(value) => *value,
             Op::Param(index) => self.invocation.params[*index as usize],
-            Op::Arg(index) => stack[self.base + *index as usize],
+            Op::Arg(index) => {
+                return Ok(Produced::Range(
+                    self.base + self.layout.arg_offsets[*index as usize],
+                ));
+            }
             Op::Unary(UnaryOp::Neg, a) => negate(at(stack, a)).map_err(arithmetic)?,
             Op::Unary(UnaryOp::Not, a) => match at(stack, a) {
                 Value::Bool(value) => Value::Bool(!value),
@@ -137,38 +286,64 @@ impl<'m> Frame<'_, 'm> {
             },
             Op::Binary(op, a, b) => binary(*op, at(stack, a), at(stack, b)).map_err(arithmetic)?,
             Op::Construct(parts) => {
+                if let Type::Struct(_) = instruction.ty {
+                    let destination = self.slot(&instruction.id);
+                    let mut cursor = destination;
+                    for part in parts {
+                        let (source, size) = (self.slot(part), self.size(part));
+                        stack.copy_within(source..source + size, cursor);
+                        cursor += size;
+                    }
+                    return Ok(Produced::Done);
+                }
                 let mut components = [0.0; 4];
                 for (slot, part) in components.iter_mut().zip(parts) {
                     *slot = float(at(stack, part));
                 }
                 from_parts(components, instruction.ty)
             }
-            Op::Extract(vector, component) => {
-                Value::Float(components(at(stack, vector))[*component as usize])
+            Op::Extract(source, component) => {
+                let source_ty = self.type_of(source);
+                if let Type::Struct(index) = source_ty {
+                    let layout = &self.layouts.structs[index as usize];
+                    return Ok(Produced::Range(
+                        self.slot(source) + layout.field_offsets[*component as usize],
+                    ));
+                }
+                Value::Float(components(at(stack, source))[*component as usize])
             }
             Op::Call(callee, call_args) => {
-                let callee = &self.module.functions[*callee as usize];
+                let callee_index = *callee as usize;
+                let callee = &self.module.functions[callee_index];
+                let layout = &self.layouts.functions[callee_index];
                 let frame_base = stack.len();
-                for arg in call_args {
-                    let value = stack[values + arg.0 as usize];
-                    stack.push(value);
+                stack.resize(
+                    frame_base + layout.args_size + layout.values_size,
+                    Value::Float(0.0),
+                );
+                for (arg, offset) in call_args.iter().zip(&layout.arg_offsets) {
+                    let (source, size) = (self.slot(arg), self.size(arg));
+                    stack.copy_within(source..source + size, frame_base + offset);
                 }
-                let frame_values = stack.len();
-                stack.resize(frame_values + callee.slot_count(), Value::Float(0.0));
                 let mut frame = Frame {
                     module: self.module,
                     invocation: self.invocation,
+                    layouts: self.layouts,
+                    layout,
                     scope: self.scope,
                     x,
                     y,
                     base: frame_base,
-                    values: frame_values,
+                    values: frame_base + layout.args_size,
                     loops: Vec::new(),
                 };
-                frame.run(callee, stack)?;
-                let result = stack[frame_values + callee.results[0].0 as usize];
+                frame.instructions(&callee.body, stack)?;
+                let result = frame.slot(&callee.results[0]);
+                let size = frame.size(&callee.results[0]);
+                let destination = self.slot(&instruction.id);
+                stack.copy_within(result..result + size, destination);
                 stack.truncate(frame_base);
-                result
+                return Ok(Produced::Done);
             }
             Op::Intrinsic(intrinsic, call_args) => {
                 let mut args = [Value::Float(0.0); 3];
@@ -181,43 +356,50 @@ impl<'m> Frame<'_, 'm> {
                 condition,
                 then,
                 otherwise,
-            } => match at(stack, condition) {
-                Value::Bool(true) => self.block(then, stack)?,
-                Value::Bool(false) => self.block(otherwise, stack)?,
-                _ => unreachable!("validation guarantees a Bool condition"),
-            },
+            } => {
+                let result = match at(stack, condition) {
+                    Value::Bool(true) => self.block(then, stack)?,
+                    Value::Bool(false) => self.block(otherwise, stack)?,
+                    _ => unreachable!("validation guarantees a Bool condition"),
+                };
+                return Ok(Produced::Range(result));
+            }
             Op::Loop {
                 count,
                 init,
                 until,
                 body,
             } => {
-                self.loops.push(LoopState {
-                    carried: at(stack, init),
-                    index: 0,
-                });
+                let carried = self.slot(&instruction.id);
+                let size = self.size(&instruction.id);
+                let init_slot = self.slot(init);
+                stack.copy_within(init_slot..init_slot + size, carried);
+                self.loops.push(LoopState { carried, index: 0 });
                 let outcome: Result<(), ExecutionError> = (|| {
                     for index in 0..*count {
                         self.loops.last_mut().expect("loop is open").index = index as i32;
-                        if let Some(until) = until
-                            && self.block(until, stack)? == Value::Bool(true)
-                        {
-                            break;
+                        if let Some(until) = until {
+                            let done = self.block(until, stack)?;
+                            if stack[done] == Value::Bool(true) {
+                                break;
+                            }
                         }
                         let next = self.block(body, stack)?;
-                        self.loops.last_mut().expect("loop is open").carried = next;
+                        stack.copy_within(next..next + size, carried);
                     }
                     Ok(())
                 })();
-                let state = self.loops.pop().expect("loop is open");
+                self.loops.pop();
                 outcome?;
-                state.carried
+                return Ok(Produced::Done);
             }
             Op::Carried => {
-                self.loops
-                    .last()
-                    .expect("validation guarantees a loop")
-                    .carried
+                return Ok(Produced::Range(
+                    self.loops
+                        .last()
+                        .expect("validation guarantees a loop")
+                        .carried,
+                ));
             }
             Op::Index => Value::Int(
                 self.loops
@@ -248,8 +430,64 @@ impl<'m> Frame<'_, 'm> {
                 };
                 Value::Vec4(fetch_clamped(self.scope, image, fx, fy)?)
             }
-        })
+        }))
     }
+
+    /// Type of a value in this frame's function, found by its slot size and
+    /// the struct table: plain values are one slot, so only multi-slot
+    /// values need the instruction looked up.
+    fn type_of(&self, id: &ValueId) -> Type {
+        if self.layout.sizes[id.0 as usize] == 1 && !self.is_single_slot_struct(id) {
+            return Type::Float;
+        }
+        find_type(self.function(), *id).unwrap_or(Type::Float)
+    }
+
+    fn is_single_slot_struct(&self, id: &ValueId) -> bool {
+        // A struct with exactly one scalar field also occupies one slot; look
+        // it up only when the module declares such a struct at all.
+        self.layouts.structs.iter().any(|layout| layout.size == 1)
+            && matches!(find_type(self.function(), *id), Some(Type::Struct(_)))
+    }
+
+    fn function(&self) -> &'m Function {
+        if std::ptr::eq(self.layout, &self.layouts.entry) {
+            &self.module.entry
+        } else {
+            let index = self
+                .layouts
+                .functions
+                .iter()
+                .position(|layout| std::ptr::eq(layout, self.layout))
+                .expect("frame layout belongs to the module");
+            &self.module.functions[index]
+        }
+    }
+}
+
+fn find_type(function: &Function, id: ValueId) -> Option<Type> {
+    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
+        for instruction in instructions {
+            if instruction.id == id {
+                return Some(instruction.ty);
+            }
+            let nested = match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                Op::Loop { until, body, .. } => until
+                    .as_ref()
+                    .and_then(|block| find(&block.body, id))
+                    .or_else(|| find(&body.body, id)),
+                _ => None,
+            };
+            if nested.is_some() {
+                return nested;
+            }
+        }
+        None
+    }
+    find(&function.body, id)
 }
 
 fn fetch_clamped(
@@ -303,7 +541,7 @@ fn from_parts(parts: [f32; 4], ty: Type) -> Value {
         Type::Vec4 => Value::Vec4(parts),
         Type::Int => Value::Int(parts[0] as i32),
         Type::Bool => Value::Bool(parts[0] != 0.0),
-        Type::Float | Type::Image => Value::Float(parts[0]),
+        Type::Float | Type::Image | Type::Struct(_) => Value::Float(parts[0]),
     }
 }
 

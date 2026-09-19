@@ -23,15 +23,16 @@ pub const INPUT_BINDING: u32 = 3;
 /// Workgroup edge length in both dimensions.
 pub const WORKGROUP: u32 = 8;
 
-fn wgsl_type(ty: Type) -> &'static str {
+fn wgsl_type(ty: Type) -> String {
     match ty {
-        Type::Float => "f32",
-        Type::Int => "i32",
-        Type::Bool => "bool",
-        Type::Vec2 => "vec2<f32>",
-        Type::Vec3 => "vec3<f32>",
-        Type::Vec4 => "vec4<f32>",
-        Type::Image => "vec4<f32>",
+        Type::Float => "f32".into(),
+        Type::Int => "i32".into(),
+        Type::Bool => "bool".into(),
+        Type::Vec2 => "vec2<f32>".into(),
+        Type::Vec3 => "vec3<f32>".into(),
+        Type::Vec4 => "vec4<f32>".into(),
+        Type::Image => "vec4<f32>".into(),
+        Type::Struct(index) => format!("S{index}"),
     }
 }
 
@@ -87,6 +88,16 @@ pub fn emit(module: &Module) -> String {
         );
     }
     out.push('\n');
+    for (index, def) in module.structs.iter().enumerate() {
+        let fields = def
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
+    }
     for index in 0..manifest.inputs.len() {
         let slot = 1 + index;
         let _ = writeln!(
@@ -222,7 +233,7 @@ impl Emitter<'_> {
                     Type::Bool => format!("({slot}.x != 0.0)"),
                     Type::Vec2 => format!("{slot}.xy"),
                     Type::Vec3 => format!("{slot}.xyz"),
-                    Type::Vec4 | Type::Image => slot,
+                    Type::Vec4 | Type::Image | Type::Struct(_) => slot,
                 }
             }
             Op::Arg(index) => format!("a{index}"),
@@ -249,12 +260,16 @@ impl Emitter<'_> {
                 "{ty_name}({})",
                 parts.iter().map(v).collect::<Vec<_>>().join(", ")
             ),
-            Op::Extract(vector, component) => {
-                format!(
-                    "{}.{}",
-                    v(vector),
-                    ["x", "y", "z", "w"][*component as usize]
-                )
+            Op::Extract(source, component) => {
+                if let Type::Struct(_) = self.type_of(*source) {
+                    format!("{}.f{component}", v(source))
+                } else {
+                    format!(
+                        "{}.{}",
+                        v(source),
+                        ["x", "y", "z", "w"][*component as usize]
+                    )
+                }
             }
             Op::Call(index, args) => format!(
                 "f{index}({})",

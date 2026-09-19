@@ -385,6 +385,25 @@ impl Intrinsic {
     }
 }
 
+/// One field of a struct.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Field {
+    /// Field name.
+    pub name: String,
+    /// Field type: plain, or an earlier struct in the table.
+    pub ty: Type,
+}
+
+/// A Kernel-defined record type. Struct `i` may only contain structs with
+/// index less than `i`, which rules out recursion by construction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructDef {
+    /// Name for inspection and diagnostics.
+    pub name: String,
+    /// Fields in declaration order.
+    pub fields: Vec<Field>,
+}
+
 /// A nested block: instructions and the value the block yields.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
@@ -410,9 +429,10 @@ pub enum Op {
     Unary(UnaryOp, ValueId),
     /// Binary operation.
     Binary(BinaryOp, ValueId, ValueId),
-    /// Build a vector from float components; the instruction type says which.
+    /// Build a vector from float components or a struct from its fields; the
+    /// instruction type says which.
     Construct(Vec<ValueId>),
-    /// Extract a float component from a vector.
+    /// Extract a float component from a vector or a field from a struct.
     Extract(ValueId, u8),
     /// Call a Kernel-defined function by index with arguments.
     Call(u32, Vec<ValueId>),
@@ -517,6 +537,8 @@ impl Function {
 pub struct Module {
     /// The manifest.
     pub manifest: Manifest,
+    /// Struct types in dependency order.
+    pub structs: Vec<StructDef>,
     /// Helper functions in dependency order.
     pub functions: Vec<Function>,
     /// The entry point, executed once per output pixel. Its results map to

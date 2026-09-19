@@ -139,10 +139,14 @@ pub enum Type {
     Vec4,
     /// An image resource, only ever seen through a handle.
     Image,
+    /// A Kernel-defined record, by index into the module's struct table.
+    /// Structs are internal to a Kernel: they never cross the ABI as
+    /// parameters or ports.
+    Struct(u32),
 }
 
 impl Type {
-    /// Stable spelling used in `.orla` sources.
+    /// Stable spelling used in `.orla` sources; structs print by index.
     pub fn name(self) -> &'static str {
         match self {
             Self::Float => "Float",
@@ -152,6 +156,7 @@ impl Type {
             Self::Vec3 => "Vec3",
             Self::Vec4 => "Vec4",
             Self::Image => "Image",
+            Self::Struct(_) => "struct",
         }
     }
 
@@ -165,15 +170,19 @@ impl Type {
         }
     }
 
-    /// Whether values of this type are plain data (not resources).
+    /// Whether values of this type are plain data that can cross the ABI
+    /// (not resources, not Kernel-internal structs).
     pub fn is_value(self) -> bool {
-        !matches!(self, Self::Image)
+        !matches!(self, Self::Image | Self::Struct(_))
     }
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        match self {
+            Self::Struct(index) => write!(f, "S{index}"),
+            other => f.write_str(other.name()),
+        }
     }
 }
 

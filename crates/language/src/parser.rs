@@ -2,7 +2,8 @@
 
 use crate::lexer::{Token, tokenize};
 use crate::{
-    BinaryOp, Block, Expr, ExprKind, FnDecl, Kernel, ParamDecl, ParseError, PortDecl, Span, Spanned,
+    BinaryOp, Block, Expr, ExprKind, FnDecl, Kernel, ParamDecl, ParseError, PortDecl, Span,
+    Spanned, StructDecl,
 };
 
 /// Parses one Kernel from source text.
@@ -135,6 +136,7 @@ impl Parser {
         let mut inputs = Vec::new();
         let mut params = Vec::new();
         let mut outputs = Vec::new();
+        let mut structs = Vec::new();
         let mut functions = Vec::new();
         let mut compute = None;
         while !self.is_punct("}") {
@@ -166,6 +168,10 @@ impl Parser {
                     self.next();
                     functions.push(self.function()?);
                 }
+                "struct" => {
+                    self.next();
+                    structs.push(self.struct_decl()?);
+                }
                 "compute" => {
                     if compute.is_some() {
                         return Err(self.error("`compute` is declared twice"));
@@ -177,7 +183,7 @@ impl Parser {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `fn`, or `compute`, found `{keyword}`"
+                            "expected `requires`, `input`, `param`, `output`, `struct`, `fn`, or `compute`, found `{keyword}`"
                         ),
                     });
                 }
@@ -190,8 +196,63 @@ impl Parser {
             inputs,
             params,
             outputs,
+            structs,
             functions,
             compute,
+        })
+    }
+
+    fn struct_decl(&mut self) -> Result<StructDecl, ParseError> {
+        let name = self.ident("a struct name")?;
+        if !name.value.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return Err(ParseError {
+                span: name.span,
+                message: format!(
+                    "struct names start with an uppercase letter; `{}` does not",
+                    name.value
+                ),
+            });
+        }
+        self.expect_punct("{")?;
+        let mut fields = Vec::new();
+        while !self.is_punct("}") {
+            let field = self.ident("a field name")?;
+            self.expect_punct(":")?;
+            let ty = self.ident("a type")?;
+            self.expect_punct(";")?;
+            fields.push((field, ty));
+        }
+        self.expect_punct("}")?;
+        Ok(StructDecl { name, fields })
+    }
+
+    /// `Name { ..base, field: expr, ... }` after the name was consumed.
+    fn struct_literal(&mut self, name: Spanned<String>) -> Result<Expr, ParseError> {
+        let span = name.span;
+        self.expect_punct("{")?;
+        let mut base = None;
+        if self.is_punct(".") {
+            self.next();
+            self.expect_punct(".")?;
+            base = Some(Box::new(self.expr()?));
+            if !self.eat_punct(",") && !self.is_punct("}") {
+                return Err(self.unexpected("`,` or `}` after `..base`"));
+            }
+        }
+        let mut fields = Vec::new();
+        while !self.is_punct("}") {
+            let field = self.ident("a field name")?;
+            self.expect_punct(":")?;
+            let value = self.expr()?;
+            fields.push((field, value));
+            if !self.eat_punct(",") {
+                break;
+            }
+        }
+        self.expect_punct("}")?;
+        Ok(Expr {
+            kind: ExprKind::Struct { name, base, fields },
+            span,
         })
     }
 
@@ -477,6 +538,16 @@ impl Parser {
             Token::Ident(name) if RESERVED.contains(&name.as_str()) => {
                 Err(self.unexpected("an expression"))
             }
+            Token::Ident(name)
+                if name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && matches!(
+                        self.tokens.get(self.position + 1),
+                        Some((Token::Punct("{"), _))
+                    ) =>
+            {
+                let (_, span) = self.next();
+                self.struct_literal(Spanned { value: name, span })
+            }
             Token::Ident(name) => {
                 self.next();
                 if self.eat_punct("(") {
@@ -511,8 +582,8 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 8] = [
-    "let", "return", "if", "else", "loop", "with", "until", "kernel",
+const RESERVED: [&str; 9] = [
+    "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

@@ -5,7 +5,9 @@
 //! required capabilities, inputs, parameters, outputs, optional helper
 //! functions, and one `compute` block that runs per output pixel. Control
 //! flow is expression-shaped: `if c { a } else { b }` and bounded
-//! `loop N with x = init until done { next }`. The frontend produces an AST
+//! `loop N with x = init until done { next }`. Structs bundle values:
+//! `struct Hit { t: Float; id: Int; }` is built with `Hit { t: 1.0, id: 2 }`
+//! or updated with `Hit { ..hit, t: 2.0 }`. The frontend produces an AST
 //! only; it knows nothing about IR or backends.
 //!
 //! ```text
@@ -69,10 +71,21 @@ pub struct Kernel {
     pub params: Vec<ParamDecl>,
     /// Outputs in declaration order.
     pub outputs: Vec<PortDecl>,
+    /// Struct types in declaration order.
+    pub structs: Vec<StructDecl>,
     /// Helper functions in declaration order.
     pub functions: Vec<FnDecl>,
     /// The per-pixel body.
     pub compute: Block,
+}
+
+/// `struct Name { field: Type; ... }`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructDecl {
+    /// Struct name; must start with an uppercase letter.
+    pub name: Spanned<String>,
+    /// Fields as `(name, type)`.
+    pub fields: Vec<(Spanned<String>, Spanned<String>)>,
 }
 
 /// `input name: Type;` or `output name: Type;`
@@ -170,8 +183,18 @@ pub enum ExprKind {
     Name(String),
     /// A call to a builtin, intrinsic, or helper function.
     Call(String, Vec<Expr>),
-    /// Component access such as `c.r`.
+    /// Component access such as `c.r`, or a struct field such as `hit.distance`.
     Member(Box<Expr>, String),
+    /// `Name { field: expr, ... }`, optionally starting from `..base` whose
+    /// unlisted fields are kept.
+    Struct {
+        /// The struct name.
+        name: Spanned<String>,
+        /// The value whose fields fill in whatever is not listed.
+        base: Option<Box<Expr>>,
+        /// Listed fields.
+        fields: Vec<(Spanned<String>, Expr)>,
+    },
     /// Negation.
     Neg(Box<Expr>),
     /// Logical not.

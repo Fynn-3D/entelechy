@@ -361,3 +361,53 @@ fn untaken_branches_do_not_execute() {
         .unwrap()[0];
     near(host.read_pixel(output, 0, 0).unwrap(), [0.0, 0.0, 0.0, 1.0]);
 }
+
+#[test]
+fn structs_carry_several_values_through_loops_calls_and_branches() {
+    let module = compile(
+        "kernel test.structs@1 { requires { image.write; } output result: Image;
+            struct Ray { origin: Vec3; direction: Vec3; }
+            struct March { ray: Ray; t: Float; steps: Int; hit: Bool; }
+            fn advance(m: March, d: Float) -> March {
+                return March { ..m, t: m.t + d, steps: m.steps + 1 };
+            }
+            fn start(dir: Vec3) -> March {
+                return March { ray: Ray { origin: vec3(0.0, 0.0, 0.0), direction: dir }, t: 0.0, steps: 0, hit: false };
+            }
+            compute {
+                let c = coord();
+                let m = loop 32 with s = start(vec3(0.0, 0.0, -1.0)) until s.hit {
+                    let next = advance(s, 0.5);
+                    if next.t >= c.x { March { ..next, hit: true } } else { next }
+                };
+                let flipped = if c.y > 0.5 { Ray { ..m.ray, origin: vec3(9.0, 9.0, 9.0) } } else { m.ray };
+                return vec4(m.t, float(m.steps), flipped.origin.x + m.ray.direction.z, float(m.hit));
+            } }",
+    )
+    .unwrap();
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain {
+            width: 4,
+            height: 2,
+        },
+        time: 0.0,
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    // x = 2: advance until t >= 2.0 takes 4 steps of 0.5.
+    near(
+        host.read_pixel(output, 2, 0).unwrap(),
+        [2.0, 4.0, -1.0, 1.0],
+    );
+    near(host.read_pixel(output, 2, 1).unwrap(), [2.0, 4.0, 8.0, 1.0]);
+    // x = 0: the first step already reaches t >= 0.
+    near(
+        host.read_pixel(output, 0, 0).unwrap(),
+        [0.5, 1.0, -1.0, 1.0],
+    );
+}
