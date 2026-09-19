@@ -88,6 +88,19 @@ capability claim.
   thread-local only with its `std` feature, which the GPU backend therefore
   enables ([parity test](crates/gpu/tests/parity.rs)).
 
+- Native operations are device access published as versions: the runtime
+  registers each [`NativeOp`](crates/runtime/src/lib.rs) at generation
+  zero with a manifest and a textual contract, refuses to publish a Kernel
+  over it, and dispatches it to `Backend::execute_native`; the evaluator
+  never fuses one. `native.rasterize@1` is the first: on the CPU a
+  reference rasterizer ([raster](crates/cpu/src/raster.rs)), on the GPU a
+  render pipeline into two float targets and a depth target compacted
+  into the tight word layout ([raster](crates/gpu/src/raster.rs)); they
+  agree on every interior pixel ([parity test](crates/gpu/tests/parity.rs),
+  [runtime test](crates/runtime/tests/hot_swap.rs)). Projection and
+  shading stay Kernels on either side of it
+  ([mesh example](examples/mesh/README.md)).
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the

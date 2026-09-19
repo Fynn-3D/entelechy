@@ -32,6 +32,10 @@ answers with the next window frame under the person's real pointer and keys,
 and `read` returns the frame the window shows. An agent and a person then
 work on the same picture.
 
+`kernels` lists the backend's native operations alongside published
+Kernels, at generation 0; `kernel` returns their contract where a Kernel
+would show its source, and `publish` under a native id is refused.
+
 Operations, fields, and results are listed in
 [the protocol module](../crates/cli/src/protocol.rs), which is the
 authoritative definition; [the end-to-end test](../crates/cli/tests/protocol.rs)

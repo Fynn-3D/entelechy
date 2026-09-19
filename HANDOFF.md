@@ -64,6 +64,12 @@ booleans are exact and the examples render identically on the CPU and the
 GPU. Audio sample blocks and geometry attributes are rows of this model
 plus device adapters, nothing more.
 
+Geometry exists as the first native operation: `native.rasterize@1` takes
+vertex and triangle rows and writes a surface grid (depth, normal, uv,
+triangle id); the CPU reference and the GPU render pipeline agree on
+interior pixels; the mesh example builds, projects, rasterizes, and
+shades a torus with three Kernels around it.
+
 Preparation is off the frame thread: the runtime prepares behind tickets on
 one worker, the session republishes running Kernels through it, and the
 evaluator runs groups unfused until their fused version arrives. `serve` and
@@ -73,12 +79,14 @@ about 70 ms and now holds none; the swap lands about 110 ms later.
 
 ## Next
 
-Pick the next demo that pulls a primitive: audio (a Rows Field of samples
-written by a Kernel per block, played by a device adapter that respects
-deadlines and never waits on the GPU) or geometry (a Field of vertices
-rasterized into an image by a native adapter). Either one starts by reusing
-the Field lifecycle exactly as it is; a new adapter provides device access,
-not algorithms.
+Audio is the remaining adapter: a `Rows<Float>` or `Rows<Vec2>` output
+claimed by a device adapter in the Player that pulls materialized blocks
+through a ring buffer and never waits on the GPU or allocates in the
+callback; the runtime and the language need nothing new. Before or after
+it: the rasterizer's textures are created per call and could be cached by
+size; `domain` cannot yet be an expression, so topology-changing Kernels
+(subdivision) wait; a `reduce` execution mode for sums and extrema is the
+next language-level primitive.
 
 ## Open
 
@@ -90,3 +98,6 @@ Life and particles have replay tests; the other examples are time-driven
 renders whose pixels a replay could still pin down at fixed times.
 The worker is one thread with a FIFO queue: a burst of edits prepares in
 order, and a superseded edit still occupies the queue until its turn.
+Native manifests print their element types as anonymous structs (`S0`);
+the contract text names the fields. The handle type is still called
+`ImageHandle` although it names any Field.

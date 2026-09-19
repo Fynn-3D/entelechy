@@ -121,7 +121,16 @@ output result <- display.result;      // named graph output; sub-graph outputs
    Kernel is named `<document>.<node>@1`.
 7. A `use` path is relative to the document; a trailing `/` means the
    directory's `.orla` files. Used documents must hold Kernels only.
-8. The graph exposes `input`, `param`, and `output` like a Kernel does, so
+8. A node may bind a native operation of the backend by id, exactly as it
+   binds a Kernel: `node raster: native.rasterize@1 { ... }`. Native
+   operations are published by the runtime itself, cannot be republished
+   from a document, and are never fused. Their contract is their manifest:
+   ports by shape and layout, so any Kernel whose element lays out the
+   same way connects. `native.rasterize@1` takes `vertices` (rows of
+   `clip: Vec4; normal: Vec3; uv: Vec2`) and `triangles` (rows of three
+   `Int`s) and writes `surface`, a grid of `depth: Float; normal: Vec3;
+   uv: Vec2; id: Int` over the node's `domain`.
+9. The graph exposes `input`, `param`, and `output` like a Kernel does, so
    a graph is placed as a node with `node name: graph "path.osn" { ... }`.
    Placement flattens it: its nodes join the parent under the prefix
    `name.`, its inputs take the parent's wires, its params take the parent's
