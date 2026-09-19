@@ -80,6 +80,8 @@ pub enum SessionError {
     NoScene,
     /// The Host rejected an import.
     Host(orla_runtime::HostError),
+    /// A resident image could not be brought back for observation.
+    Observe(String),
 }
 
 impl fmt::Display for SessionError {
@@ -89,6 +91,7 @@ impl fmt::Display for SessionError {
             Self::Image(path, error) => write!(f, "{}: {error}", path.display()),
             Self::NoScene => f.write_str("no scene has been loaded"),
             Self::Host(error) => write!(f, "{error}"),
+            Self::Observe(message) => write!(f, "cannot observe image: {message}"),
         }
     }
 }
@@ -207,6 +210,11 @@ impl Session {
             }
             other => Err(format!("unknown backend `{other}`; use cpu or gpu")),
         }
+    }
+
+    /// Mutable runtime access for interfaces that need to observe images.
+    pub fn runtime_mut(&mut self) -> &mut Runtime {
+        &mut self.runtime
     }
 
     /// The current graph, if the scene loaded.
@@ -610,14 +618,37 @@ impl Session {
         self.evaluator.unpin(node);
     }
 
-    /// Writes a cached image to a PPM file.
-    pub fn export(&self, image: ImageHandle, path: &Path) -> Result<(), SessionError> {
+    /// Writes a cached image to a PPM file, materializing it if it was
+    /// resident on the device.
+    pub fn export(&mut self, image: ImageHandle, path: &Path) -> Result<(), SessionError> {
         let image = self
             .runtime
-            .host()
             .image(image)
-            .map_err(SessionError::Host)?;
+            .map_err(|e| SessionError::Observe(e.to_string()))?;
         ppm::write(path, image).map_err(|e| SessionError::Image(path.to_path_buf(), e))
+    }
+
+    /// Reads one pixel of a cached image, materializing it if needed.
+    pub fn read_pixel(
+        &mut self,
+        image: ImageHandle,
+        x: u32,
+        y: u32,
+    ) -> Result<orla_runtime::Pixel, SessionError> {
+        let image = self
+            .runtime
+            .image(image)
+            .map_err(|e| SessionError::Observe(e.to_string()))?;
+        let (width, height) = (image.width(), image.height());
+        if x >= width || y >= height {
+            return Err(SessionError::Host(orla_runtime::HostError::OutOfBounds {
+                x,
+                y,
+                width,
+                height,
+            }));
+        }
+        Ok(image.pixels()[y as usize * width as usize + x as usize])
     }
 }
 

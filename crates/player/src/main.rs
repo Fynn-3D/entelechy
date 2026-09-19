@@ -110,8 +110,7 @@ impl Player {
         let context = self.context();
         match self.session.evaluate(&context) {
             Ok(report) => {
-                let host = self.session.runtime().host();
-                if let Ok(image) = host.image(report.output) {
+                if let Ok(image) = self.session.runtime_mut().image(report.output) {
                     self.last_size = (image.width(), image.height());
                     self.last_frame.clear();
                     self.last_frame.extend_from_slice(image.pixels());
@@ -336,7 +335,7 @@ fn main() -> ExitCode {
     let context = player.context();
     match player.session.evaluate(&context) {
         Ok(report) => {
-            if let Ok(image) = player.session.runtime().host().image(report.output) {
+            if let Ok(image) = player.session.runtime_mut().image(report.output) {
                 player.last_size = (image.width(), image.height());
                 player.last_frame = image.pixels().to_vec();
             }

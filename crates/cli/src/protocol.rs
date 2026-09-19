@@ -276,8 +276,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 }
             };
             let image = session
-                .runtime()
-                .host()
+                .runtime_mut()
                 .image(handle)
                 .map_err(|e| failure(e.to_string()))?;
             let format = request

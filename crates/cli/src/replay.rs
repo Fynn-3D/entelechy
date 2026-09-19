@@ -238,8 +238,6 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                     .map(|report| report.output)
                     .ok_or_else(|| format!("line {line}: expect before any frame"))?;
                 let actual = session
-                    .runtime()
-                    .host()
                     .read_pixel(output, *x, *y)
                     .map_err(|error| format!("line {line}: {error}"))?;
                 outcome.checks += 1;
