@@ -1,0 +1,91 @@
+// A material ball: one analytic sphere on a checker floor under an orbiting
+// light. Everything is branch-free; step() and mix() select between the
+// sphere, the floor, and the sky.
+kernel material.ball@1 {
+    requires { image.write; time.read; }
+    param albedo: Vec3 = vec3(0.86, 0.32, 0.18);
+    param roughness: Float = 0.35;
+    param metallic: Float = 0.0;
+    param light_color: Vec3 = vec3(1.0, 0.96, 0.9);
+    param light_speed: Float = 0.7;
+    output result: Image;
+
+    fn sky(d: Vec3) -> Vec3 {
+        let t = clamp(d.y * 0.6 + 0.4, 0.0, 1.0);
+        let horizon = vec3(0.55, 0.58, 0.66);
+        let zenith = vec3(0.16, 0.26, 0.48);
+        return mix(horizon, zenith, t) + vec3(0.9, 0.8, 0.6) * pow(max(d.y, 0.0), 8.0) * 0.15;
+    }
+
+    fn fresnel(f0: Vec3, cos_theta: Float) -> Vec3 {
+        let k = pow(1.0 - clamp(cos_theta, 0.0, 1.0), 5.0);
+        return f0 + (vec3(1.0, 1.0, 1.0) - f0) * k;
+    }
+
+    fn ggx(ndh: Float, rough: Float) -> Float {
+        let a2 = rough * rough * rough * rough;
+        let d = ndh * ndh * (a2 - 1.0) + 1.0;
+        return a2 / (3.14159265 * d * d + 0.0001);
+    }
+
+    fn checker(p: Vec3) -> Float {
+        let a = step(0.5, fract(p.x * 0.5));
+        let b = step(0.5, fract(p.z * 0.5));
+        return a + b - 2.0 * a * b;
+    }
+
+    compute {
+        let res = domain();
+        let px = (coord() + vec2(0.5, 0.5)) / res * 2.0 - vec2(1.0, 1.0);
+        let aspect = res.x / res.y;
+        let ro = vec3(0.0, 0.9, 3.4);
+        let rd = normalize(vec3(px.x * aspect, -px.y - 0.22, -1.9));
+
+        let angle = time() * light_speed;
+        let light = normalize(vec3(cos(angle) * 2.2, 1.8, sin(angle) * 2.2 + 0.8));
+
+        // Sphere of radius 1 at the origin.
+        let b = dot(ro, rd);
+        let c = dot(ro, ro) - 1.0;
+        let h = b * b - c;
+        let t_s = -b - sqrt(max(h, 0.0));
+        let hit_s = step(0.0, h) * step(0.0, t_s);
+
+        // Floor plane at y = -1.
+        let t_p = clamp((-1.0 - ro.y) / rd.y, -1.0, 1000.0);
+        let hit_p_raw = step(0.0, t_p);
+        let sphere = hit_s * (1.0 - hit_p_raw * step(t_p, t_s));
+        let floor = hit_p_raw * (1.0 - sphere);
+        let open = 1.0 - sphere - floor;
+
+        // Sphere shading.
+        let p = ro + rd * t_s;
+        let n = normalize(p);
+        let v = normalize(ro - p);
+        let hv = normalize(light + v);
+        let ndl = max(dot(n, light), 0.0);
+        let ndv = max(dot(n, v), 0.0);
+        let ndh = max(dot(n, hv), 0.0);
+        let f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
+        let spec = fresnel(f0, dot(hv, v)) * ggx(ndh, max(roughness, 0.05)) * ndl * 0.25;
+        let diffuse = albedo * (1.0 - metallic) * ndl / 3.14159265;
+        let env = sky(reflect(rd, n)) * fresnel(f0, ndv) * (1.0 - roughness * 0.8);
+        let ambient = sky(n) * albedo * (1.0 - metallic) * 0.25;
+        let color_s = (diffuse + spec) * light_color * 3.0 + env + ambient;
+
+        // Floor shading with a soft sphere shadow.
+        let q = ro + rd * t_p;
+        let b2 = dot(q, light);
+        let h2 = b2 * b2 - (dot(q, q) - 1.0);
+        let occlusion = step(0.0, -b2) * smoothstep(-0.25, 0.08, h2);
+        let shadow = 1.0 - 0.85 * occlusion;
+        let tile = mix(vec3(0.42, 0.42, 0.45), vec3(0.72, 0.72, 0.75), checker(q));
+        let ndl_p = max(light.y, 0.0);
+        let color_p = tile * (ndl_p * shadow * light_color * 1.6 + sky(vec3(0.0, 1.0, 0.0)) * 0.5);
+        let fog = 1.0 - exp(-t_p * 0.06);
+        let color_f = mix(color_p, sky(rd), fog);
+
+        let color = color_s * sphere + color_f * floor + sky(rd) * open;
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}

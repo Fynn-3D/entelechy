@@ -1,0 +1,14 @@
+# material ball -> tone mapping -> output
+graph material-ball
+
+node ball = material.ball@1
+  domain 360 300
+  albedo = 0.86 0.32 0.18
+  roughness = 0.35
+  metallic = 0.0
+
+node display = image.tonemap@1
+  source <- ball.result
+  exposure = 1.0
+
+output display.result

@@ -1,0 +1,20 @@
+[package]
+name = "orla-player"
+description = "Orla Player: a window that shows a live Graph scene and hot-reloads its Kernels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "orla-player"
+path = "src/main.rs"
+
+[dependencies]
+orla = { path = "../cli" }
+orla-runtime = { path = "../runtime" }
+winit = "0.30.13"
+softbuffer = "0.4"
+
+[lints]
+workspace = true
