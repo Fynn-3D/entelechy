@@ -17,6 +17,7 @@ use winit::window::{Window, WindowId};
 const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--kernels <dir>] [--input <name>=<file.ppm>]... [--scale <n>]
+              [--backend gpu|cpu]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. Press Escape
       or close the window to quit.";
@@ -26,6 +27,7 @@ struct Options {
     kernels: Option<PathBuf>,
     inputs: Vec<(String, PathBuf)>,
     scale: u32,
+    backend: Option<String>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -34,6 +36,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         kernels: None,
         inputs: Vec::new(),
         scale: 2,
+        backend: None,
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -45,6 +48,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         };
         match arg.as_str() {
             "--kernels" => options.kernels = Some(PathBuf::from(value("--kernels")?)),
+            "--backend" => options.backend = Some(value("--backend")?),
             "--scale" => {
                 options.scale = value("--scale")?
                     .parse::<u32>()
@@ -230,11 +234,23 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut session = Session::open(
-        &options.scene,
-        options.kernels.as_deref(),
-        orla::session::DEFAULT_BUDGET_PIXELS,
-    );
+    let budget = orla::session::DEFAULT_BUDGET_PIXELS;
+    let runtime = match options.backend.as_deref() {
+        Some(name) => Session::runtime_for(name, budget),
+        None => Session::runtime_for("gpu", budget).or_else(|error| {
+            eprintln!("gpu backend unavailable ({error}); using cpu");
+            Session::runtime_for("cpu", budget)
+        }),
+    };
+    let runtime = match runtime {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    eprintln!("backend: {}", runtime.backend_name());
+    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         if let Err(error) = session.bind_external(name, path) {
             eprintln!("error: {error}");

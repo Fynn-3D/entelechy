@@ -11,7 +11,7 @@ usage:
   orla check [--ir] <file.orla>...
       Compile Kernels and print their manifests, or diagnostics.
   orla run <scene.osn> [--kernels <dir>] [--input <name>=<file.ppm>]...
-                       [--out <file.ppm>] [--watch]
+                       [--out <file.ppm>] [--watch] [--backend cpu|gpu]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version.";
@@ -70,6 +70,7 @@ struct RunOptions {
     inputs: Vec<(String, PathBuf)>,
     out: PathBuf,
     watch: bool,
+    backend: String,
 }
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {
@@ -79,6 +80,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         inputs: Vec::new(),
         out: PathBuf::from("output.ppm"),
         watch: false,
+        backend: "cpu".into(),
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -92,6 +94,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
             "--kernels" => options.kernels = Some(PathBuf::from(value("--kernels")?)),
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
+            "--backend" => options.backend = value("--backend")?,
             "--input" => {
                 let binding = value("--input")?;
                 let (name, path) = binding
@@ -113,11 +116,8 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
 
 fn run(args: &[String]) -> Result<(), String> {
     let options = parse_run(args)?;
-    let mut session = Session::open(
-        &options.scene,
-        options.kernels.as_deref(),
-        orla::session::DEFAULT_BUDGET_PIXELS,
-    );
+    let runtime = Session::runtime_for(&options.backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
+    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         session
             .bind_external(name, path)

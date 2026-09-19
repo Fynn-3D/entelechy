@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
-use orla_runtime::{Expect, Generation, ImageHandle, KernelId, Runtime};
+use orla_runtime::{Backend, Expect, Generation, ImageHandle, KernelId, Runtime};
 
 use crate::ppm;
 
@@ -122,8 +122,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// Creates a session; call [`Session::sync`] to load files.
+    /// Creates a CPU-backed session; call [`Session::sync`] to load files.
     pub fn open(scene: &Path, kernels_dir: Option<&Path>, budget_pixels: usize) -> Self {
+        Self::open_with(scene, kernels_dir, Runtime::new(budget_pixels))
+    }
+
+    /// Creates a session over a runtime built by the caller, for choosing
+    /// the backend.
+    pub fn open_with(scene: &Path, kernels_dir: Option<&Path>, runtime: Runtime) -> Self {
         let kernels_dir = kernels_dir.map(Path::to_path_buf).unwrap_or_else(|| {
             scene
                 .parent()
@@ -133,7 +139,7 @@ impl Session {
         Self {
             scene_path: scene.to_path_buf(),
             kernels_dir,
-            runtime: Runtime::new(budget_pixels),
+            runtime,
             evaluator: Evaluator::new(),
             graph: None,
             scene_stamp: None,
@@ -145,6 +151,20 @@ impl Session {
     /// The runtime, for inspection.
     pub fn runtime(&self) -> &Runtime {
         &self.runtime
+    }
+
+    /// Builds a runtime over a named backend: `cpu`, or `gpu` when a device
+    /// is available.
+    pub fn runtime_for(backend: &str, budget_pixels: usize) -> Result<Runtime, String> {
+        match backend {
+            "cpu" => Ok(Runtime::new(budget_pixels)),
+            "gpu" => {
+                let gpu = orla_gpu::GpuBackend::new().map_err(|error| error.to_string())?;
+                let backend: Box<dyn Backend> = Box::new(gpu);
+                Ok(Runtime::with_backend(budget_pixels, backend))
+            }
+            other => Err(format!("unknown backend `{other}`; use cpu or gpu")),
+        }
     }
 
     /// The current graph, if the scene loaded.
