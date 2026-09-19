@@ -56,7 +56,11 @@ The element may be a scalar, a vector, or a struct; its layout is the
 struct's scalars in order, integers and booleans exact. Inside `compute`,
 `sample(f)` reads an input at this element's own address (its shape must
 match the output's), `at(f, address)` reads anywhere (clamped into range;
-`fetch` is the same word for grids), `count(f)` is the element count,
+`fetch` is the same word for grids), `at_linear(f, position)` reads
+between elements, blending the neighbours (bilinear over a grid,
+trilinear over a volume, a `Float` position over rows; element centres
+sit at half-integers, edges clamp) and is allowed only where the layout
+is all floats, whatever the spelling, `count(f)` is the element count,
 `element()` the current linear index, and `coord()` and `domain()` the
 current address and extent over a grid or volume. `time()` and `rate()`,
 the session clock in seconds and the sound device's clock in samples per

@@ -153,6 +153,16 @@ capability claim.
   [mesh example](examples/mesh/README.md)'s subdivision does, and the
   [tiles example](examples/tiles/README.md) draw a map at its tile size.
 
+- Sampling authority is a builtin gated by layout, not by the word
+  `Image`: `at_linear(f, position)` interpolates between neighbouring
+  elements of any input whose layout is all floats (a struct of floats
+  included, mixed fieldwise), bilinear over grids and trilinear over
+  volumes, with element centres at half-integers and clamped edges. The
+  CPU sums weighted corners in words; the GPU emits one helper per input
+  and one mixer per float struct ([interpreter](crates/cpu/src/eval.rs),
+  [WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs)).
+  The [volume example](examples/volume/README.md) reads its cloud that way.
+
 - The creation protocol is an interface over the session, not a new
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the

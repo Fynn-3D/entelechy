@@ -2,7 +2,8 @@
 
 A `Volume<Float>` of cloud density, 48 by 48 by 32 elements, filled by one
 Kernel with three-dimensional `coord()` and `domain()`, and ray-marched
-into an image by another with `at(density, p * size(density))`. On the
+into an image by another with `at_linear(density, p * size(density))`,
+trilinear so the cloud reads as a field rather than as its cells. On the
 GPU the volume stays resident between the two nodes and across frames;
 only the final image is presented.
 

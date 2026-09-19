@@ -49,7 +49,9 @@ kernel cloud.render@1 {
     struct March { light: Float; transmit: Float; }
 
     fn density_at(p: Vec3) -> Float {
-        return at(density, p * size(density));
+        // Trilinear: the cloud reads as a field, not as the cells it is
+        // stored in.
+        return at_linear(density, p * size(density));
     }
 
     compute {
