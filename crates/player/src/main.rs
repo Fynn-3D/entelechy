@@ -489,6 +489,8 @@ fn main() -> ExitCode {
     for event in session.sync() {
         eprintln!("{event}");
     }
+    // The first load published inline; replacements prepare off the frame.
+    session.set_background(true);
     let mut player = Player {
         session,
         scale: options.scale,

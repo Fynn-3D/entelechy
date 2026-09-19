@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use orla_abi::{Capability, Context, Domain, ImageHandle, Invocation, Type, Value};
 use orla_runtime::{
-    ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Runtime,
+    ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Runtime, Ticket,
 };
 
 use crate::{Binding, Graph, GraphError, Node, NodeId, ParamValue, Source};
@@ -224,6 +224,13 @@ struct Fused {
     version: Arc<KernelVersion>,
 }
 
+/// A fused version the runtime is still preparing. Until it arrives the
+/// group's nodes execute separately, which gives the same images.
+struct Pending {
+    parts: Vec<(NodeId, Generation)>,
+    ticket: Ticket,
+}
+
 /// One executing unit: a node, or a node with producers inlined.
 struct Group {
     node: Node,
@@ -260,6 +267,7 @@ pub struct Evaluator {
     fusion: bool,
     pinned: BTreeSet<NodeId>,
     fused: BTreeMap<NodeId, Fused>,
+    pending: BTreeMap<NodeId, Pending>,
 }
 
 impl fmt::Debug for Evaluator {
@@ -306,6 +314,9 @@ impl Evaluator {
         let cache = std::mem::take(&mut self.cache);
         let committed = std::mem::take(&mut self.committed);
         self.fused.clear();
+        for (_, pending) in std::mem::take(&mut self.pending) {
+            runtime.discard(pending.ticket);
+        }
         let mut released = BTreeSet::new();
         for cached in cache.into_values() {
             for output in cached.outputs {
@@ -522,6 +533,7 @@ impl Evaluator {
         }
         if !self.fusion {
             self.fused.clear();
+            self.forget_pending(runtime, |_| false);
             return Ok(groups);
         }
         // How many readers each output has: bindings and graph outputs.
@@ -601,43 +613,18 @@ impl Evaluator {
                 let producer = &groups[producer_position];
                 let mut parts = consumer.parts.clone();
                 parts.extend(producer.parts.iter().cloned());
-                let version = match self.fused.get(&consumer.node.id) {
-                    Some(existing) if existing.parts == parts => Arc::clone(&existing.version),
-                    _ => {
-                        let module = orla_ir::fuse(
-                            consumer.version.module(),
-                            input_index as u32,
-                            producer.version.module(),
-                            &producer.node.id.0,
-                        )
-                        .map_err(|error| EvaluateError::Fusion {
-                            node: consumer.node.id.clone(),
-                            message: error.to_string(),
-                        })?;
-                        let id = fused_id(&consumer.node.id);
-                        let source = format!(
-                            "// fused: {}\n",
-                            parts
-                                .iter()
-                                .map(|(node, generation)| format!("{node}@{generation}"))
-                                .collect::<Vec<_>>()
-                                .join(" + ")
-                        );
-                        let version = runtime.prepare_detached(module, id, source).map_err(
-                            |error: PrepareError| EvaluateError::Fusion {
-                                node: consumer.node.id.clone(),
-                                message: error.to_string(),
-                            },
-                        )?;
-                        self.fused.insert(
-                            consumer.node.id.clone(),
-                            Fused {
-                                parts: parts.clone(),
-                                version: Arc::clone(&version),
-                            },
-                        );
-                        version
-                    }
+                let fuse = || {
+                    orla_ir::fuse(
+                        consumer.version.module(),
+                        input_index as u32,
+                        producer.version.module(),
+                        &producer.node.id.0,
+                    )
+                };
+                let Some(version) =
+                    self.fused_version(runtime, &consumer.node.id, parts.clone(), fuse)?
+                else {
+                    continue;
                 };
                 // Rewire: the fused input disappears; the producer's inputs
                 // and params join under `producer/name`.
@@ -674,9 +661,90 @@ impl Evaluator {
             .into_iter()
             .filter(|group| !absorbed_into.contains_key(&group.node.id))
             .collect();
-        let live: BTreeSet<&NodeId> = executing.iter().map(|g| &g.node.id).collect();
-        self.fused.retain(|node, _| live.contains(node));
+        // Keep every group's version while its node is in the graph: a
+        // chain is planned from its head each time, so the inner groups
+        // (gray with source, under inv) are needed again next time.
+        let present: BTreeSet<&NodeId> = graph.nodes.iter().map(|node| &node.id).collect();
+        self.fused.retain(|node, _| present.contains(node));
+        self.forget_pending(runtime, |node| present.contains(node));
         Ok(executing)
+    }
+
+    /// The fused version for `parts`, if it is ready: kept from an earlier
+    /// evaluation, prepared inline, or collected from the runtime's worker.
+    /// `None` means it is still being prepared and the nodes run separately
+    /// this time.
+    fn fused_version(
+        &mut self,
+        runtime: &mut Runtime,
+        consumer: &NodeId,
+        parts: Vec<(NodeId, Generation)>,
+        fuse: impl FnOnce() -> Result<orla_ir::Validated, orla_ir::FuseError>,
+    ) -> Result<Option<Arc<KernelVersion>>, EvaluateError> {
+        if let Some(existing) = self.fused.get(consumer)
+            && existing.parts == parts
+        {
+            return Ok(Some(Arc::clone(&existing.version)));
+        }
+        let fusion = |message: String| EvaluateError::Fusion {
+            node: consumer.clone(),
+            message,
+        };
+        let ticket = match self.pending.get(consumer) {
+            Some(pending) if pending.parts == parts => pending.ticket,
+            other => {
+                if let Some(superseded) = other {
+                    runtime.discard(superseded.ticket);
+                }
+                let module = fuse().map_err(|error| fusion(error.to_string()))?;
+                let source = format!(
+                    "// fused: {}\n",
+                    parts
+                        .iter()
+                        .map(|(node, generation)| format!("{node}@{generation}"))
+                        .collect::<Vec<_>>()
+                        .join(" + ")
+                );
+                let ticket = runtime.prepare_later(module, source);
+                self.pending.insert(
+                    consumer.clone(),
+                    Pending {
+                        parts: parts.clone(),
+                        ticket,
+                    },
+                );
+                ticket
+            }
+        };
+        let Some(result) = runtime.poll(ticket) else {
+            return Ok(None);
+        };
+        self.pending.remove(consumer);
+        let candidate = result.map_err(|error: PrepareError| fusion(error.to_string()))?;
+        let version = runtime.detach(candidate, fused_id(consumer));
+        self.fused.insert(
+            consumer.clone(),
+            Fused {
+                parts,
+                version: Arc::clone(&version),
+            },
+        );
+        Ok(Some(version))
+    }
+
+    /// Drops pending preparations for nodes `keep` rejects.
+    fn forget_pending(&mut self, runtime: &mut Runtime, keep: impl Fn(&NodeId) -> bool) {
+        let dropped: Vec<NodeId> = self
+            .pending
+            .keys()
+            .filter(|node| !keep(node))
+            .cloned()
+            .collect();
+        for node in dropped {
+            if let Some(pending) = self.pending.remove(&node) {
+                runtime.discard(pending.ticket);
+            }
+        }
     }
 
     /// The domain a group will execute over, when it can be known before

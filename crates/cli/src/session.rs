@@ -14,7 +14,9 @@ use std::time::SystemTime;
 
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_language::{Document, Kernel};
-use orla_runtime::{Backend, Context, Expect, Generation, ImageHandle, KernelId, Runtime, Value};
+use orla_runtime::{
+    Backend, Context, Expect, Generation, ImageHandle, KernelId, Runtime, Ticket, Value,
+};
 
 use crate::ppm;
 
@@ -24,6 +26,14 @@ pub const DEFAULT_BUDGET_PIXELS: usize = 64 * 1024 * 1024;
 /// Something the session observed while synchronizing with the filesystem.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// A changed Kernel compiled and went to the preparation worker; the
+    /// running version stays until a later sync publishes the replacement.
+    Preparing {
+        /// Document that defines it.
+        path: PathBuf,
+        /// Kernel id.
+        id: KernelId,
+    },
     /// A Kernel was compiled and published.
     Published {
         /// Document that defines it.
@@ -56,6 +66,7 @@ pub enum Event {
 impl fmt::Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Preparing { path, id } => write!(f, "preparing {id} from {}", path.display()),
             Self::Published {
                 path,
                 id,
@@ -159,6 +170,14 @@ pub struct Session {
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
     externals: BTreeMap<String, ImageHandle>,
+    /// Replacements of running Kernels the runtime is still preparing.
+    pending: BTreeMap<KernelId, PendingPublish>,
+}
+
+struct PendingPublish {
+    ticket: Ticket,
+    path: PathBuf,
+    expect: Expect,
 }
 
 #[derive(Default)]
@@ -189,6 +208,7 @@ impl Session {
             params: BTreeMap::new(),
             documents: BTreeMap::new(),
             owners: BTreeMap::new(),
+            pending: BTreeMap::new(),
             externals: BTreeMap::new(),
         }
     }
@@ -260,9 +280,55 @@ impl Session {
     /// Reconciles the runtime with the files on disk and reports what changed.
     pub fn sync(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
+        self.collect_pending(&mut events);
         self.sync_root(&mut events);
         self.sync_libraries(&mut events);
         events
+    }
+
+    /// Prepares replacements of running Kernels and fused groups on a
+    /// worker thread, so a republish never stalls the caller; a
+    /// replacement publishes on the first sync after it is ready.
+    pub fn set_background(&mut self, enabled: bool) {
+        self.runtime.set_background(enabled);
+    }
+
+    /// Whether replacements prepare on a worker thread.
+    pub fn background(&self) -> bool {
+        self.runtime.background()
+    }
+
+    /// Publishes every replacement the worker has finished.
+    fn collect_pending(&mut self, events: &mut Vec<Event>) {
+        let ids: Vec<KernelId> = self.pending.keys().cloned().collect();
+        for id in ids {
+            let ticket = self.pending[&id].ticket;
+            let Some(result) = self.runtime.poll(ticket) else {
+                continue;
+            };
+            let PendingPublish { path, expect, .. } =
+                self.pending.remove(&id).expect("pending entry exists");
+            match result {
+                Ok(candidate) => match self.runtime.publish(candidate, expect) {
+                    Ok(version) => {
+                        events.push(Event::Published {
+                            path: path.clone(),
+                            id: id.clone(),
+                            generation: version.generation(),
+                        });
+                        self.owners.insert(id, path);
+                    }
+                    Err(error) => events.push(Event::Rejected {
+                        path,
+                        error: format!(" {error}"),
+                    }),
+                },
+                Err(error) => events.push(Event::Rejected {
+                    path,
+                    error: error.to_string(),
+                }),
+            }
+        }
     }
 
     fn document_name(&self) -> String {
@@ -489,6 +555,38 @@ impl Session {
                 kernels.insert(id, text);
                 continue;
             }
+            if let Some(running) = self.runtime.kernel(&id) {
+                // Something is running: its replacement may take its time.
+                match orla_compiler::compile_kernel(&kernel, Some(&id)) {
+                    Ok(module) => {
+                        if let Some(superseded) = self.pending.remove(&id) {
+                            self.runtime.discard(superseded.ticket);
+                        }
+                        let ticket = self.runtime.prepare_later(module, text.clone());
+                        self.pending.insert(
+                            id.clone(),
+                            PendingPublish {
+                                ticket,
+                                path: path.to_path_buf(),
+                                expect: Expect::Generation(running.generation()),
+                            },
+                        );
+                        if self.runtime.background() {
+                            events.push(Event::Preparing {
+                                path: path.to_path_buf(),
+                                id: id.clone(),
+                            });
+                        }
+                        self.collect_pending(events);
+                    }
+                    Err(error) => events.push(Event::Rejected {
+                        path: path.to_path_buf(),
+                        error: error.to_string(),
+                    }),
+                }
+                kernels.insert(id, text);
+                continue;
+            }
             match self.runtime.prepare_kernel(&kernel, Some(&id), &text) {
                 Ok(candidate) => {
                     let expect = match self.runtime.kernel(&id) {
@@ -537,6 +635,9 @@ impl Session {
     fn retire(&mut self, path: &Path, id: &KernelId, events: &mut Vec<Event>) {
         if self.owners.get(id).is_some_and(|owner| owner == path) {
             self.owners.remove(id);
+            if let Some(pending) = self.pending.remove(id) {
+                self.runtime.discard(pending.ticket);
+            }
             if self.runtime.retire(id).is_some() {
                 events.push(Event::Retired {
                     path: path.to_path_buf(),
@@ -564,6 +665,9 @@ impl Session {
     /// Retires a published Kernel; returns whether one was registered.
     pub fn retire_kernel(&mut self, id: &KernelId) -> bool {
         self.owners.remove(id);
+        if let Some(pending) = self.pending.remove(id) {
+            self.runtime.discard(pending.ticket);
+        }
         for state in self.documents.values_mut() {
             state.kernels.remove(id);
         }

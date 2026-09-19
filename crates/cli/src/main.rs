@@ -348,6 +348,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let runtime = Session::runtime_for(&backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
     let mut session = Session::open_with(&scene, library.as_deref(), runtime);
     report_events(&session.sync());
+    session.set_background(true);
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     orla::protocol::serve(&mut session, stdin.lock(), stdout.lock()).map_err(|e| e.to_string())

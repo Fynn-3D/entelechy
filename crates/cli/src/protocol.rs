@@ -404,6 +404,7 @@ fn events_json(events: &[Event]) -> Vec<Json> {
     events
         .iter()
         .map(|event| match event {
+            Event::Preparing { path, id } => json!({ "kind": "preparing", "path": path.display().to_string(), "id": id.to_string() }),
             Event::Published {
                 path,
                 id,

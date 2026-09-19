@@ -393,3 +393,84 @@ fn the_graph_command_prints_the_plan() {
     assert!(stdout.contains("// plan: 3 group(s)"), "{stdout}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
+    let dir = scratch("background");
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    session.set_fusion(false);
+    let events = session.sync();
+    assert_eq!(published(&events).len(), 3);
+    session.set_background(true);
+    let first = session.evaluate(&Context::default()).unwrap();
+    let before = session
+        .runtime()
+        .host()
+        .read_pixel(first.output, 100, 20)
+        .unwrap();
+    let generation = session
+        .runtime()
+        .kernel(&"image.grayscale@1".parse().unwrap())
+        .unwrap()
+        .generation();
+
+    let grayscale = dir.join("kernels/grayscale.orla");
+    let source = std::fs::read_to_string(&grayscale).unwrap();
+    std::fs::write(
+        &grayscale,
+        source.replace(
+            "return mix(c, vec4(g, g, g, c.a), amount);",
+            "return vec4(c.r, 0.0, 0.0, c.a);",
+        ),
+    )
+    .unwrap();
+    // The edit is noticed at once; the publish lands on a later sync, and
+    // every frame in between still runs the old version.
+    let mut events = session.sync();
+    assert!(
+        matches!(events.first(), Some(Event::Preparing { id, .. }) if id.to_string() == "image.grayscale@1"),
+        "{events:?}"
+    );
+    let mut frames = 0;
+    while published(&events).is_empty() {
+        let report = session.evaluate(&Context::default()).unwrap();
+        let pixel = session
+            .runtime()
+            .host()
+            .read_pixel(report.output, 100, 20)
+            .unwrap();
+        assert_eq!(pixel, before, "the running version keeps its output");
+        assert_eq!(
+            session
+                .runtime()
+                .kernel(&"image.grayscale@1".parse().unwrap())
+                .unwrap()
+                .generation(),
+            generation
+        );
+        frames += 1;
+        assert!(frames < 5000, "the worker never delivered");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        events = session.sync();
+    }
+    assert_eq!(published(&events), ["image.grayscale@1"]);
+    let report = session.evaluate(&Context::default()).unwrap();
+    let pixel = session
+        .runtime()
+        .host()
+        .read_pixel(report.output, 100, 20)
+        .unwrap();
+    assert_eq!(pixel[1], 0.0);
+    assert!(pixel[0] > 0.5);
+
+    // A broken edit is rejected by the compiler at once, off no thread.
+    std::fs::write(
+        &grayscale,
+        "kernel image.grayscale@1 {\n  requires { image.write; }\n  output result: Image;\n  compute { return oops; }\n}",
+    )
+    .unwrap();
+    let events = session.sync();
+    assert!(rejected(&events)[0].contains("`oops` is not defined"));
+    assert!(session.evaluate(&Context::default()).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}

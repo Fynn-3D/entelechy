@@ -819,3 +819,68 @@ fn outputs_state_sources_and_shared_producers_stay_materialized() {
         "state advanced through the fused frame"
     );
 }
+
+#[test]
+fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
+    let mut runtime = runtime();
+    runtime.set_background(true);
+    let graph = Graph::parse(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node gray: image.grayscale@1 { source <- source.result; amount = 0.5; }
+         node inv: image.invert@1 { source <- gray.result; }
+         output result <- inv.result;",
+    )
+    .unwrap();
+    let mut plain = Evaluator::new();
+    plain.set_fusion(false);
+    let reference = plain
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let expected = pixels(&runtime, reference.output);
+    plain.clear(&mut runtime);
+
+    // Every frame is right whether or not the fused versions have arrived.
+    // The chain grows as they do: nothing, then gray with source, then
+    // everything under inv; it never comes apart.
+    let whole = vec![(NodeId("inv".into()), ids(&["gray", "source"]))];
+    let partial = vec![(NodeId("gray".into()), ids(&["source"]))];
+    let mut evaluator = Evaluator::new();
+    let mut fused_since = None;
+    for frame in 0..2000 {
+        let report = evaluator
+            .evaluate(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &Context::default(),
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        assert_eq!(pixels(&runtime, report.output), expected, "frame {frame}");
+        if report.fused == whole {
+            fused_since.get_or_insert(frame);
+            if frame > fused_since.unwrap() + 2 {
+                break;
+            }
+        } else {
+            assert!(fused_since.is_none(), "a fused group does not come apart");
+            assert!(
+                report.fused.is_empty() || report.fused == partial,
+                "frame {frame}: {:?}",
+                report.fused
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    assert!(
+        fused_since.is_some(),
+        "the worker delivers the fused version"
+    );
+    evaluator.clear(&mut runtime);
+}
