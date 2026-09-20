@@ -1,6 +1,8 @@
 # Usage
 
-Orla is a Rust workspace with no external dependencies. Build and verify:
+Orla is a Rust workspace whose runtime crates have no external
+dependencies; only the interface layer (the Player, `orla-tools`) takes
+them. Build and verify:
 
 ```sh
 cargo build --workspace
@@ -123,18 +125,24 @@ swap happens when the replacement is ready, so a republish never stalls a
 frame. The same holds for fused groups, which run as separate nodes until
 their fused version arrives.
 
-## Import a model
+## Import a model or a sound
 
-Read a glTF or GLB model and write what a scene takes as inputs: vertices
-as rows of `{position, normal, uv}` with every node's transform baked in,
-triangles as rows of three indices, and the base colour texture as a PNG,
-into `--out <dir>` (the model's directory by default). Skins, animations,
-sparse accessors and JPEG textures are reported and left out. The runtime
-knows nothing of glTF; the importer speaks the Host's file formats, so a
-model in another format needs only another tool.
+`orla-tools` is the interface layer's converter: it speaks the Host's file
+formats from outside the runtime, and it is the one place besides the
+Player that takes dependencies. `import` reads a glTF or GLB model and
+writes what a scene takes as inputs: vertices as rows of `{position,
+normal, uv}` with every node's transform baked in, triangles as rows of
+three indices, and the base colour texture as a PNG, into `--out <dir>`
+(the source's directory by default); skins, animations, sparse accessors
+and JPEG textures are reported and left out. It reads a compressed sound
+(MP3, OGG Vorbis, FLAC, AAC in MP4, Matroska audio) and writes a WAV at the
+file's own rate, one or two channels, which `input` reads. The runtime
+learns no format here; a model or sound in another format needs only
+another tool.
 
 ```sh
-cargo run -- import examples/model/source/crate.glb --out examples/model/assets
+cargo run -p orla-tools -- import examples/model/source/crate.glb --out examples/model/assets
+cargo run -p orla-tools -- import song.ogg --out assets   # writes assets/song.wav
 ```
 
 ## Replay tests

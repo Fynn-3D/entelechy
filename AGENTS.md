@@ -290,6 +290,10 @@ new Rust test code or a native rebuild to validate their work.
 Keep each demo in `examples/<demo>/`, with its project entry, `kernels/`, and
 authored `tests/`. Demo-specific documentation belongs in that directory. Follow
 `examples/README.md`; do not add flat examples or a redundant project manifest.
+Keep the runtime crates (host, abi, ir, compiler, language, cpu, gpu, runtime,
+graph, and the `orla` CLI) free of external dependencies; the interface layer's
+Player and `orla-tools` are the only crates that take them, for devices and for
+formats that are not worth decoding twice.
 Do not introduce scripts or interpreter dependencies in other languages.
 Data formats and documentation are not executable
 language dependencies. External agents remain free to use any implementation

@@ -67,6 +67,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   and watches, played by a state row that keeps the playhead in the
   file's frames and resamples to the device's rate with `at_linear`;
   the file was baked by a Kernel and `run --save`.
-- [model](model/README.md): a crate from a GLB, brought in by `orla import`
+- [model](model/README.md): a crate from a GLB, brought in by `orla-tools import`
   as vertex and triangle rows and a PNG the scene reads as inputs, spun
   and rasterized by the native rasterizer, textured with `at_linear`.

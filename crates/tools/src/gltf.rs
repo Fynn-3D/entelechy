@@ -12,7 +12,7 @@ use serde_json::Value as Json;
 
 use orla_runtime::{Domain, Scalar, Schema, file};
 
-use crate::protocol::unbase64;
+use orla::protocol::unbase64;
 
 /// What an import produced.
 pub struct Imported {
@@ -551,7 +551,7 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
             Vec::new()
         };
         if bytes.starts_with(b"\x89PNG") {
-            crate::png::decode(&bytes).map_err(|e| format!("the texture: {e}"))?;
+            orla::png::decode(&bytes).map_err(|e| format!("the texture: {e}"))?;
             let texture_path = out_dir.join(format!("{stem}.albedo.png"));
             std::fs::write(&texture_path, &bytes)
                 .map_err(|e| format!("{}: {e}", texture_path.display()))?;
@@ -595,7 +595,7 @@ mod tests {
         }
         let uri = format!(
             "data:application/octet-stream;base64,{}",
-            crate::protocol::base64(&bin)
+            orla::protocol::base64(&bin)
         );
         format!(
             r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],

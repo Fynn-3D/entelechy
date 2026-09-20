@@ -1,6 +1,6 @@
 # Model
 
-A model from a file. `orla import` reads a glTF or GLB and writes what a
+A model from a file. `orla-tools import` reads a glTF or GLB and writes what a
 scene takes as inputs: the vertices as rows of `{position, normal, uv}`
 with every node's transform baked in, the triangles as rows of three
 indices, and the base colour texture as a PNG. The scene declares the
@@ -26,7 +26,7 @@ animations, sparse accessors and JPEG textures are reported and left
 out; convert a JPEG to PNG and it comes in.
 
 ```sh
-cargo run -- import examples/model/source/crate.glb --out examples/model/assets
+cargo run -p orla-tools -- import examples/model/source/crate.glb --out examples/model/assets
 cargo run --release -p orla-player -- examples/model/scene.osn --backend gpu
 cargo run -- replay examples/model/tests/model.replay
 ```

@@ -20,9 +20,6 @@ usage:
       running version.
   orla replay <file.replay>... [--backend cpu|gpu]
       Drive scenes through scripted frames and inputs and check pixels.
-  orla import <model.gltf|model.glb> [--out <dir>]
-      Write a model's vertices and triangles as Field files and its base
-      colour texture as a PNG, for a scene to read as inputs.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
       Print the flattened graph and what would execute, fused groups marked.
   orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu]
@@ -37,7 +34,6 @@ fn main() -> ExitCode {
         Some("replay") => replay(&args[1..]),
         Some("serve") => serve(&args[1..]),
         Some("graph") => graph(&args[1..]),
-        Some("import") => import(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -50,55 +46,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn import(args: &[String]) -> Result<(), String> {
-    let mut model = None;
-    let mut out = None;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a directory")?)),
-            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
-            other => {
-                if model.replace(PathBuf::from(other)).is_some() {
-                    return Err("import takes one model file".into());
-                }
-            }
-        }
-    }
-    let model = model.ok_or("import needs a .gltf or .glb file")?;
-    let out = out.unwrap_or_else(|| {
-        model
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."))
-    });
-    let imported = orla::gltf::import(&model, &out)?;
-    for file in &imported.files {
-        println!("wrote {}", file.display());
-    }
-    let (lo, hi) = imported.bounds;
-    println!(
-        "{} vertices, {} triangles, bounds ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3}){}",
-        imported.vertices,
-        imported.triangles,
-        lo[0],
-        lo[1],
-        lo[2],
-        hi[0],
-        hi[1],
-        hi[2],
-        if imported.texture.is_some() {
-            ", texture in PNG"
-        } else {
-            ", no texture"
-        }
-    );
-    for note in &imported.notes {
-        println!("note: {note}");
-    }
-    Ok(())
 }
 
 fn check(args: &[String]) -> Result<(), String> {
