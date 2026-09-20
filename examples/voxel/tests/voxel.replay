@@ -15,6 +15,26 @@ expect state.result[0].face = 0 1 0
 expect state.result[0].tool = 0
 expect 4 4 = 0.205 0.213 0.237 0.02          # the sky is dark
 
+# The label at the top left reads "place  27 11 27": at a quarter of the
+# scale its glyphs are one texel per pixel from (3, 3), so the p's bowl
+# is ink at (3, 5), the 2's top row at (46, 3), the 7's at (51, 3).
+expect label.result[0].code = 112
+expect label.result[7].code = 50
+expect label.result[8].code = 55
+expect label.result[10].code = 49
+expect 3 5 = 0.972 0.972 0.983 0.02
+expect 46 3 = 0.972 0.972 0.983 0.02
+expect 51 3 = 0.972 0.972 0.983 0.02
+
+# Over the second item the label names it, "erase", and the voxel under
+# the pointer is gone, so the numbers are dashes; an e's bowl starts one
+# pixel to the right of a p's.
+pointer 91.5 127 up
+frame 0.025
+expect label.result[0].code = 101
+expect label.result[7].code = 45
+expect 4 5 = 0.972 0.972 0.983 0.02
+
 # The left button places a white voxel on that face at once, (27, 12,
 # 27) at 62811, and again every fourth frame while held: the pointer
 # then sees the new voxel's near face, so (27, 12, 28) at 65115 follows.

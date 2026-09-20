@@ -29,12 +29,18 @@ begin ┘                                                └─ backup (feeds ba
   declared once at the top of the file; `cast` and `solid` take the
   volume as a parameter, so the state and the picture call the same
   code on whichever volume they read.
+- `voxel.label` is the words: the item under the pointer, else the tool
+  in hand, by name from a `text` input of the scene, and the voxel under
+  the pointer as three numbers, as glyph rows the text library lays out
+  and `voxel.draw` paints through `ink` at the top left, in logical
+  pixels like the bar.
 - `voxel.draw` walks the same volume per pixel with the same camera,
   lights faces by direction, darkens them where neighbours crowd the
   face, outlines the voxel under the pointer, draws a floor whose grid
   fades with distance with the two axes through the origin, a compass of
   the axes at the top right as the camera sees them, and the bar last:
-  place, erase, paint, the colour (a click cycles it), undo, reset.
+  place, erase, paint, the colour (a click cycles it), undo, reset; and
+  the label last.
 
 The picture fills the window at the window's resolution (`domain =
 window();`); the bar and the compass are laid out in logical pixels, with

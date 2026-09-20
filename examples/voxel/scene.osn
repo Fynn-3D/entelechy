@@ -4,6 +4,9 @@
 // the window at the window's resolution.
 use "kernels/";
 
+input font: Grid<Float> = "../shared/font.png";
+input names: Rows<Int> = text "place erase paint colourundo  reset ";
+
 node seed: voxel.seed@1 { domain = vec3(48, 48, 48); }
 node begin: voxel.begin@1 { domain = 1; }
 
@@ -22,6 +25,7 @@ node backup: voxel.keep@1 {
     world <~ world.result from seed.result;
     state <- state.result;
 }
-node view: voxel.draw@1 { voxels <- world.result; state <- state.result; domain = window(); }
+node label: voxel.label@1 { state <- state.result; names <- names; domain = 15; }
+node view: voxel.draw@1 { voxels <- world.result; state <- state.result; label <- label.result; font <- font; domain = window(); }
 
 output result <- view.result;

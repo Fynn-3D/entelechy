@@ -61,9 +61,10 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   Jacobi Kernel placed forty times, the projection, the smoke it carries;
   the pointer stirs, a replay reads the divergence before and after.
 - [voxel](voxel/README.md): a voxel editor, the first tool: a
-  `Volume<Int>` edited a voxel per click under a minimal bar, the
-  pointer's voxel found by a grid walk in a state row, a backup volume
-  for undo, the same walk per pixel for the picture.
+  `Volume<Int>` edited a voxel per click under a minimal bar with a label
+  from the text library, the pointer's voxel found by a grid walk in a
+  state row, a backup volume for undo, the same walk per pixel for the
+  picture.
 - [sampler](sampler/README.md): a drum from a WAV file the Host reads
   and watches, played by a state row that keeps the playhead in the
   file's frames and resamples to the device's rate with `at_linear`;

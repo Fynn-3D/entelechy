@@ -5,7 +5,10 @@
 // left button applies the tool to the voxel under the pointer and keeps
 // applying it while held; the right button erases whatever the tool. A
 // bar at the bottom holds the tools; a compass at the top right shows
-// the axes.
+// the axes; a label at the top left names the tool and the voxel under
+// the pointer, drawn through the text library.
+use "../../shared/text.orla";
+
 struct Edit {
     yaw: Float; pitch: Float; zoom: Float; pan: Vec3;
     px: Float; py: Float;                    // pointer, last frame
@@ -255,14 +258,48 @@ kernel voxel.keep@1 {
     }
 }
 
+// The label: the item under the pointer, else the tool in hand, by name
+// from the scene's text of names (six characters each), then the voxel
+// under the pointer as three two-digit numbers, dashes when there is
+// none or the pointer is on the bar; fifteen glyphs at the top left,
+// laid out in logical pixels with
+// the glyph at a whole multiple of the scale so the font stays crisp.
+kernel voxel.label@1 {
+    requires { field.read; field.write; input.read; }
+    input state: Studio;
+    input names: Rows<Int>;
+    output result: Text;
+    compute {
+        let s = at(state, 0);
+        let i = element();
+        let item = if s.hover >= 0 { s.hover } else { s.tool };
+        let code = if i < 6 { at(names, item * 6 + i) }
+            else if i == 6 || i == 9 || i == 12 { 32 }
+            else {
+                let v = if i <= 8 { s.hit.x } else if i <= 11 { s.hit.y } else { s.hit.z };
+                let tens = i == 7 || i == 10 || i == 13;
+                // Under the bar there is no voxel, whatever the ray behind it hits.
+                if !s.found || s.hover >= 0 { 45 } else {
+                    let n = int(v);
+                    48 + (if tens { n / 10 } else { n % 10 })
+                }
+            };
+        let unit = scale();
+        let glyph = max(1.0, round(unit * 2.0));
+        return Glyph { code: code, origin: vec2(12.0, 12.0) * unit + vec2(float(i) * 6.0 * glyph, 0.0), scale: glyph };
+    }
+}
+
 // The picture: the same camera and the same cast as the state, per
 // pixel; faces lit by their direction, darkened where neighbours crowd
 // the face; the voxel under the pointer outlined; a floor whose grid
-// fades with distance; a compass of the axes; the bar.
+// fades with distance; a compass of the axes; the bar; the label.
 kernel voxel.draw@1 {
     requires { field.read; field.write; input.read; }
     input voxels: Voxels;
     input state: Studio;
+    input label: Text;
+    input font: Atlas;
     output result: Image;
 
     // Occlusion on a face from the four voxels beside it, each weighing
@@ -383,7 +420,9 @@ kernel voxel.draw@1 {
         let glyph = if in_item { icon(slot, u, s.tool, s.colour) } else { vec3(0.0, 0.0, 0.0) };
         let plate = if active { vec3(0.36, 0.38, 0.46) } else if hovered { vec3(0.2, 0.21, 0.25) } else { vec3(0.11, 0.115, 0.14) };
         let colour = if in_bar { mix(with_compass, plate, 0.85) + glyph } else { with_compass };
-        let out = pow(clamp(colour, 0.0, 1.0), 1.0 / 1.8);
+        // The label, in the text library's ink.
+        let lettered = mix(colour, vec3(0.95, 0.95, 0.97), ink(label, font, px + vec2(0.5, 0.5)));
+        let out = pow(clamp(lettered, 0.0, 1.0), 1.0 / 1.8);
         return vec4(out.x, out.y, out.z, 1.0);
     }
 }
