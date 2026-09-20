@@ -6,7 +6,10 @@
 //! successful output when a change is rejected. Source resolution lives
 //! here, not in the runtimes.
 
+pub mod inflate;
+pub mod png;
 pub mod ppm;
 pub mod protocol;
 pub mod replay;
 pub mod session;
+pub mod wav;

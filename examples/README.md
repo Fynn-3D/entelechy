@@ -63,3 +63,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   `Volume<Int>` edited a voxel per click under a minimal bar, the
   pointer's voxel found by a grid walk in a state row, a backup volume
   for undo, the same walk per pixel for the picture.
+- [sampler](sampler/README.md): a drum from a WAV file the Host reads
+  and watches, played by a state row that keeps the playhead in the
+  file's frames and resamples to the device's rate with `at_linear`;
+  the file was baked by a Kernel and `run --save`.

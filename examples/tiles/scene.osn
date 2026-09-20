@@ -1,8 +1,8 @@
 // generate -> flood (fed back) -> render, with the atlas read from a file
-// the Host watches: edit assets/atlas.ppm and the tiles change.
+// the Host watches: edit assets/atlas.png and the tiles change.
 use "kernels/";
 
-input atlas: Image = "assets/atlas.ppm";
+input atlas: Image = "assets/atlas.png";
 
 node map: tiles.generate@1 {
     domain = vec2(20, 15);

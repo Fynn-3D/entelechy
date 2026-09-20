@@ -95,9 +95,12 @@ scrolled since the last evaluation, as a `Vec2`), and `key(code)` need
 `field.read`, writing `field.write`. A document's `input name: Type;` is a
 Field the caller supplies; `input atlas: Image = "atlas.ppm";` names a file
 the Host reads for it, relative to the document, and reads again whenever
-the file changes: a picture as `.ppm`, a `Grid<Float>` as `.pgm`, and any
-Field as `.field`, the Host's own format, which `run --save` and the
-protocol's `read` write. A struct, `type`, or `fn` declared at
+the file changes: a picture as `.png` or `.ppm` (as pixels, or as a
+`Grid<Float>` of luminance when the input says `Grid<Float>`), a
+`Grid<Float>` as `.pgm`, a sound as `.wav` (rows of one or two floats; the
+rate is reported, not stored, and a Kernel resamples with `at_linear`), and
+any Field as `.field`, the Host's own format. `run --save` and the
+protocol's `read` write all of them. A struct, `type`, or `fn` declared at
 the top of a document is shared by every Kernel in it, and by every Kernel
 of a document that `use`s it; a function calls only what is declared above
 it. A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)

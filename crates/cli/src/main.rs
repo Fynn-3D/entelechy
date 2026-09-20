@@ -12,7 +12,7 @@ usage:
   orla check [--ir] <file.orla|file.osn>...
       Parse documents, compile their Kernels, and print manifests or diagnostics.
   orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
-                       [--save <node.port>=<file.field|.ppm|.pgm>]...
+                       [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu]
                        [--param <name>=<literal>]... [--no-fusion]
       Evaluate a scene and write its output. With --watch, keep running and
@@ -549,6 +549,25 @@ fn evaluate_and_export(
                         return false;
                     }
                 }
+            }
+            // The output goes to `--out` when it is a picture; rows or a
+            // volume are reached with `--save`.
+            let is_picture = {
+                let host = session.runtime().host();
+                host.schema(report.output)
+                    .is_ok_and(|schema| schema.is_pixel())
+                    && host
+                        .domain(report.output)
+                        .is_ok_and(|domain| domain.shape() == orla_runtime::Shape::Grid)
+            };
+            if !is_picture {
+                eprintln!(
+                    "evaluated in {:?}: executed [{executed}], reused {}; the output is not a picture, so nothing went to {}",
+                    started.elapsed(),
+                    report.reused.len(),
+                    out.display()
+                );
+                return true;
             }
             match session.export(report.output, out) {
                 Ok(()) => {

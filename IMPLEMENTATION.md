@@ -209,10 +209,15 @@ capability claim.
   [parity](crates/gpu/tests/parity.rs)).
 - Assets are inputs with files: `input atlas: Image = "atlas.ppm";` names
   a file the session reads into the Host and re-reads when its stamp
-  changes, so a picture edited on disk changes the running scene; `.ppm`
-  is a grid of pixels, `.pgm` a `Grid<Float>`, `.field` any Field in the
-  Host's own format ([file](crates/host/src/file.rs)), which `run --save`
-  and the protocol's `read` produce ([session](crates/cli/src/session.rs),
+  changes, so a picture edited on disk changes the running scene; `.png`
+  and `.ppm` are grids of pixels (or `Grid<Float>` luminance when the
+  input asks), `.pgm` a `Grid<Float>`, `.wav` rows of one or two floats
+  with the rate reported, `.field` any Field in the Host's own format
+  ([file](crates/host/src/file.rs)). PNG and WAV are decoded and encoded
+  with no dependency ([inflate](crates/cli/src/inflate.rs),
+  [png](crates/cli/src/png.rs), [wav](crates/cli/src/wav.rs)), checked
+  against reference vectors; `run --save` and the protocol's `read`
+  produce them ([session](crates/cli/src/session.rs),
   [tests](crates/cli/tests/session.rs)).
 - Functions are shared like structs: declared at a document's top level
   and inherited through `use`; one with a Field parameter is a template

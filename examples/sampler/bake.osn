@@ -1,0 +1,7 @@
+// Bakes the kick: half a second of frames at 48 kHz, saved as a WAV.
+//   orla run examples/sampler/bake.osn --save kick=examples/sampler/assets/kick.wav
+use "kernels/";
+
+node kick: sampler.kick@1 { domain = 24000; }
+
+output result <- kick.result;

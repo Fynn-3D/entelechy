@@ -1,0 +1,48 @@
+scene sampler.osn
+
+# The first frame is a beat: the clip starts. Each frame reads on 800
+# frames; thirty frames later the half-second clip has run out and the
+# block is silent; Space starts it again.
+frame 0.0
+expect state.result[0].head = 0.0 0.001
+expect state.result[0].beat = 0
+expect block.result[100] = 0.8312 0.8312 0.002
+frame 0.02
+expect state.result[0].head = 800.0 0.001
+expect block.result[0] = 0.8009 0.8009 0.002
+frame 0.04
+frame 0.06
+frame 0.08
+frame 0.10
+frame 0.12
+frame 0.14
+frame 0.16
+frame 0.18
+frame 0.20
+frame 0.22
+frame 0.24
+frame 0.26
+frame 0.28
+frame 0.30
+frame 0.32
+frame 0.34
+frame 0.36
+frame 0.38
+frame 0.40
+frame 0.42
+frame 0.44
+frame 0.46
+frame 0.48
+frame 0.50
+frame 0.52
+frame 0.54
+frame 0.56
+frame 0.58
+frame 0.60
+frame 0.62
+expect state.result[0].head = 24800.0 0.001
+expect block.result[0] = 0.0 0.0 0.001
+key 32 down
+frame 0.99
+expect state.result[0].head = 0.0 0.001
+expect block.result[100] = 0.8312 0.8312 0.002

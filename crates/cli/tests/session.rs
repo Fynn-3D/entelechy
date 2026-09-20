@@ -644,12 +644,50 @@ output result <- copy.result;
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("loaded photo from"), "{stderr}");
-    let field = Session::load_field(&dir.join("copy.field")).unwrap();
+    let (field, _) = Session::load_field(&dir.join("copy.field"), None).unwrap();
     assert_eq!(field.domain(), orla_runtime::Domain::Grid(2, 1));
     assert_eq!(f32::from_bits(field.words()[0]), 1.0);
     assert_eq!(
         std::fs::read(dir.join("copy.ppm")).unwrap(),
         picture([255, 0, 0])
     );
+
+    // PNG comes in as pixels or as a Grid<Float> by the input's type, and
+    // goes out as a file any viewer opens; WAV comes in as rows with its
+    // rate reported.
+    let pixels = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
+    std::fs::write(dir.join("photo.png"), orla::png::encode(2, 1, &pixels)).unwrap();
+    let (as_pixels, detail) = Session::load_field(&dir.join("photo.png"), Some("Image")).unwrap();
+    assert!(
+        as_pixels.schema().is_pixel() && detail.contains("Grid 2"),
+        "{detail}"
+    );
+    let (as_gray, _) = Session::load_field(&dir.join("photo.png"), Some("Grid<Float>")).unwrap();
+    assert_eq!(as_gray.schema().words(), 1);
+    assert!((f32::from_bits(as_gray.words()[0]) - 0.2126).abs() < 1e-5);
+    let sound: Vec<u32> = [0.0f32, 0.5, -0.5, 0.25]
+        .iter()
+        .map(|v| v.to_bits())
+        .collect();
+    std::fs::write(dir.join("hit.wav"), orla::wav::encode(&sound, 2, 22050)).unwrap();
+    let (rows, detail) = Session::load_field(&dir.join("hit.wav"), Some("Rows<Vec2>")).unwrap();
+    assert_eq!(rows.domain(), orla_runtime::Domain::Rows(2));
+    assert!(detail.ends_with("at 22050 Hz"), "{detail}");
+    let output = Command::new(orla)
+        .arg("run")
+        .arg(dir.join("assets.osn"))
+        .arg("--save")
+        .arg(format!("copy={}", dir.join("copy.png").display()))
+        .arg("--out")
+        .arg(dir.join("out.ppm"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (again, _) = Session::load_field(&dir.join("copy.png"), Some("Image")).unwrap();
+    assert_eq!(f32::from_bits(again.words()[0]), 1.0);
     let _ = std::fs::remove_dir_all(&dir);
 }

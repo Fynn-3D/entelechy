@@ -192,7 +192,7 @@ pub(crate) fn lower(
 /// What one document level exposes to its parent.
 struct Level {
     externals: Vec<String>,
-    assets: Vec<(String, PathBuf)>,
+    assets: Vec<(String, PathBuf, String)>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -236,7 +236,11 @@ impl Lowering<'_, '_> {
                         "a placed graph's input is wired by the placing graph; it cannot name a file",
                     ));
                 }
-                assets.push((input.name.value.clone(), base.join(&file.value)));
+                assets.push((
+                    input.name.value.clone(),
+                    base.join(&file.value),
+                    input.ty.value.clone(),
+                ));
             }
             externals.push(input.name.value.clone());
         }

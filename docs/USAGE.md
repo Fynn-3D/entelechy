@@ -25,9 +25,11 @@ bound with `--input <name>=<file.ppm>`, or read from the file the input
 names (`input atlas: Image = "atlas.ppm";`), which the Host watches; graph
 parameters are overridden with `--param <name>=<literal>`. `--save
 <node.port>=<file>` writes any node's output after the evaluation: `.field`
-for any Field, `.ppm` for a grid of pixels, `.pgm` for a `Grid<Float>`; the
-node is pinned so fusion keeps it. A Kernel that draws a sprite sheet and a
-`--save` are how an asset is made.
+for any Field, `.png` or `.ppm` for a grid of pixels (a `Grid<Float>` as
+gray), `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
+floats; the node is pinned so fusion keeps it. A Kernel that draws a
+sprite sheet or synthesizes a drum, and a `--save`, are how an asset is
+made; `--out` is written only when the output is a picture.
 
 ```sh
 cargo run -- run examples/grayscale/scene.osn --out output.ppm

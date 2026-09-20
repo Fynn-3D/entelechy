@@ -130,9 +130,11 @@ pub struct Graph {
     pub name: String,
     /// External Field names the caller must supply.
     pub externals: Vec<String>,
-    /// Externals the document reads from files, by name, resolved
-    /// against the document's directory; the Host loads and watches them.
-    pub assets: Vec<(String, PathBuf)>,
+    /// Externals the document reads from files: the name, the path
+    /// resolved against the document's directory, and the type as
+    /// written, which tells a picture file whether to come in as pixels
+    /// or as a `Grid<Float>`; the Host loads and watches them.
+    pub assets: Vec<(String, PathBuf, String)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
     /// Nodes in document order, sub-graphs flattened in place.
