@@ -143,6 +143,7 @@ impl fmt::Display for Op {
             Self::Binary(op, a, b) => write!(f, "{a} {} {b}", op.symbol()),
             Self::Construct(parts) => write!(f, "construct {}", list(parts)),
             Self::Extract(vector, component) => write!(f, "extract {vector}[{component}]"),
+            Self::Subscript(array, index) => write!(f, "subscript {array}[{index}]"),
             Self::Call(function, args) => write!(f, "call fn{function}({})", list(args)),
             Self::Intrinsic(intrinsic, args) => {
                 write!(f, "{}({})", intrinsic.name(), list(args))

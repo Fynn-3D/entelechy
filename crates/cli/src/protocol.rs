@@ -394,9 +394,18 @@ pub fn words_json(module: &Validated, ty: Type, words: &[u32]) -> Json {
             json!(words.iter().map(|w| f32::from_bits(*w)).collect::<Vec<_>>())
         }
         Type::Struct(index) => {
-            let mut object = serde_json::Map::new();
+            let def = &module.structs[index as usize];
             let mut cursor = 0;
-            for field in &module.structs[index as usize].fields {
+            if let Some(element) = def.element {
+                let n = words_of(module, element);
+                return json!(
+                    (0..def.fields.len())
+                        .map(|k| words_json(module, element, &words[k * n..(k + 1) * n]))
+                        .collect::<Vec<_>>()
+                );
+            }
+            let mut object = serde_json::Map::new();
+            for field in &def.fields {
                 let n = words_of(module, field.ty);
                 object.insert(
                     field.name.clone(),
@@ -435,6 +444,13 @@ pub fn words_text(module: &Validated, ty: Type, words: &[u32]) -> String {
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
             let mut cursor = 0;
+            if let Some(element) = def.element {
+                let n = words_of(module, element);
+                let elements: Vec<String> = (0..def.fields.len())
+                    .map(|k| words_text(module, element, &words[k * n..(k + 1) * n]))
+                    .collect();
+                return format!("[{}]", elements.join(", "));
+            }
             let fields: Vec<String> = def
                 .fields
                 .iter()

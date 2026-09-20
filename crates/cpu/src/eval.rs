@@ -93,6 +93,15 @@ enum Instr {
         dst: usize,
         parts: Vec<Loc>,
     },
+    /// `dst` = the `n` words of element `index` (clamped to `count`) of
+    /// the array at `base`.
+    Subscript {
+        dst: usize,
+        base: usize,
+        index: usize,
+        count: usize,
+        n: usize,
+    },
     Vector {
         dst: usize,
         parts: Vec<(usize, Widen)>,
@@ -783,6 +792,24 @@ impl FunctionCompiler<'_> {
                 };
                 return None;
             }
+            Op::Subscript(array, index) => {
+                let base = self.loc(array);
+                let index = self.loc(index);
+                let count = match self.ty(array) {
+                    Type::Struct(struct_index) => self.shared.structs[struct_index as usize]
+                        .field_offsets
+                        .len(),
+                    _ => 1,
+                };
+                let dst = define(self);
+                Instr::Subscript {
+                    dst: dst.at,
+                    base: base.at,
+                    index: index.at,
+                    count,
+                    n: dst.n,
+                }
+            }
             Op::Call(callee, call_args) => {
                 let dst = define(self);
                 Instr::Call {
@@ -1457,6 +1484,16 @@ impl<'p, 's> Machine<'p, 's> {
                     s.copy_within(fp + part.at..fp + part.at + part.n, cursor);
                     cursor += part.n;
                 }
+            }
+            Instr::Subscript {
+                dst,
+                base,
+                index,
+                count,
+                n,
+            } => {
+                let k = (s[fp + index] as i32).clamp(0, *count as i32 - 1) as usize;
+                s.copy_within(fp + base + k * n..fp + base + (k + 1) * n, fp + dst);
             }
             Instr::Vector { dst, parts } => {
                 for (k, (src, widen)) in parts.iter().enumerate() {

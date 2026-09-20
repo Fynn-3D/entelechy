@@ -53,6 +53,39 @@ pub fn dispatch(domain: orla_abi::Domain) -> (u32, u32, u32, u32) {
     }
 }
 
+/// The path to field `k` of a struct value: a named field, or an
+/// array's element.
+fn field_path(module: &Module, index: u32, k: usize) -> String {
+    if module.structs[index as usize].is_array() {
+        format!("[{k}]")
+    } else {
+        format!(".f{k}")
+    }
+}
+
+/// The declaration of struct `index`: a WGSL struct, or an alias of an
+/// array, which builds with the same `S{index}(...)` constructor.
+fn struct_decl(module: &Module, index: usize) -> String {
+    let def = &module.structs[index];
+    match def.element {
+        Some(element) => format!(
+            "alias S{index} = array<{}, {}>;",
+            wgsl_type(element),
+            def.fields.len()
+        ),
+        None => {
+            let fields = def
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("struct S{index} {{ {fields} }}")
+        }
+    }
+}
+
 fn wgsl_type(ty: Type) -> String {
     match ty {
         Type::Float => "f32".into(),
@@ -131,15 +164,8 @@ fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
         );
     }
     out.push('\n');
-    for (index, def) in module.structs.iter().enumerate() {
-        let fields = def
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
+    for index in 0..module.structs.len() {
+        let _ = writeln!(out, "{}", struct_decl(module, index));
     }
     let _ = writeln!(
         out,
@@ -400,8 +426,8 @@ fn combine_expr(module: &Module, ty: Type, combine: Combine, a: &str, b: &str) -
                         module,
                         field.ty,
                         combine,
-                        &format!("{a}.f{k}"),
-                        &format!("{b}.f{k}"),
+                        &format!("{a}{}", field_path(module, index, k)),
+                        &format!("{b}{}", field_path(module, index, k)),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -481,7 +507,8 @@ fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Typ
         }
         Type::Struct(index) => {
             for (k, field) in module.structs[index as usize].fields.iter().enumerate() {
-                value_words(module, field.ty, &format!("{path}.f{k}"), out);
+                let path = format!("{path}{}", field_path(module, index, k));
+                value_words(module, field.ty, &path, out);
             }
         }
     }
@@ -515,15 +542,8 @@ fn scatter_header(module: &Module, target: Option<bool>, extra: &str) -> String 
         );
     }
     out.push_str(extra);
-    for (index, def) in module.structs.iter().enumerate() {
-        let fields = def
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
+    for index in 0..module.structs.len() {
+        let _ = writeln!(out, "{}", struct_decl(module, index));
     }
     // The total order over floats as keys, an involution on the bits:
     // every negative below every positive, NaN beyond the infinities.
@@ -1038,8 +1058,8 @@ fn emit_mixers(out: &mut String, module: &Module) {
                 mix_call(
                     module,
                     field.ty,
-                    &format!("a.f{k}"),
-                    &format!("b.f{k}"),
+                    &format!("a{}", field_path(module, index as u32, k)),
+                    &format!("b{}", field_path(module, index as u32, k)),
                     "t",
                 )
             })
@@ -1254,7 +1274,7 @@ fn store_lines(
                 used += store_lines(
                     module,
                     field.ty,
-                    &format!("{path}.f{k}"),
+                    &format!("{path}{}", field_path(module, index, k)),
                     offset + used,
                     out,
                 );
@@ -1427,8 +1447,12 @@ impl Emitter<'_> {
                 parts.iter().map(v).collect::<Vec<_>>().join(", ")
             ),
             Op::Extract(source, component) => {
-                if let Type::Struct(_) = self.type_of(*source) {
-                    format!("{}.f{component}", v(source))
+                if let Type::Struct(index) = self.type_of(*source) {
+                    format!(
+                        "{}{}",
+                        v(source),
+                        field_path(self.module, index, *component as usize)
+                    )
                 } else {
                     format!(
                         "{}.{}",
@@ -1436,6 +1460,15 @@ impl Emitter<'_> {
                         ["x", "y", "z", "w"][*component as usize]
                     )
                 }
+            }
+            Op::Subscript(array, index) => {
+                let count = match self.type_of(*array) {
+                    Type::Struct(struct_index) => {
+                        self.module.structs[struct_index as usize].fields.len()
+                    }
+                    _ => 1,
+                };
+                format!("{}[clamp({}, 0, {})]", v(array), v(index), count - 1)
             }
             Op::Call(index, args) => format!(
                 "f{index}({})",

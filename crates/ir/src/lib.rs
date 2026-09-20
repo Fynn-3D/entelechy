@@ -775,12 +775,53 @@ pub struct Field {
 
 /// A Kernel-defined record type. Struct `i` may only contain structs with
 /// index less than `i`, which rules out recursion by construction.
+///
+/// A fixed-size array `[T; N]` is a struct of `N` fields of one type `T`,
+/// named `0` to `N - 1`, with `element` set to `T`: it lays out, builds
+/// and extracts like any struct, and may also be indexed at run time
+/// with [`Op::Index`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructDef {
-    /// Name for inspection and diagnostics.
+    /// Name for inspection and diagnostics; an array's is `[T; N]`.
     pub name: String,
     /// Fields in declaration order.
     pub fields: Vec<Field>,
+    /// The element type when the struct is an array, whose fields are
+    /// all of it.
+    pub element: Option<Type>,
+}
+
+/// Largest element count an array type may declare.
+pub const MAX_ARRAY_COUNT: u32 = 4096;
+
+impl StructDef {
+    /// A named record.
+    pub fn record(name: impl Into<String>, fields: Vec<Field>) -> Self {
+        Self {
+            name: name.into(),
+            fields,
+            element: None,
+        }
+    }
+
+    /// The array `[element; count]`, named by the element's spelling.
+    pub fn array(element: Type, element_name: &str, count: u32) -> Self {
+        Self {
+            name: format!("[{element_name}; {count}]"),
+            fields: (0..count)
+                .map(|k| Field {
+                    name: k.to_string(),
+                    ty: element,
+                })
+                .collect(),
+            element: Some(element),
+        }
+    }
+
+    /// Whether the struct is an array, and of what.
+    pub fn is_array(&self) -> bool {
+        self.element.is_some()
+    }
 }
 
 /// A nested block: instructions and the value the block yields.
@@ -811,8 +852,12 @@ pub enum Op {
     /// Build a vector from float components or a struct from its fields; the
     /// instruction type says which.
     Construct(Vec<ValueId>),
-    /// Extract a float component from a vector or a field from a struct.
-    Extract(ValueId, u8),
+    /// Extract a float component from a vector, a field from a struct, or
+    /// an element of an array at a constant index.
+    Extract(ValueId, u32),
+    /// The element of an array at an `Int` index, clamped into the
+    /// array's range, as the array's element type.
+    Subscript(ValueId, ValueId),
     /// Call a Kernel-defined function by index with arguments.
     Call(u32, Vec<ValueId>),
     /// A pure intrinsic.

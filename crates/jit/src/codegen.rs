@@ -695,6 +695,40 @@ impl<'a, 'b> Fx<'a, 'b> {
                     _ => vec![words[*component as usize]],
                 }
             }
+            Op::Subscript(array, index) => {
+                // The array's words go to a slot of their own; the element
+                // is loaded back at the clamped index times its width.
+                let words = self.words(array);
+                let count = match self.ty(array) {
+                    Type::Struct(struct_index) => {
+                        self.module.structs[struct_index as usize].fields.len()
+                    }
+                    _ => 1,
+                };
+                let tys = word_types(self.module, ty);
+                let n = tys.len();
+                let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    (words.len().max(1) * 4) as u32,
+                    2,
+                ));
+                for (k, word) in words.iter().enumerate() {
+                    self.b.ins().stack_store(*word, slot, (k * 4) as i32);
+                }
+                let base = self.b.ins().stack_addr(self.ptr, slot, 0);
+                let raw = self.words(index)[0];
+                let zero = self.i32c(0);
+                let last = self.i32c(count as i64 - 1);
+                let low = self.b.ins().smax(raw, zero);
+                let clamped = self.b.ins().smin(low, last);
+                let scaled = self.b.ins().imul_imm(clamped, (n * 4) as i64);
+                let offset = self.b.ins().uextend(self.ptr, scaled);
+                let address = self.b.ins().iadd(base, offset);
+                tys.iter()
+                    .enumerate()
+                    .map(|(k, t)| self.b.ins().load(*t, self.flags, address, (k * 4) as i32))
+                    .collect()
+            }
             Op::Call(callee, args) => {
                 // The callee writes its result's words to a slot of ours.
                 let tys = word_types(self.module, ty);

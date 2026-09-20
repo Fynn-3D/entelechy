@@ -610,3 +610,63 @@ fn a_nested_loop_reads_the_enclosing_loops_carried_value() {
     compile("kernel t.s@1 { requires { field.read; field.write; } input rows: Rows<Int>; output r: Rows<Int>; scan with acc = 0 { return loop 2 with k = acc { k + acc + sample(rows) }; } }")
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+#[test]
+fn arrays_are_typed_built_indexed_and_checked() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; }
+            struct Table { rows: [Int; 4]; scale: Float; }
+            output r: Rows<Int>;
+            fn roll(t: [Int; 4], by: Int) -> [Int; 4] { return [t[by % 4], t[1], t[2], t[3]]; }
+            compute {
+                let i = element();
+                let lut = [3, 1, 4, 1];
+                let same = [i; 4];
+                let grid = [[1, 2], [3, 4]];
+                let t = Table { rows: roll(lut, i), scale: 0.5 };
+                return lut[i % 4] + same[2] + grid[i % 2][1] + t.rows[-0] + int(t.scale);
+            } }",
+    )
+    .unwrap();
+    let names: Vec<&str> = module.structs.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["[Int; 4]", "Table", "[Int; 2]", "[[Int; 2]; 2]"]
+    );
+    assert_eq!(module.structs[0].element, Some(Type::Int));
+    assert_eq!(module.structs[3].element, Some(Type::Struct(2)));
+    assert!(module.structs[1].element.is_none());
+    let text = module.to_string();
+    assert!(text.contains("subscript"), "{text}");
+    assert!(text.contains("extract %"), "{text}");
+
+    let head = "kernel t.k@1 { requires { field.write; } output r: Rows<Int>; compute { let i = element(); ";
+    let (_, message) = semantic(&format!("{head}let a = [1, 2.0]; return a[0]; }} }}"));
+    assert_eq!(
+        message,
+        "an array's elements are all one type: this one is Float, the first Int"
+    );
+    let (_, message) = semantic(&format!("{head}let a = [1, 2]; return a[2]; }} }}"));
+    assert_eq!(
+        message,
+        "index 2 is outside `[Int; 2]`, whose elements are 0 to 1"
+    );
+    let (_, message) = semantic(&format!("{head}let a = [1, 2]; return a[1.5]; }} }}"));
+    assert_eq!(message, "an array takes an Int index, found Float");
+    let (_, message) = semantic(&format!("{head}let a = [1, 2]; return a.x; }} }}"));
+    assert_eq!(
+        message,
+        "`[Int; 2]` is an array; take an element with `[index]`"
+    );
+    let (_, message) = semantic(&format!("{head}return i[0]; }} }}"));
+    assert_eq!(message, "`[index]` takes an element of an array, found Int");
+    let (_, message) = semantic(&format!("{head}let a = [1; 5000]; return a[0]; }} }}"));
+    assert_eq!(message, "an array has 1 to 4096 elements, not 5000");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } param p: [Int; 2] = 0; output r: Rows<Int>; compute { return 0; } }",
+    );
+    assert_eq!(
+        message,
+        "parameters cross the ABI and cannot be structs or arrays; use plain values"
+    );
+}

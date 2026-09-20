@@ -390,6 +390,19 @@ capability claim.
   [parity](crates/gpu/tests/parity.rs), and the
   [ray-march example](examples/raymarch/kernels/march.orla).
 
+- Fixed-size arrays `[T; N]` are structs of `N` fields of one type,
+  marked with their element in [the struct table](crates/ir/src/lib.rs)
+  and interned by the compiler so two spellings are one type: they lay
+  out, build (`[a, b, c]`, `[v; N]`) and extract (a literal index) like
+  any struct on every backend, and a run-time index is one more
+  operation, `subscript`, clamped into the array (the CPU copies the
+  element's words, the GPU indexes a WGSL `array<T, N>` alias, the JIT
+  spills the array to a stack slot and loads at the index). Proof: the
+  [feature matrix](crates/matrix/src/lib.rs) under every mode on both
+  backends, [diagnostics](crates/compiler/tests/compile.rs), and the
+  [CHIP-8](examples/chip8/kernels/chip8.orla) and
+  [Thumb](examples/thumb/kernels/thumb.orla) ROMs written as data.
+
 - Backends implement [`Backend`](crates/runtime/src/lib.rs): `prepare` does
   the expensive work (the GPU backend compiles WGSL and builds the pipeline
   there), so `publish` is a pointer swap. GPU and CPU results agree within

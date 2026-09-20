@@ -6,8 +6,8 @@ use std::str::FromStr;
 
 use orla_ir::{
     BinaryOp, Block as IrBlock, Capability, Combine, Field, Function, Instruction, Intrinsic,
-    KernelId, MAX_LOOP_COUNT, Manifest, Mode, Module, Op, Param, Port, PortType, Shape, ShapeIndex,
-    StructDef, Type, UnaryOp, Value, ValueId, schema_of,
+    KernelId, MAX_ARRAY_COUNT, MAX_LOOP_COUNT, Manifest, Mode, Module, Op, Param, Port, PortType,
+    Shape, ShapeIndex, StructDef, Type, UnaryOp, Value, ValueId, schema_of,
 };
 use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 
@@ -24,12 +24,87 @@ fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
     Type::from_str(&name.value).map_err(|error| semantic(name.span, error.to_string()))
 }
 
-/// Resolves a type name against the plain types and the struct table.
-fn resolve_type(name: &Spanned<String>, structs: &[StructDef]) -> Result<Type, CompileError> {
-    if let Some(index) = structs.iter().position(|def| def.name == name.value) {
+/// The struct table while a Kernel lowers: the declared structs first,
+/// then every array type met, `[T; N]` interned once by element and
+/// count so two spellings of it are one type.
+type Structs = RefCell<Vec<StructDef>>;
+
+/// Resolves a type name against the plain types, the struct table and
+/// the array spelling `[Type; N]`, whose type is interned.
+fn resolve_type(name: &Spanned<String>, structs: &Structs) -> Result<Type, CompileError> {
+    if let Some(inner) = name.value.strip_prefix('[') {
+        let Some((element, count)) = inner
+            .strip_suffix(']')
+            .and_then(|inner| inner.rsplit_once(';'))
+        else {
+            return Err(semantic(
+                name.span,
+                format!(
+                    "`{}` is not a type; an array is `[Type; count]`",
+                    name.value
+                ),
+            ));
+        };
+        let element = resolve_type(
+            &Spanned {
+                value: element.trim().to_owned(),
+                span: name.span,
+            },
+            structs,
+        )?;
+        let count: u32 = count.trim().parse().map_err(|_| {
+            semantic(
+                name.span,
+                format!(
+                    "`{}` is not a type; an array is `[Type; count]`",
+                    name.value
+                ),
+            )
+        })?;
+        return array_type(structs, element, count, name.span);
+    }
+    let found = structs
+        .borrow()
+        .iter()
+        .position(|def| def.name == name.value);
+    if let Some(index) = found {
         return Ok(Type::Struct(index as u32));
     }
     parse_type(name)
+}
+
+/// The array type `[element; count]`, interned in the struct table.
+fn array_type(
+    structs: &Structs,
+    element: Type,
+    count: u32,
+    span: Span,
+) -> Result<Type, CompileError> {
+    if count == 0 || count > MAX_ARRAY_COUNT {
+        return Err(semantic(
+            span,
+            format!("an array has 1 to {MAX_ARRAY_COUNT} elements, not {count}"),
+        ));
+    }
+    let existing = structs
+        .borrow()
+        .iter()
+        .position(|def| def.element == Some(element) && def.fields.len() == count as usize);
+    if let Some(index) = existing {
+        return Ok(Type::Struct(index as u32));
+    }
+    let name = describe(element, &structs.borrow());
+    let mut table = structs.borrow_mut();
+    table.push(StructDef::array(element, &name, count));
+    Ok(Type::Struct((table.len() - 1) as u32))
+}
+
+/// Whether a type is an array, and of what.
+fn array_element(ty: Type, structs: &[StructDef]) -> Option<Type> {
+    match ty {
+        Type::Struct(index) => structs[index as usize].element,
+        _ => None,
+    }
 }
 
 /// Human-readable type for diagnostics, naming structs.
@@ -43,10 +118,14 @@ fn describe(ty: Type, structs: &[StructDef]) -> String {
     }
 }
 
-fn structs(kernel: &Kernel) -> Result<Vec<StructDef>, CompileError> {
-    let mut structs: Vec<StructDef> = Vec::new();
+fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
+    let structs: Structs = RefCell::new(Vec::new());
     for decl in &kernel.structs {
-        if structs.iter().any(|def| def.name == decl.name.value) {
+        if structs
+            .borrow()
+            .iter()
+            .any(|def| def.name == decl.name.value)
+        {
             return Err(semantic(
                 decl.name.span,
                 format!("struct `{}` is defined twice", decl.name.value),
@@ -75,10 +154,9 @@ fn structs(kernel: &Kernel) -> Result<Vec<StructDef>, CompileError> {
                 ty,
             });
         }
-        structs.push(StructDef {
-            name: decl.name.value.clone(),
-            fields,
-        });
+        structs
+            .borrow_mut()
+            .push(StructDef::record(decl.name.value.clone(), fields));
     }
     Ok(structs)
 }
@@ -201,8 +279,11 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             // value of its element type, as a struct of two fields.
             let target = &manifest.inputs[base as usize];
             let address = target.ty.index_type();
+            let table = structs.borrow();
             let fields = match actual {
-                Type::Struct(index) => Some(&structs[index as usize].fields),
+                Type::Struct(index) if !table[index as usize].is_array() => {
+                    Some(&table[index as usize].fields)
+                }
                 _ => None,
             };
             let well_formed = fields.is_some_and(|fields| {
@@ -214,9 +295,9 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                     format!(
                         "a scatter into `{}` gives a struct of two fields per element, an address ({}) and a value ({}), but the body gives {}",
                         target.name,
-                        describe(address, &structs),
-                        describe(expected, &structs),
-                        describe(actual, &structs)
+                        describe(address, &table),
+                        describe(expected, &table),
+                        describe(actual, &table)
                     ),
                 ));
             }
@@ -226,8 +307,8 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                 format!(
                     "output `{}` needs a {} per element, but the body gives {}",
                     manifest.outputs[0].name,
-                    describe(expected, &structs),
-                    describe(actual, &structs)
+                    describe(expected, &structs.borrow()),
+                    describe(actual, &structs.borrow())
                 ),
             ));
         }
@@ -252,8 +333,8 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                     decl.body.result.span,
                     format!(
                         "`merge` must give a {} like `compute`, but the body gives {}",
-                        describe(expected, &structs),
-                        describe(actual, &structs)
+                        describe(expected, &structs.borrow()),
+                        describe(actual, &structs.borrow())
                     ),
                 ));
             }
@@ -271,8 +352,8 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                     carry.init.span,
                     format!(
                         "`scan` carries a {} like its output, but the initial value is {}",
-                        describe(expected, &structs),
-                        describe(actual, &structs)
+                        describe(expected, &structs.borrow()),
+                        describe(actual, &structs.borrow())
                     ),
                 ));
             }
@@ -283,7 +364,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     let functions: Vec<Function> = functions.into_inner().into_iter().map(|(_, f)| f).collect();
     Ok(Module {
         manifest,
-        structs,
+        structs: structs.into_inner(),
         functions,
         entry,
         merge,
@@ -308,7 +389,7 @@ fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
 /// gets checked.
 fn port_type(
     text: &Spanned<String>,
-    structs: &[StructDef],
+    structs: &Structs,
     aliases: &[(String, PortType)],
 ) -> Result<PortType, CompileError> {
     let name = text.value.as_str();
@@ -353,10 +434,13 @@ fn port_type(
         },
         structs,
     )?;
-    let schema = schema_of(element, structs).ok_or_else(|| {
+    let schema = schema_of(element, &structs.borrow()).ok_or_else(|| {
         semantic(
             text.span,
-            format!("`{}` cannot be an element type", describe(element, structs)),
+            format!(
+                "`{}` cannot be an element type",
+                describe(element, &structs.borrow())
+            ),
         )
     })?;
     Ok(PortType {
@@ -368,16 +452,13 @@ fn port_type(
 
 /// Resolves the Kernel's `type` aliases in order; an alias names a shape
 /// form directly, never another alias.
-fn aliases(
-    kernel: &Kernel,
-    structs: &[StructDef],
-) -> Result<Vec<(String, PortType)>, CompileError> {
+fn aliases(kernel: &Kernel, structs: &Structs) -> Result<Vec<(String, PortType)>, CompileError> {
     let mut aliases: Vec<(String, PortType)> = Vec::new();
     for decl in &kernel.types {
         let name = &decl.name.value;
         if name == "Image"
             || Type::from_str(name).is_ok()
-            || structs.iter().any(|s| &s.name == name)
+            || structs.borrow().iter().any(|s| &s.name == name)
         {
             return Err(semantic(
                 decl.name.span,
@@ -408,7 +489,7 @@ fn aliases(
 fn manifest(
     kernel: &Kernel,
     given: Option<&KernelId>,
-    structs: &[StructDef],
+    structs: &Structs,
     aliases: &[(String, PortType)],
 ) -> Result<Manifest, CompileError> {
     let id = match (&kernel.id, given) {
@@ -515,7 +596,7 @@ fn manifest(
                 ));
             }
         }
-        if combine != Combine::Last && !numeric(&inputs[base].element(), structs) {
+        if combine != Combine::Last && !numeric(&inputs[base].element(), &structs.borrow()) {
             return Err(semantic(
                 scatter.combine.span,
                 format!(
@@ -585,10 +666,11 @@ fn manifest(
                 .structs
                 .iter()
                 .any(|def| def.name.value == decl.ty.value)
+                || decl.ty.value.starts_with('[')
             {
                 return Err(semantic(
                     decl.ty.span,
-                    "parameters cross the ABI and cannot be structs; use plain values",
+                    "parameters cross the ABI and cannot be structs or arrays; use plain values",
                 ));
             }
             let ty = parse_type(&decl.ty)?;
@@ -692,7 +774,7 @@ fn constructor(ty: Type) -> Option<&'static str> {
 /// templates with Field parameters, and their instances by binding.
 struct Shared<'a> {
     manifest: &'a Manifest,
-    structs: &'a [StructDef],
+    structs: &'a Structs,
     aliases: &'a [(String, PortType)],
     functions: RefCell<Vec<(String, Function)>>,
     templates: Vec<&'a FnDecl>,
@@ -738,8 +820,8 @@ fn lower_function(
             format!(
                 "function `{}` returns {} but the body gives {}",
                 declaration.name.value,
-                describe(ret, structs),
-                describe(actual, structs)
+                describe(ret, &structs.borrow()),
+                describe(actual, &structs.borrow())
             ),
         ));
     }
@@ -759,7 +841,6 @@ enum Local {
 
 struct Builder<'a> {
     manifest: &'a Manifest,
-    structs: &'a [StructDef],
     shared: &'a Shared<'a>,
     is_entry: bool,
     name: String,
@@ -784,7 +865,6 @@ impl<'a> Builder<'a> {
     fn new(shared: &'a Shared<'a>, is_entry: bool, name: &str, fields: Vec<(String, u32)>) -> Self {
         Self {
             manifest: shared.manifest,
-            structs: shared.structs,
             shared,
             is_entry,
             name: name.to_owned(),
@@ -835,7 +915,18 @@ impl<'a> Builder<'a> {
     }
 
     fn describe(&self, ty: Type) -> String {
-        describe(ty, self.structs)
+        describe(ty, &self.structs())
+    }
+
+    /// The struct table as it stands; a borrow tied to the Kernel, not
+    /// to the builder, so a value read through it may be emitted at once.
+    fn structs(&self) -> std::cell::Ref<'a, Vec<StructDef>> {
+        self.shared.structs.borrow()
+    }
+
+    /// The array type `[element; count]`.
+    fn array_type(&self, element: Type, count: u32, span: Span) -> Result<Type, CompileError> {
+        array_type(self.shared.structs, element, count, span)
     }
 
     /// Lowers a block into a fresh buffer and returns it with its result.
@@ -941,7 +1032,14 @@ impl<'a> Builder<'a> {
                 let inner = self.value(inner)?;
                 let ty = self.ty(inner);
                 if let Type::Struct(index) = ty {
-                    let def = &self.structs[index as usize];
+                    let table = self.structs();
+                    let def = &table[index as usize];
+                    if def.is_array() {
+                        return Err(semantic(
+                            expr.span,
+                            format!("`{}` is an array; take an element with `[index]`", def.name),
+                        ));
+                    }
                     let field = def
                         .fields
                         .iter()
@@ -950,7 +1048,8 @@ impl<'a> Builder<'a> {
                             semantic(expr.span, format!("`{}` has no field `{member}`", def.name))
                         })?;
                     let field_ty = def.fields[field].ty;
-                    return Ok(self.emit(field_ty, Op::Extract(inner, field as u8)));
+                    drop(table);
+                    return Ok(self.emit(field_ty, Op::Extract(inner, field as u32)));
                 }
                 let count = ty.components().ok_or_else(|| {
                     semantic(
@@ -979,12 +1078,88 @@ impl<'a> Builder<'a> {
                         format!("{ty} has no component `.{member}`"),
                     ));
                 }
-                Ok(self.emit(Type::Float, Op::Extract(inner, component)))
+                Ok(self.emit(Type::Float, Op::Extract(inner, u32::from(component))))
+            }
+            ExprKind::Array(elements) => {
+                let mut ids = Vec::with_capacity(elements.len());
+                for element in elements {
+                    ids.push(self.value(element)?);
+                }
+                let first = self.ty(ids[0]);
+                for (id, element) in ids.iter().zip(elements) {
+                    if self.ty(*id) != first {
+                        return Err(semantic(
+                            element.span,
+                            format!(
+                                "an array's elements are all one type: this one is {}, the first {}",
+                                self.describe(self.ty(*id)),
+                                self.describe(first)
+                            ),
+                        ));
+                    }
+                }
+                let ty = self.array_type(first, ids.len() as u32, expr.span)?;
+                Ok(self.emit(ty, Op::Construct(ids)))
+            }
+            ExprKind::Repeat(element, count) => {
+                let id = self.value(element)?;
+                let ty = self.array_type(self.ty(id), count.value, count.span)?;
+                Ok(self.emit(ty, Op::Construct(vec![id; count.value as usize])))
+            }
+            ExprKind::Subscript(array, index) => {
+                let array_id = self.value(array)?;
+                let array_ty = self.ty(array_id);
+                let Some(element) = array_element(array_ty, &self.structs()) else {
+                    return Err(semantic(
+                        array.span,
+                        format!(
+                            "`[index]` takes an element of an array, found {}",
+                            self.describe(array_ty)
+                        ),
+                    ));
+                };
+                let count = match array_ty {
+                    Type::Struct(index) => self.structs()[index as usize].fields.len(),
+                    _ => 0,
+                };
+                // A literal index is a field: checked here, free to run.
+                let literal = match &index.kind {
+                    ExprKind::Int(value) => Some(*value),
+                    ExprKind::Neg(inner) => match &inner.kind {
+                        ExprKind::Int(value) => Some(value.wrapping_neg()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(literal) = literal {
+                    if literal < 0 || literal as usize >= count {
+                        return Err(semantic(
+                            index.span,
+                            format!(
+                                "index {literal} is outside `{}`, whose elements are 0 to {}",
+                                self.describe(array_ty),
+                                count - 1
+                            ),
+                        ));
+                    }
+                    return Ok(self.emit(element, Op::Extract(array_id, literal as u32)));
+                }
+                let index_id = self.value(index)?;
+                if self.ty(index_id) != Type::Int {
+                    return Err(semantic(
+                        index.span,
+                        format!(
+                            "an array takes an Int index, found {}",
+                            self.describe(self.ty(index_id))
+                        ),
+                    ));
+                }
+                Ok(self.emit(element, Op::Subscript(array_id, index_id)))
             }
             ExprKind::Call(name, args) => self.call(name, args, expr.span),
             ExprKind::Struct { name, base, fields } => {
                 let index = self
-                    .structs
+                    .structs()
                     .iter()
                     .position(|def| def.name == name.value)
                     .ok_or_else(|| {
@@ -1008,10 +1183,10 @@ impl<'a> Builder<'a> {
                     }
                     None => None,
                 };
-                let field_count = self.structs[index].fields.len();
+                let field_count = self.structs()[index].fields.len();
                 let mut given: Vec<Option<ValueId>> = vec![None; field_count];
                 for (field, value) in fields {
-                    let position = self.structs[index]
+                    let position = self.structs()[index]
                         .fields
                         .iter()
                         .position(|f| f.name == field.value)
@@ -1028,7 +1203,7 @@ impl<'a> Builder<'a> {
                         ));
                     }
                     let id = self.value(value)?;
-                    let expected = self.structs[index].fields[position].ty;
+                    let expected = self.structs()[index].fields[position].ty;
                     if self.ty(id) != expected {
                         return Err(semantic(
                             value.span,
@@ -1048,15 +1223,16 @@ impl<'a> Builder<'a> {
                     let id = match (slot, base_id) {
                         (Some(id), _) => id,
                         (None, Some(base)) => {
-                            let field_ty = self.structs[index].fields[position].ty;
-                            self.emit(field_ty, Op::Extract(base, position as u8))
+                            let field_ty = self.structs()[index].fields[position].ty;
+                            self.emit(field_ty, Op::Extract(base, position as u32))
                         }
                         (None, None) => {
                             return Err(semantic(
                                 name.span,
                                 format!(
                                     "`{}` needs field `{}`; set it or start from `..base`",
-                                    name.value, self.structs[index].fields[position].name
+                                    name.value,
+                                    self.structs()[index].fields[position].name
                                 ),
                             ));
                         }
@@ -1468,7 +1644,7 @@ impl<'a> Builder<'a> {
         let mut indices = Vec::new();
         let mut values = Vec::new();
         for ((param, ty), arg) in template.args.iter().zip(args) {
-            match resolve_type(ty, self.structs) {
+            match resolve_type(ty, self.shared.structs) {
                 Ok(expected) => {
                     let id = self.value(arg)?;
                     if self.ty(id) != expected {
@@ -1484,7 +1660,7 @@ impl<'a> Builder<'a> {
                     values.push(id);
                 }
                 Err(_) => {
-                    let declared = port_type(ty, self.structs, self.shared.aliases)?;
+                    let declared = port_type(ty, self.shared.structs, self.shared.aliases)?;
                     let (index, port) = self.input_index(arg, name)?;
                     if port.ty.shape != declared.shape || port.ty.schema != declared.schema {
                         return Err(semantic(

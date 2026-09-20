@@ -132,6 +132,11 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: 0.0, i: bitsy, b: ult(0x80000000, i) != ult(i, 0x80000000), v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
+            "arrays",
+            "let lut = [3, 1, 4, 1, 5, 9, 2, 6]; let fl = [x, x * 2.0, 3.0]; let reps = [i; 4]; let grid = [[1, 2], [3, 4], [5, 6]]; let cells = [Cell { a: x, b: i, on: true }, Cell { a: 1.0, b: 2, on: false }]; let t = Table { rows: [i, i + 1, i + 2, i + 3], scale: 0.5 }; let rolled = roll(t.rows, i % 4); let vs = [v, vec3(x, 0.0, 1.0)]; let picked = lut[i % 8] + lut[2] + lut[-i] + lut[i + 100] + reps[i % 3] + grid[i % 3][(i + 1) % 2] + grid[2][0] + cells[i % 2].b + rolled[0] + rolled[i % 4] + t.rows[3];",
+            "Out { f: fl[i % 3] + fl[1] * t.scale + cells[i % 2].a + vs[i % 2].y + vs[1].z, i: picked, b: cells[(i + 1) % 2].on, v: vs[i % 2] + mix(vs[0], vs[1], k) }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",
@@ -163,6 +168,8 @@ const HEAD: &str = "requires { field.read; field.write; input.read; time.read; }
     fn twist(p: Vec3, t: Float) -> Vec3 { return vec3(p.x * cos(t) - p.y * sin(t), p.x * sin(t) + p.y * cos(t), p.z); }
     fn peek(g: Grid<Cell>, c: Vec2) -> Float { return at(g, c).a; }
     fn score(c: Cell) -> Cell { return Cell { a: c.a * 2.0, b: c.b + 1, on: !c.on }; }
+    struct Table { rows: [Int; 4]; scale: Float; }
+    fn roll(r: [Int; 4], by: Int) -> [Int; 4] { return [r[by % 4], r[(by + 1) % 4], r[(by + 2) % 4], r[(by + 3) % 4]]; }
 ";
 
 const ENV: &str = "let x = float(i) * 0.37 + 0.1; let sampled = sample(rows);";

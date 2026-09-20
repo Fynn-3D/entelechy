@@ -282,6 +282,28 @@ fn error(location: &str, message: impl Into<String>) -> ValidationError {
 
 fn validate_structs(structs: &[StructDef]) -> Result<(), ValidationError> {
     for (index, def) in structs.iter().enumerate() {
+        if let Some(element) = def.element {
+            let count = def.fields.len();
+            if count == 0 || count > crate::MAX_ARRAY_COUNT as usize {
+                return Err(error(
+                    "structs",
+                    format!(
+                        "array `{}` has {count} elements; an array has 1 to {}",
+                        def.name,
+                        crate::MAX_ARRAY_COUNT
+                    ),
+                ));
+            }
+            if let Some(field) = def.fields.iter().find(|field| field.ty != element) {
+                return Err(error(
+                    "structs",
+                    format!(
+                        "array `{}` of {element} has an element `{}` of {}",
+                        def.name, field.name, field.ty
+                    ),
+                ));
+            }
+        }
         let mut names = std::collections::BTreeSet::new();
         for field in &def.fields {
             if !names.insert(&field.name) {
@@ -306,7 +328,7 @@ fn validate_structs(structs: &[StructDef]) -> Result<(), ValidationError> {
                 _ => {}
             }
         }
-        if def.fields.len() > u8::MAX as usize {
+        if def.element.is_none() && def.fields.len() > u8::MAX as usize {
             return Err(error(
                 "structs",
                 format!("struct `{}` has more than {} fields", def.name, u8::MAX),
@@ -604,13 +626,37 @@ impl<'a> Checker<'a> {
                     let count = source.components().ok_or_else(|| {
                         self.fail(format!("{position} extracts from non-vector {source}"))
                     })?;
-                    if *component >= count {
+                    if *component >= u32::from(count) {
                         return Err(self.fail(format!(
                             "{position} extracts component {component} of {source}"
                         )));
                     }
                     Type::Float
                 }
+            }
+            Op::Subscript(array, index) => {
+                let (array, index) = (
+                    self.operand(*array, position)?,
+                    self.operand(*index, position)?,
+                );
+                let Type::Struct(struct_index) = array else {
+                    return Err(self.fail(format!(
+                        "{position} subscripts {array}, which is not an array"
+                    )));
+                };
+                let def = &self.module.structs[struct_index as usize];
+                let Some(element) = def.element else {
+                    return Err(self.fail(format!(
+                        "{position} subscripts `{}`, a struct, not an array",
+                        def.name
+                    )));
+                };
+                if index != Type::Int {
+                    return Err(
+                        self.fail(format!("{position} subscripts with {index}, not an Int"))
+                    );
+                }
+                element
             }
             Op::Call(callee, args) => {
                 if *callee as usize >= self.index {
@@ -1250,6 +1296,7 @@ mod tests {
                     ty: Type::Int,
                 },
             ],
+            element: None,
         }];
         let schema = schema_of(Type::Struct(0), &module.structs).unwrap();
         assert_eq!(schema.to_string(), "f,f,i");

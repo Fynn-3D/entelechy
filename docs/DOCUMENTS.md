@@ -72,6 +72,19 @@ carry, and a scan's step its own, by name; `Name { a: .., b: .. }` builds
 a struct and `Name { ..base, a: .. }` copies one with some fields
 replaced.
 
+A fixed-size array `[T; N]` holds `N` values of one type `T`: any value
+type, so `[Int; 16]`, `[Vec3; 4]`, `[Hit; 8]` and `[[Int; 4]; 4]` are
+all arrays, and one may be a struct's field, a function's argument or
+result, a loop's carried value or a Field's element. `[a, b, c]` builds
+one from its elements, `[v; 8]` from eight copies of a value, and
+`a[i]` takes an element: with a literal index it is a field, checked
+when the Kernel compiles; with an `Int` computed at run time it is
+clamped into the array, as `at` clamps into a Field. An array has one
+to 4096 elements and is laid out as its elements in order, so a lookup
+table, a ROM or a register file is written as data (the CHIP-8's font
+and the Thumb core's program are). Parameters stay plain values: an
+array never crosses the ABI.
+
 The math builtins are `floor`, `ceil`, `round`, `trunc`, `sign`,
 `fract`, `abs`, `sqrt`, `inversesqrt`, `sin`, `cos`, `tan`, `asin`,
 `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `exp`, `exp2`, `log`,

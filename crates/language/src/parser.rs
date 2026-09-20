@@ -480,16 +480,48 @@ impl Parser {
         Ok(TypeAlias { name, target })
     }
 
-    /// A port type as written: `Name` or `Name<Element>`.
+    /// A port type as written: `Name` or `Name<Element>`; or a value
+    /// type, which an array type `[T; N]` always is.
     fn port_type(&mut self) -> Result<Spanned<String>, ParseError> {
+        if self.is_punct("[") {
+            return self.type_name();
+        }
         let mut ty = self.ident("a type")?;
         if self.is_punct("<") {
             self.next();
-            let element = self.ident("an element type")?;
+            let element = self.type_name()?;
             self.expect_punct(">")?;
             ty.value = format!("{}<{}>", ty.value, element.value);
         }
         Ok(ty)
+    }
+
+    /// A value type as written: `Name`, or an array `[Type; N]`, spelled
+    /// canonically (`[Int; 16]`) for the compiler to read back.
+    fn type_name(&mut self) -> Result<Spanned<String>, ParseError> {
+        if !self.is_punct("[") {
+            return self.ident("a type");
+        }
+        let span = self.next().1;
+        let element = self.type_name()?;
+        self.expect_punct(";")?;
+        let count = match self.next() {
+            (Token::Int(count), _) if count > 0 => count as u32,
+            (token, span) => {
+                return Err(ParseError {
+                    span,
+                    message: format!(
+                        "an array type is `[Type; count]` with a positive count, found {}",
+                        token.describe()
+                    ),
+                });
+            }
+        };
+        self.expect_punct("]")?;
+        Ok(Spanned {
+            value: format!("[{}; {count}]", element.value),
+            span,
+        })
     }
 
     fn struct_decl(&mut self) -> Result<StructDecl, ParseError> {
@@ -508,7 +540,7 @@ impl Parser {
         while !self.is_punct("}") {
             let field = self.ident("a field name")?;
             self.expect_punct(":")?;
-            let ty = self.ident("a type")?;
+            let ty = self.type_name()?;
             self.expect_punct(";")?;
             fields.push((field, ty));
         }
@@ -721,7 +753,7 @@ impl Parser {
     fn param(&mut self) -> Result<ParamDecl, ParseError> {
         let name = self.ident("a parameter name")?;
         self.expect_punct(":")?;
-        let ty = self.ident("a type")?;
+        let ty = self.type_name()?;
         self.expect_punct("=")?;
         let default_start = self.start();
         let default = self.expr()?;
@@ -751,7 +783,7 @@ impl Parser {
         }
         self.expect_punct(")")?;
         self.expect_punct("->")?;
-        let ret = self.ident("a return type")?;
+        let ret = self.type_name()?;
         let body = self.block()?;
         Ok(FnDecl {
             name,
@@ -967,14 +999,24 @@ impl Parser {
 
     fn postfix(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.primary()?;
-        while self.eat_punct(".") {
-            let member = self.ident("a component name")?;
-            expr = Expr {
-                span: expr.span,
-                kind: ExprKind::Member(Box::new(expr), member.value),
-            };
+        loop {
+            if self.eat_punct(".") {
+                let member = self.ident("a component name")?;
+                expr = Expr {
+                    span: expr.span,
+                    kind: ExprKind::Member(Box::new(expr), member.value),
+                };
+            } else if self.eat_punct("[") {
+                let index = self.expr()?;
+                self.expect_punct("]")?;
+                expr = Expr {
+                    span: expr.span,
+                    kind: ExprKind::Subscript(Box::new(expr), Box::new(index)),
+                };
+            } else {
+                return Ok(expr);
+            }
         }
-        Ok(expr)
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -1163,6 +1205,47 @@ impl Parser {
                 let inner = self.expr()?;
                 self.expect_punct(")")?;
                 Ok(inner)
+            }
+            Token::Punct("[") => {
+                self.next();
+                if self.is_punct("]") {
+                    return Err(self.error("an array literal has at least one element"));
+                }
+                let first = self.expr()?;
+                if self.eat_punct(";") {
+                    let count = match self.next() {
+                        (Token::Int(count), count_span) if count > 0 => Spanned {
+                            value: count as u32,
+                            span: count_span,
+                        },
+                        (token, count_span) => {
+                            return Err(ParseError {
+                                span: count_span,
+                                message: format!(
+                                    "`[value; count]` needs a positive integer count, found {}",
+                                    token.describe()
+                                ),
+                            });
+                        }
+                    };
+                    self.expect_punct("]")?;
+                    return Ok(Expr {
+                        kind: ExprKind::Repeat(Box::new(first), count),
+                        span,
+                    });
+                }
+                let mut elements = vec![first];
+                while self.eat_punct(",") {
+                    if self.is_punct("]") {
+                        break;
+                    }
+                    elements.push(self.expr()?);
+                }
+                self.expect_punct("]")?;
+                Ok(Expr {
+                    kind: ExprKind::Array(elements),
+                    span,
+                })
             }
             _ => Err(self.unexpected("an expression")),
         }

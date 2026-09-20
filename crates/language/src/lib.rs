@@ -320,7 +320,7 @@ pub struct TypeAlias {
 pub struct StructDecl {
     /// Struct name; must start with an uppercase letter.
     pub name: Spanned<String>,
-    /// Fields as `(name, type)`.
+    /// Fields as `(name, type)`; an array type is written `[Type; N]`.
     pub fields: Vec<(Spanned<String>, Spanned<String>)>,
 }
 
@@ -450,6 +450,13 @@ pub enum ExprKind {
     Call(String, Vec<Expr>),
     /// Component access such as `c.r`, or a struct field such as `hit.distance`.
     Member(Box<Expr>, String),
+    /// `[a, b, c]`: an array of the listed elements, all of one type.
+    Array(Vec<Expr>),
+    /// `[value; n]`: an array of `n` copies of a value.
+    Repeat(Box<Expr>, Spanned<u32>),
+    /// `array[index]`: the element at an `Int` index, clamped into the
+    /// array; a literal index is checked when compiled.
+    Subscript(Box<Expr>, Box<Expr>),
     /// `Name { field: expr, ... }`, optionally starting from `..base` whose
     /// unlisted fields are kept.
     Struct {

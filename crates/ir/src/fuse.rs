@@ -182,6 +182,7 @@ pub fn fuse(
                     ty: shift_struct(field.ty),
                 })
                 .collect(),
+            element: def.element.map(shift_struct),
         }
     }));
 
@@ -409,6 +410,10 @@ impl<'a> Renumber<'a> {
                 }
             }
             Op::Extract(source, _) => *source = self.map(*source),
+            Op::Subscript(array, index) => {
+                *array = self.map(*array);
+                *index = self.map(*index);
+            }
             Op::Call(_, args) | Op::Intrinsic(_, args) => {
                 for arg in args {
                     *arg = self.map(*arg);
