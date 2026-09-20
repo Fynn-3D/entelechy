@@ -80,17 +80,26 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-A Godot bridge, to make three and to see what two bridges did not:
-`/usr/local/bin/godot` is installed. In GDScript, outside the workspace
-like the other two, speaking the socket (Godot has `StreamPeerTCP`, so
-the line transport, not the WebSocket) and the Host's file formats: pull
-a node's vertex and triangle rows as an `ArrayMesh`, push a `MeshInstance`
-as `.field` files a scene reads, show the picture as an `ImageTexture`,
-set params, publish a Kernel from a text edit, watch a node. Test it with
-`godot --headless --script bridges/godot/test_bridge.gd` against a
-serving session, the way the Blender test runs. If the user prefers
-another item: the CPU's speed again (SIMD over rows is the next honest
-step there, with no dependency).
+The optional JIT backend, `orla-jit`, in the interface layer beside
+`gpu`: Cranelift 0.131 is the newest that builds on this machine's Rust
+1.93 (0.132 and later want 1.94), probed in a scratch crate with blocks,
+block params, `brif`, `sadd_overflow`, `fcvt_to_sint_sat`, `floor`, and
+an imported `extern "C"` symbol; `iconst` takes an `i64`. The crate needs
+`unsafe` (calling code it produced), so it declares its own lints instead
+of the workspace's `forbid`. Plan: compile each function of a validated
+module to a Cranelift function with values scalarised to `f32`/`i32`
+words in the ABI's layout, structs flattened, `If` and `Loop` as blocks
+with block parameters, checked integer arithmetic storing an error code
+into a context struct; Field reads, `at_linear`, and libm through
+imported helpers at first; `prepare` compiles once per version, the
+entry runs one element per call over rows in threads as the CPU does;
+reduce, scan, scatter and native ops delegate to the CPU backend at
+first. `--backend jit` on `run`, `replay`, `serve` and the Player.
+Acceptance: every example replay passes on `jit` bit for bit against the
+CPU, and the voxel and raymarch scenes are several times faster than the
+interpreter. After that, machines: a GBA is within reach of memories and
+a JIT; an NDS is not full speed without mixed backends and a
+recompiler.
 
 ## Open
 

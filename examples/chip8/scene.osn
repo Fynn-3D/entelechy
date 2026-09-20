@@ -1,0 +1,25 @@
+// rom -> boot (RAM) ; start (registers) ; blank (screen)
+//   -> machine, whose three memories feed back frame to frame -> view
+use "kernels/";
+
+param speed: Int = 40;             // steps per frame
+
+node rom: chip8.rom@1 { domain = 55; }
+node boot: chip8.boot@1 { rom <- rom.result; domain = 4096; }
+node start: chip8.start@1 { domain = 64; }
+node blank: chip8.blank@1 { domain = vec2(64, 32); }
+node ticks: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = speed;
+    compute { return 0; }
+}
+node machine: chip8.step@1 {
+    ticks <- ticks.result;
+    ram <~ machine.ram from boot.result;
+    regs <~ machine.regs from start.result;
+    screen <~ machine.screen from blank.result;
+}
+node view: chip8.view@1 { screen <- machine.screen; domain = window(); }
+
+output result <- view.result;

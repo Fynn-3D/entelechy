@@ -1,0 +1,336 @@
+// A CHIP-8: the machine of 1977 as ordered work. RAM, the registers and
+// the screen are memories the steps read and write; each frame runs
+// `speed` steps; the delay and sound timers count down once a frame; the
+// keypad is the keyboard's 1 2 3 4 / Q W E R / A S D F / Z X C V. Every
+// opcode is here: draw, the timers, the stack, waiting for a key, BCD,
+// the register file to and from RAM.
+type Bytes = Rows<Int>;
+type Screen = Grid<Int>;
+
+// The program: a box that the keypad's 4, 6, 2 and 8 (Q, E, 2, S) move,
+// one pixel a frame, paced by the delay timer so the picture never
+// flickers: set DT to one, spin until it is zero, erase, move, draw.
+kernel chip8.rom@1 {
+    requires { field.write; }
+    output result: Bytes;
+    compute {
+        let i = element();
+        return
+            if i == 0 { 96 }
+            else if i == 1 { 0 }
+            else if i == 2 { 97 }
+            else if i == 3 { 0 }
+            else if i == 4 { 162 }
+            else if i == 5 { 50 }
+            else if i == 6 { 208 }
+            else if i == 7 { 21 }
+            else if i == 8 { 110 }
+            else if i == 9 { 1 }
+            else if i == 10 { 254 }
+            else if i == 11 { 21 }
+            else if i == 12 { 254 }
+            else if i == 13 { 7 }
+            else if i == 14 { 62 }
+            else if i == 15 { 0 }
+            else if i == 16 { 18 }
+            else if i == 17 { 12 }
+            else if i == 18 { 208 }
+            else if i == 19 { 21 }
+            else if i == 20 { 110 }
+            else if i == 21 { 4 }
+            else if i == 22 { 238 }
+            else if i == 23 { 161 }
+            else if i == 24 { 112 }
+            else if i == 25 { 255 }
+            else if i == 26 { 110 }
+            else if i == 27 { 6 }
+            else if i == 28 { 238 }
+            else if i == 29 { 161 }
+            else if i == 30 { 112 }
+            else if i == 31 { 1 }
+            else if i == 32 { 110 }
+            else if i == 33 { 2 }
+            else if i == 34 { 238 }
+            else if i == 35 { 161 }
+            else if i == 36 { 113 }
+            else if i == 37 { 255 }
+            else if i == 38 { 110 }
+            else if i == 39 { 8 }
+            else if i == 40 { 238 }
+            else if i == 41 { 161 }
+            else if i == 42 { 113 }
+            else if i == 43 { 1 }
+            else if i == 44 { 208 }
+            else if i == 45 { 21 }
+            else if i == 46 { 18 }
+            else if i == 47 { 8 }
+            else if i == 48 { 0 }
+            else if i == 49 { 0 }
+            else if i == 50 { 240 }
+            else if i == 51 { 144 }
+            else if i == 52 { 144 }
+            else if i == 53 { 144 }
+            else if i == 54 { 240 }
+            else { 0 };
+    }
+}
+
+// RAM at power-on: the font at 0x50, the program at 0x200, zeros elsewhere.
+kernel chip8.boot@1 {
+    requires { field.read; field.write; }
+    input rom: Bytes;
+    output result: Bytes;
+
+    fn font(i: Int) -> Int {
+        return
+            if i == 0 { 240 }
+            else if i == 1 { 144 }
+            else if i == 2 { 144 }
+            else if i == 3 { 144 }
+            else if i == 4 { 240 }
+            else if i == 5 { 32 }
+            else if i == 6 { 96 }
+            else if i == 7 { 32 }
+            else if i == 8 { 32 }
+            else if i == 9 { 112 }
+            else if i == 10 { 240 }
+            else if i == 11 { 16 }
+            else if i == 12 { 240 }
+            else if i == 13 { 128 }
+            else if i == 14 { 240 }
+            else if i == 15 { 240 }
+            else if i == 16 { 16 }
+            else if i == 17 { 240 }
+            else if i == 18 { 16 }
+            else if i == 19 { 240 }
+            else if i == 20 { 144 }
+            else if i == 21 { 144 }
+            else if i == 22 { 240 }
+            else if i == 23 { 16 }
+            else if i == 24 { 16 }
+            else if i == 25 { 240 }
+            else if i == 26 { 128 }
+            else if i == 27 { 240 }
+            else if i == 28 { 16 }
+            else if i == 29 { 240 }
+            else if i == 30 { 240 }
+            else if i == 31 { 128 }
+            else if i == 32 { 240 }
+            else if i == 33 { 144 }
+            else if i == 34 { 240 }
+            else if i == 35 { 240 }
+            else if i == 36 { 16 }
+            else if i == 37 { 32 }
+            else if i == 38 { 64 }
+            else if i == 39 { 64 }
+            else if i == 40 { 240 }
+            else if i == 41 { 144 }
+            else if i == 42 { 240 }
+            else if i == 43 { 144 }
+            else if i == 44 { 240 }
+            else if i == 45 { 240 }
+            else if i == 46 { 144 }
+            else if i == 47 { 240 }
+            else if i == 48 { 16 }
+            else if i == 49 { 240 }
+            else if i == 50 { 240 }
+            else if i == 51 { 144 }
+            else if i == 52 { 240 }
+            else if i == 53 { 144 }
+            else if i == 54 { 144 }
+            else if i == 55 { 224 }
+            else if i == 56 { 144 }
+            else if i == 57 { 224 }
+            else if i == 58 { 144 }
+            else if i == 59 { 224 }
+            else if i == 60 { 240 }
+            else if i == 61 { 128 }
+            else if i == 62 { 128 }
+            else if i == 63 { 128 }
+            else if i == 64 { 240 }
+            else if i == 65 { 224 }
+            else if i == 66 { 144 }
+            else if i == 67 { 144 }
+            else if i == 68 { 144 }
+            else if i == 69 { 224 }
+            else if i == 70 { 240 }
+            else if i == 71 { 128 }
+            else if i == 72 { 240 }
+            else if i == 73 { 128 }
+            else if i == 74 { 240 }
+            else if i == 75 { 240 }
+            else if i == 76 { 128 }
+            else if i == 77 { 240 }
+            else if i == 78 { 128 }
+            else if i == 79 { 128 }
+            else { 0 };
+    }
+
+    compute {
+        let a = element();
+        return if a >= 80 && a < 160 { font(a - 80) }
+            else if a >= 512 && a < 512 + count(rom) { at(rom, a - 512) }
+            else { 0 };
+    }
+}
+
+// The registers: V0..VF at 0..15, I at 16, PC at 17, SP at 18, DT at 19,
+// ST at 20, the random state at 21, the stack at 32..47.
+kernel chip8.start@1 {
+    requires { field.write; }
+    output result: Bytes;
+    compute {
+        let r = element();
+        return if r == 17 { 512 } else if r == 21 { 12345 } else { 0 };
+    }
+}
+
+kernel chip8.blank@1 {
+    requires { field.write; }
+    output result: Screen;
+    compute { return 0; }
+}
+
+// One step of the machine per element of `ticks`; the opcode it ran is
+// the output, for the record.
+kernel chip8.step@1 {
+    requires { field.read; field.write; input.read; }
+    input ticks: Rows<Int>;
+    memory ram: Bytes;
+    memory regs: Bytes;
+    memory screen: Screen;
+    output result: Rows<Int>;
+    struct Draw { row: Int; hit: Int; }
+    struct Col { col: Int; hit: Int; }
+
+    // The keypad on the keyboard.
+    fn pressed(k: Int) -> Bool {
+        let code = if k == 0 { 88 } else if k == 1 { 49 } else if k == 2 { 50 } else if k == 3 { 51 }
+            else if k == 4 { 81 } else if k == 5 { 87 } else if k == 6 { 69 } else if k == 7 { 65 }
+            else if k == 8 { 83 } else if k == 9 { 68 } else if k == 10 { 90 } else if k == 11 { 67 }
+            else if k == 12 { 52 } else if k == 13 { 82 } else if k == 14 { 70 } else { 86 };
+        return key(code);
+    }
+
+    scan with n = 0 {
+        // The timers, once a frame.
+        let dt = at(regs, 19);
+        if index() == 0 && dt > 0 { put(regs, 19, dt - 1) } else { 0 };
+        let st = at(regs, 20);
+        if index() == 0 && st > 0 { put(regs, 20, st - 1) } else { 0 };
+        // Fetch and decode.
+        let pc = at(regs, 17);
+        let op = (at(ram, pc) << 8) | at(ram, pc + 1);
+        let hi = op >> 12;
+        let x = (op >> 8) & 15;
+        let y = (op >> 4) & 15;
+        let nn = op & 15;
+        let kk = op & 255;
+        let nnn = op & 4095;
+        let vx = at(regs, x);
+        let vy = at(regs, y);
+        let i = at(regs, 16);
+        let sp = at(regs, 18);
+        let next = if hi == 0 {
+            if op == 224 {
+                loop 2048 with k = 0 { put(screen, vec2(k % 64, k / 64), 0); k + 1 };
+                pc + 2
+            } else if op == 238 {
+                put(regs, 18, sp - 1);
+                at(regs, 32 + sp - 1)
+            } else { pc + 2 }
+        } else if hi == 1 { nnn }
+        else if hi == 2 { put(regs, 32 + sp, pc + 2); put(regs, 18, sp + 1); nnn }
+        else if hi == 3 { if vx == kk { pc + 4 } else { pc + 2 } }
+        else if hi == 4 { if vx != kk { pc + 4 } else { pc + 2 } }
+        else if hi == 5 { if vx == vy { pc + 4 } else { pc + 2 } }
+        else if hi == 6 { put(regs, x, kk); pc + 2 }
+        else if hi == 7 { put(regs, x, (vx + kk) & 255); pc + 2 }
+        else if hi == 8 {
+            let r = if nn == 0 { vy } else if nn == 1 { vx | vy } else if nn == 2 { vx & vy }
+                else if nn == 3 { vx ^ vy } else if nn == 4 { vx + vy } else if nn == 5 { vx - vy }
+                else if nn == 6 { vx >> 1 } else if nn == 7 { vy - vx } else { vx << 1 };
+            let flag = if nn == 4 { if r > 255 { 1 } else { 0 } }
+                else if nn == 5 { if vx >= vy { 1 } else { 0 } }
+                else if nn == 6 { vx & 1 }
+                else if nn == 7 { if vy >= vx { 1 } else { 0 } }
+                else if nn == 14 { (vx >> 7) & 1 }
+                else { -1 };
+            put(regs, x, r & 255);
+            if flag >= 0 { put(regs, 15, flag) } else { 0 };
+            pc + 2
+        }
+        else if hi == 9 { if vx != vy { pc + 4 } else { pc + 2 } }
+        else if hi == 10 { put(regs, 16, nnn); pc + 2 }
+        else if hi == 11 { nnn + at(regs, 0) }
+        else if hi == 12 {
+            let s = at(regs, 21);
+            let s1 = s ^ (s << 13);
+            let s2 = s1 ^ (s1 >> 17);
+            let s3 = s2 ^ (s2 << 5);
+            put(regs, 21, s3);
+            put(regs, x, s3 & kk);
+            pc + 2
+        }
+        else if hi == 13 {
+            // Sprite rows from I, xor-drawn at (VX, VY) with wrap; VF says
+            // whether a pixel went out.
+            let drawn = loop 16 with d = Draw { row: 0, hit: 0 } until d.row >= nn {
+                let byte = at(ram, i + d.row);
+                let py = (vy + d.row) & 31;
+                let hit_so_far = d.hit;
+                let across = loop 8 with c = Col { col: 0, hit: hit_so_far } {
+                    let bit = (byte >> (7 - c.col)) & 1;
+                    let px = (vx + c.col) & 63;
+                    let old = at(screen, vec2(px, py));
+                    let now = old ^ bit;
+                    put(screen, vec2(px, py), now);
+                    Col { col: c.col + 1, hit: if old == 1 && now == 0 { 1 } else { c.hit } }
+                };
+                Draw { row: d.row + 1, hit: across.hit }
+            };
+            put(regs, 15, drawn.hit);
+            pc + 2
+        }
+        else if hi == 14 {
+            let down = pressed(vx & 15);
+            if (kk == 158 && down) || (kk == 161 && !down) { pc + 4 } else { pc + 2 }
+        }
+        else if hi == 15 {
+            if kk == 7 { put(regs, x, at(regs, 19)); pc + 2 }
+            else if kk == 10 {
+                // Wait for a key: the lowest one down, else stay here.
+                let k = loop 16 with found = -1 until found >= 0 { if pressed(index()) { index() } else { -1 } };
+                if k >= 0 { put(regs, x, k); pc + 2 } else { pc }
+            }
+            else if kk == 21 { put(regs, 19, vx); pc + 2 }
+            else if kk == 24 { put(regs, 20, vx); pc + 2 }
+            else if kk == 30 { put(regs, 16, (i + vx) & 4095); pc + 2 }
+            else if kk == 41 { put(regs, 16, 80 + (vx & 15) * 5); pc + 2 }
+            else if kk == 51 { put(ram, i, vx / 100); put(ram, i + 1, (vx / 10) % 10); put(ram, i + 2, vx % 10); pc + 2 }
+            else if kk == 85 { loop 16 with r = 0 until r > x { put(ram, i + r, at(regs, r)); r + 1 }; pc + 2 }
+            else if kk == 101 { loop 16 with r = 0 until r > x { put(regs, r, at(ram, i + r)); r + 1 }; pc + 2 }
+            else { pc + 2 }
+        }
+        else { pc + 2 };
+        put(regs, 17, next & 4095);
+        return op;
+    }
+}
+
+// The screen, each of its 64 by 32 cells a block of the picture with a
+// faint grid, lit green.
+kernel chip8.view@1 {
+    requires { field.read; field.write; }
+    input screen: Screen;
+    output result: Image;
+    compute {
+        let uv = (coord() + vec2(0.5, 0.5)) / domain() * vec2(64.0, 32.0);
+        let on = at(screen, floor(uv)) == 1;
+        let local = fract(uv);
+        let edge = local.x < 0.08 || local.y < 0.08;
+        let lit = if on { vec3(0.55, 0.95, 0.45) } else { vec3(0.06, 0.09, 0.06) };
+        let colour = if edge { lit * 0.7 } else { lit };
+        return vec4(colour.x, colour.y, colour.z, 1.0);
+    }
+}

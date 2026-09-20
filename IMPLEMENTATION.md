@@ -152,7 +152,9 @@ capability claim.
   [WGSL](crates/gpu/src/wgsl.rs), [parity](crates/gpu/tests/parity.rs),
   [feedback test](crates/graph/tests/composition.rs)). With the integer
   bit operators, this is what a machine needs: random-access RAM written
-  step by step, persisting across frames through `<~`.
+  step by step, persisting across frames through `<~`; the
+  [CHIP-8 example](examples/chip8/README.md) is one, every opcode, its
+  replay reading the screen memory on both backends.
 - Ordered work is the third execution mode, declared by `scan with name =
   init { ... }` in place of `compute`: the entry runs once per element of
   the first input, in order, reading the previous result through the same
