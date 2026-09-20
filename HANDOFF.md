@@ -141,9 +141,10 @@ The GDExtension over `orla-ffi` is in too (`crates/godot`,
 `bridges/godot/orla_local.gd`): the Godot bridge's view runs over the
 socket or in the process with the same code.
 
-1. The whole verification on a Linux machine (Cranelift on x86, a
-   non-Apple GPU, the C ABI's `.so`, the extension's `.so`).
-2. What a session of play turns up: the voxel editor and the showcase
+Not planned: a Linux verification run (the user's call; this machine is
+the target for now).
+
+1. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, the GPU scan
    is one thread (a machine belongs on the JIT).
 
