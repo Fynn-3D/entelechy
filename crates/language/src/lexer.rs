@@ -110,6 +110,26 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             });
             continue;
         }
+        if c == '0' && chars.get(index + 1) == Some(&'x') {
+            // A hexadecimal `Int`: its 32 bits as written, so `0x80000000`
+            // is the sign bit.
+            advance(2, &mut index, &mut byte);
+            while index < chars.len() && chars[index].is_ascii_hexdigit() {
+                advance(1, &mut index, &mut byte);
+            }
+            let text = &source[start..byte];
+            let value = u32::from_str_radix(&text[2..], 16).map_err(|_| ParseError {
+                span,
+                message: format!("`{text}` is not a 32-bit hexadecimal literal"),
+            })?;
+            tokens.push(Lexeme {
+                token: Token::Int(value as i32),
+                span,
+                start,
+                end: byte,
+            });
+            continue;
+        }
         if c.is_ascii_digit() {
             let mut is_float = false;
             while index < chars.len() && chars[index].is_ascii_digit() {

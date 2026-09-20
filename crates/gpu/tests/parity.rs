@@ -1161,3 +1161,45 @@ fn memories_match_between_backends() {
         "every step tallied once"
     );
 }
+
+#[test]
+fn integer_arithmetic_matches_between_backends() {
+    // Bits, shifts and the wrapping arithmetic over the whole range of
+    // signs: both backends give the same words.
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.ints@1 { requires { field.write; } output result: Rows<Bits>; struct Bits { and: Int; or: Int; xor: Int; shl: Int; shr: Int; ushr: Int; wadd: Int; wsub: Int; wmul: Int; }
+        compute {
+            let i = element();
+            let a = mul_wrap(i, 0x9E3779B1) ^ 0x5555;
+            let b = sub_wrap(i * 7, 0x4000);
+            return Bits { and: a & b, or: a | b, xor: a ^ b, shl: a << i, shr: a >> i, ushr: a >>> i, wadd: add_wrap(a, b), wsub: sub_wrap(a, b), wmul: mul_wrap(a, b) };
+        } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 16);
+    let invocation = orla_abi::Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(200),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu).unwrap().words().to_vec();
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let device = host.resident(out).unwrap().expect("resident");
+    let bytes = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
+    let gpu_words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    assert_eq!(cpu_words, gpu_words);
+    assert!(
+        cpu_words[6..].iter().any(|w| *w as i32 > 0)
+            && cpu_words[6..].iter().any(|w| (*w as i32) < 0)
+    );
+}

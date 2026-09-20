@@ -1469,6 +1469,10 @@ impl Emitter<'_> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            // WGSL's integer arithmetic wraps.
+            Intrinsic::AddWrap => format!("({} + {})", v(&args[0]), v(&args[1])),
+            Intrinsic::SubWrap => format!("({} - {})", v(&args[0]), v(&args[1])),
+            Intrinsic::MulWrap => format!("({} * {})", v(&args[0]), v(&args[1])),
             Intrinsic::Step => format!("step({}, {})", splat(&args[0], ty), v(&args[1])),
             Intrinsic::Smoothstep => format!(
                 "smoothstep({}, {}, {})",

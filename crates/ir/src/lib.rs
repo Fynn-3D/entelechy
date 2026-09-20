@@ -460,6 +460,12 @@ pub enum Intrinsic {
     Clamp,
     /// `mix(a, b, t)` linear interpolation, `t` a `Float` or componentwise.
     Mix,
+    /// `add_wrap(a, b)` on `Int`s: the sum modulo 2^32, never a failure.
+    AddWrap,
+    /// `sub_wrap(a, b)` on `Int`s: the difference modulo 2^32.
+    SubWrap,
+    /// `mul_wrap(a, b)` on `Int`s: the low 32 bits of the product.
+    MulWrap,
     /// Convert `Int` or `Bool` (as 0 or 1) to `Float`.
     ToFloat,
     /// Convert `Float` (truncating toward zero) or `Bool` (as 0 or 1) to `Int`.
@@ -489,7 +495,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 30] = [
+    pub const ALL: [(Intrinsic, &'static str); 33] = [
         (Intrinsic::Floor, "floor"),
         (Intrinsic::Ceil, "ceil"),
         (Intrinsic::Round, "round"),
@@ -508,6 +514,9 @@ impl Intrinsic {
         (Intrinsic::Max, "max"),
         (Intrinsic::Clamp, "clamp"),
         (Intrinsic::Mix, "mix"),
+        (Intrinsic::AddWrap, "add_wrap"),
+        (Intrinsic::SubWrap, "sub_wrap"),
+        (Intrinsic::MulWrap, "mul_wrap"),
         (Intrinsic::ToFloat, "float"),
         (Intrinsic::ToInt, "int"),
         (Intrinsic::Dot, "dot"),
@@ -569,6 +578,9 @@ impl Intrinsic {
                 Some(*a)
             }
             (Self::Min | Self::Max, [a, Type::Float]) if vector(*a) => Some(*a),
+            (Self::AddWrap | Self::SubWrap | Self::MulWrap, [Type::Int, Type::Int]) => {
+                Some(Type::Int)
+            }
             (Self::Clamp, [a, b, c]) if a == b && b == c && (float_like(*a) || *a == Type::Int) => {
                 Some(*a)
             }

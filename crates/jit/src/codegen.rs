@@ -1147,6 +1147,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Intrinsic::Min if is_int(self, 0) => vec![self.b.ins().smin(w[0][0], w[1][0])],
             Intrinsic::Max if is_int(self, 0) => vec![self.b.ins().smax(w[0][0], w[1][0])],
+            Intrinsic::AddWrap => vec![self.b.ins().iadd(w[0][0], w[1][0])],
+            Intrinsic::SubWrap => vec![self.b.ins().isub(w[0][0], w[1][0])],
+            Intrinsic::MulWrap => vec![self.b.ins().imul(w[0][0], w[1][0])],
             Intrinsic::Min => self.zip2(&w[0], &w[1], |fx, x, y| fx.fmin(x, y)),
             Intrinsic::Max => self.zip2(&w[0], &w[1], |fx, x, y| fx.fmax(x, y)),
             Intrinsic::Clamp if is_int(self, 0) => {

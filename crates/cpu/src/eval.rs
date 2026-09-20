@@ -1013,6 +1013,24 @@ impl FunctionCompiler<'_> {
             },
             Intrinsic::Min => map2(f32::min),
             Intrinsic::Max => map2(f32::max),
+            Intrinsic::AddWrap => Instr::IMap2 {
+                f: i32::wrapping_add,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::SubWrap => Instr::IMap2 {
+                f: i32::wrapping_sub,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::MulWrap => Instr::IMap2 {
+                f: i32::wrapping_mul,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
             Intrinsic::Clamp if is_int(0) => Instr::IClamp {
                 dst: dst.at,
                 v: loc(0),

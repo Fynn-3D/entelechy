@@ -69,7 +69,11 @@ expressions; `Name { a: .., b: .. }` builds a struct and
 The math builtins are `floor`, `ceil`, `round`, `sign`, `fract`, `abs`,
 `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`,
 `pow`, `min`, `max`, `clamp`, `mix`, `step`, `smoothstep`, `dot`, `cross`,
-`length`, `normalize`, `reflect`, and the conversions `float` and `int`.
+`length`, `normalize`, `reflect`, and the conversions `float` and `int`;
+on `Int`s, `add_wrap`, `sub_wrap` and `mul_wrap` are the arithmetic
+modulo 2^32 (a machine's ALU), where `+ - *` report an overflow as a
+failure. An `Int` literal may be hexadecimal, `0xFF`, its 32 bits as
+written.
 The componentwise ones take a `Float` or any vector; where two operands
 meet, a `Float` beside a vector broadcasts, so `clamp(v, 0.0, 1.0)` and
 `mix(a, b, 0.5)` read as they would anywhere.
