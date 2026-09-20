@@ -116,47 +116,53 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-The machine substrate is proven and closed for now: a machine is a
-`scan` over memories (`put`, also from functions with a Field
-parameter), with `>>>`, `add_wrap`/`sub_wrap`/`mul_wrap` and hexadecimal
-literals for its ALU, stepped by the JIT; the
-[CHIP-8](examples/chip8/README.md) and the
-[Thumb core](examples/thumb/README.md) (every format of the ARM7TDMI's
-16-bit set, 19 million instructions a second on the JIT, above a GBA's
-clock) are the proofs. A whole emulator (GBA or otherwise) is a project
-of its own, not a next step of this repository. The JIT now covers every
-mode (a reduction folds with its compiled `merge` in the interpreter's
-tree, a scatter applies with the CPU crate's combine rule), so
-`--backend jit` never falls back to the interpreter. Back to the
-platform. The third bridge, Godot, is in (`bridges/godot`: an
-`OrlaView` Control as the window, params as controls, an `ArrayMesh`
-from rows, tested headless with the sessions spawned by Godot itself),
-and so is the in-process door: `orla-ffi`, a C ABI over the session
-(`crates/ffi/include/orla.h`, `bridges/c/hello.c` links it), the
-Fields read where they lie.
+Where the platform stands: four modes on three backends, bit for bit
+between the CPU and the JIT and to rounding on the GPU, held by the
+feature matrix (`crates/matrix`, 19 features x 5 modes on both); a GPU
+session runs its scans on the JIT; `orla trace` (calls followed),
+`run --profile`, `orla help` (90 builtins, generated from the typing
+table); three protocol bridges and the C ABI (`orla-ffi`); the machine
+substrate proven by the CHIP-8 and the Thumb core, the emulator itself
+out of scope. Rated 9.3/10 in the last assessment; the remaining gaps
+are the ones below.
 
-1. The Kernel language's gaps. The debugging surface is in: `orla
-   trace` and the protocol's `trace` run one element or one scan step of
-   a node on the interpreter and show every `let` with its value, the
-   ones in branches not taken marked; `run --profile` and the report's
-   `timings` time each node; calls are followed (each call's frame is
-   recorded as it returns, the first 256), a loop's bindings show the
-   last iteration. The feature matrix (`crates/matrix`) holds the JIT
-   and the GPU to the CPU over every feature under every mode; its
-   first run found the GPU's float `%` inexact and every scatter into
-   rows refused, both fixed. The ceiling felt
-   writing the CHIP-8 and Thumb cores is lifted where it was felt:
-   `match` on an `Int` (a WGSL `switch`, a Cranelift jump table) and an
-   enclosing loop's carried value readable inside a nested loop; both
-   cores are rewritten with them. Not taken up: 64-bit ints (WGSL has
-   none), strings (text is rows of codes), dynamic sizes (a graph
-   resizes by params), `put` outside `scan` (determinism). What is
-   left of the ceiling shows up only by writing more; the next Kernel
-   that hurts names the next gap.
-2. What a session of play turns up: the voxel editor and the showcase
+1. The language's data types, agreed order, one round each:
+   a. Fixed-size arrays `[T; N]` in struct fields, `let`s and literals
+      (`[1, 2, 3]`), constant and dynamic index, so a lookup table, a
+      ROM or a register file is written as data rather than as an `if`
+      chain or a memory. IR: a type `Array(T, N)` laid out as N times
+      T's words; CPU: frame words plus an offset; GPU: a WGSL array;
+      JIT: a stack slot or a select chain for a dynamic index. Add a
+      matrix feature row, a `help`/DOCUMENTS line, rewrite the CHIP-8
+      font and the Thumb ROM with it.
+   b. Matrices `Mat2/3/4`: column constructors, `Mat * Vec`, `Mat *
+      Mat`, `transpose`, `determinant`, `inverse`; WGSL native, CPU and
+      JIT as N by N floats; rewrite one rotation in raymarch or model.
+   c. Integer vectors `IVec2/3` for grid coordinates and addresses, so
+      `coord()`-derived indices stop converting back and forth; widens
+      the operator and `at` overload tables, medium work.
+   Not planned: Bool vectors, unsigned ints (`ult`/`udiv`/`>>>` cover
+   them), 64-bit, f16, strings, dynamic sizes, packed byte or RGBA8
+   Field storage (a layout matter, not a type; f32 per channel is
+   deliberate until memory or bandwidth says otherwise).
+2. `at`/`at_linear` addressing modes (wrap, mirror) when a seamless
+   tiling example needs them; `at(g, mod(c, size(g)))` covers wrap
+   today, only the linear seam cannot be composed.
+3. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, and a GPU
    session now hands its scans to the JIT, so a machine runs as native
    code under either backend.
+
+The recipe for a language addition, as this round settled it: IR
+(`Intrinsic`/`Op`/`Type` with typing rule, `describe`, argument names),
+compiler lowering (or composition into existing ops, which the backends
+then get for free), the three backends, a `help` entry when not
+generated, a DOCUMENTS line, a feature row in `orla_matrix::features`
+(the matrix runs it under every mode on the JIT bit for bit and on the
+GPU to rounding and lists every case that differs), then the full
+verification. Declined this round with reasons recorded: a wide-lane
+interpreter (the JIT covers it), the GDExtension (small gain, heavy
+dependency), a Linux run.
 
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
