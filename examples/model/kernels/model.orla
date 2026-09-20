@@ -11,12 +11,13 @@ type Vertices = Rows<Vertex>;
 type Triangles = Rows<Tri>;
 type GBuffer = Grid<Surface>;
 
-fn rotate_y(p: Vec3, a: Float) -> Vec3 {
-    return vec3(p.x * cos(a) + p.z * sin(a), p.y, p.z * cos(a) - p.x * sin(a));
+// Rotations as matrices, by columns: where each axis lands.
+fn rotate_y(a: Float) -> Mat3 {
+    return mat3(vec3(cos(a), 0.0, -sin(a)), vec3(0.0, 1.0, 0.0), vec3(sin(a), 0.0, cos(a)));
 }
 
-fn rotate_x(p: Vec3, a: Float) -> Vec3 {
-    return vec3(p.x, p.y * cos(a) - p.z * sin(a), p.y * sin(a) + p.z * cos(a));
+fn rotate_x(a: Float) -> Mat3 {
+    return mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(a), sin(a)), vec3(0.0, -sin(a), cos(a)));
 }
 
 kernel model.project@1 {
@@ -30,8 +31,9 @@ kernel model.project@1 {
     compute {
         let v = sample(mesh);
         let angle = time() * spin;
-        let p = rotate_x(rotate_y(v.position, angle), tilt);
-        let n = rotate_x(rotate_y(v.normal, angle), tilt);
+        let orbit = rotate_x(tilt) * rotate_y(angle);   // one matrix for both
+        let p = orbit * v.position;
+        let n = orbit * v.normal;
         let view = vec3(p.x, p.y, p.z - distance);
         let f = 2.1445;
         let near = 0.1;

@@ -147,9 +147,24 @@ are the ones below.
       constant array out of the per-element code on the JIT (the ROMs
       run once at boot, so nothing asked for it; a scan reading a
       256-entry table every step would).
-   b. Matrices `Mat2/3/4`: column constructors, `Mat * Vec`, `Mat *
-      Mat`, `transpose`, `determinant`, `inverse`; WGSL native, CPU and
-      JIT as N by N floats; rewrite one rotation in raymarch or model.
+   b. Done: matrices `Mat2/3/4` as ABI value types (column-major
+      floats; `Type::order`/`column`), `mat3(c0, c1, c2)` and
+      `mat3(diagonal)`, `m[i]` a column and `v[i]` a component (both
+      through `extract`/`subscript`), `Mat * Mat`, `Mat * Vec`, `Vec *
+      Mat`, scaling by a Float, `+ -`, `-m`, `==`; `transpose`,
+      `determinant`, `inverse`. One formula set in
+      `orla_cpu::matrix` over an `Arith` trait: floats on the CPU, a
+      Cranelift builder on the JIT (bit for bit with the CPU), text on
+      the GPU for the `inverse_N` helpers (emitted only for the orders
+      a Kernel inverts, since the unrolled 4x4 costs the shader
+      compiler a quarter of a second). WGSL quirks met: naga has no
+      unary minus on a matrix (`m * -1.0` is emitted), no `min`/`max`/
+      `mix`/`==` on matrices (per column). The model example's orbit is
+      one matrix. Not done: matrix params (nothing crosses the ABI as
+      a matrix in a param; a Field of matrices works), `Mat / Float`
+      (WGSL has none; `* (1.0 / f)`), non-square matrices, and
+      `vec4(v3, 1.0)`-style constructors, which would be their own
+      small round if a swizzle round ever comes.
    c. Integer vectors `IVec2/3` for grid coordinates and addresses, so
       `coord()`-derived indices stop converting back and forth; widens
       the operator and `at` overload tables, medium work.
