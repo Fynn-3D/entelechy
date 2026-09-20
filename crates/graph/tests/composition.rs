@@ -1266,3 +1266,109 @@ output r <- machine.result;",
         .unwrap();
     assert_eq!(read(&runtime, again.output, 2), 3);
 }
+
+const TALLY_ZERO: &str = "kernel tally.zero@1 { requires { field.write; } struct Tally { count: Int; } output result: Rows<Tally>; compute { return Tally { count: 0 }; } }";
+const TALLY_STEP_V1: &str = "kernel tally.step@1 { requires { field.read; field.write; } struct Tally { count: Int; } input previous: Rows<Tally>; output result: Rows<Tally>; compute { let t = sample(previous); return Tally { count: t.count + 1 }; } }";
+const TALLY_STEP_V2: &str = "kernel tally.step@1 { requires { field.read; field.write; } struct Tally { count: Int; doubled: Int; } input previous: Rows<Tally>; output result: Rows<Tally>; compute { let t = sample(previous); return Tally { count: t.count + 1, doubled: (t.count + 1) * 2 }; } }";
+const TALLY_UPGRADE: &str = "kernel tally.upgrade@1 { requires { field.read; field.write; } struct Old { count: Int; } struct Tally { count: Int; doubled: Int; } input old: Rows<Old>; output result: Rows<Tally>; compute { let o = sample(old); return Tally { count: o.count, doubled: o.count * 2 }; } }";
+const TALLY_UPGRADE_WRONG: &str = "kernel tally.wrong@1 { requires { field.read; field.write; } struct Old { count: Int; } input old: Rows<Old>; output result: Rows<Old>; compute { return sample(old); } }";
+const TALLY_SCENE: &str = "
+node seed: tally.zero@1 { domain = 1; }
+node count: tally.step@1 { previous <~ count.result from seed.result migrate tally.upgrade@1; }
+output result <- count.result;
+";
+
+fn tally(runtime: &Runtime, handle: orla_runtime::Handle) -> Vec<i32> {
+    runtime
+        .host()
+        .element(handle, 0)
+        .unwrap()
+        .iter()
+        .map(|w| *w as i32)
+        .collect()
+}
+
+#[test]
+fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
+    let mut runtime = Runtime::new(1024);
+    for source in [
+        TALLY_ZERO,
+        TALLY_STEP_V1,
+        TALLY_UPGRADE,
+        TALLY_UPGRADE_WRONG,
+    ] {
+        runtime.load(source).unwrap();
+    }
+    let graph = Graph::parse(TALLY_SCENE).unwrap();
+    assert_eq!(Graph::parse(&graph.to_string()).unwrap(), graph);
+    assert!(graph.to_string().contains("migrate tally.upgrade@1"));
+    let mut evaluator = Evaluator::new();
+    let ctx = Context::default();
+    let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime, graph: &Graph| {
+        evaluator.evaluate(graph, runtime, &BTreeMap::new(), &ctx, &BTreeMap::new())
+    };
+    for _ in 0..3 {
+        evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
+    }
+    let report = evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
+    assert_eq!(tally(&runtime, report.output), vec![4]);
+
+    // The Kernel grows a field: the committed state is carried over by
+    // the migration, and the count goes on.
+    runtime.load(TALLY_STEP_V2).unwrap();
+    let report = evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
+    assert_eq!(tally(&runtime, report.output), vec![5, 10]);
+    assert_eq!(
+        report.migrated,
+        vec![(
+            NodeId("count".into()),
+            "previous".into(),
+            "tally.upgrade@1".parse().unwrap()
+        )]
+    );
+    assert!(report.reset.is_empty());
+    let report = evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
+    assert_eq!(tally(&runtime, report.output), vec![6, 12]);
+    assert!(report.migrated.is_empty());
+
+    // Back to the old layout with a migration that gives the wrong one:
+    // the evaluation fails, the state stays, and the old Kernel reads it
+    // again once it is back.
+    let wrong = Graph::parse(&TALLY_SCENE.replace("tally.upgrade@1", "tally.wrong@1")).unwrap();
+    runtime.load(TALLY_STEP_V1).unwrap();
+    let error = evaluate(&mut evaluator, &mut runtime, &wrong).unwrap_err();
+    assert!(
+        matches!(&error, EvaluateError::Migration { kernel, .. } if kernel.to_string() == "tally.wrong@1"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("the state stays as it was"),
+        "{error}"
+    );
+    runtime.load(TALLY_STEP_V2).unwrap();
+    let report = evaluate(&mut evaluator, &mut runtime, &wrong).unwrap();
+    assert_eq!(
+        tally(&runtime, report.output),
+        vec![7, 14],
+        "nothing was lost"
+    );
+
+    // Without a migration named, a changed layout restarts the state
+    // from its initial source, and says so.
+    let plain = Graph::parse(&TALLY_SCENE.replace(" migrate tally.upgrade@1", "")).unwrap();
+    runtime.load(TALLY_STEP_V1).unwrap();
+    let report = evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
+    assert_eq!(tally(&runtime, report.output), vec![1]);
+    assert_eq!(report.reset.len(), 1);
+    assert_eq!(report.reset[0].0, NodeId("count".into()));
+    assert!(
+        report.reset[0].2.contains("laid out as"),
+        "{}",
+        report.reset[0].2
+    );
+    assert_eq!(
+        runtime.host().live(),
+        2,
+        "seed and the committed state only"
+    );
+}

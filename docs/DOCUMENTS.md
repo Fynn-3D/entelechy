@@ -360,7 +360,16 @@ output result <- display.result;      // named graph output; sub-graph outputs
    source in this evaluation and is a dependency. `port <~ source from
    initial` reads the source as committed by the previous successful
    evaluation, is not a dependency, and reads `initial` until something has
-   been committed.
+   been committed. When a republished Kernel changes what the port
+   carries, so the committed state no longer has the port's layout,
+   `port <~ source from initial migrate kernel.id@v` carries it over:
+   the named Kernel is a map over one input laid out as the old state,
+   giving the new layout, run once over the state before the nodes run,
+   and the evaluation reports it as migrated. Without `migrate`, such a
+   port restarts from `initial` and the evaluation reports the reset. A
+   migration that is not published, is not such a map, takes or gives
+   the wrong layout, or fails, fails the evaluation and leaves the state
+   as it was.
 2. A source is a graph input by name or `node.port`. Inputs and nodes share
    one namespace. A graph may declare several outputs; which device takes
    which is decided by structure (a grid of pixels for the window, rows of

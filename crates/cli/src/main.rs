@@ -797,6 +797,12 @@ fn evaluate_and_export(
                 }
             }
             // The output goes to `--out` when it is a picture; rows or a
+            for (node, port, kernel) in &report.migrated {
+                eprintln!("state of `{node}.{port}` carried into its new layout by {kernel}");
+            }
+            for (node, port, reason) in &report.reset {
+                eprintln!("state of `{node}.{port}` restarted from its initial value: {reason}");
+            }
             // volume are reached with `--save`.
             let is_picture = {
                 let host = session.runtime().host();

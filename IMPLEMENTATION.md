@@ -443,6 +443,19 @@ capability claim.
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
 
+- State migration (the plan's section 24): a `<~` binding may name a
+  migration Kernel, `migrate id@v`, a map from the old element layout to
+  the new; before the nodes run, the evaluator compares every committed
+  state's shape and layout with its port's and, on a mismatch, runs the
+  migration once over the state (its input checked against the state,
+  its output against the port) or, with none named, restarts the port
+  from its initial source, reporting either; a migration that fails
+  leaves the state as it was ([evaluator](crates/graph/src/evaluate.rs)
+  `reconcile_state`, [composition test](crates/graph/tests/composition.rs),
+  [an agent's record](examples/migrate/agent.jsonl)). The check is the
+  layout comparison every evaluation already made; nothing is added to a
+  frame that migrates nothing.
+
 - Vectors join and split in the compiler alone: `vec4(v3, w)` and the
   other constructors from shorter vectors flatten their arguments to
   components, and a swizzle `v.zyx` is extracts and a construct, so no

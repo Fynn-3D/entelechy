@@ -655,11 +655,13 @@ impl Parser {
                 let source = self.source_ref()?;
                 self.keyword("from")?;
                 let initial = self.source_ref()?;
+                let migration = self.migration()?;
                 self.expect_punct(";")?;
                 members.push(NodeMember::Previous {
                     port,
                     source,
                     initial,
+                    migration,
                 });
             } else {
                 return Err(self.unexpected("`=`, `<-`, or `<~`"));
@@ -667,6 +669,26 @@ impl Parser {
         }
         self.expect_punct("}")?;
         Ok(members)
+    }
+
+    /// An optional `migrate kernel.id@version` after a `<~` binding.
+    fn migration(&mut self) -> Result<Option<Spanned<String>>, ParseError> {
+        if !self.is_keyword("migrate") {
+            return Ok(None);
+        }
+        self.next();
+        let mut kernel = self.dotted_name("a migration kernel id")?;
+        self.expect_punct("@")?;
+        match self.next() {
+            (Token::Int(version), _) => kernel.value = format!("{}@{version}", kernel.value),
+            (token, span) => {
+                return Err(ParseError {
+                    span,
+                    message: format!("expected a version number, found {}", token.describe()),
+                });
+            }
+        }
+        Ok(Some(kernel))
     }
 
     fn source_ref(&mut self) -> Result<SourceRef, ParseError> {
@@ -713,7 +735,12 @@ impl Parser {
             let source = self.source_ref()?;
             self.keyword("from")?;
             let initial = self.source_ref()?;
-            Some(BindingDecl::Previous { source, initial })
+            let migration = self.migration()?;
+            Some(BindingDecl::Previous {
+                source,
+                initial,
+                migration,
+            })
         } else {
             None
         };
@@ -1257,9 +1284,10 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 21] = [
+const RESERVED: [&str; 22] = [
     "let", "return", "if", "else", "match", "loop", "with", "until", "kernel", "struct", "type",
     "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan", "scatter",
+    "migrate",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

@@ -11,7 +11,7 @@ use orla_ir::KernelId;
 use orla_language::NodeDecl;
 use orla_language::{
     BindingDecl, Document, Expr, ExprKind, Kernel, NodeKind, NodeMember, ParseError, SourceRef,
-    Span,
+    Span, Spanned,
 };
 
 use crate::{Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source};
@@ -436,7 +436,9 @@ impl Lowering<'_, '_> {
                     for input in &mut kernel.inputs {
                         match &mut input.binding {
                             Some(BindingDecl::Now(reference)) => rename(reference),
-                            Some(BindingDecl::Previous { source, initial }) => {
+                            Some(BindingDecl::Previous {
+                                source, initial, ..
+                            }) => {
                                 rename(source);
                                 rename(initial);
                             }
@@ -617,31 +619,41 @@ impl Lowering<'_, '_> {
                     },
                 }
             };
-        let rewrite_previous =
-            |source: &SourceRef, initial: &SourceRef| -> Result<Binding, DocumentError> {
-                let Some(node) = &source.node else {
-                    return Err(error(
-                        source.span,
-                        "`<~` reads a node output; graph inputs carry no state",
-                    ));
+        let rewrite_previous = |source: &SourceRef,
+                                initial: &SourceRef,
+                                migration: Option<&Spanned<String>>|
+         -> Result<Binding, DocumentError> {
+            let migration =
+                match migration {
+                    Some(named) => Some(named.value.parse::<KernelId>().map_err(|e| {
+                        error(named.span, format!("`migrate` names a kernel id: {e}"))
+                    })?),
+                    None => None,
                 };
-                let initial = match rewrite_now(initial)? {
-                    Binding::Now(source) => source,
-                    Binding::Previous { .. } => {
-                        return Err(error(
-                            initial.span,
-                            "the `from` source of a `<~` binding must be a current value",
-                        ));
-                    }
-                };
-                Ok(Binding::Previous {
-                    source: Source::Node {
-                        node: NodeId(format!("{prefix}{node}")),
-                        port: source.name.clone(),
-                    },
-                    initial,
-                })
+            let Some(node) = &source.node else {
+                return Err(error(
+                    source.span,
+                    "`<~` reads a node output; graph inputs carry no state",
+                ));
             };
+            let initial = match rewrite_now(initial)? {
+                Binding::Now(source) => source,
+                Binding::Previous { .. } => {
+                    return Err(error(
+                        initial.span,
+                        "the `from` source of a `<~` binding must be a current value",
+                    ));
+                }
+            };
+            Ok(Binding::Previous {
+                source: Source::Node {
+                    node: NodeId(format!("{prefix}{node}")),
+                    port: source.name.clone(),
+                },
+                initial,
+                migration,
+            })
+        };
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
         let (nodes, declared_outputs) = self.expand_times(document, placement, &params)?;
@@ -682,7 +694,8 @@ impl Lowering<'_, '_> {
                         port,
                         source,
                         initial,
-                    } => bind(port, rewrite_previous(source, initial)?)?,
+                        migration,
+                    } => bind(port, rewrite_previous(source, initial, migration.as_ref())?)?,
                     NodeMember::Carry(port, _) => {
                         return Err(error(port.span, "`carry` needs `times = N;` on the node"));
                     }
@@ -715,8 +728,15 @@ impl Lowering<'_, '_> {
                             Some(BindingDecl::Now(reference)) => {
                                 bind(&input.name, rewrite_now(reference)?)?;
                             }
-                            Some(BindingDecl::Previous { source, initial }) => {
-                                bind(&input.name, rewrite_previous(source, initial)?)?;
+                            Some(BindingDecl::Previous {
+                                source,
+                                initial,
+                                migration,
+                            }) => {
+                                bind(
+                                    &input.name,
+                                    rewrite_previous(source, initial, migration.as_ref())?,
+                                )?;
                             }
                             None => {
                                 return Err(error(
@@ -838,7 +858,9 @@ impl Lowering<'_, '_> {
             for binding in node.inputs.values_mut() {
                 match binding {
                     Binding::Now(source) => resolve(source)?,
-                    Binding::Previous { source, initial } => {
+                    Binding::Previous {
+                        source, initial, ..
+                    } => {
                         resolve(source)?;
                         resolve(initial)?;
                     }

@@ -75,6 +75,11 @@ pub enum Binding {
         source: Source,
         /// What to read before the first commit.
         initial: Source,
+        /// The Kernel that carries the committed state into the port's
+        /// layout when a republished Kernel changed it: a map over the
+        /// old elements to the new. Without one, the state restarts from
+        /// `initial` when the layouts disagree.
+        migration: Option<KernelId>,
     },
 }
 
@@ -82,7 +87,17 @@ impl fmt::Display for Binding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Now(source) => write!(f, "<- {source}"),
-            Self::Previous { source, initial } => write!(f, "<~ {source} from {initial}"),
+            Self::Previous {
+                source,
+                initial,
+                migration,
+            } => {
+                write!(f, "<~ {source} from {initial}")?;
+                if let Some(kernel) = migration {
+                    write!(f, " migrate {kernel}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -361,7 +376,9 @@ impl Graph {
             for (port, binding) in &node.inputs {
                 let sources: Vec<&Source> = match binding {
                     Binding::Now(source) => vec![source],
-                    Binding::Previous { source, initial } => {
+                    Binding::Previous {
+                        source, initial, ..
+                    } => {
                         if let Source::External(_) = source {
                             return Err(GraphError::FeedbackNeedsNode {
                                 node: node.id.clone(),

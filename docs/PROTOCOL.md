@@ -100,7 +100,12 @@ with a struct as an object by field name and `ran` false for a `let` in
 a branch the element did not take, and `calls`, each `{function,
 bindings, results}` in the order the calls returned (`calls_truncated`
 when more than 256 were made). An evaluation's report carries
-`timings`, `{node, millis}` for every node that executed, in order.
+`timings`, `{node, millis}` for every node that executed, in order;
+`migrated`, `{node, port, kernel}` for every `<~` port whose state was
+carried into a new layout by its `migrate` Kernel before the nodes ran;
+and `reset`, `{node, port, reason}` for every such port that had no
+migration and restarted from its initial source. A `graph` answer shows
+a `<~` binding's migration as `migrate`.
 
 `read` with `format: "field"` returns any Field as the Host's file format
 (what `run --save` writes and an `input` reads), and `write` with the same

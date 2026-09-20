@@ -160,7 +160,7 @@ pub enum NodeMember {
     /// `carry port <- output;`: with `times = N;`, from the second time
     /// on the port reads the previous time's output of that name.
     Carry(Spanned<String>, Spanned<String>),
-    /// `port <~ source from initial;`
+    /// `port <~ source from initial [migrate kernel.id@v];`
     Previous {
         /// The port.
         port: Spanned<String>,
@@ -168,6 +168,9 @@ pub enum NodeMember {
         source: SourceRef,
         /// What feeds the port before the first commit.
         initial: SourceRef,
+        /// The Kernel that carries committed state into this port's
+        /// layout when the two no longer agree, as `id@version`.
+        migration: Option<Spanned<String>>,
     },
 }
 
@@ -176,12 +179,15 @@ pub enum NodeMember {
 pub enum BindingDecl {
     /// `<- source`
     Now(SourceRef),
-    /// `<~ source from initial`
+    /// `<~ source from initial [migrate kernel.id@v]`
     Previous {
         /// The node output read from the last commit.
         source: SourceRef,
         /// What feeds the port before the first commit.
         initial: SourceRef,
+        /// The Kernel that carries committed state into this port's
+        /// layout when the two no longer agree, as `id@version`.
+        migration: Option<Spanned<String>>,
     },
 }
 

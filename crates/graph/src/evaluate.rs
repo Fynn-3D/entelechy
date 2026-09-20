@@ -130,6 +130,18 @@ pub enum EvaluateError {
         /// What is wrong.
         message: String,
     },
+    /// A `<~` port's committed state no longer has the port's layout and
+    /// the binding's migration Kernel could not carry it over.
+    Migration {
+        /// The node reading the state.
+        node: NodeId,
+        /// The port.
+        port: String,
+        /// The migration Kernel.
+        kernel: KernelId,
+        /// What went wrong.
+        message: String,
+    },
     /// A fused group could not be prepared by the backend.
     Fusion {
         /// The consuming node.
@@ -206,6 +218,15 @@ impl fmt::Display for EvaluateError {
                 port,
                 message,
             } => write!(f, "node `{node}` port `{port}`: {message}"),
+            Self::Migration {
+                node,
+                port,
+                kernel,
+                message,
+            } => write!(
+                f,
+                "node `{node}` port `{port}`: its state migration `{kernel}` {message}; the state stays as it was"
+            ),
             Self::Host(error) => write!(f, "{error}"),
         }
     }
@@ -245,7 +266,22 @@ pub struct Report {
     /// the backend's execute call, a GPU dispatch not waited for counting
     /// as its submission.
     pub timings: Vec<(NodeId, std::time::Duration)>,
+    /// State ports whose committed value was carried into a new layout
+    /// by the binding's migration Kernel before the nodes ran.
+    pub migrated: Migrated,
+    /// State ports whose committed value no longer had the port's layout
+    /// and, with no migration named, restarted from the initial source;
+    /// with why.
+    pub reset: Reset,
 }
+
+/// State ports carried into a new layout: the reading node, its port,
+/// and the Kernel that carried it.
+pub type Migrated = Vec<(NodeId, String, KernelId)>;
+
+/// State ports restarted from their initial source: the reading node,
+/// its port, and why.
+pub type Reset = Vec<(NodeId, String, String)>;
 
 #[derive(Clone, Debug, PartialEq)]
 enum InputKey {
@@ -531,7 +567,10 @@ impl Evaluator {
         // until the first commit.
         for node in &graph.nodes {
             for binding in node.inputs.values() {
-                if let Binding::Previous { source, initial } = binding {
+                if let Binding::Previous {
+                    source, initial, ..
+                } = binding
+                {
                     for source in [source, initial] {
                         if let Source::Node { node, .. } = source {
                             needed.insert(node.clone());
@@ -576,6 +615,7 @@ impl Evaluator {
         self.prune(graph, runtime);
         let needed = demand.map(|demand| self.needed(graph, demand));
         let groups = self.plan(graph, &order, runtime, externals, params, context)?;
+        let (migrated, reset) = self.reconcile_state(&groups, runtime, context)?;
         // Nodes absorbed into a group are no longer materialized.
         let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
         let stale: Vec<NodeId> = self
@@ -683,7 +723,99 @@ impl Evaluator {
             committed,
             outputs,
             fused,
+            migrated,
+            reset,
         })
+    }
+
+    /// Before the nodes run: every `<~` port whose committed state no
+    /// longer has the port's shape and layout (a republished Kernel
+    /// changed what it carries) is carried over by the binding's
+    /// migration Kernel, a map from the old elements to the new run once
+    /// over the state; without one, the port restarts from its initial
+    /// source. A migration that fails, or gives the wrong layout, fails
+    /// the evaluation and leaves the state as it was.
+    fn reconcile_state(
+        &mut self,
+        groups: &[Group],
+        runtime: &mut Runtime,
+        context: &Context,
+    ) -> Result<(Migrated, Reset), EvaluateError> {
+        let mut migrated = Vec::new();
+        let mut reset = Vec::new();
+        for group in groups {
+            let manifest = group.version.manifest();
+            for (name, binding) in &group.node.inputs {
+                let Binding::Previous {
+                    source:
+                        Source::Node {
+                            node: producer,
+                            port,
+                        },
+                    migration,
+                    ..
+                } = binding
+                else {
+                    continue;
+                };
+                let Some(input) = manifest.inputs.iter().find(|input| &input.name == name) else {
+                    continue;
+                };
+                let key = (producer.clone(), port.clone());
+                let Some(current) = self.committed.get(&key).copied() else {
+                    continue;
+                };
+                let shape = runtime.host().domain(current)?.shape();
+                let schema = runtime.host().schema(current)?.clone();
+                if shape == input.ty.shape && schema == input.ty.schema {
+                    continue;
+                }
+                let mismatch = if shape != input.ty.shape {
+                    format!("expects {} but the state is a {shape}", input.ty.shape)
+                } else {
+                    format!(
+                        "expects elements laid out as {} but the state is {schema}",
+                        input.ty.schema
+                    )
+                };
+                let carried = match migration {
+                    Some(kernel) => {
+                        let fail = |message: String| EvaluateError::Migration {
+                            node: group.node.id.clone(),
+                            port: name.clone(),
+                            kernel: kernel.clone(),
+                            message,
+                        };
+                        let version = runtime
+                            .kernel(kernel)
+                            .ok_or_else(|| fail("is not published".into()))?;
+                        let carried = migrate(runtime, &version, current, context).map_err(fail)?;
+                        let carried_shape = runtime.host().domain(carried)?.shape();
+                        let carried_schema = runtime.host().schema(carried)?.clone();
+                        if carried_shape != input.ty.shape || carried_schema != input.ty.schema {
+                            release(runtime, carried);
+                            return Err(fail(format!(
+                                "gave a {carried_shape} of {carried_schema}, and the port {mismatch}"
+                            )));
+                        }
+                        migrated.push((group.node.id.clone(), name.clone(), kernel.clone()));
+                        Some(carried)
+                    }
+                    None => {
+                        reset.push((group.node.id.clone(), name.clone(), mismatch));
+                        None
+                    }
+                };
+                self.committed.remove(&key);
+                if !self.is_cached(current) && !self.is_committed(current) {
+                    release(runtime, current);
+                }
+                if let Some(carried) = carried {
+                    self.committed.insert(key, carried);
+                }
+            }
+        }
+        Ok((migrated, reset))
     }
 
     /// Decides what executes: every node as its own group, then producers
@@ -731,7 +863,9 @@ impl Evaluator {
             for binding in node.inputs.values() {
                 match binding {
                     Binding::Now(source) => count(source),
-                    Binding::Previous { source, initial } => {
+                    Binding::Previous {
+                        source, initial, ..
+                    } => {
                         count(source);
                         count(initial);
                         // State sources must be materialized; count twice.
@@ -1000,6 +1134,7 @@ impl Evaluator {
             Binding::Previous {
                 source: Source::Node { node, port },
                 initial,
+                ..
             } => self
                 .committed
                 .get(&(node.clone(), port.clone()))
@@ -1213,6 +1348,7 @@ impl Evaluator {
                             port,
                         },
                     initial,
+                    ..
                 } => match self.committed.get(&(producer.clone(), port.clone())) {
                     Some(handle) => (*handle, InputKey::State(*handle)),
                     None => {
@@ -1417,6 +1553,54 @@ fn fused_id(node: &NodeId) -> KernelId {
         segment
     };
     KernelId::new(&format!("fused.{segment}"), 1).expect("sanitized segment forms a valid id")
+}
+
+/// Runs a migration Kernel once over a state Field: a map with that one
+/// input, its parameters at their defaults, over the state's extent.
+/// Returns the new state, or why the Kernel cannot be one.
+fn migrate(
+    runtime: &mut Runtime,
+    version: &Arc<KernelVersion>,
+    state: Handle,
+    context: &Context,
+) -> Result<Handle, String> {
+    let manifest = version.manifest();
+    if manifest.mode != orla_ir::Mode::Map || manifest.inputs.len() != 1 {
+        return Err("must be a map over one input, the old state, giving the new".to_owned());
+    }
+    let domain = runtime
+        .host()
+        .domain(state)
+        .map_err(|error| error.to_string())?;
+    // Its input must take the state as it is: the layout it was
+    // committed with, not the one the port wants now.
+    let schema = runtime
+        .host()
+        .schema(state)
+        .map_err(|error| error.to_string())?;
+    let takes = &manifest.inputs[0].ty;
+    if takes.shape != domain.shape() || takes.schema != *schema {
+        return Err(format!(
+            "takes {} laid out as {}, but the state is a {} laid out as {schema}",
+            takes.shape,
+            takes.schema,
+            domain.shape()
+        ));
+    }
+    let invocation = Invocation {
+        inputs: vec![state],
+        params: manifest.params.iter().map(|param| param.default).collect(),
+        domain,
+        context: *context,
+    };
+    let mut outputs = runtime
+        .execute(version, &invocation)
+        .map_err(|error| format!("failed: {error}"))?;
+    let carried = outputs.remove(0);
+    for extra in outputs {
+        release(runtime, extra);
+    }
+    Ok(carried)
 }
 
 fn release(runtime: &mut Runtime, handle: Handle) {
