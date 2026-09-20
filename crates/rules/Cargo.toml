@@ -1,0 +1,14 @@
+[package]
+name = "orla-rules"
+description = "The rules of Kernel execution every backend keeps: invocations, addresses, combines, the matrix formulas, the rasterizer's contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-abi = { path = "../abi" }
+orla-ir = { path = "../ir" }
+
+[lints]
+workspace = true

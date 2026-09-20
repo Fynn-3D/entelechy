@@ -10,32 +10,12 @@
 //! is a copy of words out of a slice the scope lent once; and no
 //! execution allocates per element.
 
-use std::fmt;
-
 use orla_abi::{Domain, Invocation, Scope, Type, Value};
 use orla_ir::{BinaryOp, Block, Function, Instruction, Intrinsic, Op, UnaryOp, Validated, ValueId};
 
-use crate::matrix::{self, Floats};
+use orla_rules::matrix::{self, Floats};
 
-use crate::ExecutionError;
-
-/// Integer arithmetic that cannot produce a value.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ArithmeticError {
-    /// Integer division or remainder by zero.
-    DivisionByZero,
-    /// Integer result does not fit in 32 bits.
-    Overflow,
-}
-
-impl fmt::Display for ArithmeticError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DivisionByZero => f.write_str("integer division by zero"),
-            Self::Overflow => f.write_str("integer overflow"),
-        }
-    }
-}
+use crate::{ArithmeticError, ExecutionError};
 
 /// Where a value lives: a frame-relative word offset and a width in words.
 #[derive(Clone, Copy, Debug)]

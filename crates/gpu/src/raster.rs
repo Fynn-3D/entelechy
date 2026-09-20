@@ -1,6 +1,6 @@
 //! The GPU side of the native `rasterize` operation: the device's
 //! rasterizer through a render pipeline, with the same contract as
-//! [`orla_cpu::raster`]. Two float render targets carry the surface
+//! [`orla_rules::raster`]. Two float render targets carry the surface
 //! attributes, a depth target settles order, and a compute pass compacts
 //! the padded copies into the tight word layout the Host expects, so the
 //! result is a resident grid like any other output.
@@ -8,8 +8,8 @@
 use std::sync::OnceLock;
 
 use orla_abi::{Handle, Invocation, Scope};
-use orla_cpu::ExecutionError;
-use orla_cpu::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
+use orla_rules::ExecutionError;
+use orla_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
 
 use crate::{DeviceImage, GpuBackend};
 

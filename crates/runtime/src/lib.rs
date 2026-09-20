@@ -31,9 +31,9 @@ pub use orla_abi::{
     Scalar, Schema, Scope, Shape, Value,
 };
 pub use orla_compiler::CompileError;
-pub use orla_cpu::ExecutionError;
 use orla_ir::{Capabilities, Capability, Port, PortType, Type};
 pub use orla_ir::{KernelId, Manifest, Validated};
+pub use orla_rules::ExecutionError;
 
 /// An operation a backend performs natively: device access, not a Kernel.
 /// Native operations are published by the runtime itself, under
@@ -41,7 +41,7 @@ pub use orla_ir::{KernelId, Manifest, Validated};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NativeOp {
     /// Rasterizes `vertices` and `triangles` into a `surface` grid; see
-    /// [`orla_cpu::raster`] for the contract.
+    /// [`orla_rules::raster`] for the contract.
     Rasterize,
 }
 
@@ -73,7 +73,7 @@ impl NativeOp {
                         ty: PortType {
                             element: Type::Struct(0),
                             shape: Shape::Rows,
-                            schema: orla_cpu::raster::vertex_schema(),
+                            schema: orla_rules::raster::vertex_schema(),
                         },
                     },
                     Port {
@@ -81,7 +81,7 @@ impl NativeOp {
                         ty: PortType {
                             element: Type::Struct(1),
                             shape: Shape::Rows,
-                            schema: orla_cpu::raster::triangle_schema(),
+                            schema: orla_rules::raster::triangle_schema(),
                         },
                     },
                 ],
@@ -91,7 +91,7 @@ impl NativeOp {
                     ty: PortType {
                         element: Type::Struct(2),
                         shape: Shape::Grid,
-                        schema: orla_cpu::raster::surface_schema(),
+                        schema: orla_rules::raster::surface_schema(),
                     },
                 }],
             },

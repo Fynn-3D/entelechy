@@ -20,8 +20,8 @@ use std::fmt;
 use std::sync::{Mutex, OnceLock};
 
 use orla_abi::{Handle, Invocation, Scope, Value};
-use orla_cpu::{ExecutionError, check_invocation};
 use orla_ir::Validated;
+use orla_rules::{ExecutionError, check_invocation};
 use orla_runtime::{Backend, NativeOp, Prepared};
 
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
@@ -482,9 +482,9 @@ impl Backend for GpuBackend {
         let domain = if reducing {
             scope.size(invocation.inputs[0])?
         } else if scanning {
-            orla_cpu::check_scan(invocation, scope)?
+            orla_rules::check_scan(invocation, scope)?
         } else if let Some(base) = scattering {
-            orla_cpu::check_scatter(invocation, scope, base)?;
+            orla_rules::check_scatter(invocation, scope, base)?;
             scope.size(invocation.inputs[0])?
         } else {
             invocation.domain

@@ -28,8 +28,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
 use orla_abi::Type;
-use orla_cpu::matrix::{self, Arith};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
+use orla_rules::matrix::{self, Arith};
 
 use crate::offsets;
 

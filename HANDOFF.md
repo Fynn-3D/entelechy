@@ -66,7 +66,11 @@ registers), keeps `unsafe` to the one crate that calls the code it made
 compiled module per Kernel version, freed with it; a reduction's `merge`
 is compiled with its two values passed through pointers (its words vary
 by Kernel, a native call from Rust cannot), and the fold and a scatter's
-apply are the CPU crate's loops so the three backends stay one rule; the
+apply are `orla-rules`' loops so the three backends stay one rule (that
+crate holds every rule the backends share: invocation checks, scan and
+scatter sizing, addresses, combines, float key order, the matrix
+formulas, the rasterizer's contract; the CPU is the reference
+implementation, not the home of the law); the
 C ABI (`orla-ffi`) is blocking and single-threaded per session, its
 strings owned by the session until the next call and a Field's words
 until the next evaluate, request or close (the Host may release them),
@@ -159,7 +163,7 @@ are the ones below.
       through `extract`/`subscript`), `Mat * Mat`, `Mat * Vec`, `Vec *
       Mat`, scaling by a Float, `+ -`, `-m`, `==`; `transpose`,
       `determinant`, `inverse`. One formula set in
-      `orla_cpu::matrix` over an `Arith` trait: floats on the CPU, a
+      `orla_rules::matrix` over an `Arith` trait: floats on the CPU, a
       Cranelift builder on the JIT (bit for bit with the CPU), text on
       the GPU for the `inverse_N` helpers (emitted only for the orders
       a Kernel inverts, since the unrolled 4x4 costs the shader

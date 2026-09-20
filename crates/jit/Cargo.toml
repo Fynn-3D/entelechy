@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+orla-rules = { path = "../rules" }
 orla-abi = { path = "../abi" }
 orla-ir = { path = "../ir" }
 orla-cpu = { path = "../cpu" }

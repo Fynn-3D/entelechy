@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Kernel rules | [rules](crates/rules/src/lib.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | Every backend's parity test runs by them |
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [interpreter](crates/cpu/src/eval.rs) | [execution tests](crates/cpu/tests/execute.rs) |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs) | [CPU/GPU parity tests](crates/gpu/tests/parity.rs) (skip without an adapter) |
@@ -418,7 +419,7 @@ capability claim.
   with the operator table in [the IR](crates/ir/src/lib.rs) (`Mat * Mat`,
   `Mat * Vec`, `Vec * Mat`, scaling, `+ -`, `==`) and three intrinsics
   (`transpose`, `determinant`, `inverse`). The formulas live once, in
-  [`orla_cpu::matrix`](crates/cpu/src/matrix.rs), over a trait of the
+  [`orla_rules::matrix`](crates/rules/src/matrix.rs), over a trait of the
   four operations: the interpreter runs them on floats, the JIT feeds
   them a Cranelift builder, and the GPU prints the inverse through them
   as a WGSL function (the rest is WGSL's own), so the CPU and the JIT

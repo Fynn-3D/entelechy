@@ -7,9 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+orla-rules = { path = "../rules" }
 orla-abi = { path = "../abi" }
 orla-ir = { path = "../ir" }
-orla-cpu = { path = "../cpu" }
 orla-runtime = { path = "../runtime" }
 # `std` keeps wgpu error scopes thread-local, so the preparation worker and
 # the executing thread never share one scope stack.
@@ -17,6 +17,7 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "m
 pollster = "0.4"
 
 [dev-dependencies]
+orla-cpu = { path = "../cpu" }
 orla-compiler = { path = "../compiler" }
 orla-matrix = { path = "../matrix" }
 orla-graph = { path = "../graph" }

@@ -320,7 +320,7 @@ fn button_down(code: i32) -> bool {{
         let entries: Vec<&'static str> = (0..n * n)
             .map(|k| &*Box::leak(format!("m[{}][{}]", k / n, k % n).into_boxed_str()))
             .collect();
-        let inverse = orla_cpu::matrix::inverse(&mut orla_cpu::matrix::Text, n, &entries);
+        let inverse = orla_rules::matrix::inverse(&mut orla_rules::matrix::Text, n, &entries);
         let _ = writeln!(
             out,
             "fn inverse_{n}(m: {name}) -> {name} {{

@@ -19,8 +19,8 @@ use std::sync::Arc;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use orla_abi::{Domain, Handle, Invocation, Scope};
-use orla_cpu::{ArithmeticError, ExecutionError, check_invocation};
 use orla_ir::{Combine, Mode, Validated};
+use orla_rules::{ArithmeticError, ExecutionError, check_invocation};
 use orla_runtime::{Backend, NativeOp, Prepared};
 
 /// Elements per thread below which the run stays single-threaded.
@@ -486,9 +486,9 @@ fn run_scatter(
     combine: Combine,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
-    let target = orla_cpu::check_scatter(invocation, scope, base)?;
+    let target = orla_rules::check_scatter(invocation, scope, base)?;
     let sources = scope.size(invocation.inputs[0])?;
-    let address = orla_cpu::address_words(target);
+    let address = orla_rules::address_words(target);
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.words();
     let shared = shared(module, invocation, scope, sources)?;
@@ -497,10 +497,10 @@ fn run_scatter(
     let mut words = scope.words(invocation.inputs[base])?.to_vec();
     let scalars = port.ty.schema.scalars();
     for (index, pair) in pairs.chunks_exact(address + stride).enumerate() {
-        let Some(at) = orla_cpu::scatter_index(target, &pair[..address]) else {
+        let Some(at) = orla_rules::scatter_index(target, &pair[..address]) else {
             continue;
         };
-        orla_cpu::combine_words(
+        orla_rules::combine_words(
             combine,
             scalars,
             &mut words[at * stride..(at + 1) * stride],
@@ -543,7 +543,7 @@ fn run_scan(
 ) -> Result<Vec<Handle>, ExecutionError> {
     let entry: ScanEntry = unsafe { std::mem::transmute::<usize, ScanEntry>(entry) };
     let init: Init = unsafe { std::mem::transmute::<usize, Init>(init) };
-    let domain = orla_cpu::check_scan(invocation, scope)?;
+    let domain = orla_rules::check_scan(invocation, scope)?;
     let shared = shared(module, invocation, scope, domain)?;
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.words();
