@@ -1,16 +1,19 @@
 //! The IR interpreter.
 //!
-//! Values live in one flat stack. A plain value takes one slot; a struct
-//! takes one slot per scalar field, nested structs flattened, so aggregate
-//! operations are range copies within the stack and nothing allocates
-//! per pixel.
+//! A module is compiled once per execution into word-addressed code and
+//! that code runs once per element. Every value lives in a flat stack of
+//! 32-bit words at an offset fixed at compile time, in the layout the ABI
+//! gives elements: a scalar is one word, a vector one per component, a
+//! struct its fields in order. Reading an argument, a struct field, a
+//! vector component, or a loop's carried value is therefore an alias
+//! resolved at compile time and costs nothing at run time; a Field read
+//! is a copy of words out of a slice the scope lent once; and no
+//! execution allocates per element.
 
 use std::fmt;
 
 use orla_abi::{Domain, Invocation, Scope, Type, Value};
-use orla_ir::{
-    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated, ValueId,
-};
+use orla_ir::{BinaryOp, Block, Function, Instruction, Intrinsic, Op, UnaryOp, Validated, ValueId};
 
 use crate::ExecutionError;
 
@@ -32,598 +35,730 @@ impl fmt::Display for ArithmeticError {
     }
 }
 
-/// Slot layout of one struct type.
+/// Where a value lives: a frame-relative word offset and a width in words.
+#[derive(Clone, Copy, Debug)]
+struct Loc {
+    at: usize,
+    n: usize,
+}
+
+/// Word layout of one struct type.
 struct StructLayout {
-    size: usize,
+    words: usize,
     field_offsets: Vec<usize>,
 }
 
-/// Slot layout of one function: where each argument and each value lives
-/// relative to the frame.
-struct FunctionLayout {
-    arg_offsets: Vec<usize>,
-    args_size: usize,
-    /// Offset of each value id within the value area.
-    offsets: Vec<usize>,
-    /// Slot count of each value id.
-    sizes: Vec<usize>,
-    values_size: usize,
+/// How a vector component is made from a part.
+#[derive(Clone, Copy)]
+enum Widen {
+    /// Already a float word.
+    Float,
+    /// An `Int` or `Bool` word, converted.
+    Int,
 }
 
-struct Layouts {
+/// How an address is read for `at` and `at_linear`.
+#[derive(Clone, Copy)]
+enum Address {
+    Int,
+    Float,
+    Vec2,
+    Vec3,
+}
+
+type F1 = fn(f32) -> f32;
+type F2 = fn(f32, f32) -> f32;
+type F3 = fn(f32, f32, f32) -> f32;
+
+/// One compiled instruction. Offsets are relative to the running frame;
+/// `n` is a width in words; `sa`, `sb`, `sc` are operand strides, zero
+/// for a scalar broadcast beside a vector.
+enum Instr {
+    Const {
+        dst: usize,
+        words: [u32; 4],
+        n: usize,
+    },
+    Param {
+        dst: usize,
+        at: usize,
+        n: usize,
+    },
+    Move {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    Gather {
+        dst: usize,
+        parts: Vec<Loc>,
+    },
+    Vector {
+        dst: usize,
+        parts: Vec<(usize, Widen)>,
+    },
+    FNeg {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    INeg {
+        dst: usize,
+        src: usize,
+    },
+    Not {
+        dst: usize,
+        src: usize,
+    },
+    FBin {
+        f: F2,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    IBin {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    FCmp {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    ICmp {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    FEq {
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+        negate: bool,
+    },
+    IEq {
+        dst: usize,
+        a: usize,
+        b: usize,
+        negate: bool,
+    },
+    And {
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    Or {
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    Map1 {
+        f: F1,
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    Map2 {
+        f: F2,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    Map3 {
+        f: F3,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        c: usize,
+        sc: usize,
+        n: usize,
+    },
+    IMap1 {
+        f: fn(i32) -> i32,
+        dst: usize,
+        src: usize,
+    },
+    IMap2 {
+        f: fn(i32, i32) -> i32,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    IClamp {
+        dst: usize,
+        v: usize,
+        low: usize,
+        high: usize,
+    },
+    ToFloat {
+        dst: usize,
+        src: usize,
+    },
+    ToInt {
+        dst: usize,
+        src: usize,
+    },
+    Dot {
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+    },
+    Cross {
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    Length {
+        dst: usize,
+        a: usize,
+        n: usize,
+    },
+    Normalize {
+        dst: usize,
+        a: usize,
+        n: usize,
+    },
+    Reflect {
+        dst: usize,
+        incident: usize,
+        normal: usize,
+        n: usize,
+    },
+    Atan2 {
+        dst: usize,
+        y: usize,
+        x: usize,
+    },
+    If {
+        condition: usize,
+        then: Vec<Instr>,
+        then_result: usize,
+        otherwise: Vec<Instr>,
+        otherwise_result: usize,
+        dst: usize,
+        n: usize,
+    },
+    Loop {
+        count: u32,
+        init: usize,
+        carried: usize,
+        n: usize,
+        until: Option<(Vec<Instr>, usize)>,
+        body: Vec<Instr>,
+        body_result: usize,
+    },
+    Index {
+        dst: usize,
+    },
+    Call {
+        function: usize,
+        args: Vec<Loc>,
+        dst: usize,
+        n: usize,
+    },
+    Coord {
+        dst: usize,
+        n: usize,
+    },
+    Extent {
+        dst: usize,
+    },
+    Element {
+        dst: usize,
+    },
+    Time {
+        dst: usize,
+    },
+    Rate {
+        dst: usize,
+    },
+    Pointer {
+        dst: usize,
+    },
+    PointerDown {
+        dst: usize,
+    },
+    Key {
+        dst: usize,
+        code: usize,
+    },
+    Button {
+        dst: usize,
+        code: usize,
+    },
+    Wheel {
+        dst: usize,
+    },
+    Count {
+        dst: usize,
+        input: usize,
+    },
+    Size {
+        dst: usize,
+        input: usize,
+    },
+    Sample {
+        dst: usize,
+        input: usize,
+        n: usize,
+    },
+    At {
+        dst: usize,
+        input: usize,
+        address: usize,
+        kind: Address,
+        n: usize,
+    },
+    AtLinear {
+        dst: usize,
+        input: usize,
+        position: usize,
+        kind: Address,
+        n: usize,
+    },
+}
+
+/// A compiled function: its frame size in words, where its arguments
+/// and results live in the frame, and its code.
+struct Code {
+    frame: usize,
+    args: Vec<Loc>,
+    results: Vec<Loc>,
+    code: Vec<Instr>,
+}
+
+/// An input the scope lent for the execution.
+struct InputView<'s> {
+    words: &'s [u32],
+    domain: Domain,
+    stride: usize,
+}
+
+/// A module compiled for one invocation, shared by every thread that
+/// runs it.
+pub(crate) struct Program<'s> {
+    functions: Vec<Code>,
+    entry: Code,
+    merge: Option<Code>,
+    init: Option<Code>,
+    /// Words of a scan's carried value at the front of the entry frame.
+    carry: usize,
+    inputs: Vec<InputView<'s>>,
+    params: Vec<u32>,
+    /// The domain the entry maps over: the output's, or the first input's
+    /// for a reduction or a scan.
+    pub(crate) domain: Domain,
+    context: orla_abi::Context,
+}
+
+/// What every function's compilation shares.
+struct Shared {
     structs: Vec<StructLayout>,
-    functions: Vec<FunctionLayout>,
-    entry: FunctionLayout,
-    merge: Option<FunctionLayout>,
-    init: Option<FunctionLayout>,
+    functions: Vec<Code>,
+    param_at: Vec<usize>,
 }
 
-impl Layouts {
-    fn new(module: &Module) -> Self {
+impl Shared {
+    fn words_of(&self, ty: Type) -> usize {
+        match ty {
+            Type::Struct(index) => self.structs[index as usize].words,
+            Type::Vec2 => 2,
+            Type::Vec3 => 3,
+            Type::Vec4 => 4,
+            Type::Float | Type::Int | Type::Bool => 1,
+        }
+    }
+}
+
+impl<'s> Program<'s> {
+    /// Compiles `module` for `invocation`, borrowing its inputs from
+    /// `scope`. Every Host access of the run happens here, through the
+    /// scope's gate.
+    pub(crate) fn new(
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &'s Scope<'_>,
+        domain: Domain,
+    ) -> Result<Self, ExecutionError> {
+        let mut inputs = Vec::with_capacity(invocation.inputs.len());
+        for handle in &invocation.inputs {
+            inputs.push(InputView {
+                words: scope.words(*handle)?,
+                domain: scope.size(*handle)?,
+                stride: scope.schema(*handle)?.words(),
+            });
+        }
+        let mut params = Vec::new();
+        let mut param_at = Vec::with_capacity(invocation.params.len());
+        for value in &invocation.params {
+            param_at.push(params.len());
+            let (words, n) = value_words(*value);
+            params.extend_from_slice(&words[..n]);
+        }
         let mut structs: Vec<StructLayout> = Vec::with_capacity(module.structs.len());
         for def in &module.structs {
             let mut field_offsets = Vec::with_capacity(def.fields.len());
-            let mut size = 0;
+            let mut words = 0;
             for field in &def.fields {
-                field_offsets.push(size);
-                size += match field.ty {
-                    Type::Struct(index) => structs[index as usize].size,
+                field_offsets.push(words);
+                words += match field.ty {
+                    Type::Struct(index) => structs[index as usize].words,
+                    Type::Vec2 => 2,
+                    Type::Vec3 => 3,
+                    Type::Vec4 => 4,
                     _ => 1,
                 };
             }
             structs.push(StructLayout {
-                size,
+                words,
                 field_offsets,
             });
         }
-        let size_of = |ty: Type| match ty {
-            Type::Struct(index) => structs[index as usize].size,
-            _ => 1,
-        };
-        let function_layout = |function: &Function| {
-            let mut arg_offsets = Vec::with_capacity(function.args.len());
-            let mut args_size = 0;
-            for arg in &function.args {
-                arg_offsets.push(args_size);
-                args_size += size_of(*arg);
-            }
-            let slots = function.slot_count();
-            let mut offsets = vec![0; slots];
-            let mut sizes = vec![1; slots];
-            let mut next = 0;
-            fn walk(
-                instructions: &[Instruction],
-                size_of: &dyn Fn(Type) -> usize,
-                offsets: &mut [usize],
-                sizes: &mut [usize],
-                next: &mut usize,
-            ) {
-                for instruction in instructions {
-                    let slot = instruction.id.0 as usize;
-                    offsets[slot] = *next;
-                    sizes[slot] = size_of(instruction.ty);
-                    *next += sizes[slot];
-                    match &instruction.op {
-                        Op::If {
-                            then, otherwise, ..
-                        } => {
-                            walk(&then.body, size_of, offsets, sizes, next);
-                            walk(&otherwise.body, size_of, offsets, sizes, next);
-                        }
-                        Op::Loop { until, body, .. } => {
-                            if let Some(until) = until {
-                                walk(&until.body, size_of, offsets, sizes, next);
-                            }
-                            walk(&body.body, size_of, offsets, sizes, next);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            walk(
-                &function.body,
-                &size_of,
-                &mut offsets,
-                &mut sizes,
-                &mut next,
-            );
-            FunctionLayout {
-                arg_offsets,
-                args_size,
-                offsets,
-                sizes,
-                values_size: next,
-            }
-        };
-        Self {
-            functions: module.functions.iter().map(function_layout).collect(),
-            entry: function_layout(&module.entry),
-            merge: module.merge.as_ref().map(function_layout),
-            init: module.init.as_ref().map(function_layout),
+        let mut shared = Shared {
             structs,
+            functions: Vec::with_capacity(module.functions.len()),
+            param_at,
+        };
+        for function in &module.functions {
+            let code = compile_function(&shared, function, None);
+            shared.functions.push(code);
         }
-    }
-}
-
-/// Interpreter state for one thread. All frames live on one value stack:
-/// a frame holds its arguments followed by the slots of every value of the
-/// function, nested blocks included, so calls and loops allocate nothing.
-pub(crate) struct Machine<'m> {
-    module: &'m Validated,
-    invocation: &'m Invocation,
-    /// The domain the entry maps over: the output's, or the first input's
-    /// for a reduction.
-    domain: Domain,
-    layouts: Layouts,
-    stack: Vec<Value>,
-}
-
-impl<'m> Machine<'m> {
-    pub(crate) fn new(module: &'m Validated, invocation: &'m Invocation, domain: Domain) -> Self {
-        let layouts = Layouts::new(module);
-        let stack = Vec::with_capacity(layouts.entry.values_size * 2);
-        Self {
-            module,
-            invocation,
+        let carry_ty = (module.manifest.mode == orla_ir::Mode::Scan)
+            .then(|| module.manifest.outputs[0].element());
+        let carry = carry_ty.map_or(0, |ty| shared.words_of(ty));
+        let entry = compile_function(&shared, &module.entry, carry_ty);
+        let merge = module
+            .merge
+            .as_ref()
+            .map(|merge| compile_function(&shared, merge, None));
+        let init = module
+            .init
+            .as_ref()
+            .map(|init| compile_function(&shared, init, None));
+        Ok(Self {
+            functions: shared.functions,
+            entry,
+            merge,
+            init,
+            carry,
+            inputs,
+            params,
             domain,
-            layouts,
-            stack,
-        }
-    }
-
-    /// Runs the entry point for one element and encodes its results into
-    /// `out` as words, result after result.
-    pub(crate) fn run_entry_words(
-        &mut self,
-        scope: &Scope<'_>,
-        at: [u32; 3],
-        out: &mut [u32],
-    ) -> Result<(), ExecutionError> {
-        self.stack.clear();
-        let layout = &self.layouts.entry;
-        self.stack.resize(layout.values_size, Value::Float(0.0));
-        let entry = &self.module.entry;
-        let mut frame = Frame {
-            module: self.module,
-            invocation: self.invocation,
-            domain: self.domain,
-            layouts: &self.layouts,
-            layout,
-            scope,
-            at,
-            base: 0,
-            values: 0,
-            loops: Vec::new(),
-        };
-        frame.instructions(&entry.body, &mut self.stack)?;
-        let mut cursor = 0;
-        for id in &entry.results {
-            let ty = find_type(entry, *id).unwrap_or(Type::Float);
-            cursor += encode(
-                self.module,
-                &self.layouts,
-                ty,
-                &self.stack[layout.offsets[id.0 as usize]..],
-                &mut out[cursor..],
-            );
-        }
-        Ok(())
-    }
-
-    /// Runs the entry for element `index` of a scan with the carried value
-    /// `carried`, encoding the step's result (the next carried value) into
-    /// `out`.
-    pub(crate) fn run_scan_step(
-        &mut self,
-        scope: &Scope<'_>,
-        index: u32,
-        carried: &[u32],
-        out: &mut [u32],
-    ) -> Result<(), ExecutionError> {
-        let layout = &self.layouts.entry;
-        let entry = &self.module.entry;
-        let ty = self.module.manifest.outputs[0].element();
-        let carry_size = match ty {
-            Type::Struct(index) => self.layouts.structs[index as usize].size,
-            _ => 1,
-        };
-        self.stack.clear();
-        self.stack
-            .resize(carry_size + layout.values_size, Value::Float(0.0));
-        decode(self.module, &self.layouts, ty, carried, &mut self.stack, 0);
-        let mut frame = Frame {
-            module: self.module,
-            invocation: self.invocation,
-            domain: self.domain,
-            layouts: &self.layouts,
-            layout,
-            scope,
-            at: [index, 0, 0],
-            base: 0,
-            values: carry_size,
-            loops: vec![LoopState {
-                carried: 0,
-                index: index as i32,
-            }],
-        };
-        frame.instructions(&entry.body, &mut self.stack)?;
-        let result = entry.results[0];
-        encode(
-            self.module,
-            &self.layouts,
-            ty,
-            &self.stack[carry_size + layout.offsets[result.0 as usize]..],
-            out,
-        );
-        Ok(())
-    }
-
-    /// Runs the module's `init` and encodes the carried value into `out`.
-    pub(crate) fn run_init_words(
-        &mut self,
-        scope: &Scope<'_>,
-        out: &mut [u32],
-    ) -> Result<(), ExecutionError> {
-        let (init, layout) = match (&self.module.init, &self.layouts.init) {
-            (Some(init), Some(layout)) => (init, layout),
-            _ => unreachable!("only scan modules have an init"),
-        };
-        self.stack.clear();
-        self.stack.resize(layout.values_size, Value::Float(0.0));
-        let mut frame = Frame {
-            module: self.module,
-            invocation: self.invocation,
-            domain: self.domain,
-            layouts: &self.layouts,
-            layout,
-            scope,
-            at: [0; 3],
-            base: 0,
-            values: 0,
-            loops: Vec::new(),
-        };
-        frame.instructions(&init.body, &mut self.stack)?;
-        let result = init.results[0];
-        let ty = find_type(init, result).unwrap_or(Type::Float);
-        encode(
-            self.module,
-            &self.layouts,
-            ty,
-            &self.stack[layout.offsets[result.0 as usize]..],
-            out,
-        );
-        Ok(())
-    }
-
-    /// Runs the module's `merge` on two encoded values and encodes the
-    /// result into `out`.
-    pub(crate) fn run_merge_words(
-        &mut self,
-        scope: &Scope<'_>,
-        a: &[u32],
-        b: &[u32],
-        out: &mut [u32],
-    ) -> Result<(), ExecutionError> {
-        let (merge, layout) = match (&self.module.merge, &self.layouts.merge) {
-            (Some(merge), Some(layout)) => (merge, layout),
-            _ => unreachable!("only reduce modules merge"),
-        };
-        self.stack.clear();
-        self.stack
-            .resize(layout.args_size + layout.values_size, Value::Float(0.0));
-        let ty = merge.args[0];
-        decode(
-            self.module,
-            &self.layouts,
-            ty,
-            a,
-            &mut self.stack,
-            layout.arg_offsets[0],
-        );
-        decode(
-            self.module,
-            &self.layouts,
-            ty,
-            b,
-            &mut self.stack,
-            layout.arg_offsets[1],
-        );
-        let mut frame = Frame {
-            module: self.module,
-            invocation: self.invocation,
-            domain: self.domain,
-            layouts: &self.layouts,
-            layout,
-            scope,
-            at: [0; 3],
-            base: 0,
-            values: layout.args_size,
-            loops: Vec::new(),
-        };
-        frame.instructions(&merge.body, &mut self.stack)?;
-        let result = merge.results[0];
-        let ty = find_type(merge, result).unwrap_or(Type::Float);
-        encode(
-            self.module,
-            &self.layouts,
-            ty,
-            &self.stack[layout.args_size + layout.offsets[result.0 as usize]..],
-            out,
-        );
-        Ok(())
+            context: invocation.context,
+        })
     }
 }
 
-/// Encodes the value of type `ty` starting at `slots[0]` into words,
-/// returning how many words were written.
-fn encode(module: &Module, layouts: &Layouts, ty: Type, slots: &[Value], out: &mut [u32]) -> usize {
-    match ty {
-        Type::Struct(index) => {
-            let def = &module.structs[index as usize];
-            let layout = &layouts.structs[index as usize];
-            let mut written = 0;
-            for (field, offset) in def.fields.iter().zip(&layout.field_offsets) {
-                written += encode(
-                    module,
-                    layouts,
-                    field.ty,
-                    &slots[*offset..],
-                    &mut out[written..],
-                );
-            }
-            written
-        }
-        _ => {
-            let words: Vec<u32> = match slots[0] {
-                Value::Float(v) => vec![v.to_bits()],
-                Value::Int(v) => vec![v as u32],
-                Value::Bool(v) => vec![v as u32],
-                Value::Vec2(v) => v.iter().map(|c| c.to_bits()).collect(),
-                Value::Vec3(v) => v.iter().map(|c| c.to_bits()).collect(),
-                Value::Vec4(v) => v.iter().map(|c| c.to_bits()).collect(),
-            };
-            out[..words.len()].copy_from_slice(&words);
-            words.len()
-        }
+/// The words of a parameter or constant, and how many are meaningful.
+fn value_words(value: Value) -> ([u32; 4], usize) {
+    match value {
+        Value::Float(v) => ([v.to_bits(), 0, 0, 0], 1),
+        Value::Int(v) => ([v as u32, 0, 0, 0], 1),
+        Value::Bool(v) => ([v as u32, 0, 0, 0], 1),
+        Value::Vec2([x, y]) => ([x.to_bits(), y.to_bits(), 0, 0], 2),
+        Value::Vec3([x, y, z]) => ([x.to_bits(), y.to_bits(), z.to_bits(), 0], 3),
+        Value::Vec4(v) => (v.map(f32::to_bits), 4),
     }
 }
 
-/// Decodes words into the slots of a value of type `ty` starting at
-/// `stack[dst]`, returning how many words were consumed.
-fn decode(
-    module: &Module,
-    layouts: &Layouts,
-    ty: Type,
-    words: &[u32],
-    stack: &mut [Value],
-    dst: usize,
-) -> usize {
-    match ty {
-        Type::Struct(index) => {
-            let def = &module.structs[index as usize];
-            let layout = &layouts.structs[index as usize];
-            let mut consumed = 0;
-            for (field, offset) in def.fields.iter().zip(&layout.field_offsets) {
-                consumed += decode(
-                    module,
-                    layouts,
-                    field.ty,
-                    &words[consumed..],
-                    stack,
-                    dst + offset,
-                );
-            }
-            consumed
-        }
-        Type::Float => {
-            stack[dst] = Value::Float(f32::from_bits(words[0]));
-            1
-        }
-        Type::Int => {
-            stack[dst] = Value::Int(words[0] as i32);
-            1
-        }
-        Type::Bool => {
-            stack[dst] = Value::Bool(words[0] != 0);
-            1
-        }
-        Type::Vec2 => {
-            stack[dst] = Value::Vec2([f32::from_bits(words[0]), f32::from_bits(words[1])]);
-            2
-        }
-        Type::Vec3 => {
-            stack[dst] = Value::Vec3([
-                f32::from_bits(words[0]),
-                f32::from_bits(words[1]),
-                f32::from_bits(words[2]),
-            ]);
-            3
-        }
-        Type::Vec4 => {
-            stack[dst] = Value::Vec4([
-                f32::from_bits(words[0]),
-                f32::from_bits(words[1]),
-                f32::from_bits(words[2]),
-                f32::from_bits(words[3]),
-            ]);
-            4
-        }
+/// Compiles one function. `carry` is the type of a scan's carried value,
+/// laid at the front of the frame before the arguments.
+fn compile_function(shared: &Shared, function: &Function, carry: Option<Type>) -> Code {
+    let slots = function.slot_count();
+    let mut compiler = FunctionCompiler {
+        shared,
+        locs: vec![Loc { at: 0, n: 0 }; slots],
+        types: vec![Type::Float; slots],
+        next: 0,
+        args: Vec::new(),
+        loops: Vec::new(),
+        carry: None,
+    };
+    if let Some(ty) = carry {
+        compiler.carry = Some(compiler.alloc(ty));
+    }
+    compiler.args = function.args.iter().map(|ty| compiler.alloc(*ty)).collect();
+    let code = compiler.block(&function.body);
+    let results = function.results.iter().map(|id| compiler.loc(id)).collect();
+    Code {
+        frame: compiler.next,
+        args: compiler.args,
+        results,
+        code,
     }
 }
 
-struct LoopState {
-    /// Absolute slot where the carried value lives.
-    carried: usize,
-    index: i32,
+struct FunctionCompiler<'c> {
+    shared: &'c Shared,
+    locs: Vec<Loc>,
+    types: Vec<Type>,
+    next: usize,
+    /// Where the function's arguments live.
+    args: Vec<Loc>,
+    /// The carried value of each enclosing loop, innermost last.
+    loops: Vec<Loc>,
+    /// A scan's carried value, read by `Carried` outside every loop.
+    carry: Option<Loc>,
 }
 
-/// Where an instruction's result comes from before it is stored.
-enum Produced {
-    Scalar(Value),
-    /// A range starting at this absolute slot, `size` slots long.
-    Range(usize),
-    /// Already stored.
-    Done,
-}
-
-/// One activation of a function.
-struct Frame<'a, 'm> {
-    module: &'m Validated,
-    invocation: &'m Invocation,
-    domain: Domain,
-    layouts: &'a Layouts,
-    layout: &'a FunctionLayout,
-    scope: &'a Scope<'a>,
-    at: [u32; 3],
-    /// Where the arguments start.
-    base: usize,
-    /// Where the value area starts.
-    values: usize,
-    loops: Vec<LoopState>,
-}
-
-impl<'m> Frame<'_, 'm> {
-    fn slot(&self, id: &ValueId) -> usize {
-        self.values + self.layout.offsets[id.0 as usize]
+impl FunctionCompiler<'_> {
+    fn alloc(&mut self, ty: Type) -> Loc {
+        let loc = Loc {
+            at: self.next,
+            n: self.shared.words_of(ty),
+        };
+        self.next += loc.n;
+        loc
     }
 
-    fn size(&self, id: &ValueId) -> usize {
-        self.layout.sizes[id.0 as usize]
+    fn loc(&self, id: &ValueId) -> Loc {
+        self.locs[id.0 as usize]
     }
 
-    fn instructions(
-        &mut self,
-        instructions: &'m [Instruction],
-        stack: &mut Vec<Value>,
-    ) -> Result<(), ExecutionError> {
+    fn ty(&self, id: &ValueId) -> Type {
+        self.types[id.0 as usize]
+    }
+
+    /// The stride of an operand in an operation of width `n`: zero when a
+    /// scalar broadcasts beside a vector.
+    fn stride(&self, id: &ValueId, n: usize) -> usize {
+        if self.loc(id).n == 1 && n > 1 { 0 } else { 1 }
+    }
+
+    /// Compiles a block.
+    fn block(&mut self, instructions: &[Instruction]) -> Vec<Instr> {
+        let mut code = Vec::with_capacity(instructions.len());
         for instruction in instructions {
-            let produced = self.instruction(instruction, stack)?;
-            let destination = self.slot(&instruction.id);
-            match produced {
-                Produced::Scalar(value) => stack[destination] = value,
-                Produced::Range(source) => {
-                    if source != destination {
-                        let size = self.size(&instruction.id);
-                        stack.copy_within(source..source + size, destination);
-                    }
-                }
-                Produced::Done => {}
+            let slot = instruction.id.0 as usize;
+            self.types[slot] = instruction.ty;
+            if let Some(instr) = self.instruction(instruction) {
+                code.push(instr);
             }
         }
-        Ok(())
+        code
     }
 
-    /// Runs a block and returns the absolute slot of its result.
-    fn block(&mut self, block: &'m Block, stack: &mut Vec<Value>) -> Result<usize, ExecutionError> {
-        self.instructions(&block.body, stack)?;
-        Ok(self.slot(&block.result))
-    }
-
-    fn instruction(
-        &mut self,
-        instruction: &'m Instruction,
-        stack: &mut Vec<Value>,
-    ) -> Result<Produced, ExecutionError> {
-        let [x, y, z] = self.at;
-        let height = self.domain.height();
-        let arithmetic = |error| ExecutionError::Arithmetic {
-            x,
-            y: z * height + y,
-            error,
+    /// Compiles one instruction, returning its code, or nothing when the
+    /// value is an alias of one that exists.
+    fn instruction(&mut self, instruction: &Instruction) -> Option<Instr> {
+        let slot = instruction.id.0 as usize;
+        let ty = instruction.ty;
+        let define = |this: &mut Self| {
+            let loc = this.alloc(ty);
+            this.locs[slot] = loc;
+            loc
         };
-        let at = |stack: &Vec<Value>, id: &ValueId| stack[self.slot(id)];
-        Ok(Produced::Scalar(match &instruction.op {
-            Op::Const(value) => *value,
-            Op::Param(index) => self.invocation.params[*index as usize],
-            Op::Arg(index) => {
-                return Ok(Produced::Range(
-                    self.base + self.layout.arg_offsets[*index as usize],
-                ));
+        Some(match &instruction.op {
+            Op::Const(value) => {
+                let dst = define(self);
+                let (words, n) = value_words(*value);
+                Instr::Const {
+                    dst: dst.at,
+                    words,
+                    n,
+                }
             }
-            Op::Unary(UnaryOp::Neg, a) => negate(at(stack, a)).map_err(arithmetic)?,
-            Op::Unary(UnaryOp::Not, a) => match at(stack, a) {
-                Value::Bool(value) => Value::Bool(!value),
-                _ => unreachable!("validation guarantees a Bool operand"),
-            },
-            Op::Binary(op, a, b) => binary(*op, at(stack, a), at(stack, b)).map_err(arithmetic)?,
-            Op::Construct(parts) => {
-                if let Type::Struct(_) = instruction.ty {
-                    let destination = self.slot(&instruction.id);
-                    let mut cursor = destination;
-                    for part in parts {
-                        let (source, size) = (self.slot(part), self.size(part));
-                        stack.copy_within(source..source + size, cursor);
-                        cursor += size;
+            Op::Param(index) => {
+                let dst = define(self);
+                Instr::Param {
+                    dst: dst.at,
+                    at: self.shared.param_at[*index as usize],
+                    n: dst.n,
+                }
+            }
+            Op::Arg(index) => {
+                self.locs[slot] = self.args[*index as usize];
+                return None;
+            }
+            Op::Unary(UnaryOp::Neg, a) => {
+                let dst = define(self);
+                let src = self.loc(a).at;
+                if ty == Type::Int {
+                    Instr::INeg { dst: dst.at, src }
+                } else {
+                    Instr::FNeg {
+                        dst: dst.at,
+                        src,
+                        n: dst.n,
                     }
-                    return Ok(Produced::Done);
                 }
-                let mut components = [0.0; 4];
-                for (slot, part) in components.iter_mut().zip(parts) {
-                    *slot = float(at(stack, part));
+            }
+            Op::Unary(UnaryOp::Not, a) => {
+                let dst = define(self);
+                Instr::Not {
+                    dst: dst.at,
+                    src: self.loc(a).at,
                 }
-                from_parts(components, instruction.ty)
+            }
+            Op::Binary(op, a, b) => {
+                let dst = define(self);
+                let (ta, tb) = (self.ty(a), self.ty(b));
+                let (la, lb) = (self.loc(a), self.loc(b));
+                match op {
+                    BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Rem => {
+                        if ta == Type::Int {
+                            Instr::IBin {
+                                op: *op,
+                                dst: dst.at,
+                                a: la.at,
+                                b: lb.at,
+                            }
+                        } else {
+                            let f: F2 = match op {
+                                BinaryOp::Add => |a, b| a + b,
+                                BinaryOp::Sub => |a, b| a - b,
+                                BinaryOp::Mul => |a, b| a * b,
+                                BinaryOp::Div => |a, b| a / b,
+                                // Truncated, like `/`, and like WGSL's `%` on floats.
+                                _ => |a, b| a % b,
+                            };
+                            Instr::FBin {
+                                f,
+                                dst: dst.at,
+                                a: la.at,
+                                sa: self.stride(a, dst.n),
+                                b: lb.at,
+                                sb: self.stride(b, dst.n),
+                                n: dst.n,
+                            }
+                        }
+                    }
+                    BinaryOp::Less
+                    | BinaryOp::LessEqual
+                    | BinaryOp::Greater
+                    | BinaryOp::GreaterEqual => {
+                        if ta == Type::Int {
+                            Instr::ICmp {
+                                op: *op,
+                                dst: dst.at,
+                                a: la.at,
+                                b: lb.at,
+                            }
+                        } else {
+                            Instr::FCmp {
+                                op: *op,
+                                dst: dst.at,
+                                a: la.at,
+                                b: lb.at,
+                            }
+                        }
+                    }
+                    BinaryOp::Equal | BinaryOp::NotEqual => {
+                        let negate = *op == BinaryOp::NotEqual;
+                        if matches!(ta, Type::Int | Type::Bool) && tb == ta {
+                            Instr::IEq {
+                                dst: dst.at,
+                                a: la.at,
+                                b: lb.at,
+                                negate,
+                            }
+                        } else {
+                            Instr::FEq {
+                                dst: dst.at,
+                                a: la.at,
+                                b: lb.at,
+                                n: la.n,
+                                negate,
+                            }
+                        }
+                    }
+                    BinaryOp::And => Instr::And {
+                        dst: dst.at,
+                        a: la.at,
+                        b: lb.at,
+                    },
+                    BinaryOp::Or => Instr::Or {
+                        dst: dst.at,
+                        a: la.at,
+                        b: lb.at,
+                    },
+                }
+            }
+            Op::Construct(parts) => {
+                let dst = define(self);
+                if let Type::Struct(_) = ty {
+                    Instr::Gather {
+                        dst: dst.at,
+                        parts: parts.iter().map(|part| self.loc(part)).collect(),
+                    }
+                } else {
+                    Instr::Vector {
+                        dst: dst.at,
+                        parts: parts
+                            .iter()
+                            .map(|part| {
+                                let widen = match self.ty(part) {
+                                    Type::Int | Type::Bool => Widen::Int,
+                                    _ => Widen::Float,
+                                };
+                                (self.loc(part).at, widen)
+                            })
+                            .collect(),
+                    }
+                }
             }
             Op::Extract(source, component) => {
-                let source_ty = self.type_of(source);
-                if let Type::Struct(index) = source_ty {
-                    let layout = &self.layouts.structs[index as usize];
-                    return Ok(Produced::Range(
-                        self.slot(source) + layout.field_offsets[*component as usize],
-                    ));
-                }
-                Value::Float(components(at(stack, source))[*component as usize])
+                let base = self.loc(source);
+                let offset = match self.ty(source) {
+                    Type::Struct(index) => {
+                        self.shared.structs[index as usize].field_offsets[*component as usize]
+                    }
+                    _ => *component as usize,
+                };
+                self.locs[slot] = Loc {
+                    at: base.at + offset,
+                    n: self.shared.words_of(ty),
+                };
+                return None;
             }
             Op::Call(callee, call_args) => {
-                let callee_index = *callee as usize;
-                let callee = &self.module.functions[callee_index];
-                let layout = &self.layouts.functions[callee_index];
-                let frame_base = stack.len();
-                stack.resize(
-                    frame_base + layout.args_size + layout.values_size,
-                    Value::Float(0.0),
-                );
-                for (arg, offset) in call_args.iter().zip(&layout.arg_offsets) {
-                    let (source, size) = (self.slot(arg), self.size(arg));
-                    stack.copy_within(source..source + size, frame_base + offset);
+                let dst = define(self);
+                Instr::Call {
+                    function: *callee as usize,
+                    args: call_args.iter().map(|arg| self.loc(arg)).collect(),
+                    dst: dst.at,
+                    n: dst.n,
                 }
-                let mut frame = Frame {
-                    module: self.module,
-                    invocation: self.invocation,
-                    domain: self.domain,
-                    layouts: self.layouts,
-                    layout,
-                    scope: self.scope,
-                    at: self.at,
-                    base: frame_base,
-                    values: frame_base + layout.args_size,
-                    loops: Vec::new(),
-                };
-                frame.instructions(&callee.body, stack)?;
-                let result = frame.slot(&callee.results[0]);
-                let size = frame.size(&callee.results[0]);
-                let destination = self.slot(&instruction.id);
-                stack.copy_within(result..result + size, destination);
-                stack.truncate(frame_base);
-                return Ok(Produced::Done);
             }
             Op::Intrinsic(intrinsic, call_args) => {
-                let mut args = [Value::Float(0.0); 3];
-                for (slot, arg) in args.iter_mut().zip(call_args) {
-                    *slot = at(stack, arg);
-                }
-                intrinsic_value(*intrinsic, &args[..call_args.len()])
+                let dst = define(self);
+                self.intrinsic(*intrinsic, call_args, dst)
             }
             Op::If {
                 condition,
                 then,
                 otherwise,
             } => {
-                let result = match at(stack, condition) {
-                    Value::Bool(true) => self.block(then, stack)?,
-                    Value::Bool(false) => self.block(otherwise, stack)?,
-                    _ => unreachable!("validation guarantees a Bool condition"),
-                };
-                return Ok(Produced::Range(result));
+                let dst = define(self);
+                let (then_code, then_result) = self.nested(then);
+                let (otherwise_code, otherwise_result) = self.nested(otherwise);
+                Instr::If {
+                    condition: self.loc(condition).at,
+                    then: then_code,
+                    then_result,
+                    otherwise: otherwise_code,
+                    otherwise_result,
+                    dst: dst.at,
+                    n: dst.n,
+                }
             }
             Op::Loop {
                 count,
@@ -631,106 +766,754 @@ impl<'m> Frame<'_, 'm> {
                 until,
                 body,
             } => {
-                let carried = self.slot(&instruction.id);
-                let size = self.size(&instruction.id);
-                let init_slot = self.slot(init);
-                stack.copy_within(init_slot..init_slot + size, carried);
-                self.loops.push(LoopState { carried, index: 0 });
-                let outcome: Result<(), ExecutionError> = (|| {
-                    for index in 0..*count {
-                        self.loops.last_mut().expect("loop is open").index = index as i32;
-                        if let Some(until) = until {
-                            let done = self.block(until, stack)?;
-                            if stack[done] == Value::Bool(true) {
-                                break;
-                            }
-                        }
-                        let next = self.block(body, stack)?;
-                        stack.copy_within(next..next + size, carried);
-                    }
-                    Ok(())
-                })();
+                let dst = define(self);
+                self.loops.push(dst);
+                let until = until.as_ref().map(|block| self.nested(block));
+                let (body_code, body_result) = self.nested(body);
                 self.loops.pop();
-                outcome?;
-                return Ok(Produced::Done);
+                Instr::Loop {
+                    count: *count,
+                    init: self.loc(init).at,
+                    carried: dst.at,
+                    n: dst.n,
+                    until,
+                    body: body_code,
+                    body_result,
+                }
             }
             Op::Carried => {
-                return Ok(Produced::Range(
-                    self.loops
-                        .last()
-                        .expect("validation guarantees a loop")
-                        .carried,
-                ));
-            }
-            Op::Index => Value::Int(
-                self.loops
+                self.locs[slot] = self
+                    .loops
                     .last()
-                    .expect("validation guarantees a loop")
-                    .index,
-            ),
-            Op::Element => {
-                let domain = self.domain;
-                let [x, y, z] = self.at;
-                Value::Int(((z * domain.height() + y) * domain.width() + x) as i32)
+                    .copied()
+                    .or(self.carry)
+                    .expect("validation guarantees a loop or a scan");
+                return None;
             }
-            Op::Count(input) => {
-                let domain = self.scope.size(self.invocation.inputs[*input as usize])?;
-                Value::Int(domain.count() as i32)
+            Op::Index => Instr::Index {
+                dst: define(self).at,
+            },
+            Op::Coord => {
+                let dst = define(self);
+                Instr::Coord {
+                    dst: dst.at,
+                    n: dst.n,
+                }
             }
-            Op::Size(input) => extent(self.scope.size(self.invocation.inputs[*input as usize])?),
-            Op::Sample(input) | Op::At(input, _) => {
-                let handle = self.invocation.inputs[*input as usize];
-                let domain = self.scope.size(handle)?;
-                let address = match &instruction.op {
-                    Op::At(_, index) => match at(stack, index) {
-                        Value::Int(i) => [i as f32, 0.0, 0.0],
-                        Value::Vec2([x, y]) => [x, y, 0.0],
-                        Value::Vec3([x, y, z]) => [x, y, z],
-                        _ => unreachable!("validation guarantees an address"),
-                    },
-                    _ => {
-                        let [x, y, z] = self.at;
-                        [x as f32, y as f32, z as f32]
+            Op::Domain => Instr::Extent {
+                dst: define(self).at,
+            },
+            Op::Time => Instr::Time {
+                dst: define(self).at,
+            },
+            Op::Rate => Instr::Rate {
+                dst: define(self).at,
+            },
+            Op::Pointer => Instr::Pointer {
+                dst: define(self).at,
+            },
+            Op::PointerDown => Instr::PointerDown {
+                dst: define(self).at,
+            },
+            Op::Button(code) => Instr::Button {
+                dst: define(self).at,
+                code: self.loc(code).at,
+            },
+            Op::Wheel => Instr::Wheel {
+                dst: define(self).at,
+            },
+            Op::Key(code) => Instr::Key {
+                dst: define(self).at,
+                code: self.loc(code).at,
+            },
+            Op::Element => Instr::Element {
+                dst: define(self).at,
+            },
+            Op::Count(input) => Instr::Count {
+                dst: define(self).at,
+                input: *input as usize,
+            },
+            Op::Size(input) => Instr::Size {
+                dst: define(self).at,
+                input: *input as usize,
+            },
+            Op::Sample(input) => {
+                let dst = define(self);
+                Instr::Sample {
+                    dst: dst.at,
+                    input: *input as usize,
+                    n: dst.n,
+                }
+            }
+            Op::At(input, index) => {
+                let dst = define(self);
+                Instr::At {
+                    dst: dst.at,
+                    input: *input as usize,
+                    address: self.loc(index).at,
+                    kind: self.address(index),
+                    n: dst.n,
+                }
+            }
+            Op::AtLinear(input, position) => {
+                let dst = define(self);
+                Instr::AtLinear {
+                    dst: dst.at,
+                    input: *input as usize,
+                    position: self.loc(position).at,
+                    kind: self.address(position),
+                    n: dst.n,
+                }
+            }
+        })
+    }
+
+    /// Compiles a nested block, returning its code and where its result lives.
+    fn nested(&mut self, block: &Block) -> (Vec<Instr>, usize) {
+        let code = self.block(&block.body);
+        (code, self.loc(&block.result).at)
+    }
+
+    fn address(&self, id: &ValueId) -> Address {
+        match self.ty(id) {
+            Type::Int => Address::Int,
+            Type::Float => Address::Float,
+            Type::Vec2 => Address::Vec2,
+            Type::Vec3 => Address::Vec3,
+            _ => unreachable!("validation guarantees an address"),
+        }
+    }
+
+    fn intrinsic(&self, intrinsic: Intrinsic, args: &[ValueId], dst: Loc) -> Instr {
+        let n = dst.n;
+        let loc = |i: usize| self.loc(&args[i]).at;
+        let is_int = |i: usize| self.ty(&args[i]) == Type::Int;
+        let map1 = |f: F1| Instr::Map1 {
+            f,
+            dst: dst.at,
+            src: loc(0),
+            n,
+        };
+        let map2 = |f: F2| Instr::Map2 {
+            f,
+            dst: dst.at,
+            a: loc(0),
+            sa: self.stride(&args[0], n),
+            b: loc(1),
+            sb: self.stride(&args[1], n),
+            n,
+        };
+        let map3 = |f: F3| Instr::Map3 {
+            f,
+            dst: dst.at,
+            a: loc(0),
+            sa: self.stride(&args[0], n),
+            b: loc(1),
+            sb: self.stride(&args[1], n),
+            c: loc(2),
+            sc: self.stride(&args[2], n),
+            n,
+        };
+        match intrinsic {
+            Intrinsic::Floor => map1(f32::floor),
+            Intrinsic::Ceil => map1(f32::ceil),
+            Intrinsic::Round => map1(f32::round_ties_even),
+            Intrinsic::Sign if is_int(0) => Instr::IMap1 {
+                f: i32::signum,
+                dst: dst.at,
+                src: loc(0),
+            },
+            Intrinsic::Sign => map1(|v| {
+                if v > 0.0 {
+                    1.0
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }),
+            Intrinsic::Fract => map1(|v| v - v.floor()),
+            Intrinsic::Abs if is_int(0) => Instr::IMap1 {
+                f: i32::wrapping_abs,
+                dst: dst.at,
+                src: loc(0),
+            },
+            Intrinsic::Abs => map1(f32::abs),
+            Intrinsic::Sqrt => map1(f32::sqrt),
+            Intrinsic::Sin => map1(f32::sin),
+            Intrinsic::Cos => map1(f32::cos),
+            Intrinsic::Tan => map1(f32::tan),
+            Intrinsic::Asin => map1(f32::asin),
+            Intrinsic::Acos => map1(f32::acos),
+            Intrinsic::Atan => map1(f32::atan),
+            Intrinsic::Exp => map1(f32::exp),
+            Intrinsic::Log => map1(f32::ln),
+            Intrinsic::Min if is_int(0) => Instr::IMap2 {
+                f: i32::min,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Max if is_int(0) => Instr::IMap2 {
+                f: i32::max,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Min => map2(f32::min),
+            Intrinsic::Max => map2(f32::max),
+            Intrinsic::Clamp if is_int(0) => Instr::IClamp {
+                dst: dst.at,
+                v: loc(0),
+                low: loc(1),
+                high: loc(2),
+            },
+            Intrinsic::Clamp => map3(|v, low, high| v.max(low).min(high)),
+            Intrinsic::Mix => map3(|a, b, t| a + (b - a) * t),
+            Intrinsic::ToFloat => Instr::ToFloat {
+                dst: dst.at,
+                src: loc(0),
+            },
+            Intrinsic::ToInt if is_int(0) || self.ty(&args[0]) == Type::Bool => Instr::Move {
+                dst: dst.at,
+                src: loc(0),
+                n: 1,
+            },
+            Intrinsic::ToInt => Instr::ToInt {
+                dst: dst.at,
+                src: loc(0),
+            },
+            Intrinsic::Dot => Instr::Dot {
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+                n: self.loc(&args[0]).n,
+            },
+            Intrinsic::Cross => Instr::Cross {
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Length => Instr::Length {
+                dst: dst.at,
+                a: loc(0),
+                n: self.loc(&args[0]).n,
+            },
+            Intrinsic::Normalize => Instr::Normalize {
+                dst: dst.at,
+                a: loc(0),
+                n,
+            },
+            Intrinsic::Pow => map2(f32::powf),
+            Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
+            Intrinsic::Smoothstep => map3(|low, high, x| {
+                let t = ((x - low) / (high - low)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            }),
+            Intrinsic::Reflect => Instr::Reflect {
+                dst: dst.at,
+                incident: loc(0),
+                normal: loc(1),
+                n,
+            },
+            Intrinsic::Atan2 => Instr::Atan2 {
+                dst: dst.at,
+                y: loc(0),
+                x: loc(1),
+            },
+        }
+    }
+}
+
+/// Interpreter state for one thread: a stack of words holding every
+/// frame, and the loop indices of the running element.
+pub(crate) struct Machine<'p, 's> {
+    program: &'p Program<'s>,
+    stack: Vec<u32>,
+    /// Top of the stack: where the next call's frame begins.
+    sp: usize,
+    loops: Vec<i32>,
+    at: [u32; 3],
+    scratch: Vec<f32>,
+}
+
+fn f(word: u32) -> f32 {
+    f32::from_bits(word)
+}
+
+impl<'p, 's> Machine<'p, 's> {
+    pub(crate) fn new(program: &'p Program<'s>) -> Self {
+        Self {
+            program,
+            stack: vec![0; program.entry.frame * 2],
+            sp: 0,
+            loops: Vec::new(),
+            at: [0; 3],
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Runs the entry point for one element and writes its results into
+    /// `out` as words, result after result.
+    pub(crate) fn run_entry_words(
+        &mut self,
+        at: [u32; 3],
+        out: &mut [u32],
+    ) -> Result<(), ExecutionError> {
+        let program = self.program;
+        let entry = &program.entry;
+        self.at = at;
+        self.loops.clear();
+        self.begin(entry.frame);
+        self.run(&entry.code, 0)?;
+        let mut cursor = 0;
+        for result in &entry.results {
+            out[cursor..cursor + result.n]
+                .copy_from_slice(&self.stack[result.at..result.at + result.n]);
+            cursor += result.n;
+        }
+        Ok(())
+    }
+
+    /// Runs the entry for element `index` of a scan with the carried value
+    /// `carried`, writing the step's result (the next carried value) into
+    /// `out`.
+    pub(crate) fn run_scan_step(
+        &mut self,
+        index: u32,
+        carried: &[u32],
+        out: &mut [u32],
+    ) -> Result<(), ExecutionError> {
+        let program = self.program;
+        let entry = &program.entry;
+        self.at = [index, 0, 0];
+        self.loops.clear();
+        self.loops.push(index as i32);
+        self.begin(entry.frame);
+        self.stack[..program.carry].copy_from_slice(carried);
+        self.run(&entry.code, 0)?;
+        let result = entry.results[0];
+        out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
+        Ok(())
+    }
+
+    /// Runs the module's `init` and writes the carried value into `out`.
+    pub(crate) fn run_init_words(&mut self, out: &mut [u32]) -> Result<(), ExecutionError> {
+        let program = self.program;
+        let init = program
+            .init
+            .as_ref()
+            .expect("only scan modules have an init");
+        self.at = [0; 3];
+        self.loops.clear();
+        self.begin(init.frame);
+        self.run(&init.code, 0)?;
+        let result = init.results[0];
+        out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
+        Ok(())
+    }
+
+    /// Runs the module's `merge` on two encoded values and writes the
+    /// result into `out`.
+    pub(crate) fn run_merge_words(
+        &mut self,
+        a: &[u32],
+        b: &[u32],
+        out: &mut [u32],
+    ) -> Result<(), ExecutionError> {
+        let program = self.program;
+        let merge = program.merge.as_ref().expect("only reduce modules merge");
+        self.at = [0; 3];
+        self.loops.clear();
+        self.begin(merge.frame);
+        let (la, lb) = (merge.args[0], merge.args[1]);
+        self.stack[la.at..la.at + la.n].copy_from_slice(a);
+        self.stack[lb.at..lb.at + lb.n].copy_from_slice(b);
+        self.run(&merge.code, 0)?;
+        let result = merge.results[0];
+        out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
+        Ok(())
+    }
+
+    /// Opens the outermost frame of `words`.
+    fn begin(&mut self, words: usize) {
+        if self.stack.len() < words {
+            self.stack.resize(words, 0);
+        }
+        self.sp = words;
+    }
+
+    fn arithmetic(&self, error: ArithmeticError) -> ExecutionError {
+        let [x, y, z] = self.at;
+        ExecutionError::Arithmetic {
+            x,
+            y: z * self.program.domain.height() + y,
+            error,
+        }
+    }
+
+    /// Runs `code` with its frame at `fp`.
+    fn run(&mut self, code: &[Instr], fp: usize) -> Result<(), ExecutionError> {
+        for instr in code {
+            self.step(instr, fp)?;
+        }
+        Ok(())
+    }
+
+    fn step(&mut self, instr: &Instr, fp: usize) -> Result<(), ExecutionError> {
+        let program = self.program;
+        let s = &mut self.stack;
+        match instr {
+            Instr::Const { dst, words, n } => {
+                s[fp + dst..fp + dst + n].copy_from_slice(&words[..*n]);
+            }
+            Instr::Param { dst, at, n } => {
+                s[fp + dst..fp + dst + n].copy_from_slice(&program.params[*at..at + n]);
+            }
+            Instr::Move { dst, src, n } => {
+                if src != dst {
+                    s.copy_within(fp + src..fp + src + n, fp + dst);
+                }
+            }
+            Instr::Gather { dst, parts } => {
+                let mut cursor = fp + dst;
+                for part in parts {
+                    s.copy_within(fp + part.at..fp + part.at + part.n, cursor);
+                    cursor += part.n;
+                }
+            }
+            Instr::Vector { dst, parts } => {
+                for (k, (src, widen)) in parts.iter().enumerate() {
+                    let word = s[fp + src];
+                    s[fp + dst + k] = match widen {
+                        Widen::Float => word,
+                        Widen::Int => (word as i32 as f32).to_bits(),
+                    };
+                }
+            }
+            Instr::FNeg { dst, src, n } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = (-f(s[fp + src + i])).to_bits();
+                }
+            }
+            Instr::INeg { dst, src } => {
+                let v = (s[fp + src] as i32)
+                    .checked_neg()
+                    .ok_or(ArithmeticError::Overflow)
+                    .map_err(|e| self.arithmetic(e))?;
+                self.stack[fp + dst] = v as u32;
+            }
+            Instr::Not { dst, src } => s[fp + dst] = (s[fp + src] == 0) as u32,
+            Instr::FBin {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                n,
+            } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = op(f(s[fp + a + i * sa]), f(s[fp + b + i * sb])).to_bits();
+                }
+            }
+            Instr::IBin { op, dst, a, b } => {
+                let (a, b) = (s[fp + a] as i32, s[fp + b] as i32);
+                let result = match op {
+                    BinaryOp::Add => a.checked_add(b).ok_or(ArithmeticError::Overflow),
+                    BinaryOp::Sub => a.checked_sub(b).ok_or(ArithmeticError::Overflow),
+                    BinaryOp::Mul => a.checked_mul(b).ok_or(ArithmeticError::Overflow),
+                    BinaryOp::Div if b == 0 => Err(ArithmeticError::DivisionByZero),
+                    BinaryOp::Div => a.checked_div(b).ok_or(ArithmeticError::Overflow),
+                    BinaryOp::Rem if b == 0 => Err(ArithmeticError::DivisionByZero),
+                    BinaryOp::Rem => a.checked_rem(b).ok_or(ArithmeticError::Overflow),
+                    _ => unreachable!("compiled from an arithmetic operator"),
+                };
+                let v = result.map_err(|e| self.arithmetic(e))?;
+                self.stack[fp + dst] = v as u32;
+            }
+            Instr::FCmp { op, dst, a, b } => {
+                let (a, b) = (f(s[fp + a]), f(s[fp + b]));
+                // NaN compares false, as in IEEE 754 and every GPU language.
+                let holds = match op {
+                    BinaryOp::Less => a < b,
+                    BinaryOp::LessEqual => a <= b,
+                    BinaryOp::Greater => a > b,
+                    _ => a >= b,
+                };
+                s[fp + dst] = holds as u32;
+            }
+            Instr::ICmp { op, dst, a, b } => {
+                let (a, b) = (s[fp + a] as i32, s[fp + b] as i32);
+                let holds = match op {
+                    BinaryOp::Less => a < b,
+                    BinaryOp::LessEqual => a <= b,
+                    BinaryOp::Greater => a > b,
+                    _ => a >= b,
+                };
+                s[fp + dst] = holds as u32;
+            }
+            Instr::FEq {
+                dst,
+                a,
+                b,
+                n,
+                negate,
+            } => {
+                let equal = (0..*n).all(|i| f(s[fp + a + i]) == f(s[fp + b + i]));
+                s[fp + dst] = (equal != *negate) as u32;
+            }
+            Instr::IEq { dst, a, b, negate } => {
+                s[fp + dst] = ((s[fp + a] == s[fp + b]) != *negate) as u32;
+            }
+            Instr::And { dst, a, b } => s[fp + dst] = (s[fp + a] != 0 && s[fp + b] != 0) as u32,
+            Instr::Or { dst, a, b } => s[fp + dst] = (s[fp + a] != 0 || s[fp + b] != 0) as u32,
+            Instr::Map1 { f: op, dst, src, n } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = op(f(s[fp + src + i])).to_bits();
+                }
+            }
+            Instr::Map2 {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                n,
+            } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = op(f(s[fp + a + i * sa]), f(s[fp + b + i * sb])).to_bits();
+                }
+            }
+            Instr::Map3 {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                c,
+                sc,
+                n,
+            } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = op(
+                        f(s[fp + a + i * sa]),
+                        f(s[fp + b + i * sb]),
+                        f(s[fp + c + i * sc]),
+                    )
+                    .to_bits();
+                }
+            }
+            Instr::IMap1 { f: op, dst, src } => s[fp + dst] = op(s[fp + src] as i32) as u32,
+            Instr::IMap2 { f: op, dst, a, b } => {
+                s[fp + dst] = op(s[fp + a] as i32, s[fp + b] as i32) as u32;
+            }
+            Instr::IClamp { dst, v, low, high } => {
+                let (v, low, high) = (s[fp + v] as i32, s[fp + low] as i32, s[fp + high] as i32);
+                s[fp + dst] = v.max(low).min(high) as u32;
+            }
+            Instr::ToFloat { dst, src } => s[fp + dst] = (s[fp + src] as i32 as f32).to_bits(),
+            Instr::ToInt { dst, src } => s[fp + dst] = (f(s[fp + src]) as i32) as u32,
+            Instr::Dot { dst, a, b, n } => {
+                let v = (0..*n).fold(0.0f32, |sum, i| sum + f(s[fp + a + i]) * f(s[fp + b + i]));
+                s[fp + dst] = v.to_bits();
+            }
+            Instr::Cross { dst, a, b } => {
+                let a = [f(s[fp + a]), f(s[fp + a + 1]), f(s[fp + a + 2])];
+                let b = [f(s[fp + b]), f(s[fp + b + 1]), f(s[fp + b + 2])];
+                s[fp + dst] = (a[1] * b[2] - a[2] * b[1]).to_bits();
+                s[fp + dst + 1] = (a[2] * b[0] - a[0] * b[2]).to_bits();
+                s[fp + dst + 2] = (a[0] * b[1] - a[1] * b[0]).to_bits();
+            }
+            Instr::Length { dst, a, n } => {
+                let v = (0..*n).fold(0.0f32, |sum, i| sum + f(s[fp + a + i]) * f(s[fp + a + i]));
+                s[fp + dst] = v.sqrt().to_bits();
+            }
+            Instr::Normalize { dst, a, n } => {
+                let length = (0..*n)
+                    .fold(0.0f32, |sum, i| sum + f(s[fp + a + i]) * f(s[fp + a + i]))
+                    .sqrt();
+                for i in 0..*n {
+                    let v = f(s[fp + a + i]);
+                    s[fp + dst + i] = if length > 0.0 { v / length } else { 0.0 }.to_bits();
+                }
+            }
+            Instr::Reflect {
+                dst,
+                incident,
+                normal,
+                n,
+            } => {
+                let scale = 2.0
+                    * (0..*n).fold(0.0f32, |sum, i| {
+                        sum + f(s[fp + normal + i]) * f(s[fp + incident + i])
+                    });
+                for i in 0..*n {
+                    s[fp + dst + i] =
+                        (f(s[fp + incident + i]) - scale * f(s[fp + normal + i])).to_bits();
+                }
+            }
+            Instr::Atan2 { dst, y, x } => s[fp + dst] = f(s[fp + y]).atan2(f(s[fp + x])).to_bits(),
+            Instr::If {
+                condition,
+                then,
+                then_result,
+                otherwise,
+                otherwise_result,
+                dst,
+                n,
+            } => {
+                let result = if s[fp + condition] != 0 {
+                    self.run(then, fp)?;
+                    *then_result
+                } else {
+                    self.run(otherwise, fp)?;
+                    *otherwise_result
+                };
+                if result != *dst {
+                    self.stack
+                        .copy_within(fp + result..fp + result + n, fp + dst);
+                }
+            }
+            Instr::Loop {
+                count,
+                init,
+                carried,
+                n,
+                until,
+                body,
+                body_result,
+            } => {
+                s.copy_within(fp + init..fp + init + n, fp + carried);
+                self.loops.push(0);
+                for index in 0..*count {
+                    *self.loops.last_mut().expect("loop is open") = index as i32;
+                    if let Some((until, done)) = until {
+                        self.run(until, fp)?;
+                        if self.stack[fp + done] != 0 {
+                            break;
+                        }
                     }
-                };
-                let index = linear(domain, address);
-                let words = self.scope.element(handle, index)?.to_vec();
-                let destination = self.slot(&instruction.id);
-                decode(
-                    self.module,
-                    self.layouts,
-                    instruction.ty,
-                    &words,
-                    stack,
-                    destination,
-                );
-                return Ok(Produced::Done);
+                    self.run(body, fp)?;
+                    self.stack
+                        .copy_within(fp + body_result..fp + body_result + n, fp + carried);
+                }
+                self.loops.pop();
             }
-            Op::AtLinear(input, index) => {
-                let handle = self.invocation.inputs[*input as usize];
-                let domain = self.scope.size(handle)?;
-                let address = match at(stack, index) {
-                    Value::Float(x) => [x, 0.5, 0.5],
-                    Value::Vec2([x, y]) => [x, y, 0.5],
-                    Value::Vec3([x, y, z]) => [x, y, z],
-                    _ => unreachable!("validation guarantees a position"),
-                };
-                let stride = self.scope.schema(handle)?.words();
-                let mut words = vec![0.0f32; stride];
+            Instr::Index { dst } => {
+                s[fp + dst] = *self.loops.last().expect("validation guarantees a loop") as u32;
+            }
+            Instr::Call {
+                function,
+                args,
+                dst,
+                n,
+            } => {
+                let callee = &program.functions[*function];
+                let base = self.sp;
+                if s.len() < base + callee.frame {
+                    s.resize(base + callee.frame, 0);
+                }
+                for (arg, param) in args.iter().zip(&callee.args) {
+                    s.copy_within(fp + arg.at..fp + arg.at + arg.n, base + param.at);
+                }
+                self.sp = base + callee.frame;
+                self.run(&callee.code, base)?;
+                let result = callee.results[0];
+                self.stack
+                    .copy_within(base + result.at..base + result.at + n, fp + dst);
+                self.sp = base;
+            }
+            Instr::Coord { dst, n } => {
+                for (i, axis) in self.at.iter().enumerate().take(*n) {
+                    s[fp + dst + i] = (*axis as f32).to_bits();
+                }
+            }
+            Instr::Extent { dst } => write_extent(s, fp + dst, program.domain),
+            Instr::Element { dst } => {
+                let [x, y, z] = self.at;
+                let domain = program.domain;
+                s[fp + dst] = (z * domain.height() + y) * domain.width() + x;
+            }
+            Instr::Time { dst } => s[fp + dst] = program.context.time.to_bits(),
+            Instr::Rate { dst } => s[fp + dst] = program.context.rate.to_bits(),
+            Instr::Pointer { dst } => {
+                let [x, y] = program.context.input.pointer;
+                s[fp + dst] = x.to_bits();
+                s[fp + dst + 1] = y.to_bits();
+            }
+            Instr::PointerDown { dst } => s[fp + dst] = program.context.input.pointer_down as u32,
+            Instr::Key { dst, code } => {
+                s[fp + dst] = program.context.input.key(s[fp + code] as i32) as u32;
+            }
+            Instr::Button { dst, code } => {
+                s[fp + dst] = program.context.input.button(s[fp + code] as i32) as u32;
+            }
+            Instr::Wheel { dst } => {
+                let [x, y] = program.context.input.wheel;
+                s[fp + dst] = x.to_bits();
+                s[fp + dst + 1] = y.to_bits();
+            }
+            Instr::Count { dst, input } => {
+                s[fp + dst] = program.inputs[*input].domain.count() as u32;
+            }
+            Instr::Size { dst, input } => write_extent(s, fp + dst, program.inputs[*input].domain),
+            Instr::Sample { dst, input, n } => {
+                let view = &program.inputs[*input];
+                let [x, y, z] = self.at;
+                let index = linear(
+                    view.domain,
+                    [
+                        x.min(view.domain.width() - 1),
+                        y.min(view.domain.height() - 1),
+                        z.min(view.domain.depth() - 1),
+                    ],
+                );
+                let start = index * view.stride;
+                s[fp + dst..fp + dst + n].copy_from_slice(&view.words[start..start + n]);
+            }
+            Instr::At {
+                dst,
+                input,
+                address,
+                kind,
+                n,
+            } => {
+                let view = &program.inputs[*input];
+                let address = read_address(s, fp + address, *kind, 0.0);
+                let index = linear(view.domain, clamp_address(view.domain, address));
+                let start = index * view.stride;
+                s[fp + dst..fp + dst + n].copy_from_slice(&view.words[start..start + n]);
+            }
+            Instr::AtLinear {
+                dst,
+                input,
+                position,
+                kind,
+                n,
+            } => {
+                let view = &program.inputs[*input];
+                let address = read_address(s, fp + position, *kind, 0.5);
+                let domain = view.domain;
                 // Element centres sit at half-integers: the position is
                 // moved by a half, split into the lower neighbour and a
                 // weight, and each axis is clamped at the edges.
-                let axis = |v: f32, n: u32| -> (u32, u32, f32) {
+                let axis = |v: f32, limit: u32| -> (usize, usize, f32) {
                     let t = if v.is_nan() { 0.0 } else { v - 0.5 };
-                    let lower = t.floor().clamp(0.0, (n - 1) as f32);
-                    let upper = (lower + 1.0).min((n - 1) as f32);
+                    let lower = t.floor().clamp(0.0, (limit - 1) as f32);
+                    let upper = (lower + 1.0).min((limit - 1) as f32);
                     let weight = (t - t.floor()).clamp(0.0, 1.0);
                     let weight = if t < 0.0 { 0.0 } else { weight };
-                    (lower as u32, upper as u32, weight)
+                    (lower as usize, upper as usize, weight)
                 };
                 let (x0, x1, fx) = axis(address[0], domain.width());
                 let (y0, y1, fy) = axis(address[1], domain.height());
                 let (z0, z1, fz) = axis(address[2], domain.depth());
+                self.scratch.clear();
+                self.scratch.resize(*n, 0.0);
+                let (width, height) = (domain.width() as usize, domain.height() as usize);
                 for (corner, weight) in [
                     ((x0, y0, z0), (1.0 - fx) * (1.0 - fy) * (1.0 - fz)),
                     ((x1, y0, z0), fx * (1.0 - fy) * (1.0 - fz)),
@@ -745,129 +1528,49 @@ impl<'m> Frame<'_, 'm> {
                         continue;
                     }
                     let (cx, cy, cz) = corner;
-                    let linear_index = (cz * domain.height() + cy) * domain.width() + cx;
-                    let element = self.scope.element(handle, linear_index)?;
-                    for (slot, word) in words.iter_mut().zip(element) {
-                        *slot += f32::from_bits(*word) * weight;
+                    let start = ((cz * height + cy) * width + cx) * view.stride;
+                    for (slot, word) in self.scratch.iter_mut().zip(&view.words[start..]) {
+                        *slot += f(*word) * weight;
                     }
                 }
-                let encoded: Vec<u32> = words.iter().map(|v| v.to_bits()).collect();
-                let destination = self.slot(&instruction.id);
-                decode(
-                    self.module,
-                    self.layouts,
-                    instruction.ty,
-                    &encoded,
-                    stack,
-                    destination,
-                );
-                return Ok(Produced::Done);
-            }
-            Op::Coord => {
-                let [x, y, z] = self.at;
-                match self.domain {
-                    Domain::Volume(..) => Value::Vec3([x as f32, y as f32, z as f32]),
-                    _ => Value::Vec2([x as f32, y as f32]),
+                for (i, v) in self.scratch.iter().enumerate() {
+                    self.stack[fp + dst + i] = v.to_bits();
                 }
             }
-            Op::Domain => extent(self.domain),
-            Op::Time => Value::Float(self.invocation.context.time),
-            Op::Rate => Value::Float(self.invocation.context.rate),
-            Op::Pointer => Value::Vec2(self.invocation.context.input.pointer),
-            Op::PointerDown => Value::Bool(self.invocation.context.input.pointer_down),
-            Op::Key(code) => {
-                let Value::Int(code) = at(stack, code) else {
-                    unreachable!("validation guarantees an Int key code")
-                };
-                Value::Bool(self.invocation.context.input.key(code))
-            }
-            Op::Button(code) => {
-                let Value::Int(code) = at(stack, code) else {
-                    unreachable!("validation guarantees an Int button number")
-                };
-                Value::Bool(self.invocation.context.input.button(code))
-            }
-            Op::Wheel => Value::Vec2(self.invocation.context.input.wheel),
-        }))
-    }
-
-    /// Type of a value in this frame's function, found by its slot size and
-    /// the struct table: plain values are one slot, so only multi-slot
-    /// values need the instruction looked up.
-    fn type_of(&self, id: &ValueId) -> Type {
-        if self.layout.sizes[id.0 as usize] == 1 && !self.is_single_slot_struct(id) {
-            return Type::Float;
         }
-        find_type(self.function(), *id).unwrap_or(Type::Float)
-    }
-
-    fn is_single_slot_struct(&self, id: &ValueId) -> bool {
-        // A struct with exactly one scalar field also occupies one slot; look
-        // it up only when the module declares such a struct at all.
-        self.layouts.structs.iter().any(|layout| layout.size == 1)
-            && matches!(find_type(self.function(), *id), Some(Type::Struct(_)))
-    }
-
-    fn function(&self) -> &'m Function {
-        if std::ptr::eq(self.layout, &self.layouts.entry) {
-            &self.module.entry
-        } else if let (Some(merge), Some(layout)) = (&self.module.merge, &self.layouts.merge)
-            && std::ptr::eq(self.layout, layout)
-        {
-            merge
-        } else if let (Some(init), Some(layout)) = (&self.module.init, &self.layouts.init)
-            && std::ptr::eq(self.layout, layout)
-        {
-            init
-        } else {
-            let index = self
-                .layouts
-                .functions
-                .iter()
-                .position(|layout| std::ptr::eq(layout, self.layout))
-                .expect("frame layout belongs to the module");
-            &self.module.functions[index]
-        }
+        Ok(())
     }
 }
 
-fn find_type(function: &Function, id: ValueId) -> Option<Type> {
-    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
-    }
-    find(&function.body, id)
-}
-
-/// The extent of a domain as the value its shape is addressed with.
-fn extent(domain: Domain) -> Value {
+/// Writes a domain's extent as the value its shape is addressed with.
+fn write_extent(stack: &mut [u32], at: usize, domain: Domain) {
     match domain {
-        Domain::Rows(n) => Value::Int(n as i32),
-        Domain::Grid(w, h) => Value::Vec2([w as f32, h as f32]),
-        Domain::Volume(w, h, d) => Value::Vec3([w as f32, h as f32, d as f32]),
+        Domain::Rows(n) => stack[at] = n,
+        Domain::Grid(w, h) => {
+            stack[at] = (w as f32).to_bits();
+            stack[at + 1] = (h as f32).to_bits();
+        }
+        Domain::Volume(w, h, d) => {
+            stack[at] = (w as f32).to_bits();
+            stack[at + 1] = (h as f32).to_bits();
+            stack[at + 2] = (d as f32).to_bits();
+        }
     }
 }
 
-/// The linear index of an address in a domain, each axis floored and
-/// clamped into range (NaN counts as zero), so no read is ever outside.
-fn linear(domain: Domain, address: [f32; 3]) -> u32 {
+/// Reads an address of the given kind; missing axes take `rest`.
+fn read_address(stack: &[u32], at: usize, kind: Address, rest: f32) -> [f32; 3] {
+    match kind {
+        Address::Int => [stack[at] as i32 as f32, rest, rest],
+        Address::Float => [f(stack[at]), rest, rest],
+        Address::Vec2 => [f(stack[at]), f(stack[at + 1]), rest],
+        Address::Vec3 => [f(stack[at]), f(stack[at + 1]), f(stack[at + 2])],
+    }
+}
+
+/// Each axis floored and clamped into range (NaN counts as zero), so no
+/// read is ever outside.
+fn clamp_address(domain: Domain, address: [f32; 3]) -> [u32; 3] {
     let clamp = |value: f32, limit: u32| -> u32 {
         if value.is_nan() {
             0
@@ -875,233 +1578,14 @@ fn linear(domain: Domain, address: [f32; 3]) -> u32 {
             value.floor().clamp(0.0, (limit - 1) as f32) as u32
         }
     };
-    let x = clamp(address[0], domain.width());
-    let y = clamp(address[1], domain.height());
-    let z = clamp(address[2], domain.depth());
-    (z * domain.height() + y) * domain.width() + x
+    [
+        clamp(address[0], domain.width()),
+        clamp(address[1], domain.height()),
+        clamp(address[2], domain.depth()),
+    ]
 }
 
-fn float(value: Value) -> f32 {
-    match value {
-        Value::Float(v) => v,
-        Value::Int(v) => v as f32,
-        Value::Bool(v) => v as u8 as f32,
-        Value::Vec2([x, _]) => x,
-        Value::Vec3([x, ..]) => x,
-        Value::Vec4([x, ..]) => x,
-    }
-}
-
-/// Components padded to four; scalars broadcast.
-fn components(value: Value) -> [f32; 4] {
-    match value {
-        Value::Float(v) => [v, v, v, v],
-        Value::Int(v) => [v as f32; 4],
-        Value::Bool(v) => [v as u8 as f32; 4],
-        Value::Vec2([x, y]) => [x, y, 0.0, 0.0],
-        Value::Vec3([x, y, z]) => [x, y, z, 0.0],
-        Value::Vec4(v) => v,
-    }
-}
-
-fn arity(value: Value) -> usize {
-    value.ty().components().unwrap_or(1) as usize
-}
-
-fn from_parts(parts: [f32; 4], ty: Type) -> Value {
-    match ty {
-        Type::Vec2 => Value::Vec2([parts[0], parts[1]]),
-        Type::Vec3 => Value::Vec3([parts[0], parts[1], parts[2]]),
-        Type::Vec4 => Value::Vec4(parts),
-        Type::Int => Value::Int(parts[0] as i32),
-        Type::Bool => Value::Bool(parts[0] != 0.0),
-        Type::Float | Type::Struct(_) => Value::Float(parts[0]),
-    }
-}
-
-fn negate(value: Value) -> Result<Value, ArithmeticError> {
-    Ok(match value {
-        Value::Int(v) => Value::Int(v.checked_neg().ok_or(ArithmeticError::Overflow)?),
-        other => map1(other, |v| -v),
-    })
-}
-
-fn binary(op: BinaryOp, a: Value, b: Value) -> Result<Value, ArithmeticError> {
-    match op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {}
-        BinaryOp::And => {
-            return Ok(Value::Bool(
-                a == Value::Bool(true) && b == Value::Bool(true),
-            ));
-        }
-        BinaryOp::Or => {
-            return Ok(Value::Bool(
-                a == Value::Bool(true) || b == Value::Bool(true),
-            ));
-        }
-        BinaryOp::Equal => return Ok(Value::Bool(equal(a, b))),
-        BinaryOp::NotEqual => return Ok(Value::Bool(!equal(a, b))),
-        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
-            let ordering = match (a, b) {
-                (Value::Int(a), Value::Int(b)) => a.partial_cmp(&b),
-                (Value::Float(a), Value::Float(b)) => a.partial_cmp(&b),
-                _ => unreachable!("validation guarantees scalar comparison operands"),
-            };
-            // NaN compares false, as in IEEE 754 and every GPU language.
-            let holds = match (op, ordering) {
-                (_, None) => false,
-                (BinaryOp::Less, Some(o)) => o.is_lt(),
-                (BinaryOp::LessEqual, Some(o)) => o.is_le(),
-                (BinaryOp::Greater, Some(o)) => o.is_gt(),
-                (BinaryOp::GreaterEqual, Some(o)) => o.is_ge(),
-                _ => unreachable!(),
-            };
-            return Ok(Value::Bool(holds));
-        }
-    }
-    if let (Value::Int(a), Value::Int(b)) = (a, b) {
-        let result = match op {
-            BinaryOp::Add => a.checked_add(b).ok_or(ArithmeticError::Overflow)?,
-            BinaryOp::Sub => a.checked_sub(b).ok_or(ArithmeticError::Overflow)?,
-            BinaryOp::Mul => a.checked_mul(b).ok_or(ArithmeticError::Overflow)?,
-            BinaryOp::Div => {
-                if b == 0 {
-                    return Err(ArithmeticError::DivisionByZero);
-                }
-                a.checked_div(b).ok_or(ArithmeticError::Overflow)?
-            }
-            BinaryOp::Rem => {
-                if b == 0 {
-                    return Err(ArithmeticError::DivisionByZero);
-                }
-                a.checked_rem(b).ok_or(ArithmeticError::Overflow)?
-            }
-            _ => unreachable!(),
-        };
-        return Ok(Value::Int(result));
-    }
-    let apply = |a: f32, b: f32| match op {
-        BinaryOp::Add => a + b,
-        BinaryOp::Sub => a - b,
-        BinaryOp::Mul => a * b,
-        BinaryOp::Div => a / b,
-        // Truncated, like `/`, and like WGSL's `%` on floats.
-        BinaryOp::Rem => a % b,
-        _ => unreachable!(),
-    };
-    Ok(map2(a, b, apply))
-}
-
-fn equal(a: Value, b: Value) -> bool {
-    match (a, b) {
-        (Value::Int(a), Value::Int(b)) => a == b,
-        (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Vec2(a), Value::Vec2(b)) => a == b,
-        (Value::Vec3(a), Value::Vec3(b)) => a == b,
-        (Value::Vec4(a), Value::Vec4(b)) => a == b,
-        _ => unreachable!("validation guarantees matching equality operands"),
-    }
-}
-
-/// Applies `f` componentwise; the result takes the vector type of either
-/// operand (scalars broadcast).
-fn map2(a: Value, b: Value, f: impl Fn(f32, f32) -> f32) -> Value {
-    let ty = if arity(a) >= arity(b) { a.ty() } else { b.ty() };
-    let (a, b) = (components(a), components(b));
-    from_parts(std::array::from_fn(|i| f(a[i], b[i])), ty)
-}
-
-fn map1(value: Value, f: impl Fn(f32) -> f32) -> Value {
-    from_parts(components(value).map(f), value.ty())
-}
-
-fn dot(a: Value, b: Value) -> f32 {
-    let (n, a, b) = (arity(a), components(a), components(b));
-    (0..n).map(|i| a[i] * b[i]).sum()
-}
-
-fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
-    match (intrinsic, args) {
-        (Intrinsic::Floor, [a]) => map1(*a, f32::floor),
-        (Intrinsic::Ceil, [a]) => map1(*a, f32::ceil),
-        (Intrinsic::Round, [a]) => map1(*a, f32::round_ties_even),
-        (Intrinsic::Sign, [Value::Int(a)]) => Value::Int(a.signum()),
-        (Intrinsic::Sign, [a]) => map1(*a, |v| {
-            if v > 0.0 {
-                1.0
-            } else if v < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }
-        }),
-        (Intrinsic::Fract, [a]) => map1(*a, |v| v - v.floor()),
-        (Intrinsic::Abs, [Value::Int(a)]) => Value::Int(a.wrapping_abs()),
-        (Intrinsic::Abs, [a]) => map1(*a, f32::abs),
-        (Intrinsic::Sqrt, [a]) => map1(*a, f32::sqrt),
-        (Intrinsic::Sin, [a]) => map1(*a, f32::sin),
-        (Intrinsic::Cos, [a]) => map1(*a, f32::cos),
-        (Intrinsic::Tan, [a]) => map1(*a, f32::tan),
-        (Intrinsic::Asin, [a]) => map1(*a, f32::asin),
-        (Intrinsic::Acos, [a]) => map1(*a, f32::acos),
-        (Intrinsic::Atan, [a]) => map1(*a, f32::atan),
-        (Intrinsic::Exp, [a]) => map1(*a, f32::exp),
-        (Intrinsic::Log, [a]) => map1(*a, f32::ln),
-        (Intrinsic::Min, [Value::Int(a), Value::Int(b)]) => Value::Int((*a).min(*b)),
-        (Intrinsic::Max, [Value::Int(a), Value::Int(b)]) => Value::Int((*a).max(*b)),
-        (Intrinsic::Min, [a, b]) => map2(*a, *b, f32::min),
-        (Intrinsic::Max, [a, b]) => map2(*a, *b, f32::max),
-        (Intrinsic::Clamp, [Value::Int(v), Value::Int(low), Value::Int(high)]) => {
-            Value::Int((*v).max(*low).min(*high))
-        }
-        (Intrinsic::Clamp, [v, low, high]) => {
-            let low = map2(*v, *low, f32::max);
-            map2(low, *high, f32::min)
-        }
-        (Intrinsic::Mix, [a, b, t]) => {
-            let span = map2(*b, *a, |b, a| b - a);
-            map2(*a, map2(span, *t, |d, t| d * t), |a, d| a + d)
-        }
-        (Intrinsic::ToFloat, [Value::Int(v)]) => Value::Float(*v as f32),
-        (Intrinsic::ToFloat, [Value::Bool(v)]) => Value::Float(*v as u8 as f32),
-        (Intrinsic::ToInt, [Value::Float(v)]) => Value::Int(*v as i32),
-        (Intrinsic::ToInt, [Value::Bool(v)]) => Value::Int(*v as i32),
-        (Intrinsic::Dot, [a, b]) => Value::Float(dot(*a, *b)),
-        (Intrinsic::Cross, [a, b]) => {
-            let (a, b) = (components(*a), components(*b));
-            Value::Vec3([
-                a[1] * b[2] - a[2] * b[1],
-                a[2] * b[0] - a[0] * b[2],
-                a[0] * b[1] - a[1] * b[0],
-            ])
-        }
-        (Intrinsic::Length, [a]) => Value::Float(dot(*a, *a).sqrt()),
-        (Intrinsic::Normalize, [a]) => {
-            let length = dot(*a, *a).sqrt();
-            if length > 0.0 {
-                map1(*a, |v| v / length)
-            } else {
-                map1(*a, |_| 0.0)
-            }
-        }
-        (Intrinsic::Pow, [a, b]) => map2(*a, *b, f32::powf),
-        (Intrinsic::Step, [edge, x]) => {
-            map2(*edge, *x, |edge, x| if x >= edge { 1.0 } else { 0.0 })
-        }
-        (Intrinsic::Smoothstep, [low, high, x]) => {
-            let t = map2(
-                map2(*x, *low, |x, low| x - low),
-                map2(*high, *low, |h, l| h - l),
-                |a, b| (a / b).clamp(0.0, 1.0),
-            );
-            map1(t, |t| t * t * (3.0 - 2.0 * t))
-        }
-        (Intrinsic::Reflect, [incident, normal]) => {
-            let scale = 2.0 * dot(*normal, *incident);
-            map2(*incident, *normal, |i, n| i - scale * n)
-        }
-        (Intrinsic::Atan2, [Value::Float(y), Value::Float(x)]) => Value::Float(y.atan2(*x)),
-        _ => unreachable!("validation guarantees intrinsic signatures"),
-    }
+/// The linear index of an in-range address.
+fn linear(domain: Domain, [x, y, z]: [u32; 3]) -> usize {
+    ((z * domain.height() + y) * domain.width() + x) as usize
 }

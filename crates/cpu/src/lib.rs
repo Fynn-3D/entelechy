@@ -1,15 +1,16 @@
 #![warn(missing_docs)]
 //! CPU backend.
 //!
-//! Interprets a [`Validated`] module once per output element. The backend is
-//! trusted Rust, but the Kernel it runs is not: every Host access goes through
-//! the capability-gated [`Scope`], and the backend creates and releases the
-//! outputs it allocates so a failed execution leaks nothing.
+//! Compiles a [`Validated`] module to word-addressed code and runs it once
+//! per output element. The backend is trusted Rust, but the Kernel it runs
+//! is not: every Host access goes through the capability-gated [`Scope`],
+//! and the backend creates and releases the outputs it allocates so a
+//! failed execution leaks nothing.
 //!
-//! Execution has two phases. The compute phase only reads through the scope
-//! and runs rows in parallel; the write phase stores results sequentially.
-//! Results are identical to a single-threaded run, and the first failing
-//! pixel in row-major order is the one reported.
+//! Execution has two phases. The compute phase borrows the inputs through
+//! the scope once and runs rows in parallel; the write phase stores results
+//! sequentially. Results are identical to a single-threaded run, and the
+//! first failing pixel in row-major order is the one reported.
 
 mod eval;
 pub mod raster;
@@ -135,7 +136,9 @@ impl CpuBackend {
         if module.manifest.mode == Mode::Scan {
             return scan(module, invocation, scope, strides[0]);
         }
-        let results = compute(module, invocation, scope, &strides, invocation.domain)?;
+        let program = eval::Program::new(module, invocation, scope, invocation.domain)?;
+        let results = compute(&program, &strides)?;
+        drop(program);
         let domain = invocation.domain;
         let stride: usize = strides.iter().sum();
         let count = domain.count();
@@ -184,8 +187,9 @@ fn reduce(
     stride: usize,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
-    let mut level = compute(module, invocation, scope, &[stride], domain)?;
-    let mut machine = eval::Machine::new(module, invocation, domain);
+    let program = eval::Program::new(module, invocation, scope, domain)?;
+    let mut level = compute(&program, &[stride])?;
+    let mut machine = eval::Machine::new(&program);
     let mut count = domain.count();
     while count > 1 {
         let pairs = count / 2;
@@ -195,7 +199,7 @@ fn reduce(
                 &level[2 * pair * stride..(2 * pair + 1) * stride],
                 &level[(2 * pair + 1) * stride..(2 * pair + 2) * stride],
             );
-            machine.run_merge_words(scope, a, b, &mut next[pair * stride..(pair + 1) * stride])?;
+            machine.run_merge_words(a, b, &mut next[pair * stride..(pair + 1) * stride])?;
         }
         if count % 2 == 1 {
             next[pairs * stride..].copy_from_slice(&level[(count - 1) * stride..count * stride]);
@@ -203,6 +207,8 @@ fn reduce(
         level = next;
         count = count.div_ceil(2);
     }
+    drop(machine);
+    drop(program);
     let port = &module.manifest.outputs[0];
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
     if let Err(error) = scope.write_all(output, &level) {
@@ -237,15 +243,18 @@ fn scan(
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = check_scan(invocation, scope)?;
     let count = domain.count();
-    let mut machine = eval::Machine::new(module, invocation, domain);
+    let program = eval::Program::new(module, invocation, scope, domain)?;
+    let mut machine = eval::Machine::new(&program);
     let mut carried = vec![0u32; stride];
-    machine.run_init_words(scope, &mut carried)?;
+    machine.run_init_words(&mut carried)?;
     let mut words = vec![0u32; count * stride];
     for index in 0..count {
         let out = &mut words[index * stride..(index + 1) * stride];
-        machine.run_scan_step(scope, index as u32, &carried, out)?;
+        machine.run_scan_step(index as u32, &carried, out)?;
         carried.copy_from_slice(out);
     }
+    drop(machine);
+    drop(program);
     let port = &module.manifest.outputs[0];
     let output = scope.create(port.ty.schema.clone(), domain)?;
     if let Err(error) = scope.write_all(output, &words) {
@@ -255,16 +264,11 @@ fn scan(
     Ok(vec![output])
 }
 
-/// Runs the entry point over every element of `domain`, reading through
-/// `scope` only. Returns every output's words per element, outputs
-/// concatenated.
-fn compute(
-    module: &Validated,
-    invocation: &Invocation,
-    scope: &Scope<'_>,
-    strides: &[usize],
-    domain: Domain,
-) -> Result<Vec<u32>, ExecutionError> {
+/// Runs the entry point over every element of the program's domain, on
+/// as many threads as pay off. Returns every output's words per element,
+/// outputs concatenated.
+fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, ExecutionError> {
+    let domain = program.domain;
     let width = domain.width() as usize;
     let height = domain.height();
     // Rows of every layer, one after another: the third axis is outermost.
@@ -281,13 +285,13 @@ fn compute(
         .max(1);
     let rows_per_thread = rows.div_ceil(threads);
     let run_rows = |first_row: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
-        let mut machine = eval::Machine::new(module, invocation, domain);
+        let mut machine = eval::Machine::new(program);
         for (offset, row) in chunk.chunks_exact_mut(row_words.max(1)).enumerate() {
             let flat = (first_row + offset) as u32;
             let (y, z) = (flat % height, flat / height);
             for x in 0..domain.width() {
                 let slot = x as usize * stride;
-                machine.run_entry_words(scope, [x, y, z], &mut row[slot..slot + stride])?;
+                machine.run_entry_words([x, y, z], &mut row[slot..slot + stride])?;
             }
         }
         Ok(())

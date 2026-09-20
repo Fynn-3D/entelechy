@@ -47,17 +47,21 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-CPU interpreter speed, the largest remaining gap: the interpreter is the
-reference and the frame-rate floor (seconds per frame for ray marching at
-720p). A bytecode or a closure-compiled path over the validated IR, with
-the tree interpreter kept as the oracle, and a parity test that runs every
-example replay through both paths. Acceptance: the raymarch and voxel
-scenes several times faster on the CPU with no pixel changed on any
-replay. If the user prefers another item, the rest of the ranked list is:
-a scatter primitive with a stated determinism rule, window size and DPI
-as context, a second bridge (Godot or web) to prove bridges are not
-Blender-specific, and labels on the voxel editor's bar through the text
-library.
+A scatter primitive with a stated determinism rule, the next gap for
+simulations and tools: today a Kernel can only gather (`at`), so a
+particle that wants to mark a grid cell, or a mesh that wants to
+accumulate per-vertex normals, needs a per-cell search over every
+particle. The primitive should be a Kernel mode or a native operation
+that writes elements at addresses the Kernel computes, with an explicit
+rule for collisions (last writer by element order, or an associative
+combine such as sum, min, max) so the CPU and the GPU agree bit for bit on
+integers and to rounding on floats. Acceptance: the particles example
+splats its rows into a grid through it, a parity test covers collisions,
+and both backends replay the same pixels. If the user prefers another
+item, the rest of the ranked list is: window size and DPI as context, a
+second bridge (Godot or web) to prove bridges are not Blender-specific,
+labels on the voxel editor's bar through the text library, and caching
+the CPU's compiled program across frames.
 
 ## Open
 
@@ -65,7 +69,9 @@ Not hand-tested: the Player's real right and middle buttons and wheel, and
 gamepad hardware (none connected). The Blender bridge ran on Blender 5.2
 only; Watch polls (default 0.5 s) and reads whole rows each tick. The file
 watch polls every 200 ms and can observe a half-written file; the next write
-is picked up. The CPU interpreter is the reference and the frame-rate floor
-(seconds per frame for ray marching at 720p). The worker is one FIFO thread.
+is picked up. The CPU interpreter is the reference; it compiles to
+word-addressed code and runs the raymarch scene at 400x260 in about 0.35 s
+and a voxel frame at 960x540 in about 1.3 s on ten cores, so it is still
+not interactive for those. The worker is one FIFO thread.
 Audio pacing is one block behind the ring. Native manifests print element
 types as anonymous structs.

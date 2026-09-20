@@ -281,7 +281,7 @@ capability claim.
   [the IR struct table](crates/ir/src/lib.rs), built and updated with
   `Name { .. }` literals, and allowed wherever a value is (loops carry them,
   functions take and return them). They never cross the ABI as parameters or
-  ports. The CPU backend flattens them to slot ranges
+  ports. The CPU backend lays them out as words, fields in order
   ([interpreter](crates/cpu/src/eval.rs)); the GPU backend emits native WGSL
   structs. Proof: [struct tests](crates/cpu/tests/execute.rs),
   [diagnostics](crates/compiler/tests/compile.rs),
@@ -316,9 +316,16 @@ capability claim.
   Kernels of every document a scene uses, not only the scene's own. `time()` needs `time.read`;
   only nodes that declare it re-execute when time advances
   ([clock caching test](crates/graph/tests/composition.rs)).
-- The CPU backend computes rows in parallel and writes sequentially; results
-  and error attribution match a single-threaded run
-  ([parallel rows test](crates/cpu/tests/execute.rs)).
+- The CPU backend compiles a module to word-addressed code once per
+  execution and runs it once per element: every value has a fixed word
+  offset in the ABI's own layout, so arguments, struct fields, vector
+  components and a loop's carried value are aliases that cost nothing,
+  Field reads copy words out of slices the scope lent once, and nothing
+  allocates per element ([interpreter](crates/cpu/src/eval.rs)). Rows run
+  in parallel and are written sequentially; results and error attribution
+  match a single-threaded run ([parallel rows test](crates/cpu/tests/execute.rs)),
+  and the GPU parity tests and every example replay hold the two backends
+  to the same pixels.
 - Undeclared capabilities are compile-time diagnostics with positions
   ([compile tests](crates/compiler/tests/compile.rs)); the IR validator remains
   the backstop.

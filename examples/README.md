@@ -18,7 +18,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [raymarch](raymarch/README.md): a signed-distance scene marched with `loop`
   and shaded with `if`, displayed through the shared tone-mapping sub-graph
   with `exposure` as a graph parameter; interactive on the GPU backend,
-  seconds per frame on the CPU.
+  a few frames per second on the CPU.
 - [life](life/README.md): Conway's Life on a `Grid<Cell>` of real booleans
   and exact integers through a feedback binding, painted with the pointer,
   with a declarative replay test.
