@@ -1,18 +1,19 @@
 scene showcase.osn
 
-# A sixteenth of the pixels; the toolbar sits at x 14..306, y 124..172.
+# A sixty-fourth of the pixels; the toolbar's items are centred at x 65.75,
+# 75.25, 84.75, 94.25 and y 86.
 frame 0.0
 expect state.result[0].scheme = 0
 expect state.result[0].spin = true
 expect 4 4 = 0.484 0.492 0.539 0.02          # the sky behind, top-left
 
 # A click on the first item cycles the colour; on the third stops the turntable.
-pointer 46 148 down
+pointer 65.75 86 down
 frame 0.02
 pointer up
 frame 0.03
 expect state.result[0].scheme = 1
-pointer 198 148 down
+pointer 84.75 86 down
 frame 0.05
 pointer up
 frame 0.07
@@ -30,7 +31,7 @@ expect state.result[0].yaw = 0.92 0.001
 expect state.result[0].dragging = false
 
 # The last item resets the view.
-pointer 274 148 down
+pointer 94.25 86 down
 frame 0.13
 pointer up
 frame 0.15

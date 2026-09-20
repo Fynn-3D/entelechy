@@ -32,8 +32,9 @@ begin ┘                                                └─ backup (feeds ba
   the axes at the top right as the camera sees them, and the bar last:
   place, erase, paint, the colour (a click cycles it), undo, reset.
 
-The bar's geometry is the frame size, which the Kernels take as
-parameters, so the replay runs at a quarter of the pixels and asserts on
+The bar and the compass are laid out for a 540-high frame and scaled
+with the height, which the Kernels take as parameters, so the replay
+runs at a sixteenth of the pixels and asserts on
 the state row and the volume: the voxel under the pointer, a held left
 button that places a voxel and then another, undo and redo of the
 stroke, the middle button orbiting, Shift and the middle button panning,

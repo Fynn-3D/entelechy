@@ -15,8 +15,9 @@ begin ─ state (feeds back) ─ view
   colour and finish, whether the turntable runs, and the toolbar item
   under the pointer. A drag on the picture orbits the camera; a release
   without a drag on a toolbar item acts on it. The toolbar's geometry is
-  arithmetic on the frame size, which the Kernel takes as parameters, so
-  the same Kernel serves the fixture at 320×180.
+  laid out for a 720-high frame and scaled with the height, which the
+  Kernel takes as parameters, so the same Kernel serves the fixture at
+  160×90.
 - `show.render` is the picture: the model as a few boxes, capsules and
   cylinders under a smooth minimum, parts numbered so the material and
   the shading know what they hit; the keys or a gamepad sink the buttons
@@ -28,7 +29,7 @@ metal), turntable on or off, reset the view.
 
 One frame at 1280×720 takes about 27 ms on the GPU including the read
 back, so the Player runs at its refresh rate; the CPU takes seconds per
-frame, and the replay uses a sixteenth of the pixels. The replay clicks
+frame, and the replay uses a sixty-fourth of the pixels. The replay clicks
 the first item and reads the scheme, stops the turntable, drags forty
 pixels and reads the yaw, then resets.
 

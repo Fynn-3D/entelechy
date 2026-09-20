@@ -1,10 +1,10 @@
 scene voxel.osn
 
-# A quarter of the pixels: the bar's items are centred at x 50, 126,
-# 202, 278, 354, 430 and y 238; the middle of the picture, (240, 157),
-# looks down on the top of the tree, voxel (27, 11, 27).
+# A sixteenth of the pixels: the bar's items are centred at x 72.5,
+# 91.5, 110.5, 129.5, 148.5, 167.5 and y 127; the middle of the picture,
+# (120, 78), looks down on the top of the tree, voxel (27, 11, 27).
 frame 0.0
-pointer 240 157 up
+pointer 120 78 up
 frame 0.02
 expect state.result[0].found = true
 expect state.result[0].hit = 27 11 27
@@ -15,7 +15,7 @@ expect 4 4 = 0.205 0.213 0.237 0.02          # the sky is dark
 # The left button places a white voxel on that face at once, (27, 12,
 # 27) at 62811, and again every fourth frame while held: the pointer
 # then sees the new voxel's near face, so (27, 12, 28) at 65115 follows.
-pointer 240 157 down
+pointer 120 78 down
 frame 0.03
 expect state.result[0].apply = true
 expect state.result[0].begin = true
@@ -76,7 +76,7 @@ button middle up
 frame 0.37
 key 16 up
 frame 0.38
-expect state.result[0].pan = -2.5013 2.1634 2.9688 0.002
+expect state.result[0].pan = -5.0027 4.3268 5.9376 0.003
 expect state.result[0].yaw = 1.18 0.001
 
 # The wheel zooms in.
@@ -85,14 +85,14 @@ frame 0.4
 expect state.result[0].zoom = 0.72 0.001
 
 # The right button erases whatever the tool, and holding it keeps
-# erasing; the voxel first under the pointer here is (24, 12, 28), 65112.
-pointer 240 157 up
+# erasing; after the pan the pointer is over the ground, (0, 0, 22), 50688.
+pointer 120 78 up
 frame 0.42
-expect state.result[0].hit = 24 12 28
+expect state.result[0].hit = 0 0 22
 button right down
 frame 0.43
 expect state.result[0].act = 1
-expect world.result[65112] = 0
+expect world.result[50688] = 0
 frame 0.45
 frame 0.47
 frame 0.48
@@ -101,12 +101,12 @@ button right up
 frame 0.52
 key 90 down
 frame 0.53
-expect world.result[65112] = 3                # undo restores the stroke
+expect world.result[50688] = 8                # undo restores the stroke
 key 90 up
 frame 0.55
 
 # The last item resets the model and the view.
-pointer 430 238 down
+pointer 167.5 127 down
 frame 0.57
 pointer up
 frame 0.58

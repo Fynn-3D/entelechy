@@ -56,7 +56,8 @@ kernel voxel.begin@1 {
     }
 }
 
-// The bar: six items of 64 pixels with 12 between, centred at the bottom.
+// The bar: six items of 64 pixels with 12 between, centred at the bottom,
+// laid out for a 540-high frame and scaled with the frame's height.
 // Place, erase, paint, the colour (a click cycles it), undo, reset.
 kernel voxel.state@1 {
     requires { field.read; field.write; input.read; }
@@ -67,9 +68,12 @@ kernel voxel.state@1 {
     param repeat: Int = 4;
     output result: Studio;
 
-    fn item_at(x: Float, y: Float, width: Float, height: Float) -> Int {
-        let left = width * 0.5 - 222.0;
-        let inside = y >= height - 56.0 && y <= height - 8.0 && x >= left && x <= left + 444.0;
+    fn item_at(px: Float, py: Float, width: Float, height: Float) -> Int {
+        let unit = height / 540.0;
+        let x = px / unit;
+        let y = py / unit;
+        let left = width / unit * 0.5 - 222.0;
+        let inside = y >= 540.0 - 56.0 && y <= 540.0 - 8.0 && x >= left && x <= left + 444.0;
         let slot = int(floor((x - left) / 76.0));
         let within = (x - left) - float(slot) * 76.0 <= 64.0;
         return if inside && within && slot >= 0 && slot < 6 { slot } else { -1 };
@@ -137,7 +141,7 @@ kernel voxel.state@1 {
         let middle = button(2);
         let shift = key(16);
         let hover = item_at(p.x, p.y, width, height);
-        let on_compass = length(p - vec2(width - 52.0, 52.0)) < 44.0;
+        let on_compass = length(p / (height / 540.0) - vec2(width / (height / 540.0) - 52.0, 52.0)) < 44.0;
         let n = size(voxels).x;
         // The middle button orbits; with Shift it pans, by what the
         // pointer covers at the model's distance.
@@ -394,8 +398,13 @@ kernel voxel.draw@1 {
                 sky + vec3(line + glow, line + glow, line + glow) + x_axis + z_axis
             } else { sky }
         };
+        // The bar and the compass are laid out for a 540-high frame and
+        // scaled with the frame's height.
+        let unit = height / 540.0;
+        let q = (px + vec2(0.5, 0.5)) / unit;
+        let wd = width / unit;
         // The compass at the top right: the axes as the camera sees them.
-        let d = px + vec2(0.5, 0.5) - vec2(width - 52.0, 52.0);
+        let d = q - vec2(wd - 52.0, 52.0);
         let m = nearer_mark(nearer_mark(nearer_mark(
             mark(d, vec3(1.0, 0.0, 0.0), cam_right, cam_up, fwd, vec3(1.0, 0.3, 0.3), true),
             mark(d, vec3(0.0, 1.0, 0.0), cam_right, cam_up, fwd, vec3(0.55, 0.85, 0.3), true)),
@@ -407,10 +416,10 @@ kernel voxel.draw@1 {
         let in_compass = length(d) < 40.0;
         let with_compass = if m.hit { m.colour } else if in_compass { mix(scene, vec3(0.1, 0.105, 0.13), 0.5) } else { scene };
         // The bar, drawn over everything.
-        let left = width * 0.5 - 222.0;
-        let slot = int(floor((px.x - left) / 76.0));
-        let u = vec2((px.x - left) - float(slot) * 76.0 - 32.0, px.y - (height - 32.0));
-        let in_bar = px.y >= height - 56.0 && px.y <= height - 8.0 && px.x >= left && px.x <= left + 444.0;
+        let left = wd * 0.5 - 222.0;
+        let slot = int(floor((q.x - left) / 76.0));
+        let u = vec2((q.x - left) - float(slot) * 76.0 - 32.0, q.y - (540.0 - 32.0));
+        let in_bar = q.y >= 540.0 - 56.0 && q.y <= 540.0 - 8.0 && q.x >= left && q.x <= left + 444.0;
         let in_item = in_bar && slot >= 0 && slot < 6 && abs(u.x) <= 32.0;
         let active = in_item && slot == s.tool;
         let hovered = in_item && slot == s.hover;
