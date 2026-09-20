@@ -24,7 +24,7 @@
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
 //! | `retire` | `id` | retired |
 //! | `param` | `name`, `value` | ok |
-//! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`? | executed, reused, committed, outputs |
+//! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` | width, height, format, data (base64); words for a Field that is not pixels |
 //! | `write` | `node`, `port`?, `data` (base64 words) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `reset` | | ok |
@@ -268,9 +268,18 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     context.input.set_key(key as i32, true);
                 }
             }
-            let report = session
-                .evaluate(&context)
-                .map_err(|e| failure(e.to_string()))?;
+            let report = match request.get("nodes").and_then(Json::as_array) {
+                Some(nodes) => {
+                    let demand = nodes
+                        .iter()
+                        .filter_map(Json::as_str)
+                        .map(|node| orla_graph::NodeId(node.to_owned()))
+                        .collect();
+                    session.evaluate_for(&context, &demand)
+                }
+                None => session.evaluate(&context),
+            }
+            .map_err(|e| failure(e.to_string()))?;
             Ok(report_json(session, &report))
         }
         "write" => {

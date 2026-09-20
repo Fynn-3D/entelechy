@@ -115,6 +115,11 @@ plus a hit sound the rules trigger, played by the sound card with the
 device pacing the game at sixty blocks a second; six seconds on the GPU
 ran with no underruns and no drops. A gamepad maps to the keyboard's
 codes in the Player (untested on hardware here: none was connected).
+Replays evaluate on demand: a frame runs the state and the nodes its
+expectations name, and the picture only when a pixel expectation
+follows, so the whole example suite replays on the CPU in seconds
+rather than minutes, and the protocol's `evaluate` takes `nodes` the
+same way.
 The voxel editor is the first tool: a 48³ `Volume<Int>` fed back and
 edited a voxel per click, the voxel under the pointer found by a grid
 walk in the state row, a backup volume for one level of undo (undo

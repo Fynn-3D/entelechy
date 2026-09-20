@@ -1070,3 +1070,73 @@ fn a_write_replaces_committed_state_and_is_checked() {
     ));
     evaluator.clear(&mut runtime);
 }
+
+#[test]
+fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
+    let mut runtime = Runtime::new(1024);
+    runtime.load(ZERO).unwrap();
+    runtime.load(INCREMENT).unwrap();
+    let graph = Graph::parse(
+        "node seed: test.zero@1 { domain = vec2(2, 2); }
+         node count: test.increment@1 { previous <~ count.result from seed.result; }
+         node view: test.increment@1 { previous <- count.result; by = 100.0; }
+         output result <- view.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let ctx = Context::default();
+    let count = NodeId("count".into());
+    let view = NodeId("view".into());
+    let demand: std::collections::BTreeSet<NodeId> = [count.clone()].into_iter().collect();
+    // The first frame produces the output once, since it never was.
+    let report = evaluator
+        .evaluate_for(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &ctx,
+            &BTreeMap::new(),
+            &demand,
+        )
+        .unwrap();
+    assert!(report.executed.contains(&view), "{:?}", report.executed);
+    assert_eq!(red(&runtime, report.output), 101.0);
+    // The next frames advance the state and leave the picture as it was.
+    for expected in 2..=3 {
+        let report = evaluator
+            .evaluate_for(
+                &graph,
+                &mut runtime,
+                &BTreeMap::new(),
+                &ctx,
+                &BTreeMap::new(),
+                &demand,
+            )
+            .unwrap();
+        assert_eq!(report.executed, vec![count.clone()], "frame {expected}");
+        assert_eq!(report.committed, vec![(count.clone(), "result".into())]);
+        assert_eq!(
+            red(&runtime, report.output),
+            101.0,
+            "the picture kept its last value"
+        );
+        assert_eq!(
+            red(&runtime, evaluator.cached(&count, "result").unwrap()),
+            expected as f32
+        );
+    }
+    // A full evaluation catches the picture up.
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &ctx,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(report.executed, vec![count.clone(), view.clone()]);
+    assert_eq!(red(&runtime, report.output), 104.0);
+    evaluator.clear(&mut runtime);
+    assert_eq!(runtime.host().live(), 0);
+}

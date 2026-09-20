@@ -24,6 +24,11 @@
 //! it, so it reads as a statement about the application's state rather
 //! than about the picture. Nodes named that way are pinned before the
 //! first frame, so fusion never hides them.
+//!
+//! A frame evaluates only what its expectations need: the named nodes,
+//! the state, and the picture only when a pixel expectation follows the
+//! frame. A replay that asserts on state never renders, and costs what
+//! the state costs.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -281,10 +286,31 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
             session.pin(orla_graph::NodeId(node.clone()));
         }
     }
+    let named: std::collections::BTreeSet<orla_graph::NodeId> = replay
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::ExpectElement { node, .. } => Some(orla_graph::NodeId(node.clone())),
+            _ => None,
+        })
+        .collect();
+    let producers: Vec<orla_graph::NodeId> = session
+        .graph()
+        .map(|graph| {
+            graph
+                .outputs
+                .iter()
+                .filter_map(|(_, source)| match source {
+                    orla_graph::Source::Node { node, .. } => Some(node.clone()),
+                    orla_graph::Source::External(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let mut input = InputState::default();
     let mut last: Option<Report> = None;
     let mut outcome = Outcome::default();
-    for step in &replay.steps {
+    for (position, step) in replay.steps.iter().enumerate() {
         match step {
             Step::Frame(time) => {
                 let context = Context {
@@ -292,8 +318,18 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                     rate: 0.0,
                     input,
                 };
+                // The picture is demanded only when a pixel expectation
+                // follows this frame, before the next.
+                let mut demand = named.clone();
+                let pixels_follow = replay.steps[position + 1..]
+                    .iter()
+                    .take_while(|step| !matches!(step, Step::Frame(_)))
+                    .any(|step| matches!(step, Step::Expect { .. }));
+                if pixels_follow {
+                    demand.extend(producers.iter().cloned());
+                }
                 let report = session
-                    .evaluate(&context)
+                    .evaluate_for(&context, &demand)
                     .map_err(|error| format!("frame at {time}: {error}"))?;
                 outcome.frames += 1;
                 last = Some(report);

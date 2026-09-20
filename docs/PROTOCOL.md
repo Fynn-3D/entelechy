@@ -52,7 +52,10 @@ defines the same id republishes it from the file.
 `evaluate` takes `time`, `rate` (the sound device's clock, for Kernels
 that read it; zero when absent), `pointer`, `down`, `buttons` (the pointer
 buttons held, by number: 0 left, 1 right, 2 middle), `wheel` (what scrolled
-since the last evaluation), and `keys`.
+since the last evaluation), and `keys`. With `nodes`, it evaluates only
+those nodes, what they read, the state (which must advance), and any
+output never produced; the rest keeps its last value. An agent watching
+a state row pays for the state, not the picture.
 
 `read` with a `node` returns a Field that is not pixels as its words, and
 `write` with a `node`, a `port`, and `data` (base64 words in the same

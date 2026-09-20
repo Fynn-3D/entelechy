@@ -461,8 +461,79 @@ impl Evaluator {
         context: &Context,
         params: &BTreeMap<String, Value>,
     ) -> Result<Report, EvaluateError> {
+        self.evaluate_with(graph, runtime, externals, context, params, None)
+    }
+
+    /// Evaluates only what `demand` needs: the demanded nodes, whatever
+    /// they read through `<-`, every `<~` source (state must advance), and
+    /// any graph output that has never been produced. The rest keeps its
+    /// last value, so an output not demanded reads as of its last
+    /// evaluation. This is how a test that asserts on a state row skips
+    /// the picture.
+    pub fn evaluate_for(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+        demand: &BTreeSet<NodeId>,
+    ) -> Result<Report, EvaluateError> {
+        self.evaluate_with(graph, runtime, externals, context, params, Some(demand))
+    }
+
+    /// The nodes an evaluation under `demand` must run: see
+    /// [`Evaluator::evaluate_for`].
+    fn needed(&self, graph: &Graph, demand: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+        let mut needed: BTreeSet<NodeId> = demand.clone();
+        // State: its producer must run, and its initial source is read
+        // until the first commit.
+        for node in &graph.nodes {
+            for binding in node.inputs.values() {
+                if let Binding::Previous { source, initial } = binding {
+                    for source in [source, initial] {
+                        if let Source::Node { node, .. } = source {
+                            needed.insert(node.clone());
+                        }
+                    }
+                }
+            }
+        }
+        for (_, source) in &graph.outputs {
+            if let Source::Node { node, port } = source
+                && self.cached(node, port).is_none()
+            {
+                needed.insert(node.clone());
+            }
+        }
+        let mut frontier: Vec<NodeId> = needed.iter().cloned().collect();
+        while let Some(id) = frontier.pop() {
+            let Some(node) = graph.node(&id) else {
+                continue;
+            };
+            for binding in node.inputs.values() {
+                if let Binding::Now(Source::Node { node: producer, .. }) = binding
+                    && needed.insert(producer.clone())
+                {
+                    frontier.push(producer.clone());
+                }
+            }
+        }
+        needed
+    }
+
+    fn evaluate_with(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+        demand: Option<&BTreeSet<NodeId>>,
+    ) -> Result<Report, EvaluateError> {
         let order = graph.order()?;
         self.prune(graph, runtime);
+        let needed = demand.map(|demand| self.needed(graph, demand));
         let groups = self.plan(graph, &order, runtime, externals, params)?;
         // Nodes absorbed into a group are no longer materialized.
         let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
@@ -480,6 +551,12 @@ impl Evaluator {
         let mut fused = Vec::new();
         for group in &groups {
             let node = &group.node;
+            if needed
+                .as_ref()
+                .is_some_and(|needed| !needed.contains(&node.id))
+            {
+                continue;
+            }
             let (invocation, key) = self.bind(
                 graph,
                 node,

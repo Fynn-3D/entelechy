@@ -207,6 +207,11 @@ capability claim.
   `wheel()`, and `key(code)` behind `input.read`; only nodes that declare it
   re-execute when input changes ([ABI](crates/abi/src/lib.rs),
   [parity](crates/gpu/tests/parity.rs)).
+- An evaluation can be demanded: `Evaluator::evaluate_for` runs the named
+  nodes, what they read, every `<~` source, and never-produced outputs, and
+  leaves the rest at its last value; a replay demands the picture only on
+  frames a pixel expectation follows, so a replay of state costs what the
+  state costs ([evaluator](crates/graph/src/evaluate.rs), [replay](crates/cli/src/replay.rs)).
 - A Field comes in from outside through the protocol's `write`, which
   replaces a state port's committed value with words in its layout
   ([evaluator](crates/graph/src/evaluate.rs), [protocol](crates/cli/src/protocol.rs)).

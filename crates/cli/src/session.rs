@@ -898,6 +898,28 @@ impl Session {
         )
     }
 
+    /// Evaluates only what `demand` needs; see
+    /// [`orla_graph::Evaluator::evaluate_for`].
+    pub fn evaluate_for(
+        &mut self,
+        context: &Context,
+        demand: &std::collections::BTreeSet<orla_graph::NodeId>,
+    ) -> Result<Report, EvaluateError> {
+        let graph = self.graph.as_ref().ok_or_else(|| {
+            EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(
+                orla_graph::Source::External("<no scene>".into()),
+            ))
+        })?;
+        self.evaluator.evaluate_for(
+            graph,
+            &mut self.runtime,
+            &self.externals,
+            context,
+            &self.params,
+            demand,
+        )
+    }
+
     /// Replaces the committed state of `node.port` with `words`; see
     /// [`orla_graph::Evaluator::write`].
     pub fn write(
