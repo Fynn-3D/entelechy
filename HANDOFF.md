@@ -123,7 +123,9 @@ baked and the sampler plays a drum from a WAV it baked; the Host's
 third gap is closed. `orla-import`, a new interface-layer crate, is where
 converters and their dependencies live: `import` turns a glTF or GLB into
 those files (the model example spins a textured crate that came in that
-way) and decodes MP3, OGG, FLAC and AAC into WAV through symphonia.
+way) and decodes MP3, OGG, FLAC and AAC into WAV through symphonia;
+`orla-export` writes the way out, GLB, WAV and PNG, and the crate comes
+back through the importer bit for bit.
 Functions cross files like structs: a top-level `fn` is shared through
 `use`, and one with a Field parameter is instantiated per port it is
 called with, so the voxel editor's walk and the fluid's staggered read

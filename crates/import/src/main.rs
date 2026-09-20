@@ -6,8 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-mod audio;
-mod gltf;
+use orla_import::{audio, gltf};
 
 const USAGE: &str = "\
 usage:

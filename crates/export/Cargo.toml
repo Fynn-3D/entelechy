@@ -1,0 +1,25 @@
+[package]
+name = "orla-export"
+description = "The exporter: writes the Host's files as formats other software opens, from outside the runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "orla-export"
+path = "src/main.rs"
+
+[dependencies]
+orla = { path = "../cli" }
+orla-runtime = { path = "../runtime" }
+serde_json = "1"
+
+[dev-dependencies]
+orla-import = { path = "../import" }
+
+[lints]
+workspace = true

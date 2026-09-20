@@ -25,8 +25,12 @@ a node that turns and halves it, which the import applies. Skins,
 animations, sparse accessors and JPEG textures are reported and left
 out; convert a JPEG to PNG and it comes in.
 
+The way back exists too: `orla-export` writes the three files as a GLB,
+and the exporter's test brings this crate out and in again bit for bit.
+
 ```sh
 cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
+cargo run -p orla-export -- examples/model/assets/crate.vertices.field examples/model/assets/crate.triangles.field examples/model/assets/crate.albedo.png --out crate.glb
 cargo run --release -p orla-player -- examples/model/scene.osn --backend gpu
 cargo run -- replay examples/model/tests/model.replay
 ```

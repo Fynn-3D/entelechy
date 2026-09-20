@@ -2,7 +2,7 @@
 
 Orla is a Rust workspace whose runtime crates have no external
 dependencies; only the interface layer (the Player, `orla-import`) takes
-them. Build and verify:
+them, and `orla-export` needs none. Build and verify:
 
 ```sh
 cargo build --workspace
@@ -143,6 +143,21 @@ another tool.
 ```sh
 cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
 cargo run -p orla-import -- song.ogg --out assets   # writes assets/song.wav
+```
+
+## Export a mesh, a sound, a picture
+
+`orla-export` is the way out: it writes the Host's files as formats other
+software opens. Vertex rows, triangle rows and a PNG become a GLB that
+Blender and three.js load as it is; rows of one or two floats become a WAV
+(`--rate` names the frames per second of a `.field`, 48000 by default; a
+compressed copy is ffmpeg's job on the WAV); a grid of pixels or floats
+becomes a PNG. What `orla-import` brought in leaves the same, bit for bit.
+
+```sh
+cargo run -p orla-export -- crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
+cargo run -p orla-export -- kick.field --out kick.wav --rate 48000
+cargo run -p orla-export -- atlas.field --out atlas.png
 ```
 
 ## Replay tests

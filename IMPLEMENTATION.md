@@ -229,7 +229,12 @@ capability claim.
   and reads MP3, OGG Vorbis, FLAC, AAC and more through symphonia and
   writes a WAV at the file's rate ([audio](crates/import/src/audio.rs),
   checked against tones made by ffmpeg). The runtime sees none of these
-  formats.
+  formats. `orla-export` ([crate](crates/export)) is the way out: vertex
+  and triangle rows and a PNG as a GLB, rows of floats as a WAV, grids as
+  PNG; the round-trip test brings the model example's crate back through
+  the importer bit for bit ([gltf](crates/export/src/gltf.rs),
+  [tests](crates/export/tests/round_trip.rs)). Lossy audio is not
+  encoded here: WAV is the lossless way out and ffmpeg compresses it.
 - Functions are shared like structs: declared at a document's top level
   and inherited through `use`; one with a Field parameter is a template
   the compiler instantiates per bound port, so a grid walk or a staggered
