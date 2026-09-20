@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orla web bridge test</title>
+</head>
+<body>
+<!--
+Exercises the bridge, against two serving sessions:
+  orla serve examples/text/scene.osn --listen 127.0.0.1:0    (note the port)
+  orla serve examples/voxel/scene.osn --listen 127.0.0.1:0   (note the port)
+then open   bridges/web/test.html?text=<port>&voxel=<port>   in a browser,
+or let `node bridges/web/test.mjs` do all of it headless. The page's log
+ends with `RESULT: ok` when every check passed, or names the first that
+failed. It reads the text example's picture and republishes its title, and
+drives the voxel editor with a window and a pointer.
+-->
+<pre id="log"></pre>
+<script src="orla.js"></script>
+<script>
+const { OrlaClient, Driver, decodePpm, decodeWords, publishable } = Orla;
+
+const log = document.getElementById("log");
+const say = (text) => { log.textContent += text + "\n"; };
+const assert = (condition, what) => { if (!condition) throw new Error(what); };
+const near = (a, b, tolerance, what) => assert(Math.abs(a - b) <= tolerance, `${what}: ${a} is not within ${tolerance} of ${b}`);
+const query = new URLSearchParams(location.search);
+
+const pixel = (decoded, x, y) => {
+  const i = (y * decoded.width + x) * 4;
+  return [decoded.data[i] / 255, decoded.data[i + 1] / 255, decoded.data[i + 2] / 255];
+};
+const colour = (decoded, x, y, rgb, tolerance, what) => {
+  const got = pixel(decoded, x, y);
+  for (let k = 0; k < 3; k++) near(got[k], rgb[k], tolerance, `${what} at (${x}, ${y}) channel ${k}`);
+};
+
+async function textScene(port) {
+  const client = await OrlaClient.open(`ws://127.0.0.1:${port}`);
+  const status = await client.call("status");
+  assert(status.scene.endsWith("scene.osn"), `status: ${JSON.stringify(status)}`);
+  const kernels = await client.call("kernels");
+  const ids = kernels.kernels.map((k) => k.id);
+  assert(ids.includes("text.draw@1"), `kernels: ${ids}`);
+  // The picture as the replay pins it: the title's O at (8, 6) twice the size.
+  await client.call("evaluate", { time: 0 });
+  const read = await client.call("read", { format: "ppm" });
+  assert(read.width === 192 && read.height === 88, `size ${read.width}x${read.height}`);
+  const frame = decodePpm(read.data);
+  colour(frame, 10, 6, [1.0, 0.85, 0.45], 0.02, "the O's top");
+  colour(frame, 12, 12, [0.09, 0.1, 0.13], 0.02, "the O's hollow");
+  say("text: picture read");
+  // The title is a Kernel: republish it spelling ARLA and the hollow fills,
+  // since an A's fourth row is solid where an O's is open.
+  const title = await client.call("kernel", { id: "scene.title@1" });
+  say("text: title source fetched");
+  assert(title.source.includes("79"), `title source: ${title.source}`);
+  const spelled = publishable(title.source.replace("{ 79 }", "{ 65 }"), "scene.title@1");
+  let refused = null;
+  try {
+    await client.call("prepare", { source: spelled.replace("element()", "elemen()") });
+  } catch (error) {
+    refused = error;
+  }
+  assert(refused && refused.line > 0 && refused.message.includes("elemen"), `a diagnostic names the problem and its line: ${refused}`);
+  say("text: a broken title is refused with a position");
+  const published = await client.call("publish", { source: spelled, expect: "any" });
+  assert(published.id === "scene.title@1", `published ${published.id}`);
+  await client.call("evaluate", { time: 0.1 });
+  const again = decodePpm((await client.call("read", { format: "ppm" })).data);
+  colour(again, 12, 12, [1.0, 0.85, 0.45], 0.02, "the A's bar");
+  say("text: title republished");
+  client.close();
+}
+
+async function voxelScene(port) {
+  const client = await OrlaClient.open(`ws://127.0.0.1:${port}`);
+  // A canvas is the window: the replay's 240 by 135, and the Driver sends
+  // its size with every evaluate. The scale is the device's; at scale one
+  // the bar is laid out full size, so the pointer aims at the picture.
+  const canvas = document.createElement("canvas");
+  canvas.width = 240;
+  canvas.height = 135;
+  document.body.appendChild(canvas);
+  const driver = new Driver(client, canvas);
+  await client.call("pin", { node: "state" });
+  await driver.step();
+  assert(driver.frame.width === 240 && driver.frame.height === 135, `frame ${driver.frame.width}x${driver.frame.height}`);
+  driver.pointer = [120, 78];
+  await driver.step();
+  const state = await client.call("read", { node: "state", port: "result" });
+  const words = decodeWords(state.data);
+  // Edit { yaw, pitch, zoom, pan(3), px, py, down, right, middle, on_bar,
+  // painting, erasing, stroked, tool, colour, hover, found, hit(3), ... }
+  assert(words.float(6) === 120 && words.float(7) === 78, `pointer ${words.float(6)}, ${words.float(7)}`);
+  assert(words.bool(18), "the pointer finds a voxel");
+  assert(words.float(19) === 27 && words.float(20) === 11 && words.float(21) === 27, `hit ${words.float(19)} ${words.float(20)} ${words.float(21)}`);
+  say("voxel: pointer finds the tree");
+  // The left button places a voxel on the face seen: (27, 12, 27) is 62811.
+  driver.buttons.add(0);
+  await driver.step();
+  driver.buttons.delete(0);
+  await client.call("pin", { node: "world" });
+  await driver.step();
+  const world = decodeWords((await client.call("read", { node: "world", port: "result" })).data);
+  assert(world.int(62811) === 1, `placed voxel is ${world.int(62811)}`);
+  say("voxel: a click places a voxel");
+  // A wider canvas is a resize: the picture follows the window.
+  canvas.width = 320;
+  canvas.height = 180;
+  await driver.step();
+  assert(driver.frame.width === 320 && driver.frame.height === 180, `resized frame ${driver.frame.width}x${driver.frame.height}`);
+  say("voxel: the picture follows the window");
+  client.close();
+}
+
+(async () => {
+  try {
+    await textScene(query.get("text"));
+    await voxelScene(query.get("voxel"));
+    say("RESULT: ok");
+  } catch (error) {
+    say(`RESULT: failed: ${error.message}`);
+  }
+})();
+</script>
+</body>
+</html>

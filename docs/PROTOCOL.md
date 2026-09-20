@@ -43,7 +43,10 @@ also accept connections on a socket, the same lines in and out, one
 response per request in order; every connection is served by the one
 session, a `quit` on a socket ends only that connection, and a `quit` on
 stdin ends the process. This is how another program, Blender say, talks
-to a running window: see `bridges/blender`.
+to a running window: see `bridges/blender`. A connection that opens with
+an HTTP request is upgraded to a WebSocket and carries the same lines as
+text frames, so a browser is a client too: see `bridges/web`. Anything
+else opening with HTTP is told, in a 426, what it reached.
 
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0; `kernel` returns their contract where a Kernel

@@ -358,3 +358,130 @@ fn the_protocol_serves_sockets_and_a_quit_ends_only_its_connection() {
     assert!(child.wait().unwrap().success());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_browser_speaks_the_protocol_over_a_websocket() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpStream;
+    let dir = scratch_in("-websocket");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .arg("serve")
+        .arg(dir.join("scene.osn"))
+        .args(["--listen", "127.0.0.1:0"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let port = stderr
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| {
+            line.strip_prefix("listening on 127.0.0.1:")
+                .map(str::to_owned)
+        })
+        .expect("the server names its port");
+    // The handshake of RFC 6455, with its own example key.
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    write!(
+        stream,
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    )
+    .unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" || line.is_empty() {
+            break;
+        }
+        head.push_str(&line);
+    }
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert!(
+        head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+        "{head}"
+    );
+    // A masked text frame per request, as a browser sends them; an
+    // unmasked one per answer.
+    let send = |stream: &mut TcpStream, text: &str| {
+        let mask = [0x12u8, 0x34, 0x56, 0x78];
+        let bytes = text.as_bytes();
+        let mut frame = vec![0x81u8];
+        if bytes.len() < 126 {
+            frame.push(0x80 | bytes.len() as u8);
+        } else {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+        }
+        frame.extend_from_slice(&mask);
+        frame.extend(bytes.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        stream.write_all(&frame).unwrap();
+    };
+    let receive = |reader: &mut BufReader<TcpStream>| -> (u8, Vec<u8>) {
+        let mut head = [0u8; 2];
+        reader.read_exact(&mut head).unwrap();
+        let mut length = (head[1] & 0x7f) as usize;
+        if length == 126 {
+            let mut ext = [0u8; 2];
+            reader.read_exact(&mut ext).unwrap();
+            length = u16::from_be_bytes(ext) as usize;
+        } else if length == 127 {
+            let mut ext = [0u8; 8];
+            reader.read_exact(&mut ext).unwrap();
+            length = u64::from_be_bytes(ext) as usize;
+        }
+        let mut payload = vec![0u8; length];
+        reader.read_exact(&mut payload).unwrap();
+        (head[0] & 0x0f, payload)
+    };
+    send(&mut stream, &json!({ "id": 1, "op": "status" }).to_string());
+    let (opcode, payload) = receive(&mut reader);
+    assert_eq!(opcode, 1);
+    let status: Json = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(status["id"], 1);
+    assert_eq!(status["ok"]["nodes"], 3, "{status}");
+    send(
+        &mut stream,
+        &json!({ "id": 2, "op": "evaluate", "time": 0.0 }).to_string(),
+    );
+    let (_, payload) = receive(&mut reader);
+    let evaluated: Json = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(evaluated["ok"]["executed"].as_array().unwrap().len(), 3);
+    // A read's answer is longer than a short frame allows.
+    send(
+        &mut stream,
+        &json!({ "id": 3, "op": "read", "format": "ppm" }).to_string(),
+    );
+    let (_, payload) = receive(&mut reader);
+    let read: Json = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(read["ok"]["format"], "ppm", "{read}");
+    assert!(read["ok"]["data"].as_str().unwrap().len() > 125);
+    // A ping is answered with a pong carrying the payload.
+    stream
+        .write_all(&[0x89, 0x82, 1, 2, 3, 4, b'h' ^ 1, b'i' ^ 2])
+        .unwrap();
+    let (opcode, payload) = receive(&mut reader);
+    assert_eq!((opcode, payload.as_slice()), (0xA, &b"hi"[..]));
+    // A quit answers, then the server closes the connection.
+    send(&mut stream, &json!({ "id": 4, "op": "quit" }).to_string());
+    let (_, payload) = receive(&mut reader);
+    let bye: Json = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(bye["ok"]["bye"], true);
+    let (opcode, _) = receive(&mut reader);
+    assert_eq!(opcode, 0x8, "a close frame follows the quit");
+    // A plain HTTP request is told what this is.
+    let mut plain = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    write!(plain, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+    let mut answer = String::new();
+    plain.read_to_string(&mut answer).unwrap();
+    assert!(answer.starts_with("HTTP/1.1 426"), "{answer}");
+    assert!(answer.contains("creation protocol"), "{answer}");
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", json!({ "id": 6, "op": "quit" })).unwrap();
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(&dir);
+}

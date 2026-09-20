@@ -268,10 +268,17 @@ capability claim.
   `orla serve` and the Player feeds every connection's lines to the one
   session with per-connection replies, a socket's `quit` ending only its
   connection ([protocol](crates/cli/src/protocol.rs),
-  [test](crates/cli/tests/protocol.rs)). `bridges/blender` is the first
-  bridge: a Blender add-on in Blender's own Python that writes meshes as
-  the Host's files and talks to a running window over the socket; bridges
-  are clients outside the workspace.
+  [test](crates/cli/tests/protocol.rs)). A connection that opens with an
+  HTTP upgrade speaks WebSocket frames instead, the handshake and framing
+  of RFC 6455 written out with no dependency ([websocket](crates/cli/src/websocket.rs),
+  [client test](crates/cli/tests/protocol.rs)). `bridges/blender` is the
+  first bridge: a Blender add-on in Blender's own Python that writes
+  meshes as the Host's files and talks to a running window over the
+  socket; [`bridges/web`](bridges/web/README.md) is the second, a page in
+  JavaScript that shows the frames, sends the canvas as the window and
+  the input, and publishes Kernels, checked headless by
+  [its runner](bridges/web/test.mjs); bridges are clients outside the
+  workspace.
 - Models and compressed sounds come in through a tool: `orla-import`
   ([crate](crates/import)) sits in the interface layer beside the CLI and
   the Player, the only layer that takes dependencies. `import` reads

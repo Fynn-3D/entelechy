@@ -35,7 +35,11 @@ window is context under `input.read` rather than a capability of its own
 (its size is in physical pixels, its scale factor is what a bar laid out
 in logical pixels divides by), the Player reports a default 960x540 window
 before its own opens, and a resize needs no structural step because the
-plan is drawn every evaluation and the extent is in the cache key.
+plan is drawn every evaluation and the extent is in the cache key; the
+listener tells a WebSocket from a line client by the first four bytes
+(`GET `) and never serves a page, so a bridge's files are opened from
+disk, and `orla.js` is a classic script because browsers refuse module
+imports between file URLs.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -48,7 +52,12 @@ writes files takes a directory of its own (`scratch_in`, or a named scratch).
 The Blender bridge is tested headless: `orla serve examples/mesh/scene.osn
 --listen 127.0.0.1:0` (port on stderr) then
 `/Applications/Blender.app/Contents/MacOS/Blender -b --python
-bridges/blender/test_bridge.py -- --port <port> --out <dir>`. The user's own
+bridges/blender/test_bridge.py -- --port <port> --out <dir>`. The web
+bridge is tested by `node bridges/web/test.mjs` after `cargo build
+--release`: it serves the text and voxel examples itself and drives
+`bridges/web/test.html` in a headless Chrome over the DevTools protocol
+(the `--dump-dom` shortcut does not wait for asynchronous work in the
+new headless mode, which is why a runner exists). The user's own
 Blender runs an MCP add-on on 127.0.0.1:9876 that executes Python sent as
 `{"type":"execute","code":...,"strict_json":false}` terminated by `\0`,
 answering the same way; the bridge was driven live through it (push with Live,
@@ -57,21 +66,21 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-A second bridge, to prove bridges are not Blender-specific: Godot or the
-web. A web bridge is the smaller and the more telling one: a page that
-opens the socket (through a small relay, since browsers speak WebSocket,
-or a `--listen` that speaks it), shows the frame `read` returns, sends the
-pointer and keys with `evaluate`, and lets a text area `publish` a Kernel;
-the bridge in JavaScript only, outside the workspace, speaking the
-protocol and nothing else, tested headless the way the Blender one is.
-Acceptance: `bridges/web` drives `examples/text` and `examples/voxel`
-(labels and a tool) from a browser with no Rust change beyond, at most,
-a WebSocket framing in the listener, and its README says what a bridge
-needs and no more. If the user prefers another item, the rest of the
-ranked list is: labels on the voxel editor's bar through the text
-library, caching the CPU's compiled program across frames, atomics for
-the order-free scatter rules on the GPU, and `window()` in the protocol's
-headless `serve` (today a client passes `window` with each `evaluate`).
+Labels on the voxel editor's bar through the text library: the bar's
+six items are icons alone, and a tool needs words (the tool's name under
+the pointer, the colour's number, the voxel under the pointer as three
+numbers). `examples/shared/text.orla` has the row layout, `text.digits`,
+`text.layout`, and the `ink` function any Kernel may call; the atlas is
+`examples/shared/font.png`. Acceptance: the voxel scene reads the font
+as an input, a Kernel writes the label rows from the state row (the
+hovered item's name, the hit voxel's coordinates), `voxel.draw` calls
+`ink` over the bar, the label is laid out in units of `scale()` like the
+bar, and the replay pins one pixel of a label on both backends. If the
+user prefers another item, the rest of the ranked list is: caching the
+CPU's compiled program across frames, atomics for the order-free
+scatter rules on the GPU, `window()` in the protocol's headless `serve`
+(a client passes `window` with each `evaluate` today, as the web bridge
+does), and a Godot bridge to make three.
 
 ## Open
 
@@ -79,7 +88,9 @@ Not hand-tested: the Player's real right and middle buttons and wheel,
 gamepad hardware (none connected), and a live resize of a window-sized
 scene in the Player (the Player was opened on the voxel editor and
 presented; the resize mechanism is covered by the graph test, not by a
-hand on the window's corner). The Blender bridge ran on Blender 5.2
+hand on the window's corner). The web bridge's page was connected, framed
+and made to load a Kernel by the headless runner, not looked at by a
+person in a browser (the Chrome extension was not connected). The Blender bridge ran on Blender 5.2
 only; Watch polls (default 0.5 s) and reads whole rows each tick. The file
 watch polls every 200 ms and can observe a half-written file; the next write
 is picked up. The CPU interpreter is the reference; it compiles to

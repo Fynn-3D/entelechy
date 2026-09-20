@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orla bridge</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #15161a; color: #d8dae0; display: grid; grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr; height: 100vh; }
+  header { grid-column: 1 / 3; display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #2a2c33; }
+  header input { width: 200px; }
+  #status { color: #9a9ea8; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  main { position: relative; min-width: 0; min-height: 0; }
+  canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
+  aside { border-left: 1px solid #2a2c33; padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #9a9ea8; margin: 6px 0 2px; }
+  textarea { width: 100%; height: 320px; box-sizing: border-box; font: 12px/1.35 ui-monospace, monospace; background: #0f1013; color: #e6e8ee; border: 1px solid #2a2c33; padding: 6px; resize: vertical; tab-size: 4; }
+  button, select, input { font: inherit; background: #23252c; color: inherit; border: 1px solid #3a3d47; border-radius: 4px; padding: 4px 8px; }
+  button:hover { background: #2c2f38; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .row label { color: #9a9ea8; min-width: 70px; }
+  .row input[type=text] { width: 110px; }
+  #diagnostic { white-space: pre-wrap; font: 12px ui-monospace, monospace; min-height: 1.4em; }
+  #diagnostic.bad { color: #f2a2a2; }
+  #diagnostic.good { color: #a6e3a1; }
+  #params:empty::after { content: "no graph params"; color: #6d717c; }
+</style>
+</head>
+<body>
+<header>
+  <label>Session <input id="url" type="text" value="ws://127.0.0.1:7788" spellcheck="false"></label>
+  <button id="connect">Connect</button>
+  <button id="run" disabled>Run</button>
+  <button id="reset" disabled title="Forget committed state (F5 in the Player)">Reset state</button>
+  <span id="status">not connected</span>
+</header>
+<main><canvas id="view" width="960" height="540"></canvas></main>
+<aside>
+  <h2>Kernel</h2>
+  <div class="row">
+    <select id="kernels" disabled></select>
+    <button id="load" disabled>Load</button>
+  </div>
+  <textarea id="source" spellcheck="false" placeholder="kernel my.thing@1 { ... }"></textarea>
+  <div class="row">
+    <button id="prepare" disabled title="Compile and report diagnostics; nothing is published">Prepare</button>
+    <button id="publish" disabled title="Publish over whatever generation runs">Publish</button>
+    <span id="diagnostic"></span>
+  </div>
+  <h2>Graph params</h2>
+  <div id="params"></div>
+  <h2>Notes</h2>
+  <div style="color:#9a9ea8">
+    The canvas is the window: its size in device pixels goes with every evaluate, so a scene with
+    <code>domain = window();</code> fills it. Click the picture to give it the keys. Left, right and
+    middle buttons, the wheel, arrows and letters reach Kernels that declare <code>input.read</code>.
+  </div>
+</aside>
+<script src="orla.js"></script>
+<script>
+const { OrlaClient, Driver, publishable } = Orla;
+
+const $ = (id) => document.getElementById(id);
+const status = (text) => { $("status").textContent = text; };
+let client = null;
+let driver = null;
+
+// The canvas keeps its element size in device pixels, so the picture is
+// sharp and `window()` is honest.
+const canvas = $("view");
+const fit = () => {
+  const rect = canvas.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * scale));
+  const height = Math.max(1, Math.round(rect.height * scale));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+};
+new ResizeObserver(fit).observe(canvas);
+fit();
+
+const enable = (on) => {
+  for (const id of ["run", "reset", "kernels", "load", "prepare", "publish"]) $(id).disabled = !on;
+};
+
+const diagnose = (text, good) => {
+  const box = $("diagnostic");
+  box.textContent = text;
+  box.className = good ? "good" : "bad";
+};
+
+const showKernels = async () => {
+  const list = await client.call("kernels");
+  const select = $("kernels");
+  select.innerHTML = "";
+  for (const kernel of list.kernels) {
+    if (kernel.generation === 0) continue; // native operations have no source
+    const option = document.createElement("option");
+    option.value = kernel.id;
+    option.textContent = `${kernel.id}  g${kernel.generation}`;
+    select.appendChild(option);
+  }
+};
+
+const showParams = async () => {
+  const graph = await client.call("graph");
+  const box = $("params");
+  box.innerHTML = "";
+  for (const param of graph.params) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("label");
+    label.textContent = `${param.name}: ${param.type}`;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = JSON.stringify(param.value);
+    const set = document.createElement("button");
+    set.textContent = "Set";
+    set.onclick = async () => {
+      try {
+        const value = JSON.parse(input.value);
+        await client.call("param", { name: param.name, value });
+        status(`param ${param.name} = ${input.value}`);
+      } catch (error) {
+        status(`param ${param.name}: ${error.message}`);
+      }
+    };
+    row.append(label, input, set);
+    box.appendChild(row);
+  }
+};
+
+$("connect").onclick = async () => {
+  try {
+    if (client) client.close();
+    client = await OrlaClient.open($("url").value);
+    client.onclose = () => { status("connection closed"); enable(false); if (driver) driver.stop(); };
+    const about = await client.call("status");
+    status(`${about.backend}: ${about.scene}`);
+    driver = new Driver(client, canvas);
+    driver.onframe = (report, millis) => {
+      const ran = report.executed.length ? report.executed.join(" ") : "nothing ran";
+      status(`${millis.toFixed(0)} ms  ${driver.frame.width}x${driver.frame.height}  ${ran}`);
+    };
+    driver.onerror = (error) => { status(`frame: ${error.message}`); $("run").textContent = "Run"; };
+    enable(true);
+    await showKernels();
+    await showParams();
+    await driver.step();
+  } catch (error) {
+    status(error.message);
+  }
+};
+
+$("run").onclick = () => {
+  if (!driver) return;
+  if (driver.running) {
+    driver.stop();
+    $("run").textContent = "Run";
+  } else {
+    $("run").textContent = "Pause";
+    driver.run();
+  }
+};
+
+$("reset").onclick = async () => {
+  await client.call("reset");
+  status("state reset");
+  if (driver && !driver.running) await driver.step();
+};
+
+$("load").onclick = async () => {
+  const id = $("kernels").value;
+  if (!id) return;
+  try {
+    const kernel = await client.call("kernel", { id });
+    $("source").value = publishable(kernel.source, id);
+    diagnose(`${id} at generation ${kernel.generation}`, true);
+  } catch (error) {
+    diagnose(error.message, false);
+  }
+};
+
+const place = (error) => error.line ? `${error.line}:${error.column}: ${error.message}` : error.message;
+
+$("prepare").onclick = async () => {
+  try {
+    const prepared = await client.call("prepare", { source: $("source").value });
+    diagnose(`${prepared.id} compiles; nothing published`, true);
+  } catch (error) {
+    diagnose(place(error), false);
+  }
+};
+
+$("publish").onclick = async () => {
+  try {
+    const published = await client.call("publish", { source: $("source").value, expect: "any" });
+    diagnose(`${published.id} published at generation ${published.generation}`, true);
+    await showKernels();
+    $("kernels").value = published.id;
+    if (driver && !driver.running) await driver.step();
+  } catch (error) {
+    diagnose(place(error), false);
+  }
+};
+</script>
+</body>
+</html>

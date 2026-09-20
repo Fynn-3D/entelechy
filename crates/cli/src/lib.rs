@@ -13,6 +13,7 @@ pub mod protocol;
 pub mod replay;
 pub mod session;
 pub mod wav;
+pub mod websocket;
 
 /// Parses a window given on a command line: `<w>x<h>` or `<w>x<h>@<scale>`,
 /// returning the size in pixels and the scale factor (one when absent).
