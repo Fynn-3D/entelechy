@@ -11,12 +11,7 @@ fn rot_x(a: Float) -> Mat3 {
 
 // A rotation and a translation as one Mat4, by columns.
 fn placed(r: Mat3, t: Vec3) -> Mat4 {
-    return mat4(
-        vec4(r[0].x, r[0].y, r[0].z, 0.0),
-        vec4(r[1].x, r[1].y, r[1].z, 0.0),
-        vec4(r[2].x, r[2].y, r[2].z, 0.0),
-        vec4(t.x, t.y, t.z, 1.0)
-    );
+    return mat4(vec4(r[0], 0.0), vec4(r[1], 0.0), vec4(r[2], 0.0), vec4(t, 1.0));
 }
 
 // Perspective with focal length f: x and y scaled, w = -z for the divide.
@@ -26,7 +21,7 @@ fn perspective(f: Float) -> Mat4 {
 
 // A point through a model-view-projection matrix to pixels, y down.
 fn project(mvp: Mat4, p: Vec3, half: Vec2) -> Vec2 {
-    let q = mvp * vec4(p.x, p.y, p.z, 1.0);
+    let q = mvp * vec4(p, 1.0);
     return half + vec2(q.x / q.w, -q.y / q.w) * half.y;
 }
 
@@ -61,10 +56,8 @@ kernel cube.draw@1 {
         // unit box there.
         let rd = normalize(vec3((c.x - half.x) / half.y, (half.y - c.y) / half.y, -f));
         let inv = inverse(model);
-        let o = inv * vec4(0.0, 0.0, 0.0, 1.0);
-        let d = inv * vec4(rd.x, rd.y, rd.z, 0.0);
-        let ro = vec3(o.x, o.y, o.z);
-        let rdo = vec3(d.x, d.y, d.z);
+        let ro = (inv * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        let rdo = (inv * vec4(rd, 0.0)).xyz;
         let side = vec3(1.0, 1.0, 1.0);
         let march = loop 80 with s = 0.0 until box(ro + rdo * s, side) < 0.002 || s > 12.0 {
             s + box(ro + rdo * s, side)
@@ -102,6 +95,6 @@ kernel cube.draw@1 {
         };
         let line = 1.0 - smoothstep(0.6, 1.4, nearest);
         let color = mix(base, vec3(1.0, 0.95, 0.8), line * 0.9);
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

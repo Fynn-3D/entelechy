@@ -1,7 +1,8 @@
 # Cube
 
 Matrices at work in one Kernel. The cube's placement is a `Mat4` built
-from a `Mat3` rotation (two rotations composed by `*`) and a translation;
+from a `Mat3` rotation (two rotations composed by `*`) and a translation,
+its columns joined as `vec4(r[0], 0.0)`;
 the solid is ray-marched in the cube's own space, where the box distance
 is simple, by taking the eye and the ray through `inverse(model)`; the
 normal comes back to the world through the rotation. The edges are a

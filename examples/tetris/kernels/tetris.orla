@@ -231,6 +231,6 @@ kernel tetris.draw@1 {
             else if line { base * 0.6 }
             else { base };
         let color = if g.alive { shown } else { mix(shown, vec3(0.4, 0.1, 0.1), 0.5) };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }

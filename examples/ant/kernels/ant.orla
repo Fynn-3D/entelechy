@@ -49,15 +49,15 @@ kernel ant.view@1 {
     requires { field.read; field.write; }
     input cells: Cells;
     input ant: Rows<Int>;
-    param zoom: Float = 4.0;
+    param zoom: Int = 4;
     output result: Image;
     compute {
-        let c = icoord() / int(zoom);
+        let c = icoord() / zoom;
         let here = ivec2(at(ant, 0), at(ant, 1));
         let v = at(cells, c);
         let color = if c == here { vec3(0.95, 0.3, 0.2) }
             else if v == 1 { vec3(0.12, 0.12, 0.14) }
             else { vec3(0.92, 0.9, 0.85) };
-        return vec4(color.x, color.y, color.z, 1.0);
+        return vec4(color, 1.0);
     }
 }
