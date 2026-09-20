@@ -229,6 +229,47 @@ fn button_down(code: i32) -> bool {{
             ty.components().unwrap_or(1)
         );
     }
+    // Rotations by a runtime count (WGSL refuses a shift by the width),
+    // the high half of a 64-bit product from 16-bit halves, and unsigned
+    // division through the signed one, which this GPU gets right where
+    // its native `u32 / u32` is wrong for dividends with the top bit set.
+    let _ = writeln!(
+        out,
+        "fn rotl_i32(x: i32, n: i32) -> i32 {{
+    let k = u32(n) & 31u;
+    return select(x, i32((u32(x) << k) | (u32(x) >> (32u - k))), k != 0u);
+}}
+fn rotr_i32(x: i32, n: i32) -> i32 {{
+    let k = u32(n) & 31u;
+    return select(x, i32((u32(x) >> k) | (u32(x) << (32u - k))), k != 0u);
+}}
+fn umulhi_u32(a: u32, b: u32) -> u32 {{
+    let al = a & 0xFFFFu;
+    let ah = a >> 16u;
+    let bl = b & 0xFFFFu;
+    let bh = b >> 16u;
+    let ll = al * bl;
+    let lh = al * bh;
+    let hl = ah * bl;
+    let hh = ah * bh;
+    let mid = (ll >> 16u) + (lh & 0xFFFFu) + (hl & 0xFFFFu);
+    return hh + (lh >> 16u) + (hl >> 16u) + (mid >> 16u);
+}}
+fn mulhi_i32(a: i32, b: i32) -> i32 {{
+    let u = umulhi_u32(u32(a), u32(b));
+    return i32(u - select(0u, u32(b), a < 0i) - select(0u, u32(a), b < 0i));
+}}
+fn udiv_u32(a: u32, b: u32) -> u32 {{
+    if (b >= 0x80000000u) {{ return select(0u, 1u, a >= b); }}
+    if (a < 0x80000000u) {{ return u32(i32(a) / i32(b)); }}
+    var q = u32(i32(a >> 1u) / i32(b)) << 1u;
+    if (a - q * b >= b) {{ q = q + 1u; }}
+    return q;
+}}
+fn urem_u32(a: u32, b: u32) -> u32 {{
+    return a - udiv_u32(a, b) * b;
+}}"
+    );
     emit_mixers(out, module);
     for (index, port) in manifest.inputs.iter().enumerate() {
         emit_linear(out, module, index, port);
@@ -1568,6 +1609,20 @@ impl Emitter<'_> {
             Intrinsic::AddWrap => format!("({} + {})", v(&args[0]), v(&args[1])),
             Intrinsic::SubWrap => format!("({} - {})", v(&args[0]), v(&args[1])),
             Intrinsic::MulWrap => format!("({} * {})", v(&args[0]), v(&args[1])),
+            Intrinsic::Popcount => format!("countOneBits({list})"),
+            Intrinsic::Clz => format!("countLeadingZeros({list})"),
+            Intrinsic::Ctz => format!("countTrailingZeros({list})"),
+            Intrinsic::Rotl => format!("rotl_i32({list})"),
+            Intrinsic::Rotr => format!("rotr_i32({list})"),
+            Intrinsic::Ult => format!("(u32({}) < u32({}))", v(&args[0]), v(&args[1])),
+            Intrinsic::Udiv => format!("i32(udiv_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
+            Intrinsic::Urem => format!("i32(urem_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
+            Intrinsic::Mulhi => format!("mulhi_i32({list})"),
+            Intrinsic::Umulhi => format!(
+                "i32(umulhi_u32(u32({}), u32({})))",
+                v(&args[0]),
+                v(&args[1])
+            ),
             Intrinsic::Step => format!("step({}, {})", splat(&args[0], ty), v(&args[1])),
             Intrinsic::Smoothstep => format!(
                 "smoothstep({}, {}, {})",

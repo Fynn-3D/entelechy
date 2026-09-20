@@ -102,6 +102,22 @@ pub fn builtins() -> Vec<Builtin> {
         })
         .collect();
     out.extend([
+        fixed("saturate", "math", &["saturate(x: Float) -> Float", "saturate(x: Vec2) -> Vec2", "saturate(x: Vec3) -> Vec3", "saturate(x: Vec4) -> Vec4"],
+            "x held between 0 and 1, componentwise: clamp(x, 0.0, 1.0).", None, false),
+        fixed("distance", "math", &["distance(a: Vec2, b: Vec2) -> Float", "distance(a: Vec3, b: Vec3) -> Float", "distance(a: Vec4, b: Vec4) -> Float"],
+            "The length of a - b.", None, false),
+        fixed("radians", "math", &["radians(x: Float) -> Float", "radians(x: Vec2) -> Vec2", "radians(x: Vec3) -> Vec3", "radians(x: Vec4) -> Vec4"],
+            "Degrees to radians, componentwise.", None, false),
+        fixed("degrees", "math", &["degrees(x: Float) -> Float", "degrees(x: Vec2) -> Vec2", "degrees(x: Vec3) -> Vec3", "degrees(x: Vec4) -> Vec4"],
+            "Radians to degrees, componentwise.", None, false),
+        fixed("inversesqrt", "math", &["inversesqrt(x: Float) -> Float", "inversesqrt(x: Vec2) -> Vec2", "inversesqrt(x: Vec3) -> Vec3", "inversesqrt(x: Vec4) -> Vec4"],
+            "1 / sqrt(x), componentwise.", None, false),
+        fixed("mod", "math", &["mod(x: Float, y: Float) -> Float", "mod(x: Vec2, y: Vec2) -> Vec2", "mod(x: Vec2, y: Float) -> Vec2", "mod(x: Vec3, y: Vec3) -> Vec3", "mod(x: Vec3, y: Float) -> Vec3", "mod(x: Vec4, y: Vec4) -> Vec4", "mod(x: Vec4, y: Float) -> Vec4"],
+            "x - y * floor(x / y): the remainder with y's sign, for wrapping coordinates, where % truncates toward zero.", None, false),
+        fixed("isnan", "math", &["isnan(x: Float) -> Bool"], "Whether x is not a number.", None, false),
+        fixed("isinf", "math", &["isinf(x: Float) -> Bool"], "Whether x is infinite.", None, false),
+        fixed("refract", "math", &["refract(incident: Vec2, normal: Vec2, eta: Float) -> Vec2", "refract(incident: Vec3, normal: Vec3, eta: Float) -> Vec3", "refract(incident: Vec4, normal: Vec4, eta: Float) -> Vec4"],
+            "incident bent through a surface with unit normal normal by the ratio of indices eta; the zero vector past total internal reflection.", None, false),
         fixed("at", "field", &["at(field: Rows<T>, index: Int) -> T", "at(field: Grid<T>, at: Vec2) -> T", "at(field: Volume<T>, at: Vec3) -> T"],
             "The element at an address: the index, or the coordinates floored, clamped into the Field (NaN as zero). A memory reads as the steps have left it.", Some("field.read"), false),
         fixed("fetch", "field", &["fetch(field: Rows<T>, index: Int) -> T", "fetch(field: Grid<T>, at: Vec2) -> T", "fetch(field: Volume<T>, at: Vec3) -> T"],

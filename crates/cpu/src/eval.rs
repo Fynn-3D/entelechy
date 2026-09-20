@@ -191,6 +191,13 @@ enum Instr {
         dst: usize,
         src: usize,
     },
+    /// An integer operation that may fail, a division by zero say.
+    IMap2Checked {
+        f: fn(i32, i32) -> Result<i32, ArithmeticError>,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
     IMap2 {
         f: fn(i32, i32) -> i32,
         dst: usize,
@@ -1126,6 +1133,82 @@ impl FunctionCompiler<'_> {
                 y: loc(0),
                 x: loc(1),
             },
+            Intrinsic::Trunc => map1(f32::trunc),
+            Intrinsic::Exp2 => map1(f32::exp2),
+            Intrinsic::Log2 => map1(f32::log2),
+            Intrinsic::Sinh => map1(f32::sinh),
+            Intrinsic::Cosh => map1(f32::cosh),
+            Intrinsic::Tanh => map1(f32::tanh),
+            Intrinsic::Fma => map3(|a, b, c| a.mul_add(b, c)),
+            Intrinsic::Popcount => Instr::IMap1 {
+                f: |x| x.count_ones() as i32,
+                dst: dst.at,
+                src: loc(0),
+            },
+            Intrinsic::Clz => Instr::IMap1 {
+                f: |x| x.leading_zeros() as i32,
+                dst: dst.at,
+                src: loc(0),
+            },
+            Intrinsic::Ctz => Instr::IMap1 {
+                f: |x| x.trailing_zeros() as i32,
+                dst: dst.at,
+                src: loc(0),
+            },
+            Intrinsic::Rotl => Instr::IMap2 {
+                f: |x, n| x.rotate_left((n & 31) as u32),
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Rotr => Instr::IMap2 {
+                f: |x, n| x.rotate_right((n & 31) as u32),
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Ult => Instr::IMap2 {
+                f: |a, b| ((a as u32) < (b as u32)) as i32,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Udiv => Instr::IMap2Checked {
+                f: |a, b| {
+                    if b == 0 {
+                        Err(ArithmeticError::DivisionByZero)
+                    } else {
+                        Ok(((a as u32) / (b as u32)) as i32)
+                    }
+                },
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Urem => Instr::IMap2Checked {
+                f: |a, b| {
+                    if b == 0 {
+                        Err(ArithmeticError::DivisionByZero)
+                    } else {
+                        Ok(((a as u32) % (b as u32)) as i32)
+                    }
+                },
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Mulhi => Instr::IMap2 {
+                f: |a, b| ((a as i64 * b as i64) >> 32) as i32,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
+            Intrinsic::Umulhi => Instr::IMap2 {
+                f: |a, b| ((a as u32 as u64 * b as u32 as u64) >> 32) as i32,
+                dst: dst.at,
+                a: loc(0),
+                b: loc(1),
+            },
         }
     }
 }
@@ -1507,6 +1590,10 @@ impl<'p, 's> Machine<'p, 's> {
                 }
             }
             Instr::IMap1 { f: op, dst, src } => s[fp + dst] = op(s[fp + src] as i32) as u32,
+            Instr::IMap2Checked { f: op, dst, a, b } => {
+                let v = op(s[fp + a] as i32, s[fp + b] as i32).map_err(|e| self.arithmetic(e))?;
+                self.stack[fp + dst] = v as u32;
+            }
             Instr::IMap2 { f: op, dst, a, b } => {
                 s[fp + dst] = op(s[fp + a] as i32, s[fp + b] as i32) as u32;
             }

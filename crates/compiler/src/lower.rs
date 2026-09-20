@@ -1273,6 +1273,122 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// A float constant.
+    fn constant(&mut self, value: f32) -> ValueId {
+        self.emit(Type::Float, Op::Const(orla_ir::Value::Float(value)))
+    }
+
+    /// The builtins that are spellings of other operations: lowered to
+    /// those operations, so every backend has them by construction.
+    fn composed(&mut self, name: &str, args: &[Expr], span: Span) -> Result<ValueId, CompileError> {
+        let ids = args
+            .iter()
+            .map(|arg| self.value(arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        let types: Vec<Type> = ids.iter().map(|id| self.ty(*id)).collect();
+        let float_like = |t: Type| matches!(t, Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4);
+        let vector = |t: Type| t.components().is_some();
+        let list = types
+            .iter()
+            .map(|ty| ty.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let refused = semantic(span, format!("`{name}` cannot be applied to ({list})"));
+        match (name, types.as_slice()) {
+            ("saturate", [a]) if float_like(*a) => {
+                let zero = self.constant(0.0);
+                let one = self.constant(1.0);
+                Ok(self.emit(*a, Op::Intrinsic(Intrinsic::Clamp, vec![ids[0], zero, one])))
+            }
+            ("distance", [a, b]) if a == b && vector(*a) => {
+                let difference = self.emit(*a, Op::Binary(BinaryOp::Sub, ids[0], ids[1]));
+                Ok(self.emit(
+                    Type::Float,
+                    Op::Intrinsic(Intrinsic::Length, vec![difference]),
+                ))
+            }
+            ("radians", [a]) if float_like(*a) => {
+                let scale = self.constant(std::f32::consts::PI / 180.0);
+                Ok(self.emit(*a, Op::Binary(BinaryOp::Mul, ids[0], scale)))
+            }
+            ("degrees", [a]) if float_like(*a) => {
+                let scale = self.constant(180.0 / std::f32::consts::PI);
+                Ok(self.emit(*a, Op::Binary(BinaryOp::Mul, ids[0], scale)))
+            }
+            ("inversesqrt", [a]) if float_like(*a) => {
+                let root = self.emit(*a, Op::Intrinsic(Intrinsic::Sqrt, vec![ids[0]]));
+                let one = self.constant(1.0);
+                Ok(self.emit(*a, Op::Binary(BinaryOp::Div, one, root)))
+            }
+            ("mod", [a, b]) if float_like(*a) && (a == b || *b == Type::Float) => {
+                // x - y * floor(x / y): the remainder that takes y's sign.
+                // At an exact multiple it is a knife-edge, 0 or nearly y,
+                // as floor is at an integer; backends may fall either way.
+                let quotient = self.emit(*a, Op::Binary(BinaryOp::Div, ids[0], ids[1]));
+                let floored = self.emit(*a, Op::Intrinsic(Intrinsic::Floor, vec![quotient]));
+                let product = self.emit(*a, Op::Binary(BinaryOp::Mul, floored, ids[1]));
+                Ok(self.emit(*a, Op::Binary(BinaryOp::Sub, ids[0], product)))
+            }
+            ("isnan", [Type::Float]) => {
+                Ok(self.emit(Type::Bool, Op::Binary(BinaryOp::NotEqual, ids[0], ids[0])))
+            }
+            ("isinf", [Type::Float]) => {
+                let magnitude = self.emit(Type::Float, Op::Intrinsic(Intrinsic::Abs, vec![ids[0]]));
+                let largest = self.constant(f32::MAX);
+                Ok(self.emit(
+                    Type::Bool,
+                    Op::Binary(BinaryOp::Greater, magnitude, largest),
+                ))
+            }
+            ("refract", [i, n, Type::Float]) if i == n && vector(*i) => {
+                // k = 1 - eta^2 (1 - dot(n, i)^2); below zero, the zero
+                // vector; else eta i - (eta dot(n, i) + sqrt(k)) n.
+                let (incident, normal, eta) = (ids[0], ids[1], ids[2]);
+                let d = self.emit(
+                    Type::Float,
+                    Op::Intrinsic(Intrinsic::Dot, vec![normal, incident]),
+                );
+                let one = self.constant(1.0);
+                let dd = self.emit(Type::Float, Op::Binary(BinaryOp::Mul, d, d));
+                let rest = self.emit(Type::Float, Op::Binary(BinaryOp::Sub, one, dd));
+                let eta2 = self.emit(Type::Float, Op::Binary(BinaryOp::Mul, eta, eta));
+                let scaled = self.emit(Type::Float, Op::Binary(BinaryOp::Mul, eta2, rest));
+                let k = self.emit(Type::Float, Op::Binary(BinaryOp::Sub, one, scaled));
+                let zero = self.constant(0.0);
+                let total = self.emit(Type::Bool, Op::Binary(BinaryOp::Less, k, zero));
+                let id = self.reserve(*i);
+                self.buffers.push(Vec::new());
+                let parts = vec![zero; i.components().unwrap_or(0) as usize];
+                let nothing = self.emit(*i, Op::Construct(parts));
+                let then = IrBlock {
+                    body: self.buffers.pop().expect("the nested buffer is open"),
+                    result: nothing,
+                };
+                self.buffers.push(Vec::new());
+                let bent = self.emit(*i, Op::Binary(BinaryOp::Mul, incident, eta));
+                let along = self.emit(Type::Float, Op::Binary(BinaryOp::Mul, eta, d));
+                let root = self.emit(Type::Float, Op::Intrinsic(Intrinsic::Sqrt, vec![k]));
+                let sum = self.emit(Type::Float, Op::Binary(BinaryOp::Add, along, root));
+                let back = self.emit(*i, Op::Binary(BinaryOp::Mul, normal, sum));
+                let out = self.emit(*i, Op::Binary(BinaryOp::Sub, bent, back));
+                let otherwise = IrBlock {
+                    body: self.buffers.pop().expect("the nested buffer is open"),
+                    result: out,
+                };
+                Ok(self.place(
+                    id,
+                    *i,
+                    Op::If {
+                        condition: total,
+                        then,
+                        otherwise,
+                    },
+                ))
+            }
+            _ => Err(refused),
+        }
+    }
+
     fn unary(
         &mut self,
         op: UnaryOp,
@@ -1763,6 +1879,8 @@ impl<'a> Builder<'a> {
                 }
                 Ok(self.emit(ty, Op::Construct(parts)))
             }
+            "saturate" | "distance" | "radians" | "degrees" | "inversesqrt" | "mod" | "isnan"
+            | "isinf" | "refract" => self.composed(name, args, span),
             _ => {
                 if let Some(intrinsic) = Intrinsic::from_name(name) {
                     let ids = args

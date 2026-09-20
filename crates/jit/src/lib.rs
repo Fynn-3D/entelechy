@@ -803,6 +803,11 @@ unary_math! {
     orla_jit_atanf => atan,
     orla_jit_expf => exp,
     orla_jit_logf => ln,
+    orla_jit_exp2f => exp2,
+    orla_jit_log2f => log2,
+    orla_jit_sinhf => sinh,
+    orla_jit_coshf => cosh,
+    orla_jit_tanhf => tanh,
 }
 
 /// `pow` on floats.
@@ -840,6 +845,11 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ("orla_jit_atanf", orla_jit_atanf as *const u8),
         ("orla_jit_expf", orla_jit_expf as *const u8),
         ("orla_jit_logf", orla_jit_logf as *const u8),
+        ("orla_jit_exp2f", orla_jit_exp2f as *const u8),
+        ("orla_jit_log2f", orla_jit_log2f as *const u8),
+        ("orla_jit_sinhf", orla_jit_sinhf as *const u8),
+        ("orla_jit_coshf", orla_jit_coshf as *const u8),
+        ("orla_jit_tanhf", orla_jit_tanhf as *const u8),
         ("orla_jit_powf", orla_jit_powf as *const u8),
         ("orla_jit_atan2f", orla_jit_atan2f as *const u8),
         ("orla_jit_fmodf", orla_jit_fmodf as *const u8),

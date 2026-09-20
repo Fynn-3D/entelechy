@@ -491,11 +491,45 @@ pub enum Intrinsic {
     Reflect,
     /// `atan2(y, x)` on floats.
     Atan2,
+    /// The integer part, toward zero, componentwise.
+    Trunc,
+    /// 2 raised to x, componentwise.
+    Exp2,
+    /// The base-2 logarithm, componentwise.
+    Log2,
+    /// The hyperbolic sine, componentwise.
+    Sinh,
+    /// The hyperbolic cosine, componentwise.
+    Cosh,
+    /// The hyperbolic tangent, componentwise.
+    Tanh,
+    /// `fma(a, b, c)`: a * b + c rounded once, componentwise.
+    Fma,
+    /// The count of one bits of an Int.
+    Popcount,
+    /// The count of leading zero bits of an Int, 32 for zero.
+    Clz,
+    /// The count of trailing zero bits of an Int, 32 for zero.
+    Ctz,
+    /// `rotl(x, n)`: the bits rotated left by n modulo 32.
+    Rotl,
+    /// `rotr(x, n)`: the bits rotated right by n modulo 32.
+    Rotr,
+    /// `ult(a, b)`: whether a is below b as unsigned 32-bit values.
+    Ult,
+    /// `udiv(a, b)`: the unsigned quotient; a zero divisor is a failure.
+    Udiv,
+    /// `urem(a, b)`: the unsigned remainder; a zero divisor is a failure.
+    Urem,
+    /// `mulhi(a, b)`: the high 32 bits of the signed 64-bit product.
+    Mulhi,
+    /// `umulhi(a, b)`: the high 32 bits of the unsigned 64-bit product.
+    Umulhi,
 }
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 33] = [
+    pub const ALL: [(Intrinsic, &'static str); 50] = [
         (Intrinsic::Floor, "floor"),
         (Intrinsic::Ceil, "ceil"),
         (Intrinsic::Round, "round"),
@@ -529,6 +563,23 @@ impl Intrinsic {
         (Intrinsic::Smoothstep, "smoothstep"),
         (Intrinsic::Reflect, "reflect"),
         (Intrinsic::Atan2, "atan2"),
+        (Intrinsic::Trunc, "trunc"),
+        (Intrinsic::Exp2, "exp2"),
+        (Intrinsic::Log2, "log2"),
+        (Intrinsic::Sinh, "sinh"),
+        (Intrinsic::Cosh, "cosh"),
+        (Intrinsic::Tanh, "tanh"),
+        (Intrinsic::Fma, "fma"),
+        (Intrinsic::Popcount, "popcount"),
+        (Intrinsic::Clz, "clz"),
+        (Intrinsic::Ctz, "ctz"),
+        (Intrinsic::Rotl, "rotl"),
+        (Intrinsic::Rotr, "rotr"),
+        (Intrinsic::Ult, "ult"),
+        (Intrinsic::Udiv, "udiv"),
+        (Intrinsic::Urem, "urem"),
+        (Intrinsic::Mulhi, "mulhi"),
+        (Intrinsic::Umulhi, "umulhi"),
     ];
 
     /// Source spelling.
@@ -584,6 +635,27 @@ impl Intrinsic {
                 "incident reflected off the surface with unit normal normal: incident - 2 * dot(normal, incident) * normal."
             }
             Self::Atan2 => "The angle of the point (x, y) from the x axis, in -pi..pi.",
+            Self::Trunc => "The integer part of x, toward zero, componentwise.",
+            Self::Exp2 => "2 raised to x, componentwise.",
+            Self::Log2 => "The base-2 logarithm, componentwise.",
+            Self::Sinh => "The hyperbolic sine, componentwise.",
+            Self::Cosh => "The hyperbolic cosine, componentwise.",
+            Self::Tanh => "The hyperbolic tangent, componentwise.",
+            Self::Fma => "a * b + c rounded once, componentwise.",
+            Self::Popcount => "How many bits of x are one.",
+            Self::Clz => "How many zero bits lead x; 32 for zero.",
+            Self::Ctz => "How many zero bits trail x; 32 for zero.",
+            Self::Rotl => "x's bits rotated left by n modulo 32.",
+            Self::Rotr => "x's bits rotated right by n modulo 32.",
+            Self::Ult => "Whether a is below b as unsigned 32-bit values.",
+            Self::Udiv => {
+                "The quotient of a and b as unsigned 32-bit values; a zero b is a failure, like /."
+            }
+            Self::Urem => {
+                "The remainder of a and b as unsigned 32-bit values; a zero b is a failure, like %."
+            }
+            Self::Mulhi => "The high 32 bits of the signed 64-bit product of a and b.",
+            Self::Umulhi => "The high 32 bits of the unsigned 64-bit product of a and b.",
         }
     }
 
@@ -604,6 +676,9 @@ impl Intrinsic {
             Self::Smoothstep => &["low", "high", "x"],
             Self::Reflect => &["incident", "normal"],
             Self::Atan2 => &["y", "x"],
+            Self::Fma => &["a", "b", "c"],
+            Self::Rotl | Self::Rotr => &["x", "n"],
+            Self::Ult | Self::Udiv | Self::Urem | Self::Mulhi | Self::Umulhi => &["a", "b"],
             Self::Length | Self::Normalize => &["v"],
             _ => &["x"],
         }
@@ -672,6 +747,18 @@ impl Intrinsic {
                 Some(*c)
             }
             (Self::Atan2, [Type::Float, Type::Float]) => Some(Type::Float),
+            (Self::Trunc | Self::Exp2 | Self::Log2 | Self::Sinh | Self::Cosh | Self::Tanh, [a])
+                if float_like(*a) =>
+            {
+                Some(*a)
+            }
+            (Self::Fma, [a, b, c]) if a == b && b == c && float_like(*a) => Some(*a),
+            (Self::Popcount | Self::Clz | Self::Ctz, [Type::Int]) => Some(Type::Int),
+            (
+                Self::Rotl | Self::Rotr | Self::Udiv | Self::Urem | Self::Mulhi | Self::Umulhi,
+                [Type::Int, Type::Int],
+            ) => Some(Type::Int),
+            (Self::Ult, [Type::Int, Type::Int]) => Some(Type::Bool),
             _ => None,
         }
     }

@@ -507,6 +507,23 @@ capability claim.
   rows named its address `i` in a pass that already had an `i`, so
   every scatter into rows was refused by the GPU. Both hold now
   ([matrix](crates/matrix/src/lib.rs), [WGSL](crates/gpu/src/wgsl.rs)).
+- The builtins were completed where a shader language or a machine
+  expects them: `trunc`, `exp2`, `log2`, `sinh`, `cosh`, `tanh`, `fma`
+  and the integer primitives `popcount`, `clz`, `ctz`, `rotl`, `rotr`,
+  `ult`, `udiv`, `urem`, `mulhi`, `umulhi` are intrinsics on every
+  backend (the GPU rotates and takes the high product half through
+  emitted helpers, having no 64-bit ints; a zero divisor fails as `/`
+  does), while `saturate`, `distance`, `radians`, `degrees`,
+  `inversesqrt`, `mod`, `isnan`, `isinf` and `refract` are lowered by
+  the compiler to the operations they are spellings of, so the backends
+  have them by construction and agree by the same ops. Two GPU facts
+  the matrix measured on the way: this GPU's native `u32 / u32` is
+  wrong for dividends with the top bit set (0xFFFFFFF0 / 1 came out
+  0xFFFFFFFE) while its signed division is exact, so `udiv` and `urem`
+  are emitted through the signed one on halved dividends; and a
+  driver's fast math may fold `inf * 0` to a number where the CPU has
+  NaN, so a NaN made by arithmetic on the GPU is not promised; one that arrives in a Field is seen alike
+  ([composed](crates/compiler/src/lower.rs), [matrix](crates/matrix/src/lib.rs)).
 - `orla help` and the protocol's `help` list what a Kernel may call:
   the math intrinsics' signatures are found by asking the IR's typing
   rule about every combination of the plain types, their sentences live

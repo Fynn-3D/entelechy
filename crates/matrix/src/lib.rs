@@ -116,6 +116,22 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: k * x + v.y, i: n + int(flag), b: flag && n > 3, v: scaled }",
         ),
         (
+            "more math",
+            // No NaN is made here: the GPU's driver may fold `inf * 0`
+            // under fast math where the CPU has NaN; a NaN that arrives
+            // in a Field is seen alike (the address tests cover that).
+            // `mod` by 0.71, not 0.7: at an exact multiple the remainder
+            // is a knife-edge (0 or nearly the divisor) that the GPU's
+            // contracted multiply-subtract lands on the other side of.
+            "let m = trunc(x * 3.3) + exp2(x * 0.5) + log2(x + 1.0) + sinh(x * 0.2) + cosh(x * 0.2) + tanh(x) + inversesqrt(x + 1.0) + distance(v, vec3(x, 0.0, 0.0)) + radians(x) + degrees(x) + saturate(x - 2.0) + fma(x, 2.0, 1.0) + mod(x, 0.71) + mod(-x, 0.71) - trunc(-x * 1.5);",
+            "Out { f: m, i: int(isinf(x / 0.0)) * 2 + int(isnan(x)) * 4 + int(isinf(x)) * 8, b: isnan(x) || isinf(x), v: refract(normalize(vec3(x, -1.0, 0.0)), vec3(0.0, 1.0, 0.0), 0.7) + saturate(vec3(x, -1.0, 2.0)) + mod(vec3(x, 2.0, -3.0), 0.71) + fma(v, v, v) + trunc(vec3(x, -x, 2.5)) }",
+        ),
+        (
+            "int primitives",
+            "let bitsy = popcount(i * 77) + clz(i + 1) + ctz(i * 4 + 8) + rotl(i, 5) + (rotr(0x80000001, i) & 0xFFFF) + (udiv(0xFFFFFFF0, i + 1) & 0xFFFF) + (urem(0xFFFFFFF0, i + 3) & 0xFFFF) + mulhi(0x40000000, i * 1000) + umulhi(0xF0000000, i * 1000 + 1) + clz(0) + ctz(0) + rotl(i, 32) + rotr(i, 0) + mulhi(-3, 0x60000000) + (rotr(0x80000001, i) >>> 16);",
+            "Out { f: 0.0, i: bitsy, b: ult(0x80000000, i) != ult(i, 0x80000000), v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",

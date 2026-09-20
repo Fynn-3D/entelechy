@@ -121,6 +121,11 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             (Intrinsic::Atan, "orla_jit_atanf"),
             (Intrinsic::Exp, "orla_jit_expf"),
             (Intrinsic::Log, "orla_jit_logf"),
+            (Intrinsic::Exp2, "orla_jit_exp2f"),
+            (Intrinsic::Log2, "orla_jit_log2f"),
+            (Intrinsic::Sinh, "orla_jit_sinhf"),
+            (Intrinsic::Cosh, "orla_jit_coshf"),
+            (Intrinsic::Tanh, "orla_jit_tanhf"),
         ]
         .into_iter()
         .map(|(intrinsic, name)| declare(&mut jit, name, &unary_sig).map(|id| (intrinsic, id)))
@@ -1250,6 +1255,38 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let low = fx.b.ins().select(neg, minus, zero);
                 fx.b.ins().select(pos, one, low)
             }),
+            Intrinsic::Trunc => map1(self, &mut |fx, v| fx.b.ins().trunc(v)),
+            Intrinsic::Fma => self.zip3(&w[0], &w[1], &w[2], |fx, a, b, c| fx.b.ins().fma(a, b, c)),
+            Intrinsic::Popcount => vec![self.b.ins().popcnt(w[0][0])],
+            Intrinsic::Clz => vec![self.b.ins().clz(w[0][0])],
+            Intrinsic::Ctz => vec![self.b.ins().ctz(w[0][0])],
+            Intrinsic::Rotl => {
+                let count = self.b.ins().band_imm(w[1][0], 31);
+                vec![self.b.ins().rotl(w[0][0], count)]
+            }
+            Intrinsic::Rotr => {
+                let count = self.b.ins().band_imm(w[1][0], 31);
+                vec![self.b.ins().rotr(w[0][0], count)]
+            }
+            Intrinsic::Ult => {
+                let below = self.b.ins().icmp(IntCC::UnsignedLessThan, w[0][0], w[1][0]);
+                vec![self.word_of(below)]
+            }
+            Intrinsic::Udiv | Intrinsic::Urem => {
+                let zero = self.b.ins().icmp_imm(IntCC::Equal, w[1][0], 0);
+                self.fail_if(zero, DIVISION_BY_ZERO);
+                // A zero divisor is reported above; the division itself
+                // must not trap, so it divides by one then.
+                let one = self.i32c(1);
+                let divisor = self.b.ins().select(zero, one, w[1][0]);
+                if intrinsic == Intrinsic::Udiv {
+                    vec![self.b.ins().udiv(w[0][0], divisor)]
+                } else {
+                    vec![self.b.ins().urem(w[0][0], divisor)]
+                }
+            }
+            Intrinsic::Mulhi => vec![self.b.ins().smulhi(w[0][0], w[1][0])],
+            Intrinsic::Umulhi => vec![self.b.ins().umulhi(w[0][0], w[1][0])],
             Intrinsic::Sin
             | Intrinsic::Cos
             | Intrinsic::Tan
@@ -1257,7 +1294,12 @@ impl<'a, 'b> Fx<'a, 'b> {
             | Intrinsic::Acos
             | Intrinsic::Atan
             | Intrinsic::Exp
-            | Intrinsic::Log => {
+            | Intrinsic::Log
+            | Intrinsic::Exp2
+            | Intrinsic::Log2
+            | Intrinsic::Sinh
+            | Intrinsic::Cosh
+            | Intrinsic::Tanh => {
                 let func = self
                     .unary
                     .iter()
