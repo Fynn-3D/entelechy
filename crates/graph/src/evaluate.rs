@@ -975,9 +975,25 @@ impl Evaluator {
             return Some(Domain::Rows(1));
         }
         let size = |handle: Handle| runtime.host().domain(handle).ok();
-        let of_source = |source: &Source| match source {
+        let plain = |source: &Source| match source {
             Source::External(name) => externals.get(name).and_then(|h| size(*h)),
             Source::Node { node, .. } => domains.get(node).copied(),
+        };
+        // A memory port of a node has the memory's extent, not the node's
+        // domain (a scan runs over its ticks, its grid memory is a grid):
+        // what it committed last, else what its initial value is sized.
+        let of_source = |source: &Source| match source {
+            Source::Node { node, port } => {
+                match graph.node(node).and_then(|n| n.inputs.get(port)) {
+                    Some(Binding::Previous { initial, .. }) => self
+                        .committed
+                        .get(&(node.clone(), port.clone()))
+                        .and_then(|h| size(*h))
+                        .or_else(|| plain(initial)),
+                    _ => plain(source),
+                }
+            }
+            external => plain(external),
         };
         let of_binding = |binding: &Binding| match binding {
             Binding::Now(source) => of_source(source),

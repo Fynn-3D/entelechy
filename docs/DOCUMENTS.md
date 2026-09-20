@@ -411,6 +411,11 @@ The session parses the graph, publishes its inline Kernels, follows its
 the Kernels whose text changed; a rejected replacement keeps the running
 version; a Kernel that leaves its document retires.
 
+A `domain` expression's `size(port)` or `count(port)` is the extent
+of what the port is bound to; bound to a memory port of a `scan`, it
+is the memory's extent (its initial value's, before the first frame),
+not the scan's domain.
+
 ## Replay
 
 Application tests are `.replay` files: `scene <path>`, optional
