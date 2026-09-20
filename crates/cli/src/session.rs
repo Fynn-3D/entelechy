@@ -1244,15 +1244,25 @@ impl Session {
         } else {
             declarations_for(base, &document.uses).map_err(|e| e.to_string())?
         };
+        // The scene's shared declarations come after the source's own,
+        // and a name the source declares, at its top or inside its
+        // Kernel, is the source's: a Kernel may redefine a shared struct,
+        // which is how a state's layout changes while it runs.
         for shared in &self.shared_structs {
             let declared = |d: &orla_language::StructDecl| d.name.value == shared.name.value;
-            if !document.structs.iter().any(declared) && !structs.iter().any(declared) {
+            if !document.structs.iter().any(declared)
+                && !structs.iter().any(declared)
+                && !document.kernels[0].structs.iter().any(declared)
+            {
                 structs.push(shared.clone());
             }
         }
         for shared in &self.shared_types {
             let declared = |d: &orla_language::TypeAlias| d.name.value == shared.name.value;
-            if !document.types.iter().any(declared) && !types.iter().any(declared) {
+            if !document.types.iter().any(declared)
+                && !types.iter().any(declared)
+                && !document.kernels[0].types.iter().any(declared)
+            {
                 types.push(shared.clone());
             }
         }
@@ -1342,7 +1352,9 @@ impl Session {
         for binding in target.inputs.values() {
             let sources = match binding {
                 orla_graph::Binding::Now(source) => vec![source],
-                orla_graph::Binding::Previous { source, initial } => vec![source, initial],
+                orla_graph::Binding::Previous {
+                    source, initial, ..
+                } => vec![source, initial],
             };
             for source in sources {
                 if let orla_graph::Source::Node { node, .. } = source
