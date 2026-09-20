@@ -447,8 +447,28 @@ fn manifest(
             })
             .collect::<Result<Vec<_>, CompileError>>()
     };
-    let inputs = ports(&kernel.inputs)?;
-    let outputs = ports(&kernel.outputs)?;
+    let mut inputs = ports(&kernel.inputs)?;
+    let mut outputs = ports(&kernel.outputs)?;
+    // A memory is bound like an input and read like an output: it joins
+    // both lists, last, and its name says so.
+    let memory_ports = ports(&kernel.memories)?;
+    let memories: Vec<String> = memory_ports.iter().map(|p| p.name.clone()).collect();
+    if let Some(first) = kernel.memories.first() {
+        if kernel.carry.is_none() {
+            return Err(semantic(
+                first.name.span,
+                "a memory is written step by step, which needs ordered work: use `scan`",
+            ));
+        }
+        if inputs.is_empty() {
+            return Err(semantic(
+                first.name.span,
+                "a scan runs over its first input, which cannot be a memory; declare an input",
+            ));
+        }
+    }
+    inputs.extend(memory_ports.iter().cloned());
+    outputs.extend(memory_ports);
     if let (Some(merge), Some(_)) = (&kernel.merge, &kernel.carry) {
         return Err(semantic(
             merge.span,
@@ -548,12 +568,12 @@ fn manifest(
             "writing an output needs `field.write`; add it to `requires`",
         ));
     }
-    if outputs.len() != 1 {
+    if kernel.outputs.len() != 1 {
         return Err(semantic(
             kernel.id.as_ref().map(|id| id.span).unwrap_or_default(),
             format!(
                 "a kernel declares exactly one output in this language version, found {}",
-                outputs.len()
+                kernel.outputs.len()
             ),
         ));
     }
@@ -585,7 +605,8 @@ fn manifest(
         .iter()
         .map(|d| &d.name)
         .chain(kernel.params.iter().map(|d| &d.name))
-        .chain(kernel.outputs.iter().map(|d| &d.name));
+        .chain(kernel.outputs.iter().map(|d| &d.name))
+        .chain(kernel.memories.iter().map(|d| &d.name));
     for name in names {
         if !seen.insert(&name.value) {
             return Err(semantic(
@@ -601,6 +622,7 @@ fn manifest(
         inputs,
         params,
         outputs,
+        memories,
     })
 }
 
@@ -838,6 +860,11 @@ impl<'a> Builder<'a> {
         self.scopes.push(self.locals.len());
         let result = (|| {
             for (name, value) in &block.lets {
+                // A statement for its effect: `put(...)`, or `let _ = ...`.
+                if name.value == "_" {
+                    self.value(value)?;
+                    continue;
+                }
                 let scope_start = *self.scopes.last().expect("a scope is open");
                 if self.locals[scope_start..]
                     .iter()
@@ -1366,6 +1393,53 @@ impl<'a> Builder<'a> {
 
     fn call(&mut self, name: &str, args: &[Expr], span: Span) -> Result<ValueId, CompileError> {
         match name {
+            "put" => {
+                self.entry_only(name, span)?;
+                self.require(name, Capability::FieldWrite, span)?;
+                self.arity(name, args, 3, span)?;
+                let (input, port) = self.input_index(&args[0], name)?;
+                let (port_name, port_ty) = (port.name.clone(), port.ty.clone());
+                if !self.manifest.memories.contains(&port_name) {
+                    return Err(semantic(
+                        args[0].span,
+                        format!(
+                            "`put` writes a memory, and `{port_name}` is not one; declare it with `memory {port_name}: {port_ty};`"
+                        ),
+                    ));
+                }
+                if self.manifest.mode != Mode::Scan {
+                    return Err(semantic(
+                        span,
+                        "`put` writes step by step, which only `scan` does",
+                    ));
+                }
+                let address = self.value(&args[1])?;
+                let expected = port_ty.index_type();
+                if self.ty(address) != expected {
+                    return Err(semantic(
+                        args[1].span,
+                        format!(
+                            "`put` addresses `{port_name}`, a {}, with {}; it takes {}",
+                            port_ty.shape,
+                            self.describe(self.ty(address)),
+                            self.describe(expected)
+                        ),
+                    ));
+                }
+                let value = self.value(&args[2])?;
+                let element = port_ty.element;
+                if self.ty(value) != element {
+                    return Err(semantic(
+                        args[2].span,
+                        format!(
+                            "`put` writes {} into `{port_name}`, whose element is {}",
+                            self.describe(self.ty(value)),
+                            self.describe(element)
+                        ),
+                    ));
+                }
+                Ok(self.emit(element, Op::Put(input, address, value)))
+            }
             "sample" => {
                 self.entry_only(name, span)?;
                 self.require(name, Capability::FieldRead, span)?;

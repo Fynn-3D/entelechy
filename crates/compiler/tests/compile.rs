@@ -507,3 +507,41 @@ fn bit_operators_take_ints_only() {
     );
     assert!(message.contains("cannot apply `<<`"), "{message}");
 }
+
+#[test]
+fn memories_are_ordered_work_written_with_put() {
+    let module = compile(
+        "kernel test.tally@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let cell = index() % 4; let v = at(ram, cell) + 1; put(ram, cell, v); return acc + v; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(module.manifest.memories, ["ram"]);
+    assert_eq!(
+        module.manifest.inputs.len(),
+        2,
+        "a memory is bound like an input"
+    );
+    assert_eq!(module.manifest.outputs.len(), 2, "and read like an output");
+    let text = module.to_string();
+    assert!(text.contains("memory ram: Rows<Int>"), "{text}");
+    assert!(text.contains("host put input1"), "{text}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; compute { return 1; } }",
+    );
+    assert!(message.contains("needs ordered work"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; input ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { put(ram, 0, 1); return acc; } }",
+    );
+    assert!(message.contains("is not one"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { put(ram, 0.5, 1); return acc; } }",
+    );
+    assert!(message.contains("it takes Int"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { put(ram, 0, 1.5); return acc; } }",
+    );
+    assert!(message.contains("whose element is Int"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { return acc; } }",
+    );
+    assert!(message.contains("cannot be a memory"), "{message}");
+}

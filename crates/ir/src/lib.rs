@@ -167,6 +167,11 @@ pub struct Manifest {
     pub params: Vec<Param>,
     /// Outputs in declaration order.
     pub outputs: Vec<Port>,
+    /// Names of the memories: ports that appear in `inputs` (bound by the
+    /// graph, read with `at`) and in `outputs` (what the steps left there),
+    /// which an ordered Kernel writes step by step with [`Op::Put`]. They
+    /// come last in both lists, in one order.
+    pub memories: Vec<String>,
 }
 
 /// How a Kernel executes over its domain.
@@ -719,6 +724,11 @@ pub enum Op {
     Count(u32),
     /// Extent of an input as its index type. Host call: `field.read`.
     Size(u32),
+    /// Writes a value at an address of the input's index type into a
+    /// memory input, in step order, later reads of it seeing the write; an
+    /// address outside the memory is dropped. Yields the value written.
+    /// Host call: `field.write`. Entry point of an ordered Kernel only.
+    Put(u32, ValueId, ValueId),
 }
 
 /// An instruction: a typed value defined by an operation.

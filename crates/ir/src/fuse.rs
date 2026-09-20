@@ -158,6 +158,7 @@ pub fn fuse(
         requires,
         inputs,
         params,
+        memories: Vec::new(),
         outputs: consumer_manifest.outputs.clone(),
     };
 
@@ -185,6 +186,7 @@ pub fn fuse(
             Op::AtLinear(i, c) => Op::AtLinear(index(*i), *c),
             Op::Count(i) => Op::Count(index(*i)),
             Op::Size(i) => Op::Size(index(*i)),
+            Op::Put(i, a, v) => Op::Put(index(*i), *a, *v),
             other => other.clone(),
         }
     };
@@ -369,6 +371,10 @@ impl<'a> Renumber<'a> {
                 }
             }
             Op::At(_, coord) | Op::AtLinear(_, coord) => *coord = self.map(*coord),
+            Op::Put(_, address, value) => {
+                *address = self.map(*address);
+                *value = self.map(*value);
+            }
             Op::Key(code) | Op::Button(code) => *code = self.map(*code),
             Op::Const(_)
             | Op::Param(_)

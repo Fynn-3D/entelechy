@@ -312,6 +312,7 @@ impl Parser {
         let mut inputs = Vec::new();
         let mut params = Vec::new();
         let mut outputs = Vec::new();
+        let mut memories = Vec::new();
         let mut structs = Vec::new();
         let mut types = Vec::new();
         let mut functions = Vec::new();
@@ -339,6 +340,10 @@ impl Parser {
                 "output" => {
                     self.next();
                     outputs.push(self.port(false)?);
+                }
+                "memory" => {
+                    self.next();
+                    memories.push(self.port(false)?);
                 }
                 "domain" if inline => {
                     let statement_start = self.start();
@@ -427,7 +432,7 @@ impl Parser {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, `compute`, `scan`, `scatter`, or `merge`, found `{keyword}`"
+                            "expected `requires`, `input`, `param`, `output`, `memory`, `struct`, `type`, `fn`, `compute`, `scan`, `scatter`, or `merge`, found `{keyword}`"
                         ),
                     });
                 }
@@ -446,6 +451,7 @@ impl Parser {
             inputs,
             params,
             outputs,
+            memories,
             structs,
             types,
             functions,
@@ -777,6 +783,19 @@ impl Parser {
                 return Err(self.error("a block must end with `return expr;` or a value"));
             } else {
                 let result = self.expr()?;
+                // An expression followed by `;` is a statement for its effect
+                // (a `put`), bound to `_`; without one it is the block's value.
+                if self.eat_punct(";") {
+                    let span = result.span;
+                    lets.push((
+                        Spanned {
+                            value: "_".to_owned(),
+                            span,
+                        },
+                        result,
+                    ));
+                    continue;
+                }
                 self.expect_punct("}")?;
                 return Ok(Block { lets, result });
             }
@@ -1077,9 +1096,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 19] = [
+const RESERVED: [&str; 20] = [
     "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "type", "node",
-    "use", "from", "input", "output", "graph", "merge", "scan", "scatter",
+    "use", "from", "input", "output", "memory", "graph", "merge", "scan", "scatter",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

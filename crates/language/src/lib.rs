@@ -242,6 +242,10 @@ pub struct Kernel {
     pub params: Vec<ParamDecl>,
     /// Outputs in declaration order.
     pub outputs: Vec<PortDecl>,
+    /// Memories in declaration order: `memory ram: Rows<Int>;`, a port an
+    /// ordered Kernel both reads and writes step by step, bound like an
+    /// input and read like an output.
+    pub memories: Vec<PortDecl>,
     /// Struct types in declaration order.
     pub structs: Vec<StructDecl>,
     /// Port type aliases in declaration order.

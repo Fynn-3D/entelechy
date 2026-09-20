@@ -158,7 +158,8 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             let output = outputs
                 .first()
                 .ok_or_else(|| error("manifest", "a scan produces one `Rows` output"))?;
-            if outputs.len() != 1 || output.shape() != Shape::Rows || first.shape() != Shape::Rows {
+            let plain = outputs.len() - module.manifest.memories.len();
+            if plain != 1 || output.shape() != Shape::Rows || first.shape() != Shape::Rows {
                 return Err(error(
                     "manifest",
                     "a scan runs over a `Rows` input and produces a `Rows` output of the same count",
@@ -210,13 +211,14 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             }
         }
     }
-    if entry.results.len() != outputs.len() {
+    let plain_outputs = outputs.len() - module.manifest.memories.len();
+    if entry.results.len() != plain_outputs {
         return Err(error(
             &entry.name,
             format!(
-                "entry returns {} values but the manifest declares {} outputs",
+                "entry returns {} values but the manifest declares {} outputs besides its memories",
                 entry.results.len(),
-                outputs.len()
+                plain_outputs
             ),
         ));
     }
@@ -303,13 +305,55 @@ fn validate_structs(structs: &[StructDef]) -> Result<(), ValidationError> {
 }
 
 fn validate_manifest(manifest: &Manifest, structs: &[StructDef]) -> Result<(), ValidationError> {
+    // A memory is one port in both lists, last in each, typed alike.
+    for (k, name) in manifest.memories.iter().enumerate() {
+        let position = |ports: &[Port]| ports.len() + k - manifest.memories.len().min(ports.len());
+        let as_input = manifest.inputs.get(position(&manifest.inputs));
+        let as_output = manifest.outputs.get(position(&manifest.outputs));
+        match (as_input, as_output) {
+            (Some(input), Some(output)) if input.name == *name && output.name == *name => {
+                if input.ty != output.ty {
+                    return Err(error(
+                        "manifest",
+                        format!("memory `{name}` is typed differently as an input and an output"),
+                    ));
+                }
+            }
+            _ => {
+                return Err(error(
+                    "manifest",
+                    format!(
+                        "memory `{name}` must be the last of the inputs and of the outputs, in order"
+                    ),
+                ));
+            }
+        }
+    }
+    if !manifest.memories.is_empty() && manifest.mode != Mode::Scan {
+        return Err(error(
+            "manifest",
+            "a memory is written step by step, which needs ordered work: `scan`",
+        ));
+    }
+    if !manifest.memories.is_empty() && manifest.inputs.len() == manifest.memories.len() {
+        return Err(error(
+            "manifest",
+            "a scan runs over its first input, which cannot be a memory; declare an input",
+        ));
+    }
     let mut names = std::collections::BTreeSet::new();
     let ports = manifest
         .inputs
         .iter()
         .map(|port| (&port.name, "input"))
         .chain(manifest.params.iter().map(|param| (&param.name, "param")))
-        .chain(manifest.outputs.iter().map(|port| (&port.name, "output")));
+        .chain(
+            manifest
+                .outputs
+                .iter()
+                .filter(|port| !manifest.memories.contains(&port.name))
+                .map(|port| (&port.name, "output")),
+        );
     for (name, kind) in ports {
         if !names.insert(name.clone()) {
             return Err(error(
@@ -711,6 +755,41 @@ impl<'a> Checker<'a> {
                 self.require(Capability::InputRead, position)?;
                 Type::Float
             }
+            Op::Put(input, index, value) => {
+                self.entry_only(position)?;
+                self.require(Capability::FieldWrite, position)?;
+                let manifest = &self.module.manifest;
+                if manifest.mode != Mode::Scan {
+                    return Err(self.fail(format!(
+                        "{position} writes a memory, which only ordered work (`scan`) may do"
+                    )));
+                }
+                let port = self.input(*input, position)?;
+                if !manifest.memories.contains(&port.name) {
+                    return Err(self.fail(format!(
+                        "{position} writes input `{}`, which is not a memory",
+                        port.name
+                    )));
+                }
+                let address = self.operand(*index, position)?;
+                if address != port.ty.index_type() {
+                    return Err(self.fail(format!(
+                        "{position} addresses memory `{}`, a {}, with {address} instead of {}",
+                        port.name,
+                        port.shape(),
+                        port.ty.index_type()
+                    )));
+                }
+                let written = self.operand(*value, position)?;
+                if written != port.element() {
+                    return Err(self.fail(format!(
+                        "{position} writes {written} into memory `{}`, whose element is {}",
+                        port.name,
+                        port.element()
+                    )));
+                }
+                port.element()
+            }
             Op::Time => {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float
@@ -875,6 +954,7 @@ mod tests {
         Manifest {
             id: "test.kernel@1".parse::<KernelId>().unwrap(),
             mode: Mode::Map,
+            memories: Vec::new(),
             requires: requires.iter().copied().collect(),
             inputs: vec![Port {
                 name: "source".into(),

@@ -336,6 +336,14 @@ enum Instr {
         kind: Address,
         n: usize,
     },
+    Put {
+        dst: usize,
+        input: usize,
+        address: usize,
+        kind: Address,
+        value: usize,
+        n: usize,
+    },
 }
 
 /// A compiled function: its frame size in words, where its arguments
@@ -364,6 +372,8 @@ pub(crate) struct Program<'s> {
     /// Words of a scan's carried value at the front of the entry frame.
     carry: usize,
     inputs: Vec<InputView<'s>>,
+    /// Which inputs are memories, written by the steps of a scan.
+    memories: Vec<bool>,
     params: Vec<u32>,
     /// The domain the entry maps over: the output's, or the first input's
     /// for a reduction or a scan.
@@ -455,6 +465,12 @@ impl<'s> Program<'s> {
             .init
             .as_ref()
             .map(|init| compile_function(&shared, init, None));
+        let memories = module
+            .manifest
+            .inputs
+            .iter()
+            .map(|port| module.manifest.memories.contains(&port.name))
+            .collect();
         Ok(Self {
             functions: shared.functions,
             entry,
@@ -462,6 +478,7 @@ impl<'s> Program<'s> {
             init,
             carry,
             inputs,
+            memories,
             params,
             domain,
             context: invocation.context,
@@ -887,6 +904,17 @@ impl FunctionCompiler<'_> {
                     n: dst.n,
                 }
             }
+            Op::Put(input, address, value) => {
+                let dst = define(self);
+                Instr::Put {
+                    dst: dst.at,
+                    input: *input as usize,
+                    address: self.loc(address).at,
+                    kind: self.address(address),
+                    value: self.loc(value).at,
+                    n: dst.n,
+                }
+            }
         })
     }
 
@@ -1051,6 +1079,9 @@ impl FunctionCompiler<'_> {
 /// frame, and the loop indices of the running element.
 pub(crate) struct Machine<'p, 's> {
     program: &'p Program<'s>,
+    /// The memories' working copies, one per memory input: what the
+    /// steps have written so far, and the outputs at the end.
+    memories: Vec<Option<Vec<u32>>>,
     stack: Vec<u32>,
     /// Top of the stack: where the next call's frame begins.
     sp: usize,
@@ -1065,8 +1096,15 @@ fn f(word: u32) -> f32 {
 
 impl<'p, 's> Machine<'p, 's> {
     pub(crate) fn new(program: &'p Program<'s>) -> Self {
+        let memories = program
+            .inputs
+            .iter()
+            .zip(&program.memories)
+            .map(|(view, memory)| memory.then(|| view.words.to_vec()))
+            .collect();
         Self {
             program,
+            memories,
             stack: vec![0; program.entry.frame * 2],
             sp: 0,
             loops: Vec::new(),
@@ -1155,6 +1193,15 @@ impl<'p, 's> Machine<'p, 's> {
         let result = merge.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
+    }
+
+    /// The memories as the steps left them, by input index.
+    pub(crate) fn take_memories(&mut self) -> Vec<(usize, Vec<u32>)> {
+        self.memories
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(index, memory)| memory.take().map(|words| (index, words)))
+            .collect()
     }
 
     /// Opens the outermost frame of `words`.
@@ -1506,7 +1553,8 @@ impl<'p, 's> Machine<'p, 's> {
                     ],
                 );
                 let start = index * view.stride;
-                s[fp + dst..fp + dst + n].copy_from_slice(&view.words[start..start + n]);
+                let words = self.memories[*input].as_deref().unwrap_or(view.words);
+                s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
             }
             Instr::At {
                 dst,
@@ -1519,7 +1567,37 @@ impl<'p, 's> Machine<'p, 's> {
                 let address = read_address(s, fp + address, *kind, 0.0);
                 let index = linear(view.domain, clamp_address(view.domain, address));
                 let start = index * view.stride;
-                s[fp + dst..fp + dst + n].copy_from_slice(&view.words[start..start + n]);
+                let words = self.memories[*input].as_deref().unwrap_or(view.words);
+                s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
+            }
+            Instr::Put {
+                dst,
+                input,
+                address,
+                kind,
+                value,
+                n,
+            } => {
+                // The value written is the instruction's own value; an
+                // address outside the memory is dropped, never clamped.
+                let view = &program.inputs[*input];
+                let written = fp + value;
+                s.copy_within(written..written + n, fp + dst);
+                let index = match kind {
+                    Address::Int => {
+                        let i = s[fp + address] as i32;
+                        (i >= 0 && (i as usize) < view.domain.count()).then_some(i as usize)
+                    }
+                    _ => {
+                        let address = read_address(s, fp + address, *kind, 0.0);
+                        let words: Vec<u32> = address.iter().map(|v| v.to_bits()).collect();
+                        crate::scatter_index(view.domain, &words)
+                    }
+                };
+                if let (Some(index), Some(memory)) = (index, self.memories[*input].as_mut()) {
+                    let start = index * view.stride;
+                    memory[start..start + n].copy_from_slice(&s[written..written + n]);
+                }
             }
             Instr::AtLinear {
                 dst,
@@ -1563,7 +1641,8 @@ impl<'p, 's> Machine<'p, 's> {
                     }
                     let (cx, cy, cz) = corner;
                     let start = ((cz * height + cy) * width + cx) * view.stride;
-                    for (slot, word) in self.scratch.iter_mut().zip(&view.words[start..]) {
+                    let words = self.memories[*input].as_deref().unwrap_or(view.words);
+                    for (slot, word) in self.scratch.iter_mut().zip(&words[start..]) {
                         *slot += f(*word) * weight;
                     }
                 }

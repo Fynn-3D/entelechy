@@ -1085,3 +1085,79 @@ fn scatters_match_between_backends() {
         }
     }
 }
+
+#[test]
+fn memories_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    // A machine that walks a grid memory: each step toggles the cell it is
+    // on and steps by what it read there, and tallies ints in a rows
+    // memory; both memories come out the same on both backends.
+    let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; } scan with at_ = vec2(3.0, 2.0) { let seen = at(screen, at_); put(screen, at_, 1 - seen); let t = at(tally, seen); put(tally, seen, Cell { hits: t.hits + 1, last: float(index()) }); put(screen, vec2(-1.0, 0.0), 9); let next = vec2(float((int(at_.x) + 3 + seen * 5) % 16), float((int(at_.y) + 1 + seen) % 8)); return next; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let steps = 300u32;
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let cells = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+    let mut host = Host::new(1 << 20);
+    let ticks = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                ints.clone(),
+                Domain::Rows(steps),
+                vec![0; steps as usize],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let screen = host
+        .adopt(orla_abi::FieldData::from_words(ints, Domain::Grid(16, 8), vec![0; 128]).unwrap())
+        .unwrap();
+    let tally = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                cells,
+                Domain::Rows(2),
+                vec![0, 0.0f32.to_bits(), 0, 0.0f32.to_bits()],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![ticks, screen, tally],
+        params: vec![],
+        domain: Domain::Rows(steps),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu_outputs = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap();
+    assert_eq!(cpu_outputs.len(), 3);
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let gpu_outputs =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap();
+    assert_eq!(gpu_outputs.len(), 3);
+    for (which, (cpu_out, gpu_out)) in cpu_outputs.iter().zip(&gpu_outputs).enumerate() {
+        let cpu_words = host.data(*cpu_out).unwrap().words().to_vec();
+        assert_eq!(
+            host.domain(*gpu_out).unwrap(),
+            host.domain(*cpu_out).unwrap()
+        );
+        let byte_len = cpu_words.len() * 4;
+        let device = host.resident(*gpu_out).unwrap().expect("resident");
+        let bytes = Backend::download(&gpu, device, byte_len).unwrap();
+        let gpu_words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(cpu_words, gpu_words, "output {which} differs");
+    }
+    let screen_words = host.data(cpu_outputs[1]).unwrap().words().to_vec();
+    assert!(screen_words.contains(&1), "the walk left marks");
+    let tally_words = host.data(cpu_outputs[2]).unwrap().words().to_vec();
+    assert_eq!(
+        tally_words[0] + tally_words[2],
+        steps,
+        "every step tallied once"
+    );
+}

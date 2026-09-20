@@ -63,6 +63,7 @@ impl NativeOp {
             Self::Rasterize => Manifest {
                 id: self.id(),
                 mode: orla_ir::Mode::Map,
+                memories: Vec::new(),
                 requires: [Capability::FieldRead, Capability::FieldWrite]
                     .into_iter()
                     .collect::<Capabilities>(),

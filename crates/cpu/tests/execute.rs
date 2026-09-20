@@ -966,3 +966,51 @@ fn bit_operators_work_on_ints_with_the_count_modulo_32() {
         [-8 & 1, -8 | 1, -8 ^ 1, -16, -4, 2, 15]
     );
 }
+
+#[test]
+fn memories_are_written_step_by_step_and_come_out_as_outputs() {
+    // Each step counts a visit in its cell and reads the count back at
+    // once; a write outside the memory is dropped; the input itself is
+    // untouched and the memory is the second output.
+    let source = "kernel test.tally@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let cell = index() % 4; let v = at(ram, cell) + 1; put(ram, cell, v); put(ram, 99, 7); put(ram, -1, 7); return at(ram, cell); } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 16);
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ticks = host
+        .adopt(
+            orla_abi::FieldData::from_words(ints.clone(), Domain::Rows(10), vec![0; 10]).unwrap(),
+        )
+        .unwrap();
+    let ram = host
+        .adopt(
+            orla_abi::FieldData::from_words(ints, Domain::Rows(6), vec![10, 20, 30, 40, 50, 60])
+                .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![ticks, ram],
+        params: vec![],
+        domain: Domain::Rows(10),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let outputs = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap();
+    assert_eq!(outputs.len(), 2);
+    let seen: Vec<u32> = (0..10)
+        .map(|i| host.element(outputs[0], i).unwrap()[0])
+        .collect();
+    assert_eq!(seen, [11, 21, 31, 41, 12, 22, 32, 42, 13, 23]);
+    let left: Vec<u32> = (0..6)
+        .map(|i| host.element(outputs[1], i).unwrap()[0])
+        .collect();
+    assert_eq!(left, [13, 23, 32, 42, 50, 60]);
+    assert_eq!(host.domain(outputs[1]).unwrap(), Domain::Rows(6));
+    let original: Vec<u32> = (0..6).map(|i| host.element(ram, i).unwrap()[0]).collect();
+    assert_eq!(
+        original,
+        [10, 20, 30, 40, 50, 60],
+        "the input is a copy's source, never written"
+    );
+}

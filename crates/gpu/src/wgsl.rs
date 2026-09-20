@@ -85,10 +85,16 @@ pub fn emit(module: &Module) -> String {
         out,
         "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<u32>;"
     );
-    for index in 0..manifest.inputs.len() {
+    for (index, port) in manifest.inputs.iter().enumerate() {
+        // A memory is written by the steps, so its binding is read-write.
+        let access = if manifest.memories.contains(&port.name) {
+            "read_write"
+        } else {
+            "read"
+        };
         let _ = writeln!(
             out,
-            "@group(0) @binding({}) var<storage, read> in{index}: array<u32>;",
+            "@group(0) @binding({}) var<storage, {access}> in{index}: array<u32>;",
             INPUT_BINDING + index as u32,
         );
     }
@@ -177,6 +183,9 @@ fn button_down(code: i32) -> bool {{
     emit_mixers(&mut out, module);
     for (index, port) in manifest.inputs.iter().enumerate() {
         emit_linear(&mut out, module, index, port);
+        if manifest.memories.contains(&port.name) {
+            emit_memory_writer(&mut out, module, index, port);
+        }
     }
     out.push('\n');
     if let Some(port) = manifest.outputs.first() {
@@ -956,6 +965,49 @@ fn emit_mixers(out: &mut String, module: &Module) {
     }
 }
 
+/// Emits `store_in{i}(index, v)` and `inside_in{i}(c)` for a memory: the
+/// element store, and whether an address lands inside the memory (floored,
+/// NaN never does), since a `put` outside is dropped.
+fn emit_memory_writer(out: &mut String, module: &Module, index: usize, port: &orla_ir::Port) {
+    let element = port.element();
+    let stride = port.ty.schema.words();
+    let slot = CONTEXT_HEAD + index;
+    let mut stores = Vec::new();
+    store_lines(module, element, "v", 0, &mut stores);
+    let body = stores.join("\n").replace("out0[", &format!("in{index}["));
+    let _ = writeln!(
+        out,
+        "fn store_in{index}(index: u32, v: {}) {{
+    let b = index * {stride}u;
+{body}
+}}",
+        wgsl_type(element)
+    );
+    let _ = match port.shape() {
+        Shape::Rows => writeln!(
+            out,
+            "fn inside_in{index}(i: i32) -> bool {{ return i >= 0i && i < i32(ctx[{slot}].x); }}"
+        ),
+        Shape::Grid => writeln!(
+            out,
+            "fn inside_in{index}(c: vec2<f32>) -> bool {{
+    let x = floor(c.x);
+    let y = floor(c.y);
+    return x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y;
+}}"
+        ),
+        Shape::Volume => writeln!(
+            out,
+            "fn inside_in{index}(c: vec3<f32>) -> bool {{
+    let x = floor(c.x);
+    let y = floor(c.y);
+    let z = floor(c.z);
+    return x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y && z >= 0.0 && z < ctx[{slot}].z;
+}}"
+        ),
+    };
+}
+
 /// Emits `linear_in{i}(c)`: the input interpolated at a fractional
 /// position, element centres at half-integers, clamped at the edges.
 fn emit_linear(out: &mut String, module: &Module, index: usize, port: &orla_ir::Port) {
@@ -1276,6 +1328,21 @@ impl Emitter<'_> {
                 args.iter().map(v).collect::<Vec<_>>().join(", ")
             ),
             Op::Intrinsic(intrinsic, args) => self.intrinsic(*intrinsic, args, *ty),
+            Op::Put(input, index, value) => {
+                // The store, when the address is inside; the value is the
+                // instruction's own.
+                self.line(
+                    depth,
+                    &format!(
+                        "if (inside_in{input}({})) {{ store_in{input}(index_in{input}({}), {}); }}",
+                        v(index),
+                        v(index),
+                        v(value)
+                    ),
+                );
+                self.line(depth, &format!("let v{}: {ty_name} = {};", id.0, v(value)));
+                return;
+            }
             Op::If {
                 condition,
                 then,

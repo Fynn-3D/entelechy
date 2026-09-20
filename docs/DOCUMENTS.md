@@ -167,6 +167,36 @@ as many elements as its input has, so a node's `domain`, if written, must
 say so. Ordered work runs on one thread on either backend; that is its
 nature, not a limit of the backend, and a scan is never fused.
 
+Ordered work may also own memory: a Field its steps read and write.
+
+```text
+kernel machine.step@1 {
+    requires { field.read; field.write; }
+    input ticks: Rows<Int>;            // one step per element
+    memory ram: Rows<Int>;             // bound like an input, read like an output
+    output result: Rows<Int>;
+    scan with pc = 0 {
+        let op = at(ram, pc);          // what an earlier step wrote is there
+        put(ram, pc + 100, op * 2);    // a write, in step order
+        return pc + 1;
+    }
+}
+```
+
+`memory name: Type;` declares a port that is both: a graph binds it like
+an input (`ram <~ machine.ram from zeros.result` makes it persist across
+evaluations; `ram <- fresh.result` starts each evaluation over) and reads
+it like an output (`machine.ram`). The steps start from what was bound,
+`at` reads the memory as the steps have left it so far, and `put(name,
+address, value)` writes an element (the address as `at` takes it, floored;
+an address outside the memory is dropped, never clamped) and yields the
+value written. What the steps left there is the output of that name,
+listed after the Kernel's own output. Only ordered work may write, so
+every backend applies the writes in one order, and the bound Field is
+never touched: a failed evaluation leaves it as it was. An expression
+followed by `;` is a statement for its effect, `put(ram, a, v);`, the
+same as `let _ = put(ram, a, v);`; a binding named `_` binds nothing.
+
 A Kernel with `scatter` in place of `compute` writes where it computes,
 the fourth and last execution mode:
 

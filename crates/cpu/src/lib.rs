@@ -263,6 +263,9 @@ fn scan(
         machine.run_scan_step(index as u32, &carried, out)?;
         carried.copy_from_slice(out);
     }
+    // The memories as the steps left them become the outputs after the
+    // first, in the manifest's order.
+    let memories = machine.take_memories();
     drop(machine);
     drop(program);
     let port = &module.manifest.outputs[0];
@@ -271,7 +274,28 @@ fn scan(
         let _ = scope.release(output);
         return Err(error.into());
     }
-    Ok(vec![output])
+    let mut outputs = vec![output];
+    for (input, words) in memories {
+        let port = &module.manifest.inputs[input];
+        let extent = match scope.size(invocation.inputs[input]) {
+            Ok(extent) => extent,
+            Err(error) => {
+                release_all(scope, &outputs);
+                return Err(error.into());
+            }
+        };
+        let created = scope
+            .create(port.ty.schema.clone(), extent)
+            .and_then(|handle| scope.write_all(handle, &words).map(|()| handle));
+        match created {
+            Ok(handle) => outputs.push(handle),
+            Err(error) => {
+                release_all(scope, &outputs);
+                return Err(error.into());
+            }
+        }
+    }
+    Ok(outputs)
 }
 
 /// Checks a scatter's invocation: it writes the extent of the input it

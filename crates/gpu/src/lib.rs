@@ -281,8 +281,9 @@ impl Backend for GpuBackend {
             uniform_entry(wgsl::PARAMS_BINDING),
             storage_entry(wgsl::OUTPUT_BINDING, false),
         ];
-        for index in 0..module.manifest.inputs.len() {
-            entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, true));
+        for (index, port) in module.manifest.inputs.iter().enumerate() {
+            let memory = module.manifest.memories.contains(&port.name);
+            entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, !memory));
         }
         let layout = self
             .device
@@ -501,6 +502,14 @@ impl Backend for GpuBackend {
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
+        // A memory's steps write it, so the bound buffer is a copy of the
+        // input's, and that copy is the memory's output afterwards.
+        let mut memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)> = Vec::new();
+        let mut copies = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("orla memories"),
+            });
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let extent = scope.size(*handle)?;
             context.extend_from_slice(&[
@@ -509,7 +518,27 @@ impl Backend for GpuBackend {
                 extent.depth() as f32,
                 0.0,
             ]);
-            input_buffers.push(self.bind_input(scope, *handle, index)?);
+            let bound = self.bind_input(scope, *handle, index)?;
+            let port = &module.manifest.inputs[index];
+            if module.manifest.memories.contains(&port.name) {
+                let size = (extent.count() * port.ty.schema.words() * 4) as u64;
+                let copy = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("memory"),
+                    size: size.max(16).div_ceil(16) * 16,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                copies.copy_buffer_to_buffer(&bound, 0, &copy, 0, size);
+                memory_outputs.push((index, copy.clone(), extent));
+                input_buffers.push(copy);
+            } else {
+                input_buffers.push(bound);
+            }
+        }
+        if !memory_outputs.is_empty() {
+            self.queue.submit(Some(copies.finish()));
         }
         let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
         let context_buffer = self.buffer("context", &context_bytes, wgpu::BufferUsages::UNIFORM);
@@ -848,7 +877,25 @@ impl Backend for GpuBackend {
             domain
         };
         let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
-        Ok(vec![output])
+        let mut outputs = vec![output];
+        for (index, buffer, extent) in memory_outputs {
+            let port = &module.manifest.inputs[index];
+            let adopted = scope.adopt_resident(
+                port.ty.schema.clone(),
+                extent,
+                Box::new(DeviceImage { buffer }),
+            );
+            match adopted {
+                Ok(handle) => outputs.push(handle),
+                Err(error) => {
+                    for handle in outputs {
+                        let _ = scope.release(handle);
+                    }
+                    return Err(error.into());
+                }
+            }
+        }
+        Ok(outputs)
     }
 
     fn execute_native(

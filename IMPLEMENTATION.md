@@ -138,6 +138,21 @@ capability claim.
   [exposure example](examples/exposure/README.md) meters a frame and
   tone-maps by the result.
 
+- Ordered work may own memory: `memory ram: Rows<Int>;` is a port that
+  is an input and an output at once (last in both lists of the
+  manifest, named in `memories`), which a scan's steps read with `at` as
+  the earlier steps left it and write with `put(ram, address, value)` in
+  step order, an address outside dropped. The CPU works on a copy of the
+  bound Field and hands the copy back as the output; the GPU copies the
+  input's buffer, binds the copy read-write, and adopts it as the output;
+  the bound Field is never written, so a failed evaluation commits
+  nothing, and both backends agree bit for bit
+  ([IR](crates/ir/src/lib.rs), [validator](crates/ir/src/validate.rs),
+  [compiler](crates/compiler/src/lower.rs), [CPU](crates/cpu/src/eval.rs),
+  [WGSL](crates/gpu/src/wgsl.rs), [parity](crates/gpu/tests/parity.rs),
+  [feedback test](crates/graph/tests/composition.rs)). With the integer
+  bit operators, this is what a machine needs: random-access RAM written
+  step by step, persisting across frames through `<~`.
 - Ordered work is the third execution mode, declared by `scan with name =
   init { ... }` in place of `compute`: the entry runs once per element of
   the first input, in order, reading the previous result through the same

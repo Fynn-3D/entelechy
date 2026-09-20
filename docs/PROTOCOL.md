@@ -49,7 +49,8 @@ text frames, so a browser is a client too: see `bridges/web`. Anything
 else opening with HTTP is told, in a 426, what it reached.
 
 `kernels` lists the backend's native operations alongside published
-Kernels, at generation 0; `kernel` (named in the `kernel` field, since a
+Kernels, at generation 0 (a manifest's `memories` names the ports that
+are an input and an output at once); `kernel` (named in the `kernel` field, since a
 request's own `id` is the envelope's) returns their contract where a
 Kernel would show its source, and `publish` under a native id is refused.
 The source `kernel` returns is what `publish` takes, for a node's inline

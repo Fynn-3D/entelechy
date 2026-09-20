@@ -12,7 +12,9 @@ impl fmt::Display for Manifest {
         }
         writeln!(f, "  requires {}", self.requires)?;
         for input in &self.inputs {
-            writeln!(f, "  input {}: {}", input.name, input.ty)?;
+            if !self.memories.contains(&input.name) {
+                writeln!(f, "  input {}: {}", input.name, input.ty)?;
+            }
         }
         for param in &self.params {
             writeln!(
@@ -24,7 +26,16 @@ impl fmt::Display for Manifest {
             )?;
         }
         for output in &self.outputs {
-            writeln!(f, "  output {}: {}", output.name, output.ty)?;
+            if !self.memories.contains(&output.name) {
+                writeln!(f, "  output {}: {}", output.name, output.ty)?;
+            }
+        }
+        for memory in self
+            .inputs
+            .iter()
+            .filter(|p| self.memories.contains(&p.name))
+        {
+            writeln!(f, "  memory {}: {}", memory.name, memory.ty)?;
         }
         Ok(())
     }
@@ -136,6 +147,7 @@ impl fmt::Display for Op {
             Self::AtLinear(input, index) => write!(f, "host at.linear input{input} {index}"),
             Self::Count(input) => write!(f, "host count input{input}"),
             Self::Size(input) => write!(f, "host size input{input}"),
+            Self::Put(input, index, value) => write!(f, "host put input{input} {index} {value}"),
         }
     }
 }

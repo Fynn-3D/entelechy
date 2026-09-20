@@ -1204,3 +1204,65 @@ fn a_domain_may_take_the_window_and_follows_it() {
     assert_eq!(resized.executed, ids(&["source"]));
     assert_eq!(runtime.host().image_size(resized.output).unwrap(), (8, 3));
 }
+
+#[test]
+fn a_memory_fed_back_persists_across_evaluations() {
+    let mut runtime = runtime();
+    runtime
+        .load("kernel test.ticks@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }")
+        .unwrap();
+    runtime
+        .load("kernel test.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }")
+        .unwrap();
+    runtime
+        .load("kernel test.count@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let v = at(ram, 0) + 1; put(ram, 0, v); return v; } }")
+        .unwrap();
+    let graph = Graph::parse(
+        "node ticks: test.ticks@1 { domain = 3; }
+node zero: test.zero@1 { domain = 2; }
+node machine: test.count@1 { ticks <- ticks.result; ram <~ machine.ram from zero.result; }
+output r <- machine.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let first = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let read = |runtime: &Runtime, handle: orla_runtime::Handle, i: u32| {
+        runtime.host().element(handle, i).unwrap()[0]
+    };
+    // Three steps count to three within the frame...
+    assert_eq!(read(&runtime, first.output, 2), 3);
+    // ...and the memory carries the count into the next frame.
+    let second = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(1.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(read(&runtime, second.output, 0), 4);
+    assert_eq!(read(&runtime, second.output, 2), 6);
+    let ram = evaluator.cached(&NodeId("machine".into()), "ram").unwrap();
+    assert_eq!(read(&runtime, ram, 0), 6);
+    assert_eq!(read(&runtime, ram, 1), 0);
+    evaluator.reset_state(&mut runtime);
+    let again = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(2.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(read(&runtime, again.output, 2), 3);
+}
