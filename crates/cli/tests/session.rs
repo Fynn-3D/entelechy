@@ -742,3 +742,65 @@ output result <- blocks.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn inputs_hold_text_as_rows_of_codes_and_follow_the_document() {
+    let dir = scratch("texts");
+    let write = |text: &str| {
+        std::fs::write(
+            dir.join("label.osn"),
+            format!(
+                "input label: Rows<Int> = text \"{text}\";
+node count: kernel {{ requires {{ field.read; field.write; }} input codes: Rows<Int> <- label; output result: Rows<Int>; domain = 2; compute {{ return if element() == 0 {{ count(codes) }} else {{ at(codes, 1) }}; }} }}
+output result <- count.result;
+"
+            ),
+        )
+        .unwrap();
+    };
+    write("Hi");
+    let mut session = Session::open(&dir.join("label.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Text { name, chars: 2 } if name == "label")),
+        "{events:?}"
+    );
+    session.pin(orla_graph::NodeId("count".into()));
+    session.evaluate(&Context::default()).unwrap();
+    let handle = session
+        .cached(&orla_graph::NodeId("count".into()), "result")
+        .unwrap();
+    let host = session.runtime().host();
+    assert_eq!(host.element(handle, 0).unwrap()[0], 2);
+    assert_eq!(host.element(handle, 1).unwrap()[0], 'i' as u32);
+    // The document changes its text: the next sync writes it again and
+    // the rows follow, count included.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write("Hey!");
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Text { chars: 4, .. })),
+        "{events:?}"
+    );
+    session.evaluate(&Context::default()).unwrap();
+    let handle = session
+        .cached(&orla_graph::NodeId("count".into()), "result")
+        .unwrap();
+    let host = session.runtime().host();
+    assert_eq!(host.element(handle, 0).unwrap()[0], 4);
+    assert_eq!(host.element(handle, 1).unwrap()[0], 'e' as u32);
+    // An empty text is refused where it is written.
+    write("");
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::SceneRejected(message) if message.contains("at least one character"))),
+        "{events:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -230,6 +230,7 @@ pub(crate) fn lower(
                 name: name.to_owned(),
                 externals: Vec::new(),
                 assets: Vec::new(),
+                texts: Vec::new(),
                 params: Vec::new(),
                 times_params: Vec::new(),
                 nodes: Vec::new(),
@@ -244,6 +245,7 @@ pub(crate) fn lower(
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
     lowering.out.graph.externals = level.externals;
     lowering.out.graph.assets = level.assets;
+    lowering.out.graph.texts = level.texts;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     Ok(lowering.out)
@@ -253,6 +255,7 @@ pub(crate) fn lower(
 struct Level {
     externals: Vec<String>,
     assets: Vec<(String, PathBuf, String)>,
+    texts: Vec<(String, String)>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -469,6 +472,7 @@ impl Lowering<'_, '_> {
         }
         let mut externals = Vec::new();
         let mut assets = Vec::new();
+        let mut texts = Vec::new();
         for input in &document.inputs {
             // The type is documentation for the reader and the placing
             // graph; what arrives is checked by shape and layout where it
@@ -492,6 +496,21 @@ impl Lowering<'_, '_> {
                     base.join(&file.value),
                     input.ty.value.clone(),
                 ));
+            }
+            if let Some(text) = &input.text {
+                if placement.is_some() {
+                    return Err(error(
+                        text.span,
+                        "a placed graph's input is wired by the placing graph; it cannot hold text",
+                    ));
+                }
+                if text.value.is_empty() {
+                    return Err(error(
+                        text.span,
+                        "an input's text needs at least one character; a Field has no empty extent",
+                    ));
+                }
+                texts.push((input.name.value.clone(), text.value.clone()));
             }
             externals.push(input.name.value.clone());
         }
@@ -846,6 +865,7 @@ impl Lowering<'_, '_> {
         Ok(Level {
             externals,
             assets,
+            texts,
             params,
             outputs,
         })

@@ -678,27 +678,36 @@ impl Parser {
         let binding_range = binding
             .is_some()
             .then(|| binding_start..self.previous_end());
-        let file = if !wired && self.eat_punct("=") {
+        let mut file = None;
+        let mut text = None;
+        if !wired && self.eat_punct("=") {
+            let as_text = self.is_keyword("text");
+            if as_text {
+                self.next();
+            }
             let (token, span) = self.next();
-            let Token::Str(path) = token else {
+            let Token::Str(value) = token else {
                 return Err(ParseError {
                     span,
                     message: format!(
-                        "an input's file is a quoted path, found {}",
+                        "an input's value is a quoted path, or `text` and a quoted string, found {}",
                         token.describe()
                     ),
                 });
             };
-            Some(Spanned { value: path, span })
-        } else {
-            None
-        };
+            if as_text {
+                text = Some(Spanned { value, span });
+            } else {
+                file = Some(Spanned { value, span });
+            }
+        }
         self.expect_punct(";")?;
         Ok(PortDecl {
             name,
             ty,
             binding,
             file,
+            text,
             binding_range,
         })
     }

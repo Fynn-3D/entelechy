@@ -12,8 +12,8 @@ Exercises the bridge, against two serving sessions:
 then open   bridges/web/test.html?text=<port>&voxel=<port>   in a browser,
 or let `node bridges/web/test.mjs` do all of it headless. The page's log
 ends with `RESULT: ok` when every check passed, or names the first that
-failed. It reads the text example's picture and republishes its title, and
-drives the voxel editor with a window and a pointer.
+failed. It reads the text example's picture and republishes its background,
+and drives the voxel editor with a window and a pointer.
 -->
 <pre id="log"></pre>
 <script src="orla.js"></script>
@@ -50,26 +50,29 @@ async function textScene(port) {
   colour(frame, 10, 6, [1.0, 0.85, 0.45], 0.02, "the O's top");
   colour(frame, 12, 12, [0.09, 0.1, 0.13], 0.02, "the O's hollow");
   say("text: picture read");
-  // The title is a Kernel: republish it spelling ARLA and the hollow fills,
-  // since an A's fourth row is solid where an O's is open.
-  const title = await client.call("kernel", { kernel: "scene.title@1" });
-  say("text: title source fetched");
-  assert(title.source.startsWith("kernel scene.title@1 {") && !title.source.includes("domain ="), `title source as publish takes it: ${title.source}`);
-  const spelled = title.source.replace("{ 79 }", "{ 65 }");
+  // The background is the node's inline Kernel: its source comes back as
+  // publish takes it (the id written in, the node's domain left out), so
+  // a recoloured copy publishes over it and the hollow of the O changes.
+  const back = await client.call("kernel", { kernel: "scene.back@1" });
+  say("text: background source fetched");
+  assert(back.source.startsWith("kernel scene.back@1 {") && !back.source.includes("domain ="), `source as publish takes it: ${back.source}`);
+  const recoloured = back.source.replace("vec4(0.09, 0.1, 0.13, 1.0)", "vec4(0.3, 0.1, 0.1, 1.0)");
+  assert(recoloured !== back.source, `the background colour is where expected: ${back.source}`);
   let refused = null;
   try {
-    await client.call("prepare", { source: spelled.replace("element()", "elemen()") });
+    await client.call("prepare", { source: recoloured.replace("vec4(", "vec5(") });
   } catch (error) {
     refused = error;
   }
-  assert(refused && refused.line > 0 && refused.message.includes("elemen"), `a diagnostic names the problem and its line: ${refused}`);
-  say("text: a broken title is refused with a position");
-  const published = await client.call("publish", { source: spelled, expect: "any" });
-  assert(published.id === "scene.title@1", `published ${published.id}`);
+  assert(refused && refused.line > 0 && refused.message.includes("vec5"), `a diagnostic names the problem and its line: ${refused}`);
+  say("text: a broken Kernel is refused with a position");
+  const published = await client.call("publish", { source: recoloured, expect: "any" });
+  assert(published.id === "scene.back@1", `published ${published.id}`);
   await client.call("evaluate", { time: 0.1 });
   const again = decodePpm((await client.call("read", { format: "ppm" })).data);
-  colour(again, 12, 12, [1.0, 0.85, 0.45], 0.02, "the A's bar");
-  say("text: title republished");
+  colour(again, 12, 12, [0.3, 0.1, 0.1], 0.02, "the recoloured hollow");
+  colour(again, 10, 6, [1.0, 0.85, 0.45], 0.02, "the title still");
+  say("text: background republished");
   client.close();
 }
 

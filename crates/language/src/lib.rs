@@ -333,6 +333,9 @@ pub struct PortDecl {
     /// A file the input is read from, only on a document's inputs:
     /// `input atlas: Image = "atlas.ppm";`.
     pub file: Option<Spanned<String>>,
+    /// Text the input holds as its characters' codes, only on a
+    /// document's inputs: `input title: Rows<Int> = text "ORLA";`.
+    pub text: Option<Spanned<String>>,
     /// Byte range of the wiring (`<- source`, `<~ source from initial`)
     /// in the document, so a Kernel's text can be given without it.
     pub binding_range: Option<Range<usize>>,

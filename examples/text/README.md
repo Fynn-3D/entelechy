@@ -6,7 +6,7 @@ shows a title at twice the size, the whole font as a specimen, and the
 pointer's x as digits that follow it.
 
 ```text
-title ─ layout ─┐
+title (text) ─ layout ─┐
 codes ─ layout ─┼─ draw ─ draw ─ draw ─ view
 probe ─ digits ─ layout ─┘        (font.png feeds every draw)
 ```
@@ -29,8 +29,10 @@ probe ─ digits ─ layout ─┘        (font.png feeds every draw)
   through the shared function `ink`, which any Kernel may call with its
   own rows and font. `text.layout@1` spaces a row of codes from an origin,
   optionally wrapping every `wrap` glyphs; `text.digits@1` writes a
-  number as digit codes. A string is written as a row of codes by a
-  Kernel, as `title` does here.
+  number as digit codes. A string is an input of the document, `input
+  title: Rows<Int> = text "ORLA";`, the characters' codes as rows the
+  session writes and rewrites as the document changes; a Kernel may also
+  compute codes, as `codes` does for the specimen.
 
 The replay pins pixels of the title, the specimen, and the readout before
 and after the pointer moves, on both backends.

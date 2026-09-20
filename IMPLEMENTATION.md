@@ -247,7 +247,11 @@ capability claim.
   [png](crates/cli/src/png.rs), [wav](crates/cli/src/wav.rs)), checked
   against reference vectors; `run --save` and the protocol's `read`
   produce them ([session](crates/cli/src/session.rs),
-  [tests](crates/cli/tests/session.rs)).
+  [tests](crates/cli/tests/session.rs)). Text is an input too: `input
+  title: Rows<Int> = text "ORLA";` is the characters' codes as rows the
+  session writes from the document and rewrites when it changes
+  ([document](crates/graph/src/document.rs), [session test](crates/cli/tests/session.rs)),
+  which the [text example](examples/text/README.md) lays out and draws.
 - Text needs no primitive: a label is `Rows<Glyph>` (code, origin,
   scale), a font is a `Grid<Float>` atlas the Host reads from a file, and
   `text.draw@1` paints one over a picture through a shared function any

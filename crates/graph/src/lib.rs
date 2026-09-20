@@ -135,6 +135,9 @@ pub struct Graph {
     /// written, which tells a picture file whether to come in as pixels
     /// or as a `Grid<Float>`; the Host loads and watches them.
     pub assets: Vec<(String, PathBuf, String)>,
+    /// Externals the document writes as text: the name and the text,
+    /// which the session supplies as `Rows<Int>` of the characters' codes.
+    pub texts: Vec<(String, String)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
     /// Parameters that size the graph (a node's `times`): a change to one
@@ -464,7 +467,10 @@ impl fmt::Display for Graph {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "// {}", self.name)?;
         for external in &self.externals {
-            writeln!(f, "input {external}: Image;")?;
+            match self.texts.iter().find(|(name, _)| name == external) {
+                Some((_, text)) => writeln!(f, "input {external}: Rows<Int> = text \"{text}\";")?,
+                None => writeln!(f, "input {external}: Image;")?,
+            }
         }
         for param in &self.params {
             writeln!(

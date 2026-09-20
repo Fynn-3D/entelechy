@@ -31,8 +31,10 @@ session sizes window-shaped scenes by it.
   Kernel's source into the editor, **Prepare** compiles it and reports a
   diagnostic with its line and column, **Publish** publishes it over
   whatever generation runs; the source a session returns is what
-  `publish` takes, a node's inline Kernel included. Load `scene.title@1`
-  from the text example, change a code, publish, and the label changes.
+  `publish` takes, a node's inline Kernel included. Load `scene.back@1`
+  from the text example, change the colour, publish, and the picture
+  changes; the title itself is text in the document (`input title:
+  Rows<Int> = text "ORLA";`), changed through `compose`.
 - **Graph params** set a parameter with `param`; a param that sizes the
   graph resizes the running scene.
 - **Reset state** is the Player's F5.
@@ -47,7 +49,7 @@ not a module, because browsers refuse module imports between file URLs.
 `test.mjs` runs it headless: it serves the text and voxel examples,
 opens the page in a headless Chrome over the DevTools protocol, and
 prints the page's log, which ends with `RESULT: ok`. It reads the text
-example's picture and republishes its title, then drives the voxel
+example's picture and republishes its background, then drives the voxel
 editor with a window and a pointer, places a voxel, and resizes the
 window; then it opens `index.html`, connects it, and loads a Kernel into
 its editor. Node 22 or later and a Chrome, nothing installed:

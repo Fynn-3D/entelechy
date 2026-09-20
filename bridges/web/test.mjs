@@ -151,10 +151,10 @@ try {
       if (/ ms /.test(page)) break;
     }
     const kernels = await run(`document.getElementById("kernels").options.length`);
-    await run(`document.getElementById("kernels").value = "scene.title@1"; document.getElementById("load").click(); true`);
+    await run(`document.getElementById("kernels").value = "scene.back@1"; document.getElementById("load").click(); true`);
     await sleep(500);
     const source = await run(`document.getElementById("source").value`);
-    const loaded = /^kernel scene\.title@1 \{/m.test(source) && !/domain =/.test(source);
+    const loaded = /^kernel scene\.back@1 \{/m.test(source) && !/domain =/.test(source);
     const ok = / ms /.test(page) && kernels > 0 && loaded;
     console.log(`index.html: ${ok ? "connected, framed, and loaded a Kernel" : `status "${page}", ${kernels} kernels, loaded ${loaded}`}`);
     if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: index.html");

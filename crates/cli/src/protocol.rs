@@ -732,6 +732,7 @@ fn events_json(events: &[Event]) -> Vec<Json> {
             Event::Retired { path, id } => json!({ "kind": "retired", "path": path.display().to_string(), "id": id.to_string() }),
             Event::SceneLoaded => json!({ "kind": "scene_loaded" }),
             Event::Loaded { name, path, detail } => json!({ "kind": "loaded", "name": name, "path": path.display().to_string(), "detail": detail }),
+            Event::Text { name, chars } => json!({ "kind": "text", "name": name, "chars": chars }),
             Event::SceneRejected(error) => {
                 let mut json = positioned(error.clone());
                 json["kind"] = json!("scene_rejected");

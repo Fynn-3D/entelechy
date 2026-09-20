@@ -60,6 +60,14 @@ pub enum Event {
     },
     /// The scene document was re-read and its graph rebuilt.
     SceneLoaded,
+    /// An input's text was written into the Host as rows of its
+    /// characters' codes, at first or after it changed.
+    Text {
+        /// The input.
+        name: String,
+        /// How many characters.
+        chars: usize,
+    },
     /// An input's file was read into the Host, at first or after it changed.
     Loaded {
         /// The input.
@@ -89,6 +97,7 @@ impl fmt::Display for Event {
             Self::Loaded { name, path, detail } => {
                 write!(f, "loaded {name} from {}: {detail}", path.display())
             }
+            Self::Text { name, chars } => write!(f, "text {name}: {chars} characters"),
             Self::SceneRejected(error) => write!(f, "scene rejected: {error}"),
         }
     }
@@ -336,6 +345,8 @@ pub struct Session {
     externals: BTreeMap<String, Handle>,
     /// Inputs read from files, with the stamp each was last read at.
     assets: BTreeMap<String, Asset>,
+    /// Inputs written as text, with the text each holds.
+    texts: BTreeMap<String, String>,
     /// Replacements of running Kernels the runtime is still preparing.
     pending: BTreeMap<KernelId, PendingPublish>,
 }
@@ -393,6 +404,7 @@ impl Session {
             pending: BTreeMap::new(),
             externals: BTreeMap::new(),
             assets: BTreeMap::new(),
+            texts: BTreeMap::new(),
         }
     }
 
@@ -695,7 +707,56 @@ impl Session {
             self.sync_root(&mut events);
         }
         self.sync_assets(&mut events);
+        self.sync_texts(&mut events);
         events
+    }
+
+    /// Writes every input's text that is new or changed into the Host as
+    /// `Rows<Int>` of its characters' codes, and forgets texts the scene no
+    /// longer declares.
+    fn sync_texts(&mut self, events: &mut Vec<Event>) {
+        let wanted: Vec<(String, String)> = self
+            .graph
+            .as_ref()
+            .map(|graph| graph.texts.clone())
+            .unwrap_or_default();
+        let stale: Vec<String> = self
+            .texts
+            .keys()
+            .filter(|name| !wanted.iter().any(|(wanted, _)| wanted == *name))
+            .cloned()
+            .collect();
+        for name in stale {
+            self.texts.remove(&name);
+            if let Some(handle) = self.externals.remove(&name) {
+                let _ = self.runtime.host_mut().release(handle);
+            }
+        }
+        for (name, text) in wanted {
+            if self.texts.get(&name) == Some(&text) {
+                continue;
+            }
+            let words: Vec<u32> = text.chars().map(|c| c as u32).collect();
+            let chars = words.len();
+            let data = FieldData::from_words(
+                orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
+                orla_runtime::Domain::Rows(chars as u32),
+                words,
+            );
+            let adopted = data.and_then(|data| self.runtime.host_mut().adopt(data));
+            match adopted {
+                Ok(handle) => {
+                    if let Some(previous) = self.externals.insert(name.clone(), handle) {
+                        let _ = self.runtime.host_mut().release(previous);
+                    }
+                    self.texts.insert(name.clone(), text);
+                    events.push(Event::Text { name, chars });
+                }
+                Err(error) => events.push(Event::SceneRejected(format!(
+                    "input `{name}`'s text: {error}"
+                ))),
+            }
+        }
     }
 
     /// Prepares replacements of running Kernels and fused groups on a

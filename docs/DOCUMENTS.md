@@ -104,7 +104,10 @@ the file changes: a picture as `.png` or `.ppm` (as pixels, or as a
 `Grid<Float>` as `.pgm`, a sound as `.wav` (rows of one or two floats; the
 rate is reported, not stored, and a Kernel resamples with `at_linear`), and
 any Field as `.field`, the Host's own format. `run --save` and the
-protocol's `read` write all of them. A struct, `type`, or `fn` declared at
+protocol's `read` write all of them. `input title: Rows<Int> = text
+"ORLA";` holds text: the session supplies the characters' codes as rows
+and writes them again when the document's text changes, so a label is a
+string in the scene rather than a Kernel of cases. A struct, `type`, or `fn` declared at
 the top of a document is shared by every Kernel in it, and by every Kernel
 of a document that `use`s it; a function calls only what is declared above
 it. A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)
