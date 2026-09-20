@@ -207,6 +207,13 @@ capability claim.
   `wheel()`, and `key(code)` behind `input.read`; only nodes that declare it
   re-execute when input changes ([ABI](crates/abi/src/lib.rs),
   [parity](crates/gpu/tests/parity.rs)).
+- Assets are inputs with files: `input atlas: Image = "atlas.ppm";` names
+  a file the session reads into the Host and re-reads when its stamp
+  changes, so a picture edited on disk changes the running scene; `.ppm`
+  is a grid of pixels, `.pgm` a `Grid<Float>`, `.field` any Field in the
+  Host's own format ([file](crates/host/src/file.rs)), which `run --save`
+  and the protocol's `read` produce ([session](crates/cli/src/session.rs),
+  [tests](crates/cli/tests/session.rs)).
 - Functions are shared like structs: declared at a document's top level
   and inherited through `use`; one with a Field parameter is a template
   the compiler instantiates per bound port, so a grid walk or a staggered

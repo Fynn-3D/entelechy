@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
+pub use orla_host::file;
 pub use orla_host::{
     Domain, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
 };

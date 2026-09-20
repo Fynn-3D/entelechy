@@ -57,6 +57,9 @@ those nodes, what they read, the state (which must advance), and any
 output never produced; the rest keeps its last value. An agent watching
 a state row pays for the state, not the picture.
 
+`read` with `format: "field"` returns any Field as the Host's file format
+(what `run --save` writes and an `input` reads), and `write` with the same
+format takes one back, checked against the port's layout and extent.
 `read` with a `node` returns a Field that is not pixels as its words, and
 `write` with a `node`, a `port`, and `data` (base64 words in the same
 layout) replaces that port's committed state, so the next evaluation's

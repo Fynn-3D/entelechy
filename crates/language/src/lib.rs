@@ -308,6 +308,9 @@ pub struct PortDecl {
     pub ty: Spanned<String>,
     /// Wiring, only on inline Kernel inputs.
     pub binding: Option<BindingDecl>,
+    /// A file the input is read from, only on a document's inputs:
+    /// `input atlas: Image = "atlas.ppm";`.
+    pub file: Option<Spanned<String>>,
 }
 
 /// `param name: Type = default;`

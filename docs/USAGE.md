@@ -20,9 +20,14 @@ cargo run -- check --ir examples/grayscale/kernels/grayscale.orla
 
 Evaluate a `.osn` graph and write the output image as a binary PPM. The
 document names its Kernel sources with `use`; `--library <dir|file>` adds
-more. External images declared with `input <name>: Image;` in the scene are
-bound with `--input <name>=<file.ppm>`; graph parameters are overridden with
-`--param <name>=<literal>`.
+more. External Fields declared with `input <name>: Image;` in the scene are
+bound with `--input <name>=<file.ppm>`, or read from the file the input
+names (`input atlas: Image = "atlas.ppm";`), which the Host watches; graph
+parameters are overridden with `--param <name>=<literal>`. `--save
+<node.port>=<file>` writes any node's output after the evaluation: `.field`
+for any Field, `.ppm` for a grid of pixels, `.pgm` for a `Grid<Float>`; the
+node is pinned so fusion keeps it. A Kernel that draws a sprite sheet and a
+`--save` are how an asset is made.
 
 ```sh
 cargo run -- run examples/grayscale/scene.osn --out output.ppm

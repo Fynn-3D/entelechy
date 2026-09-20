@@ -638,8 +638,28 @@ impl Parser {
         } else {
             None
         };
+        let file = if !wired && self.eat_punct("=") {
+            let (token, span) = self.next();
+            let Token::Str(path) = token else {
+                return Err(ParseError {
+                    span,
+                    message: format!(
+                        "an input's file is a quoted path, found {}",
+                        token.describe()
+                    ),
+                });
+            };
+            Some(Spanned { value: path, span })
+        } else {
+            None
+        };
         self.expect_punct(";")?;
-        Ok(PortDecl { name, ty, binding })
+        Ok(PortDecl {
+            name,
+            ty,
+            binding,
+            file,
+        })
     }
 
     fn param(&mut self) -> Result<ParamDecl, ParseError> {

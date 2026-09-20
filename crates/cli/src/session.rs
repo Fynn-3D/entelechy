@@ -15,7 +15,8 @@ use std::time::SystemTime;
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_language::{Document, Kernel};
 use orla_runtime::{
-    Backend, Context, Expect, Generation, Handle, KernelId, Runtime, Ticket, Value,
+    Backend, Context, Expect, FieldData, Generation, Handle, KernelId, Runtime, Shape, Ticket,
+    Value,
 };
 
 use crate::ppm;
@@ -59,6 +60,13 @@ pub enum Event {
     },
     /// The scene document was re-read and its graph rebuilt.
     SceneLoaded,
+    /// An input's file was read into the Host, at first or after it changed.
+    Loaded {
+        /// The input.
+        name: String,
+        /// The file.
+        path: PathBuf,
+    },
     /// The scene document changed but does not parse; the previous graph stays.
     SceneRejected(String),
 }
@@ -75,6 +83,7 @@ impl fmt::Display for Event {
             Self::Rejected { path, error } => write!(f, "rejected {}:{error}", path.display()),
             Self::Retired { path, id } => write!(f, "retired {id} ({})", path.display()),
             Self::SceneLoaded => f.write_str("scene loaded"),
+            Self::Loaded { name, path } => write!(f, "loaded {name} from {}", path.display()),
             Self::SceneRejected(error) => write!(f, "scene rejected: {error}"),
         }
     }
@@ -108,6 +117,12 @@ impl fmt::Display for SessionError {
 }
 
 impl std::error::Error for SessionError {}
+
+/// A file an input is read from.
+struct Asset {
+    path: PathBuf,
+    stamp: Option<Stamp>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stamp {
@@ -314,6 +329,8 @@ pub struct Session {
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
     externals: BTreeMap<String, Handle>,
+    /// Inputs read from files, with the stamp each was last read at.
+    assets: BTreeMap<String, Asset>,
     /// Replacements of running Kernels the runtime is still preparing.
     pending: BTreeMap<KernelId, PendingPublish>,
 }
@@ -370,6 +387,7 @@ impl Session {
             owners: BTreeMap::new(),
             pending: BTreeMap::new(),
             externals: BTreeMap::new(),
+            assets: BTreeMap::new(),
         }
     }
 
@@ -420,7 +438,126 @@ impl Session {
 
     /// Every document the session currently watches.
     pub fn watched(&self) -> Vec<PathBuf> {
-        self.documents.keys().cloned().collect()
+        self.documents
+            .keys()
+            .cloned()
+            .chain(self.assets.values().map(|asset| asset.path.clone()))
+            .collect()
+    }
+
+    /// Reads a Field file: `.field` as the Host writes it, `.ppm` as a grid
+    /// of pixels, `.pgm` as a `Grid<Float>`.
+    pub fn load_field(path: &Path) -> Result<FieldData, String> {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("field") => orla_runtime::file::decode(&bytes).map_err(|e| e.to_string()),
+            Some("ppm") | Some("pgm") => ppm::decode_field(&bytes).map_err(|e| e.to_string()),
+            _ => Err("unknown Field file format; use .field, .ppm, or .pgm".into()),
+        }
+    }
+
+    /// Reads every input's file that is new or changed since it was last
+    /// read, and forgets inputs the scene no longer declares.
+    fn sync_assets(&mut self, events: &mut Vec<Event>) {
+        let wanted: Vec<(String, PathBuf)> = self
+            .graph
+            .as_ref()
+            .map(|graph| graph.assets.clone())
+            .unwrap_or_default();
+        let stale: Vec<String> = self
+            .assets
+            .keys()
+            .filter(|name| !wanted.iter().any(|(wanted, _)| wanted == *name))
+            .cloned()
+            .collect();
+        for name in stale {
+            self.assets.remove(&name);
+            if let Some(handle) = self.externals.remove(&name) {
+                let _ = self.runtime.host_mut().release(handle);
+            }
+        }
+        for (name, path) in wanted {
+            let current = stamp(&path);
+            if self
+                .assets
+                .get(&name)
+                .is_some_and(|asset| asset.path == path && asset.stamp == current)
+            {
+                continue;
+            }
+            self.assets.insert(
+                name.clone(),
+                Asset {
+                    path: path.clone(),
+                    stamp: current,
+                },
+            );
+            let data = match Self::load_field(&path) {
+                Ok(data) => data,
+                Err(error) => {
+                    events.push(Event::Rejected {
+                        path: path.clone(),
+                        error: format!(" {error}"),
+                    });
+                    continue;
+                }
+            };
+            match self.runtime.host_mut().adopt(data) {
+                Ok(handle) => {
+                    if let Some(previous) = self.externals.insert(name.clone(), handle) {
+                        let _ = self.runtime.host_mut().release(previous);
+                    }
+                    events.push(Event::Loaded { name, path });
+                }
+                Err(error) => events.push(Event::Rejected {
+                    path,
+                    error: format!(" {error}"),
+                }),
+            }
+        }
+    }
+
+    /// Writes a node's output as a file: `.field` for any Field, `.ppm`
+    /// for a grid of pixels, `.pgm` for a `Grid<Float>`. The node must
+    /// have been evaluated and kept materialized (pinned).
+    pub fn save(
+        &mut self,
+        node: &orla_graph::NodeId,
+        port: &str,
+        path: &Path,
+    ) -> Result<(), String> {
+        let handle = self
+            .cached(node, port)
+            .ok_or_else(|| format!("`{node}.{port}` has no value; pin it and evaluate"))?;
+        self.runtime
+            .materialize(handle)
+            .map_err(|e| e.to_string())?;
+        let host = self.runtime.host();
+        let data = host.data(handle).map_err(|e| e.to_string())?;
+        let domain = data.domain();
+        let bytes = match path.extension().and_then(|e| e.to_str()) {
+            Some("field") => orla_runtime::file::encode_data(data),
+            Some("ppm") => {
+                if !data.schema().is_pixel() || domain.shape() != Shape::Grid {
+                    return Err(format!(
+                        "`{node}.{port}` is not a grid of pixels; save it as .field"
+                    ));
+                }
+                let image = self.runtime.image(handle).map_err(|e| e.to_string())?;
+                ppm::encode(&image)
+            }
+            Some("pgm") => {
+                if data.schema().words() != 1 || domain.shape() != Shape::Grid {
+                    return Err(format!(
+                        "`{node}.{port}` is not a Grid<Float>; save it as .field"
+                    ));
+                }
+                let samples: Vec<f32> = data.words().iter().map(|w| f32::from_bits(*w)).collect();
+                ppm::encode_gray(domain.width(), domain.height(), &samples)
+            }
+            _ => return Err("unknown Field file format; use .field, .ppm, or .pgm".into()),
+        };
+        std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Imports a PPM file as the external image `name`.
@@ -448,6 +585,7 @@ impl Session {
             self.root_stamp = None;
             self.sync_root(&mut events);
         }
+        self.sync_assets(&mut events);
         events
     }
 

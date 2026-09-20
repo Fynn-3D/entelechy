@@ -20,6 +20,7 @@ mod evaluate;
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 pub use document::{Declare, DocumentError, InlineKernel, Loader, Lowered, anonymous_id};
 pub use domain::{DomainError, DomainExpr, DomainOp, DomainSpec};
@@ -127,8 +128,11 @@ pub struct Node {
 pub struct Graph {
     /// Graph name.
     pub name: String,
-    /// External image names the caller must supply.
+    /// External Field names the caller must supply.
     pub externals: Vec<String>,
+    /// Externals the document reads from files, by name, resolved
+    /// against the document's directory; the Host loads and watches them.
+    pub assets: Vec<(String, PathBuf)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
     /// Nodes in document order, sub-graphs flattened in place.

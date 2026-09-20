@@ -115,6 +115,10 @@ plus a hit sound the rules trigger, played by the sound card with the
 device pacing the game at sixty blocks a second; six seconds on the GPU
 ran with no underruns and no drops. A gamepad maps to the keyboard's
 codes in the Player (untested on hardware here: none was connected).
+Files are inputs: `input atlas: Image = "atlas.ppm";` reads a file into
+the Host and watches it, `run --save` and the protocol write any Field
+out as `.field`, `.ppm`, or `.pgm`, and the tiles example reads its atlas
+from a file it baked; the Host's third gap is closed.
 Functions cross files like structs: a top-level `fn` is shared through
 `use`, and one with a Field parameter is instantiated per port it is
 called with, so the voxel editor's walk and the fluid's staggered read

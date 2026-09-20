@@ -92,7 +92,12 @@ second (zero without a device), need `time.read`; `pointer()`,
 `pointer_down()`, `button(n)` (0 left, 1 right, 2 middle), `wheel()` (what
 scrolled since the last evaluation, as a `Vec2`), and `key(code)` need
 `input.read`. Reading a port needs
-`field.read`, writing `field.write`. A struct, `type`, or `fn` declared at
+`field.read`, writing `field.write`. A document's `input name: Type;` is a
+Field the caller supplies; `input atlas: Image = "atlas.ppm";` names a file
+the Host reads for it, relative to the document, and reads again whenever
+the file changes: a picture as `.ppm`, a `Grid<Float>` as `.pgm`, and any
+Field as `.field`, the Host's own format, which `run --save` and the
+protocol's `read` write. A struct, `type`, or `fn` declared at
 the top of a document is shared by every Kernel in it, and by every Kernel
 of a document that `use`s it; a function calls only what is declared above
 it. A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)

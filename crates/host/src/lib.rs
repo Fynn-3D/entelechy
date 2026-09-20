@@ -12,6 +12,8 @@
 //! Field whose domain is a grid and whose elements are four floats; the
 //! pixel helpers here are views of that case, not a second store.
 
+pub mod file;
+
 use std::any::Any;
 use std::fmt;
 
@@ -78,6 +80,25 @@ impl Schema {
     /// Whether elements are pixels: four floats.
     pub fn is_pixel(&self) -> bool {
         self.0.len() == 4 && self.0.iter().all(|s| *s == Scalar::Float)
+    }
+}
+
+impl std::str::FromStr for Schema {
+    type Err = String;
+
+    /// Parses the spelling `Display` writes: scalars as `f`, `i`, `b`,
+    /// separated by commas.
+    fn from_str(text: &str) -> Result<Self, String> {
+        let mut scalars = Vec::new();
+        for part in text.split(',') {
+            scalars.push(match part.trim() {
+                "f" => Scalar::Float,
+                "i" => Scalar::Int,
+                "b" => Scalar::Bool,
+                other => return Err(format!("`{other}` is not a scalar (f, i, or b)")),
+            });
+        }
+        Ok(Self(scalars))
     }
 }
 

@@ -170,6 +170,7 @@ pub(crate) fn lower(
             graph: Graph {
                 name: name.to_owned(),
                 externals: Vec::new(),
+                assets: Vec::new(),
                 params: Vec::new(),
                 nodes: Vec::new(),
                 outputs: Vec::new(),
@@ -182,6 +183,7 @@ pub(crate) fn lower(
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
     lowering.out.graph.externals = level.externals;
+    lowering.out.graph.assets = level.assets;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     Ok(lowering.out)
@@ -190,6 +192,7 @@ pub(crate) fn lower(
 /// What one document level exposes to its parent.
 struct Level {
     externals: Vec<String>,
+    assets: Vec<(String, PathBuf)>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -214,6 +217,7 @@ impl Lowering<'_, '_> {
                 .push((base.join(&item.path.value), item.path.value.ends_with('/')));
         }
         let mut externals = Vec::new();
+        let mut assets = Vec::new();
         for input in &document.inputs {
             // The type is documentation for the reader and the placing
             // graph; what arrives is checked by shape and layout where it
@@ -224,6 +228,15 @@ impl Lowering<'_, '_> {
                     input.name.span,
                     "a graph input is supplied by the caller and cannot be wired",
                 ));
+            }
+            if let Some(file) = &input.file {
+                if placement.is_some() {
+                    return Err(error(
+                        file.span,
+                        "a placed graph's input is wired by the placing graph; it cannot name a file",
+                    ));
+                }
+                assets.push((input.name.value.clone(), base.join(&file.value)));
             }
             externals.push(input.name.value.clone());
         }
@@ -574,6 +587,7 @@ impl Lowering<'_, '_> {
         }
         Ok(Level {
             externals,
+            assets,
             params,
             outputs,
         })

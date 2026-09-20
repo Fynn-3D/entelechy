@@ -27,6 +27,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [tiles](tiles/README.md): a tile map as a `Grid<Tile>` behind a `type`
   alias, flooded a step per frame, drawn through an atlas image; two grids
   of different element types in one Kernel.
+  The atlas is a file the Host reads and watches, baked by `run --save`.
 - [volume](volume/README.md): a `Volume<Float>` of cloud density ray-marched
   into an image; the volume never leaves the GPU.
 - [mesh](mesh/README.md): a torus as vertex and triangle rows, subdivided

@@ -575,3 +575,81 @@ output result <- view.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn inputs_read_files_the_host_watches_and_outputs_save_as_files() {
+    let dir = scratch("assets");
+    let orla = env!("CARGO_BIN_EXE_orla");
+    // A 2x1 picture as a file, read by an input and copied by a Kernel.
+    let picture = |left: [u8; 3]| {
+        let mut bytes = b"P6\n2 1\n255\n".to_vec();
+        bytes.extend_from_slice(&left);
+        bytes.extend_from_slice(&[0, 0, 255]);
+        bytes
+    };
+    std::fs::write(dir.join("photo.ppm"), picture([255, 0, 0])).unwrap();
+    std::fs::write(
+        dir.join("assets.osn"),
+        "input photo: Image = \"photo.ppm\";
+node copy: kernel { requires { field.read; field.write; } input source: Image <- photo; output result: Image; compute { return sample(source); } }
+output result <- copy.result;
+",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("assets.osn"), None, 1 << 20);
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Loaded { name, .. } if name == "photo")),
+        "{events:?}"
+    );
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(session.read_pixel(report.output, 0, 0).unwrap()[0], 1.0);
+    // The file changes: the next sync reads it again and the picture follows.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(dir.join("photo.ppm"), picture([0, 255, 0])).unwrap();
+    let events = session.sync();
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Loaded { .. })),
+        "{events:?}"
+    );
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(session.read_pixel(report.output, 0, 0).unwrap()[1], 1.0);
+    // A file that is not a Field is rejected with its path, and the
+    // previous value stays bound.
+    std::fs::write(dir.join("photo.ppm"), b"not a picture").unwrap();
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Rejected { path, .. } if path.ends_with("photo.ppm"))),
+        "{events:?}"
+    );
+    assert!(session.evaluate(&Context::default()).is_ok());
+
+    // The binary saves any node's output as a Field file and a picture.
+    std::fs::write(dir.join("photo.ppm"), picture([255, 0, 0])).unwrap();
+    let output = Command::new(orla)
+        .arg("run")
+        .arg(dir.join("assets.osn"))
+        .arg("--save")
+        .arg(format!("copy.result={}", dir.join("copy.field").display()))
+        .arg("--save")
+        .arg(format!("copy={}", dir.join("copy.ppm").display()))
+        .arg("--out")
+        .arg(dir.join("out.ppm"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("loaded photo from"), "{stderr}");
+    let field = Session::load_field(&dir.join("copy.field")).unwrap();
+    assert_eq!(field.domain(), orla_runtime::Domain::Grid(2, 1));
+    assert_eq!(f32::from_bits(field.words()[0]), 1.0);
+    assert_eq!(
+        std::fs::read(dir.join("copy.ppm")).unwrap(),
+        picture([255, 0, 0])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

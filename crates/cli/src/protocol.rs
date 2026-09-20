@@ -25,8 +25,8 @@
 //! | `retire` | `id` | retired |
 //! | `param` | `name`, `value` | ok |
 //! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
-//! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` | width, height, format, data (base64); words for a Field that is not pixels |
-//! | `write` | `node`, `port`?, `data` (base64 words) | replaces the node's committed state; the port must be read by a `<~` binding |
+//! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
+//! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `reset` | | ok |
 //! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
 //! | `quit` | | bye |
@@ -291,13 +291,43 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 .to_owned();
             let data = text_field("data")?;
             let bytes = unbase64(&data).map_err(failure)?;
-            if bytes.len() % 4 != 0 {
-                return Err(failure("`data` must be whole 32-bit words"));
-            }
-            let words: Vec<u32> = bytes
-                .chunks_exact(4)
-                .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
-                .collect();
+            let words: Vec<u32> = if request.get("format").and_then(Json::as_str) == Some("field") {
+                // A Field file: its layout and extent must be the port's.
+                let data =
+                    orla_runtime::file::decode(&bytes).map_err(|e| failure(e.to_string()))?;
+                let current = session
+                    .cached(&orla_graph::NodeId(node.clone()), &port)
+                    .ok_or_else(|| {
+                        failure(format!("`{node}.{port}` has no value yet; evaluate first"))
+                    })?;
+                let host = session.runtime().host();
+                let (schema, domain) = (
+                    host.schema(current)
+                        .map_err(|e| failure(e.to_string()))?
+                        .clone(),
+                    host.domain(current).map_err(|e| failure(e.to_string()))?,
+                );
+                if data.schema() != &schema || data.domain() != domain {
+                    return Err(failure(format!(
+                        "the file is {} {} {}, but `{node}.{port}` is {} {} {}",
+                        data.domain().shape(),
+                        data.domain().count(),
+                        data.schema(),
+                        domain.shape(),
+                        domain.count(),
+                        schema
+                    )));
+                }
+                data.words().to_vec()
+            } else {
+                if bytes.len() % 4 != 0 {
+                    return Err(failure("`data` must be whole 32-bit words"));
+                }
+                bytes
+                    .chunks_exact(4)
+                    .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+                    .collect()
+            };
             let count = words.len();
             session
                 .write(&orla_graph::NodeId(node.clone()), &port, words)
@@ -350,7 +380,8 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                         .clone(),
                 )
             };
-            if !schema.is_pixel() || domain.shape() == Shape::Volume {
+            let as_file = request.get("format").and_then(Json::as_str) == Some("field");
+            if as_file || !schema.is_pixel() || domain.shape() == Shape::Volume {
                 session
                     .runtime_mut()
                     .materialize(handle)
@@ -360,13 +391,17 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     .host()
                     .data(handle)
                     .map_err(|e| failure(e.to_string()))?;
-                let bytes: Vec<u8> = data.words().iter().flat_map(|w| w.to_le_bytes()).collect();
+                let bytes: Vec<u8> = if as_file {
+                    orla_runtime::file::encode_data(data)
+                } else {
+                    data.words().iter().flat_map(|w| w.to_le_bytes()).collect()
+                };
                 return Ok(json!({
                     "shape": domain.shape().to_string(),
                     "extent": [domain.width(), domain.height(), domain.depth()],
                     "count": domain.count(),
                     "schema": schema.to_string(),
-                    "format": "words",
+                    "format": if as_file { "field" } else { "words" },
                     "data": base64(&bytes),
                 }));
             }
@@ -483,6 +518,7 @@ fn events_json(events: &[Event]) -> Vec<Json> {
             }
             Event::Retired { path, id } => json!({ "kind": "retired", "path": path.display().to_string(), "id": id.to_string() }),
             Event::SceneLoaded => json!({ "kind": "scene_loaded" }),
+            Event::Loaded { name, path } => json!({ "kind": "loaded", "name": name, "path": path.display().to_string() }),
             Event::SceneRejected(error) => {
                 let mut json = positioned(error.clone());
                 json["kind"] = json!("scene_rejected");

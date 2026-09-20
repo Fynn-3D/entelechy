@@ -12,6 +12,7 @@ usage:
   orla check [--ir] <file.orla|file.osn>...
       Parse documents, compile their Kernels, and print manifests or diagnostics.
   orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
+                       [--save <node.port>=<file.field|.ppm|.pgm>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu]
                        [--param <name>=<literal>]... [--no-fusion]
       Evaluate a scene and write its output. With --watch, keep running and
@@ -204,6 +205,7 @@ struct RunOptions {
     scene: PathBuf,
     kernels: Option<PathBuf>,
     inputs: Vec<(String, PathBuf)>,
+    saves: Vec<(String, String, PathBuf)>,
     out: PathBuf,
     watch: bool,
     backend: String,
@@ -216,6 +218,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         scene: PathBuf::new(),
         kernels: None,
         inputs: Vec::new(),
+        saves: Vec::new(),
         out: PathBuf::from("output.ppm"),
         watch: false,
         backend: "cpu".into(),
@@ -252,6 +255,16 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
                     .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
                 options.inputs.push((name.to_owned(), PathBuf::from(path)));
             }
+            "--save" => {
+                let binding = value("--save")?;
+                let (target, path) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
+                let (node, port) = target.split_once('.').unwrap_or((target, "result"));
+                options
+                    .saves
+                    .push((node.to_owned(), port.to_owned(), PathBuf::from(path)));
+            }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => {
                 if scene.replace(PathBuf::from(other)).is_some() {
@@ -277,10 +290,13 @@ fn run(args: &[String]) -> Result<(), String> {
         session.set_param(name, *value);
     }
     session.set_fusion(options.fusion);
+    for (node, _, _) in &options.saves {
+        session.pin(orla_graph::NodeId(node.clone()));
+    }
     let events = session.sync();
     report_events(&events);
     let clock = Instant::now();
-    let mut healthy = evaluate_and_export(&mut session, &options.out, 0.0);
+    let mut healthy = evaluate_and_export(&mut session, &options.out, &options.saves, 0.0);
     let _ = &clock;
     if !options.watch {
         return if healthy {
@@ -310,8 +326,12 @@ fn run(args: &[String]) -> Result<(), String> {
             )
         });
         if changed || !healthy {
-            healthy =
-                evaluate_and_export(&mut session, &options.out, clock.elapsed().as_secs_f32());
+            healthy = evaluate_and_export(
+                &mut session,
+                &options.out,
+                &options.saves,
+                clock.elapsed().as_secs_f32(),
+            );
         }
     }
 }
@@ -490,7 +510,12 @@ fn report_events(events: &[Event]) {
     }
 }
 
-fn evaluate_and_export(session: &mut Session, out: &Path, time: f32) -> bool {
+fn evaluate_and_export(
+    session: &mut Session,
+    out: &Path,
+    saves: &[(String, String, PathBuf)],
+    time: f32,
+) -> bool {
     let started = Instant::now();
     let context = Context {
         time,
@@ -516,6 +541,15 @@ fn evaluate_and_export(session: &mut Session, out: &Path, time: f32) -> bool {
                 )
                 .collect::<Vec<_>>()
                 .join(", ");
+            for (node, port, path) in saves {
+                match session.save(&orla_graph::NodeId(node.clone()), port, path) {
+                    Ok(()) => eprintln!("saved {node}.{port} -> {}", path.display()),
+                    Err(error) => {
+                        eprintln!("error: cannot save {node}.{port}: {error}");
+                        return false;
+                    }
+                }
+            }
             match session.export(report.output, out) {
                 Ok(()) => {
                     eprintln!(

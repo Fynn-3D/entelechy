@@ -217,8 +217,45 @@ output stirred <- stir.result;
             json!({ "id": 10, "op": "publish", "source": "kernel t.pair@1 { requires { field.write; } output result: Rows<Pair>; compute { return Pair { a: twice(1.0), b: 2.0 }; } }" }),
             json!({ "id": 11, "op": "prepare", "source": "struct Own { x: Float; }\nkernel t.own@1 { requires { field.write; } output result: Rows<Own>; compute { return Own { x: 1.0 }; } }" }),
             json!({ "id": 12, "op": "prepare", "source": "kernel t.a@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\nkernel t.b@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }" }),
-            json!({ "id": 13, "op": "quit" }),
+            // A Field file goes out and comes back through the protocol.
+            json!({ "id": 13, "op": "read", "node": "count", "format": "field" }),
+            json!({ "id": 14, "op": "quit" }),
         ],
+    );
+    let file = orla::protocol::unbase64(responses[12]["ok"]["data"].as_str().unwrap()).unwrap();
+    assert!(
+        file.starts_with(b"ORLAFIELD 1\nRows 2 1 1 f\n"),
+        "{:?}",
+        String::from_utf8_lossy(&file[..24])
+    );
+    let again = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "write", "node": "count", "format": "field", "data": orla::protocol::base64(&file) }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 4, "op": "read", "node": "count" }),
+            json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla::protocol::base64(&orla_runtime::file::encode(&"f".parse().unwrap(), orla_runtime::Domain::Rows(3), &[0, 0, 0])) }),
+            json!({ "id": 6, "op": "quit" }),
+        ],
+    );
+    let back: Vec<f32> = orla::protocol::unbase64(again[3]["ok"]["data"].as_str().unwrap())
+        .unwrap()
+        .chunks_exact(4)
+        .map(|w| f32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .collect();
+    assert_eq!(
+        back,
+        vec![43.0, 53.0],
+        "the saved count came back and counted on"
+    );
+    assert!(
+        again[4]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("but `count.result` is"),
+        "{}",
+        again[4]
     );
     let floats = |index: usize| -> Vec<f32> {
         let response = &responses[index];

@@ -1,9 +1,8 @@
-// generate -> flood (fed back) -> render, with a generated atlas
+// generate -> flood (fed back) -> render, with the atlas read from a file
+// the Host watches: edit assets/atlas.ppm and the tiles change.
 use "kernels/";
 
-node atlas: tiles.atlas@1 {
-    domain = vec2(64, 16);
-}
+input atlas: Image = "assets/atlas.ppm";
 
 node map: tiles.generate@1 {
     domain = vec2(20, 15);
@@ -16,7 +15,7 @@ node flood: tiles.flood@1 {
 
 node view: tiles.render@1 {
     map <- flood.result;
-    atlas <- atlas.result;
+    atlas <- atlas;
     domain = size(map) * tile;     // 20x15 tiles at 16 pixels: 320x240
 }
 
