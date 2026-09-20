@@ -960,6 +960,67 @@ fn scatters_match_between_backends() {
             assert!(hits > 100, "{label}: {hits} drops landed");
         }
     }
+    // A hundred thousand drops summed into a small grid: long runs per
+    // cell, folded in source order on both sides, bit for bit.
+    let many = 100_000u32;
+    let many_words: Vec<u32> = (0..many)
+        .flat_map(|i| {
+            let x = ((i as f32 * 0.37).sin() * 3.0 + 3.0).clamp(0.0, 5.9);
+            let y = ((i as f32 * 0.11).cos() * 2.0 + 2.0).clamp(0.0, 3.9);
+            [
+                x.to_bits(),
+                y.to_bits(),
+                (0.001 + (i % 13) as f32 * 0.0007).to_bits(),
+                i % 11,
+            ]
+        })
+        .collect();
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 24);
+    let drops = host
+        .adopt(
+            orla_abi::FieldData::from_words(drop_schema.clone(), Domain::Rows(many), many_words)
+                .unwrap(),
+        )
+        .unwrap();
+    let canvas = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                cell_schema.clone(),
+                Domain::Grid(6, 4),
+                canvas_words.clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![drops, canvas],
+        params: vec![],
+        domain: Domain::Grid(6, 4),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu_out = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let gpu_out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let device = host.resident(gpu_out).unwrap().expect("resident");
+    let bytes = Backend::download(&gpu, device, 24 * 2 * 4).unwrap();
+    let gpu_words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    assert_eq!(
+        cpu_words, gpu_words,
+        "a hundred thousand drops summed in order differ"
+    );
+    let landed: u32 = cpu_words.chunks_exact(2).map(|c| c[1]).sum();
+    assert!(landed > 100_000, "ids summed: {landed}");
+
     // Floats with NaN and both zeros under `min` and `max`, on a Float target.
     let source = "kernel test.low@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Splat { cell: Vec2; value: Float; } scatter into grid with min { let d = sample(drops); return Splat { cell: d.at, value: d.weight }; } }";
     for combine in ["min", "max"] {

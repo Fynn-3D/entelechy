@@ -195,7 +195,8 @@ in element order, so `last` is the greatest element index and a float
 order (every negative below every positive, negative zero below positive
 zero, NaN beyond the infinities), so they, an integer `sum`, and `last`
 do not depend on the order at all, and the GPU applies them in parallel
-with atomics; a float `sum` alone walks the sources in one invocation. An
+with atomics; a float `sum` the GPU sorts by target and source and folds
+per target in source order, the same sequence the CPU adds in. An
 address outside the target is dropped, never clamped; NaN is outside. `sum`, `min`, and `max` need an element of
 numbers (a Bool takes `last`). The output has the target's shape, layout,
 and extent, so a scatter node takes no `domain`, and a scatter is never

@@ -74,15 +74,17 @@ struct Pipeline {
 type Pass = (wgpu::ComputePipeline, wgpu::BindGroupLayout);
 
 /// A scatter's combine as pipelines, by its plan.
-struct Scatter {
-    plan: wgsl::ScatterPlan,
-    /// The sequential walk, or the parallel apply.
-    apply: Pass,
-    /// The gather after a parallel `last`.
-    gather: Option<Pass>,
-    /// The key transform around a parallel `min` or `max` over floats,
-    /// the same pass before and after.
-    keys: Option<Pass>,
+enum Scatter {
+    /// A float sum: sort keys, the sort's step, and the fold.
+    Sorted { keys: Pass, step: Pass, fold: Pass },
+    /// An order-free rule: the parallel apply; the gather after `last`;
+    /// the key transform around `min` and `max` over floats, the same
+    /// pass before and after.
+    Parallel {
+        apply: Pass,
+        gather: Option<Pass>,
+        keys: Option<Pass>,
+    },
 }
 
 impl Prepared for Pipeline {
@@ -354,24 +356,42 @@ impl Backend for GpuBackend {
             None
         };
         let scatter = if matches!(module.manifest.mode, orla_ir::Mode::Scatter { .. }) {
-            let plan = wgsl::scatter_plan(module);
-            let scatter = match plan {
-                wgsl::ScatterPlan::Sequential => Scatter {
-                    plan,
-                    apply: self.pass(
-                        "scatter",
-                        &wgsl::emit_scatter(module),
+            let scatter = match wgsl::scatter_plan(module) {
+                wgsl::ScatterPlan::Sorted => Scatter::Sorted {
+                    keys: self.pass(
+                        "scatter sort keys",
+                        &wgsl::emit_scatter_sort_keys(module),
+                        &[
+                            uniform_entry(wgsl::CONTEXT_BINDING),
+                            storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
+                            storage_entry(wgsl::SCATTER_SORT_KEYS_BINDING, false),
+                            storage_entry(wgsl::SCATTER_SORT_ORDER_BINDING, false),
+                            dynamic_uniform_entry(wgsl::SCATTER_SORT_PARAMS_BINDING),
+                        ],
+                    )?,
+                    step: self.pass(
+                        "scatter sort step",
+                        &wgsl::emit_scatter_sort_step(),
+                        &[
+                            storage_entry(wgsl::SCATTER_SORT_KEYS_BINDING, false),
+                            storage_entry(wgsl::SCATTER_SORT_ORDER_BINDING, false),
+                            dynamic_uniform_entry(wgsl::SCATTER_SORT_PARAMS_BINDING),
+                        ],
+                    )?,
+                    fold: self.pass(
+                        "scatter fold",
+                        &wgsl::emit_scatter_fold(module),
                         &[
                             uniform_entry(wgsl::CONTEXT_BINDING),
                             storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
                             storage_entry(wgsl::SCATTER_OUT_BINDING, false),
+                            storage_entry(wgsl::SCATTER_SORT_KEYS_BINDING, true),
+                            storage_entry(wgsl::SCATTER_SORT_ORDER_BINDING, true),
+                            dynamic_uniform_entry(wgsl::SCATTER_SORT_PARAMS_BINDING),
                         ],
                     )?,
-                    gather: None,
-                    keys: None,
                 },
-                wgsl::ScatterPlan::Parallel { last, keys } => Scatter {
-                    plan,
+                wgsl::ScatterPlan::Parallel { last, keys } => Scatter::Parallel {
                     apply: self.pass(
                         "scatter apply",
                         &wgsl::emit_scatter_parallel(module),
@@ -624,10 +644,11 @@ impl Backend for GpuBackend {
             final_buffer = current;
         }
         // The combine: the target copied on the device, then the pairs
-        // applied by the plan: one invocation walking them in order for a
-        // float sum; for the order-free rules one invocation per pair with
-        // atomics, `min` and `max` over floats between two key passes,
-        // `last` followed by a gather of the winning pairs.
+        // applied by the plan. A float sum sorts the pairs by target and
+        // source (a bitonic sort, one small dispatch per step) and folds
+        // each target's run in source order; the order-free rules apply
+        // one invocation per pair with atomics, `min` and `max` over
+        // floats between two key passes, `last` followed by a gather.
         if let (Some(base), Some(scatter)) = (scattering, pipeline.scatter.as_ref()) {
             let target_count = invocation.domain.count();
             let size = (target_count * output_words * 4) as u64;
@@ -640,69 +661,169 @@ impl Backend for GpuBackend {
                 mapped_at_creation: false,
             });
             encoder.copy_buffer_to_buffer(&input_buffers[base], 0, &target, 0, size);
-            // Winners for `last`, zeroed as every new buffer is; a token
-            // buffer where the pass has none to record.
-            let winners = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("scatter winners"),
-                size: if matches!(scatter.plan, wgsl::ScatterPlan::Parallel { last: true, .. }) {
-                    (target_count as u64 * 4).max(16).div_ceil(16) * 16
-                } else {
-                    16
+            let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
+            let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
+            let storage = |label: &str, words: usize| {
+                self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: (words as u64 * 4).max(16).div_ceil(16) * 16,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                })
+            };
+            let common = [
+                wgpu::BindGroupEntry {
+                    binding: wgsl::CONTEXT_BINDING,
+                    resource: context_buffer.as_entire_binding(),
                 },
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            });
-            let group = |layout: &wgpu::BindGroupLayout, with_winners: bool| {
-                let mut entries = vec![
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::CONTEXT_BINDING,
-                        resource: context_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::SCATTER_PAIRS_BINDING,
-                        resource: final_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::SCATTER_OUT_BINDING,
-                        resource: target.as_entire_binding(),
-                    },
-                ];
-                if with_winners {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: wgsl::SCATTER_WINNER_BINDING,
-                        resource: winners.as_entire_binding(),
-                    });
-                }
+                wgpu::BindGroupEntry {
+                    binding: wgsl::SCATTER_PAIRS_BINDING,
+                    resource: final_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::SCATTER_OUT_BINDING,
+                    resource: target.as_entire_binding(),
+                },
+            ];
+            let bind = |layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindGroupEntry]| {
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("orla scatter"),
                     layout,
-                    entries: &entries,
+                    entries,
                 })
             };
-            let mut dispatch = |pass: &Pass, with_winners: bool, groups: u32| {
-                let bind = group(&pass.1, with_winners);
+            let dispatch = |encoder: &mut wgpu::CommandEncoder,
+                            pass: &Pass,
+                            group: &wgpu::BindGroup,
+                            offsets: &[u32],
+                            groups: u32| {
                 let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("orla scatter"),
                     timestamp_writes: None,
                 });
                 compute.set_pipeline(&pass.0);
-                compute.set_bind_group(0, &bind, &[]);
+                compute.set_bind_group(0, group, offsets);
                 compute.dispatch_workgroups(groups, 1, 1);
             };
-            let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
-            let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
-            match scatter.plan {
-                wgsl::ScatterPlan::Sequential => dispatch(&scatter.apply, false, 1),
-                wgsl::ScatterPlan::Parallel { .. } => {
-                    if let Some(keys) = &scatter.keys {
-                        dispatch(keys, false, over_target);
+            match scatter {
+                Scatter::Sorted { keys, step, fold } => {
+                    let padded = element_count.next_power_of_two().max(1);
+                    let keys_buffer = storage("scatter sort keys", padded);
+                    let order_buffer = storage("scatter sort order", padded);
+                    // One parameter record per dispatch, at the alignment
+                    // dynamic offsets need: the padded count, then k and j.
+                    let mut records: Vec<[u32; 4]> = vec![[padded as u32, 0, 0, 0]];
+                    let mut k = 2;
+                    while k <= padded {
+                        let mut j = k / 2;
+                        while j >= 1 {
+                            records.push([padded as u32, k as u32, j as u32, 0]);
+                            j /= 2;
+                        }
+                        k *= 2;
                     }
-                    dispatch(&scatter.apply, true, over_sources);
-                    if let Some(gather) = &scatter.gather {
-                        dispatch(gather, true, over_target);
+                    let alignment = self
+                        .device
+                        .limits()
+                        .min_uniform_buffer_offset_alignment
+                        .max(16) as usize;
+                    let mut bytes = vec![0u8; records.len() * alignment];
+                    for (index, record) in records.iter().enumerate() {
+                        for (word, value) in record.iter().enumerate() {
+                            let at = index * alignment + word * 4;
+                            bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                        }
                     }
-                    if let Some(keys) = &scatter.keys {
-                        dispatch(keys, false, over_target);
+                    let params =
+                        self.buffer("scatter sort params", &bytes, wgpu::BufferUsages::UNIFORM);
+                    let params_entry = wgpu::BindGroupEntry {
+                        binding: wgsl::SCATTER_SORT_PARAMS_BINDING,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &params,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(16),
+                        }),
+                    };
+                    let sort_entries = |read_only: bool| {
+                        let _ = read_only;
+                        [
+                            wgpu::BindGroupEntry {
+                                binding: wgsl::SCATTER_SORT_KEYS_BINDING,
+                                resource: keys_buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: wgsl::SCATTER_SORT_ORDER_BINDING,
+                                resource: order_buffer.as_entire_binding(),
+                            },
+                            params_entry.clone(),
+                        ]
+                    };
+                    let keys_group = bind(
+                        &keys.1,
+                        &[common[0].clone(), common[1].clone()]
+                            .into_iter()
+                            .chain(sort_entries(false))
+                            .collect::<Vec<_>>(),
+                    );
+                    let step_group = bind(&step.1, &sort_entries(false));
+                    let fold_group = bind(
+                        &fold.1,
+                        &common
+                            .iter()
+                            .cloned()
+                            .chain(sort_entries(true))
+                            .collect::<Vec<_>>(),
+                    );
+                    let over_padded = (padded as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
+                    dispatch(&mut encoder, keys, &keys_group, &[0], over_padded);
+                    // Every step of the sort in one pass: dispatches in a
+                    // pass run in order, each seeing the last one's writes.
+                    {
+                        let mut compute =
+                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("orla scatter sort"),
+                                timestamp_writes: None,
+                            });
+                        compute.set_pipeline(&step.0);
+                        for index in 1..records.len() {
+                            compute.set_bind_group(0, &step_group, &[(index * alignment) as u32]);
+                            compute.dispatch_workgroups(over_padded, 1, 1);
+                        }
+                    }
+                    dispatch(&mut encoder, fold, &fold_group, &[0], over_target);
+                }
+                Scatter::Parallel {
+                    apply,
+                    gather,
+                    keys,
+                } => {
+                    // Winners for `last`, zeroed as every new buffer is; a
+                    // token buffer where the pass has none to record.
+                    let winners = storage(
+                        "scatter winners",
+                        if gather.is_some() { target_count } else { 1 },
+                    );
+                    let with_winners: Vec<wgpu::BindGroupEntry> = common
+                        .iter()
+                        .cloned()
+                        .chain([wgpu::BindGroupEntry {
+                            binding: wgsl::SCATTER_WINNER_BINDING,
+                            resource: winners.as_entire_binding(),
+                        }])
+                        .collect();
+                    if let Some(keys) = keys {
+                        let group = bind(&keys.1, &common);
+                        dispatch(&mut encoder, keys, &group, &[], over_target);
+                    }
+                    let group = bind(&apply.1, &with_winners);
+                    dispatch(&mut encoder, apply, &group, &[], over_sources);
+                    if let Some(gather) = gather {
+                        let group = bind(&gather.1, &with_winners);
+                        dispatch(&mut encoder, gather, &group, &[], over_target);
+                    }
+                    if let Some(keys) = keys {
+                        let group = bind(&keys.1, &common);
+                        dispatch(&mut encoder, keys, &group, &[], over_target);
                     }
                 }
             }
@@ -802,6 +923,20 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+/// A uniform binding read at a dynamic offset, one record per dispatch.
+fn dynamic_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
             min_binding_size: None,
         },
         count: None,

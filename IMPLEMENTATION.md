@@ -164,8 +164,11 @@ capability claim.
   parallel pass, copies the target on the device, and applies them by
   plan: the order-free rules (an integer `sum`, `min` and `max` on one
   total order of floats as keys, `last` as the greatest source index then
-  a gather) one invocation per pair with atomics, a float `sum` in one
-  invocation in order ([WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs));
+  a gather) one invocation per pair with atomics, a float `sum` by a
+  bitonic sort of the pairs by target then source and one invocation per
+  target folding its run in that order, the CPU's sequence exactly
+  ([WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs)
+  with a hundred thousand sources);
   the evaluator sizes a scatter node by its target and never fuses it
   ([evaluator](crates/graph/src/evaluate.rs)). The
   [particles example](examples/particles/README.md) splats its rows onto

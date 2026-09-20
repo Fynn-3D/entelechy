@@ -38,9 +38,13 @@ frames; a headless session's window is the session's (`serve --window`,
 the `window` op) unless an `evaluate` names one, and the Player's is the
 person's;
 scatter's `min` and `max` order floats by their bits' total order on both
-backends so the GPU may use atomics, and only a float `sum` still walks
-the pairs in one invocation (a deterministic parallel float sum needs a
-sort by address, not done); the
+backends so the GPU may use atomics, and a float `sum` is a bitonic sort
+of (target, source) followed by a per-target fold in source order, all
+sort steps in one compute pass (dispatches in a pass see each other's
+writes in order; a pass per step cost ten times more), which is exact
+and, at a hundred thousand sources into 320x240, under 2 ms on the GPU
+against 38 on the CPU, where the walk in one invocation took about 15;
+the
 window is context under `input.read` rather than a capability of its own
 (its size is in physical pixels, its scale factor is what a bar laid out
 in logical pixels divides by), the Player reports a default 960x540 window
@@ -76,17 +80,17 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-A parallel float `sum` for scatter that keeps the element order, so the
-particles example leaves the sequential path: sort the pairs by address
-with the source index as the tie-breaker (a bitonic sort over the pair
-buffer, log-squared passes of one small pipeline, or a radix sort), then
-one invocation per target element folds its run of pairs in that order.
-Acceptance: the parity test's float sum matches the CPU bit for bit as
-it does today, and a scatter of a hundred thousand particles on the GPU
-takes a few milliseconds where the sequential walk takes tens. After
-that, a Godot bridge to make three (`/usr/local/bin/godot` is installed),
-in GDScript, speaking the socket as the Blender one does and tested with
-Godot headless.
+A Godot bridge, to make three and to see what two bridges did not:
+`/usr/local/bin/godot` is installed. In GDScript, outside the workspace
+like the other two, speaking the socket (Godot has `StreamPeerTCP`, so
+the line transport, not the WebSocket) and the Host's file formats: pull
+a node's vertex and triangle rows as an `ArrayMesh`, push a `MeshInstance`
+as `.field` files a scene reads, show the picture as an `ImageTexture`,
+set params, publish a Kernel from a text edit, watch a node. Test it with
+`godot --headless --script bridges/godot/test_bridge.gd` against a
+serving session, the way the Blender test runs. If the user prefers
+another item: the CPU's speed again (SIMD over rows is the next honest
+step there, with no dependency).
 
 ## Open
 

@@ -303,122 +303,6 @@ fn combine_expr(module: &Module, ty: Type, combine: Combine, a: &str, b: &str) -
     }
 }
 
-/// Emits the sequential combine of a scatter module: one invocation walks
-/// the pairs the map pass stored, in element order, and combines each
-/// value into the target at its address; an address outside the target is
-/// dropped. The order is the rule the CPU follows too; only a float sum,
-/// whose rounding is that order, runs this way ([`scatter_plan`]).
-pub fn emit_scatter(module: &Module) -> String {
-    let Mode::Scatter { base, combine } = module.manifest.mode else {
-        return String::new();
-    };
-    let manifest = &module.manifest;
-    let target = &manifest.inputs[base as usize];
-    let element = target.element();
-    let stride = target.ty.schema.words();
-    let pair = result_type(&module.entry);
-    let pair_stride = type_words(module, pair);
-    let context_len = CONTEXT_HEAD + manifest.inputs.len();
-    let slot = CONTEXT_HEAD + base as usize;
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;"
-    );
-    let _ = writeln!(
-        out,
-        "@group(0) @binding({SCATTER_PAIRS_BINDING}) var<storage, read> pairs: array<u32>;"
-    );
-    let _ = writeln!(
-        out,
-        "@group(0) @binding({SCATTER_OUT_BINDING}) var<storage, read_write> out0: array<u32>;"
-    );
-    for (index, def) in module.structs.iter().enumerate() {
-        let fields = def
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
-    }
-    let (expr, _) = load_expr(module, pair, "pairs", "b", 0);
-    let _ = writeln!(
-        out,
-        "fn load_pair(index: u32) -> {} {{
-    let b = index * {pair_stride}u;
-    return {expr};
-}}",
-        wgsl_type(pair)
-    );
-    let (expr, _) = load_expr(module, element, "out0", "b", 0);
-    let _ = writeln!(
-        out,
-        "fn load_out0(index: u32) -> {} {{
-    let b = index * {stride}u;
-    return {expr};
-}}",
-        wgsl_type(element)
-    );
-    let mut stores = Vec::new();
-    store_lines(module, element, "v", 0, &mut stores);
-    let _ = writeln!(
-        out,
-        "fn store_out0(index: u32, v: {}) {{
-    let b = index * {stride}u;
-{}
-}}",
-        wgsl_type(element),
-        stores.join("\n")
-    );
-    let _ = writeln!(
-        out,
-        "fn combine(a: {ty}, b: {ty}) -> {ty} {{ return {}; }}",
-        combine_expr(module, element, combine, "a", "b"),
-        ty = wgsl_type(element)
-    );
-    // The address of a pair is its first field; an axis is floored and
-    // must land inside the target, NaN never does.
-    let address = match target.shape() {
-        Shape::Rows => format!(
-            "let i = p.f0;
-        if (i < 0i || i >= i32(ctx[{slot}].x)) {{ continue; }}
-        let at = u32(i);"
-        ),
-        Shape::Grid => format!(
-            "let x = floor(p.f0.x);
-        let y = floor(p.f0.y);
-        if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y)) {{ continue; }}
-        let at = u32(y) * u32(ctx[{slot}].x) + u32(x);"
-        ),
-        Shape::Volume => format!(
-            "let x = floor(p.f0.x);
-        let y = floor(p.f0.y);
-        let z = floor(p.f0.z);
-        if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y && z >= 0.0 && z < ctx[{slot}].z)) {{ continue; }}
-        let at = (u32(z) * u32(ctx[{slot}].y) + u32(y)) * u32(ctx[{slot}].x) + u32(x);"
-        ),
-    };
-    let _ = writeln!(
-        out,
-        "
-@compute @workgroup_size(1, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    if (gid.x != 0u) {{
-        return;
-    }}
-    let n = u32(ctx[0].x) * u32(ctx[0].y) * u32(ctx[1].z);
-    for (var i: u32 = 0u; i < n; i = i + 1u) {{
-        let p = load_pair(i);
-        {address}
-        store_out0(at, combine(load_out0(at), p.f1));
-    }}
-}}"
-    );
-    out
-}
-
 /// Binding index of the scatter pass's winners, for `last`: one word per
 /// target element, the greatest source index plus one, zero for none.
 pub const SCATTER_WINNER_BINDING: u32 = 3;
@@ -427,11 +311,13 @@ pub const SCATTER_WORKGROUP: u32 = 64;
 
 /// How a scatter's combine runs on the GPU: order-free rules apply the
 /// pairs in parallel with atomics; a float sum, whose rounding is the
-/// element order, applies them one after another.
+/// element order, sorts the pairs by target and source and folds each
+/// target's run in that order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScatterPlan {
-    /// One invocation walks the pairs in element order.
-    Sequential,
+    /// The pairs sorted by address then source index, then one invocation
+    /// per target element folding its run in element order.
+    Sorted,
     /// One invocation per pair, atomics on the target; `last` records the
     /// winning source and gathers afterwards; `keys` says float words are
     /// turned into ordered keys around the pass.
@@ -446,12 +332,12 @@ pub enum ScatterPlan {
 /// The plan for a scatter module.
 pub fn scatter_plan(module: &Module) -> ScatterPlan {
     let Mode::Scatter { base, combine } = module.manifest.mode else {
-        return ScatterPlan::Sequential;
+        return ScatterPlan::Sorted;
     };
     let scalars = module.manifest.inputs[base as usize].ty.schema.scalars();
     let floats = scalars.iter().any(|s| matches!(s, orla_abi::Scalar::Float));
     match combine {
-        Combine::Sum if floats => ScatterPlan::Sequential,
+        Combine::Sum if floats => ScatterPlan::Sorted,
         Combine::Sum => ScatterPlan::Parallel {
             last: false,
             keys: false,
@@ -487,9 +373,11 @@ fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Typ
     }
 }
 
-/// The header the scatter passes share: the context, the pairs, and the
-/// target, the last as atomics when `atomic`; the winners when `winners`.
-fn scatter_header(module: &Module, atomic: bool, winners: Option<bool>) -> String {
+/// The header the scatter passes share: the context and the pairs, the
+/// target when `target` says so (as atomics when `Some(true)`), and any
+/// further bindings in `extra`; then the structs, the float key, and the
+/// pair loader.
+fn scatter_header(module: &Module, target: Option<bool>, extra: &str) -> String {
     let manifest = &module.manifest;
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
     let mut out = String::new();
@@ -501,26 +389,18 @@ fn scatter_header(module: &Module, atomic: bool, winners: Option<bool>) -> Strin
         out,
         "@group(0) @binding({SCATTER_PAIRS_BINDING}) var<storage, read> pairs: array<u32>;"
     );
-    let target = if atomic {
-        "array<atomic<i32>>"
-    } else {
-        "array<u32>"
-    };
-    let _ = writeln!(
-        out,
-        "@group(0) @binding({SCATTER_OUT_BINDING}) var<storage, read_write> out0: {target};"
-    );
-    if let Some(read_only) = winners {
-        let (access, ty) = if read_only {
-            ("read", "array<u32>")
+    if let Some(atomic) = target {
+        let ty = if atomic {
+            "array<atomic<i32>>"
         } else {
-            ("read_write", "array<atomic<u32>>")
+            "array<u32>"
         };
         let _ = writeln!(
             out,
-            "@group(0) @binding({SCATTER_WINNER_BINDING}) var<storage, {access}> winner: {ty};"
+            "@group(0) @binding({SCATTER_OUT_BINDING}) var<storage, read_write> out0: {ty};"
         );
     }
+    out.push_str(extra);
     for (index, def) in module.structs.iter().enumerate() {
         let fields = def
             .fields
@@ -549,6 +429,37 @@ fn scatter_header(module: &Module, atomic: bool, winners: Option<bool>) -> Strin
         wgsl_type(pair)
     );
     out
+}
+
+/// The winners of `last`, one word per target element.
+fn winners_binding(read_only: bool) -> String {
+    let (access, ty) = if read_only {
+        ("read", "array<u32>")
+    } else {
+        ("read_write", "array<atomic<u32>>")
+    };
+    format!("@group(0) @binding({SCATTER_WINNER_BINDING}) var<storage, {access}> winner: {ty};\n")
+}
+
+/// Binding index of the sort's keys: one target index per source, the
+/// greatest value for a source that lands outside or pads the sort.
+pub const SCATTER_SORT_KEYS_BINDING: u32 = 3;
+/// Binding index of the sort's order: the source index each key came from.
+pub const SCATTER_SORT_ORDER_BINDING: u32 = 4;
+/// Binding index of the sort's parameters, a `vec4<u32>` of the padded
+/// count and the step's `k` and `j`, one record per dispatch at a dynamic
+/// offset.
+pub const SCATTER_SORT_PARAMS_BINDING: u32 = 5;
+
+/// The sort's bindings.
+fn sort_bindings(read_only: bool) -> String {
+    let access = if read_only { "read" } else { "read_write" };
+    format!(
+        "@group(0) @binding({SCATTER_SORT_KEYS_BINDING}) var<storage, {access}> keys: array<u32>;
+@group(0) @binding({SCATTER_SORT_ORDER_BINDING}) var<storage, {access}> order: array<u32>;
+@group(0) @binding({SCATTER_SORT_PARAMS_BINDING}) var<uniform> sort: vec4<u32>;
+"
+    )
 }
 
 /// The lines that turn a pair's address into `at`, leaving the invocation
@@ -592,7 +503,7 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
     let target = &module.manifest.inputs[base as usize];
     let element = target.element();
     let stride = target.ty.schema.words();
-    let mut out = scatter_header(module, true, Some(false));
+    let mut out = scatter_header(module, Some(true), &winners_binding(false));
     let mut words = Vec::new();
     value_words(module, element, "p.f1", &mut words);
     let mut lines = Vec::new();
@@ -651,7 +562,7 @@ pub fn emit_scatter_gather(module: &Module) -> String {
     let target = &module.manifest.inputs[base as usize];
     let stride = target.ty.schema.words();
     let slot = CONTEXT_HEAD + base as usize;
-    let mut out = scatter_header(module, false, Some(true));
+    let mut out = scatter_header(module, Some(false), &winners_binding(true));
     let mut words = Vec::new();
     value_words(module, target.element(), "p.f1", &mut words);
     let stores = words
@@ -691,7 +602,7 @@ pub fn emit_scatter_keys(module: &Module, encode: bool) -> String {
     let target = &module.manifest.inputs[base as usize];
     let stride = target.ty.schema.words();
     let slot = CONTEXT_HEAD + base as usize;
-    let mut out = scatter_header(module, false, None);
+    let mut out = scatter_header(module, Some(false), "");
     // The key transform is an involution, so one function serves both ways.
     let _ = encode;
     let lines = target
@@ -718,6 +629,141 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }}
     let b = e * {stride}u;
 {lines}
+}}"
+    );
+    out
+}
+
+/// Emits the sort's first pass: one invocation per slot of the padded
+/// sort, writing a source's target index as its key and its index as its
+/// order, the greatest key for a source outside the target or a pad.
+pub fn emit_scatter_sort_keys(module: &Module) -> String {
+    let mut out = scatter_header(module, None, &sort_bindings(false));
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let i = gid.x;
+    if (i >= sort.x) {{
+        return;
+    }}
+    let n = u32(ctx[0].x) * u32(ctx[0].y) * u32(ctx[1].z);
+    order[i] = i;
+    if (i >= n) {{
+        keys[i] = 0xffffffffu;
+        return;
+    }}
+    let p = load_pair(i);
+    {}
+    keys[i] = at;
+}}",
+        scatter_address(module, "keys[i] = 0xffffffffu; return;")
+    );
+    out
+}
+
+/// Emits one step of the bitonic sort over (key, order): the same shader
+/// for every `k` and `j`, which the parameters carry.
+pub fn emit_scatter_sort_step() -> String {
+    format!(
+        "{}
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let i = gid.x;
+    let partner = i ^ sort.z;
+    if (i >= sort.x || partner <= i) {{
+        return;
+    }}
+    let ascending = (i & sort.y) == 0u;
+    let ka = keys[i];
+    let kb = keys[partner];
+    let oa = order[i];
+    let ob = order[partner];
+    let a_greater = ka > kb || (ka == kb && oa > ob);
+    if (ascending == a_greater) {{
+        keys[i] = kb;
+        keys[partner] = ka;
+        order[i] = ob;
+        order[partner] = oa;
+    }}
+}}",
+        sort_bindings(false)
+    )
+}
+
+/// Emits the fold: one invocation per target element finds its run in the
+/// sorted keys and adds the pairs' values to the element in source order,
+/// exactly as the CPU walks them.
+pub fn emit_scatter_fold(module: &Module) -> String {
+    let Mode::Scatter { base, combine } = module.manifest.mode else {
+        return String::new();
+    };
+    let target = &module.manifest.inputs[base as usize];
+    let element = target.element();
+    let stride = target.ty.schema.words();
+    let slot = CONTEXT_HEAD + base as usize;
+    let mut out = scatter_header(module, Some(false), &sort_bindings(true));
+    let (expr, _) = load_expr(module, element, "out0", "b", 0);
+    let _ = writeln!(
+        out,
+        "fn load_out0(index: u32) -> {} {{
+    let b = index * {stride}u;
+    return {expr};
+}}",
+        wgsl_type(element)
+    );
+    let mut stores = Vec::new();
+    store_lines(module, element, "v", 0, &mut stores);
+    let _ = writeln!(
+        out,
+        "fn store_out0(index: u32, v: {}) {{
+    let b = index * {stride}u;
+{}
+}}",
+        wgsl_type(element),
+        stores.join("\n")
+    );
+    let _ = writeln!(
+        out,
+        "fn combine(a: {ty}, b: {ty}) -> {ty} {{ return {}; }}",
+        combine_expr(module, element, combine, "a", "b"),
+        ty = wgsl_type(element)
+    );
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
+    let e = gid.x;
+    if (e >= count) {{
+        return;
+    }}
+    let n = sort.x;
+    var lo = 0u;
+    var hi = n;
+    while (lo < hi) {{
+        let mid = (lo + hi) / 2u;
+        if (keys[mid] < e) {{
+            lo = mid + 1u;
+        }} else {{
+            hi = mid;
+        }}
+    }}
+    if (lo >= n || keys[lo] != e) {{
+        return;
+    }}
+    var acc = load_out0(e);
+    var pos = lo;
+    loop {{
+        if (pos >= n || keys[pos] != e) {{
+            break;
+        }}
+        acc = combine(acc, load_pair(order[pos]).f1);
+        pos = pos + 1u;
+    }}
+    store_out0(e, acc);
 }}"
     );
     out
