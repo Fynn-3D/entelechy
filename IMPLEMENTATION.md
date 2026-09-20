@@ -250,7 +250,13 @@ capability claim.
 - Vector math and the clock: `Vec3`, `dot`, `cross`, `normalize`, `pow`,
   `step`, `smoothstep`, `reflect`, and `time()` are typed in
   [the IR](crates/ir/src/lib.rs) and exercised by
-  [execution tests](crates/cpu/tests/execute.rs). `time()` needs `time.read`;
+  [execution tests](crates/cpu/tests/execute.rs). The componentwise
+  builtins (`floor`, `ceil`, `round`, `sign`, `fract`, `abs`, `sqrt`,
+  `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`) take a
+  `Float` or any vector; `min`, `max`, `clamp`, `mix`, `pow`, `step`, and
+  `smoothstep` broadcast a `Float` beside a vector; both backends agree
+  ([parity](crates/gpu/tests/parity.rs)). `orla check` compiles the
+  Kernels of every document a scene uses, not only the scene's own. `time()` needs `time.read`;
   only nodes that declare it re-execute when time advances
   ([clock caching test](crates/graph/tests/composition.rs)).
 - The CPU backend computes rows in parallel and writes sequentially; results

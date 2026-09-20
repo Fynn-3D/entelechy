@@ -856,6 +856,15 @@ impl Emitter<'_> {
                 format!("safe_normalize_{}({list})", ty.components().unwrap_or(0))
             }
             Intrinsic::Pow => format!("pow({}, {})", v(&args[0]), splat(&args[1], ty)),
+            // WGSL wants every operand the result's type; a Float broadcasts.
+            Intrinsic::Min | Intrinsic::Max | Intrinsic::Clamp | Intrinsic::Mix => format!(
+                "{}({})",
+                intrinsic.name(),
+                args.iter()
+                    .map(|arg| splat(arg, ty))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Intrinsic::Step => format!("step({}, {})", splat(&args[0], ty), v(&args[1])),
             Intrinsic::Smoothstep => format!(
                 "smoothstep({}, {}, {})",

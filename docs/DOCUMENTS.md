@@ -63,6 +63,14 @@ componentwise on vectors) with `Int` and `Float` kept apart except that
 expressions; `Name { a: .., b: .. }` builds a struct and
 `Name { ..base, a: .. }` copies one with some fields replaced.
 
+The math builtins are `floor`, `ceil`, `round`, `sign`, `fract`, `abs`,
+`sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`,
+`pow`, `min`, `max`, `clamp`, `mix`, `step`, `smoothstep`, `dot`, `cross`,
+`length`, `normalize`, `reflect`, and the conversions `float` and `int`.
+The componentwise ones take a `Float` or any vector; where two operands
+meet, a `Float` beside a vector broadcasts, so `clamp(v, 0.0, 1.0)` and
+`mix(a, b, 0.5)` read as they would anywhere.
+
 A `.orla` file may `use` other `.orla` files or directories for their
 declarations: the structs and `type` aliases they declare at the top,
 and what those files use in turn, come before the file's own, so a

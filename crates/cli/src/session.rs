@@ -142,6 +142,41 @@ fn expand_use(path: &Path, trailing_slash: bool) -> Vec<PathBuf> {
     }
 }
 
+/// Every document a `use` list reaches, recursively, each once, in the
+/// order reached: what a check compiles beyond the file it was given.
+pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<PathBuf>, String> {
+    fn gather(
+        base: &Path,
+        uses: &[orla_language::Use],
+        visited: &mut std::collections::BTreeSet<PathBuf>,
+        out: &mut Vec<PathBuf>,
+    ) -> Result<(), String> {
+        for item in uses {
+            let path = base.join(&item.path.value);
+            for file in expand_use(&path, item.path.value.ends_with('/')) {
+                let key = file.canonicalize().unwrap_or_else(|_| file.clone());
+                if !visited.insert(key) {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&file)
+                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                let document = orla_language::parse_document(&text)
+                    .map_err(|e| format!("{}:{e}", file.display()))?;
+                let dir = file
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf();
+                gather(&dir, &document.uses, visited, out)?;
+                out.push(file);
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    gather(base, uses, &mut std::collections::BTreeSet::new(), &mut out)?;
+    Ok(out)
+}
+
 /// The structs and type aliases a document's `use` items bring in, from
 /// the used files and directories and, recursively, what they use. The
 /// same declaration reached twice is one; two different declarations of

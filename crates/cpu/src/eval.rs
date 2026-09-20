@@ -1024,13 +1024,30 @@ fn dot(a: Value, b: Value) -> f32 {
 fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
     match (intrinsic, args) {
         (Intrinsic::Floor, [a]) => map1(*a, f32::floor),
+        (Intrinsic::Ceil, [a]) => map1(*a, f32::ceil),
+        (Intrinsic::Round, [a]) => map1(*a, f32::round_ties_even),
+        (Intrinsic::Sign, [Value::Int(a)]) => Value::Int(a.signum()),
+        (Intrinsic::Sign, [a]) => map1(*a, |v| {
+            if v > 0.0 {
+                1.0
+            } else if v < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }),
         (Intrinsic::Fract, [a]) => map1(*a, |v| v - v.floor()),
         (Intrinsic::Abs, [Value::Int(a)]) => Value::Int(a.wrapping_abs()),
         (Intrinsic::Abs, [a]) => map1(*a, f32::abs),
         (Intrinsic::Sqrt, [a]) => map1(*a, f32::sqrt),
         (Intrinsic::Sin, [a]) => map1(*a, f32::sin),
         (Intrinsic::Cos, [a]) => map1(*a, f32::cos),
+        (Intrinsic::Tan, [a]) => map1(*a, f32::tan),
+        (Intrinsic::Asin, [a]) => map1(*a, f32::asin),
+        (Intrinsic::Acos, [a]) => map1(*a, f32::acos),
+        (Intrinsic::Atan, [a]) => map1(*a, f32::atan),
         (Intrinsic::Exp, [a]) => map1(*a, f32::exp),
+        (Intrinsic::Log, [a]) => map1(*a, f32::ln),
         (Intrinsic::Min, [Value::Int(a), Value::Int(b)]) => Value::Int((*a).min(*b)),
         (Intrinsic::Max, [Value::Int(a), Value::Int(b)]) => Value::Int((*a).max(*b)),
         (Intrinsic::Min, [a, b]) => map2(*a, *b, f32::min),
@@ -1042,7 +1059,10 @@ fn intrinsic_value(intrinsic: Intrinsic, args: &[Value]) -> Value {
             let low = map2(*v, *low, f32::max);
             map2(low, *high, f32::min)
         }
-        (Intrinsic::Mix, [a, b, Value::Float(t)]) => map2(*a, *b, |a, b| a + (b - a) * t),
+        (Intrinsic::Mix, [a, b, t]) => {
+            let span = map2(*b, *a, |b, a| b - a);
+            map2(*a, map2(span, *t, |d, t| d * t), |a, d| a + d)
+        }
         (Intrinsic::ToFloat, [Value::Int(v)]) => Value::Float(*v as f32),
         (Intrinsic::ToFloat, [Value::Bool(v)]) => Value::Float(*v as u8 as f32),
         (Intrinsic::ToInt, [Value::Float(v)]) => Value::Int(*v as i32),

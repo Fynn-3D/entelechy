@@ -118,6 +118,62 @@ fn check(args: &[String]) -> Result<(), String> {
                 }
             }
         }
+        // The documents it uses, with their own declarations: a scene is
+        // not checked until its libraries are.
+        match orla::session::used_documents(base, &document.uses) {
+            Ok(used) => {
+                let mut compiled = 0;
+                for path in &used {
+                    let text = match std::fs::read_to_string(path) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            failures += 1;
+                            println!("{}: {error}", path.display());
+                            continue;
+                        }
+                    };
+                    let Ok(mut used_document) = orla_language::parse_document(&text) else {
+                        continue; // reported by `used_documents`
+                    };
+                    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+                    match orla::session::declarations_for(dir, &used_document.uses) {
+                        Ok((structs, types)) => used_document.inherit(&structs, &types),
+                        Err(error) => {
+                            failures += 1;
+                            println!("{}: {error}", path.display());
+                        }
+                    }
+                    for kernel in &used_document.kernels {
+                        match orla_compiler::compile_kernel(kernel, None) {
+                            Ok(module) => {
+                                compiled += 1;
+                                if show_ir {
+                                    println!(
+                                        "{}: {}\n{module}",
+                                        path.display(),
+                                        module.manifest.id
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                failures += 1;
+                                println!("{}:{error}", path.display());
+                            }
+                        }
+                    }
+                }
+                if !used.is_empty() {
+                    println!(
+                        "{file}: {compiled} kernel(s) compiled from {} used document(s)",
+                        used.len()
+                    );
+                }
+            }
+            Err(error) => {
+                failures += 1;
+                println!("{file}: {error}");
+            }
+        }
         if !document.nodes.is_empty() {
             match lowered.graph.order() {
                 Ok(order) => println!(

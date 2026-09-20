@@ -157,6 +157,38 @@ fn pointwise_kernels_match_exactly_enough() {
 }
 
 #[test]
+fn math_builtins_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    let gradient: Vec<[f32; 4]> = (0..64 * 32)
+        .map(|i| {
+            [
+                (i % 64) as f32 / 63.0 * 4.0 - 2.0,
+                (i / 64) as f32 / 31.0 * 2.0 - 1.0,
+                0.5,
+                1.0,
+            ]
+        })
+        .collect();
+    let source = "kernel test.math@1 { requires { field.read; field.write; } input source: Image; output result: Image;
+        compute {
+            let c = sample(source);
+            let v = vec3(c.r, c.g, c.b);
+            let a = clamp(v, -0.5, 0.5) + min(v, 0.25) + max(v, -0.25) + mix(v, v * 2.0, vec3(0.25, 0.5, 0.75)) + pow(abs(v) + 0.1, 0.5);
+            let b = ceil(v) + round(v * 3.0) + sign(v) + log(abs(v) + 1.0) + tan(v * 0.5) + asin(clamp(v, -1.0, 1.0)) + acos(clamp(v, -1.0, 1.0)) + atan(v);
+            return vec4(a.x + b.x, a.y + b.y, a.z + b.z, float(sign(int(c.r * 3.0))));
+        } }";
+    let (cpu, gpu_pixels) = both(
+        &gpu,
+        source,
+        &[gradient],
+        (64, 32),
+        vec![],
+        Domain::Grid(64, 32),
+    );
+    assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-4), 0.0);
+}
+
+#[test]
 fn loops_and_branches_match() {
     let Some(gpu) = gpu() else { return };
     let source = "kernel test.flow@1 { requires { field.write; } param steps: Int = 5; output result: Image;

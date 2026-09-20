@@ -426,7 +426,7 @@ kernel voxel.draw@1 {
         let glyph = if in_item { icon(slot, u, s.tool, s.colour) } else { vec3(0.0, 0.0, 0.0) };
         let plate = if active { vec3(0.36, 0.38, 0.46) } else if hovered { vec3(0.2, 0.21, 0.25) } else { vec3(0.11, 0.115, 0.14) };
         let colour = if in_bar { mix(with_compass, plate, 0.85) + glyph } else { with_compass };
-        let g = 1.0 / 1.8;
-        return vec4(pow(clamp(colour.x, 0.0, 1.0), g), pow(clamp(colour.y, 0.0, 1.0), g), pow(clamp(colour.z, 0.0, 1.0), g), 1.0);
+        let out = pow(clamp(colour, 0.0, 1.0), 1.0 / 1.8);
+        return vec4(out.x, out.y, out.z, 1.0);
     }
 }

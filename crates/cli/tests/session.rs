@@ -272,6 +272,15 @@ fn the_binary_checks_and_runs() {
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("bad.orla:1:"), "{stdout}");
+    // A scene is checked through its libraries: the bad Kernel fails it.
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(dir.join("scene.osn"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("bad.orla:1:"), "{stdout}");
     std::fs::remove_file(dir.join("kernels/bad.orla")).unwrap();
 
     let out = dir.join("result.ppm");

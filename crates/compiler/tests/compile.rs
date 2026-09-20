@@ -325,6 +325,25 @@ fn rate_is_context_under_time_read() {
 }
 
 #[test]
+fn math_builtins_take_vectors_and_broadcast_floats() {
+    let module = compile(
+        "kernel test.math@1 { requires { field.write; } output result: Rows<Vec3>; compute {
+            let v = vec3(-1.5, 0.25, 2.0);
+            let a = clamp(v, 0.0, 1.0) + min(v, 0.5) + max(v, 0.5) + mix(v, v * 2.0, v) + pow(v, 2.0);
+            let b = ceil(v) + round(v) + sign(v) + log(abs(v)) + tan(v) + asin(clamp(v, -1.0, 1.0)) + acos(clamp(v, -1.0, 1.0)) + atan(v);
+            let n = sign(-3) + abs(-2);
+            return a + b + vec3(float(n), 0.0, 0.0);
+        } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert!(module.to_string().contains("round"), "{module}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Vec3>; compute { return clamp(vec3(1.0, 1.0, 1.0), vec2(0.0, 0.0), 1.0); } }",
+    );
+    assert!(message.contains("cannot be applied"), "{message}");
+}
+
+#[test]
 fn buttons_and_the_wheel_are_context_under_input_read() {
     let module = compile(
         "kernel test.stir@1 { requires { field.write; input.read; } output result: Rows<Float>; compute { return if button(1) { wheel().y } else { 0.0 }; } }",

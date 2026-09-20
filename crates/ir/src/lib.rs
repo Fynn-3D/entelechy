@@ -336,6 +336,22 @@ impl UnaryOp {
 pub enum Intrinsic {
     /// Largest integer value not greater than the input, componentwise.
     Floor,
+    /// Smallest integer value not less than the input, componentwise.
+    Ceil,
+    /// Nearest integer, ties to even, componentwise.
+    Round,
+    /// -1, 0, or 1 by the sign, componentwise; `Int` stays `Int`.
+    Sign,
+    /// Natural logarithm, componentwise.
+    Log,
+    /// Tangent, componentwise.
+    Tan,
+    /// Arc sine, componentwise.
+    Asin,
+    /// Arc cosine, componentwise.
+    Acos,
+    /// Arc tangent of one value, componentwise; `atan2` takes two.
+    Atan,
     /// Fractional part, componentwise.
     Fract,
     /// Absolute value, componentwise.
@@ -346,13 +362,13 @@ pub enum Intrinsic {
     Sin,
     /// Cosine, componentwise.
     Cos,
-    /// Componentwise minimum.
+    /// Componentwise minimum; a `Float` beside a vector broadcasts.
     Min,
-    /// Componentwise maximum.
+    /// Componentwise maximum; a `Float` beside a vector broadcasts.
     Max,
-    /// `clamp(x, low, high)` componentwise.
+    /// `clamp(x, low, high)` componentwise; `Float` bounds broadcast.
     Clamp,
-    /// `mix(a, b, t)` linear interpolation with a float `t`.
+    /// `mix(a, b, t)` linear interpolation, `t` a `Float` or componentwise.
     Mix,
     /// Convert `Int` or `Bool` (as 0 or 1) to `Float`.
     ToFloat,
@@ -383,8 +399,16 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 22] = [
+    pub const ALL: [(Intrinsic, &'static str); 30] = [
         (Intrinsic::Floor, "floor"),
+        (Intrinsic::Ceil, "ceil"),
+        (Intrinsic::Round, "round"),
+        (Intrinsic::Sign, "sign"),
+        (Intrinsic::Log, "log"),
+        (Intrinsic::Tan, "tan"),
+        (Intrinsic::Asin, "asin"),
+        (Intrinsic::Acos, "acos"),
+        (Intrinsic::Atan, "atan"),
         (Intrinsic::Fract, "fract"),
         (Intrinsic::Abs, "abs"),
         (Intrinsic::Sqrt, "sqrt"),
@@ -434,22 +458,34 @@ impl Intrinsic {
         match (self, args) {
             (
                 Self::Floor
+                | Self::Ceil
+                | Self::Round
+                | Self::Sign
                 | Self::Fract
                 | Self::Abs
                 | Self::Sqrt
                 | Self::Sin
                 | Self::Cos
-                | Self::Exp,
+                | Self::Tan
+                | Self::Asin
+                | Self::Acos
+                | Self::Atan
+                | Self::Exp
+                | Self::Log,
                 [a],
             ) if float_like(*a) => Some(*a),
-            (Self::Abs, [Type::Int]) => Some(Type::Int),
+            (Self::Abs | Self::Sign, [Type::Int]) => Some(Type::Int),
             (Self::Min | Self::Max, [a, b]) if a == b && (float_like(*a) || *a == Type::Int) => {
                 Some(*a)
             }
+            (Self::Min | Self::Max, [a, Type::Float]) if vector(*a) => Some(*a),
             (Self::Clamp, [a, b, c]) if a == b && b == c && (float_like(*a) || *a == Type::Int) => {
                 Some(*a)
             }
-            (Self::Mix, [a, b, Type::Float]) if a == b && float_like(*a) => Some(*a),
+            (Self::Clamp, [a, Type::Float, Type::Float]) if vector(*a) => Some(*a),
+            (Self::Mix, [a, b, c]) if a == b && (*c == Type::Float || c == a) && float_like(*a) => {
+                Some(*a)
+            }
             (Self::ToFloat, [Type::Int | Type::Bool]) => Some(Type::Float),
             (Self::ToInt, [Type::Float | Type::Bool]) => Some(Type::Int),
             (Self::Dot, [a, b]) if a == b && vector(*a) => Some(Type::Float),
