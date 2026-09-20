@@ -77,6 +77,14 @@ pub fn compile_kernel(
     id: Option<&orla_ir::KernelId>,
 ) -> Result<Validated, CompileError> {
     let module = lower::lower(kernel, id)?;
+    Ok(orla_ir::validate(orla_ir::optimize(module))?)
+}
+
+/// Compiles one Kernel source as [`compile`] does, but leaves the IR as
+/// the lowering made it: what the optimizer is held to.
+pub fn compile_unoptimized(source: &str) -> Result<Validated, CompileError> {
+    let kernel = orla_language::parse(source)?;
+    let module = lower::lower(&kernel, None)?;
     Ok(orla_ir::validate(module)?)
 }
 

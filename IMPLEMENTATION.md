@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| IR optimizer | [optimize](crates/ir/src/optimize.rs) | [every matrix case word for word against the unoptimized IR](crates/cpu/tests/optimizer.rs) |
 | Kernel rules | [rules](crates/rules/src/lib.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | Every backend's parity test runs by them |
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [word code](crates/cpu/src/eval/code.rs), [compiler](crates/cpu/src/eval/compile.rs), [machine](crates/cpu/src/eval/run.rs) | [execution tests](crates/cpu/tests/execute.rs) |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
@@ -442,6 +443,25 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- The IR optimizer (the plan's section 41) runs between lowering and
+  validation, four exact rewrites: a part taken straight from its
+  construction is that part and a vector rebuilt from all its parts is
+  the vector (what swizzles and joins leave behind); an operation on
+  literals is its literal where the backends' arithmetic gives one and
+  no failure (an overflowing or dividing-by-zero integer expression
+  stays for the run to report); a pure operation repeated on the same
+  operands in one block or an enclosing one is shared (a read of a
+  memory the steps write, a call to a writer, and a loop's own carried
+  value are not); a value nothing reads is dropped unless it is a
+  write, holds one, or is a name a trace shows. Values are renumbered
+  in pre-order. Held to the interpreter word for word over the feature
+  matrix ([test](crates/cpu/tests/optimizer.rs), 20639 instructions to
+  14814); the examples' Kernels go from 17630 to 13215 instructions, the
+  interpreter's voxel frame from 2.2 s to 1.75 s and marching from 29 ms
+  to 16 ms, the JIT's marching from 2.4 ms to 1.6 ms (fewer Field
+  reads), the JIT's voxel unchanged, as Cranelift had done the rest.
+  `orla check --ir` shows the optimized IR.
 
 - State migration (the plan's section 24): a `<~` binding may name a
   migration Kernel, `migrate id@v`, a map from the old element layout to

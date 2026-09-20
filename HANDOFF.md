@@ -133,9 +133,12 @@ test; phase 4 has fusion, Metal through wgpu, a JIT the plan never asked
 for, and state migration (section 24: `<~ … migrate id@v`, a map
 Kernel run once over the old state when a republished Kernel changed
 its layout; without one the port restarts from its initial and says
-so; a failing migration leaves the state as it was), and lacks an IR
-optimizer, a scheduler beyond one worker thread, WASM, async Kernels,
-and packages; phase 5's domains are touched ahead of order (audio,
+so; a failing migration leaves the state as it was), and an IR optimizer (exact rewrites only: construction/extraction
+cancelling, literal folding without failures, common subexpressions
+scoped by block, dead values; 25 to 30 percent fewer instructions, the
+interpreter a fifth to two fifths faster, the JIT where Field reads
+repeated), and lacks a scheduler beyond one worker thread, WASM, async
+Kernels, and packages; phase 5's domains are touched ahead of order (audio,
 geometry, simulation, machines). The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar
 took that in: a node's name and a source reference accept any word,

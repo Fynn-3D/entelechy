@@ -1057,7 +1057,7 @@ pub fn linear_index_type(shape: Shape) -> Type {
 /// Checks one function and returns the type of every slot.
 /// Which functions write a memory, themselves or through a call: a
 /// fixed point over the call graph (recursion is refused elsewhere).
-fn writers(functions: &[Function]) -> Vec<bool> {
+pub(crate) fn writers(functions: &[Function]) -> Vec<bool> {
     let mut writers = vec![false; functions.len()];
     loop {
         let mut changed = false;

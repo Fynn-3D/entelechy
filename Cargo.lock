@@ -1727,6 +1727,7 @@ dependencies = [
  "orla-abi",
  "orla-compiler",
  "orla-ir",
+ "orla-matrix",
  "orla-rules",
 ]
 

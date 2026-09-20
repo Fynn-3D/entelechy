@@ -1,0 +1,660 @@
+//! The optimizer: what a Kernel computes, in fewer instructions, with
+//! every word the same. Four rewrites, each exact by construction:
+//!
+//! - a component, field, column or element taken straight out of what
+//!   built it is that part; a vector rebuilt from all of its own
+//!   components in order is the vector;
+//! - an operation on literals alone is its literal, where the backends'
+//!   own arithmetic gives one value and no failure: integers that
+//!   overflow or divide by zero stay for the run to report;
+//! - a pure operation computed twice on the same operands, in one block
+//!   or an enclosing one, is computed once (a Field read is pure unless
+//!   the Field is a memory the steps write; a call is pure unless the
+//!   function writes);
+//! - a value nothing reads is not computed, unless it is a `put`, a
+//!   call that writes, a block holding one, or a name a trace shows.
+//!
+//! Values are then numbered again in pre-order, as the IR requires.
+//! Nothing here reorders floats or changes which failure a run reports.
+
+use std::collections::{BTreeMap, HashMap};
+
+use crate::{
+    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, StructDef, Type, UnaryOp, Value,
+    ValueId,
+};
+
+/// Optimizes every function of a module. The result computes what the
+/// input did, word for word, and validates whenever the input does.
+pub fn optimize(module: Module) -> Module {
+    let writers = crate::validate::writers(&module.functions);
+    let memories: Vec<bool> = module
+        .manifest
+        .inputs
+        .iter()
+        .map(|port| module.manifest.memories.contains(&port.name))
+        .collect();
+    let ctx = Ctx {
+        structs: &module.structs,
+        writers: &writers,
+        memories: &memories,
+    };
+    let functions = module.functions.iter().map(|f| ctx.function(f)).collect();
+    let entry = ctx.function(&module.entry);
+    let merge = module.merge.as_ref().map(|f| ctx.function(f));
+    let init = module.init.as_ref().map(|f| ctx.function(f));
+    Module {
+        manifest: module.manifest,
+        structs: module.structs,
+        functions,
+        entry,
+        merge,
+        init,
+    }
+}
+
+struct Ctx<'a> {
+    structs: &'a [StructDef],
+    writers: &'a [bool],
+    memories: &'a [bool],
+}
+
+impl Ctx<'_> {
+    fn function(&self, function: &Function) -> Function {
+        let mut pass = Simplify {
+            ctx: self,
+            alias: HashMap::new(),
+            defs: HashMap::new(),
+            scopes: Vec::new(),
+        };
+        let body = pass.block(&function.body);
+        let results: Vec<ValueId> = function.results.iter().map(|id| pass.map(*id)).collect();
+        let bindings: Vec<(ValueId, String)> = function
+            .bindings
+            .iter()
+            .map(|(id, name)| (pass.map(*id), name.clone()))
+            .collect();
+        // Dead values go; what a result, a binding or an effect needs stays.
+        let mut used: HashMap<u32, ()> = HashMap::new();
+        for id in results.iter().chain(bindings.iter().map(|(id, _)| id)) {
+            used.insert(id.0, ());
+        }
+        let body = self.sweep(body, &mut used);
+        // Pre-order numbering again.
+        let mut renumber = Renumber {
+            ids: BTreeMap::new(),
+            next: 0,
+        };
+        let body = renumber.block(&body);
+        Function {
+            name: function.name.clone(),
+            args: function.args.clone(),
+            body,
+            results: results.iter().map(|id| renumber.map(*id)).collect(),
+            bindings: bindings
+                .into_iter()
+                .map(|(id, name)| (renumber.map(id), name))
+                .collect(),
+        }
+    }
+
+    /// Whether an instruction must run for what it does, not for its value.
+    fn has_effects(&self, op: &Op) -> bool {
+        match op {
+            Op::Put(..) => true,
+            Op::Call(callee, _) => self.writers[*callee as usize],
+            Op::If {
+                then, otherwise, ..
+            } => self.block_has_effects(then) || self.block_has_effects(otherwise),
+            Op::Match {
+                arms, otherwise, ..
+            } => {
+                arms.iter().any(|(_, block)| self.block_has_effects(block))
+                    || self.block_has_effects(otherwise)
+            }
+            Op::Loop { until, body, .. } => {
+                until.as_ref().is_some_and(|b| self.block_has_effects(b))
+                    || self.block_has_effects(body)
+            }
+            _ => false,
+        }
+    }
+
+    fn block_has_effects(&self, block: &Block) -> bool {
+        block.body.iter().any(|i| self.has_effects(&i.op))
+    }
+
+    /// Whether two instances of an operation on the same operands give
+    /// the same value: not a write, not a loop's own carried value or
+    /// index, not a read of a memory the steps change, not a block.
+    fn cse_safe(&self, op: &Op) -> bool {
+        match op {
+            Op::Put(..) | Op::Carried | Op::Index => false,
+            Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => false,
+            Op::Call(callee, _) => !self.writers[*callee as usize],
+            Op::Sample(input) | Op::At(input, _) | Op::AtLinear(input, _) => {
+                !self.memories.get(*input as usize).copied().unwrap_or(true)
+            }
+            _ => true,
+        }
+    }
+
+    /// Drops the instructions of a block nothing needs, marking what the
+    /// kept ones need; instructions are visited last to first, so a use
+    /// is seen before its definition.
+    fn sweep(&self, body: Vec<Instruction>, used: &mut HashMap<u32, ()>) -> Vec<Instruction> {
+        let mut kept: Vec<Instruction> = Vec::with_capacity(body.len());
+        for instruction in body.into_iter().rev() {
+            if !used.contains_key(&instruction.id.0) && !self.has_effects(&instruction.op) {
+                continue;
+            }
+            let op = match instruction.op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => {
+                    used.insert(condition.0, ());
+                    Op::If {
+                        condition,
+                        then: self.sweep_block(then, used),
+                        otherwise: self.sweep_block(otherwise, used),
+                    }
+                }
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => {
+                    used.insert(scrutinee.0, ());
+                    Op::Match {
+                        scrutinee,
+                        arms: arms
+                            .into_iter()
+                            .map(|(values, block)| (values, self.sweep_block(block, used)))
+                            .collect(),
+                        otherwise: self.sweep_block(otherwise, used),
+                    }
+                }
+                Op::Loop {
+                    count,
+                    init,
+                    until,
+                    body,
+                } => {
+                    used.insert(init.0, ());
+                    Op::Loop {
+                        count,
+                        init,
+                        until: until.map(|block| self.sweep_block(block, used)),
+                        body: self.sweep_block(body, used),
+                    }
+                }
+                other => {
+                    for operand in operands(&other) {
+                        used.insert(operand.0, ());
+                    }
+                    other
+                }
+            };
+            kept.push(Instruction {
+                id: instruction.id,
+                ty: instruction.ty,
+                op,
+            });
+        }
+        kept.reverse();
+        kept
+    }
+
+    fn sweep_block(&self, block: Block, used: &mut HashMap<u32, ()>) -> Block {
+        used.insert(block.result.0, ());
+        Block {
+            body: self.sweep(block.body, used),
+            result: block.result,
+        }
+    }
+}
+
+/// The values an operation reads, blocks aside.
+fn operands(op: &Op) -> Vec<ValueId> {
+    match op {
+        Op::Unary(_, a) => vec![*a],
+        Op::Binary(_, a, b) => vec![*a, *b],
+        Op::Construct(parts) => parts.clone(),
+        Op::Extract(source, _) => vec![*source],
+        Op::Subscript(array, index) => vec![*array, *index],
+        Op::Call(_, args) | Op::Intrinsic(_, args) => args.clone(),
+        Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) => vec![*at],
+        Op::Put(_, address, value) => vec![*address, *value],
+        _ => Vec::new(),
+    }
+}
+
+/// The first pass: operands renamed through the aliases so far, parts
+/// taken straight from constructions, literals folded, repeats shared.
+struct Simplify<'a> {
+    ctx: &'a Ctx<'a>,
+    /// A value that is another value, by id.
+    alias: HashMap<u32, u32>,
+    /// What each kept value is, for the rewrites that look at it.
+    defs: HashMap<u32, (Type, Op)>,
+    /// The values available for sharing, one table per open block.
+    scopes: Vec<HashMap<String, u32>>,
+}
+
+impl Simplify<'_> {
+    fn map(&self, id: ValueId) -> ValueId {
+        ValueId(*self.alias.get(&id.0).unwrap_or(&id.0))
+    }
+
+    fn block(&mut self, instructions: &[Instruction]) -> Vec<Instruction> {
+        self.scopes.push(HashMap::new());
+        let mut out = Vec::with_capacity(instructions.len());
+        for instruction in instructions {
+            let ty = instruction.ty;
+            let op = match &instruction.op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => Op::If {
+                    condition: self.map(*condition),
+                    then: self.nested(then),
+                    otherwise: self.nested(otherwise),
+                },
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee: self.map(*scrutinee),
+                    arms: arms
+                        .iter()
+                        .map(|(values, block)| (values.clone(), self.nested(block)))
+                        .collect(),
+                    otherwise: self.nested(otherwise),
+                },
+                Op::Loop {
+                    count,
+                    init,
+                    until,
+                    body,
+                } => Op::Loop {
+                    count: *count,
+                    init: self.map(*init),
+                    until: until.as_ref().map(|block| self.nested(block)),
+                    body: self.nested(body),
+                },
+                other => {
+                    let mut op = other.clone();
+                    rename(&mut op, &|id| self.map(id));
+                    op
+                }
+            };
+            // A part straight out of its construction is that part.
+            if let Op::Extract(source, k) = &op
+                && let Some((_, Op::Construct(parts))) = self.defs.get(&source.0)
+                && let Some(part) = parts.get(*k as usize)
+                && self
+                    .defs
+                    .get(&part.0)
+                    .is_some_and(|(part_ty, _)| *part_ty == ty)
+            {
+                self.alias.insert(instruction.id.0, part.0);
+                continue;
+            }
+            // A vector rebuilt from all of its own components is the vector.
+            if let Op::Construct(parts) = &op
+                && let Some(whole) = self.rebuilt(parts, ty)
+            {
+                self.alias.insert(instruction.id.0, whole);
+                continue;
+            }
+            // Literals fold when the backends' arithmetic gives one value.
+            let op = match self.fold(&op, ty) {
+                Some(value) => Op::Const(value),
+                None => op,
+            };
+            // A repeat of a pure operation is the first one.
+            let key = self.ctx.cse_safe(&op).then(|| format!("{ty}|{op:?}"));
+            if let Some(key) = &key
+                && let Some(first) = self.scopes.iter().rev().find_map(|scope| scope.get(key))
+            {
+                self.alias.insert(instruction.id.0, *first);
+                continue;
+            }
+            if let Some(key) = key
+                && let Some(scope) = self.scopes.last_mut()
+            {
+                scope.insert(key, instruction.id.0);
+            }
+            self.defs.insert(instruction.id.0, (ty, op.clone()));
+            out.push(Instruction {
+                id: instruction.id,
+                ty,
+                op,
+            });
+        }
+        self.scopes.pop();
+        out
+    }
+
+    fn nested(&mut self, block: &Block) -> Block {
+        let body = self.block(&block.body);
+        Block {
+            body,
+            result: self.map(block.result),
+        }
+    }
+
+    /// The vector, matrix, array or struct these parts are all of, in
+    /// order, when they are.
+    fn rebuilt(&self, parts: &[ValueId], ty: Type) -> Option<u32> {
+        let (Op::Extract(first, 0), _) = (&self.defs.get(&parts[0].0)?.1, ()) else {
+            return None;
+        };
+        let whole = first.0;
+        let (whole_ty, _) = self.defs.get(&whole)?;
+        if *whole_ty != ty {
+            return None;
+        }
+        let count = match ty {
+            Type::Struct(index) => self.ctx.structs[index as usize].fields.len(),
+            other => other
+                .order()
+                .or(other.lanes().map(|(n, _)| n))
+                .map(usize::from)?,
+        };
+        if parts.len() != count {
+            return None;
+        }
+        let all = parts.iter().enumerate().all(|(k, part)| {
+            matches!(self.defs.get(&part.0), Some((_, Op::Extract(source, at))) if source.0 == whole && *at as usize == k)
+        });
+        all.then_some(whole)
+    }
+
+    /// The literal an operation on literals is, when one and never a
+    /// failure.
+    fn fold(&self, op: &Op, ty: Type) -> Option<Value> {
+        if !matches!(
+            ty,
+            Type::Float | Type::Int | Type::Bool | Type::Vec2 | Type::Vec3 | Type::Vec4
+        ) {
+            return None;
+        }
+        let literal = |id: &ValueId| match self.defs.get(&id.0) {
+            Some((_, Op::Const(value))) => Some(*value),
+            _ => None,
+        };
+        match op {
+            Op::Unary(unary, a) => fold_unary(*unary, literal(a)?),
+            Op::Binary(binary, a, b) => fold_binary(*binary, literal(a)?, literal(b)?),
+            Op::Intrinsic(intrinsic, args) => {
+                let values: Option<Vec<Value>> = args.iter().map(literal).collect();
+                fold_intrinsic(*intrinsic, &values?)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Renames an operation's operands, blocks aside.
+fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
+    match op {
+        Op::Unary(_, a) => *a = map(*a),
+        Op::Binary(_, a, b) => {
+            *a = map(*a);
+            *b = map(*b);
+        }
+        Op::Construct(parts) => {
+            for part in parts {
+                *part = map(*part);
+            }
+        }
+        Op::Extract(source, _) => *source = map(*source),
+        Op::Subscript(array, index) => {
+            *array = map(*array);
+            *index = map(*index);
+        }
+        Op::Call(_, args) | Op::Intrinsic(_, args) => {
+            for arg in args {
+                *arg = map(*arg);
+            }
+        }
+        Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) => *at = map(*at),
+        Op::Put(_, address, value) => {
+            *address = map(*address);
+            *value = map(*value);
+        }
+        _ => {}
+    }
+}
+
+/// The components of a literal as floats, and back.
+fn floats(value: Value) -> Option<Vec<f32>> {
+    match value {
+        Value::Float(v) => Some(vec![v]),
+        Value::Vec2(v) => Some(v.to_vec()),
+        Value::Vec3(v) => Some(v.to_vec()),
+        Value::Vec4(v) => Some(v.to_vec()),
+        _ => None,
+    }
+}
+
+fn from_floats(parts: &[f32]) -> Option<Value> {
+    match parts {
+        [x] => Some(Value::Float(*x)),
+        [x, y] => Some(Value::Vec2([*x, *y])),
+        [x, y, z] => Some(Value::Vec3([*x, *y, *z])),
+        [x, y, z, w] => Some(Value::Vec4([*x, *y, *z, *w])),
+        _ => None,
+    }
+}
+
+/// Two float literals componentwise, a `Float` beside a vector broadcast.
+fn zip(a: Value, b: Value, f: impl Fn(f32, f32) -> f32) -> Option<Value> {
+    let (a, b) = (floats(a)?, floats(b)?);
+    let n = a.len().max(b.len());
+    if a.len() != 1 && b.len() != 1 && a.len() != b.len() {
+        return None;
+    }
+    let parts: Vec<f32> = (0..n)
+        .map(|k| {
+            let x = if a.len() == 1 { a[0] } else { a[k] };
+            let y = if b.len() == 1 { b[0] } else { b[k] };
+            f(x, y)
+        })
+        .collect();
+    from_floats(&parts)
+}
+
+fn map(a: Value, f: impl Fn(f32) -> f32) -> Option<Value> {
+    let parts: Vec<f32> = floats(a)?.into_iter().map(f).collect();
+    from_floats(&parts)
+}
+
+fn fold_unary(op: UnaryOp, a: Value) -> Option<Value> {
+    match (op, a) {
+        (UnaryOp::Neg, Value::Int(v)) => v.checked_neg().map(Value::Int),
+        (UnaryOp::Neg, other) => map(other, |v| -v),
+        (UnaryOp::Not, Value::Bool(v)) => Some(Value::Bool(!v)),
+        _ => None,
+    }
+}
+
+fn fold_binary(op: BinaryOp, a: Value, b: Value) -> Option<Value> {
+    use BinaryOp::*;
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => match op {
+            Add => x.checked_add(y).map(Value::Int),
+            Sub => x.checked_sub(y).map(Value::Int),
+            Mul => x.checked_mul(y).map(Value::Int),
+            Div if y != 0 => x.checked_div(y).map(Value::Int),
+            Rem if y != 0 => x.checked_rem(y).map(Value::Int),
+            Less => Some(Value::Bool(x < y)),
+            LessEqual => Some(Value::Bool(x <= y)),
+            Greater => Some(Value::Bool(x > y)),
+            GreaterEqual => Some(Value::Bool(x >= y)),
+            Equal => Some(Value::Bool(x == y)),
+            NotEqual => Some(Value::Bool(x != y)),
+            BitAnd => Some(Value::Int(x & y)),
+            BitOr => Some(Value::Int(x | y)),
+            BitXor => Some(Value::Int(x ^ y)),
+            // The count modulo 32, as every backend takes it.
+            Shl => Some(Value::Int(x.wrapping_shl(y as u32))),
+            Shr => Some(Value::Int(x.wrapping_shr(y as u32))),
+            Ushr => Some(Value::Int((x as u32).wrapping_shr(y as u32) as i32)),
+            _ => None,
+        },
+        (Value::Bool(x), Value::Bool(y)) => match op {
+            And => Some(Value::Bool(x && y)),
+            Or => Some(Value::Bool(x || y)),
+            Equal => Some(Value::Bool(x == y)),
+            NotEqual => Some(Value::Bool(x != y)),
+            _ => None,
+        },
+        (a, b) => match op {
+            Add => zip(a, b, |x, y| x + y),
+            Sub => zip(a, b, |x, y| x - y),
+            Mul => zip(a, b, |x, y| x * y),
+            Div => zip(a, b, |x, y| x / y),
+            Rem => zip(a, b, |x, y| x % y),
+            Less | LessEqual | Greater | GreaterEqual => {
+                let (Value::Float(x), Value::Float(y)) = (a, b) else {
+                    return None;
+                };
+                Some(Value::Bool(match op {
+                    Less => x < y,
+                    LessEqual => x <= y,
+                    Greater => x > y,
+                    _ => x >= y,
+                }))
+            }
+            Equal | NotEqual => {
+                let (x, y) = (floats(a)?, floats(b)?);
+                if x.len() != y.len() {
+                    return None;
+                }
+                let same = x.iter().zip(&y).all(|(p, q)| p == q);
+                Some(Value::Bool(if op == Equal { same } else { !same }))
+            }
+            _ => None,
+        },
+    }
+}
+
+fn fold_intrinsic(intrinsic: Intrinsic, args: &[Value]) -> Option<Value> {
+    use Intrinsic::*;
+    let sign = |v: f32| {
+        if v > 0.0 {
+            1.0
+        } else if v < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }
+    };
+    match (intrinsic, args) {
+        (Floor, [a]) => map(*a, f32::floor),
+        (Ceil, [a]) => map(*a, f32::ceil),
+        (Round, [a]) => map(*a, f32::round_ties_even),
+        (Trunc, [a]) => map(*a, f32::trunc),
+        (Fract, [a]) => map(*a, |v| v - v.floor()),
+        (Abs, [Value::Int(v)]) => Some(Value::Int(v.wrapping_abs())),
+        (Abs, [a]) => map(*a, f32::abs),
+        (Sign, [Value::Int(v)]) => Some(Value::Int(v.signum())),
+        (Sign, [a]) => map(*a, sign),
+        (Min, [Value::Int(x), Value::Int(y)]) => Some(Value::Int((*x).min(*y))),
+        (Max, [Value::Int(x), Value::Int(y)]) => Some(Value::Int((*x).max(*y))),
+        (Min, [a, b]) => zip(*a, *b, f32::min),
+        (Max, [a, b]) => zip(*a, *b, f32::max),
+        (Clamp, [Value::Int(v), Value::Int(low), Value::Int(high)]) => {
+            Some(Value::Int((*v).max(*low).min(*high)))
+        }
+        (Clamp, [v, low, high]) => {
+            let floored = zip(*v, *low, f32::max)?;
+            zip(floored, *high, f32::min)
+        }
+        (ToFloat, [Value::Int(v)]) => Some(Value::Float(*v as f32)),
+        (ToFloat, [Value::Bool(v)]) => Some(Value::Float(if *v { 1.0 } else { 0.0 })),
+        (ToInt, [Value::Float(v)]) => Some(Value::Int(*v as i32)),
+        (ToInt, [Value::Bool(v)]) => Some(Value::Int(i32::from(*v))),
+        _ => None,
+    }
+}
+
+/// Pre-order numbering of the kept instructions.
+struct Renumber {
+    ids: BTreeMap<u32, u32>,
+    next: u32,
+}
+
+impl Renumber {
+    fn map(&self, id: ValueId) -> ValueId {
+        ValueId(*self.ids.get(&id.0).unwrap_or(&id.0))
+    }
+
+    fn block(&mut self, instructions: &[Instruction]) -> Vec<Instruction> {
+        let mut out = Vec::with_capacity(instructions.len());
+        for instruction in instructions {
+            let id = ValueId(self.next);
+            self.next += 1;
+            self.ids.insert(instruction.id.0, id.0);
+            let op = match &instruction.op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => Op::If {
+                    condition: self.map(*condition),
+                    then: self.nested(then),
+                    otherwise: self.nested(otherwise),
+                },
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee: self.map(*scrutinee),
+                    arms: arms
+                        .iter()
+                        .map(|(values, block)| (values.clone(), self.nested(block)))
+                        .collect(),
+                    otherwise: self.nested(otherwise),
+                },
+                Op::Loop {
+                    count,
+                    init,
+                    until,
+                    body,
+                } => Op::Loop {
+                    count: *count,
+                    init: self.map(*init),
+                    until: until.as_ref().map(|block| self.nested(block)),
+                    body: self.nested(body),
+                },
+                other => {
+                    let mut op = other.clone();
+                    rename(&mut op, &|id| self.map(id));
+                    op
+                }
+            };
+            out.push(Instruction {
+                id,
+                ty: instruction.ty,
+                op,
+            });
+        }
+        out
+    }
+
+    fn nested(&mut self, block: &Block) -> Block {
+        let body = self.block(&block.body);
+        Block {
+            body,
+            result: self.map(block.result),
+        }
+    }
+}

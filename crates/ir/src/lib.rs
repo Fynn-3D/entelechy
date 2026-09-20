@@ -11,12 +11,14 @@
 
 mod display;
 mod fuse;
+mod optimize;
 mod validate;
 
 use std::fmt;
 use std::str::FromStr;
 
 pub use fuse::{FuseError, InputUse, fuse, input_use, samples_only};
+pub use optimize::optimize;
 pub use orla_abi::{
     Capabilities, Capability, PortType, Scalar, Schema, Shape, ShapeIndex, Type, Value,
 };
