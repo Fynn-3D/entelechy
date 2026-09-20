@@ -10,3 +10,12 @@ expect 160 120 = 0.086 0.09 0.129 0.02
 expect 60 120 = 0.698 0.427 0.196 0.04
 expect 260 120 = 0.298 0.643 0.89 0.04
 expect 160 200 = 0.345 0.212 0.094 0.04
+
+# `level` sizes the graph: at two levels the second time's rows exist,
+# and the 9217th triangle, past the first level's 9216, reads as one of
+# the four a level-one face split into. Midpoint subdivision keeps the
+# surface, so the picture is the same.
+param level 2
+frame 0.0
+expect subdivided/2.triangles.result[9216].a = 288
+expect 60 120 = 0.698 0.427 0.196 0.04

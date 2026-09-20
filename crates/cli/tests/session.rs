@@ -691,3 +691,54 @@ output result <- copy.result;
     assert_eq!(f32::from_bits(again.words()[0]), 1.0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_param_that_sizes_the_graph_lowers_it_again() {
+    let dir = scratch("times");
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"kernels/\";
+param level: Int = 1;
+node seed: image.gradient@1 { domain = vec2(8, 8); }
+node gray: image.grayscale@1 { times = level; carry source <- result; source <- seed.result; }
+node blocks: image.pixelate@1 { source <- gray.result; }
+output result <- blocks.result;
+",
+    )
+    .unwrap();
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    session.sync();
+    assert_eq!(session.graph().unwrap().nodes.len(), 3);
+    assert!(session.evaluate(&Context::default()).is_ok());
+    session.set_param("level", orla_runtime::Value::Int(3));
+    let events = session.sync();
+    assert!(
+        events.iter().any(|e| matches!(e, Event::SceneLoaded)),
+        "{events:?}"
+    );
+    let ids: Vec<String> = session
+        .graph()
+        .unwrap()
+        .nodes
+        .iter()
+        .map(|n| n.id.0.clone())
+        .collect();
+    assert_eq!(ids, ["seed", "gray/1", "gray/2", "gray/3", "blocks"]);
+    let report = session
+        .evaluate(&Context::default())
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        report.executed.iter().any(|n| n.0 == "gray/3"),
+        "{:?}",
+        report.executed
+    );
+    // A param that does not size the graph does not lower it again.
+    session.set_param("nothing", orla_runtime::Value::Int(1));
+    assert!(
+        !session
+            .sync()
+            .iter()
+            .any(|e| matches!(e, Event::SceneLoaded))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -11,7 +11,7 @@ node game: slg.game@1 {
     previous <~ game.result from begin.result;
     units <~ units.result from spawn.result;
     range <~ range.result from blank.result;
-    hunt <~ hunt2.result from blank.result;
+    hunt <~ hunt.result from blank.result;
     map <- map.result;
 }
 
@@ -28,11 +28,10 @@ node range: graph "../passes.osn" {
 
 // How far every cell is from the enemy's prey: twelve passes span the map.
 node lure: slg.seed@1 { game <- game.result; units <- units.result; who = 1; domain = vec2(16, 12); }
-node hunt1: graph "../passes.osn" {
+node hunt: graph "../passes.osn" {
+    times = 2;
+    carry start <- result;
     start <- lure.result; map <- map.result; units <- units.result; game <- game.result;
-}
-node hunt2: graph "../passes.osn" {
-    start <- hunt1.result; map <- map.result; units <- units.result; game <- game.result;
 }
 
 node view: slg.draw@1 {

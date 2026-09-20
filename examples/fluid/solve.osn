@@ -1,5 +1,6 @@
 // Eight Jacobi steps toward the pressure; the scene places this five
-// times, and starts from last frame's pressure, which is close already.
+// times with `times = 5`, carrying the pressure from one time to the
+// next, and starts from last frame's, which is close already.
 use "kernels/";
 
 input pressure: Amount;

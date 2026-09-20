@@ -341,7 +341,9 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             let name = text_field("name")?;
             let value = value_from_json(field("value")?)?;
             session.set_param(&name, value);
-            Ok(json!({ "name": name, "value": value_json(&value) }))
+            // A param that sizes the graph lowers the document again now.
+            let events = session.sync();
+            Ok(json!({ "name": name, "value": value_json(&value), "events": events_json(&events) }))
         }
         "evaluate" => {
             let mut context = Context {

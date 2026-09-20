@@ -247,6 +247,14 @@ output result <- display.result;      // named graph output; sub-graph outputs
    inline Kernel's `param x: Float = amount;` takes the graph param `amount`
    as its value. The caller overrides a graph's params at evaluation; nested
    graphs cannot place themselves.
+10. A node placed more than once is written once: `times = N;` on a
+   Kernel node or a placed graph stands for `name/1` to `name/N`, each
+   wired as written, and `carry port <- output;` feeds the port from the
+   previous time's output from the second time on, so a relaxation, a
+   Jacobi solve, or a subdivision is one node with a count. `name.port`
+   anywhere means the last time's. `N` is a literal or a graph param; a
+   param that sizes the graph lowers the document again when it changes,
+   so `param level 3` over the protocol resizes a running scene.
 
 ### Loading
 

@@ -137,6 +137,9 @@ pub struct Graph {
     pub assets: Vec<(String, PathBuf, String)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
+    /// Parameters that size the graph (a node's `times`): a change to one
+    /// of these means lowering the document again.
+    pub times_params: Vec<String>,
     /// Nodes in document order, sub-graphs flattened in place.
     pub nodes: Vec<Node>,
     /// Named results in document order; interfaces present the first.
@@ -223,6 +226,7 @@ impl Graph {
             std::path::Path::new("."),
             &mut loader,
             &mut none,
+            &BTreeMap::new(),
         )?;
         if let Some(inline) = lowered.inline.first() {
             return Err(DocumentError {
@@ -262,6 +266,7 @@ impl Graph {
             std::path::Path::new("."),
             &mut loader,
             &mut none,
+            &BTreeMap::new(),
         )
     }
 
@@ -278,7 +283,15 @@ impl Graph {
         loader: &mut Loader<'_>,
     ) -> Result<Lowered, DocumentError> {
         let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
-        document::lower(document, text, name, base, loader, &mut none)
+        document::lower(
+            document,
+            text,
+            name,
+            base,
+            loader,
+            &mut none,
+            &BTreeMap::new(),
+        )
     }
 
     /// Loads like [`Graph::load`] and also resolves every document's `use`
@@ -292,7 +305,29 @@ impl Graph {
         loader: &mut Loader<'_>,
         declare: &mut Declare<'_>,
     ) -> Result<Lowered, DocumentError> {
-        document::lower(document, text, name, base, loader, declare)
+        document::lower(
+            document,
+            text,
+            name,
+            base,
+            loader,
+            declare,
+            &BTreeMap::new(),
+        )
+    }
+
+    /// As [`Graph::load_with`], with parameter overrides that a node's
+    /// `times` may read, so the caller's values size the graph.
+    pub fn load_with_params(
+        document: &orla_language::Document,
+        text: &str,
+        name: &str,
+        base: &std::path::Path,
+        loader: &mut Loader<'_>,
+        declare: &mut Declare<'_>,
+        overrides: &BTreeMap<String, Value>,
+    ) -> Result<Lowered, DocumentError> {
+        document::lower(document, text, name, base, loader, declare, overrides)
     }
 
     /// The first declared output.

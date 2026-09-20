@@ -15,12 +15,15 @@ node advect: fluid.advect@1 {
     hand <- hand.result;
 }
 node divergence: fluid.divergence@1 { velocity <- advect.result; }
-node solve1: graph "solve.osn" { pressure <~ solve5.result from clear.result; divergence <- divergence.result; }
-node solve2: graph "solve.osn" { pressure <- solve1.result; divergence <- divergence.result; }
-node solve3: graph "solve.osn" { pressure <- solve2.result; divergence <- divergence.result; }
-node solve4: graph "solve.osn" { pressure <- solve3.result; divergence <- divergence.result; }
-node solve5: graph "solve.osn" { pressure <- solve4.result; divergence <- divergence.result; }
-node project: fluid.project@1 { velocity <- advect.result; pressure <- solve5.result; }
+// Forty Jacobi steps: eight per time, five times, each time carrying the
+// pressure on, the first from last frame's.
+node solve: graph "solve.osn" {
+    times = 5;
+    carry pressure <- result;
+    pressure <~ solve.result from clear.result;
+    divergence <- divergence.result;
+}
+node project: fluid.project@1 { velocity <- advect.result; pressure <- solve.result; }
 node smoke: fluid.smoke@1 {
     previous <~ smoke.result from clear.result;
     velocity <- project.result;

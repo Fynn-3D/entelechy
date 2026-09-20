@@ -135,6 +135,10 @@ Functions cross files like structs: a top-level `fn` is shared through
 called with, so the voxel editor's walk and the fluid's staggered read
 exist once. The math builtins take vectors and broadcast Floats, and
 `orla check` compiles the libraries a scene uses.
+A node repeats: `times = N;` with `carry port <- output;` expands a
+Kernel node or a placed graph into a chain, `N` a literal or a graph
+param that resizes a running scene when it changes; the fluid solve,
+the SLG passes and the mesh subdivision level use it.
 Replays evaluate on demand: a frame runs the state and the nodes its
 expectations name, and the picture only when a pixel expectation
 follows, so the whole example suite replays on the CPU in seconds

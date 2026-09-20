@@ -1,29 +1,27 @@
-// torus + faces -> project -> rasterize (native) -> shade
+// torus + faces -> subdivide (level times) -> project -> rasterize (native) -> shade
 use "kernels/";
+
+param level: Int = 1;
 
 node torus: mesh.torus@1 { domain = 1152; }        // 48 segments x 24 rings
 node faces: mesh.torus_faces@1 { domain = 2304; }  // two triangles per cell
 
-// One level of midpoint subdivision: the rows grow by what the inputs say.
-node vertices: mesh.split_vertices@1 {
+// Midpoint subdivision, `level` times: each time carries the rows on.
+node subdivided: graph "level.osn" {
+    times = level;
+    carry mesh <- vertices;
+    carry faces <- triangles;
     mesh <- torus.result;
     faces <- faces.result;
-    domain = count(mesh) + 3 * count(faces);
-}
-
-node triangles: mesh.split_faces@1 {
-    mesh <- torus.result;
-    faces <- faces.result;
-    domain = 4 * count(faces);
 }
 
 node project: mesh.project@1 {
-    mesh <- vertices.result;
+    mesh <- subdivided.vertices;
 }
 
 node raster: native.rasterize@1 {
     vertices <- project.result;
-    triangles <- triangles.result;
+    triangles <- subdivided.triangles;
     domain = vec2(320, 240);
 }
 

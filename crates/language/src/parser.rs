@@ -567,6 +567,16 @@ impl Parser {
         let mut members = Vec::new();
         while !self.is_punct("}") {
             let port = self.ident("a parameter or port name")?;
+            if port.value == "carry"
+                && !(self.is_punct("=") || self.is_punct("<-") || self.is_punct("<~"))
+            {
+                let carried = self.ident("a port to carry")?;
+                self.expect_punct("<-")?;
+                let output = self.ident("an output to carry from")?;
+                self.expect_punct(";")?;
+                members.push(NodeMember::Carry(carried, output));
+                continue;
+            }
             if self.eat_punct("=") {
                 let value = self.expr()?;
                 self.expect_punct(";")?;

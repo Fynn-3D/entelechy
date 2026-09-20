@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use orla_abi::Value;
 use orla_ir::KernelId;
+use orla_language::NodeDecl;
 use orla_language::{
     BindingDecl, Document, Expr, ExprKind, Kernel, NodeKind, NodeMember, ParseError, SourceRef,
     Span,
@@ -130,6 +131,12 @@ fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> 
     }
 }
 
+/// A document's nodes and outputs after `times` expansion.
+type Expanded = (
+    Vec<NodeDecl>,
+    Vec<(orla_language::Spanned<String>, SourceRef)>,
+);
+
 /// What a placed sub-graph receives from its parent.
 struct Placement {
     /// Node-name prefix, e.g. `fx.`.
@@ -145,6 +152,8 @@ struct Placement {
 struct Lowering<'a, 'b> {
     loader: &'a mut Loader<'b>,
     declare: &'a mut Declare<'b>,
+    /// The caller's parameter values, which a root node's `times` reads.
+    overrides: &'a BTreeMap<String, Value>,
     out: Lowered,
     /// Documents on the current placement path, to refuse recursion.
     stack: Vec<PathBuf>,
@@ -157,6 +166,7 @@ pub(crate) fn lower(
     base: &Path,
     loader: &mut Loader<'_>,
     declare: &mut Declare<'_>,
+    overrides: &BTreeMap<String, Value>,
 ) -> Result<Lowered, DocumentError> {
     let mut document = document.clone();
     let (structs, types, functions) =
@@ -166,12 +176,14 @@ pub(crate) fn lower(
     let mut lowering = Lowering {
         loader,
         declare,
+        overrides,
         out: Lowered {
             graph: Graph {
                 name: name.to_owned(),
                 externals: Vec::new(),
                 assets: Vec::new(),
                 params: Vec::new(),
+                times_params: Vec::new(),
                 nodes: Vec::new(),
                 outputs: Vec::new(),
             },
@@ -199,6 +211,197 @@ struct Level {
 }
 
 impl Lowering<'_, '_> {
+    /// A node with `times = N;` stands for `N` nodes `name/1` to `name/N`,
+    /// each wired as written, except that a `carry port <- output;` feeds
+    /// the port from the previous time's output from the second time on;
+    /// `name.port` anywhere means the last time's. `N` is a literal or a
+    /// param of this document, resolved from the placing graph, the
+    /// caller's overrides, or the default; a root param that sizes the
+    /// graph is remembered so a change to it lowers the document again.
+    fn expand_times(
+        &mut self,
+        document: &Document,
+        placement: Option<&Placement>,
+        params: &[GraphParam],
+    ) -> Result<Expanded, DocumentError> {
+        let mut nodes: Vec<NodeDecl> = Vec::new();
+        let mut renames: BTreeMap<String, String> = BTreeMap::new();
+        for decl in &document.nodes {
+            let times = decl.members.iter().find_map(|member| match member {
+                NodeMember::Set(name, expr) if name.value == "times" => Some((name, expr)),
+                _ => None,
+            });
+            let Some((times_name, expr)) = times else {
+                nodes.push(decl.clone());
+                continue;
+            };
+            let value = match &expr.kind {
+                ExprKind::Name(param) => {
+                    if !params.iter().any(|p| &p.name == param) {
+                        return Err(error(
+                            expr.span,
+                            format!(
+                                "`{param}` is not a param of this graph; `times` is a literal or a graph param"
+                            ),
+                        ));
+                    }
+                    match placement.and_then(|p| p.params.get(param)) {
+                        Some(ParamValue::Literal(v)) => *v,
+                        Some(ParamValue::Graph(root)) => self
+                            .overrides
+                            .get(root)
+                            .copied()
+                            .or_else(|| {
+                                self.out
+                                    .graph
+                                    .params
+                                    .iter()
+                                    .find(|p| &p.name == root)
+                                    .map(|p| p.default)
+                            })
+                            .unwrap_or_else(|| {
+                                params
+                                    .iter()
+                                    .find(|p| &p.name == param)
+                                    .map(|p| p.default)
+                                    .unwrap()
+                            }),
+                        None => {
+                            if placement.is_none() {
+                                self.out.graph.times_params.push(param.clone());
+                            }
+                            self.overrides
+                                .get(param)
+                                .copied()
+                                .filter(|_| placement.is_none())
+                                .unwrap_or_else(|| {
+                                    params
+                                        .iter()
+                                        .find(|p| &p.name == param)
+                                        .map(|p| p.default)
+                                        .unwrap()
+                                })
+                        }
+                    }
+                }
+                _ => orla_compiler::literal(expr).map_err(|e| error(expr.span, e.to_string()))?,
+            };
+            let count = match value {
+                Value::Int(n) if n >= 1 => n as usize,
+                other => {
+                    return Err(error(
+                        times_name.span,
+                        format!("`times` must be a whole number of at least 1, found {other:?}"),
+                    ));
+                }
+            };
+            let carries: Vec<(String, String)> = decl
+                .members
+                .iter()
+                .filter_map(|member| match member {
+                    NodeMember::Carry(port, output) => {
+                        Some((port.value.clone(), output.value.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            for (port, _) in &carries {
+                let bound = decl.members.iter().any(|member| match member {
+                    NodeMember::Bind(p, _) | NodeMember::Previous { port: p, .. } => {
+                        &p.value == port
+                    }
+                    _ => false,
+                });
+                if !bound {
+                    return Err(error(
+                        times_name.span,
+                        format!("carried port `{port}` needs a binding for the first time"),
+                    ));
+                }
+            }
+            let base_name = decl.name.value.clone();
+            if count == 1 {
+                // One time is the node itself, under its own name.
+                let mut copy = decl.clone();
+                copy.members.retain(|member| {
+                    !matches!(member, NodeMember::Carry(..))
+                        && !matches!(member, NodeMember::Set(name, _) if name.value == "times")
+                });
+                nodes.push(copy);
+                continue;
+            }
+            renames.insert(base_name.clone(), format!("{base_name}/{count}"));
+            for k in 1..=count {
+                let mut copy = decl.clone();
+                copy.name.value = format!("{base_name}/{k}");
+                copy.members = decl
+                    .members
+                    .iter()
+                    .filter_map(|member| match member {
+                        NodeMember::Set(name, _) if name.value == "times" => None,
+                        NodeMember::Carry(..) => None,
+                        NodeMember::Bind(port, _) | NodeMember::Previous { port, .. }
+                            if k > 1 && carries.iter().any(|(p, _)| p == &port.value) =>
+                        {
+                            let output = &carries.iter().find(|(p, _)| p == &port.value).unwrap().1;
+                            Some(NodeMember::Bind(
+                                port.clone(),
+                                SourceRef {
+                                    node: Some(format!("{base_name}/{}", k - 1)),
+                                    name: output.clone(),
+                                    span: port.span,
+                                },
+                            ))
+                        }
+                        other => Some(other.clone()),
+                    })
+                    .collect();
+                nodes.push(copy);
+            }
+        }
+        // `name.port` written anywhere now means the last time's.
+        let rename = |reference: &mut SourceRef| {
+            if let Some(node) = &reference.node
+                && let Some(last) = renames.get(node)
+            {
+                reference.node = Some(last.clone());
+            }
+        };
+        if !renames.is_empty() {
+            for node in &mut nodes {
+                for member in &mut node.members {
+                    match member {
+                        NodeMember::Bind(_, reference) => rename(reference),
+                        NodeMember::Previous {
+                            source, initial, ..
+                        } => {
+                            rename(source);
+                            rename(initial);
+                        }
+                        NodeMember::Set(..) | NodeMember::Carry(..) => {}
+                    }
+                }
+                if let NodeKind::Inline(kernel) = &mut node.kind {
+                    for input in &mut kernel.inputs {
+                        match &mut input.binding {
+                            Some(BindingDecl::Now(reference)) => rename(reference),
+                            Some(BindingDecl::Previous { source, initial }) => {
+                                rename(source);
+                                rename(initial);
+                            }
+                            None => {}
+                        }
+                    }
+                }
+            }
+        }
+        let mut outputs = document.outputs.clone();
+        for (_, reference) in &mut outputs {
+            rename(reference);
+        }
+        Ok((nodes, outputs))
+    }
+
     /// Lowers one document whose source is `text`. `placement` is `None`
     /// for the root.
     fn level(
@@ -374,7 +577,8 @@ impl Lowering<'_, '_> {
             };
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
-        for decl in &document.nodes {
+        let (nodes, declared_outputs) = self.expand_times(document, placement, &params)?;
+        for decl in &nodes {
             let id = NodeId(format!("{prefix}{}", decl.name.value));
             let mut inputs = BTreeMap::new();
             let mut node_params = BTreeMap::new();
@@ -412,6 +616,9 @@ impl Lowering<'_, '_> {
                         source,
                         initial,
                     } => bind(port, rewrite_previous(source, initial)?)?,
+                    NodeMember::Carry(port, _) => {
+                        return Err(error(port.span, "`carry` needs `times = N;` on the node"));
+                    }
                 }
             }
             match &decl.kind {
@@ -573,7 +780,7 @@ impl Lowering<'_, '_> {
             }
         }
         let mut outputs: Vec<(String, Source)> = Vec::new();
-        for (output, reference) in &document.outputs {
+        for (output, reference) in &declared_outputs {
             let mut source = match rewrite_now(reference)? {
                 Binding::Now(source) => source,
                 Binding::Previous { .. } => {
@@ -801,5 +1008,101 @@ output result <- blocks.result;
         assert!(error.message.contains("not a param"), "{error}");
         let error = Graph::parse("node a: graph \"x.osn\" { }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("cannot load"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod times_tests {
+    use super::*;
+
+    const REPEATED: &str = "
+param level: Int = 2;
+node seed: test.zero@1 { domain = 4; }
+node step: test.inc@1 { times = level; carry previous <- result; previous <- seed.result; }
+node show: test.show@1 { source <- step.result; }
+output result <- show.result;
+";
+
+    fn ids(graph: &Graph) -> Vec<String> {
+        graph.nodes.iter().map(|n| n.id.0.clone()).collect()
+    }
+
+    #[test]
+    fn times_expands_a_node_and_carries_between_times() {
+        let graph = Graph::parse(REPEATED).unwrap();
+        assert_eq!(ids(&graph), ["seed", "step/1", "step/2", "show"]);
+        assert_eq!(graph.times_params, ["level"]);
+        let first = &graph.nodes[1];
+        assert_eq!(
+            first.inputs["previous"],
+            Binding::Now(Source::Node {
+                node: NodeId("seed".into()),
+                port: "result".into()
+            })
+        );
+        let second = &graph.nodes[2];
+        assert_eq!(
+            second.inputs["previous"],
+            Binding::Now(Source::Node {
+                node: NodeId("step/1".into()),
+                port: "result".into()
+            })
+        );
+        assert_eq!(
+            graph.nodes[3].inputs["source"],
+            Binding::Now(Source::Node {
+                node: NodeId("step/2".into()),
+                port: "result".into()
+            }),
+            "the name means the last time"
+        );
+        // The caller's value sizes the graph; one time keeps the plain name.
+        let document = orla_language::parse_document(REPEATED).unwrap();
+        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+        let mut loader: Box<Loader<'_>> = Box::new(|_| Err("no files".into()));
+        let overrides = BTreeMap::from([("level".to_owned(), Value::Int(4))]);
+        let lowered = Graph::load_with_params(
+            &document,
+            REPEATED,
+            "g",
+            Path::new("."),
+            &mut loader,
+            &mut none,
+            &overrides,
+        )
+        .unwrap();
+        assert_eq!(
+            ids(&lowered.graph),
+            ["seed", "step/1", "step/2", "step/3", "step/4", "show"]
+        );
+        let overrides = BTreeMap::from([("level".to_owned(), Value::Int(1))]);
+        let lowered = Graph::load_with_params(
+            &document,
+            REPEATED,
+            "g",
+            Path::new("."),
+            &mut loader,
+            &mut none,
+            &overrides,
+        )
+        .unwrap();
+        assert_eq!(ids(&lowered.graph), ["seed", "step", "show"]);
+    }
+
+    #[test]
+    fn times_and_carry_are_checked() {
+        let zero = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 0; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        assert!(zero.message.contains("at least 1"), "{zero}");
+        let unbound = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 2; carry previous <- result; }\noutput result <- r.result;").unwrap_err();
+        assert!(
+            unbound
+                .message
+                .contains("needs a binding for the first time"),
+            "{unbound}"
+        );
+        let orphan = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { carry previous <- result; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        assert!(orphan.message.contains("needs `times"), "{orphan}");
+        let unknown = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = n; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        assert!(unknown.message.contains("not a param"), "{unknown}");
     }
 }

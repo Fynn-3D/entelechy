@@ -433,7 +433,17 @@ impl Session {
     /// Overrides a graph parameter for later evaluations. Unknown names are
     /// kept and take effect if the graph later declares them.
     pub fn set_param(&mut self, name: &str, value: Value) {
-        self.params.insert(name.to_owned(), value);
+        let previous = self.params.insert(name.to_owned(), value);
+        // A parameter that sizes the graph (a node's `times`) changes its
+        // structure: the document is lowered again on the next sync.
+        if previous != Some(value)
+            && self
+                .graph
+                .as_ref()
+                .is_some_and(|graph| graph.times_params.iter().any(|p| p == name))
+        {
+            self.root_stamp = None;
+        }
     }
 
     /// Current graph parameter overrides.
@@ -775,14 +785,21 @@ impl Session {
             std::fs::read_to_string(path).map_err(|error| error.to_string())
         };
         let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
-        let lowered =
-            match Graph::load_with(&document, &text, &name, &base, &mut loader, &mut declare) {
-                Ok(lowered) => lowered,
-                Err(error) => {
-                    events.push(Event::SceneRejected(error.to_string()));
-                    return;
-                }
-            };
+        let lowered = match Graph::load_with_params(
+            &document,
+            &text,
+            &name,
+            &base,
+            &mut loader,
+            &mut declare,
+            &self.params,
+        ) {
+            Ok(lowered) => lowered,
+            Err(error) => {
+                events.push(Event::SceneRejected(error.to_string()));
+                return;
+            }
+        };
         // Kernels defined by the root: its top-level ones and the inline
         // ones of its own nodes. Inline Kernels of sub-graphs belong to
         // their documents.

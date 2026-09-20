@@ -157,6 +157,9 @@ pub enum NodeMember {
     Set(Spanned<String>, Expr),
     /// `port <- source;`
     Bind(Spanned<String>, SourceRef),
+    /// `carry port <- output;`: with `times = N;`, from the second time
+    /// on the port reads the previous time's output of that name.
+    Carry(Spanned<String>, Spanned<String>),
     /// `port <~ source from initial;`
     Previous {
         /// The port.

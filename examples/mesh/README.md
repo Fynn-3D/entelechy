@@ -11,6 +11,11 @@ rows into a `Grid<Surface>` of depth, normal, uv, and triangle id; and
 algorithm: on the GPU it is a render pipeline, on the CPU a reference
 implementation, and they agree on every interior pixel.
 
+The subdivision is `level.osn`, one level as a sub-graph, placed `level`
+times with `times = level;` and `carry`, so `param level 2` over the
+protocol (or `--param level=2`) is two levels, the graph resized while
+the scene runs; the replay checks the rounder silhouette.
+
 ```sh
 cargo run --release -p orla-player -- examples/mesh/scene.osn --backend gpu
 cargo run -- replay examples/mesh/tests/torus.replay

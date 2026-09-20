@@ -219,6 +219,14 @@ capability claim.
   against reference vectors; `run --save` and the protocol's `read`
   produce them ([session](crates/cli/src/session.rs),
   [tests](crates/cli/tests/session.rs)).
+- A node repeats with `times = N;` and `carry port <- output;`: the
+  document lowering expands it into `name/1..N` chained through the
+  carried ports, with `name.port` meaning the last; `N` may be a graph
+  param, which the session then treats as structural and lowers the
+  document again when it changes ([document](crates/graph/src/document.rs),
+  [tests](crates/graph/src/document.rs), [session test](crates/cli/tests/session.rs)).
+  The fluid's Jacobi solve, the SLG's relaxation passes and the mesh
+  example's subdivision level are written that way.
 - The protocol has a socket transport: `--listen <host:port>` on
   `orla serve` and the Player feeds every connection's lines to the one
   session with per-connection replies, a socket's `quit` ending only its

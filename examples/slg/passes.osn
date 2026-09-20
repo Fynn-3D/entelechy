@@ -1,5 +1,6 @@
-// Six relaxation passes over a seeded range: placed once for how far the
-// acting unit can go, twice more for how far every cell is from the prey.
+// Six relaxation passes over a seeded range, one node placed six times,
+// each pass carrying the range on: placed once for how far the acting
+// unit can go, twice more for how far every cell is from the prey.
 use "kernels/";
 
 input start: Grid<Int>;
@@ -7,11 +8,10 @@ input map: Grid<Tile>;
 input units: Rows<Unit>;
 input game: Rows<Game>;
 
-node p1: slg.relax@1 { previous <- start; map <- map; units <- units; game <- game; }
-node p2: slg.relax@1 { previous <- p1.result; map <- map; units <- units; game <- game; }
-node p3: slg.relax@1 { previous <- p2.result; map <- map; units <- units; game <- game; }
-node p4: slg.relax@1 { previous <- p3.result; map <- map; units <- units; game <- game; }
-node p5: slg.relax@1 { previous <- p4.result; map <- map; units <- units; game <- game; }
-node p6: slg.relax@1 { previous <- p5.result; map <- map; units <- units; game <- game; }
+node pass: slg.relax@1 {
+    times = 6;
+    carry previous <- result;
+    previous <- start; map <- map; units <- units; game <- game;
+}
 
-output result <- p6.result;
+output result <- pass.result;
