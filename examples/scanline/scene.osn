@@ -1,0 +1,7 @@
+// A picture, shown as it is. An agent adds to this scene while it runs:
+// see agent.jsonl.
+use "kernels/";
+
+node picture: picture.draw@1 { domain = vec2(160, 120); }
+
+output result <- picture.result;

@@ -664,3 +664,118 @@ fn help_answers_the_builtins_as_json() {
             .contains("mix")
     );
 }
+
+/// The scanline example's `agent.jsonl` is the record of an agent
+/// creating a capability while the scene runs: it looks around, proposes
+/// a Kernel with a mistake, reads the positioned diagnostic, repairs it,
+/// publishes, composes the Kernel into the scene, observes the picture
+/// change, turns the effect up, and fetches its own Kernel back. This
+/// runs that record against a copy of the example and holds every step
+/// to what the example's README says happens.
+#[test]
+fn an_agent_creates_a_capability_while_the_scene_runs() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/scanline");
+    let dir = std::env::temp_dir().join(format!("orla-protocol-agent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    std::fs::copy(
+        example.join("kernels/picture.orla"),
+        dir.join("kernels/picture.orla"),
+    )
+    .unwrap();
+    std::fs::copy(example.join("scene.osn"), dir.join("scene.osn")).unwrap();
+    let script = std::fs::read_to_string(example.join("agent.jsonl")).unwrap();
+    let requests: Vec<Json> = script
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(requests.len(), 18);
+    let responses = talk(&dir.join("scene.osn"), &requests);
+    let ok = |index: usize| -> &Json {
+        assert!(
+            responses[index].get("ok").is_some(),
+            "request {} failed: {}",
+            requests[index]["id"],
+            responses[index]
+        );
+        &responses[index]["ok"]
+    };
+    // Looking around: the scene, the Kernels there, a builtin's contract.
+    assert_eq!(ok(0)["nodes"], 1);
+    assert!(
+        ok(1)["kernels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k["id"] == "picture.draw@1")
+    );
+    assert_eq!(ok(2)["name"], "coord");
+    // The first proposal is refused where it is wrong: a Float `%` an Int
+    // on line 9, at the expression.
+    let error = &responses[5]["error"];
+    assert_eq!(error["message"], "cannot apply `%` to Float and Int");
+    assert_eq!(
+        (error["line"].as_u64(), error["column"].as_u64()),
+        (Some(9), Some(20))
+    );
+    // The repair prepares, unpublished, then publishes as a new Kernel.
+    assert_eq!(ok(7)["id"], "scanline.effect@1");
+    assert_eq!(ok(7)["current"], Json::Null);
+    assert_eq!(ok(8)["id"], "scanline.effect@1");
+    assert!(ok(8)["generation"].as_u64().unwrap() >= 1);
+    // The scene composed with the new Kernel loads, twice.
+    for index in [10, 13] {
+        let events = ok(index)["events"].as_array().unwrap();
+        assert!(
+            events.iter().any(|e| e["kind"] == "scene_loaded")
+                && !events.iter().any(|e| e["kind"] == "scene_rejected"),
+            "{}",
+            responses[index]
+        );
+    }
+    // The picture: even rows as they were, odd rows darkened by the
+    // strength, 0.5 then 0.8.
+    let pixels = |index: usize| -> (usize, usize, Vec<f32>) {
+        let image = ok(index);
+        let bytes = orla::protocol::unbase64(image["data"].as_str().unwrap()).unwrap();
+        let floats = bytes
+            .chunks(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        (
+            image["width"].as_u64().unwrap() as usize,
+            image["height"].as_u64().unwrap() as usize,
+            floats,
+        )
+    };
+    let (w, h, before) = pixels(4);
+    let (_, _, half) = pixels(12);
+    let (_, _, strong) = pixels(15);
+    assert_eq!((w, h), (160, 120));
+    for y in 0..h {
+        for x in 0..w {
+            for k in 0..3 {
+                let at = (y * w + x) * 4 + k;
+                let (dim_half, dim_strong): (f32, f32) =
+                    if y % 2 == 1 { (0.5, 0.2) } else { (1.0, 1.0) };
+                assert!(
+                    (half[at] - before[at] * dim_half).abs() < 1e-5,
+                    "({x}, {y})"
+                );
+                assert!(
+                    (strong[at] - before[at] * dim_strong).abs() < 1e-5,
+                    "({x}, {y})"
+                );
+            }
+        }
+    }
+    // The Kernel comes back as it was published, the repaired line in it.
+    assert!(
+        ok(16)["source"]
+            .as_str()
+            .unwrap()
+            .contains("icoord().y % 2 == 1")
+    );
+    assert_eq!(ok(17)["bye"], true);
+}

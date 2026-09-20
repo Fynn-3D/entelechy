@@ -124,6 +124,21 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
+Against the architecture plan's phases (sections 37 to 42): phases 1
+and 2 are done and exceeded; phase 3's surfaces (the creation protocol
+with positioned diagnostics, preview, atomic publish, compose, `help`,
+the registry) are done and its demonstration is on record as the
+`scanline` example, an agent's `agent.jsonl` replayed by a protocol
+test; phase 4 has fusion, Metal through wgpu and a JIT the plan never
+asked for, and lacks an IR optimizer, a scheduler beyond one worker
+thread, WASM, async Kernels, state migration beyond `<~ from`, and
+packages; phase 5's domains are touched ahead of order (audio,
+geometry, simulation, machines). The record showed one thing an agent
+has to know: a keyword (`scan`) cannot name a node; the parser could
+take reserved words where a node name or a source reference is
+expected, since both are followed by `:` or `.`, a small grammar round
+if it bites again.
+
 Where the platform stands: four modes on three backends, bit for bit
 between the CPU and the JIT and to rounding on the GPU, held by the
 feature matrix (`crates/matrix`, 19 features x 5 modes on both); a GPU

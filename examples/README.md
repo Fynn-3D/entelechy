@@ -103,3 +103,8 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [marching](marching/README.md): marching squares over orbiting blobs,
   the sixteen cases a `[[Int; 4]; 16]` and the crossing points a
   `[Vec2; 4]`, no `if` chain anywhere.
+- [scanline](scanline/README.md): the third phase's demonstration on
+  record: an agent, over the creation protocol, proposes a Kernel, is
+  refused at a line and column, repairs it, publishes, composes it into
+  the running scene and sees the picture change; a test replays the
+  record.
