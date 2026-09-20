@@ -4,8 +4,11 @@
 //! `i32` (a `Bool` is an `i32` of 0 or 1), in the layout the ABI gives
 //! elements, so a struct is its fields in order and a vector its
 //! components. `if` and `loop` become blocks with block parameters; a
-//! call passes the words; the entry takes the context, the element's
-//! coordinates and a pointer for its output words. Integer arithmetic is
+//! call passes the words; a map's entry takes the context, the element's
+//! coordinates and a pointer for its output words; a scan's entry takes
+//! the context, the step's index, a pointer to the carried words and a
+//! pointer for the next, and its `init` writes the first carried words.
+//! Memories are written through a helper. Integer arithmetic is
 //! checked as the interpreter checks it, the first failure recorded in
 //! the context. Field reads and the transcendental functions call the
 //! helpers in the crate root, by symbol, so they round as the CPU does.
@@ -38,15 +41,36 @@ struct Imports {
     linear: FuncId,
     key: FuncId,
     button: FuncId,
+    put: FuncId,
+    put_rows: FuncId,
     unary: Vec<(Intrinsic, FuncId)>,
     powf: FuncId,
     atan2f: FuncId,
     fmodf: FuncId,
 }
 
-/// Compiles the module and returns the JIT module holding its code and
-/// the entry's address.
-pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<(JITModule, usize), String> {
+/// A module's native code: the JIT module holding it, the entry's
+/// address, and a scan's `init`.
+pub struct Code {
+    pub module: JITModule,
+    pub entry: usize,
+    pub init: Option<usize>,
+}
+
+/// What the function being translated is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A function: the context, its result's slot, its arguments' words.
+    Function,
+    /// A map's entry: the context, `x`, `y`, `z`, the output slot.
+    Map,
+    /// A scan's entry: the context, the index, the carried words, the
+    /// output slot.
+    Scan,
+}
+
+/// Compiles the module.
+pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, String> {
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     for (name, address) in crate::symbols() {
         builder.symbol(name, address);
@@ -69,6 +93,8 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<(JITModule
     let rows_sig = sig(&[ptr, i, i, ptr], &[]);
     let sample_sig = sig(&[ptr, i, i, i, i, ptr], &[]);
     let key_sig = sig(&[ptr, i], &[i]);
+    let put_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
+    let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
     let unary_sig = sig(&[f], &[f]);
     let binary_sig = sig(&[f, f], &[f]);
     let imports = Imports {
@@ -78,6 +104,8 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<(JITModule
         linear: declare(&mut jit, "orla_jit_linear", &read_sig)?,
         key: declare(&mut jit, "orla_jit_key", &key_sig)?,
         button: declare(&mut jit, "orla_jit_button", &key_sig)?,
+        put: declare(&mut jit, "orla_jit_put", &put_sig)?,
+        put_rows: declare(&mut jit, "orla_jit_put_rows", &put_rows_sig)?,
         unary: [
             (Intrinsic::Sin, "orla_jit_sinf"),
             (Intrinsic::Cos, "orla_jit_cosf"),
@@ -97,25 +125,39 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<(JITModule
     };
     // Every function takes the context, a pointer for its result's words
     // (a struct or a vector is more words than registers return), then
-    // its arguments' words; the entry takes the coordinates and the output
-    // pointer instead.
+    // its arguments' words; a map's entry takes the coordinates and the
+    // output pointer instead, a scan's the index, the carried words'
+    // pointer and the output pointer; a scan's `init` is a function
+    // without arguments.
     let mut functions = Vec::with_capacity(module.functions.len());
     for (index, function) in module.functions.iter().enumerate() {
         let mut params = vec![ptr, ptr];
         for arg in &function.args {
             params.extend(word_types(module, *arg));
         }
-        let _ = result_type(function);
         let signature = sig(&params, &[]);
         let id = jit
             .declare_function(&format!("f{index}"), Linkage::Local, &signature)
             .map_err(|error| error.to_string())?;
         functions.push((id, signature));
     }
-    let entry_signature = sig(&[ptr, i, i, i, ptr], &[]);
+    let scan = module.manifest.mode == orla_ir::Mode::Scan;
+    let entry_signature = if scan {
+        sig(&[ptr, i, ptr, ptr], &[])
+    } else {
+        sig(&[ptr, i, i, i, ptr], &[])
+    };
     let entry_id = jit
         .declare_function("entry", Linkage::Local, &entry_signature)
         .map_err(|error| error.to_string())?;
+    let init_signature = sig(&[ptr, ptr], &[]);
+    let init_id = match &module.init {
+        Some(_) if scan => Some(
+            jit.declare_function("init", Linkage::Local, &init_signature)
+                .map_err(|error| error.to_string())?,
+        ),
+        _ => None,
+    };
     let max_stride = module
         .manifest
         .inputs
@@ -133,10 +175,23 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<(JITModule
             Fx::new(
                 module, &mut jit, builder, &imports, &functions, ptr, max_stride,
             )
-            .function(function, false);
+            .function(function, Kind::Function);
         }
         jit.define_function(functions[index].0, &mut context)
             .map_err(|error| format!("{}: {error}", function.name))?;
+        jit.clear_context(&mut context);
+    }
+    if let (Some(init_id), Some(init)) = (init_id, &module.init) {
+        context.func.signature = init_signature;
+        {
+            let builder = FunctionBuilder::new(&mut context.func, &mut fbc);
+            Fx::new(
+                module, &mut jit, builder, &imports, &functions, ptr, max_stride,
+            )
+            .function(init, Kind::Function);
+        }
+        jit.define_function(init_id, &mut context)
+            .map_err(|error| format!("init: {error}"))?;
         jit.clear_context(&mut context);
     }
     context.func.signature = entry_signature;
@@ -145,7 +200,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<(JITModule
         Fx::new(
             module, &mut jit, builder, &imports, &functions, ptr, max_stride,
         )
-        .function(&module.entry, true);
+        .function(&module.entry, if scan { Kind::Scan } else { Kind::Map });
     }
     jit.define_function(entry_id, &mut context)
         .map_err(|error| format!("entry: {error}"))?;
@@ -153,7 +208,12 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<(JITModule
     jit.finalize_definitions()
         .map_err(|error| error.to_string())?;
     let entry = jit.get_finalized_function(entry_id) as usize;
-    Ok((jit, entry))
+    let init = init_id.map(|id| jit.get_finalized_function(id) as usize);
+    Ok(Code {
+        module: jit,
+        entry,
+        init,
+    })
 }
 
 /// The Cranelift type of each word of a value of `ty`.
@@ -217,6 +277,9 @@ struct Fx<'a, 'b> {
     args: Vec<Vec<Value>>,
     /// Enclosing loops: the carried words and the index.
     loops: Vec<(Vec<Value>, Value)>,
+    /// A scan entry's carried words and step index, read by `Carried`
+    /// and `Index` outside every loop.
+    scan: Option<(Vec<Value>, Value)>,
     ctx: Value,
     /// The entry's coordinates and output pointer.
     coords: Option<(Value, Value, Value, Value)>,
@@ -227,6 +290,8 @@ struct Fx<'a, 'b> {
     linear: FuncRef,
     key: FuncRef,
     button: FuncRef,
+    put: FuncRef,
+    put_rows: FuncRef,
     unary: Vec<(Intrinsic, FuncRef)>,
     powf: FuncRef,
     atan2f: FuncRef,
@@ -259,6 +324,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         let linear = import(jit, &mut b, imports.linear);
         let key = import(jit, &mut b, imports.key);
         let button = import(jit, &mut b, imports.button);
+        let put = import(jit, &mut b, imports.put);
+        let put_rows = import(jit, &mut b, imports.put_rows);
         let unary = imports
             .unary
             .iter()
@@ -285,6 +352,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             types: Vec::new(),
             args: Vec::new(),
             loops: Vec::new(),
+            scan: None,
             ctx,
             coords: None,
             calls,
@@ -294,6 +362,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             linear,
             key,
             button,
+            put,
+            put_rows,
             unary,
             powf,
             atan2f,
@@ -305,23 +375,40 @@ impl<'a, 'b> Fx<'a, 'b> {
 
     /// Translates a whole function: its arguments from the entry block's
     /// parameters, its body, and its return.
-    fn function(mut self, function: &Function, entry: bool) {
+    fn function(mut self, function: &Function, kind: Kind) {
         let slots = function.slot_count();
         self.values = vec![Vec::new(); slots];
         self.types = vec![Type::Float; slots];
         let block = self.b.current_block().expect("entry block");
         let params: Vec<Value> = self.b.block_params(block).to_vec();
-        let out = if entry {
-            self.coords = Some((params[1], params[2], params[3], params[4]));
-            params[4]
-        } else {
-            let mut cursor = 2;
-            for arg in &function.args {
-                let n = word_types(self.module, *arg).len();
-                self.args.push(params[cursor..cursor + n].to_vec());
-                cursor += n;
+        let out = match kind {
+            Kind::Map => {
+                self.coords = Some((params[1], params[2], params[3], params[4]));
+                params[4]
             }
-            params[1]
+            Kind::Scan => {
+                // The step's coordinates are its index, as the interpreter
+                // has them; the carried words are loaded once.
+                let zero = self.i32c(0);
+                self.coords = Some((params[1], zero, zero, params[3]));
+                let carried_types = word_types(self.module, result_type(function));
+                let carried = carried_types
+                    .iter()
+                    .enumerate()
+                    .map(|(k, t)| self.b.ins().load(*t, self.flags, params[2], (k * 4) as i32))
+                    .collect();
+                self.scan = Some((carried, params[1]));
+                params[3]
+            }
+            Kind::Function => {
+                let mut cursor = 2;
+                for arg in &function.args {
+                    let n = word_types(self.module, *arg).len();
+                    self.args.push(params[cursor..cursor + n].to_vec());
+                    cursor += n;
+                }
+                params[1]
+            }
         };
         self.block(&function.body);
         let mut offset = 0i32;
@@ -665,8 +752,20 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.b.seal_block(exit);
                 self.b.block_params(exit).to_vec()
             }
-            Op::Carried => self.loops.last().expect("a loop").0.clone(),
-            Op::Index => vec![self.loops.last().expect("a loop").1],
+            Op::Carried => self
+                .loops
+                .last()
+                .or(self.scan.as_ref())
+                .expect("a loop or a scan")
+                .0
+                .clone(),
+            Op::Index => vec![
+                self.loops
+                    .last()
+                    .or(self.scan.as_ref())
+                    .expect("a loop or a scan")
+                    .1,
+            ],
             Op::Coord => {
                 let (x, y, z, _) = self.coords.expect("entry point");
                 let mut words = vec![self.u32_to_f32(x), self.u32_to_f32(y)];
@@ -852,7 +951,37 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let tys = word_types(self.module, ty);
                 self.load_scratch(&tys)
             }
-            Op::Put(..) => unreachable!("only ordered work writes memories, which the CPU runs"),
+            Op::Put(input, address, value) => {
+                // The value's words go to the scratch slot; the helper
+                // resolves the address as the interpreter does and drops a
+                // write outside the memory. The instruction's value is the
+                // value written.
+                let words = self.words(value);
+                let slot = self.scratch_addr();
+                for (k, word) in words.iter().enumerate() {
+                    self.b.ins().store(self.flags, *word, slot, (k * 4) as i32);
+                }
+                let index = self.i32c(*input as i64);
+                let address_words = self.words(address);
+                match self.ty(address) {
+                    Type::Int => {
+                        self.b
+                            .ins()
+                            .call(self.put_rows, &[self.ctx, index, address_words[0], slot]);
+                    }
+                    ty => {
+                        let zero = self.f32c(0.0);
+                        let (x, y, z) = match ty {
+                            Type::Vec2 => (address_words[0], address_words[1], zero),
+                            _ => (address_words[0], address_words[1], address_words[2]),
+                        };
+                        self.b
+                            .ins()
+                            .call(self.put, &[self.ctx, index, x, y, z, slot]);
+                    }
+                }
+                words
+            }
         }
     }
 

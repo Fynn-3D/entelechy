@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
-use orla_abi::{Handle, Invocation, Scope};
+use orla_abi::{Domain, Handle, Invocation, Scope};
 use orla_cpu::{ArithmeticError, CpuBackend, ExecutionError, check_invocation};
 use orla_ir::{Mode, Validated};
 use orla_runtime::{Backend, NativeOp, Prepared};
@@ -58,9 +58,14 @@ pub struct Ctx {
     error: u32,
 }
 
-/// The entry's native signature: the context, the element's coordinates,
-/// and where its output words go.
+/// A map entry's native signature: the context, the element's
+/// coordinates, and where its output words go.
 type Entry = unsafe extern "C" fn(*mut Ctx, u32, u32, u32, *mut u32);
+/// A scan entry's: the context, the step's index, the carried words, and
+/// where the next carried words go.
+type ScanEntry = unsafe extern "C" fn(*mut Ctx, u32, *const u32, *mut u32);
+/// A scan's `init`: the context and where the first carried words go.
+type Init = unsafe extern "C" fn(*mut Ctx, *mut u32);
 
 /// The JIT backend: a target ISA to compile for.
 pub struct JitBackend {
@@ -102,6 +107,8 @@ impl JitBackend {
 struct Compiled {
     module: Option<cranelift_jit::JITModule>,
     entry: usize,
+    /// A scan's `init`; a map has none.
+    init: Option<usize>,
 }
 
 // The module is only read after finalization, and the code it holds is
@@ -144,13 +151,14 @@ impl Backend for JitBackend {
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        if module.manifest.mode != Mode::Map {
+        if !matches!(module.manifest.mode, Mode::Map | Mode::Scan) {
             return Ok(Box::new(OnCpu));
         }
-        let (jit, entry) = codegen::compile(module, self.isa.clone())?;
+        let code = codegen::compile(module, self.isa.clone())?;
         Ok(Box::new(Compiled {
-            module: Some(jit),
-            entry,
+            module: Some(code.module),
+            entry: code.entry,
+            init: code.init,
         }))
     }
 
@@ -170,7 +178,10 @@ impl Backend for JitBackend {
             ));
         };
         check_invocation(module, invocation)?;
-        run(compiled.entry, module, invocation, scope)
+        match compiled.init {
+            Some(init) => run_scan(compiled.entry, init, module, invocation, scope),
+            None => run(compiled.entry, module, invocation, scope),
+        }
     }
 
     fn execute_native(
@@ -205,6 +216,9 @@ fn param_words(value: &orla_abi::Value) -> Vec<u32> {
 struct Shared {
     views: Vec<View>,
     params: Vec<u32>,
+    /// The memories' working copies, by input index; the views point into
+    /// them.
+    memories: Vec<(usize, Vec<u32>)>,
     template: Ctx,
 }
 
@@ -213,31 +227,42 @@ struct Shared {
 unsafe impl Sync for Shared {}
 unsafe impl Send for Shared {}
 
-/// Runs the compiled entry over every element of the invocation's domain
-/// and creates the outputs.
-fn run(
-    entry: usize,
+/// The views of the inputs and the context they hang from, for a run
+/// over `domain`. The memories named get working copies of their own,
+/// which the views point at instead, so the steps' writes are seen by
+/// their reads and the inputs stay untouched.
+fn shared(
     module: &Validated,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
-) -> Result<Vec<Handle>, ExecutionError> {
-    let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
-    let domain = invocation.domain;
+    domain: Domain,
+) -> Result<Shared, ExecutionError> {
     let mut views = Vec::with_capacity(invocation.inputs.len());
-    for handle in &invocation.inputs {
+    let mut memories = Vec::new();
+    for (index, handle) in invocation.inputs.iter().enumerate() {
+        let port = &module.manifest.inputs[index];
         let words = scope.words(*handle)?;
         let extent = scope.size(*handle)?;
+        let stride = scope.schema(*handle)?.words() as u32;
+        let words = if module.manifest.memories.contains(&port.name) {
+            let mut copy = words.to_vec();
+            let pointer = copy.as_mut_ptr();
+            memories.push((index, copy));
+            pointer.cast_const()
+        } else {
+            words.as_ptr()
+        };
         views.push(View {
-            words: words.as_ptr(),
+            words,
             width: extent.width(),
             height: extent.height(),
             depth: extent.depth(),
-            stride: scope.schema(*handle)?.words() as u32,
+            stride,
         });
     }
     let params: Vec<u32> = invocation.params.iter().flat_map(param_words).collect();
     let input = &invocation.context.input;
-    // The vectors' heap buffers stay put when the vectors move into `shared`.
+    // The vectors' heap buffers stay put when the vectors move into `Shared`.
     let template = Ctx {
         views: views.as_ptr(),
         params: params.as_ptr(),
@@ -254,11 +279,25 @@ fn run(
         depth: domain.depth(),
         error: 0,
     };
-    let shared = Shared {
+    Ok(Shared {
         views,
         params,
+        memories,
         template,
-    };
+    })
+}
+
+/// Runs the compiled entry over every element of the invocation's domain
+/// and creates the outputs.
+fn run(
+    entry: usize,
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
+    let domain = invocation.domain;
+    let shared = shared(module, invocation, scope, domain)?;
     let strides: Vec<usize> = module
         .manifest
         .outputs
@@ -357,6 +396,79 @@ fn run(
         let created = scope
             .create(port.ty.schema.clone(), domain)
             .and_then(|handle| scope.write_all(handle, &own).map(|()| handle));
+        match created {
+            Ok(handle) => outputs.push(handle),
+            Err(error) => {
+                for output in outputs {
+                    let _ = scope.release(output);
+                }
+                return Err(error.into());
+            }
+        }
+    }
+    Ok(outputs)
+}
+
+/// Runs a scan: `init` for the first carried words, then the entry once
+/// per element of the first input, in order, each step reading the
+/// previous step's result and writing its own; then the output and the
+/// memories as the steps left them, in the manifest's order. Ordered
+/// work runs on one thread.
+fn run_scan(
+    entry: usize,
+    init: usize,
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let entry: ScanEntry = unsafe { std::mem::transmute::<usize, ScanEntry>(entry) };
+    let init: Init = unsafe { std::mem::transmute::<usize, Init>(init) };
+    let domain = orla_cpu::check_scan(invocation, scope)?;
+    let shared = shared(module, invocation, scope, domain)?;
+    let port = &module.manifest.outputs[0];
+    let stride = port.ty.schema.words();
+    let count = domain.count();
+    let mut ctx = Ctx { ..shared.template };
+    let mut carried = vec![0u32; stride];
+    let failure = |ctx: &Ctx, index: u32| -> Result<(), ExecutionError> {
+        if ctx.error == 0 {
+            return Ok(());
+        }
+        let error = if ctx.error == 1 {
+            ArithmeticError::DivisionByZero
+        } else {
+            ArithmeticError::Overflow
+        };
+        Err(ExecutionError::Arithmetic {
+            x: index,
+            y: 0,
+            error,
+        })
+    };
+    // `init` writes exactly `stride` words; each step reads `stride` words
+    // of the carried value and writes `stride` words of the next.
+    unsafe { init(&mut ctx, carried.as_mut_ptr()) };
+    failure(&ctx, 0)?;
+    let mut words = vec![0u32; count * stride];
+    for index in 0..count {
+        let out = &mut words[index * stride..(index + 1) * stride];
+        unsafe { entry(&mut ctx, index as u32, carried.as_ptr(), out.as_mut_ptr()) };
+        failure(&ctx, index as u32)?;
+        carried.copy_from_slice(out);
+    }
+    let output = scope.create(port.ty.schema.clone(), domain)?;
+    if let Err(error) = scope.write_all(output, &words) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    let mut outputs = vec![output];
+    for (input, words) in &shared.memories {
+        let port = &module.manifest.inputs[*input];
+        let created = scope.size(invocation.inputs[*input]).and_then(|extent| {
+            scope
+                .create(port.ty.schema.clone(), extent)
+                .and_then(|handle| scope.write_all(handle, words).map(|()| handle))
+        });
         match created {
             Ok(handle) => outputs.push(handle),
             Err(error) => {
@@ -503,6 +615,45 @@ unsafe extern "C" fn orla_jit_button(ctx: *const Ctx, code: i32) -> i32 {
     ((bits >> code) & 1) as i32
 }
 
+/// `put` into a rows memory: the element's words replaced, an index
+/// outside the memory dropped.
+unsafe extern "C" fn orla_jit_put_rows(ctx: *const Ctx, input: u32, i: i32, value: *const u32) {
+    let view = unsafe { view(ctx, input) };
+    let count = view.width * view.height * view.depth;
+    if i < 0 || i as u32 >= count {
+        return;
+    }
+    let stride = view.stride as usize;
+    let words = view.words.cast_mut();
+    unsafe { std::ptr::copy_nonoverlapping(value, words.add(i as usize * stride), stride) };
+}
+
+/// `put` into a grid or volume memory: an address outside it (NaN
+/// included) dropped, never clamped, as the interpreter has it.
+unsafe extern "C" fn orla_jit_put(
+    ctx: *const Ctx,
+    input: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    value: *const u32,
+) {
+    let view = unsafe { view(ctx, input) };
+    let axis =
+        |v: f32, limit: u32| -> Option<u32> { (v >= 0.0 && v < limit as f32).then_some(v as u32) };
+    let (Some(cx), Some(cy), Some(cz)) = (
+        axis(x, view.width),
+        axis(y, view.height),
+        axis(z, view.depth),
+    ) else {
+        return;
+    };
+    let index = ((cz * view.height + cy) * view.width + cx) as usize;
+    let stride = view.stride as usize;
+    let words = view.words.cast_mut();
+    unsafe { std::ptr::copy_nonoverlapping(value, words.add(index * stride), stride) };
+}
+
 /// The float error flag: the first failure wins.
 unsafe extern "C" fn orla_jit_fail(ctx: *mut Ctx, code: u32) {
     unsafe {
@@ -558,6 +709,8 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ("orla_jit_linear", orla_jit_linear as *const u8),
         ("orla_jit_key", orla_jit_key as *const u8),
         ("orla_jit_button", orla_jit_button as *const u8),
+        ("orla_jit_put", orla_jit_put as *const u8),
+        ("orla_jit_put_rows", orla_jit_put_rows as *const u8),
         ("orla_jit_fail", orla_jit_fail as *const u8),
         ("orla_jit_sinf", orla_jit_sinf as *const u8),
         ("orla_jit_cosf", orla_jit_cosf as *const u8),

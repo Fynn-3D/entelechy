@@ -180,3 +180,124 @@ fn integer_failures_are_reported_at_their_element() {
         }
     );
 }
+
+/// Runs a module on both backends and returns every output's words.
+fn both_all(
+    source: &str,
+    inputs: &[(orla_abi::Schema, Domain, Vec<u32>)],
+    domain: Domain,
+) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let jit = JitBackend::new().unwrap();
+    let mut host = Host::new(1 << 22);
+    let handles: Vec<_> = inputs
+        .iter()
+        .map(|(schema, domain, words)| {
+            host.adopt(
+                orla_abi::FieldData::from_words(schema.clone(), *domain, words.clone()).unwrap(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let invocation = Invocation {
+        inputs: handles,
+        params: vec![],
+        domain,
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap();
+    let cpu_words: Vec<Vec<u32>> = cpu
+        .iter()
+        .map(|handle| host.data(*handle).unwrap().words().to_vec())
+        .collect();
+    let prepared = jit
+        .prepare(&module)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let out = jit
+        .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+        .unwrap();
+    let jit_words = out
+        .iter()
+        .map(|handle| host.data(*handle).unwrap().words().to_vec())
+        .collect();
+    (cpu_words, jit_words)
+}
+
+#[test]
+fn scans_and_their_memories_match_the_interpreter() {
+    // A machine that walks a grid memory and tallies into a rows memory,
+    // reading its carried value and the step index outside any loop, with
+    // a loop inside a step and writes outside both memories dropped.
+    let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; }
+        scan with at_ = vec2(3.0, 2.0) {
+            let seen = at(screen, at_);
+            put(screen, at_, 1 - seen);
+            let t = at(tally, seen);
+            put(tally, seen, Cell { hits: t.hits + 1, last: float(index()) });
+            put(screen, vec2(-1.0, 0.0), 9);
+            put(tally, 7, Cell { hits: 0, last: 0.0 });
+            let spun = loop 3 with acc = seen { acc + index() + at(ticks, index()) };
+            let next = vec2(float((int(at_.x) + 3 + spun * 5) % 16), float((int(at_.y) + 1 + seen) % 8));
+            return next;
+        } }";
+    let steps = 300u32;
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let cells = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+    let (cpu, jit) = both_all(
+        source,
+        &[
+            (
+                ints.clone(),
+                Domain::Rows(steps),
+                (0..steps).map(|i| i % 3).collect(),
+            ),
+            (ints, Domain::Grid(16, 8), vec![0; 128]),
+            (
+                cells,
+                Domain::Rows(2),
+                vec![0, 0.0f32.to_bits(), 0, 0.0f32.to_bits()],
+            ),
+        ],
+        Domain::Rows(steps),
+    );
+    assert_eq!(cpu.len(), 3);
+    assert_eq!(cpu, jit);
+    assert!(cpu[1].contains(&1), "the walk left marks");
+    assert_eq!(cpu[2][0] + cpu[2][2], steps, "every step tallied once");
+}
+
+#[test]
+fn a_scan_step_that_fails_names_its_element() {
+    let source = "kernel test.count@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with acc = 1000 { return acc / sample(rows); } }";
+    let module = compile(source).unwrap();
+    let jit = JitBackend::new().unwrap();
+    let mut host = Host::new(1 << 16);
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(ints, Domain::Rows(6), vec![2, 5, 1, 0, 3, 3]).unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![rows],
+        params: vec![],
+        domain: Domain::Rows(6),
+        context: Context::default(),
+    };
+    let prepared = jit.prepare(&module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let outcome = jit.execute(prepared.as_ref(), &module, &invocation, &mut scope);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ExecutionError::Arithmetic {
+            x: 3,
+            y: 0,
+            error: ArithmeticError::DivisionByZero
+        }
+    );
+    assert_eq!(host.live(), 1, "the input alone survives a failed run");
+}

@@ -86,23 +86,27 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-Scan mode in the JIT. `orla-jit` compiles map Kernels to native code
-through Cranelift (values scalarised to words in the ABI's layout, `if`
-and `loop` as blocks with block parameters, a function's result through a
-caller-provided slot because arm64 has too few return registers for a
-struct, integer failures recorded in a context struct and reported at
-their element, Field reads and libm through helpers by symbol so they
-round exactly as the interpreter does; every example replay passes on
-`--backend jit` bit for bit against the CPU, twenty to thirty-five times
-faster on the raymarch, voxel and showcase scenes), but a scan, a
-reduction, a scatter and the native operations still run on the
-interpreter under it, so the CHIP-8 steps at the interpreter's speed. The
-step: compile scan Kernels (`init`, `Carried` and `Index` outside loops,
-`Put` into memory buffers passed through the context, the row-serial
-order the CPU keeps) so a machine's whole step is native; reduce and
-scatter may follow or stay interpreted. Then machines: a GBA is within
-reach of memories and a compiled scan; an NDS is not full speed without
-mixed backends and a recompiler.
+Machines on the JIT, which now compiles map and scan Kernels (a scan's
+`init`, its carried words and index outside loops, `put` into working
+copies of the memories that become the outputs; every example replay
+passes on `--backend jit` bit for bit against the CPU, the raymarch,
+voxel and showcase scenes twenty to thirty-five times faster and four
+million CHIP-8 steps in 0.18 s against 1.67 s). Two directions, in order:
+
+1. A GBA as the flagship machine: an ARM7TDMI core as one scan with
+   memories for the BIOS, work RAM, VRAM, palettes and OAM, a PPU as map
+   Kernels over VRAM. Sixteen million cycles a second is about the
+   interpreter-free step rate the CHIP-8 measured (twenty-two million
+   trivial steps a second), so a GBA needs each step to be several
+   instructions and the PPU on the GPU; measure a scan with a real
+   fetch-decode-execute before committing to full speed.
+2. Reductions and scatters on the JIT: the map part compiles as today,
+   the fold and the in-order apply follow the CPU's, so a scene that
+   mixes them no longer switches to the interpreter mid-graph.
+
+Left as is: the interpreter reports an arithmetic failure in a scan at
+`(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
+words, so a change to the interpreter's rounding needs a change here.
 
 ## Open
 

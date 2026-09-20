@@ -388,12 +388,20 @@ capability claim.
   caller-provided slot, integer arithmetic checked as the interpreter
   checks it with the first failure recorded in a context struct, Field
   reads and the transcendental functions through Rust helpers by symbol
-  so they round the same), and runs the entry once per element over the
-  CPU's threads. Map Kernels compile; the other modes and the native
-  operations run on the interpreter under it. The parity test holds the
-  whole map vocabulary bit for bit and every example replay passes on
+  so they round the same), and runs a map's entry once per element over
+  the CPU's threads. A scan compiles too: its `init` is a function
+  without arguments, its entry takes the step's index and a pointer to
+  the carried words (`Carried` and `Index` outside every loop read them),
+  the memories get working copies the views point at so a step's reads
+  see its writes, `put` goes through a helper that resolves the address
+  as the interpreter does and drops a write outside the memory, and the
+  steps run in order on one thread; the copies become the outputs after
+  the first. Reductions, scatters and the native operations run on the
+  interpreter under it. The parity tests hold the map vocabulary and a
+  scan with memories bit for bit and every example replay passes on
   `jit`; the raymarch, voxel and showcase scenes run twenty to thirty-five
-  times faster than the interpreter ([lib](crates/jit/src/lib.rs),
+  times faster than the interpreter and the CHIP-8 steps eight to nine
+  times faster ([lib](crates/jit/src/lib.rs),
   [codegen](crates/jit/src/codegen.rs), [tests](crates/jit/tests/parity.rs)).
 - The CPU backend compiles a module to word-addressed code once per
   execution and runs it once per element: every value has a fixed word

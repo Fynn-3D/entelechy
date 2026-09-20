@@ -28,7 +28,9 @@ blank (screen) ────┘
   the screen memory, the registers, and the pixels on both backends.
 - `chip8.view` draws the screen memory into the window.
 
-A frame of 40 steps takes about 0.4 ms on the CPU; the whole machine is
+A frame of 40 steps takes about 0.4 ms on the CPU, and `--backend jit`
+runs the step as native code, four million steps in 0.18 s against 1.67
+s on the interpreter (`--param speed=4000000`); the whole machine is
 under 200 lines of `.orla`. Another program is another `rom` Kernel, or
 a `.field` of bytes read as an input.
 

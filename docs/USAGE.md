@@ -71,10 +71,11 @@ anything interactive with a device; the JIT compiles the same IR to
 native code through Cranelift when a Kernel is prepared and runs it on
 the CPU's threads, bit for bit what the interpreter computes and ten to
 thirty times faster on the examples, so a machine without a usable GPU
-still runs the interactive scenes. The JIT compiles map Kernels; a
-reduction, a scan, a scatter and the native operations run on the
-interpreter under it. The Player defaults to the GPU when a device is
-available.
+still runs the interactive scenes, and a machine written as a scan
+steps eight to nine times faster than on the interpreter. The JIT
+compiles map and scan Kernels; a reduction, a scatter and the native
+operations run on the interpreter under it. The Player defaults to the
+GPU when a device is available.
 
 ```sh
 cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm
