@@ -22,7 +22,7 @@ capability claim.
 | Capability ABI | [abi](crates/abi/src/lib.rs) | Unit tests: grant checks before Host access |
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
-| Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | Kernel rules | [rules](crates/rules/src/lib.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | Every backend's parity test runs by them |
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [word code](crates/cpu/src/eval/code.rs), [compiler](crates/cpu/src/eval/compile.rs), [machine](crates/cpu/src/eval/run.rs) | [execution tests](crates/cpu/tests/execute.rs) |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
@@ -43,7 +43,7 @@ capability claim.
   with one 32-bit word per scalar ([host](crates/host/src/lib.rs)). Port
   types are structural (`element`, `shape`, `schema`); `Image` is the
   compiler's alias for `Grid<Vec4>` and `type` declares more aliases
-  ([compiler](crates/compiler/src/lower.rs)). Both backends carry every
+  ([compiler](crates/compiler/src/lower/mod.rs)). Both backends carry every
   element as words, so integers and booleans are exact and the two agree
   bit for bit on the examples ([execution test](crates/cpu/tests/execute.rs),
   [parity test](crates/gpu/tests/parity.rs)); the GPU dispatches over three
@@ -132,7 +132,7 @@ capability claim.
   carries `mode`, the module carries `merge`, and the validator checks
   the fold's signature against the output element
   ([IR](crates/ir/src/lib.rs), [validator](crates/ir/src/validate.rs),
-  [compiler](crates/compiler/src/lower.rs)). The CPU folds level by level
+  [compiler](crates/compiler/src/lower/mod.rs)). The CPU folds level by level
   in a fixed tree regardless of thread count; the GPU maps into a scratch
   buffer and folds with a second pipeline in the same tree, so integers
   are exact on both and floats agree to rounding
@@ -156,7 +156,7 @@ capability claim.
   the bound Field is never written, so a failed evaluation commits
   nothing, and both backends agree bit for bit
   ([IR](crates/ir/src/lib.rs), [validator](crates/ir/src/validate.rs),
-  [compiler](crates/compiler/src/lower.rs), [CPU](crates/cpu/src/eval/compile.rs),
+  [compiler](crates/compiler/src/lower/mod.rs), [CPU](crates/cpu/src/eval/compile.rs),
   [WGSL](crates/gpu/src/wgsl.rs), [parity](crates/gpu/tests/parity.rs),
   [feedback test](crates/graph/tests/composition.rs)). With the integer
   bit operators, this is what a machine needs: random-access RAM written
@@ -194,7 +194,7 @@ capability claim.
   order. That order is the determinism rule: `sum`, `min`, `max`, and
   `last` come out the same on both backends, floats included, and an
   address outside the target is dropped ([IR](crates/ir/src/lib.rs),
-  [validator](crates/ir/src/validate.rs), [compiler](crates/compiler/src/lower.rs)).
+  [validator](crates/ir/src/validate.rs), [compiler](crates/compiler/src/lower/mod.rs)).
   The CPU applies the pairs in order over a copy of the target
   ([backend](crates/cpu/src/lib.rs)); the GPU stores the pairs in a
   parallel pass, copies the target on the device, and applies them by
@@ -366,7 +366,7 @@ capability claim.
   and inherited through `use`; one with a Field parameter is a template
   the compiler instantiates per bound port, so a grid walk or a staggered
   read is written once for every Kernel that needs it
-  ([lowering](crates/compiler/src/lower.rs), [tests](crates/compiler/tests/compile.rs)).
+  ([lowering](crates/compiler/src/lower/mod.rs), [tests](crates/compiler/tests/compile.rs)).
 - An evaluation can be demanded: `Evaluator::evaluate_for` runs the named
   nodes, what they read, every `<~` source, and never-produced outputs, and
   leaves the rest at its last value; a replay demands the picture only on
@@ -449,7 +449,7 @@ capability claim.
   backend has a swizzle path. A function may be named after a math
   builtin and shadows it in its document; the builtins with forms of
   their own are reserved (`RESERVED_BUILTINS`,
-  [lowering](crates/compiler/src/lower.rs)).
+  [lowering](crates/compiler/src/lower/mod.rs)).
 
 - The GPU divides integers through a dividend the shader compiler
   cannot narrow: a one read from the context (`wgsl::OPAQUE_ONE`) is
@@ -567,7 +567,7 @@ capability claim.
   carried value, and a scan's step its own inside a loop, because the
   compiler reads those values through `Carried` just before the inner
   loop begins and binds the names to the results, so no backend changed
-  ([lowering](crates/compiler/src/lower.rs),
+  ([lowering](crates/compiler/src/lower/mod.rs),
   [interpreter](crates/cpu/src/eval/compile.rs), [WGSL](crates/gpu/src/wgsl.rs),
   [JIT](crates/jit/src/codegen.rs)).
 - The backends are held to the interpreter across the whole cross
@@ -605,7 +605,7 @@ capability claim.
   are emitted through the signed one on halved dividends; and a
   driver's fast math may fold `inf * 0` to a number where the CPU has
   NaN, so a NaN made by arithmetic on the GPU is not promised; one that arrives in a Field is seen alike
-  ([composed](crates/compiler/src/lower.rs), [matrix](crates/matrix/src/lib.rs)).
+  ([composed](crates/compiler/src/lower/mod.rs), [matrix](crates/matrix/src/lib.rs)).
 - `orla help` and the protocol's `help` list what a Kernel may call:
   the math intrinsics' signatures are found by asking the IR's typing
   rule about every combination of the plain types, their sentences live
