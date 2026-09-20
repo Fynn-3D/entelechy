@@ -953,5 +953,8 @@ fn help_lists_the_builtins_and_shows_one() {
     let output = Command::new(orla).args(["help", "atan3"]).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("did you mean") && stderr.contains("atan2"), "{stderr}");
+    assert!(
+        stderr.contains("did you mean") && stderr.contains("atan2"),
+        "{stderr}"
+    );
 }

@@ -320,12 +320,20 @@ impl Backend for GpuBackend {
                     label: Some("reduce"),
                     source: wgpu::ShaderSource::Wgsl(reduce_source.as_str().into()),
                 });
-            let entries = [
-                uniform_entry(wgsl::REDUCE_COUNT_BINDING),
-                storage_entry(wgsl::REDUCE_IN_BINDING, true),
-                storage_entry(wgsl::REDUCE_OUT_BINDING, false),
-                uniform_entry(3),
+            // The map pass's bindings, then the fold's own.
+            let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
+            let mut entries = vec![
+                uniform_entry(wgsl::CONTEXT_BINDING),
+                uniform_entry(wgsl::PARAMS_BINDING),
             ];
+            for index in 0..module.manifest.inputs.len() {
+                entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, true));
+            }
+            entries.extend([
+                uniform_entry(count_binding),
+                storage_entry(in_binding, true),
+                storage_entry(out_binding, false),
+            ]);
             let layout = self
                 .device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -630,27 +638,41 @@ impl Backend for GpuBackend {
                 let level_bytes: Vec<u8> = level.iter().flat_map(|v| v.to_le_bytes()).collect();
                 let level_buffer =
                     self.buffer("reduce count", &level_bytes, wgpu::BufferUsages::UNIFORM);
+                let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
+                let mut fold_entries = vec![
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::CONTEXT_BINDING,
+                        resource: context_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::PARAMS_BINDING,
+                        resource: params_buffer_for_reduce.as_entire_binding(),
+                    },
+                ];
+                for (index, buffer) in input_buffers.iter().enumerate() {
+                    fold_entries.push(wgpu::BindGroupEntry {
+                        binding: wgsl::INPUT_BINDING + index as u32,
+                        resource: buffer.as_entire_binding(),
+                    });
+                }
+                fold_entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: count_binding,
+                        resource: level_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: in_binding,
+                        resource: current.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: out_binding,
+                        resource: next.as_entire_binding(),
+                    },
+                ]);
                 let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("orla reduce"),
                     layout: reduce_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: wgsl::REDUCE_COUNT_BINDING,
-                            resource: level_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: wgsl::REDUCE_IN_BINDING,
-                            resource: current.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: wgsl::REDUCE_OUT_BINDING,
-                            resource: next.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: params_buffer_for_reduce.as_entire_binding(),
-                        },
-                    ],
+                    entries: &fold_entries,
                 });
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("orla reduce"),

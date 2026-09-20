@@ -456,3 +456,41 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     );
     assert_eq!(host.live(), 2, "a failed run leaks nothing");
 }
+
+#[test]
+fn a_merge_may_read_inputs_params_and_the_context() {
+    let source = "kernel test.fold@1 { requires { field.read; field.write; time.read; } input xs: Rows<Float>; input weights: Rows<Float>; param k: Float = 0.5; output result: Rows<Float>;
+        fn first(w: Rows<Float>) -> Float { return at(w, 0); }
+        compute { return sample(xs) * at(weights, element()); }
+        merge(a, b) { return a + b + at(weights, 1) * k + first(weights) + time(); } }";
+    let floats = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+    let count = 37u32;
+    let (cpu, jit) = both(
+        source,
+        &[
+            (
+                floats.clone(),
+                Domain::Rows(count),
+                (0..count).map(|i| (i as f32 * 0.5).to_bits()).collect(),
+            ),
+            (
+                floats,
+                Domain::Rows(count),
+                (0..count)
+                    .map(|i| (1.0 + (i % 3) as f32).to_bits())
+                    .collect(),
+            ),
+        ],
+        vec![Value::Float(0.25)],
+        Domain::Rows(1),
+        Context {
+            time: 2.0,
+            ..Context::default()
+        },
+    );
+    assert_eq!(cpu, jit);
+    let plain: f32 = (0..count)
+        .map(|i| i as f32 * 0.5 * (1.0 + (i % 3) as f32))
+        .sum();
+    assert!((f32::from_bits(cpu[0]) - (plain + 36.0 * 3.5)).abs() < 1e-2);
+}

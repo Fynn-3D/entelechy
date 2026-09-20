@@ -172,10 +172,11 @@ fn control_flow_is_scoped_and_typed() {
         message.contains("carries Float but the body gives Int"),
         "{message}"
     );
-    let (_, message) = semantic(
+    // An inner loop reads the outer loop's carried value by name.
+    compile(
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { loop 2 with y = 0.0 { x } }; return vec4(a, 0.0, 0.0, 1.0); } }",
-    );
-    assert!(message.contains("carried by an outer loop"), "{message}");
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { let i = index(); return vec4(float(i), 0.0, 0.0, 1.0); } }",
     );

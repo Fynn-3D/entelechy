@@ -93,10 +93,14 @@ fn literal(value: &Value) -> String {
     }
 }
 
-/// Emits a complete compute shader for the module.
-pub fn emit(module: &Module) -> String {
+/// The preamble both shaders share: the context and params uniforms, the
+/// output buffer when `with_output`, every input's buffer, the structs,
+/// the key and button readers, every input's loader and address, the
+/// normalizers, mixers, linear readers and memory writers. A `merge` may
+/// read inputs, params and the context like any function, so the fold
+/// shader carries the same.
+fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
     let manifest = &module.manifest;
-    let mut out = String::new();
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
     let params_len = manifest.params.len().max(1);
     let _ = writeln!(
@@ -107,10 +111,12 @@ pub fn emit(module: &Module) -> String {
         out,
         "@group(0) @binding({PARAMS_BINDING}) var<uniform> params: array<vec4<f32>, {params_len}>;"
     );
-    let _ = writeln!(
-        out,
-        "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<u32>;"
-    );
+    if with_output {
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<u32>;"
+        );
+    }
     for (index, port) in manifest.inputs.iter().enumerate() {
         // A memory is written by the steps, so its binding is read-write.
         let access = if manifest.memories.contains(&port.name) {
@@ -206,14 +212,21 @@ fn button_down(code: i32) -> bool {{
             ty.components().unwrap_or(0)
         );
     }
-    emit_mixers(&mut out, module);
+    emit_mixers(out, module);
     for (index, port) in manifest.inputs.iter().enumerate() {
-        emit_linear(&mut out, module, index, port);
+        emit_linear(out, module, index, port);
         if manifest.memories.contains(&port.name) {
-            emit_memory_writer(&mut out, module, index, port);
+            emit_memory_writer(out, module, index, port);
         }
     }
     out.push('\n');
+}
+
+/// Emits a complete compute shader for the module.
+pub fn emit(module: &Module) -> String {
+    let manifest = &module.manifest;
+    let mut out = String::new();
+    emit_preamble(&mut out, module, true);
     if let Some(port) = manifest.outputs.first() {
         // A scatter's map pass stores the entry's pairs, not elements.
         let element = if matches!(manifest.mode, Mode::Scatter { .. }) {
@@ -844,12 +857,6 @@ fn result_type_of(function: &Function, id: ValueId) -> Type {
     find(&function.body, id).unwrap_or(Type::Float)
 }
 
-/// Binding index of the reduce step's count uniform.
-pub const REDUCE_COUNT_BINDING: u32 = 0;
-/// Binding index of the reduce step's input level.
-pub const REDUCE_IN_BINDING: u32 = 1;
-/// Binding index of the reduce step's output level.
-pub const REDUCE_OUT_BINDING: u32 = 2;
 /// Workgroup length of the reduce step.
 pub const REDUCE_WORKGROUP: u32 = 64;
 
@@ -864,50 +871,24 @@ pub fn emit_reduce(module: &Module) -> String {
     };
     let element = merge.args[0];
     let stride = module.manifest.outputs[0].ty.schema.words();
+    let (count_binding, in_binding, out_binding) = reduce_bindings(module);
     let mut out = String::new();
+    // The same context, params and inputs as the map shader: `merge` is a
+    // plain function and may read any of them, or call one that does.
+    emit_preamble(&mut out, module, false);
     let _ = writeln!(
         out,
-        "@group(0) @binding({REDUCE_COUNT_BINDING}) var<uniform> level: vec4<u32>;"
+        "@group(0) @binding({count_binding}) var<uniform> level: vec4<u32>;"
     );
     let _ = writeln!(
         out,
-        "@group(0) @binding({REDUCE_IN_BINDING}) var<storage, read> in0: array<u32>;"
+        "@group(0) @binding({in_binding}) var<storage, read> fold_in: array<u32>;"
     );
     let _ = writeln!(
         out,
-        "@group(0) @binding({REDUCE_OUT_BINDING}) var<storage, read_write> out0: array<u32>;"
+        "@group(0) @binding({out_binding}) var<storage, read_write> fold_out: array<u32>;"
     );
-    // The map shader's context and params are absent here: `merge` is a
-    // plain function, but it may call helpers and read params, so params
-    // are bound too.
-    let _ = writeln!(
-        out,
-        "@group(0) @binding(3) var<uniform> params: array<vec4<f32>, {}>;",
-        module.manifest.params.len().max(1)
-    );
-    for (index, def) in module.structs.iter().enumerate() {
-        let fields = def
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
-    }
-    for ty in [Type::Vec2, Type::Vec3, Type::Vec4] {
-        let name = wgsl_type(ty);
-        let _ = writeln!(
-            out,
-            "fn safe_normalize_{}(v: {name}) -> {name} {{
-    let l = length(v);
-    if (l > 0.0) {{ return v / l; }}
-    return {name}(0.0);
-}}",
-            ty.components().unwrap_or(0)
-        );
-    }
-    let (expr, _) = load_expr(module, element, "in0", "b", 0);
+    let (expr, _) = load_expr(module, element, "fold_in", "b", 0);
     let _ = writeln!(
         out,
         "fn load_level(index: u32) -> {} {{
@@ -918,14 +899,14 @@ pub fn emit_reduce(module: &Module) -> String {
     );
     let mut stores = Vec::new();
     store_lines(module, element, "v", 0, &mut stores);
+    let body = stores.join("\n").replace("out0[", "fold_out[");
     let _ = writeln!(
         out,
-        "fn store_out0(index: u32, v: {}) {{
+        "fn store_level(index: u32, v: {}) {{
     let b = index * {stride}u;
-{}
+{body}
 }}",
-        wgsl_type(element),
-        stores.join("\n")
+        wgsl_type(element)
     );
     for (index, function) in module.functions.iter().enumerate() {
         emit_function(&mut out, module, function, &format!("f{index}"), false);
@@ -943,13 +924,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return;
     }}
     if (2u * i + 1u < n) {{
-        store_out0(i, merge(load_level(2u * i), load_level(2u * i + 1u)));
+        store_level(i, merge(load_level(2u * i), load_level(2u * i + 1u)));
     }} else {{
-        store_out0(i, load_level(2u * i));
+        store_level(i, load_level(2u * i));
     }}
 }}"
     );
     out
+}
+
+/// The fold pass's own bindings, after the inputs': the level count, the
+/// level read and the level written.
+pub fn reduce_bindings(module: &Module) -> (u32, u32, u32) {
+    let base = INPUT_BINDING + module.manifest.inputs.len() as u32;
+    (base, base + 1, base + 2)
 }
 
 /// Whether a type is floats all the way down, so it can be interpolated.

@@ -1317,3 +1317,74 @@ fn a_match_is_a_switch_on_the_gpu() {
     assert_eq!(cpu_words, gpu_words);
     assert_eq!(cpu_words[3] as i32, 100_022);
 }
+
+#[test]
+fn a_merge_may_read_inputs_params_and_the_context() {
+    // The fold pass binds what the map pass binds: `merge` reads a Field
+    // directly and through a function, a param, and the time.
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.fold@1 { requires { field.read; field.write; time.read; } input xs: Rows<Float>; input weights: Rows<Float>; param k: Float = 0.5; output result: Rows<Float>;
+        fn first(w: Rows<Float>) -> Float { return at(w, 0); }
+        compute { return sample(xs) * at(weights, element()); }
+        merge(a, b) { return a + b + at(weights, 1) * k + first(weights) + time(); } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let floats = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+    let mut host = Host::new(1 << 16);
+    let count = 37u32;
+    let xs = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                floats.clone(),
+                Domain::Rows(count),
+                (0..count).map(|i| (i as f32 * 0.5).to_bits()).collect(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let weights = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                floats,
+                Domain::Rows(count),
+                (0..count)
+                    .map(|i| (1.0 + (i % 3) as f32).to_bits())
+                    .collect(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![xs, weights],
+        params: vec![orla_abi::Value::Float(0.25)],
+        domain: Domain::Rows(1),
+        context: orla_abi::Context {
+            time: 2.0,
+            ..orla_abi::Context::default()
+        },
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu).unwrap().words().to_vec();
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let device = host.resident(out).unwrap().expect("resident");
+    let bytes = Backend::download(&gpu, device, 4).unwrap();
+    let gpu_value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let cpu_value = f32::from_bits(cpu_words[0]);
+    assert!(
+        (cpu_value - gpu_value).abs() <= cpu_value.abs() * 1e-5,
+        "{cpu_value} vs {gpu_value}"
+    );
+    // 36 merges each add at(weights, 1) * k + first(weights) + time = 2 * 0.25 + 1 + 2.
+    let plain: f32 = (0..count)
+        .map(|i| i as f32 * 0.5 * (1.0 + (i % 3) as f32))
+        .sum();
+    assert!(
+        (cpu_value - (plain + 36.0 * 3.5)).abs() < 1e-2,
+        "{cpu_value}"
+    );
+}

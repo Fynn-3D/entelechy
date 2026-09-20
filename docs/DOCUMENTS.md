@@ -152,7 +152,9 @@ kernel stats.luma@1 {
 `domain()` refer to it) and `merge` folds the results pairwise into the
 single element of a `Rows` output. `merge` must be associative and
 commutative: the fold's tree belongs to the backend, integers and
-booleans come out exact, floats agree to rounding. A reduce node takes no
+booleans come out exact, floats agree to rounding. Like any function,
+`merge` may read the inputs (`at`, `at_linear`, `count`, `size`), the
+params and the context, on every backend. A reduce node takes no
 `domain` and is never fused.
 
 A Kernel with `scan` in place of `compute` is ordered work, the third

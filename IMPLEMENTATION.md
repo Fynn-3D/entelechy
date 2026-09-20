@@ -433,7 +433,11 @@ capability claim.
   see its writes, `put` goes through a helper that resolves the address
   as the interpreter does and drops a write outside the memory, and the
   steps run in order on one thread; the copies become the outputs after
-  the first. A reduction compiles its `merge` as a function taking its
+  the first. On the GPU the fold pass carries the map pass's bindings
+  (the context, the params, every input) before its own level buffers,
+  so a `merge` that reads a Field, a param or the time compiles there as
+  it runs on the CPU and the JIT ([fold](crates/gpu/src/wgsl.rs),
+  [parity test](crates/gpu/tests/parity.rs)). A reduction compiles its `merge` as a function taking its
   two values through pointers, so the host folds the map's words in the
   interpreter's fixed tree by calling it whatever the words; a scatter
   runs its entry over the sources into pairs and applies them in element
