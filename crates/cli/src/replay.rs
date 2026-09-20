@@ -532,13 +532,15 @@ fn check_element(
     let actual: Vec<String> = words
         .iter()
         .map(|w| match ty {
-            Type::Int => (*w as i32).to_string(),
+            Type::Int | Type::IVec2 | Type::IVec3 => (*w as i32).to_string(),
             Type::Bool => (*w != 0).to_string(),
             _ => format!("{}", f32::from_bits(*w)),
         })
         .collect();
     let matches = words.iter().zip(values).all(|(w, expected)| match ty {
-        Type::Int => expected.parse::<i32>().is_ok_and(|e| e == *w as i32),
+        Type::Int | Type::IVec2 | Type::IVec3 => {
+            expected.parse::<i32>().is_ok_and(|e| e == *w as i32)
+        }
         Type::Bool => match expected.as_str() {
             "true" => *w != 0,
             "false" => *w == 0,
