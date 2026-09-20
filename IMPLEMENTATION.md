@@ -410,10 +410,14 @@ capability claim.
   see its writes, `put` goes through a helper that resolves the address
   as the interpreter does and drops a write outside the memory, and the
   steps run in order on one thread; the copies become the outputs after
-  the first. Reductions, scatters and the native operations run on the
-  interpreter under it. The parity tests hold the map vocabulary and a
-  scan with memories bit for bit and every example replay passes on
-  `jit`; the raymarch, voxel and showcase scenes run twenty to thirty-five
+  the first. A reduction compiles its `merge` as a function taking its
+  two values through pointers, so the host folds the map's words in the
+  interpreter's fixed tree by calling it whatever the words; a scatter
+  runs its entry over the sources into pairs and applies them in element
+  order with the CPU crate's own combine rule. The native operations,
+  the rasterizer, are the CPU's code. The parity tests hold the map
+  vocabulary, a scan with memories, a reduction and scatters bit for bit
+  and every example replay passes on `jit`; the raymarch, voxel and showcase scenes run twenty to thirty-five
   times faster than the interpreter and the CHIP-8 steps eight to nine
   times faster ([lib](crates/jit/src/lib.rs),
   [codegen](crates/jit/src/codegen.rs), [tests](crates/jit/tests/parity.rs)).

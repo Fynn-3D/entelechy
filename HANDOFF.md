@@ -62,7 +62,10 @@ builds on Rust 1.93), returns every function's result through a
 caller-provided stack slot (arm64 refuses a struct's worth of return
 registers), keeps `unsafe` to the one crate that calls the code it made
 (its own `[lints]` instead of the workspace's `forbid`), and prepares one
-compiled module per Kernel version, freed with it.
+compiled module per Kernel version, freed with it; a reduction's `merge`
+is compiled with its two values passed through pointers (its words vary
+by Kernel, a native call from Rust cannot), and the fold and a scatter's
+apply are the CPU crate's loops so the three backends stay one rule.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -97,16 +100,16 @@ literals for its ALU, stepped by the JIT; the
 [Thumb core](examples/thumb/README.md) (every format of the ARM7TDMI's
 16-bit set, 19 million instructions a second on the JIT, above a GBA's
 clock) are the proofs. A whole emulator (GBA or otherwise) is a project
-of its own, not a next step of this repository. Back to the platform:
+of its own, not a next step of this repository. The JIT now covers every
+mode (a reduction folds with its compiled `merge` in the interpreter's
+tree, a scatter applies with the CPU crate's combine rule), so
+`--backend jit` never falls back to the interpreter. Back to the
+platform:
 
-1. Reductions and scatters on the JIT: the map part compiles as today,
-   the fold and the in-order apply follow the CPU's, so a scene that
-   mixes them no longer switches to the interpreter mid-graph; the JIT
-   then covers every mode and can be the default where no GPU is.
-2. A Godot bridge (`/usr/local/bin/godot` is installed): a client of the
+1. A Godot bridge (`/usr/local/bin/godot` is installed): a client of the
    protocol like the Blender and web bridges, a texture from `read`, the
    input from the scene, params from the inspector.
-3. What a session of play turns up: the voxel editor and the showcase
+2. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, the GPU scan
    is one thread (a machine belongs on the JIT).
 

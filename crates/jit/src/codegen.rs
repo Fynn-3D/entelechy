@@ -7,8 +7,10 @@
 //! call passes the words; a map's entry takes the context, the element's
 //! coordinates and a pointer for its output words; a scan's entry takes
 //! the context, the step's index, a pointer to the carried words and a
-//! pointer for the next, and its `init` writes the first carried words.
-//! Memories are written through a helper. Integer arithmetic is
+//! pointer for the next, and its `init` writes the first carried words;
+//! a reduction's `merge` takes its two values through pointers, so the
+//! host can call it whatever their words. Memories are written through
+//! a helper. Integer arithmetic is
 //! checked as the interpreter checks it, the first failure recorded in
 //! the context. Field reads and the transcendental functions call the
 //! helpers in the crate root, by symbol, so they round as the CPU does.
@@ -50,11 +52,12 @@ struct Imports {
 }
 
 /// A module's native code: the JIT module holding it, the entry's
-/// address, and a scan's `init`.
+/// address, a scan's `init`, and a reduction's `merge`.
 pub struct Code {
     pub module: JITModule,
     pub entry: usize,
     pub init: Option<usize>,
+    pub merge: Option<usize>,
 }
 
 /// What the function being translated is.
@@ -67,6 +70,9 @@ enum Kind {
     /// A scan's entry: the context, the index, the carried words, the
     /// output slot.
     Scan,
+    /// A reduction's `merge`: the context, pointers to the two values'
+    /// words, the output slot.
+    Merge,
 }
 
 /// Compiles the module.
@@ -158,6 +164,14 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         ),
         _ => None,
     };
+    let merge_signature = sig(&[ptr, ptr, ptr, ptr], &[]);
+    let merge_id = match &module.merge {
+        Some(_) if module.manifest.mode == orla_ir::Mode::Reduce => Some(
+            jit.declare_function("merge", Linkage::Local, &merge_signature)
+                .map_err(|error| error.to_string())?,
+        ),
+        _ => None,
+    };
     let max_stride = module
         .manifest
         .inputs
@@ -194,6 +208,19 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             .map_err(|error| format!("init: {error}"))?;
         jit.clear_context(&mut context);
     }
+    if let (Some(merge_id), Some(merge)) = (merge_id, &module.merge) {
+        context.func.signature = merge_signature;
+        {
+            let builder = FunctionBuilder::new(&mut context.func, &mut fbc);
+            Fx::new(
+                module, &mut jit, builder, &imports, &functions, ptr, max_stride,
+            )
+            .function(merge, Kind::Merge);
+        }
+        jit.define_function(merge_id, &mut context)
+            .map_err(|error| format!("merge: {error}"))?;
+        jit.clear_context(&mut context);
+    }
     context.func.signature = entry_signature;
     {
         let builder = FunctionBuilder::new(&mut context.func, &mut fbc);
@@ -209,10 +236,12 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         .map_err(|error| error.to_string())?;
     let entry = jit.get_finalized_function(entry_id) as usize;
     let init = init_id.map(|id| jit.get_finalized_function(id) as usize);
+    let merge = merge_id.map(|id| jit.get_finalized_function(id) as usize);
     Ok(Code {
         module: jit,
         entry,
         init,
+        merge,
     })
 }
 
@@ -408,6 +437,18 @@ impl<'a, 'b> Fx<'a, 'b> {
                     cursor += n;
                 }
                 params[1]
+            }
+            Kind::Merge => {
+                // Each argument's words are loaded from its pointer.
+                for (arg, pointer) in function.args.iter().zip([params[1], params[2]]) {
+                    let words = word_types(self.module, *arg)
+                        .iter()
+                        .enumerate()
+                        .map(|(k, t)| self.b.ins().load(*t, self.flags, pointer, (k * 4) as i32))
+                        .collect();
+                    self.args.push(words);
+                }
+                params[3]
             }
         };
         self.block(&function.body);

@@ -302,3 +302,155 @@ fn a_scan_step_that_fails_names_its_element() {
     );
     assert_eq!(host.live(), 1, "the input alone survives a failed run");
 }
+
+#[test]
+fn reductions_fold_in_the_interpreters_tree() {
+    // Ints exactly and floats bit for bit, since both backends fold the
+    // same pairs in the same order; an odd count runs the tail path.
+    let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
+    let (width, height) = (37u32, 23u32);
+    let pixels: Vec<u32> = (0..width * height)
+        .flat_map(|i| {
+            let f = i as f32 / (width * height) as f32;
+            [f, (f * 7.0).fract(), 1.0 - f, 1.0].map(f32::to_bits)
+        })
+        .collect();
+    let (cpu, jit) = both_all(
+        source,
+        &[(
+            orla_abi::Schema::pixel(),
+            Domain::Grid(width, height),
+            pixels,
+        )],
+        Domain::Rows(1),
+    );
+    assert_eq!(cpu, jit);
+    assert_eq!(cpu[0].len(), 6);
+    assert!(cpu[0][0] > 0 && f32::from_bits(cpu[0][5]) > 0.5);
+}
+
+#[test]
+fn scatters_apply_in_element_order_with_the_same_rule() {
+    // Many drops into a small grid, several per cell, so the order of the
+    // float sums matters; an address outside is dropped.
+    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
+    let count = 2000u32;
+    let drops: Vec<u32> = (0..count)
+        .flat_map(|i| {
+            let x = (i as f32 * 0.37).sin() * 5.0 + 3.0;
+            let y = (i as f32 * 0.11).cos() * 3.0 + 1.5;
+            [
+                x.to_bits(),
+                y.to_bits(),
+                (0.1 + (i % 7) as f32 * 0.013).to_bits(),
+                i % 11,
+            ]
+        })
+        .collect();
+    let drop_schema = orla_abi::Schema::new(vec![
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Int,
+    ]);
+    let cell = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let (cpu, jit) = both_all(
+        source,
+        &[
+            (drop_schema, Domain::Rows(count), drops),
+            (cell, Domain::Grid(8, 4), vec![0; 64]),
+        ],
+        Domain::Grid(8, 4),
+    );
+    assert_eq!(cpu, jit);
+    let mass: f32 = cpu[0].chunks_exact(2).map(|c| f32::from_bits(c[0])).sum();
+    assert!(mass > 50.0, "the drops inside landed: {mass}");
+    // The other rules and an integer target: min, max and last over rows.
+    for rule in ["min", "max", "last"] {
+        let source = format!(
+            "kernel test.rows@1 {{ requires {{ field.read; field.write; }} input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair {{ at: Int; value: Int; }} scatter into slots with {rule} {{ let k = sample(keys); return Pair {{ at: k % 9 - 1, value: k * 7 % 13 - 6 }}; }} }}"
+        );
+        let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let (cpu, jit) = both_all(
+            &source,
+            &[
+                (ints.clone(), Domain::Rows(100), (0..100).collect()),
+                (ints, Domain::Rows(8), vec![0; 8]),
+            ],
+            Domain::Rows(8),
+        );
+        assert_eq!(cpu, jit, "{rule}");
+    }
+}
+
+#[test]
+fn a_merge_or_a_combine_that_overflows_is_reported() {
+    let jit = JitBackend::new().unwrap();
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    // The fold overflows at the second level.
+    let source = "kernel test.total@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows); } merge(a, b) { return a + b; } }";
+    let module = compile(source).unwrap();
+    let mut host = Host::new(1 << 16);
+    let rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                ints.clone(),
+                Domain::Rows(4),
+                vec![0x4000_0000, 0x4000_0000, 1, 1],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![rows],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: Context::default(),
+    };
+    let prepared = jit.prepare(&module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let outcome = jit.execute(prepared.as_ref(), &module, &invocation, &mut scope);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ExecutionError::Arithmetic {
+            x: 0,
+            y: 0,
+            error: ArithmeticError::Overflow
+        }
+    );
+    // An integer sum into one slot overflows at the third source.
+    let source = "kernel test.pile@1 { requires { field.read; field.write; } input rows: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair { at: Int; value: Int; } scatter into slots with sum { return Pair { at: 0, value: sample(rows) }; } }";
+    let module = compile(source).unwrap();
+    let mut host = Host::new(1 << 16);
+    let rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                ints.clone(),
+                Domain::Rows(4),
+                vec![0x4000_0000, 0x3000_0000, 0x4000_0000, 1],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let slots = host
+        .adopt(orla_abi::FieldData::from_words(ints, Domain::Rows(2), vec![0; 2]).unwrap())
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![rows, slots],
+        params: vec![],
+        domain: Domain::Rows(2),
+        context: Context::default(),
+    };
+    let prepared = jit.prepare(&module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let outcome = jit.execute(prepared.as_ref(), &module, &invocation, &mut scope);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ExecutionError::Arithmetic {
+            x: 2,
+            y: 0,
+            error: ArithmeticError::Overflow
+        }
+    );
+    assert_eq!(host.live(), 2, "a failed run leaks nothing");
+}

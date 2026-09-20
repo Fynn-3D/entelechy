@@ -73,9 +73,10 @@ the CPU's threads, bit for bit what the interpreter computes and ten to
 thirty times faster on the examples, so a machine without a usable GPU
 still runs the interactive scenes, and a machine written as a scan
 steps eight to nine times faster than on the interpreter. The JIT
-compiles map and scan Kernels; a reduction, a scatter and the native
-operations run on the interpreter under it. The Player defaults to the
-GPU when a device is available.
+compiles every mode (a reduction's fold and a scatter's in-order apply
+follow the interpreter's exactly); the native operations, the
+rasterizer, are the CPU's code. The Player defaults to the GPU when a
+device is available.
 
 ```sh
 cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm

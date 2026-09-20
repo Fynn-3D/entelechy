@@ -352,8 +352,8 @@ pub fn float_order_key(word: u32) -> i32 {
 }
 
 /// Combines a scattered value into the element already there, scalar by
-/// scalar; the one rule both backends follow.
-fn combine_words(
+/// scalar; the one rule every backend follows.
+pub fn combine_words(
     combine: Combine,
     scalars: &[Scalar],
     element: &mut [u32],

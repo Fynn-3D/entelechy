@@ -19,8 +19,8 @@ use std::sync::Arc;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use orla_abi::{Domain, Handle, Invocation, Scope};
-use orla_cpu::{ArithmeticError, CpuBackend, ExecutionError, check_invocation};
-use orla_ir::{Mode, Validated};
+use orla_cpu::{ArithmeticError, ExecutionError, check_invocation};
+use orla_ir::{Combine, Mode, Validated};
 use orla_runtime::{Backend, NativeOp, Prepared};
 
 /// Elements per thread below which the run stays single-threaded.
@@ -66,11 +66,13 @@ type Entry = unsafe extern "C" fn(*mut Ctx, u32, u32, u32, *mut u32);
 type ScanEntry = unsafe extern "C" fn(*mut Ctx, u32, *const u32, *mut u32);
 /// A scan's `init`: the context and where the first carried words go.
 type Init = unsafe extern "C" fn(*mut Ctx, *mut u32);
+/// A reduction's `merge`: the context, the two values' words, and where
+/// the merged words go.
+type Merge = unsafe extern "C" fn(*mut Ctx, *const u32, *const u32, *mut u32);
 
 /// The JIT backend: a target ISA to compile for.
 pub struct JitBackend {
     isa: Arc<dyn TargetIsa>,
-    cpu: CpuBackend,
 }
 
 impl std::fmt::Debug for JitBackend {
@@ -90,10 +92,7 @@ impl JitBackend {
             .map_err(|error| error.to_string())?
             .finish(settings::Flags::new(flags))
             .map_err(|error| error.to_string())?;
-        Ok(Self {
-            isa,
-            cpu: CpuBackend,
-        })
+        Ok(Self { isa })
     }
 
     /// The target the code is compiled for, for diagnostics.
@@ -107,8 +106,10 @@ impl JitBackend {
 struct Compiled {
     module: Option<cranelift_jit::JITModule>,
     entry: usize,
-    /// A scan's `init`; a map has none.
+    /// A scan's `init`.
     init: Option<usize>,
+    /// A reduction's `merge`.
+    merge: Option<usize>,
 }
 
 // The module is only read after finalization, and the code it holds is
@@ -132,15 +133,6 @@ impl Prepared for Compiled {
     }
 }
 
-/// A prepared module of a mode the JIT hands to the CPU backend.
-struct OnCpu;
-
-impl Prepared for OnCpu {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
 impl Backend for JitBackend {
     fn name(&self) -> &'static str {
         "jit"
@@ -151,14 +143,12 @@ impl Backend for JitBackend {
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        if !matches!(module.manifest.mode, Mode::Map | Mode::Scan) {
-            return Ok(Box::new(OnCpu));
-        }
         let code = codegen::compile(module, self.isa.clone())?;
         Ok(Box::new(Compiled {
             module: Some(code.module),
             entry: code.entry,
             init: code.init,
+            merge: code.merge,
         }))
     }
 
@@ -170,17 +160,29 @@ impl Backend for JitBackend {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
         let Some(compiled) = prepared.as_any().downcast_ref::<Compiled>() else {
-            if prepared.as_any().is::<OnCpu>() {
-                return self.cpu.execute(module, invocation, scope);
-            }
             return Err(ExecutionError::Device(
                 "kernel was prepared by a different backend".into(),
             ));
         };
         check_invocation(module, invocation)?;
-        match compiled.init {
-            Some(init) => run_scan(compiled.entry, init, module, invocation, scope),
-            None => run(compiled.entry, module, invocation, scope),
+        match module.manifest.mode {
+            Mode::Map => run(compiled.entry, module, invocation, scope),
+            Mode::Scan => {
+                let init = compiled.init.expect("a scan compiles its init");
+                run_scan(compiled.entry, init, module, invocation, scope)
+            }
+            Mode::Reduce => {
+                let merge = compiled.merge.expect("a reduction compiles its merge");
+                run_reduce(compiled.entry, merge, module, invocation, scope)
+            }
+            Mode::Scatter { base, combine } => run_scatter(
+                compiled.entry,
+                module,
+                invocation,
+                scope,
+                base as usize,
+                combine,
+            ),
         }
     }
 
@@ -287,24 +289,15 @@ fn shared(
     })
 }
 
-/// Runs the compiled entry over every element of the invocation's domain
-/// and creates the outputs.
-fn run(
-    entry: usize,
-    module: &Validated,
-    invocation: &Invocation,
-    scope: &mut Scope<'_>,
-) -> Result<Vec<Handle>, ExecutionError> {
-    let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
-    let domain = invocation.domain;
-    let shared = shared(module, invocation, scope, domain)?;
-    let strides: Vec<usize> = module
-        .manifest
-        .outputs
-        .iter()
-        .map(|port| port.ty.schema.words())
-        .collect();
-    let stride: usize = strides.iter().sum();
+/// Runs the compiled entry over every element of `domain`, on as many
+/// threads as pay off, and returns `stride` words per element, element
+/// after element (rows of every layer one after another).
+fn compute(
+    entry: Entry,
+    shared: &Shared,
+    domain: Domain,
+    stride: usize,
+) -> Result<Vec<u32>, ExecutionError> {
     let width = domain.width() as usize;
     let height = domain.height();
     let rows = height as usize * domain.depth() as usize;
@@ -334,7 +327,6 @@ fn run(
         depth: t.depth,
         error: 0,
     };
-    let shared = &shared;
     let run_rows = |first_row: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
         let mut ctx = fresh(&shared.template);
         for (offset, row) in chunk.chunks_exact_mut(row_words.max(1)).enumerate() {
@@ -383,6 +375,28 @@ fn run(
             outcome?;
         }
     }
+    Ok(results)
+}
+
+/// A map: the entry over the invocation's domain, its words split into
+/// the outputs.
+fn run(
+    entry: usize,
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
+    let domain = invocation.domain;
+    let shared = shared(module, invocation, scope, domain)?;
+    let strides: Vec<usize> = module
+        .manifest
+        .outputs
+        .iter()
+        .map(|port| port.ty.schema.words())
+        .collect();
+    let stride: usize = strides.iter().sum();
+    let results = compute(entry, &shared, domain, stride)?;
     let count = domain.count();
     let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
     let mut offset = 0;
@@ -407,6 +421,112 @@ fn run(
         }
     }
     Ok(outputs)
+}
+
+/// A reduction: the entry over the first input's domain, then a pairwise
+/// fold with `merge` in the fixed tree the CPU uses, so the result does
+/// not depend on how many threads ran the map. One `Rows` element.
+fn run_reduce(
+    entry: usize,
+    merge: usize,
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
+    let merge: Merge = unsafe { std::mem::transmute::<usize, Merge>(merge) };
+    let domain = scope.size(invocation.inputs[0])?;
+    let shared = shared(module, invocation, scope, domain)?;
+    let port = &module.manifest.outputs[0];
+    let stride = port.ty.schema.words();
+    let mut level = compute(entry, &shared, domain, stride)?;
+    let mut ctx = Ctx { ..shared.template };
+    let mut count = domain.count();
+    while count > 1 {
+        let pairs = count / 2;
+        let mut next = vec![0u32; count.div_ceil(2) * stride];
+        for pair in 0..pairs {
+            let a = level[2 * pair * stride..].as_ptr();
+            let b = level[(2 * pair + 1) * stride..].as_ptr();
+            let out = next[pair * stride..].as_mut_ptr();
+            // `merge` reads `stride` words at `a` and `b` and writes
+            // `stride` words at `out`.
+            unsafe { merge(&mut ctx, a, b, out) };
+            if ctx.error != 0 {
+                return Err(ExecutionError::Arithmetic {
+                    x: 0,
+                    y: 0,
+                    error: arithmetic(ctx.error),
+                });
+            }
+        }
+        if count % 2 == 1 {
+            next[pairs * stride..].copy_from_slice(&level[(count - 1) * stride..count * stride]);
+        }
+        level = next;
+        count = count.div_ceil(2);
+    }
+    let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
+    if let Err(error) = scope.write_all(output, &level) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// A scatter: the entry over the first input into pairs of address and
+/// value, then every pair applied to a copy of the target, one after
+/// another in element order, by the rule the CPU applies.
+fn run_scatter(
+    entry: usize,
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+    base: usize,
+    combine: Combine,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
+    let target = orla_cpu::check_scatter(invocation, scope, base)?;
+    let sources = scope.size(invocation.inputs[0])?;
+    let address = orla_cpu::address_words(target);
+    let port = &module.manifest.outputs[0];
+    let stride = port.ty.schema.words();
+    let shared = shared(module, invocation, scope, sources)?;
+    let pairs = compute(entry, &shared, sources, address + stride)?;
+    drop(shared);
+    let mut words = scope.words(invocation.inputs[base])?.to_vec();
+    let scalars = port.ty.schema.scalars();
+    for (index, pair) in pairs.chunks_exact(address + stride).enumerate() {
+        let Some(at) = orla_cpu::scatter_index(target, &pair[..address]) else {
+            continue;
+        };
+        orla_cpu::combine_words(
+            combine,
+            scalars,
+            &mut words[at * stride..(at + 1) * stride],
+            &pair[address..],
+        )
+        .map_err(|error| ExecutionError::Arithmetic {
+            x: (index % sources.width() as usize) as u32,
+            y: (index / sources.width() as usize) as u32,
+            error,
+        })?;
+    }
+    let output = scope.create(port.ty.schema.clone(), target)?;
+    if let Err(error) = scope.write_all(output, &words) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// The failure a context's error code names.
+fn arithmetic(code: u32) -> ArithmeticError {
+    if code == 1 {
+        ArithmeticError::DivisionByZero
+    } else {
+        ArithmeticError::Overflow
+    }
 }
 
 /// Runs a scan: `init` for the first carried words, then the entry once
