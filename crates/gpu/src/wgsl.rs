@@ -303,10 +303,11 @@ fn combine_expr(module: &Module, ty: Type, combine: Combine, a: &str, b: &str) -
     }
 }
 
-/// Emits the scatter pass of a scatter module: one invocation walks the
-/// pairs the map pass stored, in element order, and combines each value
-/// into the target at its address; an address outside the target is
-/// dropped. The order is the rule the CPU follows too.
+/// Emits the sequential combine of a scatter module: one invocation walks
+/// the pairs the map pass stored, in element order, and combines each
+/// value into the target at its address; an address outside the target is
+/// dropped. The order is the rule the CPU follows too; only a float sum,
+/// whose rounding is that order, runs this way ([`scatter_plan`]).
 pub fn emit_scatter(module: &Module) -> String {
     let Mode::Scatter { base, combine } = module.manifest.mode else {
         return String::new();
@@ -413,6 +414,310 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         {address}
         store_out0(at, combine(load_out0(at), p.f1));
     }}
+}}"
+    );
+    out
+}
+
+/// Binding index of the scatter pass's winners, for `last`: one word per
+/// target element, the greatest source index plus one, zero for none.
+pub const SCATTER_WINNER_BINDING: u32 = 3;
+/// Workgroup length of the parallel scatter passes.
+pub const SCATTER_WORKGROUP: u32 = 64;
+
+/// How a scatter's combine runs on the GPU: order-free rules apply the
+/// pairs in parallel with atomics; a float sum, whose rounding is the
+/// element order, applies them one after another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScatterPlan {
+    /// One invocation walks the pairs in element order.
+    Sequential,
+    /// One invocation per pair, atomics on the target; `last` records the
+    /// winning source and gathers afterwards; `keys` says float words are
+    /// turned into ordered keys around the pass.
+    Parallel {
+        /// The rule is `last`.
+        last: bool,
+        /// Float words need keys for `min` and `max`.
+        keys: bool,
+    },
+}
+
+/// The plan for a scatter module.
+pub fn scatter_plan(module: &Module) -> ScatterPlan {
+    let Mode::Scatter { base, combine } = module.manifest.mode else {
+        return ScatterPlan::Sequential;
+    };
+    let scalars = module.manifest.inputs[base as usize].ty.schema.scalars();
+    let floats = scalars.iter().any(|s| matches!(s, orla_abi::Scalar::Float));
+    match combine {
+        Combine::Sum if floats => ScatterPlan::Sequential,
+        Combine::Sum => ScatterPlan::Parallel {
+            last: false,
+            keys: false,
+        },
+        Combine::Min | Combine::Max => ScatterPlan::Parallel {
+            last: false,
+            keys: floats,
+        },
+        Combine::Last => ScatterPlan::Parallel {
+            last: true,
+            keys: false,
+        },
+    }
+}
+
+/// The words of a value as WGSL `u32` expressions, one per word in layout
+/// order, each with its scalar type.
+fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Type)>) {
+    match ty {
+        Type::Float | Type::Int => out.push((format!("bitcast<u32>({path})"), ty)),
+        Type::Bool => out.push((format!("select(0u, 1u, {path})"), Type::Bool)),
+        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
+            let n = ty.components().unwrap_or(4) as usize;
+            for component in ["x", "y", "z", "w"].iter().take(n) {
+                out.push((format!("bitcast<u32>({path}.{component})"), Type::Float));
+            }
+        }
+        Type::Struct(index) => {
+            for (k, field) in module.structs[index as usize].fields.iter().enumerate() {
+                value_words(module, field.ty, &format!("{path}.f{k}"), out);
+            }
+        }
+    }
+}
+
+/// The header the scatter passes share: the context, the pairs, and the
+/// target, the last as atomics when `atomic`; the winners when `winners`.
+fn scatter_header(module: &Module, atomic: bool, winners: Option<bool>) -> String {
+    let manifest = &module.manifest;
+    let context_len = CONTEXT_HEAD + manifest.inputs.len();
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;"
+    );
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({SCATTER_PAIRS_BINDING}) var<storage, read> pairs: array<u32>;"
+    );
+    let target = if atomic {
+        "array<atomic<i32>>"
+    } else {
+        "array<u32>"
+    };
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({SCATTER_OUT_BINDING}) var<storage, read_write> out0: {target};"
+    );
+    if let Some(read_only) = winners {
+        let (access, ty) = if read_only {
+            ("read", "array<u32>")
+        } else {
+            ("read_write", "array<atomic<u32>>")
+        };
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({SCATTER_WINNER_BINDING}) var<storage, {access}> winner: {ty};"
+        );
+    }
+    for (index, def) in module.structs.iter().enumerate() {
+        let fields = def
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
+    }
+    // The total order over floats as keys, an involution on the bits:
+    // every negative below every positive, NaN beyond the infinities.
+    let _ = writeln!(
+        out,
+        "fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}"
+    );
+    let pair = result_type(&module.entry);
+    let pair_stride = type_words(module, pair);
+    let (expr, _) = load_expr(module, pair, "pairs", "b", 0);
+    let _ = writeln!(
+        out,
+        "fn load_pair(index: u32) -> {} {{
+    let b = index * {pair_stride}u;
+    return {expr};
+}}",
+        wgsl_type(pair)
+    );
+    out
+}
+
+/// The lines that turn a pair's address into `at`, leaving the invocation
+/// with `exit` when it falls outside the target.
+fn scatter_address(module: &Module, exit: &str) -> String {
+    let Mode::Scatter { base, .. } = module.manifest.mode else {
+        return String::new();
+    };
+    let target = &module.manifest.inputs[base as usize];
+    let slot = CONTEXT_HEAD + base as usize;
+    match target.shape() {
+        Shape::Rows => format!(
+            "let i = p.f0;
+    if (i < 0i || i >= i32(ctx[{slot}].x)) {{ {exit} }}
+    let at = u32(i);"
+        ),
+        Shape::Grid => format!(
+            "let x = floor(p.f0.x);
+    let y = floor(p.f0.y);
+    if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y)) {{ {exit} }}
+    let at = u32(y) * u32(ctx[{slot}].x) + u32(x);"
+        ),
+        Shape::Volume => format!(
+            "let x = floor(p.f0.x);
+    let y = floor(p.f0.y);
+    let z = floor(p.f0.z);
+    if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y && z >= 0.0 && z < ctx[{slot}].z)) {{ {exit} }}
+    let at = (u32(z) * u32(ctx[{slot}].y) + u32(y)) * u32(ctx[{slot}].x) + u32(x);"
+        ),
+    }
+}
+
+/// Emits the parallel apply pass: one invocation per pair, combining its
+/// value into the target with atomics (`sum` of ints, `min` and `max` on
+/// ordered keys) or recording the greatest source index per element
+/// (`last`). Order-free, so the result is the sequential one.
+pub fn emit_scatter_parallel(module: &Module) -> String {
+    let Mode::Scatter { base, combine } = module.manifest.mode else {
+        return String::new();
+    };
+    let target = &module.manifest.inputs[base as usize];
+    let element = target.element();
+    let stride = target.ty.schema.words();
+    let mut out = scatter_header(module, true, Some(false));
+    let mut words = Vec::new();
+    value_words(module, element, "p.f1", &mut words);
+    let mut lines = Vec::new();
+    match combine {
+        Combine::Sum => {
+            for (k, (expr, _)) in words.iter().enumerate() {
+                lines.push(format!(
+                    "    atomicAdd(&out0[b + {k}u], bitcast<i32>({expr}));"
+                ));
+            }
+        }
+        Combine::Min | Combine::Max => {
+            let op = if combine == Combine::Min {
+                "atomicMin"
+            } else {
+                "atomicMax"
+            };
+            for (k, (expr, ty)) in words.iter().enumerate() {
+                let key = if *ty == Type::Float {
+                    format!("key_of(bitcast<i32>({expr}))")
+                } else {
+                    format!("bitcast<i32>({expr})")
+                };
+                lines.push(format!("    {op}(&out0[b + {k}u], {key});"));
+            }
+        }
+        Combine::Last => lines.push("    atomicMax(&winner[at], i + 1u);".to_owned()),
+    }
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let n = u32(ctx[0].x) * u32(ctx[0].y) * u32(ctx[1].z);
+    let i = gid.x;
+    if (i >= n) {{
+        return;
+    }}
+    let p = load_pair(i);
+    {}
+    let b = at * {stride}u;
+{}
+}}",
+        scatter_address(module, "return;"),
+        lines.join("\n")
+    );
+    out
+}
+
+/// Emits the gather pass of `last`: one invocation per target element,
+/// taking the winning pair's value when there is one.
+pub fn emit_scatter_gather(module: &Module) -> String {
+    let Mode::Scatter { base, .. } = module.manifest.mode else {
+        return String::new();
+    };
+    let target = &module.manifest.inputs[base as usize];
+    let stride = target.ty.schema.words();
+    let slot = CONTEXT_HEAD + base as usize;
+    let mut out = scatter_header(module, false, Some(true));
+    let mut words = Vec::new();
+    value_words(module, target.element(), "p.f1", &mut words);
+    let stores = words
+        .iter()
+        .enumerate()
+        .map(|(k, (expr, _))| format!("    out0[b + {k}u] = {expr};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
+    let e = gid.x;
+    if (e >= count) {{
+        return;
+    }}
+    let w = winner[e];
+    if (w == 0u) {{
+        return;
+    }}
+    let p = load_pair(w - 1u);
+    let b = e * {stride}u;
+{stores}
+}}"
+    );
+    out
+}
+
+/// Emits the pass that turns the target's float words into ordered keys
+/// (`encode`) or back, around a parallel `min` or `max`.
+pub fn emit_scatter_keys(module: &Module, encode: bool) -> String {
+    let Mode::Scatter { base, .. } = module.manifest.mode else {
+        return String::new();
+    };
+    let target = &module.manifest.inputs[base as usize];
+    let stride = target.ty.schema.words();
+    let slot = CONTEXT_HEAD + base as usize;
+    let mut out = scatter_header(module, false, None);
+    // The key transform is an involution, so one function serves both ways.
+    let _ = encode;
+    let lines = target
+        .ty
+        .schema
+        .scalars()
+        .iter()
+        .enumerate()
+        .filter(|(_, scalar)| matches!(scalar, orla_abi::Scalar::Float))
+        .map(|(k, _)| {
+            format!("    out0[b + {k}u] = bitcast<u32>(key_of(bitcast<i32>(out0[b + {k}u])));")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
+    let e = gid.x;
+    if (e >= count) {{
+        return;
+    }}
+    let b = e * {stride}u;
+{lines}
 }}"
     );
     out

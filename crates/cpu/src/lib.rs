@@ -317,6 +317,16 @@ pub fn scatter_index(domain: Domain, address: &[u32]) -> Option<usize> {
     Some(((z * domain.height() + y) * domain.width() + x) as usize)
 }
 
+/// The total order `min` and `max` use over floats, as a key that orders
+/// like the float: every negative below every positive, negative zero
+/// below positive zero, NaN beyond the infinities by its bits. Both
+/// backends compare by it, so a parallel minimum on the GPU and a
+/// sequential one here pick the same word.
+pub fn float_order_key(word: u32) -> i32 {
+    let bits = word as i32;
+    if bits >= 0 { bits } else { bits ^ 0x7fff_ffff }
+}
+
 /// Combines a scattered value into the element already there, scalar by
 /// scalar; the one rule both backends follow.
 fn combine_words(
@@ -333,9 +343,21 @@ fn combine_words(
             (Combine::Sum, _) => (a as i32)
                 .checked_add(b as i32)
                 .ok_or(ArithmeticError::Overflow)? as u32,
-            (Combine::Min, Scalar::Float) => f32::from_bits(a).min(f32::from_bits(b)).to_bits(),
+            (Combine::Min, Scalar::Float) => {
+                if float_order_key(b) < float_order_key(a) {
+                    b
+                } else {
+                    a
+                }
+            }
             (Combine::Min, _) => (a as i32).min(b as i32) as u32,
-            (Combine::Max, Scalar::Float) => f32::from_bits(a).max(f32::from_bits(b)).to_bits(),
+            (Combine::Max, Scalar::Float) => {
+                if float_order_key(b) > float_order_key(a) {
+                    b
+                } else {
+                    a
+                }
+            }
             (Combine::Max, _) => (a as i32).max(b as i32) as u32,
         };
     }

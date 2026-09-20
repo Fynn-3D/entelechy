@@ -161,8 +161,11 @@ capability claim.
   [validator](crates/ir/src/validate.rs), [compiler](crates/compiler/src/lower.rs)).
   The CPU applies the pairs in order over a copy of the target
   ([backend](crates/cpu/src/lib.rs)); the GPU stores the pairs in a
-  parallel pass, copies the target on the device, and applies them in one
-  invocation ([WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs));
+  parallel pass, copies the target on the device, and applies them by
+  plan: the order-free rules (an integer `sum`, `min` and `max` on one
+  total order of floats as keys, `last` as the greatest source index then
+  a gather) one invocation per pair with atomics, a float `sum` in one
+  invocation in order ([WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs));
   the evaluator sizes a scatter node by its target and never fuses it
   ([evaluator](crates/graph/src/evaluate.rs)). The
   [particles example](examples/particles/README.md) splats its rows onto

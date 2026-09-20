@@ -31,6 +31,10 @@ order, floats included), which the GPU honours by applying the pairs in one
 invocation after a parallel map, rather than with atomics: exact and slow
 for very many sources, and a place to optimise later without changing any
 result (int `sum`, `min`, `max`, and `last` by index are order-free); the
+scatter's `min` and `max` order floats by their bits' total order on both
+backends so the GPU may use atomics, and only a float `sum` still walks
+the pairs in one invocation (a deterministic parallel float sum needs a
+sort by address, not done); the
 window is context under `input.read` rather than a capability of its own
 (its size is in physical pixels, its scale factor is what a bar laid out
 in logical pixels divides by), the Player reports a default 960x540 window
@@ -66,21 +70,21 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-Labels on the voxel editor's bar through the text library: the bar's
-six items are icons alone, and a tool needs words (the tool's name under
-the pointer, the colour's number, the voxel under the pointer as three
-numbers). `examples/shared/text.orla` has the row layout, `text.digits`,
-`text.layout`, and the `ink` function any Kernel may call; the atlas is
-`examples/shared/font.png`. Acceptance: the voxel scene reads the font
-as an input, a Kernel writes the label rows from the state row (the
-hovered item's name, the hit voxel's coordinates), `voxel.draw` calls
-`ink` over the bar, the label is laid out in units of `scale()` like the
-bar, and the replay pins one pixel of a label on both backends. If the
-user prefers another item, the rest of the ranked list is: caching the
-CPU's compiled program across frames, atomics for the order-free
-scatter rules on the GPU, `window()` in the protocol's headless `serve`
-(a client passes `window` with each `evaluate` today, as the web bridge
-does), and a Godot bridge to make three.
+The remaining items are small and independent; take them in this order
+unless the user picks. First, measure before touching: the CPU compiles
+a module to word-addressed code on every execution (`Program::new` in
+`crates/cpu/src/eval.rs`); time a frame of the voxel scene with the
+compile step counted separately, and only if it is more than a few
+percent, keep the compiled code in the CPU's `Prepared` (compile once
+per Kernel version, bind inputs per execution). Second, `window()` in
+the headless `serve`: a `window` op, or a `--window` flag on `serve`, so
+a headless session sizes window-shaped scenes without the client passing
+`window` on every `evaluate` (the web bridge does today). Third, a
+parallel float `sum` for scatter that keeps the element order: sort the
+pairs by address (a GPU radix or bitonic sort over the pair buffer),
+then a segmented fold in element order per cell; the particles example
+would leave the sequential path. Fourth, a Godot bridge to make three,
+in GDScript, speaking the socket as the Blender one does.
 
 ## Open
 

@@ -885,4 +885,134 @@ fn scatters_match_between_backends() {
             assert!(total > 10.0, "drops landed: {total}");
         }
     }
+    // Ints alone sum with atomics, in parallel; and floats with NaN and
+    // both zeros meet `min` and `max` in the one total order both
+    // backends use, whichever order the pairs arrive in.
+    let source = "kernel test.count@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Tally>; output result: Grid<Tally>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Tally { hits: Int; ids: Int; } struct Splat { cell: Vec2; value: Tally; } scatter into grid with sum { let d = sample(drops); return Splat { cell: d.at, value: Tally { hits: 1, ids: d.id } }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let tally_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Int]);
+    let mut odd_words = drop_words.clone();
+    for i in 0..count as usize {
+        if i % 97 == 0 {
+            odd_words[i * 4 + 2] = f32::NAN.to_bits();
+        } else if i % 89 == 0 {
+            odd_words[i * 4 + 2] = (-0.0f32).to_bits();
+        } else if i % 83 == 0 {
+            odd_words[i * 4 + 2] = 0.0f32.to_bits();
+        }
+    }
+    for (label, module, words, schema, grid_words) in [
+        (
+            "int sum",
+            module,
+            drop_words.clone(),
+            tally_schema.clone(),
+            (0..48).map(|_| 0u32).collect::<Vec<_>>(),
+        ),
+        (
+            "min with NaN",
+            compile(&source.replace("with sum", "with min").replace(
+                "Tally { hits: 1, ids: d.id }",
+                "Tally { hits: d.id, ids: 0 }",
+            ))
+            .unwrap(),
+            odd_words.clone(),
+            tally_schema.clone(),
+            (0..48).map(|_| 5u32).collect(),
+        ),
+    ] {
+        let mut host = Host::new(1 << 20);
+        let drops = host
+            .adopt(
+                orla_abi::FieldData::from_words(drop_schema.clone(), Domain::Rows(count), words)
+                    .unwrap(),
+            )
+            .unwrap();
+        let grid = host
+            .adopt(orla_abi::FieldData::from_words(schema, Domain::Grid(6, 4), grid_words).unwrap())
+            .unwrap();
+        let invocation = orla_abi::Invocation {
+            inputs: vec![drops, grid],
+            params: vec![],
+            domain: Domain::Grid(6, 4),
+            context: orla_abi::Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let cpu_out = orla_cpu::CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0];
+        let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+        let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+        let mut scope = Scope::new(&mut host, all());
+        let gpu_out =
+            Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+        let byte_len =
+            host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+        let device = host.resident(gpu_out).unwrap().expect("resident");
+        let bytes = Backend::download(&gpu, device, byte_len).unwrap();
+        let gpu_words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(cpu_words, gpu_words, "{label} differs");
+        if label == "int sum" {
+            let hits: u32 = cpu_words.chunks_exact(2).map(|c| c[0]).sum();
+            assert!(hits > 100, "{label}: {hits} drops landed");
+        }
+    }
+    // Floats with NaN and both zeros under `min` and `max`, on a Float target.
+    let source = "kernel test.low@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Splat { cell: Vec2; value: Float; } scatter into grid with min { let d = sample(drops); return Splat { cell: d.at, value: d.weight }; } }";
+    for combine in ["min", "max"] {
+        let module = compile(&source.replace("with min", &format!("with {combine}"))).unwrap();
+        let mut host = Host::new(1 << 20);
+        let drops = host
+            .adopt(
+                orla_abi::FieldData::from_words(
+                    drop_schema.clone(),
+                    Domain::Rows(count),
+                    odd_words.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let grid = host
+            .adopt(
+                orla_abi::FieldData::from_words(
+                    orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
+                    Domain::Grid(6, 4),
+                    (0..24).map(|_| 0.5f32.to_bits()).collect(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let invocation = orla_abi::Invocation {
+            inputs: vec![drops, grid],
+            params: vec![],
+            domain: Domain::Grid(6, 4),
+            context: orla_abi::Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let cpu_out = orla_cpu::CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0];
+        let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+        let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+        let mut scope = Scope::new(&mut host, all());
+        let gpu_out =
+            Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+        let device = host.resident(gpu_out).unwrap().expect("resident");
+        let bytes = Backend::download(&gpu, device, 24 * 4).unwrap();
+        let gpu_words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(cpu_words, gpu_words, "float {combine} with NaN differs");
+        let nans = cpu_words
+            .iter()
+            .filter(|w| f32::from_bits(**w).is_nan())
+            .count();
+        if combine == "max" {
+            assert!(nans > 0, "NaN is beyond infinity under max");
+        }
+    }
 }

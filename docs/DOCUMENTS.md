@@ -191,8 +191,12 @@ value combined into the element at its address by the rule after `with`:
 replaces. The rule of order is total and the same on both backends, floats
 included: the result is as if the sources were applied one after another
 in element order, so `last` is the greatest element index and a float
-`sum` rounds in that order. An address outside the target is dropped,
-never clamped; NaN is outside. `sum`, `min`, and `max` need an element of
+`sum` rounds in that order. `min` and `max` order floats by one total
+order (every negative below every positive, negative zero below positive
+zero, NaN beyond the infinities), so they, an integer `sum`, and `last`
+do not depend on the order at all, and the GPU applies them in parallel
+with atomics; a float `sum` alone walks the sources in one invocation. An
+address outside the target is dropped, never clamped; NaN is outside. `sum`, `min`, and `max` need an element of
 numbers (a Bool takes `last`). The output has the target's shape, layout,
 and extent, so a scatter node takes no `domain`, and a scatter is never
 fused. The exact language is defined by [the frontend](../crates/language/src/lib.rs)
