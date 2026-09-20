@@ -18,6 +18,7 @@ pollster = "0.4"
 
 [dev-dependencies]
 orla-compiler = { path = "../compiler" }
+orla-matrix = { path = "../matrix" }
 orla-graph = { path = "../graph" }
 orla-language = { path = "../language" }
 

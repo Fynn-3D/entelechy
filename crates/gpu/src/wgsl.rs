@@ -212,6 +212,23 @@ fn button_down(code: i32) -> bool {{
             ty.components().unwrap_or(0)
         );
     }
+    // The truncated remainder exactly: WGSL's `%` rounds the quotient
+    // before truncating it, so 7.5 % 0.3 comes out 0 where the CPU has
+    // 0.3 - epsilon; the fused multiply-add keeps the remainder exact
+    // and a remainder of the wrong sign is one divisor off.
+    for ty in [Type::Float, Type::Vec2, Type::Vec3, Type::Vec4] {
+        let name = wgsl_type(ty);
+        let _ = writeln!(
+            out,
+            "fn fmod_{}(x: {name}, y: {name}) -> {name} {{
+    let q = trunc(x / y);
+    let r = fma(-q, y, x);
+    let wrong = (r != {name}(0.0)) & ((r < {name}(0.0)) != (x < {name}(0.0)));
+    return select(r, r + sign(x) * abs(y), wrong);
+}}",
+            ty.components().unwrap_or(1)
+        );
+    }
     emit_mixers(out, module);
     for (index, port) in manifest.inputs.iter().enumerate() {
         emit_linear(out, module, index, port);
@@ -527,10 +544,11 @@ fn scatter_address(module: &Module, exit: &str) -> String {
     let target = &module.manifest.inputs[base as usize];
     let slot = CONTEXT_HEAD + base as usize;
     match target.shape() {
+        // Named `row`, not `i`: the pass's own `i` is the source index.
         Shape::Rows => format!(
-            "let i = p.f0;
-    if (i < 0i || i >= i32(ctx[{slot}].x)) {{ {exit} }}
-    let at = u32(i);"
+            "let row = p.f0;
+    if (row < 0i || row >= i32(ctx[{slot}].x)) {{ {exit} }}
+    let at = u32(row);"
         ),
         Shape::Grid => format!(
             "let x = floor(p.f0.x);
@@ -1335,6 +1353,23 @@ impl Emitter<'_> {
                 // shift takes its count unsigned, masked to the width.
                 let vector = self.type_of(*a).components().is_some();
                 match op {
+                    BinaryOp::Rem if *ty != Type::Int => {
+                        // Both operands at the result's width: a Float
+                        // beside a vector broadcasts.
+                        let widen = |id: &ValueId| {
+                            if self.type_of(*id) == *ty {
+                                v(id)
+                            } else {
+                                format!("{}({})", wgsl_type(*ty), v(id))
+                            }
+                        };
+                        format!(
+                            "fmod_{}({}, {})",
+                            ty.components().unwrap_or(1),
+                            widen(a),
+                            widen(b)
+                        )
+                    }
                     BinaryOp::Equal if vector => format!("all({} == {})", v(a), v(b)),
                     BinaryOp::NotEqual if vector => format!("any({} != {})", v(a), v(b)),
                     BinaryOp::Shl | BinaryOp::Shr => {

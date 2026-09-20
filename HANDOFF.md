@@ -79,7 +79,10 @@ gone once it commits, and the trace commits nothing itself.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
-the example-replay test is the slow one), and every replay on the three backends:
+the example-replay test is the slow one; the feature matrix in
+`crates/matrix` runs every feature under every mode on the JIT and the
+GPU against the CPU, so a new language feature goes into
+`orla_matrix::features` and a new mode into `modes`), and every replay on the three backends:
 `for f in examples/*/tests/*.replay; do for b in gpu cpu jit; do
 ./target/release/orla replay $f --backend $b; done; done` (about 20 s after
 `cargo build --release`). Tests in one binary run in parallel: a test that
@@ -138,7 +141,10 @@ Fields read where they lie.
    ones in branches not taken marked; `run --profile` and the report's
    `timings` time each node; calls are followed (each call's frame is
    recorded as it returns, the first 256), a loop's bindings show the
-   last iteration. The ceiling felt
+   last iteration. The feature matrix (`crates/matrix`) holds the JIT
+   and the GPU to the CPU over every feature under every mode; its
+   first run found the GPU's float `%` inexact and every scatter into
+   rows refused, both fixed. The ceiling felt
    writing the CHIP-8 and Thumb cores is lifted where it was felt:
    `match` on an `Int` (a WGSL `switch`, a Cranelift jump table) and an
    enclosing loop's carried value readable inside a nested loop; both

@@ -20,6 +20,7 @@ cranelift-native = "0.131"
 
 [dev-dependencies]
 orla-compiler = { path = "../compiler" }
+orla-matrix = { path = "../matrix" }
 
 # The one crate that calls code it produced: it takes its own lints
 # rather than the workspace's `unsafe_code = "forbid"`, and keeps every

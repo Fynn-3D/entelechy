@@ -30,6 +30,7 @@ capability claim.
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
 | Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [end-to-end client test](crates/cli/tests/protocol.rs) |
+| Feature matrix | [matrix](crates/matrix/src/lib.rs) | [on the JIT](crates/jit/tests/matrix.rs) bit for bit, [on the GPU](crates/gpu/tests/matrix.rs) ints exact and floats to rounding |
 | Trace and profile | [trace](crates/cpu/src/lib.rs), [session](crates/cli/src/session.rs), [`orla trace`](crates/cli/src/main.rs) | [binary test](crates/cli/tests/session.rs), [protocol test](crates/cli/tests/protocol.rs) |
 | C ABI host | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
 | Player | [window loop](crates/player/src/main.rs), [CPU blit](crates/player/src/lib.rs), [device presenter](crates/gpu/src/present.rs) | Presentation unit tests, blit shader compile test; [material ball](examples/material-ball/README.md) for the live loop |
@@ -487,6 +488,25 @@ capability claim.
   ([lowering](crates/compiler/src/lower.rs),
   [interpreter](crates/cpu/src/eval.rs), [WGSL](crates/gpu/src/wgsl.rs),
   [JIT](crates/jit/src/codegen.rs)).
+- The backends are held to the interpreter across the whole cross
+  product, not where an example happens to look: `orla-matrix` writes
+  every feature of the language (arithmetic, bits, comparisons,
+  vectors, the transcendental functions, rounding, conversions,
+  structs, `if`, `match`, loops nested and with `until`, calls plain and
+  with a Field parameter, Field reads of every kind, the context, the
+  params, hex and negative literals) into every execution mode (a map
+  over rows, a map over a grid, a reduction, a scan with a memory, a
+  scatter) as complete Kernels with their inputs, and the JIT's and the
+  GPU's matrix tests run all of them against the CPU, the JIT bit for
+  bit, the GPU with ints and booleans exact and floats to rounding,
+  reporting every case that differs at once. Its first run found two
+  holes on the GPU: WGSL's float `%` rounds the quotient before
+  truncating it (7.5 % 0.3 came out 0 against the CPU's 0.3 minus
+  epsilon), so a Float remainder is now an emitted `fmod` built on a
+  fused multiply-add with a one-divisor correction; and a scatter into
+  rows named its address `i` in a pass that already had an `i`, so
+  every scatter into rows was refused by the GPU. Both hold now
+  ([matrix](crates/matrix/src/lib.rs), [WGSL](crates/gpu/src/wgsl.rs)).
 - `orla help` and the protocol's `help` list what a Kernel may call:
   the math intrinsics' signatures are found by asking the IR's typing
   rule about every combination of the plain types, their sentences live

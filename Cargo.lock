@@ -1758,6 +1758,7 @@ dependencies = [
  "orla-graph",
  "orla-ir",
  "orla-language",
+ "orla-matrix",
  "orla-runtime",
  "pollster",
  "wgpu",
@@ -1810,12 +1811,20 @@ dependencies = [
  "orla-compiler",
  "orla-cpu",
  "orla-ir",
+ "orla-matrix",
  "orla-runtime",
 ]
 
 [[package]]
 name = "orla-language"
 version = "0.1.0"
+
+[[package]]
+name = "orla-matrix"
+version = "0.1.0"
+dependencies = [
+ "orla-abi",
+]
 
 [[package]]
 name = "orla-player"
