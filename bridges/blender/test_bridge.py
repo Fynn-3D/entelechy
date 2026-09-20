@@ -43,9 +43,13 @@ shape, extent, schema, words = bridge.read_field(paths[0])
 assert (shape, extent, schema) == ("Rows", (36, 1, 1), "f,f,f,f,f,f,f,f"), (shape, extent, schema)
 floats = struct.unpack("<288f", words)
 xs = floats[0::8]
+ys = floats[1::8]
 zs = floats[2::8]
+# Blender z up becomes Orla y up: the cube lifted by one along Blender's
+# z stands at y 0.5..1.5 in Orla, and Blender's y runs along Orla's -z.
 assert min(xs) == -0.5 and max(xs) == 0.5, (min(xs), max(xs))
-assert min(zs) == 0.5 and max(zs) == 1.5, (min(zs), max(zs))
+assert min(ys) == 0.5 and max(ys) == 1.5, (min(ys), max(ys))
+assert min(zs) == -0.5 and max(zs) == 0.5, (min(zs), max(zs))
 shape, extent, schema, words = bridge.read_field(paths[1])
 assert (shape, extent, schema) == ("Rows", (12, 1, 1), "i,i,i"), (shape, extent, schema)
 assert open(paths[2], "rb").read(8) == b"\x89PNG\r\n\x1a\n"
@@ -54,9 +58,24 @@ print("push: ok")
 client = bridge.OrlaClient("127.0.0.1", port)
 status = client.call("status")
 assert status["nodes"] >= 3, status
-client.call("evaluate", time=0.0)
-torus = bridge.pull_mesh(client, "torus", "faces", name="Torus")
+torus = bridge.pull_mesh(client, "torus", "faces", name="Torus", weld=False)
 assert len(torus.data.vertices) == 1152 and len(torus.data.polygons) == 2304, (len(torus.data.vertices), len(torus.data.polygons))
+# The subdivided torus is a Kernel's product behind fusion: the pull pins
+# it; welded, its corners fold back to shared vertices.
+fine = bridge.pull_mesh(client, "vertices", "triangles", name="Fine")
+assert len(fine.data.polygons) == 9216 and len(fine.data.vertices) < 8064, (len(fine.data.vertices), len(fine.data.polygons))
+# The torus lies in Orla's xz plane; turned back, it lies flat in Blender's xy.
+zs = [v.co.z for v in fine.data.vertices]
+ys = [v.co.y for v in fine.data.vertices]
+assert max(zs) - min(zs) < max(ys) - min(ys), (max(zs) - min(zs), max(ys) - min(ys))
+# A watch reads the rows each tick and rebuilds only when they change.
+settings = bpy.context.scene.orla
+settings.vertex_node, settings.triangle_node, settings.watch_name = "vertices", "triangles", "Watched"
+bridge._watch["client"] = client
+assert bridge.watch_once(bpy.context) == "built"
+assert "Watched" in bpy.data.objects
+assert bridge.watch_once(bpy.context) == "unchanged"
+bridge._watch["client"] = None
 frame = bridge.pull_image(client)
 assert frame.size[0] == 320 and frame.size[1] == 240, frame.size
 client.call("param", name="exposure", value=1.5)

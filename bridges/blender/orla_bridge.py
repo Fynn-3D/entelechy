@@ -53,7 +53,22 @@ def read_field(path):
 
 # --------------------------------------------------------------- mesh rows
 
-def mesh_rows(obj, depsgraph=None):
+# Blender is z-up; Orla's scenes, like glTF, are y-up. The bridge turns
+# axes on the way out and back, so a model stands the same on both sides:
+# Blender (x, y, z) is Orla (x, z, -y).
+AXES_YUP = "YUP"
+AXES_NONE = "NONE"
+
+
+def to_orla(v, axes):
+    return (v[0], v[2], -v[1]) if axes == AXES_YUP else (v[0], v[1], v[2])
+
+
+def to_blender(v, axes):
+    return (v[0], -v[2], v[1]) if axes == AXES_YUP else (v[0], v[1], v[2])
+
+
+def mesh_rows(obj, depsgraph=None, axes=AXES_YUP):
     """The object's mesh as the runtime's rows: one vertex per triangle
     corner, position in world space, split normal, uv with v flipped to
     the top-left convention; and the triangles as indices. Returns
@@ -73,15 +88,19 @@ def mesh_rows(obj, depsgraph=None):
         matrix = obj.matrix_world
         normal_matrix = matrix.to_3x3().inverted_safe().transposed()
         uv_layer = tri.uv_layers.active
+        # Smooth or flat as the mesh says: corner normals (4.1 and later),
+        # split normals before that.
+        corner_normals = getattr(tri, "corner_normals", None)
         positions = []
         for lt in tri.loop_triangles:
             for k in range(3):
                 loop = lt.loops[k]
                 vertex = tri.vertices[tri.loops[loop].vertex_index]
-                p = matrix @ vertex.co
-                n = (normal_matrix @ Vector(lt.split_normals[k])).normalized()
+                p = to_orla(matrix @ vertex.co, axes)
+                raw = corner_normals[loop].vector if corner_normals is not None else lt.split_normals[k]
+                n = to_orla((normal_matrix @ Vector(raw)).normalized(), axes)
                 uv = uv_layer.data[loop].uv if uv_layer else (0.0, 0.0)
-                positions.extend([p.x, p.y, p.z, n.x, n.y, n.z, uv[0], 1.0 - uv[1]])
+                positions.extend([p[0], p[1], p[2], n[0], n[1], n[2], uv[0], 1.0 - uv[1]])
         count = len(tri.loop_triangles) * 3
         vertex_words = struct.pack(f"<{len(positions)}f", *positions)
         triangle_words = struct.pack(f"<{count}i", *range(count))
@@ -107,12 +126,12 @@ def base_colour_image(obj):
     return None
 
 
-def push_object(obj, assets_dir, depsgraph=None):
+def push_object(obj, assets_dir, depsgraph=None, axes=AXES_YUP):
     """Writes <name>.vertices.field, <name>.triangles.field and, when the
     material has one, <name>.albedo.png into assets_dir. Returns the paths."""
     os.makedirs(assets_dir, exist_ok=True)
     name = bpy.path.clean_name(obj.name)
-    vertices, count, triangles, faces = mesh_rows(obj, depsgraph)
+    vertices, count, triangles, faces = mesh_rows(obj, depsgraph, axes)
     paths = []
     path = os.path.join(assets_dir, f"{name}.vertices.field")
     write_field(path, "Rows", (count, 1, 1), "f,f,f,f,f,f,f,f", vertices)
@@ -169,18 +188,24 @@ class OrlaClient:
 
 
 def connect(context):
-    prefs = context.preferences.addons[__name__].preferences
-    return OrlaClient(prefs.host, prefs.port)
+    # Installed as an add-on, the host and port are preferences; run as a
+    # script, they are the defaults.
+    addon = context.preferences.addons.get(__name__)
+    if addon is not None:
+        return OrlaClient(addon.preferences.host, addon.preferences.port)
+    return OrlaClient("127.0.0.1", 7788)
 
 
-def rows_to_mesh(name, vertex_words, vertex_stride, triangle_words):
+def rows_to_mesh(name, vertex_words, vertex_stride, triangle_words, weld=True, into=None, axes=AXES_YUP):
     """Builds a mesh from vertex rows of `vertex_stride` floats (8: position,
-    normal, uv; 9: clip xyzw, normal, uv) and triangle rows of three ints."""
-    import base64
+    normal, uv; 9: clip xyzw, normal, uv) and triangle rows of three ints.
+    The rows hold a vertex per triangle corner; `weld` merges corners that
+    share a position, keeping each corner's uv. With `into` an existing
+    object, its mesh is replaced and the object keeps its place."""
     vertices = struct.unpack(f"<{len(vertex_words) // 4}f", vertex_words)
     indices = struct.unpack(f"<{len(triangle_words) // 4}i", triangle_words)
     count = len(vertices) // vertex_stride
-    positions = [tuple(vertices[i * vertex_stride:i * vertex_stride + 3]) for i in range(count)]
+    positions = [to_blender(vertices[i * vertex_stride:i * vertex_stride + 3], axes) for i in range(count)]
     faces = [tuple(indices[i:i + 3]) for i in range(0, len(indices), 3)]
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(positions, [], faces)
@@ -191,20 +216,100 @@ def rows_to_mesh(name, vertex_words, vertex_stride, triangle_words):
             v = mesh.loops[loop_index].vertex_index
             u, t = vertices[v * vertex_stride + uv_at], vertices[v * vertex_stride + uv_at + 1]
             uv_layer.data[loop_index].uv = (u, 1.0 - t)
+    if weld and count:
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-6)
+        bm.to_mesh(mesh)
+        bm.free()
+    for poly in mesh.polygons:
+        poly.use_smooth = True
     mesh.update()
+    if into is not None:
+        previous = into.data
+        into.data = mesh
+        if previous.users == 0:
+            bpy.data.meshes.remove(previous)
+        return into
     obj = bpy.data.objects.new(name, mesh)
     bpy.context.collection.objects.link(obj)
     return obj
 
 
-def pull_mesh(client, vertex_node, triangle_node, name="OrlaMesh"):
+def read_rows(client, vertex_node, triangles, evaluate=True):
+    """The rows behind a mesh: a node's vertex rows and a node's or a
+    `.field` file's triangle rows, as bytes with the vertex stride. The
+    nodes are pinned first, so fusion keeps them materialized, and the
+    session is evaluated so they are current."""
     import base64
+    client.call("pin", node=vertex_node)
+    from_file = triangles.endswith(".field")
+    if not from_file:
+        client.call("pin", node=triangles)
+    if evaluate:
+        client.call("evaluate", time=time.monotonic() - _started)
     vertices = client.call("read", node=vertex_node, port="result")
-    triangles = client.call("read", node=triangle_node, port="result")
     stride = len(vertices["schema"].split(","))
     if stride not in (8, 9):
         raise RuntimeError(f"{vertex_node} has {stride} words per row; a mesh has 8 or 9")
-    return rows_to_mesh(name, base64.b64decode(vertices["data"]), stride, base64.b64decode(triangles["data"]))
+    if from_file:
+        _, _, _, triangle_words = read_field(bpy.path.abspath(triangles))
+    else:
+        triangle_words = base64.b64decode(client.call("read", node=triangles, port="result")["data"])
+    return base64.b64decode(vertices["data"]), stride, triangle_words
+
+
+_started = time.monotonic()
+
+
+def pull_mesh(client, vertex_node, triangles, name="OrlaMesh", weld=True, into=None, axes=AXES_YUP):
+    """Vertices come from a node's rows; the triangles from a node's rows,
+    or from a `.field` file when the scene reads them as an input."""
+    vertex_words, stride, triangle_words = read_rows(client, vertex_node, triangles)
+    return rows_to_mesh(name, vertex_words, stride, triangle_words, weld=weld, into=into, axes=axes)
+
+
+# ------------------------------------------------------------------ watch
+
+_watch = {"client": None, "digest": None, "object": None}
+
+
+def watch_once(context):
+    """One tick of the watch: reads the rows, and rebuilds the watched
+    object only when they changed. Returns "built", "unchanged", or an
+    error message. The connection is kept between ticks."""
+    import hashlib
+    settings = context.scene.orla
+    try:
+        if _watch["client"] is None:
+            _watch["client"] = connect(context)
+        client = _watch["client"]
+        vertex_words, stride, triangle_words = read_rows(client, settings.vertex_node, settings.triangle_node)
+    except Exception as error:
+        _watch["client"] = None
+        return f"watch: {error}"
+    digest = hashlib.blake2b(vertex_words + triangle_words, digest_size=16).digest()
+    obj = _watch["object"]
+    if obj is not None and obj.name not in bpy.data.objects:
+        obj = None
+    if digest == _watch["digest"] and obj is not None:
+        return "unchanged"
+    _watch["digest"] = digest
+    _watch["object"] = rows_to_mesh(settings.watch_name, vertex_words, stride, triangle_words, weld=settings.weld, into=obj, axes=settings.axes)
+    return "built"
+
+
+def _watch_tick():
+    settings = getattr(bpy.context.scene, "orla", None)
+    if settings is None or not settings.watching:
+        if _watch["client"] is not None:
+            _watch["client"].close()
+            _watch["client"] = None
+        return None
+    outcome = watch_once(bpy.context)
+    if outcome.startswith("watch:"):
+        print("orla bridge:", outcome)
+    return settings.watch_interval
 
 
 def pull_image(client, name="OrlaFrame"):
@@ -260,9 +365,22 @@ class OrlaPreferences(bpy.types.AddonPreferences):
 
 class OrlaSettings(bpy.types.PropertyGroup):
     assets_dir: bpy.props.StringProperty(name="Assets", subtype="DIR_PATH", description="The Orla scene's assets directory; inputs there are read and watched")
+    axes: bpy.props.EnumProperty(
+        name="Axes",
+        items=[
+            (AXES_YUP, "Y up", "Blender's Z becomes Orla's Y, as glTF does; a model stands the same on both sides"),
+            (AXES_NONE, "As is", "Coordinates cross unchanged"),
+        ],
+        default=AXES_YUP,
+        description="How axes turn between Blender (z up) and Orla (y up), on the way out and back",
+    )
     live: bpy.props.BoolProperty(name="Live", default=False, description="Push the active object again whenever its geometry changes")
     vertex_node: bpy.props.StringProperty(name="Vertices node", default="torus")
-    triangle_node: bpy.props.StringProperty(name="Triangles node", default="faces")
+    triangle_node: bpy.props.StringProperty(name="Triangles", default="faces", description="A node, or a .field file when the scene reads triangles as an input")
+    weld: bpy.props.BoolProperty(name="Weld", default=True, description="Merge the triangle corners that share a position; uvs stay per corner")
+    watching: bpy.props.BoolProperty(name="Watching", default=False)
+    watch_name: bpy.props.StringProperty(name="Object", default="OrlaWatch", description="The object the watch keeps current")
+    watch_interval: bpy.props.FloatProperty(name="Every", default=0.5, min=0.1, max=10.0, subtype="TIME_ABSOLUTE", description="Seconds between reads")
     param_name: bpy.props.StringProperty(name="Param", default="exposure")
     param_value: bpy.props.StringProperty(name="Value", default="1.0")
 
@@ -281,7 +399,7 @@ class ORLA_OT_push(bpy.types.Operator):
         if not settings.assets_dir:
             self.report({"ERROR"}, "set the assets directory")
             return {"CANCELLED"}
-        paths = push_object(obj, bpy.path.abspath(settings.assets_dir), context.evaluated_depsgraph_get())
+        paths = push_object(obj, bpy.path.abspath(settings.assets_dir), context.evaluated_depsgraph_get(), settings.axes)
         self.report({"INFO"}, "wrote " + ", ".join(os.path.basename(p) for p in paths))
         return {"FINISHED"}
 
@@ -295,12 +413,30 @@ class ORLA_OT_pull_mesh(bpy.types.Operator):
         settings = context.scene.orla
         try:
             client = connect(context)
-            obj = pull_mesh(client, settings.vertex_node, settings.triangle_node)
+            obj = pull_mesh(client, settings.vertex_node, settings.triangle_node, weld=settings.weld, axes=settings.axes)
             client.close()
         except Exception as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         self.report({"INFO"}, f"pulled {obj.name}: {len(obj.data.vertices)} vertices")
+        return {"FINISHED"}
+
+
+class ORLA_OT_watch(bpy.types.Operator):
+    bl_idname = "orla.watch"
+    bl_label = "Watch"
+    bl_description = "Keep an object current with two nodes' rows: read them every interval and rebuild when they change"
+
+    def execute(self, context):
+        settings = context.scene.orla
+        settings.watching = not settings.watching
+        if settings.watching:
+            _watch["digest"] = None
+            if not bpy.app.timers.is_registered(_watch_tick):
+                bpy.app.timers.register(_watch_tick, first_interval=0.0)
+            self.report({"INFO"}, f"watching {settings.vertex_node} into {settings.watch_name}")
+        else:
+            self.report({"INFO"}, "watch off")
         return {"FINISHED"}
 
 
@@ -371,6 +507,7 @@ class ORLA_PT_panel(bpy.types.Panel):
         box = layout.box()
         box.label(text="Files: the scene's inputs")
         box.prop(settings, "assets_dir")
+        box.prop(settings, "axes")
         box.operator("orla.push")
         box.prop(settings, "live")
         box = layout.box()
@@ -378,7 +515,12 @@ class ORLA_PT_panel(bpy.types.Panel):
         row = box.row()
         row.prop(settings, "vertex_node")
         row.prop(settings, "triangle_node")
+        box.prop(settings, "weld")
         box.operator("orla.pull_mesh")
+        row = box.row()
+        row.prop(settings, "watch_name")
+        row.prop(settings, "watch_interval")
+        box.operator("orla.watch", text="Stop watching" if settings.watching else "Watch", depress=settings.watching)
         box.operator("orla.pull_image")
         row = box.row()
         row.prop(settings, "param_name")
@@ -403,12 +545,12 @@ def _on_depsgraph(scene, depsgraph):
         return
     _last_push = time.monotonic()
     try:
-        push_object(obj, bpy.path.abspath(settings.assets_dir), depsgraph)
+        push_object(obj, bpy.path.abspath(settings.assets_dir), depsgraph, settings.axes)
     except Exception as error:
         print("orla bridge: push failed:", error)
 
 
-classes = (OrlaPreferences, OrlaSettings, ORLA_OT_push, ORLA_OT_pull_mesh, ORLA_OT_pull_image, ORLA_OT_param, ORLA_OT_publish, ORLA_PT_panel)
+classes = (OrlaPreferences, OrlaSettings, ORLA_OT_push, ORLA_OT_pull_mesh, ORLA_OT_watch, ORLA_OT_pull_image, ORLA_OT_param, ORLA_OT_publish, ORLA_PT_panel)
 
 
 def register():
@@ -420,6 +562,8 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_watch_tick):
+        bpy.app.timers.unregister(_watch_tick)
     if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
     del bpy.types.Scene.orla

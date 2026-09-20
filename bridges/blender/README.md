@@ -12,6 +12,11 @@ the host and port of a running session:
 cargo run --release -p orla-player -- examples/model/scene.osn --serve --listen 127.0.0.1:7788
 ```
 
+**Axes**: Blender is z-up and Orla's scenes, like glTF, are y-up; the
+bridge turns axes on the way out and back (Blender x, y, z is Orla x, z,
+-y), so a model stands the same on both sides. "As is" passes
+coordinates unchanged.
+
 **Files** push the active mesh into a scene's assets directory as the
 rows the runtime uses, `<name>.vertices.field` (position, normal, uv per
 triangle corner, in world space) and `<name>.triangles.field`, and the
@@ -21,10 +26,17 @@ watches them, so with **Live** on, editing the mesh in Blender changes the
 window. This path needs no connection.
 
 **Session** talks to the running window: pull two nodes' rows out as a
-mesh (rows of 8 or 9 floats and rows of three ints, as the mesh and
-model examples produce), pull the picture into an Image named OrlaFrame,
-set a graph parameter, publish the text editor's active text as a Kernel
-and watch it land.
+mesh (rows of 8 or 9 floats and rows of three ints, as the mesh and model
+examples produce; the triangles may also be a `.field` file when the scene
+reads them as an input), the nodes pinned first so fusion keeps them and
+the corners welded back to shared vertices unless **Weld** is off; **Watch**
+keeps an object current by reading the rows every interval and rebuilding
+when they change, so a mesh a Kernel computes grows in Blender as its
+code or parameters change; pull the picture into an Image named
+OrlaFrame; set a graph parameter (a param that sizes the graph, like the mesh
+example's subdivision `level`, resizes the running scene, and a watch
+follows); publish the text editor's active text as a Kernel and watch it
+land.
 
 `test_bridge.py` runs headless against a serving session and checks all
 of it:
