@@ -78,6 +78,19 @@ evaluation after the one just run (the node's `<~` inputs are the state
 that evaluation committed), and commits nothing itself. Over the
 protocol, `trace` is the same as JSON.
 
+## Packages and versions
+
+`orla package <dir.orlapkg>` checks a package directory's manifest and
+says what it holds; `orla pack <dir.orlapkg> [<file>]` writes it as one
+`.orlapkg` file (Orla's own uncompressed container: a magic line, the
+format version, then each file's path and bytes), and `orla unpack
+<file> <new dir>` reads it back. A scene uses a package with `use
+"name.orlapkg";`, by path or by name through `ORLA_PACKAGES`, and places
+its graph presets by path. `orla version` prints the four versions the
+plan keeps apart: `orla.api`, `orla.language`, `orla.ir`,
+`orla.package`; a package's manifest names the least language and IR it
+needs, and one needing more is refused with both numbers.
+
 ## Inspecting a graph
 
 ```sh

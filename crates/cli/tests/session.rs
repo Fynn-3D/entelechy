@@ -962,3 +962,102 @@ fn help_lists_the_builtins_and_shows_one() {
         "{stderr}"
     );
 }
+
+/// A package is a directory with a manifest; `pack` makes one file of
+/// it, `unpack` the directory again, `package` says what it holds, and a
+/// scene's `use` of it brings its Kernels in once its versions fit.
+#[test]
+fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/pixelfx.orlapkg");
+    let dir = std::env::temp_dir().join(format!("orla-packages-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("pixelfx.orlapkg");
+    let output = Command::new(orla)
+        .arg("pack")
+        .arg(&example)
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("packed 3 file(s)"));
+    let unpacked = dir.join("unpacked.orlapkg");
+    let output = Command::new(orla)
+        .arg("unpack")
+        .arg(&archive)
+        .arg(&unpacked)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for file in ["package.osn", "kernels/pixelfx.orla", "graphs/nes.osn"] {
+        assert_eq!(
+            std::fs::read(example.join(file)).unwrap(),
+            std::fs::read(unpacked.join(file)).unwrap(),
+            "{file} came back as it went"
+        );
+    }
+    let output = Command::new(orla)
+        .arg("package")
+        .arg(&unpacked)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("package pixelfx@1 (needs language 1, ir 1): 1 kernel file(s), 1 graph preset(s), 0 other file(s)"),
+        "{stdout}"
+    );
+    // A scene beside the unpacked package uses it by name through
+    // ORLA_PACKAGES, and checks.
+    let elsewhere = dir.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        elsewhere.join("scene.osn"),
+        "use \"unpacked.orlapkg\";\nnode source: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\nnode toned: pixelfx.palette@1 { source <- source.result; }\noutput result <- toned.result;\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(elsewhere.join("scene.osn"))
+        .env("ORLA_PACKAGES", &dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("graph `scene` with 2 node(s), 1 use(s)"),
+        "{stdout}"
+    );
+    // A package needing a newer language is refused, with the two versions.
+    let manifest = unpacked.join("package.osn");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, text.replace("language = 1", "language = 99")).unwrap();
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(elsewhere.join("scene.osn"))
+        .env("ORLA_PACKAGES", &dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("package pixelfx@1 needs language 99, and this Orla has language 1"),
+        "{stdout}"
+    );
+    // `version` names every version on its own line.
+    let output = Command::new(orla).arg("version").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("orla.language = 1") && stdout.contains("orla.package = 1"),
+        "{stdout}"
+    );
+}

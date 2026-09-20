@@ -152,10 +152,24 @@ fn stamp(path: &Path) -> Option<Stamp> {
     })
 }
 
-/// A `use` target: a file, or every `.orla` directly inside a directory.
-fn expand_use(path: &Path, trailing_slash: bool) -> Vec<PathBuf> {
+/// The format of an `.orlapkg` archive and of a package's manifest.
+pub const PACKAGE_VERSION: u32 = 1;
+
+/// A `use` target: a file; every `.orla` directly inside a directory; or
+/// a package, a directory with a `package.osn` (found beside the
+/// document, or by name in the directories `ORLA_PACKAGES` lists),
+/// whose manifest's own `use`s are followed once its versions fit.
+fn expand_use(path: &Path, trailing_slash: bool) -> Result<Vec<PathBuf>, String> {
+    // One file, one path: a Kernel reached by two spellings (a scene's
+    // `use` of a package and its preset's `use "../kernels/"`, say) is
+    // owned by one document, not published twice.
+    let canonical = |file: PathBuf| file.canonicalize().unwrap_or(file);
+    let path = resolve_package(path);
+    if path.join("package.osn").is_file() {
+        return package_files(&path).map(|files| files.into_iter().map(canonical).collect());
+    }
     if trailing_slash || path.is_dir() {
-        let mut files: Vec<PathBuf> = std::fs::read_dir(path)
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&path)
             .map(|entries| {
                 entries
                     .filter_map(Result::ok)
@@ -165,10 +179,87 @@ fn expand_use(path: &Path, trailing_slash: bool) -> Vec<PathBuf> {
             })
             .unwrap_or_default();
         files.sort();
-        files
+        Ok(files.into_iter().map(canonical).collect())
     } else {
-        vec![path.to_path_buf()]
+        Ok(vec![canonical(path.to_path_buf())])
     }
+}
+
+/// A `use` that names nothing beside the document is looked for by its
+/// name in each directory of `ORLA_PACKAGES`, `:`-separated.
+fn resolve_package(path: &Path) -> PathBuf {
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    let Some(name) = path.file_name() else {
+        return path.to_path_buf();
+    };
+    let Some(dirs) = std::env::var_os("ORLA_PACKAGES") else {
+        return path.to_path_buf();
+    };
+    for dir in std::env::split_paths(&dirs) {
+        let candidate = dir.join(name);
+        if candidate.join("package.osn").is_file() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// The Kernel files a package brings in: what its manifest uses, once
+/// the manifest's versions fit this Orla.
+fn package_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let manifest = dir.join("package.osn");
+    let declared = package_manifest(&manifest)?;
+    let text =
+        std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let document =
+        orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", manifest.display()))?;
+    let mut files = Vec::new();
+    for item in &document.uses {
+        let path = dir.join(&item.path.value);
+        if path.join("package.osn").is_file() && path.canonicalize().ok() == dir.canonicalize().ok()
+        {
+            return Err(format!(
+                "{}: a package cannot use itself",
+                declared.id.value
+            ));
+        }
+        files.extend(expand_use(&path, item.path.value.ends_with('/'))?);
+    }
+    Ok(files)
+}
+
+/// A package's manifest, checked: it declares a package, and needs no
+/// newer language or IR than this Orla has.
+pub fn package_manifest(manifest: &Path) -> Result<orla_language::PackageDecl, String> {
+    let text =
+        std::fs::read_to_string(manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let document =
+        orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", manifest.display()))?;
+    let Some(declared) = document.package else {
+        return Err(format!(
+            "{}: a package manifest begins `package name@version {{ language = N; ir = N; }}`",
+            manifest.display()
+        ));
+    };
+    if declared.language > orla_language::LANGUAGE_VERSION {
+        return Err(format!(
+            "package {} needs language {}, and this Orla has language {}",
+            declared.id.value,
+            declared.language,
+            orla_language::LANGUAGE_VERSION
+        ));
+    }
+    if declared.ir > orla_ir::IR_VERSION {
+        return Err(format!(
+            "package {} needs ir {}, and this Orla has ir {}",
+            declared.id.value,
+            declared.ir,
+            orla_ir::IR_VERSION
+        ));
+    }
+    Ok(declared)
 }
 
 /// What a document shares with the Kernels that use it: structs, type
@@ -190,7 +281,7 @@ pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<Pa
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
-            for file in expand_use(&path, item.path.value.ends_with('/')) {
+            for file in expand_use(&path, item.path.value.ends_with('/'))? {
                 let key = file.canonicalize().unwrap_or_else(|_| file.clone());
                 if !visited.insert(key) {
                     continue;
@@ -229,7 +320,7 @@ pub fn declarations_for(base: &Path, uses: &[orla_language::Use]) -> Result<Decl
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
-            for file in expand_use(&path, item.path.value.ends_with('/')) {
+            for file in expand_use(&path, item.path.value.ends_with('/'))? {
                 let key = file.canonicalize().unwrap_or_else(|_| file.clone());
                 if !visited.insert(key) {
                     continue;
@@ -974,10 +1065,10 @@ impl Session {
         let mut changed = false;
         let mut wanted: Vec<PathBuf> = Vec::new();
         for (path, trailing_slash) in &self.root_uses {
-            wanted.extend(expand_use(path, *trailing_slash));
+            wanted.extend(expand_use(path, *trailing_slash).unwrap_or_default());
         }
         for path in &self.extra_uses {
-            wanted.extend(expand_use(path, false));
+            wanted.extend(expand_use(path, false).unwrap_or_default());
         }
         wanted.retain(|path| *path != self.root && !self.sub_graphs.contains_key(path));
         wanted.sort();

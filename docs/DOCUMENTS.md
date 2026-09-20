@@ -430,10 +430,34 @@ output result <- display.result;      // named graph output; sub-graph outputs
    param that sizes the graph lowers the document again when it changes,
    so `param level 3` over the protocol resizes a running scene.
 
+### Packages
+
+A package is a directory, `name.orlapkg/`, with a manifest `package.osn`
+at its root:
+
+```text
+package pixelfx@1 { language = 1; ir = 1; }   // its id, and the least language and IR it needs
+use "kernels/";                                // its Kernels, as any document uses them
+```
+
+beside which it holds its Kernel files, its graph presets (`.osn`
+documents placed as nodes by path, `node nes: graph
+"pixelfx.orlapkg/graphs/nes.osn" { ... }`), and any assets a scene reads
+by path. A scene's `use "pixelfx.orlapkg";` brings the package's Kernels
+and declarations in, as if it had used what the manifest uses, once the
+manifest's versions are no newer than this Orla's (`orla version` prints
+them: `orla.api`, `orla.language`, `orla.ir` and `orla.package`, each
+its own); a `use` that names nothing beside the document is looked for
+by name in the directories `ORLA_PACKAGES` lists. `orla pack` writes a
+package as one `.orlapkg` file, `orla unpack` reads it back, `orla
+package` says what one holds. A Kernel reached by two paths, a scene's
+`use` of the package and a preset's `use "../kernels/"`, is one file
+and one owner.
+
 ### Loading
 
 The session parses the graph, publishes its inline Kernels, follows its
-`use` items, and rebuilds the Graph model. Changed documents republish only
+`use` items, packages included, and rebuilds the Graph model. Changed documents republish only
 the Kernels whose text changed; a rejected replacement keeps the running
 version; a Kernel that leaves its document retires.
 

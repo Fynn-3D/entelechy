@@ -58,10 +58,29 @@ use std::ops::Range;
 
 pub use parser::{parse, parse_document, parse_literal};
 
+/// The version of the Kernel language and the document format. Bumped
+/// when a document of the old one would no longer parse or mean the
+/// same.
+pub const LANGUAGE_VERSION: u32 = 1;
+
+/// `package name@version { language = N; ir = N; }`: what a package's
+/// manifest declares, the versions being the least it needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageDecl {
+    /// The package's id, `name@version`.
+    pub id: Spanned<String>,
+    /// The least language version it needs.
+    pub language: u32,
+    /// The least IR version it needs.
+    pub ir: u32,
+}
+
 /// A whole file. For a `.osn` the file is the graph; for a `.orla` only
-/// `kernels` is populated.
+/// `kernels` is populated; a package's `package.osn` has `package`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
+    /// The package this document is the manifest of, if it is one.
+    pub package: Option<PackageDecl>,
     /// Files or directories whose Kernels this document uses.
     pub uses: Vec<Use>,
     /// Struct types declared at the top level; every Kernel of the

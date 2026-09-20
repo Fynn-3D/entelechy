@@ -27,8 +27,8 @@ use std::thread::JoinHandle;
 
 pub use orla_abi::file;
 pub use orla_abi::{
-    Context, Domain, FieldData, Handle, Host, HostError, Image, InputState, Invocation, Pixel,
-    Scalar, Schema, Scope, Shape, Value,
+    ABI_VERSION, Context, Domain, FieldData, Handle, Host, HostError, Image, InputState,
+    Invocation, Pixel, Scalar, Schema, Scope, Shape, Value,
 };
 pub use orla_compiler::CompileError;
 use orla_ir::{Capabilities, Capability, Port, PortType, Type};

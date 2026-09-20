@@ -130,6 +130,11 @@ impl fmt::Display for Capabilities {
     }
 }
 
+/// The version of the Capability ABI: what a Kernel may ask of the Host
+/// and how values cross. Bumped when a Kernel built against the old one
+/// would no longer bind.
+pub const ABI_VERSION: u32 = 1;
+
 /// Types that cross the Kernel boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Type {

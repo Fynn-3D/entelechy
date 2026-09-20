@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Packages and versions | [package](crates/cli/src/package.rs), [use expansion](crates/cli/src/session.rs), [manifest](crates/language/src/parser.rs) | [pack, unpack, describe, refusal](crates/cli/tests/session.rs), [package example](examples/package/tests/package.replay) |
 | IR optimizer | [optimize](crates/ir/src/optimize.rs) | [every matrix case word for word against the unoptimized IR](crates/cpu/tests/optimizer.rs) |
 | Kernel rules | [rules](crates/rules/src/lib.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | Every backend's parity test runs by them |
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [word code](crates/cpu/src/eval/code.rs), [compiler](crates/cpu/src/eval/compile.rs), [machine](crates/cpu/src/eval/run.rs) | [execution tests](crates/cpu/tests/execute.rs) |
@@ -443,6 +444,17 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- Packages (the plan's section 43) are directories with a `package.osn`
+  manifest, `package name@version { language = N; ir = N; }` plus the
+  `use`s that bring its Kernels; a scene's `use` of one expands, in the
+  session's use expansion, to what the manifest uses once its versions
+  fit, and files are canonicalized so a Kernel reached by two paths has
+  one owner. `orla pack`/`unpack` carry a package as one file in Orla's
+  own container, no dependency added. Versions (section 44) are four
+  constants, `ABI_VERSION`, `LANGUAGE_VERSION`, `IR_VERSION`,
+  `PACKAGE_VERSION`, printed by `orla version` and in the protocol's
+  `status`.
 
 - The IR optimizer (the plan's section 41) runs between lowering and
   validation, four exact rewrites: a part taken straight from its

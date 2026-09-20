@@ -137,8 +137,11 @@ so; a failing migration leaves the state as it was), and an IR optimizer (exact 
 cancelling, literal folding without failures, common subexpressions
 scoped by block, dead values; 25 to 30 percent fewer instructions, the
 interpreter a fifth to two fifths faster, the JIT where Field reads
-repeated), and lacks a scheduler beyond one worker thread, WASM, async
-Kernels, and packages; phase 5's domains are touched ahead of order (audio,
+repeated), and packages (section 43: a directory with a `package.osn` manifest
+naming the package and the least language and IR it needs, used by a
+scene like any library, carried as one `.orlapkg` file by `orla
+pack`/`unpack`; with section 44's four versions, `orla version`), and
+lacks a scheduler beyond one worker thread, WASM, and async Kernels; phase 5's domains are touched ahead of order (audio,
 geometry, simulation, machines). The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar
 took that in: a node's name and a source reference accept any word,

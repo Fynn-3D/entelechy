@@ -31,6 +31,15 @@ usage:
   orla help [<name>]
       List every builtin a Kernel may call with one line each, or show one
       builtin's signatures, what it does, and the capability it needs.
+  orla version
+      Print the versions of the ABI, the language, the IR and the package
+      format, each its own.
+  orla package <dir.orlapkg>
+      Check a package directory's manifest and say what it holds.
+  orla pack <dir.orlapkg> [<file.orlapkg>]
+      Write a package directory as one archive file, its manifest checked.
+  orla unpack <file.orlapkg> <new dir>
+      Read an archive back into a directory, its manifest checked.
   orla replay <file.replay>... [--backend cpu|gpu|jit]
       Drive scenes through scripted frames and inputs and check pixels.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
@@ -43,6 +52,10 @@ usage:
       no window see (the protocol's `window` op changes it). See
       crates/cli/src/protocol.rs.";
 
+fn usage_error(message: &str) -> Result<(), String> {
+    Err(format!("{message}\n{USAGE}"))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
@@ -53,6 +66,45 @@ fn main() -> ExitCode {
         Some("graph") => graph(&args[1..]),
         Some("trace") => trace(&args[1..]),
         Some("help") => help(&args[1..]),
+        Some("version") => {
+            println!(
+                "orla.api = {}\norla.language = {}\norla.ir = {}\norla.package = {}",
+                orla_runtime::ABI_VERSION,
+                orla_language::LANGUAGE_VERSION,
+                orla_ir::IR_VERSION,
+                orla::session::PACKAGE_VERSION
+            );
+            Ok(())
+        }
+        Some("pack") => match &args[1..] {
+            [dir, rest @ ..] => {
+                let dir = Path::new(dir);
+                let out = rest.first().map(PathBuf::from).unwrap_or_else(|| {
+                    let name = dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    PathBuf::from(if name.ends_with(".orlapkg") {
+                        name
+                    } else {
+                        format!("{name}.orlapkg")
+                    })
+                });
+                orla::package::pack(dir, &out).map(|count| {
+                    eprintln!("packed {count} file(s) into {}", out.display());
+                })
+            }
+            _ => usage_error("pack needs a package directory"),
+        },
+        Some("unpack") => match &args[1..] {
+            [file, dir, ..] => orla::package::unpack(Path::new(file), Path::new(dir))
+                .map(|count| eprintln!("unpacked {count} file(s) into {dir}")),
+            _ => usage_error("unpack needs an .orlapkg file and a new directory"),
+        },
+        Some("package") => match &args[1..] {
+            [dir, ..] => orla::package::describe(Path::new(dir)).map(|text| println!("{text}")),
+            _ => usage_error("package needs a package directory"),
+        },
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

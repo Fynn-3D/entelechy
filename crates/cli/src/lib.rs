@@ -7,6 +7,7 @@
 //! here, not in the runtimes.
 
 pub mod inflate;
+pub mod package;
 pub mod png;
 pub mod ppm;
 pub mod protocol;

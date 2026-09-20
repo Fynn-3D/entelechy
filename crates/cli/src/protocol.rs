@@ -581,6 +581,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     };
     match op {
         "status" => Ok(json!({
+            "versions": { "api": orla_runtime::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": crate::session::PACKAGE_VERSION },
             "backend": session.runtime().backend_name(),
             "scene": session.root().display().to_string(),
             "watched": session.watched().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),

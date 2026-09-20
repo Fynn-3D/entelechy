@@ -48,6 +48,10 @@ an HTTP request is upgraded to a WebSocket and carries the same lines as
 text frames, so a browser is a client too: see `bridges/web`. Anything
 else opening with HTTP is told, in a 426, what it reached.
 
+`status` answers with the session's backend, scene, watched files,
+counts, and `versions`, the ABI, language, IR and package format
+versions each on their own, as `orla version` prints them.
+
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0 (a manifest's `memories` names the ports that
 are an input and an output at once); `kernel` (named in the `kernel` field, since a

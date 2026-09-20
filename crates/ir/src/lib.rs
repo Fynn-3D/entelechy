@@ -24,6 +24,10 @@ pub use orla_abi::{
 };
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
+/// The version of the IR: its operations, types and rules. Bumped when
+/// a module of the old one would no longer validate or mean the same.
+pub const IR_VERSION: u32 = 1;
+
 /// Stable identity of a Kernel: a dotted name and a version, e.g.
 /// `image.grayscale@1`. Graphs bind to this, never to source paths.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

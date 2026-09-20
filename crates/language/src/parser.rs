@@ -3,8 +3,8 @@
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
     BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, Kernel, MatchArm,
-    MergeDecl, NodeDecl, NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, ScatterDecl,
-    SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
+    MergeDecl, NodeDecl, NodeKind, NodeMember, PackageDecl, ParamDecl, ParseError, PortDecl,
+    ScatterDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -15,6 +15,7 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
         position: 0,
     };
     let mut document = Document {
+        package: None,
         uses: Vec::new(),
         structs: Vec::new(),
         types: Vec::new(),
@@ -41,6 +42,16 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
                 document.uses.push(Use {
                     path: Spanned { value: path, span },
                 });
+            }
+            Token::Ident(word) if word == "package" => {
+                let span = parser.next().1;
+                if document.package.is_some() {
+                    return Err(ParseError {
+                        span,
+                        message: "a document declares one package".into(),
+                    });
+                }
+                document.package = Some(parser.package()?);
             }
             Token::Ident(word) if word == "kernel" => {
                 document.kernels.push(parser.kernel(false)?);
@@ -671,6 +682,62 @@ impl Parser {
         Ok(members)
     }
 
+    /// `name@version { language = N; ir = N; }` after `package`: the
+    /// versions are the least the package needs, each named once.
+    fn package(&mut self) -> Result<PackageDecl, ParseError> {
+        let mut id = self.dotted_name("a package name")?;
+        self.expect_punct("@")?;
+        match self.next() {
+            (Token::Int(version), _) => id.value = format!("{}@{version}", id.value),
+            (token, span) => {
+                return Err(ParseError {
+                    span,
+                    message: format!("expected a version number, found {}", token.describe()),
+                });
+            }
+        }
+        self.expect_punct("{")?;
+        let (mut language, mut ir) = (None, None);
+        while !self.is_punct("}") {
+            let key = self.raw_ident("`language` or `ir`")?;
+            self.expect_punct("=")?;
+            let (token, span) = self.next();
+            let Token::Int(version) = token else {
+                return Err(ParseError {
+                    span,
+                    message: format!(
+                        "`{}` needs a version number, found {}",
+                        key.value,
+                        token.describe()
+                    ),
+                });
+            };
+            self.expect_punct(";")?;
+            let slot = match key.value.as_str() {
+                "language" => &mut language,
+                "ir" => &mut ir,
+                other => {
+                    return Err(ParseError {
+                        span: key.span,
+                        message: format!("a package needs `language` and `ir`, not `{other}`"),
+                    });
+                }
+            };
+            if slot.is_some() {
+                return Err(ParseError {
+                    span: key.span,
+                    message: format!("`{}` is given twice", key.value),
+                });
+            }
+            *slot = Some(version as u32);
+        }
+        self.expect_punct("}")?;
+        let (Some(language), Some(ir)) = (language, ir) else {
+            return Err(self.error("a package names the `language` and `ir` versions it needs"));
+        };
+        Ok(PackageDecl { id, language, ir })
+    }
+
     /// An optional `migrate kernel.id@version` after a `<~` binding.
     fn migration(&mut self) -> Result<Option<Spanned<String>>, ParseError> {
         if !self.is_keyword("migrate") {
@@ -1284,10 +1351,10 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 22] = [
+const RESERVED: [&str; 23] = [
     "let", "return", "if", "else", "match", "loop", "with", "until", "kernel", "struct", "type",
     "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan", "scatter",
-    "migrate",
+    "migrate", "package",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -1496,6 +1563,24 @@ kernel image.grayscale@1 {
 #[cfg(test)]
 mod document_tests {
     use super::*;
+
+    #[test]
+    fn a_package_manifest_names_the_package_and_the_versions_it_needs() {
+        let document =
+            parse_document("package nes_fx@2 { language = 1; ir = 1; }\nuse \"kernels/\";")
+                .unwrap();
+        let package = document.package.unwrap();
+        assert_eq!(package.id.value, "nes_fx@2");
+        assert_eq!((package.language, package.ir), (1, 1));
+        assert_eq!(document.uses.len(), 1);
+        let error = parse_document("package nes_fx@1 { language = 1; }").unwrap_err();
+        assert!(error.message.contains("`ir`"), "{error}");
+        let error =
+            parse_document("package nes_fx@1 { language = 1; ir = 1; colour = 2; }").unwrap_err();
+        assert!(error.message.contains("not `colour`"), "{error}");
+        let error = parse_document("package nes_fx { language = 1; ir = 1; }").unwrap_err();
+        assert!(error.message.contains("`@`"), "{error}");
+    }
 
     #[test]
     fn a_node_may_take_a_keyword_for_its_name() {
