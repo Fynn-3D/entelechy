@@ -155,6 +155,11 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: 0.0, i: narrow, b: hi % 7 == 0, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
+            "swizzles and joins",
+            "let p = vec4(v, x); let q = vec4(vec2(x, 2.0), 3, 4.0); let s = vec3(i, vec2(0.5, 0.25)); let w = p.wzyx + q.xyzw + vec4(s.zz, s.xy) + vec4(p.rgb, p.a); let iv = ivec3(ivec2(i, 2), 3).zx + ivec3(1, ivec2(i, i)).yz; let m2 = mat2(w.xy, w.zw); let t = m2 * v.xy + p.ba;",
+            "Out { f: w.x + w.w + t.x + t.y + s.y, i: iv.x * 10 + iv.y, b: p.xyz == v && q.gb == vec2(2.0, 3.0), v: w.yzw + vec3(s.xy, 1.0) + p.rrr }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",

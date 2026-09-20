@@ -67,7 +67,7 @@ fn diagnostics_name_the_problem_and_the_position() {
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(true, 0.0, 0.0, 1.0); } }",
     );
     assert!(
-        message.contains("must be Float or Int, found Bool"),
+        message.contains("must be Float, Int or a shorter vector, found Bool"),
         "{message}"
     );
 
@@ -425,7 +425,10 @@ fn remainder_widening_and_vector_equality_type_check() {
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Bool>; compute { return vec2(true, 1.0) == vec2(1.0, 1.0); } }",
     );
-    assert!(message.contains("must be Float or Int"), "{message}");
+    assert!(
+        message.contains("must be Float, Int or a shorter vector"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -789,7 +792,7 @@ fn integer_vectors_address_fields_without_conversions_in_the_source() {
     let (_, message) = semantic(&format!("{head}let c = ivec2(1.5, 2); return 0.0; }} }}"));
     assert_eq!(
         message,
-        "`ivec2` components must be Int, found Float; a Float truncates with int()"
+        "`ivec2` components must be Int or a shorter integer vector, found Float; a Float truncates with int()"
     );
     let (_, message) = semantic(&format!(
         "{head}let c = ivec2(1, 2) + vec2(1.0, 2.0); return 0.0; }} }}"
@@ -810,5 +813,72 @@ fn integer_vectors_address_fields_without_conversions_in_the_source() {
     assert_eq!(
         message,
         "`at_linear` addresses `g`, a Grid, with Vec2, found IVec2"
+    );
+}
+
+#[test]
+fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_name() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; }
+            output r: Rows<Vec4>;
+            fn step(a: Vec2, b: Vec2) -> Vec2 { return a + b * 2.0; }
+            fn mix(a: Int) -> Int { return a * 3; }
+            compute {
+                let i = element();
+                let v = vec3(1.0, 2.0, 3.0);
+                let p = vec4(v, 1.0);
+                let q = vec4(vec2(1.0, 2.0), 3, 4.0);
+                let s = vec3(i, vec2(0.5, 0.25));
+                let w = p.wzyx + q.xyzw + vec4(s.zz, s.xy) + vec4(p.rgb, p.a);
+                let iv = ivec3(ivec2(i, 2), 3).zx;
+                let m = step(v.xy, s.yx) + vec2(float(mix(i)), float(iv.y));
+                return w + vec4(m, m.yx);
+            } }",
+    )
+    .unwrap();
+    let text = module.to_string();
+    // The document's `step` and `mix` are called; the builtins are not.
+    assert!(text.contains("call fn0("), "{text}");
+    assert!(text.contains("call fn1("), "{text}");
+    let body = &text[text.find("fn compute()").unwrap_or(0)..];
+    assert!(!body.contains("step("), "{body}");
+    assert!(!body.contains("mix("), "{body}");
+
+    let head = "kernel t.k@1 { requires { field.write; } output r: Rows<Float>; compute { let i = element(); let v = vec3(1.0, 2.0, 3.0); ";
+    let (_, message) = semantic(&format!("{head}return vec4(v, v).x; }} }}"));
+    assert_eq!(
+        message,
+        "`vec4` takes 4 components, found 6 in (Vec3, Vec3)"
+    );
+    let (_, message) = semantic(&format!("{head}return vec2(v).x; }} }}"));
+    assert_eq!(message, "`vec2` takes 2 components, found 3 in (Vec3)");
+    let (_, message) = semantic(&format!("{head}return v.xq; }} }}"));
+    assert_eq!(
+        message,
+        "`.xq` is not a component or a swizzle; use x, y, z, w or r, g, b, a, one to four of one alphabet"
+    );
+    let (_, message) = semantic(&format!("{head}return v.xr; }} }}"));
+    assert!(
+        message.starts_with("`.xr` is not a component or a swizzle"),
+        "{message}"
+    );
+    let (_, message) = semantic(&format!("{head}return v.xyw.x; }} }}"));
+    assert_eq!(message, "Vec3 has no component `.w`");
+    let (_, message) = semantic(&format!("{head}return float(ivec3(1, 2, 3).xyzz.x); }} }}"));
+    assert_eq!(
+        message,
+        "`.xyzz` would be an integer vector of four, which there is none"
+    );
+    let (_, message) = semantic(&format!("{head}return ivec2(1.5, v).x; }} }}"));
+    assert_eq!(
+        message,
+        "`ivec2` components must be Int or a shorter integer vector, found Float; a Float truncates with int()"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input g: Rows<Float>; output r: Rows<Float>; fn at(a: Float) -> Float { return a; } compute { return 0.0; } }",
+    );
+    assert_eq!(
+        message,
+        "`at` is a builtin of the language; a function cannot take its name (a math builtin's, like `step`, it can, and stands for it here)"
     );
 }

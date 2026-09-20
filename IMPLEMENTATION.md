@@ -431,6 +431,14 @@ capability claim.
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
 
+- Vectors join and split in the compiler alone: `vec4(v3, w)` and the
+  other constructors from shorter vectors flatten their arguments to
+  components, and a swizzle `v.zyx` is extracts and a construct, so no
+  backend has a swizzle path. A function may be named after a math
+  builtin and shadows it in its document; the builtins with forms of
+  their own are reserved (`RESERVED_BUILTINS`,
+  [lowering](crates/compiler/src/lower.rs)).
+
 - The GPU divides integers through a dividend the shader compiler
   cannot narrow: a one read from the context (`wgsl::OPAQUE_ONE`) is
   multiplied in by `whole_i32` and its vector and unsigned kin before

@@ -57,7 +57,12 @@ struct's scalars in order, integers and booleans exact. Inside `compute`,
 Expressions are `let` bindings and a result; `+ - * /` and `%` (the
 remainder, truncated like `/`, on `Int` and `Float` alike, and
 componentwise on vectors) with `Int` and `Float` kept apart except that
-`vec2`, `vec3`, and `vec4` take `Int` components and widen them; `& | ^`
+`vec2`, `vec3`, and `vec4` take `Int` components and widen them, and
+take shorter vectors among their components (`vec4(v3, 1.0)`,
+`vec3(1.0, v2)`), as `ivec2` and `ivec3` take integer vectors; `v.xy`,
+`v.zyx`, `c.rgb` and the like are swizzles, a vector of those
+components in that order from one alphabet, and `v.x` one component;
+`& | ^`
 and `<< >> >>>` work on `Int`s (the shift count modulo 32, `>>`
 arithmetic, `>>>` logical),
 binding between comparison and arithmetic as in Rust; `==` and
@@ -112,6 +117,11 @@ to a `Vec2` or `Vec3` and `int(v)` truncates a vector to one. `at`,
 `Vec3`, and a scatter's address may be one; each is the float address
 converted, which is exact for every coordinate a Field can have, so
 the Field rules are one set (clamped reads, dropped writes).
+
+A function may take a math builtin's name (`step`, `mix`, `abs`) and
+then stands for it in its document; the Field, memory, context and
+construction builtins (`at`, `put`, `coord`, `vec2` and the rest) keep
+their names.
 
 The math builtins are `floor`, `ceil`, `round`, `trunc`, `sign`,
 `fract`, `abs`, `sqrt`, `inversesqrt`, `sin`, `cos`, `tan`, `asin`,
@@ -260,7 +270,9 @@ never touched: a failed evaluation leaves it as it was. A function may
 `put` into a Field parameter, so a store is written once and called from
 the steps (`fn store(m: Rows<Int>, a: Int, v: Int) -> Int { return
 put(m, a, v); }`); it is a step's write, in the step's order, and the
-initial carried value may not write. An expression
+initial carried value may not write, though it may read a memory with
+`at` (what was bound, before any step: the ant example starts from the
+cell its memory holds). An expression
 followed by `;` is a statement for its effect, `put(ram, a, v);`, the
 same as `let _ = put(ram, a, v);`; a binding named `_` binds nothing.
 

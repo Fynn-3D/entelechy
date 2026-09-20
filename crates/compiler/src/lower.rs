@@ -226,6 +226,15 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     };
     let mut shared = shared;
     for declaration in &kernel.functions {
+        if RESERVED_BUILTINS.contains(&declaration.name.value.as_str()) {
+            return Err(semantic(
+                declaration.name.span,
+                format!(
+                    "`{}` is a builtin of the language; a function cannot take its name (a math builtin's, like `step`, it can, and stands for it here)",
+                    declaration.name.value
+                ),
+            ));
+        }
         let taken = shared
             .functions
             .borrow()
@@ -417,6 +426,61 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         merge,
         init,
     })
+}
+
+/// The builtins a function cannot be named after: the Field, memory,
+/// context and construction ones, whose forms the language owns. The
+/// math builtins are ordinary calls, and a function of one's name
+/// stands for it in its document.
+const RESERVED_BUILTINS: [&str; 33] = [
+    "put",
+    "sample",
+    "at",
+    "fetch",
+    "at_linear",
+    "count",
+    "size",
+    "isize",
+    "element",
+    "coord",
+    "icoord",
+    "domain",
+    "idomain",
+    "time",
+    "rate",
+    "window",
+    "scale",
+    "pointer",
+    "pointer_down",
+    "button",
+    "wheel",
+    "key",
+    "index",
+    "vec2",
+    "vec3",
+    "vec4",
+    "ivec2",
+    "ivec3",
+    "mat2",
+    "mat3",
+    "mat4",
+    "float",
+    "int",
+];
+
+/// The letters that name components, two ways.
+fn component_index(letter: char) -> Option<(u8, bool)> {
+    match letter {
+        'x' => Some((0, false)),
+        'y' => Some((1, false)),
+        'z' => Some((2, false)),
+        'w' => Some((3, false)),
+        'r' => Some((0, true)),
+        'g' => Some((1, true)),
+        'b' => Some((2, true)),
+        'a' => Some((3, true)),
+        _ => None,
+    }
 }
 
 /// Whether a type is numbers all the way down: floats and ints, no Bool.
@@ -1122,25 +1186,60 @@ impl<'a> Builder<'a> {
                         ),
                     )
                 })?;
-                let component = match member.as_str() {
-                    "x" | "r" => 0,
-                    "y" | "g" => 1,
-                    "z" | "b" => 2,
-                    "w" | "a" => 3,
+                // One letter is a component; two to four are a swizzle,
+                // a vector of those components in that order, from one
+                // alphabet (xyzw or rgba).
+                let letters: Vec<(u8, bool)> = member
+                    .chars()
+                    .map(component_index)
+                    .collect::<Option<Vec<_>>>()
+                    .filter(|letters| {
+                        (1..=4).contains(&letters.len())
+                            && letters.iter().all(|(_, colour)| *colour == letters[0].1)
+                    })
+                    .ok_or_else(|| {
+                        semantic(
+                            expr.span,
+                            format!(
+                                "`.{member}` is not a component or a swizzle; use x, y, z, w or r, g, b, a, one to four of one alphabet"
+                            ),
+                        )
+                    })?;
+                if let Some((component, _)) = letters.iter().find(|(c, _)| *c >= count) {
+                    let letter = member
+                        .chars()
+                        .find(|l| component_index(*l).is_some_and(|(c, _)| c == *component))
+                        .unwrap_or('?');
+                    return Err(semantic(
+                        expr.span,
+                        format!("{ty} has no component `.{letter}`"),
+                    ));
+                }
+                if letters.len() == 1 {
+                    return Ok(self.emit(lane, Op::Extract(inner, u32::from(letters[0].0))));
+                }
+                let result = match (lane, letters.len()) {
+                    (Type::Float, 2) => Type::Vec2,
+                    (Type::Float, 3) => Type::Vec3,
+                    (Type::Float, 4) => Type::Vec4,
+                    (Type::Int, 2) => Type::IVec2,
+                    (Type::Int, 3) => Type::IVec3,
                     _ => {
                         return Err(semantic(
                             expr.span,
-                            format!("`.{member}` is not a component; use x, y, z, w or r, g, b, a"),
+                            format!(
+                                "`.{member}` would be an integer vector of four, which there is none"
+                            ),
                         ));
                     }
                 };
-                if component >= count {
-                    return Err(semantic(
-                        expr.span,
-                        format!("{ty} has no component `.{member}`"),
-                    ));
-                }
-                Ok(self.emit(lane, Op::Extract(inner, u32::from(component))))
+                let parts = letters
+                    .iter()
+                    .map(|(component, _)| {
+                        self.emit(lane, Op::Extract(inner, u32::from(*component)))
+                    })
+                    .collect();
+                Ok(self.emit(result, Op::Construct(parts)))
             }
             ExprKind::Array(elements) => {
                 let mut ids = Vec::with_capacity(elements.len());
@@ -2104,25 +2203,46 @@ impl<'a> Builder<'a> {
                     "vec3" => Type::Vec3,
                     _ => Type::Vec4,
                 };
-                self.arity(name, args, ty.components().unwrap_or(0) as usize, span)?;
-                let mut parts = Vec::with_capacity(args.len());
+                // Components from scalars and shorter vectors, in order,
+                // as many as the vector has: `vec4(v3, 1.0)`, `vec3(1.0,
+                // v2)`. An Int component widens; a cell address needs no
+                // `float()` at every use.
+                let wanted = ty.components().unwrap_or(0) as usize;
+                let mut parts = Vec::with_capacity(wanted);
+                let mut given = Vec::with_capacity(args.len());
                 for arg in args {
                     let part = self.value(arg)?;
-                    let part = match self.ty(part) {
-                        Type::Float => part,
-                        // An Int component widens; a cell address needs no
-                        // `float()` at every use.
-                        Type::Int => {
-                            self.emit(Type::Float, Op::Intrinsic(Intrinsic::ToFloat, vec![part]))
+                    let part_ty = self.ty(part);
+                    given.push(part_ty.to_string());
+                    match part_ty {
+                        Type::Float => parts.push(part),
+                        Type::Int => parts.push(
+                            self.emit(Type::Float, Op::Intrinsic(Intrinsic::ToFloat, vec![part])),
+                        ),
+                        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
+                            for k in 0..part_ty.components().unwrap_or(0) {
+                                parts.push(self.emit(Type::Float, Op::Extract(part, u32::from(k))));
+                            }
                         }
                         other => {
                             return Err(semantic(
                                 arg.span,
-                                format!("`{name}` components must be Float or Int, found {other}"),
+                                format!(
+                                    "`{name}` components must be Float, Int or a shorter vector, found {other}"
+                                ),
                             ));
                         }
-                    };
-                    parts.push(part);
+                    }
+                }
+                if parts.len() != wanted {
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`{name}` takes {wanted} components, found {} in ({})",
+                            parts.len(),
+                            given.join(", ")
+                        ),
+                    ));
                 }
                 Ok(self.emit(ty, Op::Construct(parts)))
             }
@@ -2132,21 +2252,40 @@ impl<'a> Builder<'a> {
                 } else {
                     Type::IVec3
                 };
-                let count = ty.int_components().unwrap_or(0) as usize;
-                self.arity(name, args, count, span)?;
-                let mut parts = Vec::with_capacity(count);
+                let wanted = ty.int_components().unwrap_or(0) as usize;
+                let mut parts = Vec::with_capacity(wanted);
+                let mut given = Vec::with_capacity(args.len());
                 for arg in args {
                     let part = self.value(arg)?;
-                    if self.ty(part) != Type::Int {
-                        return Err(semantic(
-                            arg.span,
-                            format!(
-                                "`{name}` components must be Int, found {}; a Float truncates with int()",
-                                self.describe(self.ty(part))
-                            ),
-                        ));
+                    let part_ty = self.ty(part);
+                    given.push(part_ty.to_string());
+                    match part_ty {
+                        Type::Int => parts.push(part),
+                        Type::IVec2 | Type::IVec3 => {
+                            for k in 0..part_ty.int_components().unwrap_or(0) {
+                                parts.push(self.emit(Type::Int, Op::Extract(part, u32::from(k))));
+                            }
+                        }
+                        other => {
+                            return Err(semantic(
+                                arg.span,
+                                format!(
+                                    "`{name}` components must be Int or a shorter integer vector, found {}; a Float truncates with int()",
+                                    self.describe(other)
+                                ),
+                            ));
+                        }
                     }
-                    parts.push(part);
+                }
+                if parts.len() != wanted {
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`{name}` takes {wanted} components, found {} in ({})",
+                            parts.len(),
+                            given.join(", ")
+                        ),
+                    ));
                 }
                 Ok(self.emit(ty, Op::Construct(parts)))
             }
@@ -2221,25 +2360,9 @@ impl<'a> Builder<'a> {
                 }
                 Ok(self.emit(ty, Op::Construct(columns)))
             }
-            "saturate" | "distance" | "radians" | "degrees" | "inversesqrt" | "mod" | "isnan"
-            | "isinf" | "refract" => self.composed(name, args, span),
             _ => {
-                if let Some(intrinsic) = Intrinsic::from_name(name) {
-                    let ids = args
-                        .iter()
-                        .map(|arg| self.value(arg))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let types = ids.iter().map(|id| self.ty(*id)).collect::<Vec<_>>();
-                    let ty = intrinsic.result_type(&types).ok_or_else(|| {
-                        let list = types
-                            .iter()
-                            .map(|ty| ty.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        semantic(span, format!("`{name}` cannot be applied to ({list})"))
-                    })?;
-                    return Ok(self.emit(ty, Op::Intrinsic(intrinsic, ids)));
-                }
+                // A function of the document first: one may take a math
+                // builtin's name and stand for it.
                 let found = {
                     let functions = self.shared.functions.borrow();
                     functions.iter().position(|(f, _)| f == name).map(|index| {
@@ -2272,6 +2395,36 @@ impl<'a> Builder<'a> {
                 if let Some(template) = self.shared.templates.iter().find(|t| t.name.value == name)
                 {
                     return self.instantiate(template, args, span);
+                }
+                if matches!(
+                    name,
+                    "saturate"
+                        | "distance"
+                        | "radians"
+                        | "degrees"
+                        | "inversesqrt"
+                        | "mod"
+                        | "isnan"
+                        | "isinf"
+                        | "refract"
+                ) {
+                    return self.composed(name, args, span);
+                }
+                if let Some(intrinsic) = Intrinsic::from_name(name) {
+                    let ids = args
+                        .iter()
+                        .map(|arg| self.value(arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let types = ids.iter().map(|id| self.ty(*id)).collect::<Vec<_>>();
+                    let ty = intrinsic.result_type(&types).ok_or_else(|| {
+                        let list = types
+                            .iter()
+                            .map(|ty| ty.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        semantic(span, format!("`{name}` cannot be applied to ({list})"))
+                    })?;
+                    return Ok(self.emit(ty, Op::Intrinsic(intrinsic, ids)));
                 }
                 Err(semantic(
                     span,
