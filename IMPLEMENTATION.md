@@ -24,7 +24,7 @@ capability claim.
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | Kernel rules | [rules](crates/rules/src/lib.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | Every backend's parity test runs by them |
-| CPU backend | [cpu](crates/cpu/src/lib.rs), [interpreter](crates/cpu/src/eval.rs) | [execution tests](crates/cpu/tests/execute.rs) |
+| CPU backend | [cpu](crates/cpu/src/lib.rs), [word code](crates/cpu/src/eval/code.rs), [compiler](crates/cpu/src/eval/compile.rs), [machine](crates/cpu/src/eval/run.rs) | [execution tests](crates/cpu/tests/execute.rs) |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs) | [CPU/GPU parity tests](crates/gpu/tests/parity.rs) (skip without an adapter) |
 | JIT backend | [jit](crates/jit/src/lib.rs), [Cranelift emission](crates/jit/src/codegen.rs) | [CPU/JIT parity tests](crates/jit/tests/parity.rs), every example replay on `jit` |
@@ -156,7 +156,7 @@ capability claim.
   the bound Field is never written, so a failed evaluation commits
   nothing, and both backends agree bit for bit
   ([IR](crates/ir/src/lib.rs), [validator](crates/ir/src/validate.rs),
-  [compiler](crates/compiler/src/lower.rs), [CPU](crates/cpu/src/eval.rs),
+  [compiler](crates/compiler/src/lower.rs), [CPU](crates/cpu/src/eval/compile.rs),
   [WGSL](crates/gpu/src/wgsl.rs), [parity](crates/gpu/tests/parity.rs),
   [feedback test](crates/graph/tests/composition.rs)). With the integer
   bit operators, this is what a machine needs: random-access RAM written
@@ -224,7 +224,7 @@ capability claim.
   included, mixed fieldwise), bilinear over grids and trilinear over
   volumes, with element centres at half-integers and clamped edges. The
   CPU sums weighted corners in words; the GPU emits one helper per input
-  and one mixer per float struct ([interpreter](crates/cpu/src/eval.rs),
+  and one mixer per float struct ([interpreter](crates/cpu/src/eval/compile.rs),
   [WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs)).
   The [volume example](examples/volume/README.md) reads its cloud that way.
 
@@ -385,7 +385,7 @@ capability claim.
   `Name { .. }` literals, and allowed wherever a value is (loops carry them,
   functions take and return them). They never cross the ABI as parameters or
   ports. The CPU backend lays them out as words, fields in order
-  ([interpreter](crates/cpu/src/eval.rs)); the GPU backend emits native WGSL
+  ([interpreter](crates/cpu/src/eval/compile.rs)); the GPU backend emits native WGSL
   structs. Proof: [struct tests](crates/cpu/tests/execute.rs),
   [diagnostics](crates/compiler/tests/compile.rs),
   [parity](crates/gpu/tests/parity.rs), and the
@@ -413,7 +413,7 @@ capability claim.
   nothing else reads, a named one kept for its trace. Four million
   three-table lookups: 524 ms to 40 ms on the JIT, 20 s to 0.6 s on
   the interpreter ([JIT](crates/jit/src/codegen.rs),
-  [interpreter](crates/cpu/src/eval.rs)).
+  [interpreter](crates/cpu/src/eval/compile.rs)).
 
 - Matrices `Mat2/3/4` are value types of the ABI, column-major floats,
   with the operator table in [the IR](crates/ir/src/lib.rs) (`Mat * Mat`,
@@ -536,7 +536,7 @@ capability claim.
   offset in the ABI's own layout, so arguments, struct fields, vector
   components and a loop's carried value are aliases that cost nothing,
   Field reads copy words out of slices the scope lent once, and nothing
-  allocates per element ([interpreter](crates/cpu/src/eval.rs)). Rows run
+  allocates per element ([interpreter](crates/cpu/src/eval/compile.rs)). Rows run
   in parallel and are written sequentially; results and error attribution
   match a single-threaded run ([parallel rows test](crates/cpu/tests/execute.rs)),
   and the GPU parity tests and every example replay hold the two backends
@@ -568,7 +568,7 @@ capability claim.
   compiler reads those values through `Carried` just before the inner
   loop begins and binds the names to the results, so no backend changed
   ([lowering](crates/compiler/src/lower.rs),
-  [interpreter](crates/cpu/src/eval.rs), [WGSL](crates/gpu/src/wgsl.rs),
+  [interpreter](crates/cpu/src/eval/compile.rs), [WGSL](crates/gpu/src/wgsl.rs),
   [JIT](crates/jit/src/codegen.rs)).
 - The backends are held to the interpreter across the whole cross
   product, not where an example happens to look: `orla-matrix` writes

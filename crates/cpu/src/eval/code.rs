@@ -1,0 +1,397 @@
+//! The word code: what a function compiles to. Offsets are relative
+//! to the running frame; a value is a run of words there.
+
+use orla_ir::{BinaryOp, Intrinsic};
+
+use crate::ArithmeticError;
+
+/// Where a value lives: a frame-relative word offset and a width in words.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Loc {
+    pub(super) at: usize,
+    pub(super) n: usize,
+}
+
+/// Word layout of one struct type.
+pub(super) struct StructLayout {
+    pub(super) words: usize,
+    pub(super) field_offsets: Vec<usize>,
+}
+
+/// How a vector component is made from a part.
+#[derive(Clone, Copy)]
+pub(super) enum Widen {
+    /// Already a float word.
+    Float,
+    /// An `Int` or `Bool` word, converted.
+    Int,
+}
+
+/// How an address is read for `at` and `at_linear`.
+#[derive(Clone, Copy)]
+pub(super) enum Address {
+    Int,
+    Float,
+    Vec2,
+    Vec3,
+}
+
+pub(super) type F1 = fn(f32) -> f32;
+pub(super) type F2 = fn(f32, f32) -> f32;
+pub(super) type F3 = fn(f32, f32, f32) -> f32;
+
+/// The shapes a `*` on matrices takes.
+#[derive(Clone, Copy)]
+pub(super) enum MatMul {
+    MatMat,
+    MatVec,
+    VecMat,
+}
+
+/// One compiled instruction. Offsets are relative to the running frame;
+/// `n` is a width in words; `sa`, `sb`, `sc` are operand strides, zero
+/// for a scalar broadcast beside a vector.
+pub(super) enum Instr {
+    Const {
+        dst: usize,
+        words: [u32; 4],
+        n: usize,
+    },
+    Param {
+        dst: usize,
+        at: usize,
+        n: usize,
+    },
+    Move {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    Gather {
+        dst: usize,
+        parts: Vec<Loc>,
+    },
+    /// A value known when the function compiled: its words.
+    Words {
+        dst: usize,
+        words: Vec<u32>,
+    },
+    /// `dst` = the `n` words of element `index` (clamped to `count`) of
+    /// the array at `base`.
+    Subscript {
+        dst: usize,
+        base: usize,
+        index: usize,
+        count: usize,
+        n: usize,
+    },
+    /// A matrix product of order `n`: `a * b`, the shapes by `kind`.
+    MatMul {
+        kind: MatMul,
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+    },
+    /// `transpose`, `determinant` or `inverse` of the order `n` matrix at
+    /// `src`.
+    Matrix {
+        op: Intrinsic,
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    Vector {
+        dst: usize,
+        parts: Vec<(usize, Widen)>,
+    },
+    FNeg {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    INeg {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    Not {
+        dst: usize,
+        src: usize,
+    },
+    FBin {
+        f: F2,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    IBin {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    FCmp {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    ICmp {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    FEq {
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+        negate: bool,
+    },
+    IEq {
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+        negate: bool,
+    },
+    And {
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    Or {
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    Map1 {
+        f: F1,
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    Map2 {
+        f: F2,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    Map3 {
+        f: F3,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        c: usize,
+        sc: usize,
+        n: usize,
+    },
+    IMap1 {
+        f: fn(i32) -> i32,
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    /// An integer operation that may fail, a division by zero say.
+    IMap2Checked {
+        f: fn(i32, i32) -> Result<i32, ArithmeticError>,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    IMap2 {
+        f: fn(i32, i32) -> i32,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    IClamp {
+        dst: usize,
+        v: usize,
+        low: usize,
+        sl: usize,
+        high: usize,
+        sh: usize,
+        n: usize,
+    },
+    ToFloat {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    ToInt {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    Dot {
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+    },
+    Cross {
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    Length {
+        dst: usize,
+        a: usize,
+        n: usize,
+    },
+    Normalize {
+        dst: usize,
+        a: usize,
+        n: usize,
+    },
+    Reflect {
+        dst: usize,
+        incident: usize,
+        normal: usize,
+        n: usize,
+    },
+    Atan2 {
+        dst: usize,
+        y: usize,
+        x: usize,
+    },
+    If {
+        condition: usize,
+        then: Vec<Instr>,
+        then_result: usize,
+        otherwise: Vec<Instr>,
+        otherwise_result: usize,
+        dst: usize,
+        n: usize,
+    },
+    Match {
+        scrutinee: usize,
+        /// Each arm's values, code and result; the first holding the
+        /// value runs.
+        arms: Vec<(Vec<i32>, Vec<Instr>, usize)>,
+        otherwise: Vec<Instr>,
+        otherwise_result: usize,
+        dst: usize,
+        n: usize,
+    },
+    Loop {
+        count: u32,
+        init: usize,
+        carried: usize,
+        n: usize,
+        until: Option<(Vec<Instr>, usize)>,
+        body: Vec<Instr>,
+        body_result: usize,
+    },
+    Index {
+        dst: usize,
+    },
+    Call {
+        function: usize,
+        args: Vec<Loc>,
+        dst: usize,
+        n: usize,
+    },
+    Coord {
+        dst: usize,
+        n: usize,
+    },
+    Extent {
+        dst: usize,
+    },
+    Element {
+        dst: usize,
+    },
+    Time {
+        dst: usize,
+    },
+    Rate {
+        dst: usize,
+    },
+    Pointer {
+        dst: usize,
+    },
+    PointerDown {
+        dst: usize,
+    },
+    Key {
+        dst: usize,
+        code: usize,
+    },
+    Button {
+        dst: usize,
+        code: usize,
+    },
+    Wheel {
+        dst: usize,
+    },
+    Window {
+        dst: usize,
+    },
+    Scale {
+        dst: usize,
+    },
+    Count {
+        dst: usize,
+        input: usize,
+    },
+    Size {
+        dst: usize,
+        input: usize,
+    },
+    Sample {
+        dst: usize,
+        input: usize,
+        n: usize,
+    },
+    At {
+        dst: usize,
+        input: usize,
+        address: usize,
+        kind: Address,
+        n: usize,
+    },
+    AtLinear {
+        dst: usize,
+        input: usize,
+        position: usize,
+        kind: Address,
+        n: usize,
+    },
+    Put {
+        dst: usize,
+        input: usize,
+        address: usize,
+        kind: Address,
+        value: usize,
+        n: usize,
+    },
+}
+
+/// A compiled function: its frame size in words, where its arguments
+/// and results live in the frame, and its code.
+pub(super) struct Code {
+    pub(super) frame: usize,
+    pub(super) args: Vec<Loc>,
+    pub(super) results: Vec<Loc>,
+    pub(super) code: Vec<Instr>,
+    /// Where every value of the function lives in its frame, by id.
+    pub(super) locs: Vec<Loc>,
+}
