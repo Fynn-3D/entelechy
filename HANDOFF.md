@@ -88,9 +88,12 @@ Not hand-tested: the Player's real right and middle buttons and wheel,
 gamepad hardware (none connected), and a live resize of a window-sized
 scene in the Player (the Player was opened on the voxel editor and
 presented; the resize mechanism is covered by the graph test, not by a
-hand on the window's corner). The web bridge's page was connected, framed
-and made to load a Kernel by the headless runner, not looked at by a
-person in a browser (the Chrome extension was not connected). The Blender bridge ran on Blender 5.2
+hand on the window's corner). The web bridge's page was driven in a real
+Chrome as well as headless: the text example's title republished from
+its editor and the voxel editor filled a Retina canvas at 24 ms a frame
+and took a click; a browser refuses `file://` pages through the Chrome
+extension, so the directory was served with any static file server for
+that (`python3 -m http.server`), which the page does not need otherwise. The Blender bridge ran on Blender 5.2
 only; Watch polls (default 0.5 s) and reads whole rows each tick. The file
 watch polls every 200 ms and can observe a half-written file; the next write
 is picked up. The CPU interpreter is the reference; it compiles to
