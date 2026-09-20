@@ -20,7 +20,7 @@ use std::fmt;
 use std::sync::{Mutex, OnceLock};
 
 use orla_abi::{Handle, Invocation, Scope, Value};
-use orla_ir::Validated;
+use orla_ir::{Mode, Validated};
 use orla_rules::{ExecutionError, check_invocation};
 use orla_runtime::{Backend, NativeOp, Prepared};
 
@@ -469,416 +469,46 @@ impl Backend for GpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // A reduction maps over its first input and folds afterwards; a
-        // scan walks its first input's rows in one invocation; a scatter
-        // maps over its first input into pairs and combines them into a
-        // copy of its target afterwards.
-        let reducing = module.manifest.mode == orla_ir::Mode::Reduce;
-        let scanning = module.manifest.mode == orla_ir::Mode::Scan;
-        let scattering = match module.manifest.mode {
-            orla_ir::Mode::Scatter { base, .. } => Some(base as usize),
-            _ => None,
+        let mode = module.manifest.mode;
+        let domain = execution_domain(module, invocation, scope)?;
+        let staged = self.stage(pipeline, module, invocation, scope, domain)?;
+        let Staged {
+            mut encoder,
+            context_buffer,
+            params_buffer,
+            input_buffers,
+            memory_outputs,
+            output_buffer,
+            output_words,
+            element_count,
+        } = staged;
+        // What the map pass left is the output, unless the mode has more
+        // to do with it: a reduction folds it, a scatter combines it
+        // into its target.
+        let final_buffer = match (mode, pipeline.reduce.as_ref(), pipeline.scatter.as_ref()) {
+            (Mode::Reduce, Some(reduce), _) => self.fold(
+                &mut encoder,
+                module,
+                reduce,
+                &context_buffer,
+                &params_buffer,
+                &input_buffers,
+                output_buffer,
+                element_count,
+                output_words,
+            ),
+            (Mode::Scatter { base, .. }, _, Some(scatter)) => self.combine(
+                &mut encoder,
+                scatter,
+                &input_buffers[base as usize],
+                &context_buffer,
+                output_buffer,
+                invocation.domain.count(),
+                element_count,
+                output_words,
+            ),
+            _ => output_buffer,
         };
-        let domain = if reducing {
-            scope.size(invocation.inputs[0])?
-        } else if scanning {
-            orla_rules::check_scan(invocation, scope)?
-        } else if let Some(base) = scattering {
-            orla_rules::check_scatter(invocation, scope, base)?;
-            scope.size(invocation.inputs[0])?
-        } else {
-            invocation.domain
-        };
-        let element_count = domain.count();
-
-        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per input.
-        let input = &invocation.context.input;
-        let mut context = vec![
-            domain.width() as f32,
-            domain.height() as f32,
-            invocation.context.time,
-            input.button_bits() as f32,
-            input.pointer[0],
-            input.pointer[1],
-            domain.depth() as f32,
-            invocation.context.rate,
-        ];
-        context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
-        let window = invocation.context.window;
-        context.extend_from_slice(&[input.wheel[0], input.wheel[1], window[0], window[1]]);
-        let (groups_x, groups_y, groups_z, fold) = wgsl::dispatch(domain);
-        // The third word is a one the shader compiler cannot see through
-        // (`wgsl::OPAQUE_ONE`); the fourth is spare.
-        context.extend_from_slice(&[invocation.context.scale, fold as f32, 1.0, 0.0]);
-        // Inputs: bind resident buffers directly; upload the rest once and
-        // leave them resident.
-        let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
-        // A memory's steps write it, so the bound buffer is a copy of the
-        // input's, and that copy is the memory's output afterwards.
-        let mut memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)> = Vec::new();
-        let mut copies = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("orla memories"),
-            });
-        for (index, handle) in invocation.inputs.iter().enumerate() {
-            let extent = scope.size(*handle)?;
-            context.extend_from_slice(&[
-                extent.width() as f32,
-                extent.height() as f32,
-                extent.depth() as f32,
-                0.0,
-            ]);
-            let bound = self.bind_input(scope, *handle, index)?;
-            let port = &module.manifest.inputs[index];
-            if module.manifest.memories.contains(&port.name) {
-                let size = (extent.count() * port.ty.schema.words() * 4) as u64;
-                let copy = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("memory"),
-                    size: size.max(16).div_ceil(16) * 16,
-                    usage: wgpu::BufferUsages::STORAGE
-                        | wgpu::BufferUsages::COPY_SRC
-                        | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                copies.copy_buffer_to_buffer(&bound, 0, &copy, 0, size);
-                memory_outputs.push((index, copy.clone(), extent));
-                input_buffers.push(copy);
-            } else {
-                input_buffers.push(bound);
-            }
-        }
-        if !memory_outputs.is_empty() {
-            self.queue.submit(Some(copies.finish()));
-        }
-        let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let context_buffer = self.buffer("context", &context_bytes, wgpu::BufferUsages::UNIFORM);
-        let params_buffer = self.buffer(
-            "params",
-            &param_bytes(&invocation.params),
-            wgpu::BufferUsages::UNIFORM,
-        );
-        let output_port = &module.manifest.outputs[0];
-        let output_words = output_port.ty.schema.words();
-        // A scatter's map pass stores a pair per source element.
-        let map_words = if scattering.is_some() {
-            wgsl::type_words(module, wgsl::result_type(&module.entry))
-        } else {
-            output_words
-        };
-        let output_size = (element_count * map_words * 4) as u64;
-        let params_buffer_for_reduce = params_buffer.clone();
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("output"),
-            size: output_size,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut entries = vec![
-            wgpu::BindGroupEntry {
-                binding: wgsl::CONTEXT_BINDING,
-                resource: context_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: wgsl::PARAMS_BINDING,
-                resource: params_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: wgsl::OUTPUT_BINDING,
-                resource: output_buffer.as_entire_binding(),
-            },
-        ];
-        for (index, buffer) in input_buffers.iter().enumerate() {
-            entries.push(wgpu::BindGroupEntry {
-                binding: wgsl::INPUT_BINDING + index as u32,
-                resource: buffer.as_entire_binding(),
-            });
-        }
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("orla kernel"),
-            layout: &pipeline.layout,
-            entries: &entries,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("orla"),
-            });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("orla kernel"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&pipeline.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            if scanning {
-                pass.dispatch_workgroups(1, 1, 1);
-            } else {
-                pass.dispatch_workgroups(groups_x, groups_y, groups_z);
-            }
-        }
-        // The fold: level by level into a second buffer, alternating, in
-        // the same pairwise tree as the CPU reference.
-        let mut final_buffer = output_buffer;
-        if let Some((reduce_pipeline, reduce_layout)) = pipeline.reduce.as_ref() {
-            let stride = output_words as u64 * 4;
-            let mut count = element_count as u64;
-            let other = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("reduce level"),
-                size: (count.div_ceil(2) * stride).max(16),
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let mut current = final_buffer;
-            let mut next = other;
-            while count > 1 {
-                let level: [u32; 4] = [count as u32, 0, 0, 0];
-                let level_bytes: Vec<u8> = level.iter().flat_map(|v| v.to_le_bytes()).collect();
-                let level_buffer =
-                    self.buffer("reduce count", &level_bytes, wgpu::BufferUsages::UNIFORM);
-                let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
-                let mut fold_entries = vec![
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::CONTEXT_BINDING,
-                        resource: context_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::PARAMS_BINDING,
-                        resource: params_buffer_for_reduce.as_entire_binding(),
-                    },
-                ];
-                for (index, buffer) in input_buffers.iter().enumerate() {
-                    fold_entries.push(wgpu::BindGroupEntry {
-                        binding: wgsl::INPUT_BINDING + index as u32,
-                        resource: buffer.as_entire_binding(),
-                    });
-                }
-                fold_entries.extend([
-                    wgpu::BindGroupEntry {
-                        binding: count_binding,
-                        resource: level_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: in_binding,
-                        resource: current.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: out_binding,
-                        resource: next.as_entire_binding(),
-                    },
-                ]);
-                let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("orla reduce"),
-                    layout: reduce_layout,
-                    entries: &fold_entries,
-                });
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("orla reduce"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(reduce_pipeline);
-                pass.set_bind_group(0, &group, &[]);
-                pass.dispatch_workgroups(
-                    (count.div_ceil(2) as u32).div_ceil(wgsl::REDUCE_WORKGROUP),
-                    1,
-                    1,
-                );
-                drop(pass);
-                count = count.div_ceil(2);
-                std::mem::swap(&mut current, &mut next);
-            }
-            final_buffer = current;
-        }
-        // The combine: the target copied on the device, then the pairs
-        // applied by the plan. A float sum sorts the pairs by target and
-        // source (a bitonic sort, one small dispatch per step) and folds
-        // each target's run in source order; the order-free rules apply
-        // one invocation per pair with atomics, `min` and `max` over
-        // floats between two key passes, `last` followed by a gather.
-        if let (Some(base), Some(scatter)) = (scattering, pipeline.scatter.as_ref()) {
-            let target_count = invocation.domain.count();
-            let size = (target_count * output_words * 4) as u64;
-            let target = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("scatter target"),
-                size: size.max(16).div_ceil(16) * 16,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            encoder.copy_buffer_to_buffer(&input_buffers[base], 0, &target, 0, size);
-            let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
-            let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
-            let storage = |label: &str, words: usize| {
-                self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size: (words as u64 * 4).max(16).div_ceil(16) * 16,
-                    usage: wgpu::BufferUsages::STORAGE,
-                    mapped_at_creation: false,
-                })
-            };
-            let common = [
-                wgpu::BindGroupEntry {
-                    binding: wgsl::CONTEXT_BINDING,
-                    resource: context_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: wgsl::SCATTER_PAIRS_BINDING,
-                    resource: final_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: wgsl::SCATTER_OUT_BINDING,
-                    resource: target.as_entire_binding(),
-                },
-            ];
-            let bind = |layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindGroupEntry]| {
-                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("orla scatter"),
-                    layout,
-                    entries,
-                })
-            };
-            let dispatch = |encoder: &mut wgpu::CommandEncoder,
-                            pass: &Pass,
-                            group: &wgpu::BindGroup,
-                            offsets: &[u32],
-                            groups: u32| {
-                let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("orla scatter"),
-                    timestamp_writes: None,
-                });
-                compute.set_pipeline(&pass.0);
-                compute.set_bind_group(0, group, offsets);
-                compute.dispatch_workgroups(groups, 1, 1);
-            };
-            match scatter {
-                Scatter::Sorted { keys, step, fold } => {
-                    let padded = element_count.next_power_of_two().max(1);
-                    let keys_buffer = storage("scatter sort keys", padded);
-                    let order_buffer = storage("scatter sort order", padded);
-                    // One parameter record per dispatch, at the alignment
-                    // dynamic offsets need: the padded count, then k and j.
-                    let mut records: Vec<[u32; 4]> = vec![[padded as u32, 0, 0, 0]];
-                    let mut k = 2;
-                    while k <= padded {
-                        let mut j = k / 2;
-                        while j >= 1 {
-                            records.push([padded as u32, k as u32, j as u32, 0]);
-                            j /= 2;
-                        }
-                        k *= 2;
-                    }
-                    let alignment = self
-                        .device
-                        .limits()
-                        .min_uniform_buffer_offset_alignment
-                        .max(16) as usize;
-                    let mut bytes = vec![0u8; records.len() * alignment];
-                    for (index, record) in records.iter().enumerate() {
-                        for (word, value) in record.iter().enumerate() {
-                            let at = index * alignment + word * 4;
-                            bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
-                        }
-                    }
-                    let params =
-                        self.buffer("scatter sort params", &bytes, wgpu::BufferUsages::UNIFORM);
-                    let params_entry = wgpu::BindGroupEntry {
-                        binding: wgsl::SCATTER_SORT_PARAMS_BINDING,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &params,
-                            offset: 0,
-                            size: std::num::NonZeroU64::new(16),
-                        }),
-                    };
-                    let sort_entries = |read_only: bool| {
-                        let _ = read_only;
-                        [
-                            wgpu::BindGroupEntry {
-                                binding: wgsl::SCATTER_SORT_KEYS_BINDING,
-                                resource: keys_buffer.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: wgsl::SCATTER_SORT_ORDER_BINDING,
-                                resource: order_buffer.as_entire_binding(),
-                            },
-                            params_entry.clone(),
-                        ]
-                    };
-                    let keys_group = bind(
-                        &keys.1,
-                        &[common[0].clone(), common[1].clone()]
-                            .into_iter()
-                            .chain(sort_entries(false))
-                            .collect::<Vec<_>>(),
-                    );
-                    let step_group = bind(&step.1, &sort_entries(false));
-                    let fold_group = bind(
-                        &fold.1,
-                        &common
-                            .iter()
-                            .cloned()
-                            .chain(sort_entries(true))
-                            .collect::<Vec<_>>(),
-                    );
-                    let over_padded = (padded as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
-                    dispatch(&mut encoder, keys, &keys_group, &[0], over_padded);
-                    // Every step of the sort in one pass: dispatches in a
-                    // pass run in order, each seeing the last one's writes.
-                    {
-                        let mut compute =
-                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                label: Some("orla scatter sort"),
-                                timestamp_writes: None,
-                            });
-                        compute.set_pipeline(&step.0);
-                        for index in 1..records.len() {
-                            compute.set_bind_group(0, &step_group, &[(index * alignment) as u32]);
-                            compute.dispatch_workgroups(over_padded, 1, 1);
-                        }
-                    }
-                    dispatch(&mut encoder, fold, &fold_group, &[0], over_target);
-                }
-                Scatter::Parallel {
-                    apply,
-                    gather,
-                    keys,
-                } => {
-                    // Winners for `last`, zeroed as every new buffer is; a
-                    // token buffer where the pass has none to record.
-                    let winners = storage(
-                        "scatter winners",
-                        if gather.is_some() { target_count } else { 1 },
-                    );
-                    let with_winners: Vec<wgpu::BindGroupEntry> = common
-                        .iter()
-                        .cloned()
-                        .chain([wgpu::BindGroupEntry {
-                            binding: wgsl::SCATTER_WINNER_BINDING,
-                            resource: winners.as_entire_binding(),
-                        }])
-                        .collect();
-                    if let Some(keys) = keys {
-                        let group = bind(&keys.1, &common);
-                        dispatch(&mut encoder, keys, &group, &[], over_target);
-                    }
-                    let group = bind(&apply.1, &with_winners);
-                    dispatch(&mut encoder, apply, &group, &[], over_sources);
-                    if let Some(gather) = gather {
-                        let group = bind(&gather.1, &with_winners);
-                        dispatch(&mut encoder, gather, &group, &[], over_target);
-                    }
-                    if let Some(keys) = keys {
-                        let group = bind(&keys.1, &common);
-                        dispatch(&mut encoder, keys, &group, &[], over_target);
-                    }
-                }
-            }
-            final_buffer = target;
-        }
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         self.queue.submit(Some(encoder.finish()));
         // Submissions on one queue run in order, so a later node reading
@@ -887,36 +517,12 @@ impl Backend for GpuBackend {
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(error.to_string()));
         }
-        let device = Box::new(DeviceImage {
-            buffer: final_buffer,
-        });
-        let output_domain = if reducing {
-            orla_abi::Domain::Rows(1)
-        } else if scattering.is_some() {
-            invocation.domain
-        } else {
-            domain
+        let output_domain = match mode {
+            Mode::Reduce => orla_abi::Domain::Rows(1),
+            Mode::Scatter { .. } => invocation.domain,
+            _ => domain,
         };
-        let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
-        let mut outputs = vec![output];
-        for (index, buffer, extent) in memory_outputs {
-            let port = &module.manifest.inputs[index];
-            let adopted = scope.adopt_resident(
-                port.ty.schema.clone(),
-                extent,
-                Box::new(DeviceImage { buffer }),
-            );
-            match adopted {
-                Ok(handle) => outputs.push(handle),
-                Err(error) => {
-                    for handle in outputs {
-                        let _ = scope.release(handle);
-                    }
-                    return Err(error.into());
-                }
-            }
-        }
-        Ok(outputs)
+        adopt_outputs(scope, module, output_domain, final_buffer, memory_outputs)
     }
 
     fn execute_native(
@@ -1021,5 +627,511 @@ fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
             min_binding_size: None,
         },
         count: None,
+    }
+}
+
+/// What the map pass leaves ready for the mode's remaining passes.
+struct Staged {
+    encoder: wgpu::CommandEncoder,
+    context_buffer: wgpu::Buffer,
+    params_buffer: wgpu::Buffer,
+    input_buffers: Vec<wgpu::Buffer>,
+    /// A memory's copy, written by the steps, to adopt as that output.
+    memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
+    output_buffer: wgpu::Buffer,
+    output_words: usize,
+    element_count: usize,
+}
+
+/// The domain the entry maps over: a reduction's and a scatter's first
+/// input, a scan's rows (checked), else the invocation's.
+fn execution_domain(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+) -> Result<orla_abi::Domain, ExecutionError> {
+    Ok(match module.manifest.mode {
+        Mode::Reduce => scope.size(invocation.inputs[0])?,
+        Mode::Scan => orla_rules::check_scan(invocation, scope)?,
+        Mode::Scatter { base, .. } => {
+            orla_rules::check_scatter(invocation, scope, base as usize)?;
+            scope.size(invocation.inputs[0])?
+        }
+        Mode::Map => invocation.domain,
+    })
+}
+
+/// The output and the memories as the scope's resident Fields; on a
+/// failure, whatever was adopted is released.
+fn adopt_outputs(
+    scope: &mut Scope<'_>,
+    module: &Validated,
+    output_domain: orla_abi::Domain,
+    final_buffer: wgpu::Buffer,
+    memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let output_port = &module.manifest.outputs[0];
+    let device = Box::new(DeviceImage {
+        buffer: final_buffer,
+    });
+    let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
+    let mut outputs = vec![output];
+    for (index, buffer, extent) in memory_outputs {
+        let port = &module.manifest.inputs[index];
+        let adopted = scope.adopt_resident(
+            port.ty.schema.clone(),
+            extent,
+            Box::new(DeviceImage { buffer }),
+        );
+        match adopted {
+            Ok(handle) => outputs.push(handle),
+            Err(error) => {
+                for handle in outputs {
+                    let _ = scope.release(handle);
+                }
+                return Err(error.into());
+            }
+        }
+    }
+    Ok(outputs)
+}
+
+impl GpuBackend {
+    /// Binds the inputs (memories as copies the steps may write), writes
+    /// the context and the parameters, creates the output, and encodes
+    /// the map pass over `domain`.
+    fn stage(
+        &self,
+        pipeline: &Pipeline,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        domain: orla_abi::Domain,
+    ) -> Result<Staged, ExecutionError> {
+        let element_count = domain.count();
+        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per input.
+        let input = &invocation.context.input;
+        let mut context = vec![
+            domain.width() as f32,
+            domain.height() as f32,
+            invocation.context.time,
+            input.button_bits() as f32,
+            input.pointer[0],
+            input.pointer[1],
+            domain.depth() as f32,
+            invocation.context.rate,
+        ];
+        context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
+        let window = invocation.context.window;
+        context.extend_from_slice(&[input.wheel[0], input.wheel[1], window[0], window[1]]);
+        let (groups_x, groups_y, groups_z, fold) = wgsl::dispatch(domain);
+        // The third word is a one the shader compiler cannot see through
+        // (`wgsl::OPAQUE_ONE`); the fourth is spare.
+        context.extend_from_slice(&[invocation.context.scale, fold as f32, 1.0, 0.0]);
+        // Inputs: bind resident buffers directly; upload the rest once and
+        // leave them resident.
+        let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
+        // A memory's steps write it, so the bound buffer is a copy of the
+        // input's, and that copy is the memory's output afterwards.
+        let mut memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)> = Vec::new();
+        let mut copies = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("orla memories"),
+            });
+        for (index, handle) in invocation.inputs.iter().enumerate() {
+            let extent = scope.size(*handle)?;
+            context.extend_from_slice(&[
+                extent.width() as f32,
+                extent.height() as f32,
+                extent.depth() as f32,
+                0.0,
+            ]);
+            let bound = self.bind_input(scope, *handle, index)?;
+            let port = &module.manifest.inputs[index];
+            if module.manifest.memories.contains(&port.name) {
+                let size = (extent.count() * port.ty.schema.words() * 4) as u64;
+                let copy = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("memory"),
+                    size: size.max(16).div_ceil(16) * 16,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                copies.copy_buffer_to_buffer(&bound, 0, &copy, 0, size);
+                memory_outputs.push((index, copy.clone(), extent));
+                input_buffers.push(copy);
+            } else {
+                input_buffers.push(bound);
+            }
+        }
+        if !memory_outputs.is_empty() {
+            self.queue.submit(Some(copies.finish()));
+        }
+        let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let context_buffer = self.buffer("context", &context_bytes, wgpu::BufferUsages::UNIFORM);
+        let params_buffer = self.buffer(
+            "params",
+            &param_bytes(&invocation.params),
+            wgpu::BufferUsages::UNIFORM,
+        );
+        let output_words = module.manifest.outputs[0].ty.schema.words();
+        // A scatter's map pass stores a pair per source element.
+        let map_words = if matches!(module.manifest.mode, Mode::Scatter { .. }) {
+            wgsl::type_words(module, wgsl::result_type(&module.entry))
+        } else {
+            output_words
+        };
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("output"),
+            size: (element_count * map_words * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: wgsl::CONTEXT_BINDING,
+                resource: context_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: wgsl::PARAMS_BINDING,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: wgsl::OUTPUT_BINDING,
+                resource: output_buffer.as_entire_binding(),
+            },
+        ];
+        for (index, buffer) in input_buffers.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::INPUT_BINDING + index as u32,
+                resource: buffer.as_entire_binding(),
+            });
+        }
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("orla kernel"),
+            layout: &pipeline.layout,
+            entries: &entries,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("orla"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("orla kernel"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            // A scan walks its rows in one invocation.
+            if module.manifest.mode == Mode::Scan {
+                pass.dispatch_workgroups(1, 1, 1);
+            } else {
+                pass.dispatch_workgroups(groups_x, groups_y, groups_z);
+            }
+        }
+        Ok(Staged {
+            encoder,
+            context_buffer,
+            params_buffer,
+            input_buffers,
+            memory_outputs,
+            output_buffer,
+            output_words,
+            element_count,
+        })
+    }
+
+    /// A reduction's fold: level by level into a second buffer,
+    /// alternating, in the same pairwise tree as the CPU reference.
+    /// Returns the buffer holding the one element.
+    #[allow(clippy::too_many_arguments)]
+    fn fold(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        module: &Validated,
+        reduce: &Pass,
+        context_buffer: &wgpu::Buffer,
+        params_buffer: &wgpu::Buffer,
+        input_buffers: &[wgpu::Buffer],
+        mapped: wgpu::Buffer,
+        element_count: usize,
+        output_words: usize,
+    ) -> wgpu::Buffer {
+        let (reduce_pipeline, reduce_layout) = reduce;
+        let params_buffer_for_reduce = params_buffer;
+        let final_buffer = mapped;
+        let stride = output_words as u64 * 4;
+        let mut count = element_count as u64;
+        let other = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("reduce level"),
+            size: (count.div_ceil(2) * stride).max(16),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut current = final_buffer;
+        let mut next = other;
+        while count > 1 {
+            let level: [u32; 4] = [count as u32, 0, 0, 0];
+            let level_bytes: Vec<u8> = level.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let level_buffer =
+                self.buffer("reduce count", &level_bytes, wgpu::BufferUsages::UNIFORM);
+            let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
+            let mut fold_entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: wgsl::CONTEXT_BINDING,
+                    resource: context_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::PARAMS_BINDING,
+                    resource: params_buffer_for_reduce.as_entire_binding(),
+                },
+            ];
+            for (index, buffer) in input_buffers.iter().enumerate() {
+                fold_entries.push(wgpu::BindGroupEntry {
+                    binding: wgsl::INPUT_BINDING + index as u32,
+                    resource: buffer.as_entire_binding(),
+                });
+            }
+            fold_entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: count_binding,
+                    resource: level_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: in_binding,
+                    resource: current.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: out_binding,
+                    resource: next.as_entire_binding(),
+                },
+            ]);
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("orla reduce"),
+                layout: reduce_layout,
+                entries: &fold_entries,
+            });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("orla reduce"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(reduce_pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(
+                (count.div_ceil(2) as u32).div_ceil(wgsl::REDUCE_WORKGROUP),
+                1,
+                1,
+            );
+            drop(pass);
+            count = count.div_ceil(2);
+            std::mem::swap(&mut current, &mut next);
+        }
+        current
+    }
+
+    /// A scatter's combine: the target copied on the device, then the
+    /// pairs applied by the plan. A float sum sorts the pairs by target
+    /// and source (a bitonic sort, one small dispatch per step) and folds
+    /// each target's run in source order; the order-free rules apply one
+    /// invocation per pair with atomics, `min` and `max` over floats
+    /// between two key passes, `last` followed by a gather. Returns the
+    /// target.
+    #[allow(clippy::too_many_arguments)]
+    fn combine(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        scatter: &Scatter,
+        base_buffer: &wgpu::Buffer,
+        context_buffer: &wgpu::Buffer,
+        pairs: wgpu::Buffer,
+        target_count: usize,
+        element_count: usize,
+        output_words: usize,
+    ) -> wgpu::Buffer {
+        let final_buffer = pairs;
+        let size = (target_count * output_words * 4) as u64;
+        let target = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scatter target"),
+            size: size.max(16).div_ceil(16) * 16,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(base_buffer, 0, &target, 0, size);
+        let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
+        let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
+        let storage = |label: &str, words: usize| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (words as u64 * 4).max(16).div_ceil(16) * 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        let common = [
+            wgpu::BindGroupEntry {
+                binding: wgsl::CONTEXT_BINDING,
+                resource: context_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: wgsl::SCATTER_PAIRS_BINDING,
+                resource: final_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: wgsl::SCATTER_OUT_BINDING,
+                resource: target.as_entire_binding(),
+            },
+        ];
+        let bind = |layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindGroupEntry]| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("orla scatter"),
+                layout,
+                entries,
+            })
+        };
+        let dispatch = |encoder: &mut wgpu::CommandEncoder,
+                        pass: &Pass,
+                        group: &wgpu::BindGroup,
+                        offsets: &[u32],
+                        groups: u32| {
+            let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("orla scatter"),
+                timestamp_writes: None,
+            });
+            compute.set_pipeline(&pass.0);
+            compute.set_bind_group(0, group, offsets);
+            compute.dispatch_workgroups(groups, 1, 1);
+        };
+        match scatter {
+            Scatter::Sorted { keys, step, fold } => {
+                let padded = element_count.next_power_of_two().max(1);
+                let keys_buffer = storage("scatter sort keys", padded);
+                let order_buffer = storage("scatter sort order", padded);
+                // One parameter record per dispatch, at the alignment
+                // dynamic offsets need: the padded count, then k and j.
+                let mut records: Vec<[u32; 4]> = vec![[padded as u32, 0, 0, 0]];
+                let mut k = 2;
+                while k <= padded {
+                    let mut j = k / 2;
+                    while j >= 1 {
+                        records.push([padded as u32, k as u32, j as u32, 0]);
+                        j /= 2;
+                    }
+                    k *= 2;
+                }
+                let alignment = self
+                    .device
+                    .limits()
+                    .min_uniform_buffer_offset_alignment
+                    .max(16) as usize;
+                let mut bytes = vec![0u8; records.len() * alignment];
+                for (index, record) in records.iter().enumerate() {
+                    for (word, value) in record.iter().enumerate() {
+                        let at = index * alignment + word * 4;
+                        bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                    }
+                }
+                let params =
+                    self.buffer("scatter sort params", &bytes, wgpu::BufferUsages::UNIFORM);
+                let params_entry = wgpu::BindGroupEntry {
+                    binding: wgsl::SCATTER_SORT_PARAMS_BINDING,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &params,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(16),
+                    }),
+                };
+                let sort_entries = |read_only: bool| {
+                    let _ = read_only;
+                    [
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::SCATTER_SORT_KEYS_BINDING,
+                            resource: keys_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::SCATTER_SORT_ORDER_BINDING,
+                            resource: order_buffer.as_entire_binding(),
+                        },
+                        params_entry.clone(),
+                    ]
+                };
+                let keys_group = bind(
+                    &keys.1,
+                    &[common[0].clone(), common[1].clone()]
+                        .into_iter()
+                        .chain(sort_entries(false))
+                        .collect::<Vec<_>>(),
+                );
+                let step_group = bind(&step.1, &sort_entries(false));
+                let fold_group = bind(
+                    &fold.1,
+                    &common
+                        .iter()
+                        .cloned()
+                        .chain(sort_entries(true))
+                        .collect::<Vec<_>>(),
+                );
+                let over_padded = (padded as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
+                dispatch(encoder, keys, &keys_group, &[0], over_padded);
+                // Every step of the sort in one pass: dispatches in a
+                // pass run in order, each seeing the last one's writes.
+                {
+                    let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("orla scatter sort"),
+                        timestamp_writes: None,
+                    });
+                    compute.set_pipeline(&step.0);
+                    for index in 1..records.len() {
+                        compute.set_bind_group(0, &step_group, &[(index * alignment) as u32]);
+                        compute.dispatch_workgroups(over_padded, 1, 1);
+                    }
+                }
+                dispatch(encoder, fold, &fold_group, &[0], over_target);
+            }
+            Scatter::Parallel {
+                apply,
+                gather,
+                keys,
+            } => {
+                // Winners for `last`, zeroed as every new buffer is; a
+                // token buffer where the pass has none to record.
+                let winners = storage(
+                    "scatter winners",
+                    if gather.is_some() { target_count } else { 1 },
+                );
+                let with_winners: Vec<wgpu::BindGroupEntry> = common
+                    .iter()
+                    .cloned()
+                    .chain([wgpu::BindGroupEntry {
+                        binding: wgsl::SCATTER_WINNER_BINDING,
+                        resource: winners.as_entire_binding(),
+                    }])
+                    .collect();
+                if let Some(keys) = keys {
+                    let group = bind(&keys.1, &common);
+                    dispatch(encoder, keys, &group, &[], over_target);
+                }
+                let group = bind(&apply.1, &with_winners);
+                dispatch(encoder, apply, &group, &[], over_sources);
+                if let Some(gather) = gather {
+                    let group = bind(&gather.1, &with_winners);
+                    dispatch(encoder, gather, &group, &[], over_target);
+                }
+                if let Some(keys) = keys {
+                    let group = bind(&keys.1, &common);
+                    dispatch(encoder, keys, &group, &[], over_target);
+                }
+            }
+        }
+        target
     }
 }
