@@ -42,9 +42,11 @@ the JIT and the GPU alike. Speed, one frame of 128 by 128 and
 |---|---|---|
 | CPU interpreter | 0.57 s | 1.6 M instructions/s |
 | JIT | 0.05 s | 19 M instructions/s |
-| GPU (a scan is one thread) | 2.1 s | 0.45 M instructions/s |
+| GPU session (the scan on the JIT, the picture on the GPU) | about the JIT's | |
 
-A GBA's ARM7TDMI runs at 16.78 MHz and a Thumb instruction takes one to
+A GPU walks a scan on one thread (0.45 M instructions a second here),
+so a GPU session hands the scan to the JIT and keeps the picture on the
+device. A GBA's ARM7TDMI runs at 16.78 MHz and a Thumb instruction takes one to
 three of those cycles plus wait states, so the JIT already steps this
 core faster than the real machine; what a GBA adds is the memory map,
 the PPU, DMA, timers and interrupts. The core is under 300 lines of

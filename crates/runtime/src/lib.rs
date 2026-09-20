@@ -469,6 +469,11 @@ impl Drop for Runtime {
 pub struct Runtime {
     host: Host,
     backend: Arc<dyn Backend>,
+    /// The backend ordered work (a scan) runs on when it is not the
+    /// main one: a GPU walks a scan on one thread, so a GPU runtime
+    /// hands scans to the JIT. Its inputs are brought into Host memory
+    /// first; its outputs are Host Fields the main backend uploads.
+    ordered: Option<Arc<dyn Backend>>,
     kernels: BTreeMap<KernelId, Arc<KernelVersion>>,
     next_generation: u64,
     worker: Option<Worker>,
@@ -486,9 +491,20 @@ impl Runtime {
 
     /// Creates a runtime over the given backend.
     pub fn with_backend(budget_words: usize, backend: Box<dyn Backend>) -> Self {
+        Self::with_backends(budget_words, backend, None)
+    }
+
+    /// Creates a runtime over `backend`, with `ordered` running the scans
+    /// when given; see [`Runtime::executes_on`].
+    pub fn with_backends(
+        budget_words: usize,
+        backend: Box<dyn Backend>,
+        ordered: Option<Box<dyn Backend>>,
+    ) -> Self {
         let mut runtime = Self {
             host: Host::new(budget_words),
             backend: Arc::from(backend),
+            ordered: ordered.map(Arc::from),
             kernels: BTreeMap::new(),
             next_generation: 1,
             worker: None,
@@ -528,11 +544,16 @@ impl Runtime {
         let (jobs, inbox) = channel::<Job>();
         let (outbox, done) = channel::<Done>();
         let backend = Arc::clone(&self.backend);
+        let ordered = self.ordered.clone();
         let handle = std::thread::Builder::new()
             .name("orla-prepare".into())
             .spawn(move || {
                 for job in inbox {
-                    let result = prepare_on(backend.as_ref(), job.module, job.source);
+                    let chosen = match &ordered {
+                        Some(ordered) if job.module.manifest.mode == orla_ir::Mode::Scan => ordered,
+                        _ => &backend,
+                    };
+                    let result = prepare_on(chosen.as_ref(), job.module, job.source);
                     if outbox
                         .send(Done {
                             ticket: job.ticket,
@@ -592,12 +613,12 @@ impl Runtime {
                     source,
                 }) {
                     let Job { module, source, .. } = unsent.0;
-                    let result = prepare_on(self.backend.as_ref(), module, source);
+                    let result = prepare_on(self.backend_for(&module), module, source);
                     self.ready.insert(ticket, result);
                 }
             }
             None => {
-                let result = prepare_on(self.backend.as_ref(), module, source);
+                let result = prepare_on(self.backend_for(&module), module, source);
                 self.ready.insert(ticket, result);
             }
         }
@@ -720,7 +741,30 @@ impl Runtime {
     }
 
     fn prepare_module(&self, module: Validated, source: &str) -> Result<Candidate, PrepareError> {
-        prepare_on(self.backend.as_ref(), module, source.to_owned())
+        prepare_on(self.backend_for(&module), module, source.to_owned())
+    }
+
+    /// The backend a module is prepared on and executes on: the ordered
+    /// one for a scan when there is one, else the main one.
+    fn backend_for(&self, module: &Validated) -> &dyn Backend {
+        match &self.ordered {
+            Some(ordered) if module.manifest.mode == orla_ir::Mode::Scan => ordered.as_ref(),
+            _ => self.backend.as_ref(),
+        }
+    }
+
+    /// The name of the backend a version executes on.
+    pub fn executes_on(&self, version: &KernelVersion) -> &'static str {
+        match version.module() {
+            Some(module) => self.backend_for(module).name(),
+            None => self.backend.name(),
+        }
+    }
+
+    /// The name of the backend ordered work runs on, when it is not the
+    /// main one.
+    pub fn ordered_backend_name(&self) -> Option<&'static str> {
+        self.ordered.as_ref().map(|backend| backend.name())
     }
 
     /// Prepares a module the runtime did not compile from source (a fused
@@ -809,13 +853,28 @@ impl Runtime {
         invocation: &Invocation,
     ) -> Result<Vec<Handle>, ExecutionError> {
         let granted = version.manifest().requires.clone();
-        let mut scope = Scope::new(&mut self.host, granted);
         match &version.body {
             Body::Kernel { module, prepared } => {
-                self.backend
-                    .execute(prepared.as_ref(), module, invocation, &mut scope)
+                let ordered = self.ordered.is_some() && module.manifest.mode == orla_ir::Mode::Scan;
+                if ordered {
+                    // The scan reads through Host memory: whatever the
+                    // main backend left resident comes back first.
+                    for handle in &invocation.inputs {
+                        self.materialize(*handle)?;
+                    }
+                }
+                let backend = if ordered {
+                    Arc::clone(self.ordered.as_ref().expect("checked"))
+                } else {
+                    Arc::clone(&self.backend)
+                };
+                let mut scope = Scope::new(&mut self.host, granted);
+                backend.execute(prepared.as_ref(), module, invocation, &mut scope)
             }
-            Body::Native(op) => self.backend.execute_native(*op, invocation, &mut scope),
+            Body::Native(op) => {
+                let mut scope = Scope::new(&mut self.host, granted);
+                self.backend.execute_native(*op, invocation, &mut scope)
+            }
         }
     }
 }

@@ -112,8 +112,11 @@ still runs the interactive scenes, and a machine written as a scan
 steps eight to nine times faster than on the interpreter. The JIT
 compiles every mode (a reduction's fold and a scatter's in-order apply
 follow the interpreter's exactly); the native operations, the
-rasterizer, are the CPU's code. The Player defaults to the GPU when a
-device is available.
+rasterizer, are the CPU's code. A GPU session hands its scans to the
+JIT, since a GPU walks ordered work on one thread: a machine's step
+runs as native code while the picture stays on the device, the scan's
+memories crossing as a few kilobytes a frame. The Player defaults to
+the GPU when a device is available.
 
 ```sh
 cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm

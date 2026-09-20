@@ -154,8 +154,9 @@ Fields read where they lie.
    left of the ceiling shows up only by writing more; the next Kernel
    that hurts names the next gap.
 2. What a session of play turns up: the voxel editor and the showcase
-   were rated on interactivity; the JIT closed the CPU gap, the GPU scan
-   is one thread (a machine belongs on the JIT).
+   were rated on interactivity; the JIT closed the CPU gap, and a GPU
+   session now hands its scans to the JIT, so a machine runs as native
+   code under either backend.
 
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's

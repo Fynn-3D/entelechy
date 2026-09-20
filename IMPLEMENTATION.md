@@ -449,6 +449,15 @@ capability claim.
   times faster than the interpreter and the CHIP-8 steps eight to nine
   times faster ([lib](crates/jit/src/lib.rs),
   [codegen](crates/jit/src/codegen.rs), [tests](crates/jit/tests/parity.rs)).
+- A runtime may run its scans on a second backend (`Runtime::with_backends`):
+  a module is prepared on and executes on the backend its mode
+  chooses, the preparation worker included; a scan's inputs are brought
+  into Host memory before it runs and its outputs are Host Fields the
+  main backend uploads when it reads them. A `gpu` session pairs the GPU
+  with the JIT this way, so ordered work is native code and the picture
+  stays on the device; the mixed runtime is tested with two recording
+  backends ([runtime](crates/runtime/src/lib.rs),
+  [test](crates/runtime/tests/mixed.rs), [session](crates/cli/src/session.rs)).
 - The CPU backend compiles a module to word-addressed code once per
   execution and runs it once per element: every value has a fixed word
   offset in the ABI's own layout, so arguments, struct fields, vector

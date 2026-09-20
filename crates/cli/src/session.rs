@@ -423,9 +423,14 @@ impl Session {
         match backend {
             "cpu" => Ok(Runtime::new(budget_words)),
             "gpu" => {
+                // A GPU walks a scan on one thread; the JIT takes the
+                // scans, the GPU everything else.
                 let gpu = orla_gpu::GpuBackend::new().map_err(|error| error.to_string())?;
                 let backend: Box<dyn Backend> = Box::new(gpu);
-                Ok(Runtime::with_backend(budget_words, backend))
+                let ordered: Option<Box<dyn Backend>> = orla_jit::JitBackend::new()
+                    .ok()
+                    .map(|jit| Box::new(jit) as Box<dyn Backend>);
+                Ok(Runtime::with_backends(budget_words, backend, ordered))
             }
             "jit" => {
                 let jit = orla_jit::JitBackend::new()?;
