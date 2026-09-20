@@ -1,0 +1,15 @@
+// source -> across -> down (the blur) -> emboss; show puts the blur and
+// the emboss side by side.
+use "kernels/";
+
+node source: blur.source@1 { domain = vec2(160, 120); }
+node across: blur.pass@1 { source <- source.result; axis = 0; }
+node down: blur.pass@1 { source <- across.result; axis = 1; }
+node emboss: blur.emboss@1 { source <- down.result; }
+node show: blur.show@1 {
+    blurred <- down.result;
+    embossed <- emboss.result;
+    domain = size(blurred) * vec2(2, 1);
+}
+
+output result <- show.result;

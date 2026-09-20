@@ -1,0 +1,13 @@
+// tile is drawn once; view scrolls it three ways, one band each.
+use "kernels/";
+
+param speed: Float = 12.0;
+
+node tile: scroll.tile@1 { domain = vec2(64, 64); }
+node view: scroll.view@1 {
+    tile <- tile.result;
+    speed = speed;
+    domain = vec2(384, 240);
+}
+
+output result <- view.result;

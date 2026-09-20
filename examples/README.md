@@ -93,3 +93,13 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [tetris](tetris/README.md): the game with its pieces as a table of bit
   masks, `[[Int; 4]; 7]`, and every cell question as integer vector
   arithmetic; the replay clears a line.
+- [scroll](scroll/README.md): a tile scrolled without end three ways,
+  nearest through `mod`, `at_linear` through `mod` (which seams) and the
+  shared library's wrapped blend (which does not); the replay pins the
+  seam.
+- [blur](blur/README.md): a two-pass Gaussian from a table of weights and
+  an emboss whose kernel is a `Mat3`, every edge read folded back by two
+  lines of integer arithmetic: mirror addressing composed from `at`.
+- [marching](marching/README.md): marching squares over orbiting blobs,
+  the sixteen cases a `[[Int; 4]; 16]` and the crossing points a
+  `[Vec2; 4]`, no `if` chain anywhere.

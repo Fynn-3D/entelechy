@@ -1,0 +1,22 @@
+scene ../scene.osn
+
+# The disc against the top edge stays its own colour in the top row:
+# the reads past the edge fold back into the disc. Its lower edge blurs
+# over three rows. The bar along the left edge likewise keeps its colour
+# at x = 0 and blurs at x = 11..13. Flat regions of the emboss are mid
+# grey; the disc's lower edge embosses dark above and light below.
+frame 0.0
+expect 80 0 = 0.949 0.749 0.2 0.02
+expect 80 41 = 0.694 0.561 0.188 0.02
+expect 80 42 = 0.373 0.322 0.173 0.02
+expect 80 43 = 0.173 0.169 0.161 0.02
+expect 0 60 = 0.2 0.302 0.8 0.02
+expect 11 60 = 0.176 0.247 0.604 0.02
+expect 13 60 = 0.125 0.141 0.2 0.02
+expect 120 100 = 0.627 0.18 0.259 0.02
+expect 121 100 = 0.804 0.196 0.29 0.02
+expect 240 0 = 0.498 0.498 0.498 0.02        # emboss: flat is mid grey, at the edge too
+expect 240 20 = 0.498 0.498 0.498 0.02
+expect 240 42 = 0.0 0.0 0.0 0.02             # the disc's lower edge, dark
+expect 172 60 = 0.125 0.125 0.125 0.02       # the bar's right edge
+expect 319 119 = 0.498 0.498 0.498 0.02      # the corner, folded back flat

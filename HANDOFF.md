@@ -187,9 +187,17 @@ are the ones below.
    them), 64-bit, f16, strings, dynamic sizes, packed byte or RGBA8
    Field storage (a layout matter, not a type; f32 per channel is
    deliberate until memory or bandwidth says otherwise).
-2. `at`/`at_linear` addressing modes (wrap, mirror) when a seamless
-   tiling example needs them; `at(g, mod(c, size(g)))` covers wrap
-   today, only the linear seam cannot be composed.
+2. Decided against `at`/`at_linear` addressing modes, by the second
+   play round (examples `scroll`, `blur`, `marching`): mirror is two
+   lines of integer arithmetic on the cell (`blur.orla` `fold`,
+   `mirror`) and wrap for `at` is `mod`; the one read that cannot be
+   composed through `at_linear`, a wrapped linear read, is ten lines
+   of four `at`s blended, now `examples/shared/wrap.orla`
+   `at_linear_wrapped`, which the scroll example uses and whose seam
+   the replay pins against the clamped read. A mode would touch the
+   IR and three backends' linear paths to save those ten lines; not
+   worth it until a scene reads wrapped and linear in its inner loop
+   and the four reads show in a profile.
 
 The play round after the three types (examples `ant`, `cube`,
 `tetris`, each replayed on the three backends) turned up, and fixed:
@@ -234,6 +242,14 @@ Left as is: the interpreter reports an arithmetic failure in a scan at
 words, so a change to the interpreter's rounding needs a change here.
 
 ## Open
+
+Seen once: `crates/cli/tests/protocol.rs`
+`fields_come_in_through_write_and_buttons_reach_kernels` failed in a
+full `cargo test --workspace` (the served child's first line never
+came) and passed alone and in the next full run; the tests in that
+binary spawn `orla serve` while the GPU tests hold the device, so it
+may be the device under load rather than the protocol. Worth a retry
+before a hunt.
 
 Not hand-tested: the Player's real right and middle buttons and wheel,
 gamepad hardware (none connected), and a live resize of a window-sized

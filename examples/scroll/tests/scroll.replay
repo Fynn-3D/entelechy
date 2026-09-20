@@ -1,0 +1,17 @@
+scene ../scene.osn
+
+# At time zero the tile's edge falls between pixels 191 and 192, and a
+# square's edge inside the tile between 23 and 24. Nearest texels step
+# at both. The clamped linear read steps at the tile's edge (the seam)
+# but ramps over the square's edge; the wrapped blend ramps at both.
+frame 0.0
+expect 191 40 = 0.118 0.153 0.31 0.02        # nearest: the seam steps
+expect 192 40 = 0.729 0.647 0.529 0.02
+expect 191 120 = 0.318 0.302 0.38 0.02       # at_linear: the seam steps too
+expect 192 120 = 0.525 0.467 0.455 0.02
+expect 23 120 = 0.529 0.412 0.431 0.02       # at_linear: a square's edge ramps
+expect 24 120 = 0.455 0.357 0.404 0.02
+expect 191 200 = 0.514 0.604 0.455 0.02      # wrapped blend: the seam ramps
+expect 192 200 = 0.318 0.396 0.38 0.02
+expect 23 200 = 0.376 0.396 0.38 0.02        # and so does the square's edge
+expect 24 200 = 0.616 0.604 0.455 0.02

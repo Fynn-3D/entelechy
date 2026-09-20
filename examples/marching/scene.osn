@@ -1,0 +1,14 @@
+// field is the blobs on a coarse grid; draw marches its squares at
+// `cell` pixels each.
+use "kernels/";
+
+param cell: Int = 8;
+
+node field: marching.field@1 { domain = vec2(48, 36); }
+node draw: marching.draw@1 {
+    field <- field.result;
+    cell = cell;
+    domain = size(field) * cell;
+}
+
+output result <- draw.result;
