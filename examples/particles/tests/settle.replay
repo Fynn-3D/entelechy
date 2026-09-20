@@ -1,14 +1,22 @@
 scene settle.osn
 
-# The particle starts at the centre and moves less than a pixel in the first
-# step, so the centre pixel glows (its tint depends on the seeded age, hence
-# the wide tolerance) and a far pixel shows only the background.
+# The particle starts at the centre and moves less than a pixel in the
+# first step, so the scatter puts its tint in canvas cell (16, 16) and
+# nowhere else. Its seeded age is about 1.56, so the tint is about a
+# quarter of the way from the warm colour to the cool one; the pixel
+# under it shows the background plus that tint, a far pixel only the
+# background.
 frame 0.0
-expect 16 16 = 0.55 0.5 0.55 0.4
+expect splat.result[528] = 0.82 0.76 0.48 0.03
+expect splat.result[529] = 0.0 0.0 0.0
+expect splat.result[496] = 0.0 0.0 0.0
+expect 16 16 = 0.87 0.82 0.58 0.05
 expect 16 24 = 0.05 0.06 0.1
 
-# Eight frames of gravity move it about 4.6 pixels down and 0.8 right: the
-# centre is background again and (17, 21) glows.
+# Eight frames of gravity move it about 4.6 pixels down and 0.8 right,
+# into cell (16, 20), and its age has grown a little, so the tint has
+# cooled a little; the canvas forgets each frame (fade is zero), so the
+# centre is background again.
 frame 0.1
 frame 0.2
 frame 0.3
@@ -16,5 +24,7 @@ frame 0.4
 frame 0.5
 frame 0.6
 frame 0.7
+expect splat.result[528] = 0.0 0.0 0.0
+expect splat.result[656] = 0.8 0.75 0.5 0.03
 expect 16 16 = 0.05 0.06 0.1
-expect 17 21 = 0.45 0.4 0.45 0.4
+expect 16 20 = 0.85 0.81 0.6 0.05

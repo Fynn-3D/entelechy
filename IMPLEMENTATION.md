@@ -150,6 +150,23 @@ capability claim.
   [audio example](examples/audio/README.md) filters each block with one
   and carries the filter's memory across blocks through Graph state.
 
+- Writing where a Kernel computes is the fourth execution mode, declared
+  by `scatter into target with rule` in place of `compute`: the entry
+  maps over the first input and yields an address and a value, and the
+  output is the target with every value combined into the element at its
+  address, as if the sources were applied one after another in element
+  order. That order is the determinism rule: `sum`, `min`, `max`, and
+  `last` come out the same on both backends, floats included, and an
+  address outside the target is dropped ([IR](crates/ir/src/lib.rs),
+  [validator](crates/ir/src/validate.rs), [compiler](crates/compiler/src/lower.rs)).
+  The CPU applies the pairs in order over a copy of the target
+  ([backend](crates/cpu/src/lib.rs)); the GPU stores the pairs in a
+  parallel pass, copies the target on the device, and applies them in one
+  invocation ([WGSL](crates/gpu/src/wgsl.rs), [parity test](crates/gpu/tests/parity.rs));
+  the evaluator sizes a scatter node by its target and never fuses it
+  ([evaluator](crates/graph/src/evaluate.rs)). The
+  [particles example](examples/particles/README.md) splats its rows onto
+  a canvas this way.
 - A node's `domain` may be an expression over its inputs and parameters
   ([domain](crates/graph/src/domain.rs)): a small arithmetic language with
   `size(port)` and `count(port)`, accepted at document lowering, resolved

@@ -25,7 +25,12 @@ stays in `compute` while functions with Field parameters use `at`/`at_linear`;
 text is a convention of the shared library, not a contract of the runtime:
 `examples/shared/text.orla` declares the glyph row and the drawing, and the
 font atlas beside it is baked from rows of bits in `font.orla` (a face is
-replaced by re-baking or by another PNG in the same 6x8 cells).
+replaced by re-baking or by another PNG in the same 6x8 cells); a scatter's
+order is its determinism rule (sources applied one after another in element
+order, floats included), which the GPU honours by applying the pairs in one
+invocation after a parallel map, rather than with atomics: exact and slow
+for very many sources, and a place to optimise later without changing any
+result (int `sum`, `min`, `max`, and `last` by index are order-free).
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -47,21 +52,22 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-A scatter primitive with a stated determinism rule, the next gap for
-simulations and tools: today a Kernel can only gather (`at`), so a
-particle that wants to mark a grid cell, or a mesh that wants to
-accumulate per-vertex normals, needs a per-cell search over every
-particle. The primitive should be a Kernel mode or a native operation
-that writes elements at addresses the Kernel computes, with an explicit
-rule for collisions (last writer by element order, or an associative
-combine such as sum, min, max) so the CPU and the GPU agree bit for bit on
-integers and to rounding on floats. Acceptance: the particles example
-splats its rows into a grid through it, a parity test covers collisions,
-and both backends replay the same pixels. If the user prefers another
-item, the rest of the ranked list is: window size and DPI as context, a
-second bridge (Godot or web) to prove bridges are not Blender-specific,
-labels on the voxel editor's bar through the text library, and caching
-the CPU's compiled program across frames.
+Window size and DPI as context: a scene today sizes its picture with a
+literal `domain` and passes the height to Kernels as a parameter (the
+voxel editor's bar, the showcase's toolbar), so a resized window shows a
+scaled picture rather than more of it. The Player should hand the window's
+size in pixels and its scale factor to the Graph as context, a node's
+`domain` should be able to name them (`domain = window();` or
+`size(window)`), and the change should be a structural one the session
+handles as it handles a graph param that sizes the document. Acceptance:
+the voxel editor and the showcase fill a resized window at the window's
+resolution with their bars at a constant physical size, `run` and `replay`
+take `--window w h` (and a scale) so the same scenes still replay, and
+nothing changes for scenes that do not ask. If the user prefers another
+item, the rest of the ranked list is: a second bridge (Godot or web) to
+prove bridges are not Blender-specific, labels on the voxel editor's bar
+through the text library, caching the CPU's compiled program across
+frames, and atomics for the order-free scatter rules on the GPU.
 
 ## Open
 

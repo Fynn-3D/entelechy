@@ -66,6 +66,8 @@ struct Pipeline {
     layout: wgpu::BindGroupLayout,
     /// The fold of a reduce module, run level by level after the map.
     reduce: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
+    /// The combine pass of a scatter module, run once after the map.
+    scatter: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
 }
 
 impl Prepared for Pipeline {
@@ -292,10 +294,55 @@ impl Backend for GpuBackend {
         } else {
             None
         };
+        let scatter = if matches!(module.manifest.mode, orla_ir::Mode::Scatter { .. }) {
+            let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let scatter_source = wgsl::emit_scatter(module);
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("scatter"),
+                    source: wgpu::ShaderSource::Wgsl(scatter_source.as_str().into()),
+                });
+            let entries = [
+                uniform_entry(wgsl::CONTEXT_BINDING),
+                storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
+                storage_entry(wgsl::SCATTER_OUT_BINDING, false),
+            ];
+            let layout = self
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("orla scatter"),
+                    entries: &entries,
+                });
+            let pipeline_layout =
+                self.device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("orla scatter"),
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
+                    });
+            let pipeline = self
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("scatter"),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+            if let Some(error) = pollster::block_on(scope_guard.pop()) {
+                return Err(format!("{error}\n--- emitted WGSL ---\n{scatter_source}"));
+            }
+            Some((pipeline, layout))
+        } else {
+            None
+        };
         Ok(Box::new(Pipeline {
             pipeline,
             layout,
             reduce,
+            scatter,
         }))
     }
 
@@ -317,13 +364,22 @@ impl Backend for GpuBackend {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // A reduction maps over its first input and folds afterwards; a
-        // scan walks its first input's rows in one invocation.
+        // scan walks its first input's rows in one invocation; a scatter
+        // maps over its first input into pairs and combines them into a
+        // copy of its target afterwards.
         let reducing = module.manifest.mode == orla_ir::Mode::Reduce;
         let scanning = module.manifest.mode == orla_ir::Mode::Scan;
+        let scattering = match module.manifest.mode {
+            orla_ir::Mode::Scatter { base, .. } => Some(base as usize),
+            _ => None,
+        };
         let domain = if reducing {
             scope.size(invocation.inputs[0])?
         } else if scanning {
             orla_cpu::check_scan(invocation, scope)?
+        } else if let Some(base) = scattering {
+            orla_cpu::check_scatter(invocation, scope, base)?;
+            scope.size(invocation.inputs[0])?
         } else {
             invocation.domain
         };
@@ -365,7 +421,13 @@ impl Backend for GpuBackend {
         );
         let output_port = &module.manifest.outputs[0];
         let output_words = output_port.ty.schema.words();
-        let output_size = (element_count * output_words * 4) as u64;
+        // A scatter's map pass stores a pair per source element.
+        let map_words = if scattering.is_some() {
+            wgsl::type_words(module, wgsl::result_type(&module.entry))
+        } else {
+            output_words
+        };
+        let output_size = (element_count * map_words * 4) as u64;
         let params_buffer_for_reduce = params_buffer.clone();
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("output"),
@@ -482,6 +544,49 @@ impl Backend for GpuBackend {
             }
             final_buffer = current;
         }
+        // The combine: the target copied on the device, then one invocation
+        // applies the pairs in element order.
+        if let (Some(base), Some((scatter_pipeline, scatter_layout))) =
+            (scattering, pipeline.scatter.as_ref())
+        {
+            let size = (invocation.domain.count() * output_words * 4) as u64;
+            let target = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("scatter target"),
+                size: size.max(16).div_ceil(16) * 16,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_buffer_to_buffer(&input_buffers[base], 0, &target, 0, size);
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("orla scatter"),
+                layout: scatter_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::CONTEXT_BINDING,
+                        resource: context_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::SCATTER_PAIRS_BINDING,
+                        resource: final_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::SCATTER_OUT_BINDING,
+                        resource: target.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("orla scatter"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(scatter_pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+            drop(pass);
+            final_buffer = target;
+        }
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         self.queue.submit(Some(encoder.finish()));
         // Submissions on one queue run in order, so a later node reading
@@ -495,6 +600,8 @@ impl Backend for GpuBackend {
         });
         let output_domain = if reducing {
             orla_abi::Domain::Rows(1)
+        } else if scattering.is_some() {
+            invocation.domain
         } else {
             domain
         };

@@ -797,3 +797,90 @@ fn remainder_widening_and_vector_equality_match_between_backends() {
     assert_eq!(at(9, 5)[2], 1.0, "cell (2, 1) is picked");
     assert_eq!(at(3, 3)[3], 0.0);
 }
+
+#[test]
+fn scatters_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    // Many drops into a small grid, several per cell, so the order of the
+    // float sums matters and both backends must follow the same one; a
+    // struct target combined by `max` with ints; `last` over rows.
+    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
+    let count = 2000u32;
+    let drop_words: Vec<u32> = (0..count)
+        .flat_map(|i| {
+            let x = (i as f32 * 0.37).sin() * 5.0 + 3.0;
+            let y = (i as f32 * 0.11).cos() * 3.0 + 1.5;
+            [
+                x.to_bits(),
+                y.to_bits(),
+                (0.1 + (i % 7) as f32 * 0.013).to_bits(),
+                i % 11,
+            ]
+        })
+        .collect();
+    let drop_schema = orla_abi::Schema::new(vec![
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Int,
+    ]);
+    let cell_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    let canvas_words: Vec<u32> = (0..24).flat_map(|i| [0.0f32.to_bits(), i % 3]).collect();
+    for combine in ["sum", "max", "min", "last"] {
+        let source = source.replace("with sum", &format!("with {combine}"));
+        let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+        let mut host = Host::new(1 << 20);
+        let drops = host
+            .adopt(
+                orla_abi::FieldData::from_words(
+                    drop_schema.clone(),
+                    Domain::Rows(count),
+                    drop_words.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let canvas = host
+            .adopt(
+                orla_abi::FieldData::from_words(
+                    cell_schema.clone(),
+                    Domain::Grid(6, 4),
+                    canvas_words.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let invocation = orla_abi::Invocation {
+            inputs: vec![drops, canvas],
+            params: vec![],
+            domain: Domain::Grid(6, 4),
+            context: orla_abi::Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let cpu_out = orla_cpu::CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0];
+        let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+        let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+        let mut scope = Scope::new(&mut host, all());
+        let gpu_out =
+            Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+        assert_eq!(host.domain(gpu_out).unwrap(), Domain::Grid(6, 4));
+        let byte_len =
+            host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+        let device = host.resident(gpu_out).unwrap().expect("resident");
+        let bytes = Backend::download(&gpu, device, byte_len).unwrap();
+        let gpu_words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(cpu_words, gpu_words, "scatter with {combine} differs");
+        if combine == "sum" {
+            let total: f32 = cpu_words
+                .chunks_exact(2)
+                .map(|c| f32::from_bits(c[0]))
+                .sum();
+            assert!(total > 10.0, "drops landed: {total}");
+        }
+    }
+}

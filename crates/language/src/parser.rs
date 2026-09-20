@@ -3,8 +3,8 @@
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
     BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, Kernel, MergeDecl,
-    NodeDecl, NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, SourceRef, Span, Spanned,
-    StructDecl, TypeAlias, Use,
+    NodeDecl, NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, ScatterDecl, SourceRef, Span,
+    Spanned, StructDecl, TypeAlias, Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -317,6 +317,7 @@ impl Parser {
         let mut compute = None;
         let mut merge = None;
         let mut carry = None;
+        let mut scatter = None;
         while !self.is_punct("}") {
             let span = self.span();
             let Token::Ident(keyword) = self.peek().clone() else {
@@ -365,8 +366,8 @@ impl Parser {
                 }
                 "compute" => {
                     if compute.is_some() {
-                        return Err(self.error(if carry.is_some() {
-                            "a kernel has either `compute` or `scan`"
+                        return Err(self.error(if carry.is_some() || scatter.is_some() {
+                            "a kernel has one of `compute`, `scan`, or `scatter`"
                         } else {
                             "`compute` is declared twice"
                         }));
@@ -374,9 +375,29 @@ impl Parser {
                     self.next();
                     compute = Some(self.block()?);
                 }
+                "scatter" => {
+                    if compute.is_some() {
+                        return Err(
+                            self.error("a kernel has one of `compute`, `scan`, or `scatter`")
+                        );
+                    }
+                    self.next();
+                    self.keyword("into")?;
+                    let into = self.ident("an input name")?;
+                    self.keyword("with")?;
+                    let combine = self.ident("`sum`, `min`, `max`, or `last`")?;
+                    compute = Some(self.block()?);
+                    scatter = Some(ScatterDecl {
+                        into,
+                        combine,
+                        span,
+                    });
+                }
                 "scan" => {
                     if compute.is_some() {
-                        return Err(self.error("a kernel has either `compute` or `scan`"));
+                        return Err(
+                            self.error("a kernel has one of `compute`, `scan`, or `scatter`")
+                        );
                     }
                     self.next();
                     self.keyword("with")?;
@@ -403,14 +424,14 @@ impl Parser {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, `compute`, `scan`, or `merge`, found `{keyword}`"
+                            "expected `requires`, `input`, `param`, `output`, `struct`, `type`, `fn`, `compute`, `scan`, `scatter`, or `merge`, found `{keyword}`"
                         ),
                     });
                 }
             }
         }
-        let compute =
-            compute.ok_or_else(|| self.error("kernel has no `compute` or `scan` block"))?;
+        let compute = compute
+            .ok_or_else(|| self.error("kernel has no `compute`, `scan`, or `scatter` block"))?;
         self.expect_punct("}")?;
         let end = self.previous_end();
         Ok(Kernel {
@@ -427,6 +448,7 @@ impl Parser {
             compute,
             merge,
             carry,
+            scatter,
         })
     }
 
@@ -982,9 +1004,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 18] = [
+const RESERVED: [&str; 19] = [
     "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "type", "node",
-    "use", "from", "input", "output", "graph", "merge", "scan",
+    "use", "from", "input", "output", "graph", "merge", "scan", "scatter",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

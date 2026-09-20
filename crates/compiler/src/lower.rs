@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use orla_ir::{
-    BinaryOp, Block as IrBlock, Capability, Field, Function, Instruction, Intrinsic, KernelId,
-    MAX_LOOP_COUNT, Manifest, Mode, Module, Op, Param, Port, PortType, Shape, ShapeIndex,
+    BinaryOp, Block as IrBlock, Capability, Combine, Field, Function, Instruction, Intrinsic,
+    KernelId, MAX_LOOP_COUNT, Manifest, Mode, Module, Op, Param, Port, PortType, Shape, ShapeIndex,
     StructDef, Type, UnaryOp, Value, ValueId, schema_of,
 };
 use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
@@ -196,7 +196,31 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         }
         let result = builder.block(&kernel.compute)?;
         let actual = builder.ty(result);
-        if actual != expected {
+        if let Mode::Scatter { base, .. } = manifest.mode {
+            // The body yields a pair: an address into the target and a
+            // value of its element type, as a struct of two fields.
+            let target = &manifest.inputs[base as usize];
+            let address = target.ty.index_type();
+            let fields = match actual {
+                Type::Struct(index) => Some(&structs[index as usize].fields),
+                _ => None,
+            };
+            let well_formed = fields.is_some_and(|fields| {
+                fields.len() == 2 && fields[0].ty == address && fields[1].ty == expected
+            });
+            if !well_formed {
+                return Err(semantic(
+                    kernel.compute.result.span,
+                    format!(
+                        "a scatter into `{}` gives a struct of two fields per element, an address ({}) and a value ({}), but the body gives {}",
+                        target.name,
+                        describe(address, &structs),
+                        describe(expected, &structs),
+                        describe(actual, &structs)
+                    ),
+                ));
+            }
+        } else if actual != expected {
             return Err(semantic(
                 kernel.compute.result.span,
                 format!(
@@ -265,6 +289,18 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         merge,
         init,
     })
+}
+
+/// Whether a type is numbers all the way down: floats and ints, no Bool.
+fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
+    match ty {
+        Type::Float | Type::Int | Type::Vec2 | Type::Vec3 | Type::Vec4 => true,
+        Type::Bool => false,
+        Type::Struct(index) => structs[*index as usize]
+            .fields
+            .iter()
+            .all(|field| numeric(&field.ty, structs)),
+    }
 }
 
 /// The port type a written name stands for. `Image` and the declared
@@ -419,7 +455,60 @@ fn manifest(
             "a kernel is a reduction (`merge`) or a scan (`scan`), not both",
         ));
     }
-    let mode = if let Some(carry) = &kernel.carry {
+    if let (Some(merge), Some(_)) = (&kernel.merge, &kernel.scatter) {
+        return Err(semantic(
+            merge.span,
+            "a kernel is a reduction (`merge`) or a scatter (`scatter`), not both",
+        ));
+    }
+    let mode = if let Some(scatter) = &kernel.scatter {
+        let Some(base) = inputs
+            .iter()
+            .position(|input| input.name == scatter.into.value)
+        else {
+            return Err(semantic(
+                scatter.into.span,
+                format!(
+                    "`{}` is not an input; a scatter starts from an input port",
+                    scatter.into.value
+                ),
+            ));
+        };
+        let Some(combine) = Combine::parse(&scatter.combine.value) else {
+            return Err(semantic(
+                scatter.combine.span,
+                format!(
+                    "`{}` is not a combine rule; scatter with `sum`, `min`, `max`, or `last`",
+                    scatter.combine.value
+                ),
+            ));
+        };
+        match outputs.first() {
+            Some(port) if outputs.len() == 1 && port.ty == inputs[base].ty => {}
+            _ => {
+                return Err(semantic(
+                    scatter.span,
+                    format!(
+                        "a scatter produces one output shaped and laid out like `{}`, the input it scatters into",
+                        scatter.into.value
+                    ),
+                ));
+            }
+        }
+        if combine != Combine::Last && !numeric(&inputs[base].element(), structs) {
+            return Err(semantic(
+                scatter.combine.span,
+                format!(
+                    "`{}` combines numbers, and the element holds a Bool; scatter with `last`",
+                    combine.name()
+                ),
+            ));
+        }
+        Mode::Scatter {
+            base: base as u32,
+            combine,
+        }
+    } else if let Some(carry) = &kernel.carry {
         match (inputs.first(), outputs.first()) {
             (Some(first), Some(port))
                 if first.shape() == Shape::Rows && port.shape() == Shape::Rows => {}
@@ -1216,7 +1305,7 @@ impl<'a> Builder<'a> {
     /// input's for a reduction.
     fn output_shape(&self) -> Shape {
         match self.manifest.mode {
-            Mode::Reduce | Mode::Scan => self
+            Mode::Reduce | Mode::Scan | Mode::Scatter { .. } => self
                 .manifest
                 .inputs
                 .first()

@@ -135,8 +135,8 @@ commutative: the fold's tree belongs to the backend, integers and
 booleans come out exact, floats agree to rounding. A reduce node takes no
 `domain` and is never fused.
 
-A Kernel with `scan` in place of `compute` is ordered work, the third and
-last execution mode:
+A Kernel with `scan` in place of `compute` is ordered work, the third
+execution mode:
 
 ```text
 kernel audio.lowpass@1 {
@@ -156,9 +156,40 @@ The body runs once per element of the first input, in order, exactly as a
 and the next step's `y`, and `index()` is the element index. A scan writes
 as many elements as its input has, so a node's `domain`, if written, must
 say so. Ordered work runs on one thread on either backend; that is its
-nature, not a limit of the backend, and a scan is never fused. The exact
-language is defined by [the frontend](../crates/language/src/lib.rs) and
-its tests.
+nature, not a limit of the backend, and a scan is never fused.
+
+A Kernel with `scatter` in place of `compute` writes where it computes,
+the fourth and last execution mode:
+
+```text
+kernel particles.splat@1 {
+    requires { field.read; field.write; }
+    input particles: Rows<Particle>;
+    input canvas: Grid<Vec3>;
+    output result: Grid<Vec3>;         // starts as `canvas`
+    struct Splat { cell: Vec2; heat: Vec3; }
+    scatter into canvas with sum {     // once per element of `particles`
+        let p = sample(particles);
+        return Splat { cell: floor(p.position * size(canvas)), heat: tint(p) };
+    }
+}
+```
+
+The body runs once per element of the first input and yields a struct of
+two fields: an address into the target named after `into` (an `Int` for
+rows, a `Vec2` for a grid, a `Vec3` for a volume, floored like `at`) and a
+value of the target's element type. The output is the target with every
+value combined into the element at its address by the rule after `with`:
+`sum` adds fieldwise, `min` and `max` take the fieldwise extreme, `last`
+replaces. The rule of order is total and the same on both backends, floats
+included: the result is as if the sources were applied one after another
+in element order, so `last` is the greatest element index and a float
+`sum` rounds in that order. An address outside the target is dropped,
+never clamped; NaN is outside. `sum`, `min`, and `max` need an element of
+numbers (a Bool takes `last`). The output has the target's shape, layout,
+and extent, so a scatter node takes no `domain`, and a scatter is never
+fused. The exact language is defined by [the frontend](../crates/language/src/lib.rs)
+and its tests.
 
 ## Graph
 

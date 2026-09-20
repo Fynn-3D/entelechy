@@ -8,8 +8,8 @@
 use std::fmt::Write;
 
 use orla_ir::{
-    BinaryOp, Block, Function, Instruction, Intrinsic, Mode, Module, Op, Shape, Type, UnaryOp,
-    Value, ValueId,
+    BinaryOp, Block, Combine, Function, Instruction, Intrinsic, Mode, Module, Op, Shape, Type,
+    UnaryOp, Value, ValueId,
 };
 
 /// Binding index of the context uniform.
@@ -180,8 +180,13 @@ fn button_down(code: i32) -> bool {{
     }
     out.push('\n');
     if let Some(port) = manifest.outputs.first() {
-        let element = port.element();
-        let stride = port.ty.schema.words();
+        // A scatter's map pass stores the entry's pairs, not elements.
+        let element = if matches!(manifest.mode, Mode::Scatter { .. }) {
+            result_type(&module.entry)
+        } else {
+            port.element()
+        };
+        let stride = type_words(module, element);
         let mut stores = Vec::new();
         store_lines(module, element, "v", 0, &mut stores);
         let _ = writeln!(
@@ -242,6 +247,172 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let element = (gid.z * h + gid.y) * w + gid.x;
     let coord = vec3<f32>(f32(gid.x), f32(gid.y), f32(gid.z));
     store_out0(element, entry(coord, element));
+}}"
+    );
+    out
+}
+
+/// Words a value of a type takes in a buffer.
+pub fn type_words(module: &Module, ty: Type) -> usize {
+    match ty {
+        Type::Float | Type::Int | Type::Bool => 1,
+        Type::Vec2 => 2,
+        Type::Vec3 => 3,
+        Type::Vec4 => 4,
+        Type::Struct(index) => module.structs[index as usize]
+            .fields
+            .iter()
+            .map(|field| type_words(module, field.ty))
+            .sum(),
+    }
+}
+
+/// Binding index of the scatter pass's pairs, the map pass's output.
+pub const SCATTER_PAIRS_BINDING: u32 = 1;
+/// Binding index of the scatter pass's target, a copy of the base input.
+pub const SCATTER_OUT_BINDING: u32 = 2;
+
+/// The combine of two values of a type, as a WGSL expression: fieldwise
+/// through structs, WGSL's own operators and builtins below.
+fn combine_expr(module: &Module, ty: Type, combine: Combine, a: &str, b: &str) -> String {
+    match ty {
+        Type::Struct(index) => {
+            let fields = module.structs[index as usize]
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(k, field)| {
+                    combine_expr(
+                        module,
+                        field.ty,
+                        combine,
+                        &format!("{a}.f{k}"),
+                        &format!("{b}.f{k}"),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("S{index}({fields})")
+        }
+        _ => match combine {
+            Combine::Sum => format!("({a} + {b})"),
+            Combine::Min => format!("min({a}, {b})"),
+            Combine::Max => format!("max({a}, {b})"),
+            Combine::Last => b.to_owned(),
+        },
+    }
+}
+
+/// Emits the scatter pass of a scatter module: one invocation walks the
+/// pairs the map pass stored, in element order, and combines each value
+/// into the target at its address; an address outside the target is
+/// dropped. The order is the rule the CPU follows too.
+pub fn emit_scatter(module: &Module) -> String {
+    let Mode::Scatter { base, combine } = module.manifest.mode else {
+        return String::new();
+    };
+    let manifest = &module.manifest;
+    let target = &manifest.inputs[base as usize];
+    let element = target.element();
+    let stride = target.ty.schema.words();
+    let pair = result_type(&module.entry);
+    let pair_stride = type_words(module, pair);
+    let context_len = CONTEXT_HEAD + manifest.inputs.len();
+    let slot = CONTEXT_HEAD + base as usize;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;"
+    );
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({SCATTER_PAIRS_BINDING}) var<storage, read> pairs: array<u32>;"
+    );
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({SCATTER_OUT_BINDING}) var<storage, read_write> out0: array<u32>;"
+    );
+    for (index, def) in module.structs.iter().enumerate() {
+        let fields = def
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "struct S{index} {{ {fields} }}");
+    }
+    let (expr, _) = load_expr(module, pair, "pairs", "b", 0);
+    let _ = writeln!(
+        out,
+        "fn load_pair(index: u32) -> {} {{
+    let b = index * {pair_stride}u;
+    return {expr};
+}}",
+        wgsl_type(pair)
+    );
+    let (expr, _) = load_expr(module, element, "out0", "b", 0);
+    let _ = writeln!(
+        out,
+        "fn load_out0(index: u32) -> {} {{
+    let b = index * {stride}u;
+    return {expr};
+}}",
+        wgsl_type(element)
+    );
+    let mut stores = Vec::new();
+    store_lines(module, element, "v", 0, &mut stores);
+    let _ = writeln!(
+        out,
+        "fn store_out0(index: u32, v: {}) {{
+    let b = index * {stride}u;
+{}
+}}",
+        wgsl_type(element),
+        stores.join("\n")
+    );
+    let _ = writeln!(
+        out,
+        "fn combine(a: {ty}, b: {ty}) -> {ty} {{ return {}; }}",
+        combine_expr(module, element, combine, "a", "b"),
+        ty = wgsl_type(element)
+    );
+    // The address of a pair is its first field; an axis is floored and
+    // must land inside the target, NaN never does.
+    let address = match target.shape() {
+        Shape::Rows => format!(
+            "let i = p.f0;
+        if (i < 0i || i >= i32(ctx[{slot}].x)) {{ continue; }}
+        let at = u32(i);"
+        ),
+        Shape::Grid => format!(
+            "let x = floor(p.f0.x);
+        let y = floor(p.f0.y);
+        if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y)) {{ continue; }}
+        let at = u32(y) * u32(ctx[{slot}].x) + u32(x);"
+        ),
+        Shape::Volume => format!(
+            "let x = floor(p.f0.x);
+        let y = floor(p.f0.y);
+        let z = floor(p.f0.z);
+        if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y && z >= 0.0 && z < ctx[{slot}].z)) {{ continue; }}
+        let at = (u32(z) * u32(ctx[{slot}].y) + u32(y)) * u32(ctx[{slot}].x) + u32(x);"
+        ),
+    };
+    let _ = writeln!(
+        out,
+        "
+@compute @workgroup_size(1, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if (gid.x != 0u) {{
+        return;
+    }}
+    let n = u32(ctx[0].x) * u32(ctx[0].y) * u32(ctx[1].z);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {{
+        let p = load_pair(i);
+        {address}
+        store_out0(at, combine(load_out0(at), p.f1));
+    }}
 }}"
     );
     out
@@ -633,7 +804,7 @@ fn emit_function(out: &mut String, module: &Module, function: &Function, name: &
     let _ = writeln!(out, "}}");
 }
 
-fn result_type(function: &Function) -> Type {
+pub(crate) fn result_type(function: &Function) -> Type {
     fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
         for instruction in instructions {
             if instruction.id == id {
@@ -881,7 +1052,9 @@ impl Emitter<'_> {
     fn output_shape(&self) -> Shape {
         let manifest = &self.module.manifest;
         match manifest.mode {
-            Mode::Reduce | Mode::Scan => manifest.inputs.first().map_or(Shape::Rows, |p| p.shape()),
+            Mode::Reduce | Mode::Scan | Mode::Scatter { .. } => {
+                manifest.inputs.first().map_or(Shape::Rows, |p| p.shape())
+            }
             Mode::Map => manifest.outputs.first().map_or(Shape::Grid, |p| p.shape()),
         }
     }

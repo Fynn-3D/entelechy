@@ -91,6 +91,8 @@ pub enum EvaluateError {
     /// A reduction node was given a `domain`; a reduction produces one
     /// element and maps over its first input.
     ReduceDomain(NodeId),
+    /// A scatter node wrote a `domain`; it takes the extent of its target.
+    ScatterDomain(NodeId),
     /// A node's `domain` expression could not be resolved.
     Domain {
         /// The node.
@@ -194,6 +196,10 @@ impl fmt::Display for EvaluateError {
             Self::ReduceDomain(node) => write!(
                 f,
                 "node `{node}` is a reduction, which produces one element; remove its `domain`"
+            ),
+            Self::ScatterDomain(node) => write!(
+                f,
+                "node `{node}` is a scatter, which writes the extent of the input it scatters into; remove its `domain`"
             ),
             Self::PortKind {
                 node,
@@ -943,6 +949,10 @@ impl Evaluator {
                 .or_else(|| of_source(initial)),
             Binding::Previous { .. } => None,
         };
+        if let orla_ir::Mode::Scatter { base, .. } = manifest.mode {
+            let target = manifest.inputs.get(base as usize)?;
+            return of_binding(group.node.inputs.get(&target.name)?);
+        }
         match &group.node.domain {
             Some(DomainSpec::Literal(domain)) => Some(*domain),
             Some(DomainSpec::Expr(expr)) => {
@@ -1228,6 +1238,11 @@ impl Evaluator {
                 return Err(EvaluateError::ReduceDomain(node.id.clone()));
             }
             Domain::Rows(1)
+        } else if let orla_ir::Mode::Scatter { base, .. } = manifest.mode {
+            if node.domain.is_some() {
+                return Err(EvaluateError::ScatterDomain(node.id.clone()));
+            }
+            runtime.host().domain(inputs[base as usize])?
         } else {
             match (&node.domain, inputs.first()) {
                 (Some(DomainSpec::Literal(domain)), _) => *domain,

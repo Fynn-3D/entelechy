@@ -23,7 +23,8 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   and exact integers through a feedback binding, painted with the pointer,
   with a declarative replay test.
 - [particles](particles/README.md): a `Rows<Particle>` advanced per element
-  and gathered into an image; the first scene whose data is not an image.
+  and splatted onto a canvas by a scatter, each particle writing its own
+  cell in element order; the first scene whose data is not an image.
 - [tiles](tiles/README.md): a tile map as a `Grid<Tile>` behind a `type`
   alias, flooded a step per frame, drawn through an atlas image; two grids
   of different element types in one Kernel.

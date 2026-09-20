@@ -709,3 +709,169 @@ fn remainder_truncates_like_division_and_vectors_compare_whole() {
     let error = run(&mut host, 7, 0).unwrap_err();
     assert!(error.to_string().contains("division by zero"), "{error}");
 }
+
+#[test]
+fn scatters_combine_into_the_target_in_element_order() {
+    // Particles splat weights into a grid of floats by `sum`; an id grid
+    // takes the last particle's id by `last`; a struct element is
+    // combined fieldwise by `max`; addresses outside the grid are dropped.
+    let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; } struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, mass: d.weight }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(
+        module.manifest.mode,
+        orla_ir::Mode::Scatter {
+            base: 1,
+            combine: orla_ir::Combine::Sum
+        }
+    ));
+    let mut host = Host::new(1 << 16);
+    let drops: Vec<(f32, f32, f32)> = vec![
+        (0.2, 0.7, 1.0),      // cell (0, 0)
+        (2.9, 1.1, 0.5),      // cell (2, 1)
+        (0.5, 0.5, 0.25),     // cell (0, 0) again
+        (-0.5, 0.0, 9.0),     // outside: dropped, not clamped
+        (3.0, 0.0, 9.0),      // outside on the far edge
+        (1.0, f32::NAN, 9.0), // NaN: dropped
+    ];
+    let words: Vec<u32> = drops
+        .iter()
+        .flat_map(|(x, y, w)| [x.to_bits(), y.to_bits(), w.to_bits()])
+        .collect();
+    let schema = orla_abi::Schema::new(vec![
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Float,
+        orla_abi::Scalar::Float,
+    ]);
+    let rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(schema, Domain::Rows(drops.len() as u32), words)
+                .unwrap(),
+        )
+        .unwrap();
+    let canvas_words: Vec<u32> = (0..6).map(|i| (i as f32 * 0.1).to_bits()).collect();
+    let canvas = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
+                Domain::Grid(3, 2),
+                canvas_words,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![rows, canvas],
+        params: vec![],
+        domain: Domain::Grid(3, 2),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.domain(output).unwrap(), Domain::Grid(3, 2));
+    let got: Vec<f32> = (0..6)
+        .map(|i| f32::from_bits(host.element(output, i).unwrap()[0]))
+        .collect();
+    let expected = [0.0 + 1.0 + 0.25, 0.1, 0.2, 0.3, 0.4, 0.5 + 0.5];
+    for (g, e) in got.iter().zip(expected) {
+        assert!((g - e).abs() < 1e-6, "{got:?} != {expected:?}");
+    }
+    // The target is untouched.
+    assert_eq!(
+        f32::from_bits(host.element(canvas, 0).unwrap()[0]),
+        0.0,
+        "the base input is copied, not written"
+    );
+
+    // The domain must be the target's.
+    let bad = Invocation {
+        inputs: vec![rows, canvas],
+        params: vec![],
+        domain: Domain::Grid(2, 2),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let error = CpuBackend.execute(&module, &bad, &mut scope).unwrap_err();
+    assert!(error.to_string().contains("scatters into"), "{error}");
+
+    // `last` by element order, `max` fieldwise over a struct with ints,
+    // into rows addressed by Int.
+    let source = "kernel test.mark@1 { requires { field.read; field.write; } input hits: Rows<Hit>; input slots: Rows<Slot>; output result: Rows<Slot>; struct Hit { slot: Int; id: Int; score: Float; } struct Slot { id: Int; score: Float; } struct Put { at: Int; value: Slot; } scatter into slots with max { let h = sample(hits); return Put { at: h.slot, value: Slot { id: h.id, score: h.score } }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let hits: Vec<(i32, i32, f32)> = vec![(1, 5, 0.5), (1, 3, 0.9), (0, 7, -1.0), (4, 1, 1.0)];
+    let words: Vec<u32> = hits
+        .iter()
+        .flat_map(|(s, i, f)| [*s as u32, *i as u32, f.to_bits()])
+        .collect();
+    let hit_schema = orla_abi::Schema::new(vec![
+        orla_abi::Scalar::Int,
+        orla_abi::Scalar::Int,
+        orla_abi::Scalar::Float,
+    ]);
+    let hits = host
+        .adopt(orla_abi::FieldData::from_words(hit_schema, Domain::Rows(4), words).unwrap())
+        .unwrap();
+    let slot_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+    let slots = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                slot_schema,
+                Domain::Rows(3),
+                vec![
+                    0,
+                    0.0f32.to_bits(),
+                    4,
+                    0.7f32.to_bits(),
+                    9,
+                    0.0f32.to_bits(),
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = Invocation {
+        inputs: vec![hits, slots],
+        params: vec![],
+        domain: Domain::Rows(3),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let element = |i: u32| {
+        let w = host.element(output, i).unwrap();
+        (w[0] as i32, f32::from_bits(w[1]))
+    };
+    assert_eq!(
+        element(0),
+        (7, 0.0),
+        "max keeps the higher score already there"
+    );
+    assert_eq!(
+        element(1),
+        (5, 0.9),
+        "max is fieldwise: id from one hit, score from another"
+    );
+    assert_eq!(
+        element(2),
+        (9, 0.0),
+        "slot 4 is outside three rows and dropped"
+    );
+
+    let source = source.replace("with max", "with last");
+    let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let w = host.element(output, 1).unwrap();
+    assert_eq!(
+        (w[0] as i32, f32::from_bits(w[1])),
+        (3, 0.9),
+        "the later element wins"
+    );
+    let w = host.element(output, 0).unwrap();
+    assert_eq!((w[0] as i32, f32::from_bits(w[1])), (7, -1.0));
+}

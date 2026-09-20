@@ -1,4 +1,4 @@
-// seed -> step (fed back) -> draw
+// seed -> step (fed back) -> splat (onto last frame's faded canvas) -> draw
 use "kernels/";
 
 node seed: particles.seed@1 {
@@ -9,9 +9,21 @@ node step: particles.step@1 {
     previous <~ step.result from seed.result;
 }
 
-node draw: particles.draw@1 {
-    particles <- step.result;
+node clear: particles.clear@1 {
     domain = vec2(320, 240);
+}
+
+node fade: particles.fade@1 {
+    previous <~ splat.result from clear.result;
+}
+
+node splat: particles.splat@1 {
+    particles <- step.result;
+    canvas <- fade.result;
+}
+
+node draw: particles.draw@1 {
+    canvas <- splat.result;
 }
 
 output result <- draw.result;

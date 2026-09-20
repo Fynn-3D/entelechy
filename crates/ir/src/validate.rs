@@ -9,8 +9,8 @@ use std::fmt;
 use std::ops::Deref;
 
 use crate::{
-    Block, Capability, Function, Instruction, MAX_LOOP_COUNT, Manifest, Mode, Module, Op, Port,
-    PortType, Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
+    Block, Capability, Combine, Function, Instruction, MAX_LOOP_COUNT, Manifest, Mode, Module, Op,
+    Port, PortType, Shape, ShapeIndex, StructDef, Type, UnaryOp, ValueId, schema_of,
 };
 
 /// A module that passed [`validate`].
@@ -83,8 +83,63 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
     }
     match (module.manifest.mode, &module.merge) {
         (Mode::Map, None) => {}
-        (Mode::Map | Mode::Scan, Some(_)) => {
+        (Mode::Map | Mode::Scan | Mode::Scatter { .. }, Some(_)) => {
             return Err(error("manifest", "only a reduce Kernel has a `merge`"));
+        }
+        (Mode::Scatter { base, combine }, None) => {
+            let manifest = &module.manifest;
+            let target = manifest.inputs.get(base as usize).ok_or_else(|| {
+                error(
+                    "manifest",
+                    format!("a scatter into input {base} needs that input"),
+                )
+            })?;
+            if manifest.inputs.is_empty() {
+                return Err(error(
+                    "manifest",
+                    "a scatter maps over its first input, so it needs one",
+                ));
+            }
+            let output = outputs
+                .first()
+                .ok_or_else(|| error("manifest", "a scatter produces one output"))?;
+            if outputs.len() != 1 || output.ty != target.ty {
+                return Err(error(
+                    "manifest",
+                    format!(
+                        "a scatter produces exactly one output, shaped and laid out like the input it scatters into (`{}`)",
+                        target.name
+                    ),
+                ));
+            }
+            let element = output.element();
+            if combine != Combine::Last && !numeric(&module.structs, element) {
+                return Err(error(
+                    "manifest",
+                    format!(
+                        "`{}` combines numbers; `{element}` holds a Bool, so scatter with `last`",
+                        combine.name()
+                    ),
+                ));
+            }
+            let address = target.ty.index_type();
+            let pair = entry.results.first().map(|r| types[r.0 as usize]);
+            let fields = match pair {
+                Some(Type::Struct(index)) => Some(&module.structs[index as usize].fields),
+                _ => None,
+            };
+            let well_formed = fields.is_some_and(|fields| {
+                fields.len() == 2 && fields[0].ty == address && fields[1].ty == element
+            });
+            if entry.results.len() != 1 || !well_formed {
+                return Err(error(
+                    &entry.name,
+                    format!(
+                        "a scatter's entry returns a struct of two fields, an address ({address}) into `{}` and a value ({element})",
+                        target.name
+                    ),
+                ));
+            }
         }
         (Mode::Reduce, None) => {
             return Err(error("manifest", "a reduce Kernel needs a `merge`"));
@@ -165,7 +220,11 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             ),
         ));
     }
+    let scattering = matches!(module.manifest.mode, Mode::Scatter { .. });
     for (result, output) in entry.results.iter().zip(outputs) {
+        if scattering {
+            break;
+        }
         let actual = types[result.0 as usize];
         let expected = output.element();
         if actual != expected {
@@ -186,6 +245,18 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
         ));
     }
     Ok(Validated(module))
+}
+
+/// Whether a type is numbers all the way down: floats and ints, no Bool.
+fn numeric(structs: &[StructDef], ty: Type) -> bool {
+    match ty {
+        Type::Float | Type::Int | Type::Vec2 | Type::Vec3 | Type::Vec4 => true,
+        Type::Bool => false,
+        Type::Struct(index) => structs[index as usize]
+            .fields
+            .iter()
+            .all(|field| numeric(structs, field.ty)),
+    }
 }
 
 fn error(location: &str, message: impl Into<String>) -> ValidationError {
@@ -334,7 +405,9 @@ impl<'a> Checker<'a> {
     fn output_shape(&self) -> Shape {
         let manifest = &self.module.manifest;
         match manifest.mode {
-            Mode::Reduce | Mode::Scan => manifest.inputs.first().map_or(Shape::Rows, Port::shape),
+            Mode::Reduce | Mode::Scan | Mode::Scatter { .. } => {
+                manifest.inputs.first().map_or(Shape::Rows, Port::shape)
+            }
             Mode::Map => manifest.outputs.first().map_or(Shape::Grid, Port::shape),
         }
     }

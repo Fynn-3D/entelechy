@@ -185,6 +185,18 @@ pub enum Mode {
     /// (the module's `init` before the first) and writing each step's
     /// result as that element of a `Rows` output of the same count.
     Scan,
+    /// The entry runs once per element of the first input's domain and
+    /// yields an address into the `base` input and a value; the output is
+    /// `base` with every value combined into the element at its address,
+    /// as if the sources were applied one after another in element order.
+    /// An address outside `base` is dropped. `base` has the output's
+    /// shape and layout, and sizes the output.
+    Scatter {
+        /// Index of the input the output starts from.
+        base: u32,
+        /// How a value meets the element already there.
+        combine: Combine,
+    },
 }
 
 impl Mode {
@@ -194,13 +206,60 @@ impl Mode {
             Self::Map => "map",
             Self::Reduce => "reduce",
             Self::Scan => "scan",
+            Self::Scatter { .. } => "scatter",
+        }
+    }
+
+    /// Whether the entry maps over the first input rather than the output.
+    pub fn maps_over_input(self) -> bool {
+        !matches!(self, Self::Map)
+    }
+}
+
+/// How a scattered value combines with the element at its address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Combine {
+    /// Fieldwise addition; `Int` fields overflow as the backend's integers do.
+    Sum,
+    /// Fieldwise minimum.
+    Min,
+    /// Fieldwise maximum.
+    Max,
+    /// The value replaces the element; the last source in element order wins.
+    Last,
+}
+
+impl Combine {
+    /// Stable spelling used in `.orla` sources.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sum => "sum",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Last => "last",
+        }
+    }
+
+    /// The spelling's meaning, if it is one.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "sum" => Some(Self::Sum),
+            "min" => Some(Self::Min),
+            "max" => Some(Self::Max),
+            "last" => Some(Self::Last),
+            _ => None,
         }
     }
 }
 
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        match self {
+            Self::Scatter { base, combine } => {
+                write!(f, "scatter into input {base} with {}", combine.name())
+            }
+            _ => f.write_str(self.name()),
+        }
     }
 }
 

@@ -254,6 +254,22 @@ pub struct Kernel {
     /// `compute` and whose carried value threads through the elements in
     /// order.
     pub carry: Option<CarryDecl>,
+    /// `scatter into base with combine { ... }`: present for a scatter,
+    /// whose body is `compute` and yields an address and a value per
+    /// element of the first input.
+    pub scatter: Option<ScatterDecl>,
+}
+
+/// `scatter into base with combine { ... }`: the target input the output
+/// starts from and the rule a value meets the element there with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScatterDecl {
+    /// The input port the output starts from.
+    pub into: Spanned<String>,
+    /// `sum`, `min`, `max`, or `last`.
+    pub combine: Spanned<String>,
+    /// Where `scatter` was written.
+    pub span: Span,
 }
 
 /// The carried value of a scan: its name and its value before the first

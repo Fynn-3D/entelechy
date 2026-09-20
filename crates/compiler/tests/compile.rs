@@ -306,7 +306,9 @@ fn scan_carries_a_value_and_is_checked() {
     )
     .unwrap_err();
     assert!(
-        error.to_string().contains("either `compute` or `scan`"),
+        error
+            .to_string()
+            .contains("one of `compute`, `scan`, or `scatter`"),
         "{error}"
     );
 }
@@ -423,4 +425,58 @@ fn remainder_widening_and_vector_equality_type_check() {
         "kernel t.k@1 { requires { field.write; } output result: Rows<Bool>; compute { return vec2(true, 1.0) == vec2(1.0, 1.0); } }",
     );
     assert!(message.contains("must be Float or Int"), "{message}");
+}
+
+#[test]
+fn scatter_names_its_target_and_rule_and_is_checked() {
+    let module = compile(
+        "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        module.manifest.mode,
+        orla_ir::Mode::Scatter {
+            base: 1,
+            combine: orla_ir::Combine::Sum
+        }
+    );
+    let text = module.to_string();
+    assert!(
+        text.contains("mode scatter into input 1 with sum"),
+        "{text}"
+    );
+
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into nowhere with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+    );
+    assert!(message.contains("not an input"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with average { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+    );
+    assert!(
+        message.contains("`sum`, `min`, `max`, or `last`"),
+        "{message}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Image; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } }",
+    );
+    assert!(
+        message.contains("shaped and laid out like `canvas`"),
+        "{message}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Int; mass: Float; } scatter into canvas with sum { return Splat { cell: 1, mass: 1.0 }; } }",
+    );
+    assert!(
+        message.contains("an address (Vec2) and a value (Float)"),
+        "{message}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input flags: Grid<Bool>; output result: Grid<Bool>; struct Splat { cell: Vec2; on: Bool; } scatter into flags with sum { return Splat { cell: sample(drops), on: true }; } }",
+    );
+    assert!(message.contains("scatter with `last`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input drops: Rows<Vec2>; input canvas: Grid<Float>; output result: Grid<Float>; struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { return Splat { cell: sample(drops), mass: 1.0 }; } merge(a, b) { return a + b; } }",
+    );
+    assert!(message.contains("not both"), "{message}");
 }

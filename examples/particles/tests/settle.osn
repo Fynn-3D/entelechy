@@ -1,5 +1,5 @@
 // One particle (element 0 starts moving straight right) under strong
-// gravity, so its path is predictable.
+// gravity, so its path is predictable; the canvas forgets every frame.
 use "../kernels/";
 
 node seed: particles.seed@1 {
@@ -13,9 +13,22 @@ node step: particles.step@1 {
     dt = 0.02;
 }
 
-node draw: particles.draw@1 {
-    particles <- step.result;
+node clear: particles.clear@1 {
     domain = vec2(32, 32);
+}
+
+node fade: particles.fade@1 {
+    previous <~ splat.result from clear.result;
+    fade = 0.0;
+}
+
+node splat: particles.splat@1 {
+    particles <- step.result;
+    canvas <- fade.result;
+}
+
+node draw: particles.draw@1 {
+    canvas <- splat.result;
     radius = 2.0;
 }
 

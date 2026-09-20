@@ -17,8 +17,8 @@ pub mod raster;
 
 use std::fmt;
 
-use orla_abi::{AbiError, Domain, Handle, Invocation, Scope, Shape, Type};
-use orla_ir::{Mode, Validated};
+use orla_abi::{AbiError, Domain, Handle, Invocation, Scalar, Scope, Shape, Type};
+use orla_ir::{Combine, Mode, Validated};
 
 pub use eval::ArithmeticError;
 
@@ -135,6 +135,16 @@ impl CpuBackend {
         }
         if module.manifest.mode == Mode::Scan {
             return scan(module, invocation, scope, strides[0]);
+        }
+        if let Mode::Scatter { base, combine } = module.manifest.mode {
+            return scatter(
+                module,
+                invocation,
+                scope,
+                strides[0],
+                base as usize,
+                combine,
+            );
         }
         let program = eval::Program::new(module, invocation, scope, invocation.domain)?;
         let results = compute(&program, &strides)?;
@@ -257,6 +267,119 @@ fn scan(
     drop(program);
     let port = &module.manifest.outputs[0];
     let output = scope.create(port.ty.schema.clone(), domain)?;
+    if let Err(error) = scope.write_all(output, &words) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// Checks a scatter's invocation: it writes the extent of the input it
+/// scatters into; the domain says so. Every backend applies this.
+pub fn check_scatter(
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+    base: usize,
+) -> Result<Domain, ExecutionError> {
+    let domain = scope.size(invocation.inputs[base])?;
+    if domain != invocation.domain {
+        return Err(ExecutionError::Device(format!(
+            "a scatter writes the extent of the input it scatters into ({domain}); its domain cannot be {}",
+            invocation.domain
+        )));
+    }
+    Ok(domain)
+}
+
+/// Words an address into a domain takes in a scatter's pair.
+pub fn address_words(domain: Domain) -> usize {
+    domain.shape().dims() as usize
+}
+
+/// The linear index a scattered address names, or `None` when it falls
+/// outside the target (NaN included): the write is dropped, never clamped.
+pub fn scatter_index(domain: Domain, address: &[u32]) -> Option<usize> {
+    if domain.shape() == Shape::Rows {
+        let i = address[0] as i32;
+        return (i >= 0 && (i as usize) < domain.count()).then_some(i as usize);
+    }
+    let axis = |word: u32, limit: u32| -> Option<u32> {
+        let v = f32::from_bits(word).floor();
+        (v >= 0.0 && v < limit as f32).then_some(v as u32)
+    };
+    let x = axis(address[0], domain.width())?;
+    let y = axis(address[1], domain.height())?;
+    let z = if domain.shape() == Shape::Volume {
+        axis(address[2], domain.depth())?
+    } else {
+        0
+    };
+    Some(((z * domain.height() + y) * domain.width() + x) as usize)
+}
+
+/// Combines a scattered value into the element already there, scalar by
+/// scalar; the one rule both backends follow.
+fn combine_words(
+    combine: Combine,
+    scalars: &[Scalar],
+    element: &mut [u32],
+    value: &[u32],
+) -> Result<(), ArithmeticError> {
+    for ((slot, incoming), scalar) in element.iter_mut().zip(value).zip(scalars) {
+        let (a, b) = (*slot, *incoming);
+        *slot = match (combine, scalar) {
+            (Combine::Last, _) => b,
+            (Combine::Sum, Scalar::Float) => (f32::from_bits(a) + f32::from_bits(b)).to_bits(),
+            (Combine::Sum, _) => (a as i32)
+                .checked_add(b as i32)
+                .ok_or(ArithmeticError::Overflow)? as u32,
+            (Combine::Min, Scalar::Float) => f32::from_bits(a).min(f32::from_bits(b)).to_bits(),
+            (Combine::Min, _) => (a as i32).min(b as i32) as u32,
+            (Combine::Max, Scalar::Float) => f32::from_bits(a).max(f32::from_bits(b)).to_bits(),
+            (Combine::Max, _) => (a as i32).max(b as i32) as u32,
+        };
+    }
+    Ok(())
+}
+
+/// A scatter: the entry over the first input, then every address and
+/// value applied to a copy of the target, one after another in element
+/// order. The order is the rule, so the result is the same on every
+/// backend, floats included.
+fn scatter(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+    stride: usize,
+    base: usize,
+    combine: Combine,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let target = check_scatter(invocation, scope, base)?;
+    let sources = scope.size(invocation.inputs[0])?;
+    let address = address_words(target);
+    let program = eval::Program::new(module, invocation, scope, sources)?;
+    let pairs = compute(&program, &[address + stride])?;
+    drop(program);
+    let mut words = scope.words(invocation.inputs[base])?.to_vec();
+    let port = &module.manifest.outputs[0];
+    let scalars = port.ty.schema.scalars();
+    for (index, pair) in pairs.chunks_exact(address + stride).enumerate() {
+        let Some(at) = scatter_index(target, &pair[..address]) else {
+            continue;
+        };
+        combine_words(
+            combine,
+            scalars,
+            &mut words[at * stride..(at + 1) * stride],
+            &pair[address..],
+        )
+        .map_err(|error| ExecutionError::Arithmetic {
+            x: (index % sources.width() as usize) as u32,
+            y: (index / sources.width() as usize) as u32,
+            error,
+        })?;
+    }
+    let output = scope.create(port.ty.schema.clone(), target)?;
     if let Err(error) = scope.write_all(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
