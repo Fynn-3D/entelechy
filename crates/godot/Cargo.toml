@@ -1,0 +1,24 @@
+[package]
+name = "orla-godot"
+description = "GDExtension for Godot 4: a session in Godot's own process over the C ABI, its Fields as Images and arrays"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "orla_godot"
+crate-type = ["cdylib"]
+
+[dependencies]
+orla-ffi = { path = "../ffi" }
+# 0.4 is the newest godot-rust that builds on Rust 1.93 (0.5 wants 1.94);
+# its 4.5 API loads in Godot 4.6, GDExtension being forward compatible.
+godot = { version = "0.4", features = ["api-4-5"] }
+
+# Calls the C ABI it wraps; nothing else is unsafe.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = "warn"

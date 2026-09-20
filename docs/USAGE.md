@@ -220,7 +220,10 @@ canvas as the window, and edits and publishes Kernels; `bridges/godot`
 is the third: a Godot 4 project whose `OrlaView` Control is the window
 (the frames drawn as a texture, the pointer, keys and its size sent with
 every evaluate), with the graph's params as controls and a Kernel's rows
-pulled out as an `ArrayMesh`. A bridge is a client in its host's
+pulled out as an `ArrayMesh`; with `cargo build --release -p orla-godot`
+the same project opens a scene in Godot's own process through the
+`OrlaSession` extension class, the picture an `Image` built on the
+Host's words. A bridge is a client in its host's
 language, outside the workspace, speaking only the public contracts.
 
 ## In your own process

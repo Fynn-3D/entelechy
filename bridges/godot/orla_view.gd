@@ -2,6 +2,9 @@
 ## the screen's scale go with every `evaluate`, the pointer, buttons,
 ## wheel and keys over it are the input, and each frame is an `evaluate`
 ## followed by a `read` shown as its texture, letterboxed like the Player.
+## The session is an `OrlaClient` over the socket or an `OrlaLocal` in
+## this process; the view asks the same of either, except that the local
+## one hands the frame over as an Image instead of a PPM.
 class_name OrlaView
 extends Control
 
@@ -12,7 +15,8 @@ const Client = preload("res://orla_client.gd")
 signal framed(report: Dictionary, millis: float)
 signal stopped(message: String)
 
-var client: Client
+## An OrlaClient or an OrlaLocal.
+var client: RefCounted
 ## Whether `_process` steps the session frame after frame.
 var running := false
 ## The last frame's size in output pixels.
@@ -162,7 +166,7 @@ func step() -> Dictionary:
 	var wheel := _wheel
 	_wheel = Vector2.ZERO
 	var began := Time.get_ticks_usec()
-	var report := client.request("evaluate", {
+	var input := {
 		"time": (Time.get_ticks_msec() - _started) / 1000.0,
 		"pointer": [_pointer.x, _pointer.y],
 		"buttons": _buttons.keys(),
@@ -170,12 +174,24 @@ func step() -> Dictionary:
 		"keys": _keys.keys(),
 		"window": [window_size().x, window_size().y],
 		"scale": window_scale(),
-	})
+	}
+	if client.has_method("image"):
+		# In this process: the picture is an Image on the Host's words.
+		var local_report: Dictionary = client.evaluate(input)
+		if Client.failed(local_report):
+			return local_report
+		var image: Image = client.image()
+		if image:
+			show_image(image)
+		last_millis = (Time.get_ticks_usec() - began) / 1000.0
+		framed.emit(local_report, last_millis)
+		return local_report
+	var report: Dictionary = client.request("evaluate", input)
 	if Client.failed(report):
 		return report
 	for output in report.get("outputs", []):
 		if int(output.get("width", 0)) > 0:
-			var read := client.request("read", {"output": output["name"], "format": "ppm"})
+			var read: Dictionary = client.request("read", {"output": output["name"], "format": "ppm"})
 			if Client.failed(read):
 				return read
 			var image := Client.decode_ppm(read["data"])
@@ -189,7 +205,7 @@ func step() -> Dictionary:
 
 func show_image(image: Image) -> void:
 	var image_size := image.get_size()
-	if image_size != frame_size or _texture.get_size() != Vector2(image_size):
+	if image_size != frame_size or _texture.get_size() != Vector2(image_size) or _texture.get_format() != image.get_format():
 		frame_size = image_size
 		_texture = ImageTexture.create_from_image(image)
 	else:

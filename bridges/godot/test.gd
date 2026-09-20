@@ -10,6 +10,7 @@
 extends SceneTree
 
 const Client = preload("res://orla_client.gd")
+const Local = preload("res://orla_local.gd")
 const View = preload("res://orla_view.gd")
 
 var _sessions: Array[Dictionary] = []
@@ -44,7 +45,7 @@ func _run(orla: String) -> String:
 	var mesh_port := _serve(orla, "examples/mesh/scene.osn", "cpu")
 	if text_port == 0 or voxel_port == 0 or mesh_port == 0:
 		return "a session did not start"
-	for check in [_text.bind(text_port), _voxel.bind(voxel_port), _mesh.bind(mesh_port), _main.bind(mesh_port)]:
+	for check in [_text.bind(text_port), _voxel.bind(voxel_port), _mesh.bind(mesh_port), _main.bind(mesh_port), _local]:
 		var failure = check.call()
 		if typeof(failure) != TYPE_STRING:
 			return "a check stopped on a script error (see above)"
@@ -258,4 +259,73 @@ func _main(port: int) -> String:
 	print("main: connected, framed and built the params")
 	main.client.close()
 	main.queue_free()
+	return ""
+
+
+## The session in this process, when the extension is built: the text
+## example's picture as an Image on the Host's words, a Kernel published
+## through the same door, a node's words, and the voxel editor driven by
+## an OrlaView over the local session.
+func _local() -> String:
+	if not Local.available():
+		print("local: skipped (cargo build --release -p orla-godot)")
+		return ""
+	var local := Local.new()
+	var error := local.open("res://../../examples/text/scene.osn", "jit")
+	if not error.is_empty():
+		return "local: " + error
+	var report := local.evaluate({"time": 0.0})
+	if Client.failed(report):
+		return "local: " + str(report["error"])
+	var image := local.image()
+	if image == null or image.get_size() != Vector2i(192, 88) or image.get_format() != Image.FORMAT_RGBAF:
+		return "local: image %s" % [image]
+	if not _colour_is(image, 10, 6, Color(1.0, 0.85, 0.45), 0.02):
+		return "local: the O's top is " + str(image.get_pixel(10, 6))
+	print("local: picture as an Image")
+	var back := local.request("kernel", {"kernel": "scene.back@1"})
+	var recoloured := str(back.get("source", "")).replace("vec4(0.09, 0.1, 0.13, 1.0)", "vec4(0.3, 0.1, 0.1, 1.0)")
+	var published := local.request("publish", {"source": recoloured, "expect": "any"})
+	if str(published.get("id", "")) != "scene.back@1":
+		return "local: published " + JSON.stringify(published)
+	local.evaluate({"time": 0.1})
+	if not _colour_is(local.image(), 12, 12, Color(0.3, 0.1, 0.1), 0.02):
+		return "local: the recoloured hollow is " + str(local.image().get_pixel(12, 12))
+	local.request("pin", {"node": "codes"})
+	local.evaluate({"time": 0.2})
+	var codes := local.node("codes")
+	if int(codes.get("count", 0)) != 95 or codes["words"].decode_s32(0) != 32:
+		return "local: codes " + JSON.stringify(codes.keys())
+	print("local: republished and a node's words read")
+	local.close()
+	# The voxel editor through an OrlaView over the local session.
+	local = Local.new()
+	error = local.open("res://../../examples/voxel/scene.osn", "jit")
+	if not error.is_empty():
+		return "local: " + error
+	var view := View.new()
+	view.size = Vector2(240, 135)
+	root.add_child(view)
+	view.client = local
+	local.request("pin", {"node": "state"})
+	local.request("pin", {"node": "world"})
+	report = view.step()
+	if Client.failed(report) or view.frame_size != Vector2i(240, 135):
+		return "local: voxel frame %s %s" % [view.frame_size, report.get("error", "")]
+	view.set_pointer(Vector2(120, 78))
+	view.step()
+	var state := local.node("state")
+	var words: PackedByteArray = state["words"]
+	if not Client.bool_at(words, 18) or Client.float_at(words, 19) != 27.0:
+		return "local: the pointer finds no voxel"
+	view.press_button(0, true)
+	view.step()
+	view.press_button(0, false)
+	view.step()
+	var world: PackedByteArray = local.node("world")["words"]
+	if Client.int_at(world, 62811) != 1:
+		return "local: placed voxel is %d" % Client.int_at(world, 62811)
+	print("local: the voxel editor runs in this process")
+	local.close()
+	view.queue_free()
 	return ""
