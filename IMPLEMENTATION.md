@@ -219,15 +219,15 @@ capability claim.
   against reference vectors; `run --save` and the protocol's `read`
   produce them ([session](crates/cli/src/session.rs),
   [tests](crates/cli/tests/session.rs)).
-- Models and compressed sounds come in through a tool: `orla-tools`
-  ([crate](crates/tools)) sits in the interface layer beside the CLI and
+- Models and compressed sounds come in through a tool: `orla-import`
+  ([crate](crates/import)) sits in the interface layer beside the CLI and
   the Player, the only layer that takes dependencies. `import` reads
   glTF/GLB (external, data-URI or GLB buffers; every accessor type; node
   transforms baked; normals computed when absent) and writes vertex and
   triangle rows as `.field` and the base colour texture as PNG
-  ([gltf](crates/tools/src/gltf.rs), [model example](examples/model/README.md)),
+  ([gltf](crates/import/src/gltf.rs), [model example](examples/model/README.md)),
   and reads MP3, OGG Vorbis, FLAC, AAC and more through symphonia and
-  writes a WAV at the file's rate ([audio](crates/tools/src/audio.rs),
+  writes a WAV at the file's rate ([audio](crates/import/src/audio.rs),
   checked against tones made by ffmpeg). The runtime sees none of these
   formats.
 - Functions are shared like structs: declared at a document's top level

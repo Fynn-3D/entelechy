@@ -120,7 +120,7 @@ the Host and watches it, `run --save` and the protocol write any Field
 out as `.field`, `.png`, `.ppm`, `.pgm`, or `.wav`, PNG and WAV decode
 with no dependency, the tiles example reads its atlas from a PNG it
 baked and the sampler plays a drum from a WAV it baked; the Host's
-third gap is closed. `orla-tools`, a new interface-layer crate, is where
+third gap is closed. `orla-import`, a new interface-layer crate, is where
 converters and their dependencies live: `import` turns a glTF or GLB into
 those files (the model example spins a textured crate that came in that
 way) and decodes MP3, OGG, FLAC and AAC into WAV through symphonia.

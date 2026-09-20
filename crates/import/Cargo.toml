@@ -1,13 +1,13 @@
 [package]
-name = "orla-tools"
-description = "Importers and converters that speak the Host's file formats from outside the runtime: models, sounds"
+name = "orla-import"
+description = "The importer: brings models and sounds in as the Host's files, from outside the runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "orla-tools"
+name = "orla-import"
 path = "src/main.rs"
 
 [dependencies]

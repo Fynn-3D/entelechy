@@ -1549,6 +1549,16 @@ name = "orla-host"
 version = "0.1.0"
 
 [[package]]
+name = "orla-import"
+version = "0.1.0"
+dependencies = [
+ "orla",
+ "orla-runtime",
+ "serde_json",
+ "symphonia",
+]
+
+[[package]]
 name = "orla-ir"
 version = "0.1.0"
 dependencies = [
@@ -1587,16 +1597,6 @@ dependencies = [
  "orla-cpu",
  "orla-ir",
  "orla-language",
-]
-
-[[package]]
-name = "orla-tools"
-version = "0.1.0"
-dependencies = [
- "orla",
- "orla-runtime",
- "serde_json",
- "symphonia",
 ]
 
 [[package]]

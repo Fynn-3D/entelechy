@@ -1,7 +1,7 @@
-//! `orla-tools`: importers that speak the Host's file formats from
-//! outside the runtime. A model becomes vertex and triangle rows and a
-//! PNG; a compressed sound becomes a WAV. The runtime learns no format
-//! here; a scene reads what these write as inputs.
+//! `orla-import`: brings a file in as the Host's files, from outside the
+//! runtime. A model becomes vertex and triangle rows and a PNG; a
+//! compressed sound becomes a WAV. The runtime learns no format here; a
+//! scene reads what this writes as inputs.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -11,7 +11,7 @@ mod gltf;
 
 const USAGE: &str = "\
 usage:
-  orla-tools import <file> [--out <dir>]
+  orla-import <file> [--out <dir>]
       A model (.gltf, .glb) becomes <stem>.vertices.field, <stem>.triangles.field
       and, when it has one in PNG, <stem>.albedo.png; a sound (.mp3, .ogg, .flac,
       .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate. Files go to
@@ -19,13 +19,11 @@ usage:
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let result = match args.first().map(String::as_str) {
-        Some("import") => import(&args[1..]),
-        _ => {
-            eprintln!("{USAGE}");
-            return ExitCode::from(2);
-        }
-    };
+    if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    let result = import(&args);
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {

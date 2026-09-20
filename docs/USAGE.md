@@ -1,7 +1,7 @@
 # Usage
 
 Orla is a Rust workspace whose runtime crates have no external
-dependencies; only the interface layer (the Player, `orla-tools`) takes
+dependencies; only the interface layer (the Player, `orla-import`) takes
 them. Build and verify:
 
 ```sh
@@ -127,7 +127,7 @@ their fused version arrives.
 
 ## Import a model or a sound
 
-`orla-tools` is the interface layer's converter: it speaks the Host's file
+`orla-import` is the interface layer's converter: it speaks the Host's file
 formats from outside the runtime, and it is the one place besides the
 Player that takes dependencies. `import` reads a glTF or GLB model and
 writes what a scene takes as inputs: vertices as rows of `{position,
@@ -141,8 +141,8 @@ learns no format here; a model or sound in another format needs only
 another tool.
 
 ```sh
-cargo run -p orla-tools -- import examples/model/source/crate.glb --out examples/model/assets
-cargo run -p orla-tools -- import song.ogg --out assets   # writes assets/song.wav
+cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
+cargo run -p orla-import -- song.ogg --out assets   # writes assets/song.wav
 ```
 
 ## Replay tests
