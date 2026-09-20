@@ -4,6 +4,7 @@
 //! Every diagnostic carries a source position so an agent can repair the
 //! Kernel without guessing. The compiler never executes anything.
 
+pub mod help;
 mod lower;
 
 use std::fmt;

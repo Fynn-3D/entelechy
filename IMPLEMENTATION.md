@@ -483,6 +483,13 @@ capability claim.
   ([lowering](crates/compiler/src/lower.rs),
   [interpreter](crates/cpu/src/eval.rs), [WGSL](crates/gpu/src/wgsl.rs),
   [JIT](crates/jit/src/codegen.rs)).
+- `orla help` and the protocol's `help` list what a Kernel may call:
+  the math intrinsics' signatures are found by asking the IR's typing
+  rule about every combination of the plain types, their sentences live
+  beside the enum, and the Field, memory, context and construction
+  builtins are described next to the lowering that dispatches them
+  ([help](crates/compiler/src/help.rs)), so the listing is what
+  compiles.
 - Undeclared capabilities are compile-time diagnostics with positions
   ([compile tests](crates/compiler/tests/compile.rs)); the IR validator remains
   the backstop.

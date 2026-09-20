@@ -905,3 +905,53 @@ output result <- tally.result;
         "{stderr}"
     );
 }
+
+#[test]
+fn help_lists_the_builtins_and_shows_one() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let output = Command::new(orla).arg("help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    for name in [
+        "floor",
+        "atan2",
+        "at_linear",
+        "put",
+        "key",
+        "vec4",
+        "add_wrap",
+        "match",
+    ] {
+        assert_eq!(
+            stdout.contains(&format!("  {name} ")),
+            name != "match",
+            "{name} in {stdout}"
+        );
+    }
+    let output = Command::new(orla)
+        .args(["help", "smoothstep"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("smoothstep(low: Float, high: Float, x: Vec3) -> Vec3"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("smoothstep(low: Vec2, high: Vec2, x: Vec2) -> Vec2"),
+        "{stdout}"
+    );
+    let output = Command::new(orla)
+        .args(["help", "sample"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Needs `field.read`") && stdout.contains("Only the entry"),
+        "{stdout}"
+    );
+    let output = Command::new(orla).args(["help", "atan3"]).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("did you mean") && stderr.contains("atan2"), "{stderr}");
+}

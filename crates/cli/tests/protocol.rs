@@ -606,3 +606,38 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
             .contains("element")
     );
 }
+
+#[test]
+fn help_answers_the_builtins_as_json() {
+    let dir = scratch_in("-help");
+    let responses = talk(
+        &dir.join("scene.osn"),
+        &[
+            json!({ "id": 1, "op": "help" }),
+            json!({ "id": 2, "op": "help", "name": "mix" }),
+            json!({ "id": 3, "op": "help", "name": "mixx" }),
+        ],
+    );
+    let all = responses[0]["ok"]["builtins"].as_array().unwrap();
+    assert!(all.len() > 50);
+    assert!(
+        all.iter()
+            .any(|b| b["name"] == "put" && b["requires"] == "field.write")
+    );
+    let mix = &responses[1]["ok"];
+    assert_eq!(mix["kind"], "math");
+    assert!(
+        mix["signatures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "mix(a: Vec3, b: Vec3, t: Float) -> Vec3")
+    );
+    assert!(mix["requires"].is_null());
+    assert!(
+        responses[2]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("mix")
+    );
+}

@@ -9,6 +9,19 @@ cargo build --workspace
 cargo test --workspace
 ```
 
+## What a Kernel may call
+
+```sh
+cargo run -- help              # every builtin, one line each
+cargo run -- help smoothstep   # its signatures, what it does, what it needs
+```
+
+The list comes from the compiler's own tables, so it is what compiles: the
+math intrinsics with every accepted signature, the Field reads, `put`,
+the context functions with the capability each needs, and the vector
+constructors. Over the protocol, `help` answers the same as JSON; the
+language itself is in [DOCUMENTS](DOCUMENTS.md).
+
 ## Check a Kernel
 
 Compile `.orla` files and print their manifests. Diagnostics carry

@@ -28,6 +28,9 @@ usage:
       Evaluate the scene, then run one element of a node's Kernel (or one
       step of a scan) on the interpreter and print every `let` of it with
       its value, and the result. Nothing is committed by the trace.
+  orla help [<name>]
+      List every builtin a Kernel may call with one line each, or show one
+      builtin's signatures, what it does, and the capability it needs.
   orla replay <file.replay>... [--backend cpu|gpu|jit]
       Drive scenes through scripted frames and inputs and check pixels.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
@@ -49,6 +52,7 @@ fn main() -> ExitCode {
         Some("serve") => serve(&args[1..]),
         Some("graph") => graph(&args[1..]),
         Some("trace") => trace(&args[1..]),
+        Some("help") => help(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -559,6 +563,55 @@ fn replay(args: &[String]) -> Result<(), String> {
         Err(format!("{failed} replay(s) failed"))
     } else {
         Ok(())
+    }
+}
+
+/// `orla help`: the builtins, all or one.
+fn help(args: &[String]) -> Result<(), String> {
+    match args.first() {
+        None => {
+            let builtins = orla_compiler::help::builtins();
+            let width = builtins.iter().map(|b| b.name.len()).max().unwrap_or(0);
+            let mut kind = "";
+            for builtin in &builtins {
+                if builtin.kind != kind {
+                    kind = builtin.kind;
+                    println!("{kind}");
+                }
+                println!("  {:<width$}  {}", builtin.name, builtin.doc);
+            }
+            println!(
+                "orla help <name> shows a builtin's signatures; docs/DOCUMENTS.md the language."
+            );
+            Ok(())
+        }
+        Some(name) => {
+            let Some(builtin) = orla_compiler::help::builtin(name) else {
+                let similar = orla_compiler::help::similar(name);
+                return Err(if similar.is_empty() {
+                    format!("no builtin named `{name}`; `orla help` lists them")
+                } else {
+                    format!(
+                        "no builtin named `{name}`; did you mean {}?",
+                        similar.join(", ")
+                    )
+                });
+            };
+            println!("{} ({})", builtin.name, builtin.kind);
+            for signature in &builtin.signatures {
+                println!("  {signature}");
+            }
+            println!("{}", builtin.doc);
+            if let Some(capability) = builtin.requires {
+                println!("Needs `{capability}` in the Kernel's `requires`.");
+            }
+            if builtin.entry_only {
+                println!(
+                    "Only the entry (`compute`, `scan`, `scatter`) may call it; a function takes its value as an argument."
+                );
+            }
+            Ok(())
+        }
     }
 }
 

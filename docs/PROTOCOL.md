@@ -83,6 +83,11 @@ those nodes, what they read, the state (which must advance), and any
 output never produced; the rest keeps its last value. An agent watching
 a state row pays for the state, not the picture.
 
+`help` answers with every builtin a Kernel may call (`builtins`, each
+`{name, kind, signatures, doc, requires, entry_only}`), or, with `name`,
+that one; an unknown name is an error naming similar ones. It is what
+the compiler accepts, generated from its tables.
+
 `trace` runs one element of a node on the interpreter and answers with
 every binding of it: `node`, and `at` (`[x, y, z]`, an element of a map)
 or `element` (a step of a scan), with the fields `evaluate` takes for the

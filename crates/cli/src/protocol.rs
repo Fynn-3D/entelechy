@@ -626,6 +626,30 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             .map_err(|e| failure(e.to_string()))?;
             Ok(report_json(session, &report))
         }
+        "help" => {
+            let entry = |builtin: &orla_compiler::help::Builtin| {
+                json!({
+                    "name": builtin.name,
+                    "kind": builtin.kind,
+                    "signatures": builtin.signatures,
+                    "doc": builtin.doc,
+                    "requires": builtin.requires,
+                    "entry_only": builtin.entry_only,
+                })
+            };
+            match request.get("name").and_then(Json::as_str) {
+                Some(name) => match orla_compiler::help::builtin(name) {
+                    Some(builtin) => Ok(entry(&builtin)),
+                    None => Err(failure(format!(
+                        "no builtin named `{name}`; similar: {}",
+                        orla_compiler::help::similar(name).join(", ")
+                    ))),
+                },
+                None => Ok(json!({
+                    "builtins": orla_compiler::help::builtins().iter().map(entry).collect::<Vec<_>>()
+                })),
+            }
+        }
         "trace" => {
             let node = text_field("node")?;
             let at = match (

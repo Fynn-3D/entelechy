@@ -540,6 +540,75 @@ impl Intrinsic {
             .unwrap_or("?")
     }
 
+    /// One sentence on what the intrinsic computes, for `help`.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Floor => "The largest integer not greater than x, componentwise.",
+            Self::Ceil => "The smallest integer not less than x, componentwise.",
+            Self::Round => "The nearest integer, ties to even, componentwise.",
+            Self::Sign => "-1, 0 or 1 by the sign of x, componentwise; an Int stays an Int.",
+            Self::Log => "The natural logarithm, componentwise.",
+            Self::Tan => "The tangent, componentwise.",
+            Self::Asin => "The arc sine, componentwise.",
+            Self::Acos => "The arc cosine, componentwise.",
+            Self::Atan => "The arc tangent of one value, componentwise; atan2 takes two.",
+            Self::Fract => "The fractional part, x - floor(x), componentwise.",
+            Self::Abs => "The absolute value, componentwise; an Int stays an Int.",
+            Self::Sqrt => "The square root, componentwise.",
+            Self::Sin => "The sine, componentwise.",
+            Self::Cos => "The cosine, componentwise.",
+            Self::Min => {
+                "The smaller of a and b, componentwise; a Float beside a vector broadcasts."
+            }
+            Self::Max => {
+                "The larger of a and b, componentwise; a Float beside a vector broadcasts."
+            }
+            Self::Clamp => "x held between low and high, componentwise; Float bounds broadcast.",
+            Self::Mix => "a + (b - a) * t, componentwise; t a Float or componentwise.",
+            Self::AddWrap => "a + b modulo 2^32 on Ints: never a failure, unlike +.",
+            Self::SubWrap => "a - b modulo 2^32 on Ints: never a failure, unlike -.",
+            Self::MulWrap => "The low 32 bits of a * b on Ints: never a failure, unlike *.",
+            Self::ToFloat => "An Int, or a Bool as 0 or 1, as a Float.",
+            Self::ToInt => "A Float truncated toward zero, or a Bool as 0 or 1, as an Int.",
+            Self::Dot => "The dot product of two vectors of one size.",
+            Self::Cross => "The cross product of two Vec3.",
+            Self::Length => "The Euclidean length of a vector.",
+            Self::Normalize => "The unit vector in v's direction; the zero vector stays zero.",
+            Self::Pow => "base raised to exponent, componentwise; a Float exponent broadcasts.",
+            Self::Exp => "e raised to x, componentwise.",
+            Self::Step => "1 where x >= edge, else 0, componentwise; a Float edge broadcasts.",
+            Self::Smoothstep => {
+                "0 below low, 1 above high, a smooth curve between, componentwise; Float edges broadcast."
+            }
+            Self::Reflect => {
+                "incident reflected off the surface with unit normal normal: incident - 2 * dot(normal, incident) * normal."
+            }
+            Self::Atan2 => "The angle of the point (x, y) from the x axis, in -pi..pi.",
+        }
+    }
+
+    /// The names of the arguments, for `help`.
+    pub fn argument_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Min
+            | Self::Max
+            | Self::AddWrap
+            | Self::SubWrap
+            | Self::MulWrap
+            | Self::Dot
+            | Self::Cross => &["a", "b"],
+            Self::Clamp => &["x", "low", "high"],
+            Self::Mix => &["a", "b", "t"],
+            Self::Pow => &["base", "exponent"],
+            Self::Step => &["edge", "x"],
+            Self::Smoothstep => &["low", "high", "x"],
+            Self::Reflect => &["incident", "normal"],
+            Self::Atan2 => &["y", "x"],
+            Self::Length | Self::Normalize => &["v"],
+            _ => &["x"],
+        }
+    }
+
     /// Looks up an intrinsic by source name.
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
