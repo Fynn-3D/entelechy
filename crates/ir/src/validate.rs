@@ -264,7 +264,14 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
 /// Whether a type is numbers all the way down: floats and ints, no Bool.
 fn numeric(structs: &[StructDef], ty: Type) -> bool {
     match ty {
-        Type::Float | Type::Int | Type::Vec2 | Type::Vec3 | Type::Vec4 => true,
+        Type::Float
+        | Type::Int
+        | Type::Vec2
+        | Type::Vec3
+        | Type::Vec4
+        | Type::Mat2
+        | Type::Mat3
+        | Type::Mat4 => true,
         Type::Bool => false,
         Type::Struct(index) => structs[index as usize]
             .fields
@@ -591,6 +598,22 @@ impl<'a> Checker<'a> {
                         }
                     }
                     *ty
+                } else if let (Some(order), Some(column)) = (ty.order(), ty.column()) {
+                    if parts.len() != order as usize {
+                        return Err(self.fail(format!(
+                            "{position} constructs {ty} from {} columns",
+                            parts.len()
+                        )));
+                    }
+                    for part in parts {
+                        let actual = self.operand(*part, position)?;
+                        if actual != column {
+                            return Err(self.fail(format!(
+                                "{position} constructs {ty} from a {actual} column, expected {column}"
+                            )));
+                        }
+                    }
+                    *ty
                 } else {
                     let expected = ty.components().ok_or_else(|| {
                         self.fail(format!("{position} constructs non-vector {ty}"))
@@ -622,6 +645,13 @@ impl<'a> Checker<'a> {
                         ))
                     })?;
                     field.ty
+                } else if let (Some(order), Some(column)) = (source.order(), source.column()) {
+                    if *component >= u32::from(order) {
+                        return Err(self.fail(format!(
+                            "{position} extracts column {component} of {source}"
+                        )));
+                    }
+                    column
                 } else {
                     let count = source.components().ok_or_else(|| {
                         self.fail(format!("{position} extracts from non-vector {source}"))
@@ -639,17 +669,21 @@ impl<'a> Checker<'a> {
                     self.operand(*array, position)?,
                     self.operand(*index, position)?,
                 );
-                let Type::Struct(struct_index) = array else {
-                    return Err(self.fail(format!(
-                        "{position} subscripts {array}, which is not an array"
-                    )));
-                };
-                let def = &self.module.structs[struct_index as usize];
-                let Some(element) = def.element else {
-                    return Err(self.fail(format!(
-                        "{position} subscripts `{}`, a struct, not an array",
-                        def.name
-                    )));
+                let element = match array {
+                    Type::Struct(struct_index) => {
+                        let def = &self.module.structs[struct_index as usize];
+                        def.element.ok_or_else(|| {
+                            self.fail(format!(
+                                "{position} subscripts `{}`, a struct, not an array",
+                                def.name
+                            ))
+                        })?
+                    }
+                    _ => array.column().or_else(|| array.components().map(|_| Type::Float)).ok_or_else(|| {
+                        self.fail(format!(
+                            "{position} subscripts {array}, which is not an array, a matrix or a vector"
+                        ))
+                    })?,
                 };
                 if index != Type::Int {
                     return Err(

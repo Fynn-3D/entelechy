@@ -366,7 +366,9 @@ fn words_of(module: &Validated, ty: Type) -> usize {
         Type::Float | Type::Int | Type::Bool => 1,
         Type::Vec2 => 2,
         Type::Vec3 => 3,
-        Type::Vec4 => 4,
+        Type::Vec4 | Type::Mat2 => 4,
+        Type::Mat3 => 9,
+        Type::Mat4 => 16,
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
@@ -392,6 +394,18 @@ pub fn words_json(module: &Validated, ty: Type, words: &[u32]) -> Json {
         Type::Bool => json!(words[0] != 0),
         Type::Vec2 | Type::Vec3 | Type::Vec4 => {
             json!(words.iter().map(|w| f32::from_bits(*w)).collect::<Vec<_>>())
+        }
+        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
+            let n = usize::from(ty.order().unwrap_or(0));
+            json!(
+                words
+                    .chunks(n)
+                    .map(|column| column
+                        .iter()
+                        .map(|w| f32::from_bits(*w))
+                        .collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            )
         }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
@@ -441,6 +455,18 @@ pub fn words_text(module: &Validated, ty: Type, words: &[u32]) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
+            let n = usize::from(ty.order().unwrap_or(0));
+            let column = ty.column().unwrap_or(Type::Float);
+            format!(
+                "mat{n}({})",
+                words
+                    .chunks(n)
+                    .map(|c| words_text(module, column, c))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
             let mut cursor = 0;

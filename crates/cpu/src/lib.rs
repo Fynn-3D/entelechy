@@ -13,6 +13,7 @@
 //! first failing pixel in row-major order is the one reported.
 
 mod eval;
+pub mod matrix;
 pub mod raster;
 
 use std::fmt;

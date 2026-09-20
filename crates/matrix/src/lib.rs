@@ -137,6 +137,11 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: fl[i % 3] + fl[1] * t.scale + cells[i % 2].a + vs[i % 2].y + vs[1].z, i: picked, b: cells[(i + 1) % 2].on, v: vs[i % 2] + mix(vs[0], vs[1], k) }",
         ),
         (
+            "matrices",
+            "let m2 = spin(x); let m3 = mat3(vec3(x + 2.0, 1.0, 0.0), vec3(0.0, x + 2.0, 1.0), vec3(1.0, 0.0, x + 2.0)); let m4 = mat4(vec4(2.0, 0.0, 0.0, 0.0), vec4(0.0, 3.0, 0.0, 0.0), vec4(0.0, 0.0, 4.0, 0.0), vec4(x, 1.0, 2.0, 1.0)); let ident = inverse(m3) * m3; let back = inverse(m4) * m4; let sum = m3 + transpose(m3) - mat3(1.0) * 0.5; let sc = 2.0 * m2 * 0.5; let mv = m3 * v; let vm = v * m3; let mm = (m3 * m3)[i % 3]; let neg = -m2; let col = m4[3]; let spun = loop 3 with r = m2 { r * m2 }; let fr = Frame { basis: m3, origin: v }; let mq = m4 * vec4(1.0, 2.0, 3.0, 1.0);",
+            "Out { f: determinant(m2) + determinant(m3) + determinant(m4) + ident[1][1] + ident[0][2] + back[2][2] + back[3].x + sum[i % 3][(i + 1) % 3] + sc[0].x + mv.x + vm.y + mm.z + neg[1].y + col.w + m3[i % 3].x + v[i % 3] + mq.z + m2[1][0] + (m3 * 2.0)[2][2] + (2.0 * m3)[0][0] + spun[0].x + fr.basis[1].y + fr.origin.z + inverse(m2)[0].x, i: int(m2 == m2) + int(m3 != m3) * 2 + int(-m2 == m2 * -1.0) * 4 + int(neg != m2) * 8, b: sum == transpose(sum), v: mv + vm + mm + vec3(mq.x, mq.y, mq.z) + transpose(m3)[i % 3] + inverse(m4)[3].x * v }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",
@@ -170,6 +175,8 @@ const HEAD: &str = "requires { field.read; field.write; input.read; time.read; }
     fn score(c: Cell) -> Cell { return Cell { a: c.a * 2.0, b: c.b + 1, on: !c.on }; }
     struct Table { rows: [Int; 4]; scale: Float; }
     fn roll(r: [Int; 4], by: Int) -> [Int; 4] { return [r[by % 4], r[(by + 1) % 4], r[(by + 2) % 4], r[(by + 3) % 4]]; }
+    struct Frame { basis: Mat3; origin: Vec3; }
+    fn spin(a: Float) -> Mat2 { return mat2(vec2(cos(a), sin(a)), vec2(-sin(a), cos(a))); }
 ";
 
 const ENV: &str = "let x = float(i) * 0.37 + 0.1; let sampled = sample(rows);";

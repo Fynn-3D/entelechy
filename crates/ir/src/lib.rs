@@ -130,6 +130,9 @@ pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
             Type::Vec2 => out.extend([Scalar::Float; 2]),
             Type::Vec3 => out.extend([Scalar::Float; 3]),
             Type::Vec4 => out.extend([Scalar::Float; 4]),
+            Type::Mat2 => out.extend([Scalar::Float; 4]),
+            Type::Mat3 => out.extend([Scalar::Float; 9]),
+            Type::Mat4 => out.extend([Scalar::Float; 16]),
             Type::Struct(index) => {
                 for field in &structs.get(index as usize)?.fields {
                     push(field.ty, structs, out)?;
@@ -328,10 +331,25 @@ impl BinaryOp {
     /// Result type of `a op b`, or `None` when the operands cannot combine.
     /// Arithmetic: vectors combine componentwise with vectors of the same
     /// size or with a float on either side; integers only with integers.
-    /// Comparisons take two scalars of one type and give `Bool`; equality
-    /// also compares `Bool`s. `&&` and `||` take `Bool`s. The bit
+    /// Matrices add and subtract with matrices of their order, scale by a
+    /// float, and multiply as matrices: `Mat * Mat`, `Mat * Vec` (a
+    /// column), `Vec * Mat` (a row). Comparisons take two scalars of one
+    /// type and give `Bool`; equality also compares `Bool`s, whole
+    /// vectors and whole matrices. `&&` and `||` take `Bool`s. The bit
     /// operators and shifts take two `Int`s.
     pub fn result_type(self, a: Type, b: Type) -> Option<Type> {
+        if a.order().is_some() || b.order().is_some() {
+            return match self {
+                Self::Add | Self::Sub if a == b => Some(a),
+                Self::Mul if a == b => Some(a),
+                Self::Mul if a.column() == Some(b) => Some(b),
+                Self::Mul if b.column() == Some(a) => Some(a),
+                Self::Mul if a == Type::Float => Some(b),
+                Self::Mul if b == Type::Float => Some(a),
+                Self::Equal | Self::NotEqual if a == b => Some(Type::Bool),
+                _ => None,
+            };
+        }
         match self {
             Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr | Self::Ushr => {
                 match (a, b) {
@@ -413,7 +431,17 @@ impl UnaryOp {
     /// Result type, or `None` when the operand does not fit.
     pub fn result_type(self, a: Type) -> Option<Type> {
         match (self, a) {
-            (Self::Neg, Type::Float | Type::Int | Type::Vec2 | Type::Vec3 | Type::Vec4) => Some(a),
+            (
+                Self::Neg,
+                Type::Float
+                | Type::Int
+                | Type::Vec2
+                | Type::Vec3
+                | Type::Vec4
+                | Type::Mat2
+                | Type::Mat3
+                | Type::Mat4,
+            ) => Some(a),
             (Self::Not, Type::Bool) => Some(Type::Bool),
             _ => None,
         }
@@ -525,11 +553,17 @@ pub enum Intrinsic {
     Mulhi,
     /// `umulhi(a, b)`: the high 32 bits of the unsigned 64-bit product.
     Umulhi,
+    /// The matrix with rows and columns exchanged.
+    Transpose,
+    /// The determinant of a matrix, a `Float`.
+    Determinant,
+    /// The inverse of a matrix; a singular matrix gives no finite numbers.
+    Inverse,
 }
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 50] = [
+    pub const ALL: [(Intrinsic, &'static str); 53] = [
         (Intrinsic::Floor, "floor"),
         (Intrinsic::Ceil, "ceil"),
         (Intrinsic::Round, "round"),
@@ -580,6 +614,9 @@ impl Intrinsic {
         (Intrinsic::Urem, "urem"),
         (Intrinsic::Mulhi, "mulhi"),
         (Intrinsic::Umulhi, "umulhi"),
+        (Intrinsic::Transpose, "transpose"),
+        (Intrinsic::Determinant, "determinant"),
+        (Intrinsic::Inverse, "inverse"),
     ];
 
     /// Source spelling.
@@ -656,6 +693,11 @@ impl Intrinsic {
             }
             Self::Mulhi => "The high 32 bits of the signed 64-bit product of a and b.",
             Self::Umulhi => "The high 32 bits of the unsigned 64-bit product of a and b.",
+            Self::Transpose => "The matrix with its rows and columns exchanged.",
+            Self::Determinant => "The determinant of a square matrix.",
+            Self::Inverse => {
+                "The matrix that multiplies m to the identity; a singular m gives no finite numbers."
+            }
         }
     }
 
@@ -680,6 +722,7 @@ impl Intrinsic {
             Self::Rotl | Self::Rotr => &["x", "n"],
             Self::Ult | Self::Udiv | Self::Urem | Self::Mulhi | Self::Umulhi => &["a", "b"],
             Self::Length | Self::Normalize => &["v"],
+            Self::Transpose | Self::Determinant | Self::Inverse => &["m"],
             _ => &["x"],
         }
     }
@@ -759,6 +802,8 @@ impl Intrinsic {
                 [Type::Int, Type::Int],
             ) => Some(Type::Int),
             (Self::Ult, [Type::Int, Type::Int]) => Some(Type::Bool),
+            (Self::Transpose | Self::Inverse, [m]) if m.order().is_some() => Some(*m),
+            (Self::Determinant, [m]) if m.order().is_some() => Some(Type::Float),
             _ => None,
         }
     }
@@ -849,14 +894,16 @@ pub enum Op {
     Unary(UnaryOp, ValueId),
     /// Binary operation.
     Binary(BinaryOp, ValueId, ValueId),
-    /// Build a vector from float components or a struct from its fields; the
-    /// instruction type says which.
+    /// Build a vector from float components, a matrix from its column
+    /// vectors, or a struct from its fields; the instruction type says
+    /// which.
     Construct(Vec<ValueId>),
-    /// Extract a float component from a vector, a field from a struct, or
-    /// an element of an array at a constant index.
+    /// Extract a float component from a vector, a column from a matrix,
+    /// a field from a struct, or an element of an array at a constant
+    /// index.
     Extract(ValueId, u32),
-    /// The element of an array at an `Int` index, clamped into the
-    /// array's range, as the array's element type.
+    /// The element of an array, the column of a matrix or the component
+    /// of a vector at an `Int` index, clamped into range.
     Subscript(ValueId, ValueId),
     /// Call a Kernel-defined function by index with arguments.
     Call(u32, Vec<ValueId>),

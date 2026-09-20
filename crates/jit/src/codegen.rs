@@ -27,6 +27,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module as _};
 use orla_abi::Type;
+use orla_cpu::matrix::{self, Arith};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
 
 use crate::offsets;
@@ -250,6 +251,28 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     })
 }
 
+/// The matrix formulas' arithmetic, as instructions.
+struct Ops<'a, 'b>(&'a mut FunctionBuilder<'b>);
+
+impl Arith for Ops<'_, '_> {
+    type V = Value;
+    fn add(&mut self, a: Value, b: Value) -> Value {
+        self.0.ins().fadd(a, b)
+    }
+    fn sub(&mut self, a: Value, b: Value) -> Value {
+        self.0.ins().fsub(a, b)
+    }
+    fn mul(&mut self, a: Value, b: Value) -> Value {
+        self.0.ins().fmul(a, b)
+    }
+    fn div(&mut self, a: Value, b: Value) -> Value {
+        self.0.ins().fdiv(a, b)
+    }
+    fn neg(&mut self, a: Value) -> Value {
+        self.0.ins().fneg(a)
+    }
+}
+
 /// The Cranelift type of each word of a value of `ty`.
 fn word_types(module: &Module, ty: Type) -> Vec<types::Type> {
     match ty {
@@ -258,6 +281,9 @@ fn word_types(module: &Module, ty: Type) -> Vec<types::Type> {
         Type::Vec2 => vec![types::F32; 2],
         Type::Vec3 => vec![types::F32; 3],
         Type::Vec4 => vec![types::F32; 4],
+        Type::Mat2 => vec![types::F32; 4],
+        Type::Mat3 => vec![types::F32; 9],
+        Type::Mat4 => vec![types::F32; 16],
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
@@ -667,7 +693,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Binary(op, a, b) => self.binary(*op, a, b),
             Op::Construct(parts) => {
-                if let Type::Struct(_) = ty {
+                if matches!(ty, Type::Struct(_)) || ty.order().is_some() {
                     parts.iter().flat_map(|part| self.words(part)).collect()
                 } else {
                     parts
@@ -692,6 +718,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                         let n = word_types(self.module, ty).len();
                         words[start..start + n].to_vec()
                     }
+                    other if other.order().is_some() => {
+                        let n = usize::from(other.order().unwrap_or(1));
+                        let start = *component as usize * n;
+                        words[start..start + n].to_vec()
+                    }
                     _ => vec![words[*component as usize]],
                 }
             }
@@ -703,7 +734,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                     Type::Struct(struct_index) => {
                         self.module.structs[struct_index as usize].fields.len()
                     }
-                    _ => 1,
+                    other => other.order().or(other.components()).map_or(1, usize::from),
                 };
                 let tys = word_types(self.module, ty);
                 let n = tys.len();
@@ -1151,6 +1182,19 @@ impl<'a, 'b> Fx<'a, 'b> {
     fn binary(&mut self, op: BinaryOp, a: &orla_ir::ValueId, b: &orla_ir::ValueId) -> Vec<Value> {
         let (ta, tb) = (self.ty(a), self.ty(b));
         let (wa, wb) = (self.words(a), self.words(b));
+        if op == BinaryOp::Mul && (ta.order().is_some() || tb.order().is_some()) {
+            let mut ops = Ops(&mut self.b);
+            return match (ta.order(), tb.order()) {
+                (Some(n), Some(_)) => matrix::mul_mat_mat(&mut ops, usize::from(n), &wa, &wb),
+                (Some(n), None) if tb != Type::Float => {
+                    matrix::mul_mat_vec(&mut ops, usize::from(n), &wa, &wb)
+                }
+                (None, Some(n)) if ta != Type::Float => {
+                    matrix::mul_vec_mat(&mut ops, usize::from(n), &wa, &wb)
+                }
+                _ => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().fmul(x, y)),
+            };
+        }
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul if ta == Type::Int => {
                 let (v, overflow) = match op {
@@ -1260,6 +1304,18 @@ impl<'a, 'b> Fx<'a, 'b> {
             w[0].iter().map(|v| f(fx, *v)).collect()
         };
         match intrinsic {
+            Intrinsic::Transpose => {
+                let n = usize::from(self.ty(&args[0]).order().unwrap_or(1));
+                matrix::transpose(n, &w[0])
+            }
+            Intrinsic::Determinant => {
+                let n = usize::from(self.ty(&args[0]).order().unwrap_or(1));
+                vec![matrix::determinant(&mut Ops(&mut self.b), n, &w[0])]
+            }
+            Intrinsic::Inverse => {
+                let n = usize::from(self.ty(&args[0]).order().unwrap_or(1));
+                matrix::inverse(&mut Ops(&mut self.b), n, &w[0])
+            }
             Intrinsic::Floor => map1(self, &mut |fx, v| fx.b.ins().floor(v)),
             Intrinsic::Ceil => map1(self, &mut |fx, v| fx.b.ins().ceil(v)),
             Intrinsic::Round => map1(self, &mut |fx, v| fx.b.ins().nearest(v)),

@@ -85,6 +85,20 @@ table, a ROM or a register file is written as data (the CHIP-8's font
 and the Thumb core's program are). Parameters stay plain values: an
 array never crosses the ABI.
 
+Matrices `Mat2`, `Mat3` and `Mat4` are square, of floats, stored by
+columns. `mat3(c0, c1, c2)` builds one from its column vectors (where
+each axis lands), `mat3(1.0)` puts a value down the diagonal, `m[i]` is
+a column (a literal index checked when the Kernel compiles, a computed
+one clamped) and `v[i]` a vector's component the same way. `m * v`
+applies a matrix to a column vector, `v * m` to a row vector, `m * m`
+composes, `m * f` and `f * m` scale, `+` and `-` take two matrices of
+one order, `-m` negates and `==` compares whole matrices; `transpose`,
+`determinant` and `inverse` are the builtins (a singular matrix's
+inverse holds no finite numbers). The GPU runs them as WGSL's own
+matrices; the interpreter and the JIT compute one formula in one order,
+so their words agree bit for bit, and the inverse on the GPU is that
+formula printed as a shader function.
+
 The math builtins are `floor`, `ceil`, `round`, `trunc`, `sign`,
 `fract`, `abs`, `sqrt`, `inversesqrt`, `sin`, `cos`, `tan`, `asin`,
 `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `exp`, `exp2`, `log`,

@@ -403,6 +403,20 @@ capability claim.
   [CHIP-8](examples/chip8/kernels/chip8.orla) and
   [Thumb](examples/thumb/kernels/thumb.orla) ROMs written as data.
 
+- Matrices `Mat2/3/4` are value types of the ABI, column-major floats,
+  with the operator table in [the IR](crates/ir/src/lib.rs) (`Mat * Mat`,
+  `Mat * Vec`, `Vec * Mat`, scaling, `+ -`, `==`) and three intrinsics
+  (`transpose`, `determinant`, `inverse`). The formulas live once, in
+  [`orla_cpu::matrix`](crates/cpu/src/matrix.rs), over a trait of the
+  four operations: the interpreter runs them on floats, the JIT feeds
+  them a Cranelift builder, and the GPU prints the inverse through them
+  as a WGSL function (the rest is WGSL's own), so the CPU and the JIT
+  agree bit for bit and the GPU to rounding. Proof: the
+  [feature matrix](crates/matrix/src/lib.rs),
+  [diagnostics](crates/compiler/tests/compile.rs), and the
+  [model example](examples/model/kernels/model.orla)'s orbit, one matrix
+  applied to every vertex and normal.
+
 - Backends implement [`Backend`](crates/runtime/src/lib.rs): `prepare` does
   the expensive work (the GPU backend compiles WGSL and builds the pipeline
   there), so `publish` is a pointer swap. GPU and CPU results agree within

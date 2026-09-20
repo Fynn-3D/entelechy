@@ -94,8 +94,51 @@ fn wgsl_type(ty: Type) -> String {
         Type::Vec2 => "vec2<f32>".into(),
         Type::Vec3 => "vec3<f32>".into(),
         Type::Vec4 => "vec4<f32>".into(),
+        Type::Mat2 => "mat2x2<f32>".into(),
+        Type::Mat3 => "mat3x3<f32>".into(),
+        Type::Mat4 => "mat4x4<f32>".into(),
         Type::Struct(index) => format!("S{index}"),
     }
+}
+
+/// Whether any function of the module takes the inverse of a matrix of
+/// the given type.
+fn inverts(module: &Module, ty: Type) -> bool {
+    fn walk(instructions: &[Instruction], ty: Type) -> bool {
+        instructions
+            .iter()
+            .any(|instruction| match &instruction.op {
+                Op::Intrinsic(Intrinsic::Inverse, _) => instruction.ty == ty,
+                Op::If {
+                    then, otherwise, ..
+                } => walk(&then.body, ty) || walk(&otherwise.body, ty),
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    arms.iter().any(|(_, block)| walk(&block.body, ty)) || walk(&otherwise.body, ty)
+                }
+                Op::Loop { until, body, .. } => {
+                    until.as_ref().is_some_and(|block| walk(&block.body, ty))
+                        || walk(&body.body, ty)
+                }
+                _ => false,
+            })
+    }
+    module
+        .functions
+        .iter()
+        .chain([&module.entry])
+        .chain(module.merge.iter())
+        .chain(module.init.iter())
+        .any(|function| walk(&function.body, ty))
+}
+
+/// `f(m[0]), f(m[1]), ...` over a matrix's columns, for the builtins
+/// WGSL has for vectors but not for matrices.
+fn per_column(ty: Type, f: impl Fn(usize) -> String) -> String {
+    let n = usize::from(ty.order().unwrap_or(0));
+    let columns = (0..n).map(f).collect::<Vec<_>>().join(", ");
+    format!("{}({columns})", wgsl_type(ty))
 }
 
 fn literal(value: &Value) -> String {
@@ -255,6 +298,28 @@ fn button_down(code: i32) -> bool {{
             ty.components().unwrap_or(1)
         );
     }
+    // The inverse of a matrix, which WGSL lacks: the adjugate over the
+    // determinant, in the order the interpreter and the JIT compute it.
+    // Only for the orders the Kernel inverts: the unrolled 4x4 costs the
+    // shader compiler a quarter of a second.
+    for ty in [Type::Mat2, Type::Mat3, Type::Mat4] {
+        if !inverts(module, ty) {
+            continue;
+        }
+        let name = wgsl_type(ty);
+        let n = usize::from(ty.order().unwrap_or(0));
+        let entries: Vec<&'static str> = (0..n * n)
+            .map(|k| &*Box::leak(format!("m[{}][{}]", k / n, k % n).into_boxed_str()))
+            .collect();
+        let inverse = orla_cpu::matrix::inverse(&mut orla_cpu::matrix::Text, n, &entries);
+        let _ = writeln!(
+            out,
+            "fn inverse_{n}(m: {name}) -> {name} {{
+    return {name}({});
+}}",
+            inverse.join(", ")
+        );
+    }
     // Rotations by a runtime count (WGSL refuses a shift by the width),
     // the high half of a 64-bit product from 16-bit halves, and unsigned
     // division through the signed one, which this GPU gets right where
@@ -399,6 +464,9 @@ pub fn type_words(module: &Module, ty: Type) -> usize {
         Type::Vec2 => 2,
         Type::Vec3 => 3,
         Type::Vec4 => 4,
+        Type::Mat2 => 4,
+        Type::Mat3 => 9,
+        Type::Mat4 => 16,
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
@@ -434,6 +502,12 @@ fn combine_expr(module: &Module, ty: Type, combine: Combine, a: &str, b: &str) -
                 .join(", ");
             format!("S{index}({fields})")
         }
+        _ if ty.order().is_some() => match combine {
+            Combine::Sum => format!("({a} + {b})"),
+            Combine::Min => per_column(ty, |c| format!("min({a}[{c}], {b}[{c}])")),
+            Combine::Max => per_column(ty, |c| format!("max({a}[{c}], {b}[{c}])")),
+            Combine::Last => b.to_owned(),
+        },
         _ => match combine {
             Combine::Sum => format!("({a} + {b})"),
             Combine::Min => format!("min({a}, {b})"),
@@ -503,6 +577,14 @@ fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Typ
             let n = ty.components().unwrap_or(4) as usize;
             for component in ["x", "y", "z", "w"].iter().take(n) {
                 out.push((format!("bitcast<u32>({path}.{component})"), Type::Float));
+            }
+        }
+        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
+            let n = usize::from(ty.order().unwrap_or(0));
+            for c in 0..n {
+                for r in 0..n {
+                    out.push((format!("bitcast<u32>({path}[{c}][{r}])"), Type::Float));
+                }
             }
         }
         Type::Struct(index) => {
@@ -1022,7 +1104,13 @@ pub fn reduce_bindings(module: &Module) -> (u32, u32, u32) {
 /// Whether a type is floats all the way down, so it can be interpolated.
 fn all_floats(module: &Module, ty: Type) -> bool {
     match ty {
-        Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4 => true,
+        Type::Float
+        | Type::Vec2
+        | Type::Vec3
+        | Type::Vec4
+        | Type::Mat2
+        | Type::Mat3
+        | Type::Mat4 => true,
         Type::Int | Type::Bool => false,
         Type::Struct(index) => module.structs[index as usize]
             .fields
@@ -1036,6 +1124,7 @@ fn all_floats(module: &Module, ty: Type) -> bool {
 fn mix_call(module: &Module, ty: Type, a: &str, b: &str, t: &str) -> String {
     match ty {
         Type::Struct(index) => format!("mix_S{index}({a}, {b}, {t})"),
+        _ if ty.order().is_some() => per_column(ty, |c| format!("mix({a}[{c}], {b}[{c}], {t})")),
         _ => {
             let _ = module;
             format!("mix({a}, {b}, {t})")
@@ -1222,6 +1311,14 @@ fn load_expr(
                 .join(", ");
             (format!("{}({parts})", wgsl_type(ty)), n)
         }
+        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
+            let n = usize::from(ty.order().unwrap_or(0));
+            let parts = (0..n * n)
+                .map(|k| format!("bitcast<f32>({})", word(offset + k)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (format!("{}({parts})", wgsl_type(ty)), n * n)
+        }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
             let mut parts = Vec::new();
@@ -1266,6 +1363,18 @@ fn store_lines(
                 ));
             }
             n
+        }
+        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
+            let n = usize::from(ty.order().unwrap_or(0));
+            for c in 0..n {
+                for r in 0..n {
+                    out.push(format!(
+                        "    out0[b + {}u] = bitcast<u32>({path}[{c}][{r}]);",
+                        offset + c * n + r
+                    ));
+                }
+            }
+            n * n
         }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
@@ -1382,10 +1491,15 @@ impl Emitter<'_> {
                     Type::Bool => format!("({slot}.x != 0.0)"),
                     Type::Vec2 => format!("{slot}.xy"),
                     Type::Vec3 => format!("{slot}.xyz"),
-                    Type::Vec4 | Type::Struct(_) => slot,
+                    Type::Vec4 | Type::Mat2 | Type::Mat3 | Type::Mat4 | Type::Struct(_) => slot,
                 }
             }
             Op::Arg(index) => format!("a{index}"),
+            // naga has no negation of a matrix; a scale by -1 flips the
+            // same bits.
+            Op::Unary(UnaryOp::Neg, a) if self.type_of(*a).order().is_some() => {
+                format!("({} * -1.0)", v(a))
+            }
             Op::Unary(UnaryOp::Neg, a) => format!("(-{})", v(a)),
             Op::Unary(UnaryOp::Not, a) => format!("(!{})", v(a)),
             Op::Binary(op, a, b) => {
@@ -1413,7 +1527,20 @@ impl Emitter<'_> {
                 // A whole-vector comparison folds the componentwise one; a
                 // shift takes its count unsigned, masked to the width.
                 let vector = self.type_of(*a).components().is_some();
+                let matrix = self.type_of(*a).order().map(usize::from);
                 match op {
+                    BinaryOp::Equal | BinaryOp::NotEqual if matrix.is_some() => {
+                        let n = matrix.unwrap_or(0);
+                        let same = (0..n)
+                            .map(|c| format!("all({}[{c}] == {}[{c}])", v(a), v(b)))
+                            .collect::<Vec<_>>()
+                            .join(" && ");
+                        if *op == BinaryOp::Equal {
+                            format!("({same})")
+                        } else {
+                            format!("(!({same}))")
+                        }
+                    }
                     BinaryOp::Rem if *ty != Type::Int => {
                         // Both operands at the result's width: a Float
                         // beside a vector broadcasts.
@@ -1453,6 +1580,8 @@ impl Emitter<'_> {
                         v(source),
                         field_path(self.module, index, *component as usize)
                     )
+                } else if self.type_of(*source).order().is_some() {
+                    format!("{}[{component}]", v(source))
                 } else {
                     format!(
                         "{}.{}",
@@ -1466,7 +1595,7 @@ impl Emitter<'_> {
                     Type::Struct(struct_index) => {
                         self.module.structs[struct_index as usize].fields.len()
                     }
-                    _ => 1,
+                    other => other.order().or(other.components()).map_or(1, usize::from),
                 };
                 format!("{}[clamp({}, 0, {})]", v(array), v(index), count - 1)
             }
@@ -1648,6 +1777,7 @@ impl Emitter<'_> {
             Intrinsic::Rotl => format!("rotl_i32({list})"),
             Intrinsic::Rotr => format!("rotr_i32({list})"),
             Intrinsic::Ult => format!("(u32({}) < u32({}))", v(&args[0]), v(&args[1])),
+            Intrinsic::Inverse => format!("inverse_{}({list})", ty.order().unwrap_or(0)),
             Intrinsic::Udiv => format!("i32(udiv_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
             Intrinsic::Urem => format!("i32(urem_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
             Intrinsic::Mulhi => format!("mulhi_i32({list})"),

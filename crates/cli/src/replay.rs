@@ -503,7 +503,9 @@ fn check_element(
         Type::Float | Type::Int | Type::Bool => 1,
         Type::Vec2 => 2,
         Type::Vec3 => 3,
-        Type::Vec4 => 4,
+        Type::Vec4 | Type::Mat2 => 4,
+        Type::Mat3 => 9,
+        Type::Mat4 => 16,
         Type::Struct(_) => {
             return Err("name a field of the struct; whole structs are not compared".into());
         }

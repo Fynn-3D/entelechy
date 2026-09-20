@@ -649,7 +649,7 @@ fn arrays_are_typed_built_indexed_and_checked() {
     let (_, message) = semantic(&format!("{head}let a = [1, 2]; return a[2]; }} }}"));
     assert_eq!(
         message,
-        "index 2 is outside `[Int; 2]`, whose elements are 0 to 1"
+        "index 2 is outside [Int; 2], whose indices are 0 to 1"
     );
     let (_, message) = semantic(&format!("{head}let a = [1, 2]; return a[1.5]; }} }}"));
     assert_eq!(message, "an array takes an Int index, found Float");
@@ -659,7 +659,10 @@ fn arrays_are_typed_built_indexed_and_checked() {
         "`[Int; 2]` is an array; take an element with `[index]`"
     );
     let (_, message) = semantic(&format!("{head}return i[0]; }} }}"));
-    assert_eq!(message, "`[index]` takes an element of an array, found Int");
+    assert_eq!(
+        message,
+        "`[index]` takes an element of an array, a column of a matrix or a component of a vector, found Int"
+    );
     let (_, message) = semantic(&format!("{head}let a = [1; 5000]; return a[0]; }} }}"));
     assert_eq!(message, "an array has 1 to 4096 elements, not 5000");
     let (_, message) = semantic(
@@ -669,4 +672,70 @@ fn arrays_are_typed_built_indexed_and_checked() {
         message,
         "parameters cross the ABI and cannot be structs or arrays; use plain values"
     );
+}
+
+#[test]
+fn matrices_are_built_from_columns_multiplied_and_checked() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; }
+            struct Frame { basis: Mat3; origin: Vec3; }
+            output r: Rows<Vec3>;
+            fn spin(a: Float) -> Mat2 { return mat2(vec2(cos(a), sin(a)), vec2(-sin(a), cos(a))); }
+            compute {
+                let i = element();
+                let m = mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, 2.0, 0.0), vec3(0.0, 0.0, 3.0));
+                let f = Frame { basis: m * transpose(m) + mat3(1.0) * 0.5, origin: vec3(1.0, 2.0, 3.0) };
+                let w = inverse(f.basis) * f.origin + f.origin * f.basis;
+                let s = spin(0.5) * vec2(1.0, 0.0);
+                let d = determinant(mat4(2.0)) + m[i % 3].x + m[2][2] + w[i % 3] + s.y;
+                return -m * w * d + (f.basis == m) * w;
+            } }",
+    );
+    let (_, message) = match module {
+        Ok(_) => panic!("a Bool times a Vec3 must be refused"),
+        Err(CompileError::Semantic { span, message }) => (span, message),
+        Err(other) => panic!("{other}"),
+    };
+    assert_eq!(message, "cannot apply `*` to Bool and Vec3");
+
+    let head = "kernel t.k@1 { requires { field.write; } output r: Rows<Float>; compute { let i = element(); ";
+    let ok = compile(&format!(
+        "{head}let m = mat2(vec2(1.0, 2.0), vec2(3.0, 4.0)); let n = mat3(1.0); let p = mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0)); return determinant(m) + determinant(n) + determinant(p) + (transpose(m) * 2.0 - m)[1].y + (2.0 * n)[i % 3][1] + (m * m)[0][0] + float(m != m); }} }}"
+    ))
+    .unwrap();
+    assert_eq!(ok.manifest.outputs[0].element(), Type::Float);
+    assert!(ok.to_string().contains("transpose("), "{ok}");
+    assert!(ok.to_string().contains("subscript"), "{ok}");
+
+    let (_, message) = semantic(&format!(
+        "{head}let m = mat2(vec3(1.0, 2.0, 3.0), vec2(0.0, 1.0)); return m[0].x; }} }}"
+    ));
+    assert_eq!(message, "`mat2` takes Vec2 columns, found Vec3");
+    let (_, message) = semantic(&format!("{head}let m = mat3(1); return m[0].x; }} }}"));
+    assert_eq!(
+        message,
+        "`mat3` takes 3 Vec3 columns, or one Float for the diagonal; found Int"
+    );
+    let (_, message) = semantic(&format!("{head}let m = mat2(1.0); return m[2].x; }} }}"));
+    assert_eq!(message, "index 2 is outside Mat2, whose indices are 0 to 1");
+    let (_, message) = semantic(&format!("{head}let m = mat2(1.0); return m.x; }} }}"));
+    assert_eq!(message, "Mat2 is a matrix; take a column with `[index]`");
+    let (_, message) = semantic(&format!(
+        "{head}let m = mat2(1.0); return (m * mat3(1.0))[0].x; }} }}"
+    ));
+    assert_eq!(message, "cannot apply `*` to Mat2 and Mat3");
+    let (_, message) = semantic(&format!(
+        "{head}let m = mat2(1.0); return (m + 1.0)[0].x; }} }}"
+    ));
+    assert_eq!(message, "cannot apply `+` to Mat2 and Float");
+    let (_, message) = semantic(&format!(
+        "{head}let m = mat2(1.0); return (m * vec3(1.0, 0.0, 0.0)).x; }} }}"
+    ));
+    assert_eq!(message, "cannot apply `*` to Mat2 and Vec3");
+    let (_, message) = semantic(&format!("{head}return determinant(vec2(1.0, 0.0)); }} }}"));
+    assert_eq!(message, "`determinant` cannot be applied to (Vec2)");
+    let (_, message) = semantic(&format!(
+        "{head}let v = vec3(1.0, 2.0, 3.0); return v[3]; }} }}"
+    ));
+    assert_eq!(message, "index 3 is outside Vec3, whose indices are 0 to 2");
 }

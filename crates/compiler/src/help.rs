@@ -24,13 +24,16 @@ pub struct Builtin {
     pub entry_only: bool,
 }
 
-const PLAIN: [Type; 6] = [
+const PLAIN: [Type; 9] = [
     Type::Float,
     Type::Int,
     Type::Bool,
     Type::Vec2,
     Type::Vec3,
     Type::Vec4,
+    Type::Mat2,
+    Type::Mat3,
+    Type::Mat4,
 ];
 
 /// The signatures of an intrinsic, found by asking its typing rule about
@@ -148,6 +151,9 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("vec2", "construction", &["vec2(x: Float, y: Float) -> Vec2", "vec2(x: Int, y: Int) -> Vec2"], "A vector from components; Int components widen to Float.", None, false),
         fixed("vec3", "construction", &["vec3(x: Float, y: Float, z: Float) -> Vec3", "vec3(x: Int, y: Int, z: Int) -> Vec3"], "A vector from components; Int components widen to Float.", None, false),
         fixed("vec4", "construction", &["vec4(x: Float, y: Float, z: Float, w: Float) -> Vec4", "vec4(x: Int, y: Int, z: Int, w: Int) -> Vec4"], "A vector from components; Int components widen to Float.", None, false),
+        fixed("mat2", "construction", &["mat2(c0: Vec2, c1: Vec2) -> Mat2", "mat2(diagonal: Float) -> Mat2"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
+        fixed("mat3", "construction", &["mat3(c0: Vec3, c1: Vec3, c2: Vec3) -> Mat3", "mat3(diagonal: Float) -> Mat3"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
+        fixed("mat4", "construction", &["mat4(c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4) -> Mat4", "mat4(diagonal: Float) -> Mat4"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
     ]);
     out
 }

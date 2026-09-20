@@ -145,6 +145,12 @@ pub enum Type {
     Vec3,
     /// Four floats.
     Vec4,
+    /// Two columns of two floats, column-major.
+    Mat2,
+    /// Three columns of three floats, column-major.
+    Mat3,
+    /// Four columns of four floats, column-major.
+    Mat4,
     /// A Kernel-defined record, by index into the module's struct table.
     /// Structs are internal to a Kernel: they never cross the ABI as
     /// parameters or ports.
@@ -161,7 +167,41 @@ impl Type {
             Self::Vec2 => "Vec2",
             Self::Vec3 => "Vec3",
             Self::Vec4 => "Vec4",
+            Self::Mat2 => "Mat2",
+            Self::Mat3 => "Mat3",
+            Self::Mat4 => "Mat4",
             Self::Struct(_) => "struct",
+        }
+    }
+
+    /// The order of a square matrix type: its columns, each a vector of
+    /// as many floats.
+    pub fn order(self) -> Option<u8> {
+        match self {
+            Self::Mat2 => Some(2),
+            Self::Mat3 => Some(3),
+            Self::Mat4 => Some(4),
+            _ => None,
+        }
+    }
+
+    /// The column type of a matrix type.
+    pub fn column(self) -> Option<Type> {
+        match self {
+            Self::Mat2 => Some(Self::Vec2),
+            Self::Mat3 => Some(Self::Vec3),
+            Self::Mat4 => Some(Self::Vec4),
+            _ => None,
+        }
+    }
+
+    /// The matrix type whose columns are this vector type.
+    pub fn matrix_of(self) -> Option<Type> {
+        match self {
+            Self::Vec2 => Some(Self::Mat2),
+            Self::Vec3 => Some(Self::Mat3),
+            Self::Vec4 => Some(Self::Mat4),
+            _ => None,
         }
     }
 
@@ -214,6 +254,9 @@ impl FromStr for Type {
             Self::Vec2,
             Self::Vec3,
             Self::Vec4,
+            Self::Mat2,
+            Self::Mat3,
+            Self::Mat4,
         ]
         .into_iter()
         .find(|ty| ty.name() == name)

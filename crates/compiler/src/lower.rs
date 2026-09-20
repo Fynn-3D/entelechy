@@ -99,11 +99,18 @@ fn array_type(
     Ok(Type::Struct((table.len() - 1) as u32))
 }
 
-/// Whether a type is an array, and of what.
-fn array_element(ty: Type, structs: &[StructDef]) -> Option<Type> {
+/// What `[index]` takes from a type, and how many there are: an array's
+/// element, a matrix's column, a vector's component.
+fn subscript_element(ty: Type, structs: &[StructDef]) -> Option<(Type, usize)> {
     match ty {
-        Type::Struct(index) => structs[index as usize].element,
-        _ => None,
+        Type::Struct(index) => {
+            let def = &structs[index as usize];
+            def.element.map(|element| (element, def.fields.len()))
+        }
+        _ => ty
+            .column()
+            .map(|column| (column, ty.order().unwrap_or(0) as usize))
+            .or_else(|| ty.components().map(|n| (Type::Float, n as usize))),
     }
 }
 
@@ -375,7 +382,14 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
 /// Whether a type is numbers all the way down: floats and ints, no Bool.
 fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
     match ty {
-        Type::Float | Type::Int | Type::Vec2 | Type::Vec3 | Type::Vec4 => true,
+        Type::Float
+        | Type::Int
+        | Type::Vec2
+        | Type::Vec3
+        | Type::Vec4
+        | Type::Mat2
+        | Type::Mat3
+        | Type::Mat4 => true,
         Type::Bool => false,
         Type::Struct(index) => structs[*index as usize]
             .fields
@@ -1051,6 +1065,12 @@ impl<'a> Builder<'a> {
                     drop(table);
                     return Ok(self.emit(field_ty, Op::Extract(inner, field as u32)));
                 }
+                if ty.order().is_some() {
+                    return Err(semantic(
+                        expr.span,
+                        format!("{ty} is a matrix; take a column with `[index]`"),
+                    ));
+                }
                 let count = ty.components().ok_or_else(|| {
                     semantic(
                         expr.span,
@@ -1109,18 +1129,14 @@ impl<'a> Builder<'a> {
             ExprKind::Subscript(array, index) => {
                 let array_id = self.value(array)?;
                 let array_ty = self.ty(array_id);
-                let Some(element) = array_element(array_ty, &self.structs()) else {
+                let Some((element, count)) = subscript_element(array_ty, &self.structs()) else {
                     return Err(semantic(
                         array.span,
                         format!(
-                            "`[index]` takes an element of an array, found {}",
+                            "`[index]` takes an element of an array, a column of a matrix or a component of a vector, found {}",
                             self.describe(array_ty)
                         ),
                     ));
-                };
-                let count = match array_ty {
-                    Type::Struct(index) => self.structs()[index as usize].fields.len(),
-                    _ => 0,
                 };
                 // A literal index is a field: checked here, free to run.
                 let literal = match &index.kind {
@@ -1136,7 +1152,7 @@ impl<'a> Builder<'a> {
                         return Err(semantic(
                             index.span,
                             format!(
-                                "index {literal} is outside `{}`, whose elements are 0 to {}",
+                                "index {literal} is outside {}, whose indices are 0 to {}",
                                 self.describe(array_ty),
                                 count - 1
                             ),
@@ -2054,6 +2070,54 @@ impl<'a> Builder<'a> {
                     parts.push(part);
                 }
                 Ok(self.emit(ty, Op::Construct(parts)))
+            }
+            "mat2" | "mat3" | "mat4" => {
+                let ty = match name {
+                    "mat2" => Type::Mat2,
+                    "mat3" => Type::Mat3,
+                    _ => Type::Mat4,
+                };
+                let order = ty.order().unwrap_or(0) as usize;
+                let column = ty.column().unwrap_or(Type::Float);
+                if args.len() == 1 {
+                    // One Float: that value down the diagonal.
+                    let diagonal = self.value(&args[0])?;
+                    if self.ty(diagonal) != Type::Float {
+                        return Err(semantic(
+                            args[0].span,
+                            format!(
+                                "`{name}` takes {order} {column} columns, or one Float for the diagonal; found {}",
+                                self.describe(self.ty(diagonal))
+                            ),
+                        ));
+                    }
+                    let zero = self.constant(0.0);
+                    let columns = (0..order)
+                        .map(|c| {
+                            let parts = (0..order)
+                                .map(|r| if r == c { diagonal } else { zero })
+                                .collect();
+                            self.emit(column, Op::Construct(parts))
+                        })
+                        .collect();
+                    return Ok(self.emit(ty, Op::Construct(columns)));
+                }
+                self.arity(name, args, order, span)?;
+                let mut columns = Vec::with_capacity(order);
+                for arg in args {
+                    let part = self.value(arg)?;
+                    if self.ty(part) != column {
+                        return Err(semantic(
+                            arg.span,
+                            format!(
+                                "`{name}` takes {column} columns, found {}",
+                                self.describe(self.ty(part))
+                            ),
+                        ));
+                    }
+                    columns.push(part);
+                }
+                Ok(self.emit(ty, Op::Construct(columns)))
             }
             "saturate" | "distance" | "radians" | "degrees" | "inversesqrt" | "mod" | "isnan"
             | "isinf" | "refract" => self.composed(name, args, span),

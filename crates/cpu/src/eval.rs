@@ -15,6 +15,8 @@ use std::fmt;
 use orla_abi::{Domain, Invocation, Scope, Type, Value};
 use orla_ir::{BinaryOp, Block, Function, Instruction, Intrinsic, Op, UnaryOp, Validated, ValueId};
 
+use crate::matrix::{self, Floats};
+
 use crate::ExecutionError;
 
 /// Integer arithmetic that cannot produce a value.
@@ -70,6 +72,14 @@ type F1 = fn(f32) -> f32;
 type F2 = fn(f32, f32) -> f32;
 type F3 = fn(f32, f32, f32) -> f32;
 
+/// The shapes a `*` on matrices takes.
+#[derive(Clone, Copy)]
+enum MatMul {
+    MatMat,
+    MatVec,
+    VecMat,
+}
+
 /// One compiled instruction. Offsets are relative to the running frame;
 /// `n` is a width in words; `sa`, `sb`, `sc` are operand strides, zero
 /// for a scalar broadcast beside a vector.
@@ -100,6 +110,22 @@ enum Instr {
         base: usize,
         index: usize,
         count: usize,
+        n: usize,
+    },
+    /// A matrix product of order `n`: `a * b`, the shapes by `kind`.
+    MatMul {
+        kind: MatMul,
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+    },
+    /// `transpose`, `determinant` or `inverse` of the order `n` matrix at
+    /// `src`.
+    Matrix {
+        op: Intrinsic,
+        dst: usize,
+        src: usize,
         n: usize,
     },
     Vector {
@@ -423,6 +449,9 @@ impl Shared {
             Type::Vec2 => 2,
             Type::Vec3 => 3,
             Type::Vec4 => 4,
+            Type::Mat2 => 4,
+            Type::Mat3 => 9,
+            Type::Mat4 => 16,
             Type::Float | Type::Int | Type::Bool => 1,
         }
     }
@@ -463,7 +492,9 @@ impl<'s> Program<'s> {
                     Type::Struct(index) => structs[index as usize].words,
                     Type::Vec2 => 2,
                     Type::Vec3 => 3,
-                    Type::Vec4 => 4,
+                    Type::Vec4 | Type::Mat2 => 4,
+                    Type::Mat3 => 9,
+                    Type::Mat4 => 16,
                     _ => 1,
                 };
             }
@@ -660,6 +691,25 @@ impl FunctionCompiler<'_> {
                 let dst = define(self);
                 let (ta, tb) = (self.ty(a), self.ty(b));
                 let (la, lb) = (self.loc(a), self.loc(b));
+                let product = match (op, ta.order(), tb.order()) {
+                    (BinaryOp::Mul, Some(n), Some(_)) => Some((MatMul::MatMat, n)),
+                    (BinaryOp::Mul, Some(n), None) if tb != Type::Float => {
+                        Some((MatMul::MatVec, n))
+                    }
+                    (BinaryOp::Mul, None, Some(n)) if ta != Type::Float => {
+                        Some((MatMul::VecMat, n))
+                    }
+                    _ => None,
+                };
+                if let Some((kind, n)) = product {
+                    return Some(Instr::MatMul {
+                        kind,
+                        dst: dst.at,
+                        a: la.at,
+                        b: lb.at,
+                        n: usize::from(n),
+                    });
+                }
                 match op {
                     BinaryOp::BitAnd
                     | BinaryOp::BitOr
@@ -757,7 +807,7 @@ impl FunctionCompiler<'_> {
             }
             Op::Construct(parts) => {
                 let dst = define(self);
-                if let Type::Struct(_) = ty {
+                if matches!(ty, Type::Struct(_)) || ty.order().is_some() {
                     Instr::Gather {
                         dst: dst.at,
                         parts: parts.iter().map(|part| self.loc(part)).collect(),
@@ -784,7 +834,7 @@ impl FunctionCompiler<'_> {
                     Type::Struct(index) => {
                         self.shared.structs[index as usize].field_offsets[*component as usize]
                     }
-                    _ => *component as usize,
+                    other => *component as usize * other.order().map_or(1, usize::from),
                 };
                 self.locs[slot] = Loc {
                     at: base.at + offset,
@@ -799,7 +849,7 @@ impl FunctionCompiler<'_> {
                     Type::Struct(struct_index) => self.shared.structs[struct_index as usize]
                         .field_offsets
                         .len(),
-                    _ => 1,
+                    other => other.order().or(other.components()).map_or(1, usize::from),
                 };
                 let dst = define(self);
                 Instr::Subscript {
@@ -1036,6 +1086,12 @@ impl FunctionCompiler<'_> {
             n,
         };
         match intrinsic {
+            Intrinsic::Transpose | Intrinsic::Determinant | Intrinsic::Inverse => Instr::Matrix {
+                op: intrinsic,
+                dst: dst.at,
+                src: loc(0),
+                n: usize::from(self.ty(&args[0]).order().unwrap_or(1)),
+            },
             Intrinsic::Floor => map1(f32::floor),
             Intrinsic::Ceil => map1(f32::ceil),
             Intrinsic::Round => map1(f32::round_ties_even),
@@ -1494,6 +1550,43 @@ impl<'p, 's> Machine<'p, 's> {
             } => {
                 let k = (s[fp + index] as i32).clamp(0, *count as i32 - 1) as usize;
                 s.copy_within(fp + base + k * n..fp + base + (k + 1) * n, fp + dst);
+            }
+            Instr::MatMul { kind, dst, a, b, n } => {
+                let floats = |at: usize, count: usize| -> Vec<f32> {
+                    s[fp + at..fp + at + count].iter().map(|w| f(*w)).collect()
+                };
+                let square = n * n;
+                let out = match kind {
+                    MatMul::MatMat => matrix::mul_mat_mat(
+                        &mut Floats,
+                        *n,
+                        &floats(*a, square),
+                        &floats(*b, square),
+                    ),
+                    MatMul::MatVec => {
+                        matrix::mul_mat_vec(&mut Floats, *n, &floats(*a, square), &floats(*b, *n))
+                    }
+                    MatMul::VecMat => {
+                        matrix::mul_vec_mat(&mut Floats, *n, &floats(*a, *n), &floats(*b, square))
+                    }
+                };
+                for (k, v) in out.iter().enumerate() {
+                    s[fp + dst + k] = v.to_bits();
+                }
+            }
+            Instr::Matrix { op, dst, src, n } => {
+                let m: Vec<f32> = s[fp + src..fp + src + n * n]
+                    .iter()
+                    .map(|w| f(*w))
+                    .collect();
+                let out = match op {
+                    Intrinsic::Transpose => matrix::transpose(*n, &m),
+                    Intrinsic::Inverse => matrix::inverse(&mut Floats, *n, &m),
+                    _ => vec![matrix::determinant(&mut Floats, *n, &m)],
+                };
+                for (k, v) in out.iter().enumerate() {
+                    s[fp + dst + k] = v.to_bits();
+                }
             }
             Instr::Vector { dst, parts } => {
                 for (k, (src, widen)) in parts.iter().enumerate() {
