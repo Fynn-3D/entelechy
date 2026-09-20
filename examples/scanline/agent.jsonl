@@ -8,10 +8,10 @@
 {"id": 8, "op": "prepare", "source": "// Scanlines: every other row of the picture darkened by `strength`.\nkernel scanline.effect@1 {\n    requires { field.read; field.write; }\n    input source: Image;\n    param strength: Float = 0.5;\n    output result: Image;\n    compute {\n        let c = sample(source);\n        let dark = icoord().y % 2 == 1;\n        return if dark { vec4(c.rgb * (1.0 - strength), c.a) } else { c };\n    }\n}\n"}
 {"id": 9, "op": "publish", "source": "// Scanlines: every other row of the picture darkened by `strength`.\nkernel scanline.effect@1 {\n    requires { field.read; field.write; }\n    input source: Image;\n    param strength: Float = 0.5;\n    output result: Image;\n    compute {\n        let c = sample(source);\n        let dark = icoord().y % 2 == 1;\n        return if dark { vec4(c.rgb * (1.0 - strength), c.a) } else { c };\n    }\n}\n", "expect": "absent"}
 {"id": 10, "op": "document"}
-{"id": 11, "op": "compose", "text": "// A picture, shown through the scanlines an agent added while it ran.\nuse \"kernels/\";\n\nnode picture: picture.draw@1 { domain = vec2(160, 120); }\nnode lines: scanline.effect@1 { source <- picture.result; strength = 0.5; }\n\noutput result <- lines.result;\n"}
+{"id": 11, "op": "compose", "text": "// A picture, shown through the scanlines an agent added while it ran.\nuse \"kernels/\";\n\nnode picture: picture.draw@1 { domain = vec2(160, 120); }\nnode scan: scanline.effect@1 { source <- picture.result; strength = 0.5; }\n\noutput result <- scan.result;\n"}
 {"id": 12, "op": "evaluate", "time": 0.0}
 {"id": 13, "op": "read", "format": "rgba32f"}
-{"id": 14, "op": "compose", "text": "// A picture, shown through the scanlines an agent added while it ran.\nuse \"kernels/\";\n\nnode picture: picture.draw@1 { domain = vec2(160, 120); }\nnode lines: scanline.effect@1 { source <- picture.result; strength = 0.8; }\n\noutput result <- lines.result;\n"}
+{"id": 14, "op": "compose", "text": "// A picture, shown through the scanlines an agent added while it ran.\nuse \"kernels/\";\n\nnode picture: picture.draw@1 { domain = vec2(160, 120); }\nnode scan: scanline.effect@1 { source <- picture.result; strength = 0.8; }\n\noutput result <- scan.result;\n"}
 {"id": 15, "op": "evaluate", "time": 0.0}
 {"id": 16, "op": "read", "format": "rgba32f"}
 {"id": 17, "op": "kernel", "kernel": "scanline.effect@1"}

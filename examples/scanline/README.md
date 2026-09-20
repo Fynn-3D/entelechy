@@ -15,7 +15,7 @@ protocol, one request a line, and this is what happened:
    unpublished; `publish` with `expect: "absent"`: `scanline.effect@1`
    exists now, in the running session.
 5. `document`, `compose`: it read the scene and wrote it back with a
-   `lines` node between the picture and the output; the scene reloaded.
+   `scan` node between the picture and the output; the scene reloaded.
 6. `evaluate`, `read`: every odd row is half as bright, the even rows
    untouched. `compose` again with `strength = 0.8`, `evaluate`, `read`:
    the odd rows at a fifth, and the evaluator fused the picture into the
@@ -35,5 +35,6 @@ cp -r examples/scanline /tmp/scanline
 ./target/release/orla serve /tmp/scanline/scene.osn < examples/scanline/agent.jsonl
 ```
 
-One thing the record shows an agent must know: `scan` cannot name a
-node, being the keyword of a scan Kernel, so the node is `lines`.
+The first take of this record named the node `lines`, because `scan`,
+the keyword of a scan Kernel, could not name a node; a node may take any
+word now, so the natural name stands.

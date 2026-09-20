@@ -134,10 +134,10 @@ asked for, and lacks an IR optimizer, a scheduler beyond one worker
 thread, WASM, async Kernels, state migration beyond `<~ from`, and
 packages; phase 5's domains are touched ahead of order (audio,
 geometry, simulation, machines). The record showed one thing an agent
-has to know: a keyword (`scan`) cannot name a node; the parser could
-take reserved words where a node name or a source reference is
-expected, since both are followed by `:` or `.`, a small grammar round
-if it bites again.
+had to know, a keyword (`scan`) could not name a node, and the grammar
+took that in: a node's name and a source reference accept any word,
+since the one follows `node` and precedes `:` and the other follows
+`<-`, `<~` or `from`.
 
 Where the platform stands: four modes on three backends, bit for bit
 between the CPU and the JIT and to rounding on the GPU, held by the

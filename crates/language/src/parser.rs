@@ -581,7 +581,9 @@ impl Parser {
     /// `name: kernel [id] { ... }` or `name: id@version { members }` after
     /// the `node` keyword.
     fn node(&mut self) -> Result<NodeDecl, ParseError> {
-        let name = self.ident("a node name")?;
+        // Any word names a node, a keyword too: the name follows `node`
+        // and precedes `:`, so `scan` or `input` is not mistaken there.
+        let name = self.raw_ident("a node name")?;
         self.expect_punct(":")?;
         if self.is_keyword("kernel") {
             let kernel = self.kernel(true)?;
@@ -668,9 +670,11 @@ impl Parser {
     }
 
     fn source_ref(&mut self) -> Result<SourceRef, ParseError> {
-        let first = self.ident("a source")?;
+        // A source follows `<-`, `<~` or `from`, so a node named by a
+        // keyword is read here as it was declared.
+        let first = self.raw_ident("a source")?;
         if self.eat_punct(".") {
-            let port = self.ident("an output port")?;
+            let port = self.raw_ident("an output port")?;
             Ok(SourceRef {
                 node: Some(first.value),
                 name: port.value,
@@ -1464,6 +1468,24 @@ kernel image.grayscale@1 {
 #[cfg(test)]
 mod document_tests {
     use super::*;
+
+    #[test]
+    fn a_node_may_take_a_keyword_for_its_name() {
+        let document = parse_document(
+            "node scan: kernel { requires { field.write; } output result: Rows<Int>; domain = 4; compute { return 0; } }
+             node input: kernel { requires { field.read; field.write; } input previous: Rows<Int> <- scan.result; output result: Rows<Int>; compute { return sample(previous); } }
+             output result <- input.result;",
+        )
+        .unwrap();
+        let names: Vec<&str> = document
+            .nodes
+            .iter()
+            .map(|n| n.name.value.as_str())
+            .collect();
+        assert_eq!(names, vec!["scan", "input"]);
+        let error = parse_document("node scan kernel { }").unwrap_err();
+        assert!(error.message.contains("`:`"), "{error}");
+    }
 
     #[test]
     fn document_structs_are_shared_by_every_kernel() {

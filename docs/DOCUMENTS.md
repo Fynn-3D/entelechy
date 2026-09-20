@@ -316,6 +316,11 @@ and its tests.
 
 ## Graph
 
+A node may take any word for its name, a keyword too (`node scan: …`,
+`… <- scan.result`), since the name follows `node` and a source follows
+`<-`, `<~` or `from`; a Kernel's own names (ports, parameters, values)
+cannot be keywords.
+
 ```text
 use "kernels/";                       // every .orla directly in the directory
 use "../shared/tonemap.orla";         // one library file
