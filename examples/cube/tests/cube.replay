@@ -1,0 +1,18 @@
+scene ../scene.osn
+
+# At time zero the cube is only tilted, so the picture is symmetric
+# about its middle column: the front face is in shade, the top face is
+# lit, the corners are background, an edge runs down column 81 and its
+# mirror down column 238, and a pixel and its mirror agree.
+frame 0.0
+expect 160 120 = 0.19 0.12 0.19 0.03      # the front face, in shade
+expect 160 60 = 0.52 0.66 0.19 0.03       # the top face, lit
+expect 2 2 = 0.06 0.07 0.1 0.01
+expect 317 237 = 0.06 0.07 0.1 0.01
+expect 160 40 = 0.06 0.07 0.1 0.01        # above the cube
+expect 110 120 = 0.19 0.12 0.19 0.03
+expect 209 120 = 0.19 0.12 0.19 0.03
+expect 100 80 = 0.52 0.66 0.19 0.03
+expect 219 80 = 0.52 0.66 0.19 0.03
+expect 81 120 = 0.95 0.9 0.78 0.12        # an edge
+expect 238 120 = 0.95 0.9 0.78 0.12       # its mirror

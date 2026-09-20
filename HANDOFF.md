@@ -190,6 +190,26 @@ are the ones below.
 2. `at`/`at_linear` addressing modes (wrap, mirror) when a seamless
    tiling example needs them; `at(g, mod(c, size(g)))` covers wrap
    today, only the linear seam cannot be composed.
+
+The play round after the three types (examples `ant`, `cube`,
+`tetris`, each replayed on the three backends) turned up, and fixed:
+`size(port)` in a domain expression took the source node's domain
+rather than the port's, so a scan's grid memory sized a consumer as
+rows (evaluate.rs `of_source`); a replay `expect` decoded an `IVec`
+field as floats (replay.rs); and Metal miscompiled a signed division
+of a sixteen-bit-narrowed dividend (`(x >>> 16) % 7` gave 8192 for
+zero; `udiv`/`urem` too), now guarded by `whole_*` in every integer
+division and pinned by the matrix's `narrow division` row. Language
+friction noted, not acted on: no `vec4(v3, w)` or `vec3(v2, z)`
+constructors and no swizzles, so every Mat4 built from a Mat3 and
+every `.xyz` spells the components (cube.orla `placed`, the ray's
+`o.x, o.y, o.z`); a graph `domain` cannot multiply a `Vec2` by an
+`Int` param, so `zoom` is a `Float` the Kernel converts (ant); a
+user function cannot shadow an intrinsic (`step` had to be `walk`);
+an `init` may read a memory with `at` (the ant's start does), which
+is right but undocumented. The tetris board clears lines with a
+20-iteration loop calling a 10-cell `full` test per cell only in the
+frame a piece lands, which the `if` keeps off every other frame.
 3. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, and a GPU
    session now hands its scans to the JIT, so a machine runs as native

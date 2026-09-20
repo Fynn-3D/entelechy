@@ -83,3 +83,13 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [text](text/README.md): text as rows of glyphs drawn by a Kernel through
   a font atlas the Host watches; a title, the whole font, and the pointer's
   x as digits; the font was baked from rows of bits by `run --save`.
+- [ant](ant/README.md): Langton's ant as a `scan` over a grid memory,
+  cells and headings as integer vectors, a direction table as an array;
+  the trail feeds back frame to frame.
+- [cube](cube/README.md): a cube ray-marched in its own space through
+  the inverse of its model matrix, its edges drawn from a corner table
+  and an edge table projected by `perspective * model`; matrices end to
+  end in one Kernel.
+- [tetris](tetris/README.md): the game with its pieces as a table of bit
+  masks, `[[Int; 4]; 7]`, and every cell question as integer vector
+  arithmetic; the replay clears a line.

@@ -1,0 +1,28 @@
+// blank (cells) and start (the ant) seed two memories that walk feeds
+// back frame to frame; view shows them.
+use "kernels/";
+
+param speed: Int = 250;            // steps per frame
+param zoom: Float = 4.0;
+
+node blank: ant.blank@1 { domain = vec2(96, 64); }
+node start: ant.start@1 { domain = 3; }
+node ticks: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = speed;
+    compute { return 0; }
+}
+node walk: ant.walk@1 {
+    ticks <- ticks.result;
+    cells <~ walk.cells from blank.result;
+    ant <~ walk.ant from start.result;
+}
+node view: ant.view@1 {
+    cells <- walk.cells;
+    ant <- walk.ant;
+    zoom = zoom;
+    domain = size(cells) * zoom;
+}
+
+output result <- view.result;

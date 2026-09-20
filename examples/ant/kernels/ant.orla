@@ -1,0 +1,63 @@
+// Langton's ant: a scan walks the ant over a grid memory, one step per
+// tick, flipping the cell it leaves; the grid and the ant's own cell are
+// memories that feed back frame to frame.
+struct Ant { at: IVec2; dir: Int; }
+type Cells = Grid<Int>;
+
+kernel ant.blank@1 {
+    requires { field.write; }
+    output result: Cells;
+    compute { return 0; }
+}
+
+// The ant's memory: x, y, and the way it faces (0 up, 1 right, 2 down, 3 left).
+kernel ant.start@1 {
+    requires { field.write; }
+    param x: Int = 48;
+    param y: Int = 32;
+    output result: Rows<Int>;
+    compute {
+        let i = element();
+        return if i == 0 { x } else if i == 1 { y } else { 0 };
+    }
+}
+
+// The rule: on a white cell turn right, on a black cell turn left; flip
+// the cell, step forward. The grid wraps.
+kernel ant.walk@1 {
+    requires { field.read; field.write; }
+    input ticks: Rows<Int>;
+    memory cells: Cells;
+    memory ant: Rows<Int>;
+    output result: Rows<Ant>;
+    scan with a = Ant { at: ivec2(at(ant, 0), at(ant, 1)), dir: at(ant, 2) } {
+        let moves = [ivec2(0, -1), ivec2(1, 0), ivec2(0, 1), ivec2(-1, 0)];
+        let color = at(cells, a.at);
+        put(cells, a.at, 1 - color);
+        let dir = (a.dir + if color == 0 { 1 } else { 3 }) % 4;
+        let size = isize(cells);
+        let next = (a.at + moves[dir] + size) % size;
+        put(ant, 0, next.x);
+        put(ant, 1, next.y);
+        put(ant, 2, dir);
+        return Ant { at: next, dir: dir };
+    }
+}
+
+// Pixels: black cells on parchment, the ant in red, `zoom` pixels a cell.
+kernel ant.view@1 {
+    requires { field.read; field.write; }
+    input cells: Cells;
+    input ant: Rows<Int>;
+    param zoom: Float = 4.0;
+    output result: Image;
+    compute {
+        let c = icoord() / int(zoom);
+        let here = ivec2(at(ant, 0), at(ant, 1));
+        let v = at(cells, c);
+        let color = if c == here { vec3(0.95, 0.3, 0.2) }
+            else if v == 1 { vec3(0.12, 0.12, 0.14) }
+            else { vec3(0.92, 0.9, 0.85) };
+        return vec4(color.x, color.y, color.z, 1.0);
+    }
+}

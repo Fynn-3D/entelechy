@@ -1,0 +1,11 @@
+// One Kernel: a cube marched in its own space and outlined by its edges.
+use "kernels/";
+
+param spin: Float = 0.6;
+
+node cube: cube.draw@1 {
+    domain = vec2(320, 240);
+    spin = spin;
+}
+
+output result <- cube.result;

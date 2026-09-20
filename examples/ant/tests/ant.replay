@@ -1,0 +1,24 @@
+scene ../scene.osn
+
+# One frame is 250 steps from the centre of a blank grid. The first step
+# flips (48, 32) and turns the ant right, to (49, 32); the second flips
+# (49, 32) and turns it down. Where 250 and 500 steps leave the ant, and
+# a few cells of the trail, are pinned so the three backends walk alike.
+frame 0.0
+expect walk.result[0].at = 49 32
+expect walk.result[0].dir = 1
+expect walk.result[1].at = 49 33
+expect walk.result[1].dir = 2
+expect walk.result[249].at = 51 37
+expect walk.result[249].dir = 0
+expect walk.cells[3120] = 1
+expect walk.cells[3121] = 0
+expect walk.cells[3217] = 1
+expect walk.cells[3024] = 1
+expect 194 130 = 0.12 0.12 0.14 0.02      # cell (48, 32), black
+expect 198 130 = 0.92 0.9 0.85 0.02       # cell (49, 32), white again
+expect 206 150 = 0.95 0.3 0.2 0.02        # cell (51, 37), the ant
+
+# The second frame walks on from the memories.
+frame 0.05
+expect walk.result[249].at = 54 28

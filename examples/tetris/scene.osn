@@ -1,0 +1,29 @@
+// start/empty seed the state and the board; step and board feed back;
+// draw shows them with the next piece beside the well.
+use "kernels/";
+
+param seed: Int = 7;
+param prefill: Int = 0;
+param cell: Float = 12.0;
+
+node start: tetris.start@1 { domain = 1; seed = seed; }
+node empty: tetris.empty@1 { domain = vec2(10, 20); prefill = prefill; }
+
+node step: tetris.step@1 {
+    previous <~ step.result from start.result;
+    board <~ board.result from empty.result;
+}
+
+node board: tetris.board@1 {
+    previous <~ board.result from empty.result;
+    game <- step.result;
+}
+
+node view: tetris.draw@1 {
+    board <- board.result;
+    game <- step.result;
+    cell = cell;
+    domain = vec2(16, 20) * cell;
+}
+
+output result <- view.result;
