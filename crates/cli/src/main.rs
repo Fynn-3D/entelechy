@@ -25,10 +25,12 @@ usage:
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
       Print the flattened graph and what would execute, fused groups marked.
   orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu]
-                         [--listen <host:port>]
+                         [--listen <host:port>] [--window <w>x<h>[@<scale>]]
       Serve the creation protocol: JSON requests on stdin, one response per
       line on stdout, and on every connection to --listen, where a client's
-      quit ends only its connection. See crates/cli/src/protocol.rs.";
+      quit ends only its connection. --window is what evaluations that name
+      no window see (the protocol's `window` op changes it). See
+      crates/cli/src/protocol.rs.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -422,6 +424,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut library = None;
     let mut scene = None;
     let mut listen = None;
+    let mut window = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -430,6 +433,12 @@ fn serve(args: &[String]) -> Result<(), String> {
                     .next()
                     .cloned()
                     .ok_or_else(|| "--backend needs a value".to_string())?;
+            }
+            "--window" => {
+                let text = iter
+                    .next()
+                    .ok_or_else(|| "--window needs <w>x<h> or <w>x<h>@<scale>".to_string())?;
+                window = Some(orla::parse_window(text)?);
             }
             "--listen" => {
                 listen = Some(
@@ -455,6 +464,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let scene = scene.ok_or_else(|| "serve needs a scene file".to_string())?;
     let runtime = Session::runtime_for(&backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
     let mut session = Session::open_with(&scene, library.as_deref(), runtime);
+    session.set_window(window);
     report_events(&session.sync());
     session.set_background(true);
     let (sink, requests) = std::sync::mpsc::channel();

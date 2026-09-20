@@ -24,7 +24,8 @@
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
 //! | `retire` | `kernel` (the Kernel's id) | retired |
 //! | `param` | `name`, `value` | ok |
-//! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
+//! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `window`? (`[w, h]` in pixels), `scale`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
+//! | `window` | `size` (`[w, h]` in pixels, or null for none), `scale`? | the window a headless session reports to evaluations that name none |
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
 //! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `reset` | | ok |
@@ -442,15 +443,20 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             let number_at = |list: &Vec<Json>, index: usize| {
                 list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
             };
+            // The window: the request's, else the session's, else none.
+            let (window, scale) = match request.get("window").and_then(Json::as_array) {
+                Some(w) => (
+                    [number_at(w, 0), number_at(w, 1)],
+                    request.get("scale").and_then(Json::as_f64).unwrap_or(1.0) as f32,
+                ),
+                None => session.window().unwrap_or(([0.0, 0.0], 1.0)),
+            };
             let mut context = Context {
                 time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0) as f32,
                 rate: request.get("rate").and_then(Json::as_f64).unwrap_or(0.0) as f32,
                 input: InputState::default(),
-                window: request
-                    .get("window")
-                    .and_then(Json::as_array)
-                    .map_or([0.0, 0.0], |w| [number_at(w, 0), number_at(w, 1)]),
-                scale: request.get("scale").and_then(Json::as_f64).unwrap_or(1.0) as f32,
+                window,
+                scale,
             };
             if let Some(pointer) = request.get("pointer").and_then(Json::as_array) {
                 context.input.pointer = [
@@ -649,6 +655,42 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "reset" => {
             session.reset_state();
             Ok(json!({ "reset": true }))
+        }
+        "window" => {
+            let window = match request.get("size") {
+                None | Some(Json::Null) => None,
+                Some(Json::Array(size)) if size.len() == 2 => {
+                    let side = |index: usize| {
+                        size.get(index)
+                            .and_then(Json::as_f64)
+                            .filter(|v| *v >= 1.0)
+                            .map(|v| v as f32)
+                    };
+                    let scale = request
+                        .get("scale")
+                        .map_or(Some(1.0), Json::as_f64)
+                        .filter(|s| *s > 0.0)
+                        .ok_or_else(|| failure("`scale` must be a positive number"))?;
+                    match (side(0), side(1)) {
+                        (Some(w), Some(h)) => Some(([w, h], scale as f32)),
+                        _ => {
+                            return Err(failure(
+                                "`size` is `[width, height]` in whole pixels, each at least one",
+                            ));
+                        }
+                    }
+                }
+                Some(_) => {
+                    return Err(failure(
+                        "`size` is `[width, height]` in pixels, or null for no window",
+                    ));
+                }
+            };
+            session.set_window(window);
+            Ok(match window {
+                Some((size, scale)) => json!({ "window": size, "scale": scale }),
+                None => json!({ "window": Json::Null }),
+            })
         }
         "pin" => {
             let node = text_field("node")?;

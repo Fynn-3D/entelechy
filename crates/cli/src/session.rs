@@ -347,6 +347,9 @@ pub struct Session {
     assets: BTreeMap<String, Asset>,
     /// Inputs written as text, with the text each holds.
     texts: BTreeMap<String, String>,
+    /// The window a headless session reports when an evaluation names
+    /// none: its size in pixels and its scale factor.
+    window: Option<([f32; 2], f32)>,
     /// Replacements of running Kernels the runtime is still preparing.
     pending: BTreeMap<KernelId, PendingPublish>,
 }
@@ -405,6 +408,7 @@ impl Session {
             externals: BTreeMap::new(),
             assets: BTreeMap::new(),
             texts: BTreeMap::new(),
+            window: None,
         }
     }
 
@@ -1331,6 +1335,17 @@ impl Session {
     /// sources on the next evaluation.
     pub fn reset_state(&mut self) {
         self.evaluator.reset_state(&mut self.runtime);
+    }
+
+    /// Sets the window a headless session reports when an evaluation names
+    /// none: the size in pixels and the scale factor; `None` for no window.
+    pub fn set_window(&mut self, window: Option<([f32; 2], f32)>) {
+        self.window = window;
+    }
+
+    /// The window a headless session reports, if one was set.
+    pub fn window(&self) -> Option<([f32; 2], f32)> {
+        self.window
     }
 
     /// Enables or disables fusion of pointwise chains.

@@ -485,3 +485,67 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
     assert!(child.wait().unwrap().success());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_headless_session_takes_a_window_for_window_shaped_scenes() {
+    let dir = scratch_in("-window");
+    std::fs::write(
+        dir.join("window.osn"),
+        "node fill: kernel { requires { field.write; input.read; } output result: Image; domain = window(); compute { let w = window(); return vec4(w.x / 100.0, scale(), 0.0, 1.0); } }
+output result <- fill.result;
+",
+    )
+    .unwrap();
+    let responses = talk(
+        &dir.join("window.osn"),
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "window", "size": [8, 4], "scale": 2 }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 4, "op": "read", "format": "rgba32f" }),
+            json!({ "id": 5, "op": "evaluate", "time": 0.2, "window": [6, 3] }),
+            json!({ "id": 6, "op": "window", "size": null }),
+            json!({ "id": 7, "op": "evaluate", "time": 0.3 }),
+            json!({ "id": 8, "op": "window", "size": [0, 4] }),
+        ],
+    );
+    assert!(
+        responses[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no window"),
+        "{}",
+        responses[0]
+    );
+    assert_eq!(responses[1]["ok"]["window"], json!([8.0, 4.0]));
+    assert_eq!(responses[2]["ok"]["outputs"][0]["width"], 8);
+    assert_eq!(responses[2]["ok"]["outputs"][0]["height"], 4);
+    let bytes = {
+        let data = responses[3]["ok"]["data"].as_str().unwrap();
+        orla::protocol::unbase64(data).unwrap()
+    };
+    let first = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let second = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    assert_eq!(
+        (first, second),
+        (0.08, 2.0),
+        "window() and scale() reach the Kernel"
+    );
+    // A window on the request wins over the session's; none, and the
+    // scene cannot be sized again.
+    assert_eq!(responses[4]["ok"]["outputs"][0]["width"], 6);
+    assert_eq!(responses[5]["ok"]["window"], Json::Null);
+    assert!(
+        responses[6]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no window")
+    );
+    assert!(
+        responses[7]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at least one")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

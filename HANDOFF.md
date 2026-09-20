@@ -31,6 +31,12 @@ order, floats included), which the GPU honours by applying the pairs in one
 invocation after a parallel map, rather than with atomics: exact and slow
 for very many sources, and a place to optimise later without changing any
 result (int `sum`, `min`, `max`, and `last` by index are order-free); the
+the CPU compiles a module to word code on every execution because that
+was measured at 2 to 40 microseconds per Kernel against milliseconds of
+running (voxel, raymarch, life), so no compiled program is cached across
+frames; a headless session's window is the session's (`serve --window`,
+the `window` op) unless an `evaluate` names one, and the Player's is the
+person's;
 scatter's `min` and `max` order floats by their bits' total order on both
 backends so the GPU may use atomics, and only a float `sum` still walks
 the pairs in one invocation (a deterministic parallel float sum needs a
@@ -70,21 +76,17 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-The remaining items are small and independent; take them in this order
-unless the user picks. First, measure before touching: the CPU compiles
-a module to word-addressed code on every execution (`Program::new` in
-`crates/cpu/src/eval.rs`); time a frame of the voxel scene with the
-compile step counted separately, and only if it is more than a few
-percent, keep the compiled code in the CPU's `Prepared` (compile once
-per Kernel version, bind inputs per execution). Second, `window()` in
-the headless `serve`: a `window` op, or a `--window` flag on `serve`, so
-a headless session sizes window-shaped scenes without the client passing
-`window` on every `evaluate` (the web bridge does today). Third, a
-parallel float `sum` for scatter that keeps the element order: sort the
-pairs by address (a GPU radix or bitonic sort over the pair buffer),
-then a segmented fold in element order per cell; the particles example
-would leave the sequential path. Fourth, a Godot bridge to make three,
-in GDScript, speaking the socket as the Blender one does.
+A parallel float `sum` for scatter that keeps the element order, so the
+particles example leaves the sequential path: sort the pairs by address
+with the source index as the tie-breaker (a bitonic sort over the pair
+buffer, log-squared passes of one small pipeline, or a radix sort), then
+one invocation per target element folds its run of pairs in that order.
+Acceptance: the parity test's float sum matches the CPU bit for bit as
+it does today, and a scatter of a hundred thousand particles on the GPU
+takes a few milliseconds where the sequential walk takes tens. After
+that, a Godot bridge to make three (`/usr/local/bin/godot` is installed),
+in GDScript, speaking the socket as the Blender one does and tested with
+Godot headless.
 
 ## Open
 
