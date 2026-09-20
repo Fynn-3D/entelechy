@@ -12,9 +12,10 @@ The previous implementation at `../bak/orla` is a read-only reference.
 
 Layering as decided: the runtime crates and the `orla` CLI take no external
 dependencies; the interface layer (L8: `cli`, `player`, `import`, `export`,
-`jit`) is the only place that may (player: winit, softbuffer, cpal, gilrs;
-gpu: wgpu; import: symphonia; export: none; jit: cranelift 0.131, the
-newest that builds on Rust 1.93, and the one crate with `unsafe`). Crates are named by what they are, not by
+`jit`, `ffi`) is the only place that may (player: winit, softbuffer, cpal,
+gilrs; gpu: wgpu; import: symphonia; export: none; jit: cranelift 0.131,
+the newest that builds on Rust 1.93; ffi: none). `jit` and `ffi` are the
+two crates with `unsafe`. Crates are named by what they are, not by
 layer. Bridges live in `bridges/<program>/` in that program's language, outside
 the workspace, speaking only the protocol and the Host's file formats.
 
@@ -65,7 +66,13 @@ registers), keeps `unsafe` to the one crate that calls the code it made
 compiled module per Kernel version, freed with it; a reduction's `merge`
 is compiled with its two values passed through pointers (its words vary
 by Kernel, a native call from Rust cannot), and the fold and a scatter's
-apply are the CPU crate's loops so the three backends stay one rule.
+apply are the CPU crate's loops so the three backends stay one rule; the
+C ABI (`orla-ffi`) is blocking and single-threaded per session, its
+strings owned by the session until the next call and a Field's words
+until the next evaluate, request or close (the Host may release them),
+its header written by hand rather than generated so no build dependency
+comes in, and the whole protocol reachable through one `orla_request`
+so the fast path stays ten functions.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -83,7 +90,12 @@ bridge is tested by `node bridges/web/test.mjs` after `cargo build
 --release`: it serves the text and voxel examples itself and drives
 `bridges/web/test.html` in a headless Chrome over the DevTools protocol
 (the `--dump-dom` shortcut does not wait for asynchronous work in the
-new headless mode, which is why a runner exists). The Godot bridge is
+new headless mode, which is why a runner exists). The C ABI is tested by
+`cargo test -p orla-ffi` (in the workspace run) and by hand with
+`cc bridges/c/hello.c -Icrates/ffi/include -Ltarget/release -lorla_ffi`
+then `DYLD_LIBRARY_PATH=target/release ./a.out examples/text/scene.osn
+jit`, which prints the picture's size, a pixel before and after a
+publish. The Godot bridge is
 tested by `godot --headless --path bridges/godot -s test.gd` after
 `cargo build --release` (`/usr/local/bin/godot`, 4.6): the script spawns
 the text, voxel and mesh sessions through `OS.execute_with_pipe`, reads
@@ -112,9 +124,18 @@ tree, a scatter applies with the CPU crate's combine rule), so
 `--backend jit` never falls back to the interpreter. Back to the
 platform. The third bridge, Godot, is in (`bridges/godot`: an
 `OrlaView` Control as the window, params as controls, an `ArrayMesh`
-from rows, tested headless with the sessions spawned by Godot itself).
+from rows, tested headless with the sessions spawned by Godot itself),
+and so is the in-process door: `orla-ffi`, a C ABI over the session
+(`crates/ffi/include/orla.h`, `bridges/c/hello.c` links it), the
+Fields read where they lie.
 
-1. What a session of play turns up: the voxel editor and the showcase
+1. A GDExtension for Godot over `orla-ffi`, so the Godot bridge's
+   per-frame PPM over the socket becomes an `Image` built on the Host's
+   words in the same process; `bridges/godot` stays as the protocol
+   client.
+2. The whole verification on a Linux machine (Cranelift on x86, a
+   non-Apple GPU, the C ABI's `.so`).
+3. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, the GPU scan
    is one thread (a machine belongs on the JIT).
 

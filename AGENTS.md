@@ -292,10 +292,11 @@ authored `tests/`. Demo-specific documentation belongs in that directory. Follow
 `examples/README.md`; do not add flat examples or a redundant project manifest.
 Keep the runtime crates (host, abi, ir, compiler, language, cpu, gpu, runtime,
 graph, and the `orla` CLI) free of external dependencies; the interface layer
-(the Player, `orla-import`, `orla-export`, `orla-jit`) is the only place that
-may take them, for devices, for formats that are not worth decoding twice,
-and for a code generator. `orla-jit` is also the one crate allowed `unsafe`:
-it calls the code it produces, and nothing else.
+(the Player, `orla-import`, `orla-export`, `orla-jit`, `orla-ffi`) is the
+only place that may take them, for devices, for formats that are not worth
+decoding twice, and for a code generator. `orla-jit` and `orla-ffi` are the
+two crates allowed `unsafe`: the JIT calls the code it produces, the FFI
+reads the pointers and strings a C caller hands it, and nothing else.
 Bridges to other programs live in `bridges/<program>/`, written in that
 program's own language (Blender's Python, a browser's JavaScript, Godot's
 GDScript), outside the Rust workspace; they

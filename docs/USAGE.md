@@ -223,6 +223,30 @@ every evaluate), with the graph's params as controls and a Kernel's rows
 pulled out as an `ArrayMesh`. A bridge is a client in its host's
 language, outside the workspace, speaking only the public contracts.
 
+## In your own process
+
+The same session is a library: `orla-ffi` builds `liborla_ffi`
+(a dynamic and a static library) behind the C header
+[`crates/ffi/include/orla.h`](../crates/ffi/include/orla.h), ten
+functions any language binds. A host opens a scene on a backend,
+evaluates it under its own input (time, pointer, buttons, keys, the
+window and its scale), and reads an output or a pinned node as a
+pointer into the Host's words with its extent, stride, shape and schema:
+a picture is RGBA32F in place, ready for a texture, no socket and no
+encoding. `orla_request` takes one line of the protocol and returns its
+answer, so params, publishing, composing and resets are there too.
+
+```sh
+cargo build --release -p orla-ffi
+cc bridges/c/hello.c -Icrates/ffi/include -Ltarget/release -lorla_ffi -o hello
+DYLD_LIBRARY_PATH=target/release ./hello examples/text/scene.osn jit
+```
+
+[`bridges/c`](../bridges/c/README.md) is that example. A pointer the
+library returns belongs to the session until the next call; a Field's
+words until the next evaluate, request or close; one thread at a time
+per session.
+
 ## Creation protocol
 
 Agents drive a session over stdin and stdout with JSON lines:

@@ -57,6 +57,11 @@ The source `kernel` returns is what `publish` takes, for a node's inline
 Kernel too: the id the node gave it is written in and the node's `domain`
 left out, so an agent may fetch, edit, and republish any Kernel it sees.
 
+The same operations are reachable inside a process that loads Orla as a
+library: `orla_request` in [`orla.h`](../crates/ffi/include/orla.h) takes
+one line and returns its answer, beside the C functions that evaluate
+and read Fields in place.
+
 Operations, fields, and results are listed in
 [the protocol module](../crates/cli/src/protocol.rs), which is the
 authoritative definition; [the end-to-end test](../crates/cli/tests/protocol.rs)

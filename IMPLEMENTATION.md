@@ -30,6 +30,7 @@ capability claim.
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
 | Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [end-to-end client test](crates/cli/tests/protocol.rs) |
+| C ABI host | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
 | Player | [window loop](crates/player/src/main.rs), [CPU blit](crates/player/src/lib.rs), [device presenter](crates/gpu/src/present.rs) | Presentation unit tests, blit shader compile test; [material ball](examples/material-ball/README.md) for the live loop |
 
 ## Contracts worth knowing
@@ -326,6 +327,22 @@ capability claim.
   from two nodes' rows, the graph's params as controls, checked by
   [its test](bridges/godot/test.gd), which spawns the sessions itself
   through Godot's pipes; bridges are clients outside the workspace.
+- The same session is a library in another program's process:
+  `orla-ffi` ([crate](crates/ffi), [header](crates/ffi/include/orla.h))
+  builds a `cdylib` and a `staticlib` with ten `extern "C"` functions
+  over `Session`: open a scene on a backend, evaluate under a
+  `#[repr(C)]` input (time, pointer, buttons as bits, keys as bits,
+  window and scale), read an output's or a pinned node's Field as a
+  pointer into the Host's words with its extent, stride, shape and
+  schema (a picture is RGBA32F in place, no PPM and no copy), the last
+  report as JSON, and one protocol line in and one out for everything
+  else. Strings belong to the session until the next call, a Field's
+  words until the next evaluate, request or close; one thread at a time
+  per session; every entry catches a panic and reports it as an error;
+  a NULL session is inert. The header is written by hand, no generator.
+  The tests drive the functions from Rust as C would, and
+  [`bridges/c/hello.c`](bridges/c/hello.c) links the library from C
+  ([ffi](crates/ffi/src/lib.rs), [tests](crates/ffi/tests/abi.rs)).
 - Models and compressed sounds come in through a tool: `orla-import`
   ([crate](crates/import)) sits in the interface layer beside the CLI and
   the Player, the only layer that takes dependencies. `import` reads
