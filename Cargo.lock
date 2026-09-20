@@ -1739,6 +1739,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orla-ffi"
+version = "0.1.0"
+dependencies = [
+ "orla",
+ "orla-abi",
+ "orla-graph",
+]
+
+[[package]]
 name = "orla-gpu"
 version = "0.1.0"
 dependencies = [
