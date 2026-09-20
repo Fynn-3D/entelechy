@@ -140,6 +140,7 @@ enum Instr {
     INeg {
         dst: usize,
         src: usize,
+        n: usize,
     },
     Not {
         dst: usize,
@@ -158,7 +159,10 @@ enum Instr {
         op: BinaryOp,
         dst: usize,
         a: usize,
+        sa: usize,
         b: usize,
+        sb: usize,
+        n: usize,
     },
     FCmp {
         op: BinaryOp,
@@ -183,6 +187,7 @@ enum Instr {
         dst: usize,
         a: usize,
         b: usize,
+        n: usize,
         negate: bool,
     },
     And {
@@ -225,6 +230,7 @@ enum Instr {
         f: fn(i32) -> i32,
         dst: usize,
         src: usize,
+        n: usize,
     },
     /// An integer operation that may fail, a division by zero say.
     IMap2Checked {
@@ -237,21 +243,29 @@ enum Instr {
         f: fn(i32, i32) -> i32,
         dst: usize,
         a: usize,
+        sa: usize,
         b: usize,
+        sb: usize,
+        n: usize,
     },
     IClamp {
         dst: usize,
         v: usize,
         low: usize,
+        sl: usize,
         high: usize,
+        sh: usize,
+        n: usize,
     },
     ToFloat {
         dst: usize,
         src: usize,
+        n: usize,
     },
     ToInt {
         dst: usize,
         src: usize,
+        n: usize,
     },
     Dot {
         dst: usize,
@@ -449,6 +463,8 @@ impl Shared {
             Type::Vec2 => 2,
             Type::Vec3 => 3,
             Type::Vec4 => 4,
+            Type::IVec2 => 2,
+            Type::IVec3 => 3,
             Type::Mat2 => 4,
             Type::Mat3 => 9,
             Type::Mat4 => 16,
@@ -490,8 +506,8 @@ impl<'s> Program<'s> {
                 field_offsets.push(words);
                 words += match field.ty {
                     Type::Struct(index) => structs[index as usize].words,
-                    Type::Vec2 => 2,
-                    Type::Vec3 => 3,
+                    Type::Vec2 | Type::IVec2 => 2,
+                    Type::Vec3 | Type::IVec3 => 3,
                     Type::Vec4 | Type::Mat2 => 4,
                     Type::Mat3 => 9,
                     Type::Mat4 => 16,
@@ -670,8 +686,12 @@ impl FunctionCompiler<'_> {
             Op::Unary(UnaryOp::Neg, a) => {
                 let dst = define(self);
                 let src = self.loc(a).at;
-                if ty == Type::Int {
-                    Instr::INeg { dst: dst.at, src }
+                if ty == Type::Int || ty.int_components().is_some() {
+                    Instr::INeg {
+                        dst: dst.at,
+                        src,
+                        n: dst.n,
+                    }
                 } else {
                     Instr::FNeg {
                         dst: dst.at,
@@ -720,19 +740,25 @@ impl FunctionCompiler<'_> {
                         op: *op,
                         dst: dst.at,
                         a: la.at,
+                        sa: self.stride(a, dst.n),
                         b: lb.at,
+                        sb: self.stride(b, dst.n),
+                        n: dst.n,
                     },
                     BinaryOp::Add
                     | BinaryOp::Sub
                     | BinaryOp::Mul
                     | BinaryOp::Div
                     | BinaryOp::Rem => {
-                        if ta == Type::Int {
+                        if ta == Type::Int || ty.int_components().is_some() {
                             Instr::IBin {
                                 op: *op,
                                 dst: dst.at,
                                 a: la.at,
+                                sa: self.stride(a, dst.n),
                                 b: lb.at,
+                                sb: self.stride(b, dst.n),
+                                n: dst.n,
                             }
                         } else {
                             let f: F2 = match op {
@@ -776,11 +802,14 @@ impl FunctionCompiler<'_> {
                     }
                     BinaryOp::Equal | BinaryOp::NotEqual => {
                         let negate = *op == BinaryOp::NotEqual;
-                        if matches!(ta, Type::Int | Type::Bool) && tb == ta {
+                        if (matches!(ta, Type::Int | Type::Bool) || ta.int_components().is_some())
+                            && tb == ta
+                        {
                             Instr::IEq {
                                 dst: dst.at,
                                 a: la.at,
                                 b: lb.at,
+                                n: la.n,
                                 negate,
                             }
                         } else {
@@ -807,7 +836,10 @@ impl FunctionCompiler<'_> {
             }
             Op::Construct(parts) => {
                 let dst = define(self);
-                if matches!(ty, Type::Struct(_)) || ty.order().is_some() {
+                if matches!(ty, Type::Struct(_))
+                    || ty.order().is_some()
+                    || ty.int_components().is_some()
+                {
                     Instr::Gather {
                         dst: dst.at,
                         parts: parts.iter().map(|part| self.loc(part)).collect(),
@@ -849,7 +881,10 @@ impl FunctionCompiler<'_> {
                     Type::Struct(struct_index) => self.shared.structs[struct_index as usize]
                         .field_offsets
                         .len(),
-                    other => other.order().or(other.components()).map_or(1, usize::from),
+                    other => other
+                        .order()
+                        .or(other.lanes().map(|(n, _)| n))
+                        .map_or(1, usize::from),
                 };
                 let dst = define(self);
                 Instr::Subscript {
@@ -1058,7 +1093,24 @@ impl FunctionCompiler<'_> {
     fn intrinsic(&self, intrinsic: Intrinsic, args: &[ValueId], dst: Loc) -> Instr {
         let n = dst.n;
         let loc = |i: usize| self.loc(&args[i]).at;
-        let is_int = |i: usize| self.ty(&args[i]) == Type::Int;
+        let is_int = |i: usize| {
+            self.ty(&args[i]) == Type::Int || self.ty(&args[i]).int_components().is_some()
+        };
+        let imap1 = |f: fn(i32) -> i32| Instr::IMap1 {
+            f,
+            dst: dst.at,
+            src: loc(0),
+            n,
+        };
+        let imap2 = |f: fn(i32, i32) -> i32| Instr::IMap2 {
+            f,
+            dst: dst.at,
+            a: loc(0),
+            sa: self.stride(&args[0], n),
+            b: loc(1),
+            sb: self.stride(&args[1], n),
+            n,
+        };
         let map1 = |f: F1| Instr::Map1 {
             f,
             dst: dst.at,
@@ -1095,11 +1147,7 @@ impl FunctionCompiler<'_> {
             Intrinsic::Floor => map1(f32::floor),
             Intrinsic::Ceil => map1(f32::ceil),
             Intrinsic::Round => map1(f32::round_ties_even),
-            Intrinsic::Sign if is_int(0) => Instr::IMap1 {
-                f: i32::signum,
-                dst: dst.at,
-                src: loc(0),
-            },
+            Intrinsic::Sign if is_int(0) => imap1(i32::signum),
             Intrinsic::Sign => map1(|v| {
                 if v > 0.0 {
                     1.0
@@ -1110,11 +1158,7 @@ impl FunctionCompiler<'_> {
                 }
             }),
             Intrinsic::Fract => map1(|v| v - v.floor()),
-            Intrinsic::Abs if is_int(0) => Instr::IMap1 {
-                f: i32::wrapping_abs,
-                dst: dst.at,
-                src: loc(0),
-            },
+            Intrinsic::Abs if is_int(0) => imap1(i32::wrapping_abs),
             Intrinsic::Abs => map1(f32::abs),
             Intrinsic::Sqrt => map1(f32::sqrt),
             Intrinsic::Sin => map1(f32::sin),
@@ -1125,49 +1169,28 @@ impl FunctionCompiler<'_> {
             Intrinsic::Atan => map1(f32::atan),
             Intrinsic::Exp => map1(f32::exp),
             Intrinsic::Log => map1(f32::ln),
-            Intrinsic::Min if is_int(0) => Instr::IMap2 {
-                f: i32::min,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
-            Intrinsic::Max if is_int(0) => Instr::IMap2 {
-                f: i32::max,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
+            Intrinsic::Min if is_int(0) => imap2(i32::min),
+            Intrinsic::Max if is_int(0) => imap2(i32::max),
             Intrinsic::Min => map2(f32::min),
             Intrinsic::Max => map2(f32::max),
-            Intrinsic::AddWrap => Instr::IMap2 {
-                f: i32::wrapping_add,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
-            Intrinsic::SubWrap => Instr::IMap2 {
-                f: i32::wrapping_sub,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
-            Intrinsic::MulWrap => Instr::IMap2 {
-                f: i32::wrapping_mul,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
+            Intrinsic::AddWrap => imap2(i32::wrapping_add),
+            Intrinsic::SubWrap => imap2(i32::wrapping_sub),
+            Intrinsic::MulWrap => imap2(i32::wrapping_mul),
             Intrinsic::Clamp if is_int(0) => Instr::IClamp {
                 dst: dst.at,
                 v: loc(0),
                 low: loc(1),
+                sl: self.stride(&args[1], n),
                 high: loc(2),
+                sh: self.stride(&args[2], n),
+                n,
             },
             Intrinsic::Clamp => map3(|v, low, high| v.max(low).min(high)),
             Intrinsic::Mix => map3(|a, b, t| a + (b - a) * t),
             Intrinsic::ToFloat => Instr::ToFloat {
                 dst: dst.at,
                 src: loc(0),
+                n,
             },
             Intrinsic::ToInt if is_int(0) || self.ty(&args[0]) == Type::Bool => Instr::Move {
                 dst: dst.at,
@@ -1177,6 +1200,7 @@ impl FunctionCompiler<'_> {
             Intrinsic::ToInt => Instr::ToInt {
                 dst: dst.at,
                 src: loc(0),
+                n,
             },
             Intrinsic::Dot => Instr::Dot {
                 dst: dst.at,
@@ -1223,39 +1247,12 @@ impl FunctionCompiler<'_> {
             Intrinsic::Cosh => map1(f32::cosh),
             Intrinsic::Tanh => map1(f32::tanh),
             Intrinsic::Fma => map3(|a, b, c| a.mul_add(b, c)),
-            Intrinsic::Popcount => Instr::IMap1 {
-                f: |x| x.count_ones() as i32,
-                dst: dst.at,
-                src: loc(0),
-            },
-            Intrinsic::Clz => Instr::IMap1 {
-                f: |x| x.leading_zeros() as i32,
-                dst: dst.at,
-                src: loc(0),
-            },
-            Intrinsic::Ctz => Instr::IMap1 {
-                f: |x| x.trailing_zeros() as i32,
-                dst: dst.at,
-                src: loc(0),
-            },
-            Intrinsic::Rotl => Instr::IMap2 {
-                f: |x, n| x.rotate_left((n & 31) as u32),
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
-            Intrinsic::Rotr => Instr::IMap2 {
-                f: |x, n| x.rotate_right((n & 31) as u32),
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
-            Intrinsic::Ult => Instr::IMap2 {
-                f: |a, b| ((a as u32) < (b as u32)) as i32,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
+            Intrinsic::Popcount => imap1(|x| x.count_ones() as i32),
+            Intrinsic::Clz => imap1(|x| x.leading_zeros() as i32),
+            Intrinsic::Ctz => imap1(|x| x.trailing_zeros() as i32),
+            Intrinsic::Rotl => imap2(|x, n| x.rotate_left((n & 31) as u32)),
+            Intrinsic::Rotr => imap2(|x, n| x.rotate_right((n & 31) as u32)),
+            Intrinsic::Ult => imap2(|a, b| ((a as u32) < (b as u32)) as i32),
             Intrinsic::Udiv => Instr::IMap2Checked {
                 f: |a, b| {
                     if b == 0 {
@@ -1280,18 +1277,8 @@ impl FunctionCompiler<'_> {
                 a: loc(0),
                 b: loc(1),
             },
-            Intrinsic::Mulhi => Instr::IMap2 {
-                f: |a, b| ((a as i64 * b as i64) >> 32) as i32,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
-            Intrinsic::Umulhi => Instr::IMap2 {
-                f: |a, b| ((a as u32 as u64 * b as u32 as u64) >> 32) as i32,
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
+            Intrinsic::Mulhi => imap2(|a, b| ((a as i64 * b as i64) >> 32) as i32),
+            Intrinsic::Umulhi => imap2(|a, b| ((a as u32 as u64 * b as u32 as u64) >> 32) as i32),
         }
     }
 }
@@ -1602,12 +1589,17 @@ impl<'p, 's> Machine<'p, 's> {
                     s[fp + dst + i] = (-f(s[fp + src + i])).to_bits();
                 }
             }
-            Instr::INeg { dst, src } => {
-                let v = (s[fp + src] as i32)
-                    .checked_neg()
-                    .ok_or(ArithmeticError::Overflow)
-                    .map_err(|e| self.arithmetic(e))?;
-                self.stack[fp + dst] = v as u32;
+            Instr::INeg { dst, src, n } => {
+                // The frame is read through `self` here: a failure is
+                // reported through `self` too, so the borrow of the stack
+                // cannot live across the iterations.
+                for i in 0..*n {
+                    let v = (self.stack[fp + src + i] as i32)
+                        .checked_neg()
+                        .ok_or(ArithmeticError::Overflow)
+                        .map_err(|e| self.arithmetic(e))?;
+                    self.stack[fp + dst + i] = v as u32;
+                }
             }
             Instr::Not { dst, src } => s[fp + dst] = (s[fp + src] == 0) as u32,
             Instr::FBin {
@@ -1623,27 +1615,40 @@ impl<'p, 's> Machine<'p, 's> {
                     s[fp + dst + i] = op(f(s[fp + a + i * sa]), f(s[fp + b + i * sb])).to_bits();
                 }
             }
-            Instr::IBin { op, dst, a, b } => {
-                let (a, b) = (s[fp + a] as i32, s[fp + b] as i32);
-                let result = match op {
-                    BinaryOp::Add => a.checked_add(b).ok_or(ArithmeticError::Overflow),
-                    BinaryOp::Sub => a.checked_sub(b).ok_or(ArithmeticError::Overflow),
-                    BinaryOp::Mul => a.checked_mul(b).ok_or(ArithmeticError::Overflow),
-                    BinaryOp::Div if b == 0 => Err(ArithmeticError::DivisionByZero),
-                    BinaryOp::Div => a.checked_div(b).ok_or(ArithmeticError::Overflow),
-                    BinaryOp::Rem if b == 0 => Err(ArithmeticError::DivisionByZero),
-                    BinaryOp::Rem => a.checked_rem(b).ok_or(ArithmeticError::Overflow),
-                    BinaryOp::BitAnd => Ok(a & b),
-                    BinaryOp::BitOr => Ok(a | b),
-                    BinaryOp::BitXor => Ok(a ^ b),
-                    // The count modulo 32, as the GPU masks it.
-                    BinaryOp::Shl => Ok(a.wrapping_shl(b as u32)),
-                    BinaryOp::Shr => Ok(a.wrapping_shr(b as u32)),
-                    BinaryOp::Ushr => Ok((a as u32).wrapping_shr(b as u32) as i32),
-                    _ => unreachable!("compiled from an arithmetic operator"),
-                };
-                let v = result.map_err(|e| self.arithmetic(e))?;
-                self.stack[fp + dst] = v as u32;
+            Instr::IBin {
+                op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                n,
+            } => {
+                for i in 0..*n {
+                    let (a, b) = (
+                        self.stack[fp + a + i * sa] as i32,
+                        self.stack[fp + b + i * sb] as i32,
+                    );
+                    let result = match op {
+                        BinaryOp::Add => a.checked_add(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Sub => a.checked_sub(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Mul => a.checked_mul(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Div if b == 0 => Err(ArithmeticError::DivisionByZero),
+                        BinaryOp::Div => a.checked_div(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Rem if b == 0 => Err(ArithmeticError::DivisionByZero),
+                        BinaryOp::Rem => a.checked_rem(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::BitAnd => Ok(a & b),
+                        BinaryOp::BitOr => Ok(a | b),
+                        BinaryOp::BitXor => Ok(a ^ b),
+                        // The count modulo 32, as the GPU masks it.
+                        BinaryOp::Shl => Ok(a.wrapping_shl(b as u32)),
+                        BinaryOp::Shr => Ok(a.wrapping_shr(b as u32)),
+                        BinaryOp::Ushr => Ok((a as u32).wrapping_shr(b as u32) as i32),
+                        _ => unreachable!("compiled from an arithmetic operator"),
+                    };
+                    let v = result.map_err(|e| self.arithmetic(e))?;
+                    self.stack[fp + dst + i] = v as u32;
+                }
             }
             Instr::FCmp { op, dst, a, b } => {
                 let (a, b) = (f(s[fp + a]), f(s[fp + b]));
@@ -1676,8 +1681,15 @@ impl<'p, 's> Machine<'p, 's> {
                 let equal = (0..*n).all(|i| f(s[fp + a + i]) == f(s[fp + b + i]));
                 s[fp + dst] = (equal != *negate) as u32;
             }
-            Instr::IEq { dst, a, b, negate } => {
-                s[fp + dst] = ((s[fp + a] == s[fp + b]) != *negate) as u32;
+            Instr::IEq {
+                dst,
+                a,
+                b,
+                n,
+                negate,
+            } => {
+                let same = (0..*n).all(|i| s[fp + a + i] == s[fp + b + i]);
+                s[fp + dst] = (same != *negate) as u32;
             }
             Instr::And { dst, a, b } => s[fp + dst] = (s[fp + a] != 0 && s[fp + b] != 0) as u32,
             Instr::Or { dst, a, b } => s[fp + dst] = (s[fp + a] != 0 || s[fp + b] != 0) as u32,
@@ -1719,20 +1731,57 @@ impl<'p, 's> Machine<'p, 's> {
                     .to_bits();
                 }
             }
-            Instr::IMap1 { f: op, dst, src } => s[fp + dst] = op(s[fp + src] as i32) as u32,
+            Instr::IMap1 { f: op, dst, src, n } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = op(s[fp + src + i] as i32) as u32;
+                }
+            }
             Instr::IMap2Checked { f: op, dst, a, b } => {
                 let v = op(s[fp + a] as i32, s[fp + b] as i32).map_err(|e| self.arithmetic(e))?;
                 self.stack[fp + dst] = v as u32;
             }
-            Instr::IMap2 { f: op, dst, a, b } => {
-                s[fp + dst] = op(s[fp + a] as i32, s[fp + b] as i32) as u32;
+            Instr::IMap2 {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                n,
+            } => {
+                for i in 0..*n {
+                    s[fp + dst + i] =
+                        op(s[fp + a + i * sa] as i32, s[fp + b + i * sb] as i32) as u32;
+                }
             }
-            Instr::IClamp { dst, v, low, high } => {
-                let (v, low, high) = (s[fp + v] as i32, s[fp + low] as i32, s[fp + high] as i32);
-                s[fp + dst] = v.max(low).min(high) as u32;
+            Instr::IClamp {
+                dst,
+                v,
+                low,
+                sl,
+                high,
+                sh,
+                n,
+            } => {
+                for i in 0..*n {
+                    let (v, low, high) = (
+                        s[fp + v + i] as i32,
+                        s[fp + low + i * sl] as i32,
+                        s[fp + high + i * sh] as i32,
+                    );
+                    s[fp + dst + i] = v.max(low).min(high) as u32;
+                }
             }
-            Instr::ToFloat { dst, src } => s[fp + dst] = (s[fp + src] as i32 as f32).to_bits(),
-            Instr::ToInt { dst, src } => s[fp + dst] = (f(s[fp + src]) as i32) as u32,
+            Instr::ToFloat { dst, src, n } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = (s[fp + src + i] as i32 as f32).to_bits();
+                }
+            }
+            Instr::ToInt { dst, src, n } => {
+                for i in 0..*n {
+                    s[fp + dst + i] = (f(s[fp + src + i]) as i32) as u32;
+                }
+            }
             Instr::Dot { dst, a, b, n } => {
                 let v = (0..*n).fold(0.0f32, |sum, i| sum + f(s[fp + a + i]) * f(s[fp + b + i]));
                 s[fp + dst] = v.to_bits();

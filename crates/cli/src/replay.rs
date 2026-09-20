@@ -504,13 +504,15 @@ fn check_element(
         Type::Vec2 => 2,
         Type::Vec3 => 3,
         Type::Vec4 | Type::Mat2 => 4,
+        Type::IVec2 => 2,
+        Type::IVec3 => 3,
         Type::Mat3 => 9,
         Type::Mat4 => 16,
         Type::Struct(_) => {
             return Err("name a field of the struct; whole structs are not compared".into());
         }
     };
-    let exact = matches!(ty, Type::Int | Type::Bool);
+    let exact = matches!(ty, Type::Int | Type::Bool | Type::IVec2 | Type::IVec3);
     let tolerance = match values.len() {
         n if n == components => 0.01,
         n if n == components + 1 && !exact => values[components]

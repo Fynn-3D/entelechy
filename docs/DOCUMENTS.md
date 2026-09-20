@@ -99,6 +99,20 @@ matrices; the interpreter and the JIT compute one formula in one order,
 so their words agree bit for bit, and the inverse on the GPU is that
 formula printed as a shader function.
 
+Integer vectors `IVec2` and `IVec3` are cells and offsets: `ivec2(x,
+y)` from `Int`s, `icoord()` this element's cell, `isize(f)` a Field's
+extent and `idomain()` the output's, all as integers, so a rule on a
+grid never converts a coordinate to write it down. They take `+ - * /
+%`, `& | ^` and the shifts componentwise, with each other or with an
+`Int` on either side (a failure where an `Int` would fail: overflow, a
+zero divisor), `-v`, `==`, `.x .y .z` and `v[i]`, and `abs`, `sign`,
+`min`, `max`, `clamp` (with `Int` bounds too); `float(v)` widens one
+to a `Vec2` or `Vec3` and `int(v)` truncates a vector to one. `at`,
+`fetch` and `put` take an integer vector where they take a `Vec2` or
+`Vec3`, and a scatter's address may be one; each is the float address
+converted, which is exact for every coordinate a Field can have, so
+the Field rules are one set (clamped reads, dropped writes).
+
 The math builtins are `floor`, `ceil`, `round`, `trunc`, `sign`,
 `fract`, `abs`, `sqrt`, `inversesqrt`, `sin`, `cos`, `tan`, `asin`,
 `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `exp`, `exp2`, `log`,

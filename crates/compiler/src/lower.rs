@@ -110,7 +110,7 @@ fn subscript_element(ty: Type, structs: &[StructDef]) -> Option<(Type, usize)> {
         _ => ty
             .column()
             .map(|column| (column, ty.order().unwrap_or(0) as usize))
-            .or_else(|| ty.components().map(|n| (Type::Float, n as usize))),
+            .or_else(|| ty.lanes().map(|(n, lane)| (lane, n as usize))),
     }
 }
 
@@ -279,7 +279,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                 },
             ));
         }
-        let result = builder.block(&kernel.compute)?;
+        let mut result = builder.block(&kernel.compute)?;
         let actual = builder.ty(result);
         if let Mode::Scatter { base, .. } = manifest.mode {
             // The body yields a pair: an address into the target and a
@@ -296,7 +296,47 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             let well_formed = fields.is_some_and(|fields| {
                 fields.len() == 2 && fields[0].ty == address && fields[1].ty == expected
             });
-            if !well_formed {
+            // An integer address (`IVec2` into a grid) is the float one
+            // converted: exact, as every coordinate a Field can have is.
+            let integer_address = fields.is_some_and(|fields| {
+                fields.len() == 2
+                    && fields[0].ty.other_kind() == Some(address)
+                    && fields[1].ty == expected
+            });
+            if integer_address {
+                let integer = fields.map(|fields| fields[0].ty).unwrap_or(address);
+                let name = format!(
+                    "({}, {})",
+                    describe(address, &table),
+                    describe(expected, &table)
+                );
+                let existing = table.iter().position(|def| def.name == name);
+                drop(table);
+                let pair = match existing {
+                    Some(index) => Type::Struct(index as u32),
+                    None => {
+                        let mut table = structs.borrow_mut();
+                        table.push(StructDef::record(
+                            name,
+                            vec![
+                                Field {
+                                    name: "address".into(),
+                                    ty: address,
+                                },
+                                Field {
+                                    name: "value".into(),
+                                    ty: expected,
+                                },
+                            ],
+                        ));
+                        Type::Struct((table.len() - 1) as u32)
+                    }
+                };
+                let at = builder.emit(integer, Op::Extract(result, 0));
+                let at = builder.emit(address, Op::Intrinsic(Intrinsic::ToFloat, vec![at]));
+                let value = builder.emit(expected, Op::Extract(result, 1));
+                result = builder.emit(pair, Op::Construct(vec![at, value]));
+            } else if !well_formed {
                 return Err(semantic(
                     kernel.compute.result.span,
                     format!(
@@ -387,6 +427,8 @@ fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
         | Type::Vec2
         | Type::Vec3
         | Type::Vec4
+        | Type::IVec2
+        | Type::IVec3
         | Type::Mat2
         | Type::Mat3
         | Type::Mat4 => true,
@@ -1071,7 +1113,7 @@ impl<'a> Builder<'a> {
                         format!("{ty} is a matrix; take a column with `[index]`"),
                     ));
                 }
-                let count = ty.components().ok_or_else(|| {
+                let (count, lane) = ty.lanes().ok_or_else(|| {
                     semantic(
                         expr.span,
                         format!(
@@ -1098,7 +1140,7 @@ impl<'a> Builder<'a> {
                         format!("{ty} has no component `.{member}`"),
                     ));
                 }
-                Ok(self.emit(Type::Float, Op::Extract(inner, u32::from(component))))
+                Ok(self.emit(lane, Op::Extract(inner, u32::from(component))))
             }
             ExprKind::Array(elements) => {
                 let mut ids = Vec::with_capacity(elements.len());
@@ -1787,6 +1829,17 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// An integer vector address converted to the float one a Field
+    /// takes: exact for every coordinate a Field can have, so `at` and
+    /// `put` need no integer path of their own. Any other value passes.
+    fn float_address(&mut self, address: ValueId, expected: Type) -> ValueId {
+        if self.ty(address).other_kind() == Some(expected) {
+            self.emit(expected, Op::Intrinsic(Intrinsic::ToFloat, vec![address]))
+        } else {
+            address
+        }
+    }
+
     fn arity(
         &self,
         name: &str,
@@ -1836,6 +1889,7 @@ impl<'a> Builder<'a> {
                 }
                 let address = self.value(&args[1])?;
                 let expected = port_ty.index_type();
+                let address = self.float_address(address, expected);
                 if self.ty(address) != expected {
                     return Err(semantic(
                         args[1].span,
@@ -1888,11 +1942,12 @@ impl<'a> Builder<'a> {
                 let expected = port.ty.index_type();
                 let (port_name, shape) = (port.name.clone(), port.shape());
                 let index = self.value(&args[1])?;
+                let index = self.float_address(index, expected);
                 if self.ty(index) != expected {
                     return Err(semantic(
                         args[1].span,
                         format!(
-                            "`{name}` addresses `{port_name}`, a {shape}, with {expected}, found {}",
+                            "`{name}` addresses `{port_name}`, a {shape}, with {expected} or its integer vector, found {}",
                             self.describe(self.ty(index))
                         ),
                     ));
@@ -2070,6 +2125,53 @@ impl<'a> Builder<'a> {
                     parts.push(part);
                 }
                 Ok(self.emit(ty, Op::Construct(parts)))
+            }
+            "ivec2" | "ivec3" => {
+                let ty = if name == "ivec2" {
+                    Type::IVec2
+                } else {
+                    Type::IVec3
+                };
+                let count = ty.int_components().unwrap_or(0) as usize;
+                self.arity(name, args, count, span)?;
+                let mut parts = Vec::with_capacity(count);
+                for arg in args {
+                    let part = self.value(arg)?;
+                    if self.ty(part) != Type::Int {
+                        return Err(semantic(
+                            arg.span,
+                            format!(
+                                "`{name}` components must be Int, found {}; a Float truncates with int()",
+                                self.describe(self.ty(part))
+                            ),
+                        ));
+                    }
+                    parts.push(part);
+                }
+                Ok(self.emit(ty, Op::Construct(parts)))
+            }
+            "icoord" | "idomain" => {
+                // The float coordinate or extent, converted: every value
+                // either takes is a whole number.
+                let inner = if name == "icoord" { "coord" } else { "domain" };
+                let float = self.call(inner, args, span)?;
+                let ty = self.ty(float);
+                Ok(match ty.other_kind() {
+                    Some(integer) => {
+                        self.emit(integer, Op::Intrinsic(Intrinsic::ToInt, vec![float]))
+                    }
+                    None => float,
+                })
+            }
+            "isize" => {
+                let float = self.call("size", args, span)?;
+                let ty = self.ty(float);
+                Ok(match ty.other_kind() {
+                    Some(integer) => {
+                        self.emit(integer, Op::Intrinsic(Intrinsic::ToInt, vec![float]))
+                    }
+                    None => float,
+                })
             }
             "mat2" | "mat3" | "mat4" => {
                 let ty = match name {

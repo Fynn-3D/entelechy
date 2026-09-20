@@ -145,6 +145,10 @@ pub enum Type {
     Vec3,
     /// Four floats.
     Vec4,
+    /// Two integers: a grid coordinate, a cell address.
+    IVec2,
+    /// Three integers: a volume coordinate.
+    IVec3,
     /// Two columns of two floats, column-major.
     Mat2,
     /// Three columns of three floats, column-major.
@@ -167,6 +171,8 @@ impl Type {
             Self::Vec2 => "Vec2",
             Self::Vec3 => "Vec3",
             Self::Vec4 => "Vec4",
+            Self::IVec2 => "IVec2",
+            Self::IVec3 => "IVec3",
             Self::Mat2 => "Mat2",
             Self::Mat3 => "Mat3",
             Self::Mat4 => "Mat4",
@@ -215,6 +221,34 @@ impl Type {
         }
     }
 
+    /// Number of integer components for integer vector types.
+    pub fn int_components(self) -> Option<u8> {
+        match self {
+            Self::IVec2 => Some(2),
+            Self::IVec3 => Some(3),
+            _ => None,
+        }
+    }
+
+    /// Number of components of a vector of either kind, and their type.
+    pub fn lanes(self) -> Option<(u8, Type)> {
+        self.components()
+            .map(|n| (n, Self::Float))
+            .or_else(|| self.int_components().map(|n| (n, Self::Int)))
+    }
+
+    /// The float vector with as many components as this integer vector,
+    /// and the other way round: what `float` and `int` convert between.
+    pub fn other_kind(self) -> Option<Type> {
+        match self {
+            Self::Vec2 => Some(Self::IVec2),
+            Self::Vec3 => Some(Self::IVec3),
+            Self::IVec2 => Some(Self::Vec2),
+            Self::IVec3 => Some(Self::Vec3),
+            _ => None,
+        }
+    }
+
     /// Whether values of this type are plain data that can cross the ABI
     /// (not Kernel-internal structs).
     pub fn is_value(self) -> bool {
@@ -254,6 +288,8 @@ impl FromStr for Type {
             Self::Vec2,
             Self::Vec3,
             Self::Vec4,
+            Self::IVec2,
+            Self::IVec3,
             Self::Mat2,
             Self::Mat3,
             Self::Mat4,

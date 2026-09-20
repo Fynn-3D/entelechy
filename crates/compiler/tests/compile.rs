@@ -739,3 +739,76 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
     ));
     assert_eq!(message, "index 3 is outside Vec3, whose indices are 0 to 2");
 }
+
+#[test]
+fn integer_vectors_address_fields_without_conversions_in_the_source() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.read; field.write; }
+            struct Site { cell: IVec2; weight: Int; }
+            input cells: Grid<Int>;
+            output r: Grid<Int>;
+            fn walk(c: IVec2, d: IVec2) -> IVec2 { return (c + d) % isize(cells); }
+            compute {
+                let c = icoord();
+                let site = Site { cell: walk(c, ivec2(1, -1)), weight: c.x };
+                let far = c + idomain() * 2 - ivec2(3, 4) / 2 + abs(-c) + min(c, 5) + clamp(c, ivec2(0, 0), ivec2(7, 7));
+                let f = float(far) * 0.5;
+                let back = int(f);
+                return at(cells, site.cell) + at(cells, back) + far[c.y % 2] + int(c == back);
+            } }",
+    )
+    .unwrap();
+    let text = module.to_string();
+    // Every `at` addresses the grid with a Vec2: the integer one converted.
+    assert!(text.contains("float("), "{text}");
+    assert!(!text.contains("icoord"), "{text}");
+    assert_eq!(module.functions[0].args, vec![Type::IVec2, Type::IVec2]);
+
+    // A scatter's address may be an integer vector: the pair is converted
+    // into a synthesized struct whose address is the float one.
+    let scatter = compile(
+        "kernel t.s@1 { requires { field.read; field.write; }
+            input seeds: Rows<Int>; input canvas: Grid<Int>;
+            output r: Grid<Int>;
+            struct Drop { at: IVec2; value: Int; }
+            scatter into canvas with sum {
+                let i = element();
+                return Drop { at: ivec2(i % 8, i / 8), value: 1 };
+            } }",
+    )
+    .unwrap();
+    let pair = scatter.entry.body.last().unwrap();
+    let Type::Struct(index) = pair.ty else {
+        panic!("{scatter}")
+    };
+    let def = &scatter.structs[index as usize];
+    assert_eq!(def.name, "(Vec2, Int)");
+    assert_eq!(def.fields[0].ty, Type::Vec2);
+
+    let head = "kernel t.k@1 { requires { field.read; field.write; } input g: Grid<Float>; output r: Rows<Float>; compute { let i = element(); ";
+    let (_, message) = semantic(&format!("{head}let c = ivec2(1.5, 2); return 0.0; }} }}"));
+    assert_eq!(
+        message,
+        "`ivec2` components must be Int, found Float; a Float truncates with int()"
+    );
+    let (_, message) = semantic(&format!(
+        "{head}let c = ivec2(1, 2) + vec2(1.0, 2.0); return 0.0; }} }}"
+    ));
+    assert_eq!(message, "cannot apply `+` to IVec2 and Vec2");
+    let (_, message) = semantic(&format!(
+        "{head}let c = ivec2(1, 2) + ivec3(1, 2, 3); return 0.0; }} }}"
+    ));
+    assert_eq!(message, "cannot apply `+` to IVec2 and IVec3");
+    let (_, message) = semantic(&format!("{head}return at(g, ivec3(1, 2, 3)); }} }}"));
+    assert_eq!(
+        message,
+        "`at` addresses `g`, a Grid, with Vec2 or its integer vector, found IVec3"
+    );
+    let (_, message) = semantic(&format!("{head}let c = ivec2(1, 2); return c.z; }} }}"));
+    assert_eq!(message, "IVec2 has no component `.z`");
+    let (_, message) = semantic(&format!("{head}return at_linear(g, ivec2(1, 2)); }} }}"));
+    assert_eq!(
+        message,
+        "`at_linear` addresses `g`, a Grid, with Vec2, found IVec2"
+    );
+}

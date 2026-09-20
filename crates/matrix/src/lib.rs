@@ -142,6 +142,11 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: determinant(m2) + determinant(m3) + determinant(m4) + ident[1][1] + ident[0][2] + back[2][2] + back[3].x + sum[i % 3][(i + 1) % 3] + sc[0].x + mv.x + vm.y + mm.z + neg[1].y + col.w + m3[i % 3].x + v[i % 3] + mq.z + m2[1][0] + (m3 * 2.0)[2][2] + (2.0 * m3)[0][0] + spun[0].x + fr.basis[1].y + fr.origin.z + inverse(m2)[0].x, i: int(m2 == m2) + int(m3 != m3) * 2 + int(-m2 == m2 * -1.0) * 4 + int(neg != m2) * 8, b: sum == transpose(sum), v: mv + vm + mm + vec3(mq.x, mq.y, mq.z) + transpose(m3)[i % 3] + inverse(m4)[3].x * v }",
         ),
         (
+            "integer vectors",
+            "let c = ivec2(i % 16, i / 16); let d = ivec3(i, -i, 3); let sum = c + ivec2(1, 2) * 3 - d.x; let quot = (d / 2 + d % 3) * ivec3(2, 3, 4) - 7 / (d + ivec3(99, 99, 99)); let bits = ((c << 2) ^ (d.y & 5) | ivec2(1, 0)) >> 1; let ush = ivec2(-8, 16) >>> 2; let m = min(max(d, ivec3(2, 1, 0)), 10) + clamp(d, -2, 2) + clamp(d, ivec3(0, 0, 0), ivec3(1, 1, 1)) + abs(ivec3(-1, 2, -3)) + sign(ivec3(-5, 0, 5)); let cellf = float(c) * 0.5 + vec2(0.25, 0.25); let back = int(cellf) + int(vec3(1.9, -1.9, 0.5)).y; let site = Site { cell: walk(c, ivec2(3, 1)), weight: i }; let looked = at(cells, site.cell).b + at(cells, c).b + at(cells, ivec2(-3, 99)).b; let isz = isize(cells);",
+            "Out { f: cellf.x + cellf.y + float(back).x + float(d).z, i: sum.x + sum.y + quot.x + quot.y + quot.z + bits.x + bits.y + ush.x + ush.y + m.x + m.y + m.z + site.cell.x * 100 + site.weight + looked + c[i % 2] + (-c).y + isz.x * 1000 + isz.y, b: c == ivec2(i % 16, i / 16) && d != ivec3(0, 0, 0) && !(c != c), v: vec3(float(m).x, float(sum).y, float(c[1])) }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",
@@ -177,6 +182,8 @@ const HEAD: &str = "requires { field.read; field.write; input.read; time.read; }
     fn roll(r: [Int; 4], by: Int) -> [Int; 4] { return [r[by % 4], r[(by + 1) % 4], r[(by + 2) % 4], r[(by + 3) % 4]]; }
     struct Frame { basis: Mat3; origin: Vec3; }
     fn spin(a: Float) -> Mat2 { return mat2(vec2(cos(a), sin(a)), vec2(-sin(a), cos(a))); }
+    struct Site { cell: IVec2; weight: Int; }
+    fn walk(c: IVec2, d: IVec2) -> IVec2 { return (c + d) % ivec2(16, 4); }
 ";
 
 const ENV: &str = "let x = float(i) * 0.37 + 0.1; let sampled = sample(rows);";
@@ -196,7 +203,7 @@ fn map_grid(lets: &str, out: &str) -> String {
         "kernel matrix.map_grid@1 {{ {HEAD}
     input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>;
     output result: Grid<Out>;
-    compute {{ let c0 = coord(); let i = int(c0.x) + int(c0.y) * 16; {GRID_ENV} {lets} let out = {out}; return out; }} }}"
+    compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; {GRID_ENV} {lets} let out = {out}; return out; }} }}"
     )
 }
 

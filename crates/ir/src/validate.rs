@@ -269,6 +269,8 @@ fn numeric(structs: &[StructDef], ty: Type) -> bool {
         | Type::Vec2
         | Type::Vec3
         | Type::Vec4
+        | Type::IVec2
+        | Type::IVec3
         | Type::Mat2
         | Type::Mat3
         | Type::Mat4 => true,
@@ -615,7 +617,7 @@ impl<'a> Checker<'a> {
                     }
                     *ty
                 } else {
-                    let expected = ty.components().ok_or_else(|| {
+                    let (expected, lane) = ty.lanes().ok_or_else(|| {
                         self.fail(format!("{position} constructs non-vector {ty}"))
                     })?;
                     if parts.len() != expected as usize {
@@ -625,9 +627,9 @@ impl<'a> Checker<'a> {
                         )));
                     }
                     for part in parts {
-                        if self.operand(*part, position)? != Type::Float {
+                        if self.operand(*part, position)? != lane {
                             return Err(self.fail(format!(
-                                "{position} constructs {ty} from a non-float component"
+                                "{position} constructs {ty} from a component that is not {lane}"
                             )));
                         }
                     }
@@ -653,7 +655,7 @@ impl<'a> Checker<'a> {
                     }
                     column
                 } else {
-                    let count = source.components().ok_or_else(|| {
+                    let (count, lane) = source.lanes().ok_or_else(|| {
                         self.fail(format!("{position} extracts from non-vector {source}"))
                     })?;
                     if *component >= u32::from(count) {
@@ -661,7 +663,7 @@ impl<'a> Checker<'a> {
                             "{position} extracts component {component} of {source}"
                         )));
                     }
-                    Type::Float
+                    lane
                 }
             }
             Op::Subscript(array, index) => {
@@ -679,7 +681,7 @@ impl<'a> Checker<'a> {
                             ))
                         })?
                     }
-                    _ => array.column().or_else(|| array.components().map(|_| Type::Float)).ok_or_else(|| {
+                    _ => array.column().or_else(|| array.lanes().map(|(_, lane)| lane)).ok_or_else(|| {
                         self.fail(format!(
                             "{position} subscripts {array}, which is not an array, a matrix or a vector"
                         ))

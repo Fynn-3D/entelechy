@@ -67,7 +67,8 @@ node's Kernel on the interpreter, element `--at x y [z]` of a map or step
 and the carried value are as that step sees them, and prints every `let`
 of the entry in source order with its type and value, then the result;
 an `Int` of sixteen or more also in hex, a struct by its fields, an
-array by its elements, a matrix by its columns. A `let`
+array by its elements, a matrix by its columns, an integer vector as
+`ivec2(x, y)`. A `let`
 in the branch of an `if` the element did not take reads `- (not run)`; a
 `let` in a loop shows its last iteration's value. Every call the element
 made follows, in the order the calls returned, each with its own `let`s

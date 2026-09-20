@@ -367,6 +367,8 @@ fn words_of(module: &Validated, ty: Type) -> usize {
         Type::Vec2 => 2,
         Type::Vec3 => 3,
         Type::Vec4 | Type::Mat2 => 4,
+        Type::IVec2 => 2,
+        Type::IVec3 => 3,
         Type::Mat3 => 9,
         Type::Mat4 => 16,
         Type::Struct(index) => module.structs[index as usize]
@@ -395,6 +397,7 @@ pub fn words_json(module: &Validated, ty: Type, words: &[u32]) -> Json {
         Type::Vec2 | Type::Vec3 | Type::Vec4 => {
             json!(words.iter().map(|w| f32::from_bits(*w)).collect::<Vec<_>>())
         }
+        Type::IVec2 | Type::IVec3 => json!(words.iter().map(|w| *w as i32).collect::<Vec<_>>()),
         Type::Mat2 | Type::Mat3 | Type::Mat4 => {
             let n = usize::from(ty.order().unwrap_or(0));
             json!(
@@ -452,6 +455,15 @@ pub fn words_text(module: &Validated, ty: Type, words: &[u32]) -> String {
             words
                 .iter()
                 .map(|w| f32::from_bits(*w).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Type::IVec2 | Type::IVec3 => format!(
+            "ivec{}({})",
+            words.len(),
+            words
+                .iter()
+                .map(|w| (*w as i32).to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         ),

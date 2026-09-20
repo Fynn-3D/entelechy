@@ -94,6 +94,8 @@ fn wgsl_type(ty: Type) -> String {
         Type::Vec2 => "vec2<f32>".into(),
         Type::Vec3 => "vec3<f32>".into(),
         Type::Vec4 => "vec4<f32>".into(),
+        Type::IVec2 => "vec2<i32>".into(),
+        Type::IVec3 => "vec3<i32>".into(),
         Type::Mat2 => "mat2x2<f32>".into(),
         Type::Mat3 => "mat3x3<f32>".into(),
         Type::Mat4 => "mat4x4<f32>".into(),
@@ -464,6 +466,8 @@ pub fn type_words(module: &Module, ty: Type) -> usize {
         Type::Vec2 => 2,
         Type::Vec3 => 3,
         Type::Vec4 => 4,
+        Type::IVec2 => 2,
+        Type::IVec3 => 3,
         Type::Mat2 => 4,
         Type::Mat3 => 9,
         Type::Mat4 => 16,
@@ -573,10 +577,10 @@ fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Typ
     match ty {
         Type::Float | Type::Int => out.push((format!("bitcast<u32>({path})"), ty)),
         Type::Bool => out.push((format!("select(0u, 1u, {path})"), Type::Bool)),
-        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
-            let n = ty.components().unwrap_or(4) as usize;
-            for component in ["x", "y", "z", "w"].iter().take(n) {
-                out.push((format!("bitcast<u32>({path}.{component})"), Type::Float));
+        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::IVec2 | Type::IVec3 => {
+            let (n, lane) = ty.lanes().unwrap_or((4, Type::Float));
+            for component in ["x", "y", "z", "w"].iter().take(n as usize) {
+                out.push((format!("bitcast<u32>({path}.{component})"), lane));
             }
         }
         Type::Mat2 | Type::Mat3 | Type::Mat4 => {
@@ -1111,7 +1115,7 @@ fn all_floats(module: &Module, ty: Type) -> bool {
         | Type::Mat2
         | Type::Mat3
         | Type::Mat4 => true,
-        Type::Int | Type::Bool => false,
+        Type::Int | Type::Bool | Type::IVec2 | Type::IVec3 => false,
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
@@ -1311,6 +1315,14 @@ fn load_expr(
                 .join(", ");
             (format!("{}({parts})", wgsl_type(ty)), n)
         }
+        Type::IVec2 | Type::IVec3 => {
+            let n = ty.int_components().unwrap_or(2) as usize;
+            let parts = (0..n)
+                .map(|k| format!("bitcast<i32>({})", word(offset + k)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (format!("{}({parts})", wgsl_type(ty)), n)
+        }
         Type::Mat2 | Type::Mat3 | Type::Mat4 => {
             let n = usize::from(ty.order().unwrap_or(0));
             let parts = (0..n * n)
@@ -1354,8 +1366,8 @@ fn store_lines(
             out.push(format!("    out0[b + {offset}u] = select(0u, 1u, {path});"));
             1
         }
-        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
-            let n = ty.components().unwrap_or(4) as usize;
+        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::IVec2 | Type::IVec3 => {
+            let n = ty.lanes().map_or(4, |(n, _)| n as usize);
             for (k, component) in ["x", "y", "z", "w"].iter().take(n).enumerate() {
                 out.push(format!(
                     "    out0[b + {}u] = bitcast<u32>({path}.{component});",
@@ -1491,7 +1503,13 @@ impl Emitter<'_> {
                     Type::Bool => format!("({slot}.x != 0.0)"),
                     Type::Vec2 => format!("{slot}.xy"),
                     Type::Vec3 => format!("{slot}.xyz"),
-                    Type::Vec4 | Type::Mat2 | Type::Mat3 | Type::Mat4 | Type::Struct(_) => slot,
+                    Type::Vec4
+                    | Type::IVec2
+                    | Type::IVec3
+                    | Type::Mat2
+                    | Type::Mat3
+                    | Type::Mat4
+                    | Type::Struct(_) => slot,
                 }
             }
             Op::Arg(index) => format!("a{index}"),
@@ -1526,9 +1544,41 @@ impl Emitter<'_> {
                 };
                 // A whole-vector comparison folds the componentwise one; a
                 // shift takes its count unsigned, masked to the width.
-                let vector = self.type_of(*a).components().is_some();
+                let vector = self.type_of(*a).lanes().is_some();
                 let matrix = self.type_of(*a).order().map(usize::from);
+                // An integer vector beside an Int: WGSL's bit operators
+                // and shifts take two operands of one type, so the Int
+                // widens; the shift count is unsigned, masked to the width.
+                let int_vector = ty.int_components().is_some();
+                let widen = |id: &ValueId| {
+                    if self.type_of(*id) == *ty {
+                        v(id)
+                    } else {
+                        format!("{}({})", wgsl_type(*ty), v(id))
+                    }
+                };
+                let count = |id: &ValueId| {
+                    let n = ty.int_components().unwrap_or(1);
+                    // A whole vector converts; a scalar converts first,
+                    // then splats, as WGSL does not do both in one.
+                    let unsigned = if self.type_of(*id) == Type::Int {
+                        format!("u32({})", v(id))
+                    } else {
+                        v(id)
+                    };
+                    format!("(vec{n}<u32>({unsigned}) & vec{n}<u32>(31u))")
+                };
                 match op {
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor if int_vector => {
+                        format!("({} {symbol} {})", widen(a), widen(b))
+                    }
+                    BinaryOp::Shl | BinaryOp::Shr if int_vector => {
+                        format!("({} {symbol} {})", widen(a), count(b))
+                    }
+                    BinaryOp::Ushr if int_vector => {
+                        let n = ty.int_components().unwrap_or(1);
+                        format!("vec{n}<i32>(vec{n}<u32>({}) >> {})", widen(a), count(b))
+                    }
                     BinaryOp::Equal | BinaryOp::NotEqual if matrix.is_some() => {
                         let n = matrix.unwrap_or(0);
                         let same = (0..n)
@@ -1541,7 +1591,7 @@ impl Emitter<'_> {
                             format!("(!({same}))")
                         }
                     }
-                    BinaryOp::Rem if *ty != Type::Int => {
+                    BinaryOp::Rem if *ty != Type::Int && !int_vector => {
                         // Both operands at the result's width: a Float
                         // beside a vector broadcasts.
                         let widen = |id: &ValueId| {
@@ -1595,7 +1645,10 @@ impl Emitter<'_> {
                     Type::Struct(struct_index) => {
                         self.module.structs[struct_index as usize].fields.len()
                     }
-                    other => other.order().or(other.components()).map_or(1, usize::from),
+                    other => other
+                        .order()
+                        .or(other.lanes().map(|(n, _)| n))
+                        .map_or(1, usize::from),
                 };
                 format!("{}[clamp({}, 0, {})]", v(array), v(index), count - 1)
             }
@@ -1745,15 +1798,14 @@ impl Emitter<'_> {
         let v = |id: &ValueId| format!("v{}", id.0);
         let list = args.iter().map(v).collect::<Vec<_>>().join(", ");
         let splat = |id: &ValueId, target: Type| {
-            if target.components().is_some() && self.type_of(*id) == Type::Float {
+            if target.lanes().is_some() && matches!(self.type_of(*id), Type::Float | Type::Int) {
                 format!("{}({})", wgsl_type(target), v(id))
             } else {
                 v(id)
             }
         };
         match intrinsic {
-            Intrinsic::ToFloat => format!("f32({list})"),
-            Intrinsic::ToInt => format!("i32({list})"),
+            Intrinsic::ToFloat | Intrinsic::ToInt => format!("{}({list})", wgsl_type(ty)),
             Intrinsic::Normalize => {
                 format!("safe_normalize_{}({list})", ty.components().unwrap_or(0))
             }

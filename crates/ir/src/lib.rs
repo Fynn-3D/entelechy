@@ -130,6 +130,8 @@ pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
             Type::Vec2 => out.extend([Scalar::Float; 2]),
             Type::Vec3 => out.extend([Scalar::Float; 3]),
             Type::Vec4 => out.extend([Scalar::Float; 4]),
+            Type::IVec2 => out.extend([Scalar::Int; 2]),
+            Type::IVec3 => out.extend([Scalar::Int; 3]),
             Type::Mat2 => out.extend([Scalar::Float; 4]),
             Type::Mat3 => out.extend([Scalar::Float; 9]),
             Type::Mat4 => out.extend([Scalar::Float; 16]),
@@ -336,8 +338,33 @@ impl BinaryOp {
     /// column), `Vec * Mat` (a row). Comparisons take two scalars of one
     /// type and give `Bool`; equality also compares `Bool`s, whole
     /// vectors and whole matrices. `&&` and `||` take `Bool`s. The bit
-    /// operators and shifts take two `Int`s.
+    /// operators and shifts take two `Int`s. Integer vectors take the
+    /// arithmetic, bit and shift operators componentwise with each other
+    /// or with an `Int` on either side, and compare whole with `==`.
     pub fn result_type(self, a: Type, b: Type) -> Option<Type> {
+        if a.int_components().is_some() || b.int_components().is_some() {
+            let vector = if a.int_components().is_some() { a } else { b };
+            let scalar = if vector == a { b } else { a };
+            return match self {
+                Self::Add
+                | Self::Sub
+                | Self::Mul
+                | Self::Div
+                | Self::Rem
+                | Self::BitAnd
+                | Self::BitOr
+                | Self::BitXor
+                | Self::Shl
+                | Self::Shr
+                | Self::Ushr
+                    if scalar == vector || scalar == Type::Int =>
+                {
+                    Some(vector)
+                }
+                Self::Equal | Self::NotEqual if a == b => Some(Type::Bool),
+                _ => None,
+            };
+        }
         if a.order().is_some() || b.order().is_some() {
             return match self {
                 Self::Add | Self::Sub if a == b => Some(a),
@@ -438,6 +465,8 @@ impl UnaryOp {
                 | Type::Vec2
                 | Type::Vec3
                 | Type::Vec4
+                | Type::IVec2
+                | Type::IVec3
                 | Type::Mat2
                 | Type::Mat3
                 | Type::Mat4,
@@ -641,7 +670,7 @@ impl Intrinsic {
             Self::Acos => "The arc cosine, componentwise.",
             Self::Atan => "The arc tangent of one value, componentwise; atan2 takes two.",
             Self::Fract => "The fractional part, x - floor(x), componentwise.",
-            Self::Abs => "The absolute value, componentwise; an Int stays an Int.",
+            Self::Abs => "The absolute value, componentwise; an Int or IVec stays one.",
             Self::Sqrt => "The square root, componentwise.",
             Self::Sin => "The sine, componentwise.",
             Self::Cos => "The cosine, componentwise.",
@@ -656,8 +685,10 @@ impl Intrinsic {
             Self::AddWrap => "a + b modulo 2^32 on Ints: never a failure, unlike +.",
             Self::SubWrap => "a - b modulo 2^32 on Ints: never a failure, unlike -.",
             Self::MulWrap => "The low 32 bits of a * b on Ints: never a failure, unlike *.",
-            Self::ToFloat => "An Int, or a Bool as 0 or 1, as a Float.",
-            Self::ToInt => "A Float truncated toward zero, or a Bool as 0 or 1, as an Int.",
+            Self::ToFloat => "An Int, or a Bool as 0 or 1, as a Float; an IVec as a Vec.",
+            Self::ToInt => {
+                "A Float truncated toward zero, or a Bool as 0 or 1, as an Int; a Vec2 or Vec3 as an IVec, componentwise."
+            }
             Self::Dot => "The dot product of two vectors of one size.",
             Self::Cross => "The cross product of two Vec3.",
             Self::Length => "The Euclidean length of a vector.",
@@ -760,23 +791,34 @@ impl Intrinsic {
                 | Self::Log,
                 [a],
             ) if float_like(*a) => Some(*a),
-            (Self::Abs | Self::Sign, [Type::Int]) => Some(Type::Int),
-            (Self::Min | Self::Max, [a, b]) if a == b && (float_like(*a) || *a == Type::Int) => {
+            (Self::Abs | Self::Sign, [Type::Int | Type::IVec2 | Type::IVec3]) => Some(args[0]),
+            (Self::Min | Self::Max, [a, b])
+                if a == b
+                    && (float_like(*a) || *a == Type::Int || a.int_components().is_some()) =>
+            {
                 Some(*a)
             }
             (Self::Min | Self::Max, [a, Type::Float]) if vector(*a) => Some(*a),
+            (Self::Min | Self::Max, [a, Type::Int]) if a.int_components().is_some() => Some(*a),
             (Self::AddWrap | Self::SubWrap | Self::MulWrap, [Type::Int, Type::Int]) => {
                 Some(Type::Int)
             }
-            (Self::Clamp, [a, b, c]) if a == b && b == c && (float_like(*a) || *a == Type::Int) => {
+            (Self::Clamp, [a, b, c])
+                if a == b
+                    && b == c
+                    && (float_like(*a) || *a == Type::Int || a.int_components().is_some()) =>
+            {
                 Some(*a)
             }
             (Self::Clamp, [a, Type::Float, Type::Float]) if vector(*a) => Some(*a),
+            (Self::Clamp, [a, Type::Int, Type::Int]) if a.int_components().is_some() => Some(*a),
             (Self::Mix, [a, b, c]) if a == b && (*c == Type::Float || c == a) && float_like(*a) => {
                 Some(*a)
             }
             (Self::ToFloat, [Type::Int | Type::Bool]) => Some(Type::Float),
+            (Self::ToFloat, [Type::IVec2 | Type::IVec3]) => args[0].other_kind(),
             (Self::ToInt, [Type::Float | Type::Bool]) => Some(Type::Int),
+            (Self::ToInt, [Type::Vec2 | Type::Vec3]) => args[0].other_kind(),
             (Self::Dot, [a, b]) if a == b && vector(*a) => Some(Type::Float),
             (Self::Cross, [Type::Vec3, Type::Vec3]) => Some(Type::Vec3),
             (Self::Length, [a]) if vector(*a) => Some(Type::Float),
@@ -894,9 +936,9 @@ pub enum Op {
     Unary(UnaryOp, ValueId),
     /// Binary operation.
     Binary(BinaryOp, ValueId, ValueId),
-    /// Build a vector from float components, a matrix from its column
-    /// vectors, or a struct from its fields; the instruction type says
-    /// which.
+    /// Build a vector from float components, an integer vector from
+    /// `Int`s, a matrix from its column vectors, or a struct from its
+    /// fields; the instruction type says which.
     Construct(Vec<ValueId>),
     /// Extract a float component from a vector, a column from a matrix,
     /// a field from a struct, or an element of an array at a constant

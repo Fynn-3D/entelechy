@@ -281,6 +281,8 @@ fn word_types(module: &Module, ty: Type) -> Vec<types::Type> {
         Type::Vec2 => vec![types::F32; 2],
         Type::Vec3 => vec![types::F32; 3],
         Type::Vec4 => vec![types::F32; 4],
+        Type::IVec2 => vec![types::I32; 2],
+        Type::IVec3 => vec![types::I32; 3],
         Type::Mat2 => vec![types::F32; 4],
         Type::Mat3 => vec![types::F32; 9],
         Type::Mat4 => vec![types::F32; 16],
@@ -677,11 +679,16 @@ impl<'a, 'b> Fx<'a, 'b> {
             Op::Arg(index) => self.args[*index as usize].clone(),
             Op::Unary(UnaryOp::Neg, a) => {
                 let words = self.words(a);
-                if self.ty(a) == Type::Int {
-                    let zero = self.i32c(0);
-                    let (v, overflow) = self.b.ins().ssub_overflow(zero, words[0]);
-                    self.fail_if(overflow, OVERFLOW);
-                    vec![v]
+                if self.ty(a) == Type::Int || self.ty(a).int_components().is_some() {
+                    words
+                        .iter()
+                        .map(|w| {
+                            let zero = self.i32c(0);
+                            let (v, overflow) = self.b.ins().ssub_overflow(zero, *w);
+                            self.fail_if(overflow, OVERFLOW);
+                            v
+                        })
+                        .collect()
                 } else {
                     words.iter().map(|w| self.b.ins().fneg(*w)).collect()
                 }
@@ -693,7 +700,10 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Binary(op, a, b) => self.binary(*op, a, b),
             Op::Construct(parts) => {
-                if matches!(ty, Type::Struct(_)) || ty.order().is_some() {
+                if matches!(ty, Type::Struct(_))
+                    || ty.order().is_some()
+                    || ty.int_components().is_some()
+                {
                     parts.iter().flat_map(|part| self.words(part)).collect()
                 } else {
                     parts
@@ -734,7 +744,10 @@ impl<'a, 'b> Fx<'a, 'b> {
                     Type::Struct(struct_index) => {
                         self.module.structs[struct_index as usize].fields.len()
                     }
-                    other => other.order().or(other.components()).map_or(1, usize::from),
+                    other => other
+                        .order()
+                        .or(other.lanes().map(|(n, _)| n))
+                        .map_or(1, usize::from),
                 };
                 let tys = word_types(self.module, ty);
                 let n = tys.len();
@@ -1182,6 +1195,8 @@ impl<'a, 'b> Fx<'a, 'b> {
     fn binary(&mut self, op: BinaryOp, a: &orla_ir::ValueId, b: &orla_ir::ValueId) -> Vec<Value> {
         let (ta, tb) = (self.ty(a), self.ty(b));
         let (wa, wb) = (self.words(a), self.words(b));
+        let int_like =
+            ta == Type::Int || ta.int_components().is_some() || tb.int_components().is_some();
         if op == BinaryOp::Mul && (ta.order().is_some() || tb.order().is_some()) {
             let mut ops = Ops(&mut self.b);
             return match (ta.order(), tb.order()) {
@@ -1196,33 +1211,36 @@ impl<'a, 'b> Fx<'a, 'b> {
             };
         }
         match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul if ta == Type::Int => {
-                let (v, overflow) = match op {
-                    BinaryOp::Add => self.b.ins().sadd_overflow(wa[0], wb[0]),
-                    BinaryOp::Sub => self.b.ins().ssub_overflow(wa[0], wb[0]),
-                    _ => self.b.ins().smul_overflow(wa[0], wb[0]),
-                };
-                self.fail_if(overflow, OVERFLOW);
-                vec![v]
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul if int_like => {
+                self.zip2(&wa, &wb, |fx, x, y| {
+                    let (v, overflow) = match op {
+                        BinaryOp::Add => fx.b.ins().sadd_overflow(x, y),
+                        BinaryOp::Sub => fx.b.ins().ssub_overflow(x, y),
+                        _ => fx.b.ins().smul_overflow(x, y),
+                    };
+                    fx.fail_if(overflow, OVERFLOW);
+                    v
+                })
             }
-            BinaryOp::Div | BinaryOp::Rem if ta == Type::Int => {
+            BinaryOp::Div | BinaryOp::Rem if int_like => {
                 // A zero divisor and MIN / -1 are the two failures; both
                 // would trap, so the division runs on a safe divisor instead.
-                let zero = self.b.ins().icmp_imm(IntCC::Equal, wb[0], 0);
-                self.fail_if(zero, DIVISION_BY_ZERO);
-                let is_min = self.b.ins().icmp_imm(IntCC::Equal, wa[0], i32::MIN as i64);
-                let minus_one = self.b.ins().icmp_imm(IntCC::Equal, wb[0], -1);
-                let overflow = self.b.ins().band(is_min, minus_one);
-                self.fail_if(overflow, OVERFLOW);
-                let unsafe_ = self.b.ins().bor(zero, overflow);
-                let one = self.i32c(1);
-                let divisor = self.b.ins().select(unsafe_, one, wb[0]);
-                let v = if op == BinaryOp::Div {
-                    self.b.ins().sdiv(wa[0], divisor)
-                } else {
-                    self.b.ins().srem(wa[0], divisor)
-                };
-                vec![v]
+                self.zip2(&wa, &wb, |fx, x, y| {
+                    let zero = fx.b.ins().icmp_imm(IntCC::Equal, y, 0);
+                    fx.fail_if(zero, DIVISION_BY_ZERO);
+                    let is_min = fx.b.ins().icmp_imm(IntCC::Equal, x, i32::MIN as i64);
+                    let minus_one = fx.b.ins().icmp_imm(IntCC::Equal, y, -1);
+                    let overflow = fx.b.ins().band(is_min, minus_one);
+                    fx.fail_if(overflow, OVERFLOW);
+                    let unsafe_ = fx.b.ins().bor(zero, overflow);
+                    let one = fx.i32c(1);
+                    let divisor = fx.b.ins().select(unsafe_, one, y);
+                    if op == BinaryOp::Div {
+                        fx.b.ins().sdiv(x, divisor)
+                    } else {
+                        fx.b.ins().srem(x, divisor)
+                    }
+                })
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                 self.zip2(&wa, &wb, |fx, x, y| match op {
@@ -1259,7 +1277,10 @@ impl<'a, 'b> Fx<'a, 'b> {
             BinaryOp::Equal | BinaryOp::NotEqual => {
                 let mut all: Option<Value> = None;
                 for (x, y) in wa.iter().zip(&wb) {
-                    let same = if matches!(ta, Type::Int | Type::Bool) && tb == ta {
+                    let same = if (matches!(ta, Type::Int | Type::Bool)
+                        || ta.int_components().is_some())
+                        && tb == ta
+                    {
                         self.b.ins().icmp(IntCC::Equal, *x, *y)
                     } else {
                         self.b.ins().fcmp(FloatCC::Equal, *x, *y)
@@ -1279,27 +1300,25 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             BinaryOp::And => vec![self.b.ins().band(wa[0], wb[0])],
             BinaryOp::Or => vec![self.b.ins().bor(wa[0], wb[0])],
-            BinaryOp::BitAnd => vec![self.b.ins().band(wa[0], wb[0])],
-            BinaryOp::BitOr => vec![self.b.ins().bor(wa[0], wb[0])],
-            BinaryOp::BitXor => vec![self.b.ins().bxor(wa[0], wb[0])],
-            BinaryOp::Shl => {
-                let count = self.b.ins().band_imm(wb[0], 31);
-                vec![self.b.ins().ishl(wa[0], count)]
-            }
-            BinaryOp::Shr => {
-                let count = self.b.ins().band_imm(wb[0], 31);
-                vec![self.b.ins().sshr(wa[0], count)]
-            }
-            BinaryOp::Ushr => {
-                let count = self.b.ins().band_imm(wb[0], 31);
-                vec![self.b.ins().ushr(wa[0], count)]
-            }
+            BinaryOp::BitAnd => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().band(x, y)),
+            BinaryOp::BitOr => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().bor(x, y)),
+            BinaryOp::BitXor => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().bxor(x, y)),
+            BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => self.zip2(&wa, &wb, |fx, x, y| {
+                let count = fx.b.ins().band_imm(y, 31);
+                match op {
+                    BinaryOp::Shl => fx.b.ins().ishl(x, count),
+                    BinaryOp::Shr => fx.b.ins().sshr(x, count),
+                    _ => fx.b.ins().ushr(x, count),
+                }
+            }),
         }
     }
 
     fn intrinsic(&mut self, intrinsic: Intrinsic, args: &[orla_ir::ValueId]) -> Vec<Value> {
         let w: Vec<Vec<Value>> = args.iter().map(|a| self.words(a)).collect();
-        let is_int = |fx: &Self, k: usize| fx.ty(&args[k]) == Type::Int;
+        let is_int = |fx: &Self, k: usize| {
+            fx.ty(&args[k]) == Type::Int || fx.ty(&args[k]).int_components().is_some()
+        };
         let map1 = |fx: &mut Self, f: &mut dyn FnMut(&mut Self, Value) -> Value| -> Vec<Value> {
             w[0].iter().map(|v| f(fx, *v)).collect()
         };
@@ -1324,18 +1343,17 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let f = fx.b.ins().floor(v);
                 fx.b.ins().fsub(v, f)
             }),
-            Intrinsic::Abs if is_int(self, 0) => vec![self.b.ins().iabs(w[0][0])],
+            Intrinsic::Abs if is_int(self, 0) => map1(self, &mut |fx, v| fx.b.ins().iabs(v)),
             Intrinsic::Abs => map1(self, &mut |fx, v| fx.b.ins().fabs(v)),
-            Intrinsic::Sign if is_int(self, 0) => {
-                let v = w[0][0];
-                let pos = self.b.ins().icmp_imm(IntCC::SignedGreaterThan, v, 0);
-                let neg = self.b.ins().icmp_imm(IntCC::SignedLessThan, v, 0);
-                let one = self.i32c(1);
-                let minus = self.i32c(-1);
-                let zero = self.i32c(0);
-                let low = self.b.ins().select(neg, minus, zero);
-                vec![self.b.ins().select(pos, one, low)]
-            }
+            Intrinsic::Sign if is_int(self, 0) => map1(self, &mut |fx, v| {
+                let pos = fx.b.ins().icmp_imm(IntCC::SignedGreaterThan, v, 0);
+                let neg = fx.b.ins().icmp_imm(IntCC::SignedLessThan, v, 0);
+                let one = fx.i32c(1);
+                let minus = fx.i32c(-1);
+                let zero = fx.i32c(0);
+                let low = fx.b.ins().select(neg, minus, zero);
+                fx.b.ins().select(pos, one, low)
+            }),
             Intrinsic::Sign => map1(self, &mut |fx, v| {
                 let zero = fx.f32c(0.0);
                 let pos = fx.b.ins().fcmp(FloatCC::GreaterThan, v, zero);
@@ -1401,16 +1419,22 @@ impl<'a, 'b> Fx<'a, 'b> {
                     fx.b.inst_results(call)[0]
                 })
             }
-            Intrinsic::Min if is_int(self, 0) => vec![self.b.ins().smin(w[0][0], w[1][0])],
-            Intrinsic::Max if is_int(self, 0) => vec![self.b.ins().smax(w[0][0], w[1][0])],
+            Intrinsic::Min if is_int(self, 0) => {
+                self.zip2(&w[0], &w[1], |fx, x, y| fx.b.ins().smin(x, y))
+            }
+            Intrinsic::Max if is_int(self, 0) => {
+                self.zip2(&w[0], &w[1], |fx, x, y| fx.b.ins().smax(x, y))
+            }
             Intrinsic::AddWrap => vec![self.b.ins().iadd(w[0][0], w[1][0])],
             Intrinsic::SubWrap => vec![self.b.ins().isub(w[0][0], w[1][0])],
             Intrinsic::MulWrap => vec![self.b.ins().imul(w[0][0], w[1][0])],
             Intrinsic::Min => self.zip2(&w[0], &w[1], |fx, x, y| fx.fmin(x, y)),
             Intrinsic::Max => self.zip2(&w[0], &w[1], |fx, x, y| fx.fmax(x, y)),
             Intrinsic::Clamp if is_int(self, 0) => {
-                let low = self.b.ins().smax(w[0][0], w[1][0]);
-                vec![self.b.ins().smin(low, w[2][0])]
+                self.zip3(&w[0], &w[1], &w[2], |fx, v, low, high| {
+                    let floored = fx.b.ins().smax(v, low);
+                    fx.b.ins().smin(floored, high)
+                })
             }
             Intrinsic::Clamp => self.zip3(&w[0], &w[1], &w[2], |fx, v, low, high| {
                 let floored = fx.fmax(v, low);
@@ -1421,12 +1445,14 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let scaled = fx.b.ins().fmul(span, t);
                 fx.b.ins().fadd(a, scaled)
             }),
-            Intrinsic::ToFloat => vec![self.b.ins().fcvt_from_sint(types::F32, w[0][0])],
+            Intrinsic::ToFloat => map1(self, &mut |fx, v| fx.b.ins().fcvt_from_sint(types::F32, v)),
             Intrinsic::ToInt => {
                 if matches!(self.ty(&args[0]), Type::Int | Type::Bool) {
                     vec![w[0][0]]
                 } else {
-                    vec![self.b.ins().fcvt_to_sint_sat(types::I32, w[0][0])]
+                    map1(self, &mut |fx, v| {
+                        fx.b.ins().fcvt_to_sint_sat(types::I32, v)
+                    })
                 }
             }
             Intrinsic::Dot => vec![self.dot(&w[0], &w[1])],

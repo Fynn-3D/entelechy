@@ -417,6 +417,20 @@ capability claim.
   [model example](examples/model/kernels/model.orla)'s orbit, one matrix
   applied to every vertex and normal.
 
+- Integer vectors `IVec2/3` are value types of the ABI (`Type::lanes`
+  gives a vector of either kind its count and lane type); every integer
+  instruction of the interpreter takes a width and strides, the JIT zips
+  words, and WGSL has them natively (bit operators and shifts widen the
+  `Int` side, since WGSL wants both operands of one type). An integer
+  address to `at`, `put` or a scatter is the float one converted by the
+  compiler, exact for any coordinate a Field can hold, so the backends'
+  Field paths did not change; `icoord`, `isize` and `idomain` are the
+  float builtins converted the same way. Proof: the
+  [feature matrix](crates/matrix/src/lib.rs),
+  [diagnostics](crates/compiler/tests/compile.rs), and the
+  [snake example](examples/snake/kernels/snake.orla), whose cells are
+  integer vectors end to end.
+
 - Backends implement [`Backend`](crates/runtime/src/lib.rs): `prepare` does
   the expensive work (the GPU backend compiles WGSL and builds the pipeline
   there), so `publish` is a pointer swap. GPU and CPU results agree within
