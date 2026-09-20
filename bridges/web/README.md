@@ -30,11 +30,9 @@ session sizes window-shaped scenes by it.
 - **Kernel** lists what the session has published; **Load** fetches a
   Kernel's source into the editor, **Prepare** compiles it and reports a
   diagnostic with its line and column, **Publish** publishes it over
-  whatever generation runs. An inline Kernel's source comes as its node
-  wrote it, without the id the node gave it and perhaps with the node's
-  `domain`, so Load writes the id in and leaves the domain out. Load
-  `scene.title@1` from the text example, change a code, publish, and the
-  label changes.
+  whatever generation runs; the source a session returns is what
+  `publish` takes, a node's inline Kernel included. Load `scene.title@1`
+  from the text example, change a code, publish, and the label changes.
 - **Graph params** set a parameter with `param`; a param that sizes the
   graph resizes the running scene.
 - **Reset state** is the Player's F5.

@@ -306,6 +306,7 @@ impl Parser {
             Some(id)
         };
         let mut domain = None;
+        let mut domain_range = None;
         self.expect_punct("{")?;
         let mut requires = None;
         let mut inputs = Vec::new();
@@ -340,10 +341,12 @@ impl Parser {
                     outputs.push(self.port(false)?);
                 }
                 "domain" if inline => {
+                    let statement_start = self.start();
                     self.next();
                     self.expect_punct("=")?;
                     let value = self.expr()?;
                     self.expect_punct(";")?;
+                    domain_range = Some(statement_start..self.previous_end());
                     if domain.replace(value).is_some() {
                         return Err(self.error("`domain` is set twice"));
                     }
@@ -438,6 +441,7 @@ impl Parser {
             range: start..end,
             id,
             domain,
+            domain_range,
             requires: requires.unwrap_or_default(),
             inputs,
             params,
@@ -660,6 +664,7 @@ impl Parser {
         let name = self.ident("a port name")?;
         self.expect_punct(":")?;
         let ty = self.port_type()?;
+        let binding_start = self.start();
         let binding = if wired && self.eat_punct("<-") {
             Some(BindingDecl::Now(self.source_ref()?))
         } else if wired && self.eat_punct("<~") {
@@ -670,6 +675,9 @@ impl Parser {
         } else {
             None
         };
+        let binding_range = binding
+            .is_some()
+            .then(|| binding_start..self.previous_end());
         let file = if !wired && self.eat_punct("=") {
             let (token, span) = self.next();
             let Token::Str(path) = token else {
@@ -691,6 +699,7 @@ impl Parser {
             ty,
             binding,
             file,
+            binding_range,
         })
     }
 
@@ -699,9 +708,16 @@ impl Parser {
         self.expect_punct(":")?;
         let ty = self.ident("a type")?;
         self.expect_punct("=")?;
+        let default_start = self.start();
         let default = self.expr()?;
+        let default_range = default_start..self.previous_end();
         self.expect_punct(";")?;
-        Ok(ParamDecl { name, ty, default })
+        Ok(ParamDecl {
+            name,
+            ty,
+            default,
+            default_range,
+        })
     }
 
     fn function(&mut self) -> Result<FnDecl, ParseError> {

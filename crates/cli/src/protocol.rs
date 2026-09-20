@@ -15,14 +15,14 @@
 //! | --- | --- | --- |
 //! | `status` | | backend, scene, watched, kernels, nodes |
 //! | `kernels` | | list of manifests with generations |
-//! | `kernel` | `id` | manifest, generation, source |
+//! | `kernel` | `kernel` (the Kernel's id) | manifest, generation, source, as `publish` takes it |
 //! | `graph` | | inputs, params, nodes, outputs |
 //! | `document` | | path, text of the scene |
 //! | `compose` | `text` | writes the scene, syncs; events |
 //! | `sync` | | events |
 //! | `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
-//! | `retire` | `id` | retired |
+//! | `retire` | `kernel` (the Kernel's id) | retired |
 //! | `param` | `name`, `value` | ok |
 //! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
@@ -304,6 +304,19 @@ pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
     })
 }
 
+/// The Kernel a request names: in `kernel`, or, for clients from before
+/// the field had its own name, in `id`, which is also the request's own.
+fn kernel_field(request: &Json) -> Result<KernelId, Json> {
+    let named = request
+        .get("kernel")
+        .or_else(|| request.get("id"))
+        .and_then(Json::as_str)
+        .ok_or_else(|| failure("`kernel` names the Kernel, for example `image.blur@1`"))?;
+    named
+        .parse::<KernelId>()
+        .map_err(|e| failure(e.to_string()))
+}
+
 fn failure(message: impl Into<String>) -> Json {
     json!({ "message": message.into() })
 }
@@ -353,9 +366,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 .collect::<Vec<_>>()
         })),
         "kernel" => {
-            let id = text_field("id")?
-                .parse::<KernelId>()
-                .map_err(|e| failure(e.to_string()))?;
+            let id = kernel_field(request)?;
             let version = session
                 .runtime()
                 .kernel(&id)
@@ -416,9 +427,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             Ok(json!({ "id": version.id().to_string(), "generation": version.generation().0 }))
         }
         "retire" => {
-            let id = text_field("id")?
-                .parse::<KernelId>()
-                .map_err(|e| failure(e.to_string()))?;
+            let id = kernel_field(request)?;
             Ok(json!({ "retired": session.retire_kernel(&id) }))
         }
         "param" => {

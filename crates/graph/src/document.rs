@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use orla_abi::Value;
@@ -88,6 +89,53 @@ pub struct Lowered {
     pub uses: Vec<(PathBuf, bool)>,
     /// Sub-graph documents that were loaded, resolved.
     pub documents: Vec<PathBuf>,
+}
+
+/// An inline Kernel's text as `publish` takes it: the node's Kernel as
+/// written, with what only a node may write taken out (its `domain`
+/// statement and the wiring on its inputs), a default that named a graph
+/// param replaced by the param's value (`edits`, as byte ranges of the
+/// document and the text to put there), and the id the node gave it
+/// written in when it had none of its own. What `kernel` returns over
+/// the protocol republishes as is.
+pub fn publishable_text(
+    document: &str,
+    kernel: &Kernel,
+    id: &KernelId,
+    mut edits: Vec<(Range<usize>, String)>,
+) -> String {
+    let Some(mut text) = document.get(kernel.range.clone()).map(str::to_owned) else {
+        return String::new();
+    };
+    let base = kernel.range.start;
+    if let Some(range) = &kernel.domain_range {
+        let (a, b) = (range.start - base, range.end - base);
+        // Take the whole line when the statement stands alone on it.
+        let line_start = text[..a].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = text[b..].find('\n').map_or(text.len(), |i| b + i + 1);
+        let alone = text[line_start..a].trim().is_empty() && text[b..line_end].trim().is_empty();
+        let cut = if alone { line_start..line_end } else { a..b };
+        edits.push((cut.start + base..cut.end + base, String::new()));
+    }
+    for port in &kernel.inputs {
+        if let Some(range) = &port.binding_range {
+            // The space before the arrow goes with it: `input x: Image;`.
+            let mut start = range.start;
+            while start > base && document.as_bytes()[start - 1] == b' ' {
+                start -= 1;
+            }
+            edits.push((start..range.end, String::new()));
+        }
+    }
+    // Later ranges first, so earlier offsets stay right.
+    edits.sort_by(|a, b| b.0.start.cmp(&a.0.start));
+    for (range, replacement) in edits {
+        text.replace_range(range.start - base..range.end - base, &replacement);
+    }
+    if kernel.id.is_none() {
+        text = format!("kernel {id}{}", &text["kernel".len()..]);
+    }
+    text
 }
 
 /// The id of an anonymous inline Kernel: the document name and the node
@@ -668,18 +716,17 @@ impl Lowering<'_, '_> {
                     // Param defaults that name a graph param become node
                     // values; the compiled Kernel keeps a literal default.
                     let mut compiled = (**kernel).clone();
+                    let mut edits = Vec::new();
                     for param in &mut compiled.params {
                         if let ExprKind::Name(_) = &param.default.kind {
                             let value = resolve_value(&param.default)?;
                             let literal = default_of(&value);
+                            edits.push((param.default_range.clone(), literal.to_string()));
                             param.default = literal_expr(literal, param.default.span);
                             node_params.insert(param.name.value.clone(), value);
                         }
                     }
-                    let text = text
-                        .get(kernel.range.clone())
-                        .unwrap_or_default()
-                        .to_owned();
+                    let text = publishable_text(text, kernel, &kernel_id, edits);
                     self.out.inline.push(InlineKernel {
                         node: id.clone(),
                         id: kernel_id.clone(),
@@ -896,8 +943,22 @@ output result <- blocks.result;
         let mut none = |path: &Path| -> Result<String, String> { Err(path.display().to_string()) };
         let lowered =
             Graph::load(&document, source, "My-Scene", Path::new("."), &mut none).unwrap();
+        // The text is publishable as it is: the node's id written in, the
+        // node's domain left out, and it parses on its own.
         assert!(
-            lowered.inline[0].text.starts_with("kernel {"),
+            !lowered.inline[0].text.contains("domain"),
+            "{}",
+            lowered.inline[0].text
+        );
+        assert!(
+            orla_language::parse(&lowered.inline[0].text).is_ok(),
+            "{}",
+            lowered.inline[0].text
+        );
+        assert!(
+            lowered.inline[0]
+                .text
+                .starts_with("kernel my_scene.trail@1 {"),
             "{}",
             lowered.inline[0].text
         );

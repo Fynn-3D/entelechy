@@ -74,15 +74,6 @@ class OrlaClient {
   }
 }
 
-/// A Kernel's source as `publish` takes it: an inline Kernel's text has no
-/// id of its own (its node gave it one) and may set the node's `domain`,
-/// which only a node may; the id is written in and the domain left out.
-function publishable(source, id) {
-  return source
-    .replace(/^(\s*)kernel\s*\{/, `$1kernel ${id} {`)
-    .replace(/^[ \t]*domain\s*=[^;]*;[ \t]*\n/m, "");
-}
-
 /// Base64 to bytes.
 function bytesOf(base64) {
   const text = atob(base64);
@@ -311,5 +302,5 @@ class Driver {
   }
 }
 
-globalThis.Orla = { OrlaClient, Driver, decodePpm, decodeWords, placement, bytesOf, publishable };
+globalThis.Orla = { OrlaClient, Driver, decodePpm, decodeWords, placement, bytesOf };
 })();

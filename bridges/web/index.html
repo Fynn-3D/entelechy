@@ -57,7 +57,7 @@
 </aside>
 <script src="orla.js"></script>
 <script>
-const { OrlaClient, Driver, publishable } = Orla;
+const { OrlaClient, Driver } = Orla;
 
 const $ = (id) => document.getElementById(id);
 const status = (text) => { $("status").textContent = text; };
@@ -174,8 +174,8 @@ $("load").onclick = async () => {
   const id = $("kernels").value;
   if (!id) return;
   try {
-    const kernel = await client.call("kernel", { id });
-    $("source").value = publishable(kernel.source, id);
+    const kernel = await client.call("kernel", { kernel: id });
+    $("source").value = kernel.source;
     diagnose(`${id} at generation ${kernel.generation}`, true);
   } catch (error) {
     diagnose(error.message, false);

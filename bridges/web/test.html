@@ -18,7 +18,7 @@ drives the voxel editor with a window and a pointer.
 <pre id="log"></pre>
 <script src="orla.js"></script>
 <script>
-const { OrlaClient, Driver, decodePpm, decodeWords, publishable } = Orla;
+const { OrlaClient, Driver, decodePpm, decodeWords } = Orla;
 
 const log = document.getElementById("log");
 const say = (text) => { log.textContent += text + "\n"; };
@@ -52,10 +52,10 @@ async function textScene(port) {
   say("text: picture read");
   // The title is a Kernel: republish it spelling ARLA and the hollow fills,
   // since an A's fourth row is solid where an O's is open.
-  const title = await client.call("kernel", { id: "scene.title@1" });
+  const title = await client.call("kernel", { kernel: "scene.title@1" });
   say("text: title source fetched");
-  assert(title.source.includes("79"), `title source: ${title.source}`);
-  const spelled = publishable(title.source.replace("{ 79 }", "{ 65 }"), "scene.title@1");
+  assert(title.source.startsWith("kernel scene.title@1 {") && !title.source.includes("domain ="), `title source as publish takes it: ${title.source}`);
+  const spelled = title.source.replace("{ 79 }", "{ 65 }");
   let refused = null;
   try {
     await client.call("prepare", { source: spelled.replace("element()", "elemen()") });

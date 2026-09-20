@@ -231,6 +231,9 @@ pub struct Kernel {
     pub id: Option<Spanned<String>>,
     /// `domain = expr;`, allowed only in an inline node Kernel.
     pub domain: Option<Expr>,
+    /// Byte range of the whole `domain = expr;` statement in its document,
+    /// so the Kernel's text can be given without it.
+    pub domain_range: Option<Range<usize>>,
     /// Declared capability names.
     pub requires: Vec<Spanned<String>>,
     /// Inputs in declaration order.
@@ -330,6 +333,9 @@ pub struct PortDecl {
     /// A file the input is read from, only on a document's inputs:
     /// `input atlas: Image = "atlas.ppm";`.
     pub file: Option<Spanned<String>>,
+    /// Byte range of the wiring (`<- source`, `<~ source from initial`)
+    /// in the document, so a Kernel's text can be given without it.
+    pub binding_range: Option<Range<usize>>,
 }
 
 /// `param name: Type = default;`
@@ -341,6 +347,9 @@ pub struct ParamDecl {
     pub ty: Spanned<String>,
     /// Default value expression.
     pub default: Expr,
+    /// Byte range of the default expression in the document, so a graph
+    /// param it names can be replaced by its value in the Kernel's text.
+    pub default_range: Range<usize>,
 }
 
 /// `fn name(arg: Type, ...) -> Type { ... }`

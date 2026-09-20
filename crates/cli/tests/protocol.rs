@@ -64,7 +64,7 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
             json!({ "id": 3, "op": "graph" }),
             json!({ "id": 4, "op": "prepare", "source": "kernel x.y@1 {\n  requires { field.write; }\n  output result: Image;\n  compute { return nope; }\n}" }),
             json!({ "id": 5, "op": "publish", "source": BRIGHT_SHOW, "expect": 999 }),
-            json!({ "id": 6, "op": "kernel", "id": "life.show@1" }),
+            json!({ "id": 6, "op": "kernel", "kernel": "life.show@1" }),
             json!({ "id": 7, "op": "evaluate", "time": 0.0 }),
             json!({ "id": 8, "op": "read", "format": "rgba32f" }),
             json!({ "id": 9, "op": "param", "name": "nothing", "value": [1, 2] }),
