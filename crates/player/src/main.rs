@@ -32,8 +32,9 @@ usage:
       Tab cycles the preview through the graph's nodes and back to the output.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
-      window: an agent's publish, compose, and param land in the frame a
-      person watches, and its evaluate observes that person's input.";
+      window, and on every connection to --listen <host:port>: an agent's
+      publish, compose, and param land in the frame a person watches, and
+      its evaluate observes that person's input.";
 
 struct Options {
     scene: PathBuf,
@@ -42,6 +43,7 @@ struct Options {
     scale: u32,
     backend: Option<String>,
     serve: bool,
+    listen: Option<String>,
     params: Vec<(String, orla_runtime::Value)>,
     /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
@@ -55,6 +57,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         scale: 2,
         backend: None,
         serve: false,
+        listen: None,
         params: Vec::new(),
         no_audio: false,
     };
@@ -70,6 +73,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--backend" => options.backend = Some(value("--backend")?),
             "--serve" => options.serve = true,
+            "--listen" => {
+                options.serve = true;
+                options.listen = Some(value("--listen")?);
+            }
             "--no-audio" => options.no_audio = true,
             "--param" => {
                 let binding = value("--param")?;
@@ -123,8 +130,8 @@ struct Player {
     cursor: (f32, f32),
     status: String,
     last_title: Instant,
-    /// Protocol requests arriving from stdin, when serving.
-    requests: Option<Receiver<String>>,
+    /// Protocol requests arriving from stdin or a socket, when serving.
+    requests: Option<Receiver<orla::protocol::Incoming>>,
     /// The node whose image is shown instead of the graph output.
     preview: Option<orla_graph::NodeId>,
     /// The sound card, opened when a scene has a sound-shaped output.
@@ -232,9 +239,10 @@ impl Player {
         let Some(requests) = &self.requests else {
             return;
         };
-        let pending: Vec<String> = std::iter::from_fn(|| requests.try_recv().ok()).collect();
-        for line in pending {
-            let (response, quit) = match orla::protocol::parse_request(&line) {
+        let pending: Vec<orla::protocol::Incoming> =
+            std::iter::from_fn(|| requests.try_recv().ok()).collect();
+        for incoming in pending {
+            let (response, quit) = match orla::protocol::parse_request(&incoming.line) {
                 Ok((id, request))
                     if request.get("op").and_then(Json::as_str) == Some("evaluate") =>
                 {
@@ -244,10 +252,15 @@ impl Player {
                     };
                     (orla::protocol::envelope(&id, result), false)
                 }
-                _ => orla::protocol::respond_line(&mut self.session, &line),
+                _ => orla::protocol::respond_line(&mut self.session, &incoming.line),
             };
-            println!("{response}");
-            if quit {
+            let _ = incoming.reply.send(response);
+            // A quit on standard input closes the window; on a socket it
+            // closes that connection, which an empty line tells its writer.
+            if quit && !incoming.local {
+                let _ = incoming.reply.send(String::new());
+            }
+            if quit && incoming.local {
                 event_loop.exit();
             }
         }
@@ -659,15 +672,16 @@ fn main() -> ExitCode {
     }
     if options.serve {
         let (sender, receiver) = channel();
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-            let stdin = std::io::stdin();
-            for line in stdin.lock().lines().map_while(Result::ok) {
-                if !line.trim().is_empty() && sender.send(line).is_err() {
-                    break;
+        if let Some(address) = &options.listen {
+            match orla::protocol::listen(address, sender.clone()) {
+                Ok(bound) => eprintln!("listening on {bound}"),
+                Err(error) => {
+                    eprintln!("error: cannot listen on {address}: {error}");
+                    return ExitCode::FAILURE;
                 }
             }
-        });
+        }
+        orla::protocol::stdin_into(sender);
         player.requests = Some(receiver);
         eprintln!("serving the creation protocol on stdin/stdout");
     }

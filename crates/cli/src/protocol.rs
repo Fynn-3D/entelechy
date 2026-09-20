@@ -62,6 +62,116 @@ pub fn serve(
     Ok(())
 }
 
+/// One request line and where its answer goes: the process's standard
+/// output, or the socket it came in on. The transports below feed these
+/// to whoever serves the session, a loop or a window.
+pub struct Incoming {
+    /// The request line.
+    pub line: String,
+    /// Where the response line goes.
+    pub reply: std::sync::mpsc::Sender<String>,
+    /// Whether it came on standard input, where `quit` ends the process;
+    /// on a socket, `quit` ends that connection.
+    pub local: bool,
+}
+
+/// Feeds standard input's lines to `sink` and answers on standard
+/// output, from threads of its own.
+pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) {
+    let (reply, answers) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let stdout = std::io::stdout();
+        for line in answers {
+            let mut out = stdout.lock();
+            let _ = writeln!(out, "{line}");
+            let _ = out.flush();
+        }
+    });
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines().map_while(Result::ok) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let incoming = Incoming {
+                line,
+                reply: reply.clone(),
+                local: true,
+            };
+            if sink.send(incoming).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Listens on `address` (`127.0.0.1:7788`, or port 0 for any) and feeds
+/// every connection's lines to `sink`; each connection's answers go back
+/// on its socket, one line each, from a thread of its own. Returns the
+/// address bound. The protocol is the same on a socket as on standard
+/// input, so a tool in another program, Blender say, talks to a running
+/// window.
+pub fn listen(
+    address: &str,
+    sink: std::sync::mpsc::Sender<Incoming>,
+) -> std::io::Result<std::net::SocketAddr> {
+    let listener = std::net::TcpListener::bind(address)?;
+    let bound = listener.local_addr()?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming().map_while(Result::ok) {
+            let Ok(writer) = stream.try_clone() else {
+                continue;
+            };
+            let (reply, answers) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                let mut writer = writer;
+                for line in answers {
+                    // An empty line is the sign to close: sent after a
+                    // quit's answer, it ends the connection from this side.
+                    if line.is_empty()
+                        || writeln!(writer, "{line}")
+                            .and_then(|_| writer.flush())
+                            .is_err()
+                    {
+                        break;
+                    }
+                }
+                let _ = writer.shutdown(std::net::Shutdown::Both);
+            });
+            let sink = sink.clone();
+            std::thread::spawn(move || {
+                let reader = std::io::BufReader::new(stream);
+                for line in reader.lines().map_while(Result::ok) {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let incoming = Incoming {
+                        line,
+                        reply: reply.clone(),
+                        local: false,
+                    };
+                    if sink.send(incoming).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    Ok(bound)
+}
+
+/// Answers one incoming request; returns whether the process should end
+/// (a `quit` on standard input). A `quit` on a socket answers, then
+/// closes that connection.
+pub fn answer(session: &mut Session, incoming: Incoming) -> bool {
+    let (response, quit) = respond_line(session, &incoming.line);
+    let _ = incoming.reply.send(response);
+    if quit && !incoming.local {
+        let _ = incoming.reply.send(String::new());
+    }
+    quit && incoming.local
+}
+
 /// Parses one request line and returns the request and its echoed id, or
 /// an error envelope's payload.
 pub fn parse_request(line: &str) -> Result<(Json, Json), Json> {

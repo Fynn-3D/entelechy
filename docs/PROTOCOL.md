@@ -37,6 +37,14 @@ answers with the next window frame under the person's real pointer and keys,
 and `read` returns the frame the window shows. An agent and a person then
 work on the same picture.
 
+With `--listen <host:port>` (`127.0.0.1:7788`, or port 0 for any free
+port, named on stderr as `listening on ...`), `orla serve` and the Player
+also accept connections on a socket, the same lines in and out, one
+response per request in order; every connection is served by the one
+session, a `quit` on a socket ends only that connection, and a `quit` on
+stdin ends the process. This is how another program, Blender say, talks
+to a running window: see `bridges/blender`.
+
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0; `kernel` returns their contract where a Kernel
 would show its source, and `publish` under a native id is refused.

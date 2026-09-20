@@ -5,7 +5,13 @@ use std::process::{Command, Stdio};
 use serde_json::{Value as Json, json};
 
 fn scratch() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-protocol-{}", std::process::id()));
+    scratch_in("")
+}
+
+/// A copy of the Life example in a directory of its own: tests in this
+/// binary run in parallel, so each takes a different `name`.
+fn scratch_in(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("orla-protocol{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/life");
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
@@ -290,4 +296,65 @@ output stirred <- stir.result;
     assert_eq!(responses[9]["ok"]["id"], "t.pair@1", "{}", responses[9]);
     assert_eq!(responses[10]["ok"]["id"], "t.own@1", "{}", responses[10]);
     assert!(message(11).contains("one kernel"), "{}", message(11));
+}
+
+#[test]
+fn the_protocol_serves_sockets_and_a_quit_ends_only_its_connection() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+    let dir = scratch_in("-sockets");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .arg("serve")
+        .arg(dir.join("scene.osn"))
+        .args(["--listen", "127.0.0.1:0"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let port = stderr
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| {
+            line.strip_prefix("listening on 127.0.0.1:")
+                .map(str::to_owned)
+        })
+        .expect("the server names its port");
+    let talk = |requests: &[Json]| -> Vec<Json> {
+        let stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut responses = Vec::new();
+        for request in requests {
+            writeln!(writer, "{request}").unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            responses.push(serde_json::from_str(&line).unwrap());
+        }
+        let mut rest = String::new();
+        reader.read_line(&mut rest).unwrap();
+        assert!(rest.is_empty(), "the connection closed after quit: {rest}");
+        responses
+    };
+    let first = talk(&[
+        json!({ "id": 1, "op": "status" }),
+        json!({ "id": 2, "op": "evaluate", "time": 0.0 }),
+        json!({ "id": 3, "op": "quit" }),
+    ]);
+    assert_eq!(first[0]["ok"]["nodes"], 3, "{}", first[0]);
+    assert_eq!(first[1]["ok"]["executed"].as_array().unwrap().len(), 3);
+    assert_eq!(first[2]["ok"]["bye"], true);
+    // The server outlived that client's quit; a second client is served.
+    let second = talk(&[
+        json!({ "id": 4, "op": "status" }),
+        json!({ "id": 5, "op": "quit" }),
+    ]);
+    assert_eq!(second[0]["ok"]["kernels"], 4, "{}", second[0]);
+    // A quit on standard input ends the process.
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", json!({ "id": 6, "op": "quit" })).unwrap();
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(&dir);
 }

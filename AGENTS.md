@@ -294,6 +294,10 @@ Keep the runtime crates (host, abi, ir, compiler, language, cpu, gpu, runtime,
 graph, and the `orla` CLI) free of external dependencies; the interface layer
 (the Player, `orla-import`, `orla-export`) is the only place that may take
 them, for devices and for formats that are not worth decoding twice.
+Bridges to other programs live in `bridges/<program>/`, written in that
+program's own language (Blender's Python), outside the Rust workspace; they
+speak only the public contracts (the protocol and the Host's file formats),
+and nothing in the workspace depends on them.
 Do not introduce scripts or interpreter dependencies in other languages.
 Data formats and documentation are not executable
 language dependencies. External agents remain free to use any implementation

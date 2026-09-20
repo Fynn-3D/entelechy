@@ -219,6 +219,14 @@ capability claim.
   against reference vectors; `run --save` and the protocol's `read`
   produce them ([session](crates/cli/src/session.rs),
   [tests](crates/cli/tests/session.rs)).
+- The protocol has a socket transport: `--listen <host:port>` on
+  `orla serve` and the Player feeds every connection's lines to the one
+  session with per-connection replies, a socket's `quit` ending only its
+  connection ([protocol](crates/cli/src/protocol.rs),
+  [test](crates/cli/tests/protocol.rs)). `bridges/blender` is the first
+  bridge: a Blender add-on in Blender's own Python that writes meshes as
+  the Host's files and talks to a running window over the socket; bridges
+  are clients outside the workspace.
 - Models and compressed sounds come in through a tool: `orla-import`
   ([crate](crates/import)) sits in the interface layer beside the CLI and
   the Player, the only layer that takes dependencies. `import` reads

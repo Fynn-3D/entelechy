@@ -23,8 +23,10 @@ usage:
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
       Print the flattened graph and what would execute, fused groups marked.
   orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu]
+                         [--listen <host:port>]
       Serve the creation protocol: JSON requests on stdin, one response per
-      line on stdout. See crates/cli/src/protocol.rs for the operations.";
+      line on stdout, and on every connection to --listen, where a client's
+      quit ends only its connection. See crates/cli/src/protocol.rs.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -411,6 +413,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut backend = "cpu".to_string();
     let mut library = None;
     let mut scene = None;
+    let mut listen = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -419,6 +422,13 @@ fn serve(args: &[String]) -> Result<(), String> {
                     .next()
                     .cloned()
                     .ok_or_else(|| "--backend needs a value".to_string())?;
+            }
+            "--listen" => {
+                listen = Some(
+                    iter.next()
+                        .cloned()
+                        .ok_or_else(|| "--listen needs <host:port>".to_string())?,
+                );
             }
             "--library" => {
                 library = Some(PathBuf::from(
@@ -439,9 +449,18 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut session = Session::open_with(&scene, library.as_deref(), runtime);
     report_events(&session.sync());
     session.set_background(true);
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    orla::protocol::serve(&mut session, stdin.lock(), stdout.lock()).map_err(|e| e.to_string())
+    let (sink, requests) = std::sync::mpsc::channel();
+    if let Some(address) = &listen {
+        let bound = orla::protocol::listen(address, sink.clone()).map_err(|e| e.to_string())?;
+        eprintln!("listening on {bound}");
+    }
+    orla::protocol::stdin_into(sink);
+    for incoming in requests {
+        if orla::protocol::answer(&mut session, incoming) {
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn replay(args: &[String]) -> Result<(), String> {

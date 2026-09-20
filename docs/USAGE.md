@@ -187,6 +187,17 @@ arrows 37 to 40.
 graphs: one grammar, wiring written at the consumer, inline Kernels, and
 `use` for reuse.
 
+## Bridges
+
+A running window is open to other programs over the protocol's socket
+transport: `orla-player --serve --listen 127.0.0.1:7788 scene.osn`, or
+`orla serve --listen ...` without a window. `bridges/blender` is an add-on
+for Blender that pushes a mesh into a scene's assets as the Host's files
+(and keeps pushing while you edit), pulls a node's rows out as a mesh and
+the picture as an image, sets parameters and publishes Kernels from the
+text editor; a bridge is a client in its host's language, outside the
+workspace, speaking only the public contracts.
+
 ## Creation protocol
 
 Agents drive a session over stdin and stdout with JSON lines:
