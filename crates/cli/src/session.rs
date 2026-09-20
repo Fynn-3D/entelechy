@@ -244,6 +244,10 @@ pub struct Session {
     /// Sub-graph documents placed by the root, with the stamps they were
     /// loaded at; a change to any of them rebuilds the graph.
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
+    /// The scene's shared declarations, from its `use`s and its own top
+    /// level, which a Kernel published through the protocol inherits.
+    shared_structs: Vec<orla_language::StructDecl>,
+    shared_types: Vec<orla_language::TypeAlias>,
     /// Caller overrides of graph parameters.
     params: BTreeMap<String, Value>,
     /// Kernel text by id for every document that published Kernels; the
@@ -298,6 +302,8 @@ impl Session {
             root_stamp: None,
             root_uses: Vec::new(),
             sub_graphs: BTreeMap::new(),
+            shared_structs: Vec::new(),
+            shared_types: Vec::new(),
             params: BTreeMap::new(),
             documents: BTreeMap::new(),
             owners: BTreeMap::new(),
@@ -491,6 +497,8 @@ impl Session {
         match declarations_for(&base, &document.uses) {
             Ok((structs, types)) => {
                 declarations = declarations_key(&structs, &types);
+                self.shared_structs = structs.iter().chain(&document.structs).cloned().collect();
+                self.shared_types = types.iter().chain(&document.types).cloned().collect();
                 document.inherit(&structs, &types);
             }
             Err(error) => events.push(Event::Rejected {
@@ -814,9 +822,45 @@ impl Session {
         source: &str,
         expect: Expect,
     ) -> Result<std::sync::Arc<orla_runtime::KernelVersion>, String> {
-        let candidate = self.runtime.prepare(source).map_err(|e| e.to_string())?;
+        let candidate = self.prepare_source(source)?;
         self.runtime
             .publish(candidate, expect)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Prepares `source`, a document holding one Kernel, without
+    /// publishing it. The Kernel sees the declarations the source makes
+    /// or `use`s, and the scene's shared ones after those, so a Kernel
+    /// from a file republishes through the protocol as it is.
+    pub fn prepare_source(&self, source: &str) -> Result<orla_runtime::Candidate, String> {
+        let mut document = orla_language::parse_document(source).map_err(|e| e.to_string())?;
+        if document.kernels.len() != 1 {
+            return Err(format!(
+                "expected one kernel, found {}",
+                document.kernels.len()
+            ));
+        }
+        let base = self.root.parent().unwrap_or_else(|| Path::new("."));
+        let (mut structs, mut types) = if document.uses.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            declarations_for(base, &document.uses).map_err(|e| e.to_string())?
+        };
+        for shared in &self.shared_structs {
+            let declared = |d: &orla_language::StructDecl| d.name.value == shared.name.value;
+            if !document.structs.iter().any(declared) && !structs.iter().any(declared) {
+                structs.push(shared.clone());
+            }
+        }
+        for shared in &self.shared_types {
+            let declared = |d: &orla_language::TypeAlias| d.name.value == shared.name.value;
+            if !document.types.iter().any(declared) && !types.iter().any(declared) {
+                types.push(shared.clone());
+            }
+        }
+        document.inherit(&structs, &types);
+        self.runtime
+            .prepare_kernel(&document.kernels[0], None, source)
             .map_err(|e| e.to_string())
     }
 

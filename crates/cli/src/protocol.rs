@@ -20,7 +20,7 @@
 //! | `document` | | path, text of the scene |
 //! | `compose` | `text` | writes the scene, syncs; events |
 //! | `sync` | | events |
-//! | `prepare` | `source` | id, manifest (nothing published) |
+//! | `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
 //! | `retire` | `id` | retired |
 //! | `param` | `name`, `value` | ok |
@@ -190,10 +190,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "sync" => Ok(json!({ "events": events_json(&session.sync()) })),
         "prepare" => {
             let source = text_field("source")?;
-            let candidate = session
-                .runtime()
-                .prepare(&source)
-                .map_err(|e| positioned(e.to_string()))?;
+            let candidate = session.prepare_source(&source).map_err(positioned)?;
             let current = session
                 .runtime()
                 .kernel(candidate.id())

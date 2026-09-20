@@ -15,6 +15,11 @@ evaluation succeeds.
 {"id": 2, "error": {"message": "`nope` is not defined", "line": 4, "column": 20}}
 ```
 
+`prepare` and `publish` take a document holding one Kernel: the Kernel
+sees the declarations the source makes or `use`s, and the scene's shared
+ones after those, so a Kernel copied from a library file republishes as
+it is, structs and all.
+
 The loop an agent runs:
 
 ```text

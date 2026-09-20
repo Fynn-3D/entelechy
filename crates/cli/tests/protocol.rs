@@ -176,7 +176,8 @@ fn fields_come_in_through_write_and_buttons_reach_kernels() {
         dir.join("k.orla"),
         "kernel t.zero@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }
 kernel t.count@1 { requires { field.read; field.write; } input previous: Rows<Float>; output result: Rows<Float>; compute { return sample(previous) + 1.0; } }
-kernel t.stir@1 { requires { field.write; input.read; } output result: Rows<Float>; compute { return (if button(1) { 1.0 } else { 0.0 }) + wheel().y * 10.0; } }",
+kernel t.stir@1 { requires { field.write; input.read; } output result: Rows<Float>; compute { return (if button(1) { 1.0 } else { 0.0 }) + wheel().y * 10.0; } }
+struct Pair { a: Float; b: Float; }",
     )
     .unwrap();
     let scene = dir.join("scene.osn");
@@ -211,7 +212,11 @@ output stirred <- stir.result;
             json!({ "id": 7, "op": "write", "node": "count", "data": words(&[1.0]) }),
             json!({ "id": 8, "op": "evaluate", "time": 0.2, "buttons": [1], "wheel": [0.0, -1.0] }),
             json!({ "id": 9, "op": "read", "output": "stirred" }),
-            json!({ "id": 10, "op": "quit" }),
+            // A Kernel published through the protocol sees the scene's declarations.
+            json!({ "id": 10, "op": "publish", "source": "kernel t.pair@1 { requires { field.write; } output result: Rows<Pair>; compute { return Pair { a: 1.0, b: 2.0 }; } }" }),
+            json!({ "id": 11, "op": "prepare", "source": "struct Own { x: Float; }\nkernel t.own@1 { requires { field.write; } output result: Rows<Own>; compute { return Own { x: 1.0 }; } }" }),
+            json!({ "id": 12, "op": "prepare", "source": "kernel t.a@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\nkernel t.b@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }" }),
+            json!({ "id": 13, "op": "quit" }),
         ],
     );
     let floats = |index: usize| -> Vec<f32> {
@@ -244,4 +249,7 @@ output stirred <- stir.result;
         vec![-9.0],
         "the right button and the wheel reached the Kernel"
     );
+    assert_eq!(responses[9]["ok"]["id"], "t.pair@1", "{}", responses[9]);
+    assert_eq!(responses[10]["ok"]["id"], "t.own@1", "{}", responses[10]);
+    assert!(message(11).contains("one kernel"), "{}", message(11));
 }
