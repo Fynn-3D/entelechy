@@ -838,7 +838,8 @@ fn the_binary_traces_one_step_of_a_scan_and_profiles_a_run() {
         let v = at(ram, cell) + 1;
         put(ram, cell, v);
         let big = if v > 1 { let product = v * 100; product } else { let none = 0; none };
-        return acc + v;
+        let kind = match cell { 0 | 1 => { let low = 1; low }, 3 => { let high = 3; high }, _ => 2 };
+        return acc + v + kind - 1;
     }
 }
 ",
@@ -875,7 +876,10 @@ output result <- tally.result;
         "  product: Int = 400 (0x190)",
         "  none: Int = - (not run)",
         "  big: Int = 400 (0x190)",
-        "  -> result: Int = 18 (0x12)",
+        "  low: Int = 1",
+        "  high: Int = - (not run)",
+        "  kind: Int = 1",
+        "  -> result: Int = 21 (0x15)",
     ] {
         assert!(stdout.contains(line), "{line:?} in {stdout}");
     }

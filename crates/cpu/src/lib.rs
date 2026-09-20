@@ -279,6 +279,20 @@ fn ran_values(entry: &orla_ir::Function, machine: &eval::Machine<'_, '_>) -> Vec
                     walk(&then.body, chosen, machine, ran);
                     walk(&otherwise.body, live && !chosen, machine, ran);
                 }
+                orla_ir::Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => {
+                    let value = machine.entry_value(*scrutinee)[0] as i32;
+                    let mut taken = false;
+                    for (values, block) in arms {
+                        let chosen = live && !taken && values.contains(&value);
+                        taken |= chosen;
+                        walk(&block.body, chosen, machine, ran);
+                    }
+                    walk(&otherwise.body, live && !taken, machine, ran);
+                }
                 orla_ir::Op::Loop { until, body, .. } => {
                     if let Some(until) = until {
                         walk(&until.body, live, machine, ran);
@@ -305,6 +319,12 @@ fn type_of(function: &orla_ir::Function, id: orla_ir::ValueId) -> Option<Type> {
                 orla_ir::Op::If {
                     then, otherwise, ..
                 } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                orla_ir::Op::Match {
+                    arms, otherwise, ..
+                } => arms
+                    .iter()
+                    .find_map(|(_, block)| find(&block.body, id))
+                    .or_else(|| find(&otherwise.body, id)),
                 orla_ir::Op::Loop { until, body, .. } => until
                     .as_ref()
                     .and_then(|block| find(&block.body, id))

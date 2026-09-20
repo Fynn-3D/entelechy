@@ -51,6 +51,14 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
                     walk(&then.body, input, use_);
                     walk(&otherwise.body, input, use_);
                 }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    for (_, block) in arms {
+                        walk(&block.body, input, use_);
+                    }
+                    walk(&otherwise.body, input, use_);
+                }
                 Op::Loop { until, body, .. } => {
                     if let Some(until) = until {
                         walk(&until.body, input, use_);
@@ -350,6 +358,18 @@ impl<'a> Renumber<'a> {
                     then: self.nested(then),
                     otherwise: self.nested(otherwise),
                 },
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee: self.map(*scrutinee),
+                    arms: arms
+                        .iter()
+                        .map(|(values, block)| (values.clone(), self.nested(block)))
+                        .collect(),
+                    otherwise: self.nested(otherwise),
+                },
                 Op::Loop {
                     count,
                     init,
@@ -418,7 +438,9 @@ impl<'a> Renumber<'a> {
             | Op::Sample(_)
             | Op::Count(_)
             | Op::Size(_) => {}
-            Op::If { .. } | Op::Loop { .. } => unreachable!("blocks are rewritten separately"),
+            Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => {
+                unreachable!("blocks are rewritten separately")
+            }
         }
     }
 }

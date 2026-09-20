@@ -73,13 +73,15 @@ fn the_vocabulary_matches_the_interpreter_bit_for_bit() {
             };
             let m = if c.on { mix(w, v, k) } else { normalize(w) * length(v) };
             let bits = (i << 3) ^ (i >> 1) | (n & 5) ^ ((0 - i) >>> 3);
+            let dense = match i % 7 { 0 => 1, 1 | 2 => { let two = i * 2; two }, 3 => 30, 5 => 50, _ => -1 };
+            let sparse = match i * 1000 { 0 => 7, 3000 => 8, 9000 => 9, -1 => 10, _ => 11 };
             let trig = tan(x * 0.1) + asin(fract(x * 0.13)) + acos(fract(x * 0.17)) + atan(x) + atan2(x, 3.0) + exp(k * x) + log(x + 1.0) + pow(x + 1.0, 1.5) + sqrt(x);
             let shaped = smoothstep(2.0, 9.0, x) + step(4.0, x) + floor(x * 0.9) + ceil(x * 0.2) + round(x * 0.5) + sign(x - 5.0) + abs(x - 6.0) + clamp(x, 2.0, 8.0) + max(x, 3.0) + min(x, 4.0);
             let ints = clamp(i * 3, 2, 20) + max(i, 4) + min(i, 3) + abs(i - 4) + sign(i - 2) + (i % 3) + (i / 2) + int(x * 1.5) + int(c.on) + (add_wrap(0x7FFFFFF0, i) >>> 28) + (sub_wrap(0x80000000, i) >>> 28) + (mul_wrap(0x40000001, i) >>> 29);
             let r = reflect(normalize(w), normalize(vec3(0.0, 1.0, 0.0))) + cross(w, v);
             let v4 = vec4(x, 1.0, 2.0, 3.0) * 0.5 + vec4(1, 2, 3, 4);
             let same = vec2(x, 1.0) == vec2(float(i), 1.0) && v != vec3(0.0, 0.0, 0.0) && !(x > 100.0);
-            return Out { f: s.sum + lin + walked.sum + trig + shaped + v4.w + dot(m, r) + time() + pointer().x + float(key(65)) + float(pointer_down()) + rate() + window().y + scale(), i: s.count + walked.count + bits + ints + int(same), v: m + r, b: same || c.on };
+            return Out { f: s.sum + lin + walked.sum + trig + shaped + v4.w + dot(m, r) + time() + pointer().x + float(key(65)) + float(pointer_down()) + rate() + window().y + scale(), i: s.count + walked.count + bits + ints + int(same) + dense * 3 + sparse, v: m + r, b: same || c.on };
         } }";
     let cell = orla_abi::Schema::new(vec![
         orla_abi::Scalar::Float,

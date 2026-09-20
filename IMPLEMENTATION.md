@@ -468,6 +468,21 @@ capability claim.
   report times every executed node (`run --profile`)
   ([trace](crates/cpu/src/lib.rs), [session](crates/cli/src/session.rs),
   [protocol](crates/cli/src/protocol.rs)).
+- `match` on an `Int` is an op of its own (`Op::Match`: the scrutinee,
+  arms of values and blocks, an `otherwise` block), typed by the
+  validator (no value in two arms, one result type), run by the
+  interpreter as a scan of the arms, emitted by the GPU as a WGSL
+  `switch` with literal selectors and a `default`, and by the JIT as a
+  `br_table` over a dense range (values spanning at most four times
+  their count plus sixteen) or a chain of compares otherwise; the
+  CHIP-8 and Thumb dispatches are written with it and their replays
+  hold on the three backends. A nested loop reads an enclosing loop's
+  carried value, and a scan's step its own inside a loop, because the
+  compiler reads those values through `Carried` just before the inner
+  loop begins and binds the names to the results, so no backend changed
+  ([lowering](crates/compiler/src/lower.rs),
+  [interpreter](crates/cpu/src/eval.rs), [WGSL](crates/gpu/src/wgsl.rs),
+  [JIT](crates/jit/src/codegen.rs)).
 - Undeclared capabilities are compile-time diagnostics with positions
   ([compile tests](crates/compiler/tests/compile.rs)); the IR validator remains
   the backstop.

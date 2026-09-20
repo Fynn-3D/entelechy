@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    AbiParam, FuncRef, InstBuilder, MemFlags, Signature, StackSlot, StackSlotData, StackSlotKind,
-    Value, types,
+    AbiParam, BlockArg, BlockCall, FuncRef, InstBuilder, JumpTableData, MemFlags, Signature,
+    StackSlot, StackSlotData, StackSlotKind, Value, types,
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -279,6 +279,12 @@ fn result_type(function: &Function) -> Type {
                 Op::If {
                     then, otherwise, ..
                 } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                Op::Match {
+                    arms, otherwise, ..
+                } => arms
+                    .iter()
+                    .find_map(|(_, block)| find(&block.body, id))
+                    .or_else(|| find(&otherwise.body, id)),
                 Op::Loop { until, body, .. } => until
                     .as_ref()
                     .and_then(|block| find(&block.body, id))
@@ -731,6 +737,83 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let else_words = self.words(&otherwise.result);
                 let else_args: Vec<_> = else_words.iter().map(|v| (*v).into()).collect();
                 self.b.ins().jump(join, &else_args);
+                self.b.switch_to_block(join);
+                self.b.seal_block(join);
+                self.b.block_params(join).to_vec()
+            }
+            Op::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => {
+                // A dense table when the values are close, else a chain of
+                // compares; either way each arm is a block jumping to one
+                // join with the result's words.
+                let value = self.words(scrutinee)[0];
+                let join = self.b.create_block();
+                for t in &word_types(self.module, ty) {
+                    self.b.append_block_param(join, *t);
+                }
+                let arm_blocks: Vec<_> = arms.iter().map(|_| self.b.create_block()).collect();
+                let default_block = self.b.create_block();
+                let all: Vec<(i32, usize)> = arms
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(index, (values, _))| values.iter().map(move |v| (*v, index)))
+                    .collect();
+                let bounds = all.iter().fold(None, |bounds: Option<(i32, i32)>, (v, _)| {
+                    Some(bounds.map_or((*v, *v), |(lo, hi)| (lo.min(*v), hi.max(*v))))
+                });
+                let dense = bounds.is_some_and(|(lo, hi)| {
+                    (hi as i64 - lo as i64 + 1) as usize <= all.len() * 4 + 16
+                });
+                if let (true, Some((lo, hi))) = (dense, bounds) {
+                    let span = (hi as i64 - lo as i64 + 1) as usize;
+                    let mut targets = vec![default_block; span];
+                    for (v, index) in &all {
+                        targets[(*v as i64 - lo as i64) as usize] = arm_blocks[*index];
+                    }
+                    let none: [BlockArg; 0] = [];
+                    let default_call = self.b.func.dfg.block_call(default_block, &none);
+                    let calls: Vec<BlockCall> = targets
+                        .iter()
+                        .map(|block| self.b.func.dfg.block_call(*block, &none))
+                        .collect();
+                    let table = self
+                        .b
+                        .create_jump_table(JumpTableData::new(default_call, &calls));
+                    // The index is taken unsigned, so a value below the
+                    // lowest wraps past the table and lands on the default.
+                    let index = if lo == 0 {
+                        value
+                    } else {
+                        self.b.ins().iadd_imm(value, -(lo as i64))
+                    };
+                    self.b.ins().br_table(index, table);
+                } else {
+                    for (v, index) in &all {
+                        let next = self.b.create_block();
+                        let hit = self.b.ins().icmp_imm(IntCC::Equal, value, *v as i64);
+                        self.b.ins().brif(hit, arm_blocks[*index], &[], next, &[]);
+                        self.b.switch_to_block(next);
+                        self.b.seal_block(next);
+                    }
+                    self.b.ins().jump(default_block, &[]);
+                }
+                for (block, (_, arm)) in arm_blocks.iter().zip(arms) {
+                    self.b.switch_to_block(*block);
+                    self.b.seal_block(*block);
+                    self.block(&arm.body);
+                    let words = self.words(&arm.result);
+                    let args: Vec<_> = words.iter().map(|v| (*v).into()).collect();
+                    self.b.ins().jump(join, &args);
+                }
+                self.b.switch_to_block(default_block);
+                self.b.seal_block(default_block);
+                self.block(&otherwise.body);
+                let words = self.words(&otherwise.result);
+                let args: Vec<_> = words.iter().map(|v| (*v).into()).collect();
+                self.b.ins().jump(join, &args);
                 self.b.switch_to_block(join);
                 self.b.seal_block(join);
                 self.b.block_params(join).to_vec()

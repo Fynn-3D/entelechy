@@ -823,6 +823,12 @@ fn result_type_of(function: &Function, id: ValueId) -> Type {
                 Op::If {
                     then, otherwise, ..
                 } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                Op::Match {
+                    arms, otherwise, ..
+                } => arms
+                    .iter()
+                    .find_map(|(_, block)| find(&block.body, id))
+                    .or_else(|| find(&otherwise.body, id)),
                 Op::Loop { until, body, .. } => until
                     .as_ref()
                     .and_then(|block| find(&block.body, id))
@@ -1251,6 +1257,12 @@ pub(crate) fn result_type(function: &Function) -> Type {
                 Op::If {
                     then, otherwise, ..
                 } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                Op::Match {
+                    arms, otherwise, ..
+                } => arms
+                    .iter()
+                    .find_map(|(_, block)| find(&block.body, id))
+                    .or_else(|| find(&otherwise.body, id)),
                 Op::Loop { until, body, .. } => until
                     .as_ref()
                     .and_then(|block| find(&block.body, id))
@@ -1393,6 +1405,32 @@ impl Emitter<'_> {
                 self.line(depth, "} else {");
                 let result = self.block(otherwise, depth + 1);
                 self.line(depth + 1, &format!("v{} = {result};", id.0));
+                self.line(depth, "}");
+                return;
+            }
+            Op::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => {
+                // WGSL's switch: every selector a literal, no fallthrough.
+                self.line(depth, &format!("var v{}: {ty_name};", id.0));
+                self.line(depth, &format!("switch ({}) {{", v(scrutinee)));
+                for (values, block) in arms {
+                    let selectors = values
+                        .iter()
+                        .map(|value| format!("{value}i"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.line(depth + 1, &format!("case {selectors}: {{"));
+                    let result = self.block(block, depth + 2);
+                    self.line(depth + 2, &format!("v{} = {result};", id.0));
+                    self.line(depth + 1, "}");
+                }
+                self.line(depth + 1, "default: {");
+                let result = self.block(otherwise, depth + 2);
+                self.line(depth + 2, &format!("v{} = {result};", id.0));
+                self.line(depth + 1, "}");
                 self.line(depth, "}");
                 return;
             }
@@ -1544,6 +1582,12 @@ impl Emitter<'_> {
                     Op::If {
                         then, otherwise, ..
                     } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                    Op::Match {
+                        arms, otherwise, ..
+                    } => arms
+                        .iter()
+                        .find_map(|(_, block)| find(&block.body, id))
+                        .or_else(|| find(&otherwise.body, id)),
                     Op::Loop { until, body, .. } => until
                         .as_ref()
                         .and_then(|block| find(&block.body, id))

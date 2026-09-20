@@ -138,14 +138,15 @@ Fields read where they lie.
    ones in branches not taken marked; `run --profile` and the report's
    `timings` time each node. Calls are not followed (a called function's
    frame is gone when the entry returns) and a loop's bindings show the
-   last iteration: two places to deepen if wanted. Next the language's
-   ceiling where it was felt writing the CHIP-8 and Thumb cores: a
-   `match` on an `Int` (a decoder is one, not an `if` chain; the GPU
-   emits a `switch`, the JIT a jump table), an outer loop's carried
-   value readable inside a nested loop, and whatever else those two
-   examples show once rewritten with them. Not taken up: 64-bit ints
-   (WGSL has none), strings (text is rows of codes), dynamic sizes
-   (a graph resizes by params), `put` outside `scan` (determinism).
+   last iteration: two places to deepen if wanted. The ceiling felt
+   writing the CHIP-8 and Thumb cores is lifted where it was felt:
+   `match` on an `Int` (a WGSL `switch`, a Cranelift jump table) and an
+   enclosing loop's carried value readable inside a nested loop; both
+   cores are rewritten with them. Not taken up: 64-bit ints (WGSL has
+   none), strings (text is rows of codes), dynamic sizes (a graph
+   resizes by params), `put` outside `scan` (determinism). What is
+   left of the ceiling shows up only by writing more; the next Kernel
+   that hurts names the next gap.
 2. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, the GPU scan
    is one thread (a machine belongs on the JIT).

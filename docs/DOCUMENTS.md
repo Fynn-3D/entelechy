@@ -62,9 +62,15 @@ and `<< >> >>>` work on `Int`s (the shift count modulo 32, `>>`
 arithmetic, `>>>` logical),
 binding between comparison and arithmetic as in Rust; `==` and
 `!=` compare scalars and whole vectors; `<` and the rest compare scalars;
-`if c { a } else { b }` and `loop n with x = init until done { next }` are
-expressions; `Name { a: .., b: .. }` builds a struct and
-`Name { ..base, a: .. }` copies one with some fields replaced.
+`if c { a } else { b }`, `match i { 0 => a, 1 | 2 => { let x = ..; x },
+_ => b }` (on an `Int`; the arm whose values hold it runs, else the `_`
+arm, which comes last and is required; no value in two arms; every arm
+the same type; the GPU runs it as a `switch`, the JIT as a jump table
+when the values are close) and `loop n with x = init until done { next }`
+are expressions; a nested loop reads the values the loops around it
+carry, and a scan's step its own, by name; `Name { a: .., b: .. }` builds
+a struct and `Name { ..base, a: .. }` copies one with some fields
+replaced.
 
 The math builtins are `floor`, `ceil`, `round`, `sign`, `fract`, `abs`,
 `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`,

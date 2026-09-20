@@ -475,6 +475,16 @@ pub enum ExprKind {
         /// Block taken otherwise.
         otherwise: Box<Block>,
     },
+    /// `match value { 1 => a, 2 | 3 => { ... }, _ => b }` on an `Int`: the
+    /// arm whose values hold the scrutinee runs, else the last, `_`.
+    Match {
+        /// The `Int` matched.
+        scrutinee: Box<Expr>,
+        /// The arms in order, each with the values it takes.
+        arms: Vec<MatchArm>,
+        /// The `_` arm.
+        otherwise: Box<Block>,
+    },
     /// `loop count with name = init until done { body }`.
     Loop {
         /// Compile-time iteration bound.
@@ -488,6 +498,15 @@ pub enum ExprKind {
         /// The body, yielding the next carried value.
         body: Box<Block>,
     },
+}
+
+/// One arm of a `match`: the values it takes and what it yields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MatchArm {
+    /// The `Int` values, as written, `1 | 2 | 3`.
+    pub values: Vec<Spanned<i32>>,
+    /// The arm's block: `{ lets; value }`, or a bare expression.
+    pub body: Block,
 }
 
 /// A parse failure with a position.

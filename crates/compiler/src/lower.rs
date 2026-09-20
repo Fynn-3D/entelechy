@@ -1104,6 +1104,76 @@ impl<'a> Builder<'a> {
                     },
                 ))
             }
+            ExprKind::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => {
+                let scrutinee_id = self.value(scrutinee)?;
+                if self.ty(scrutinee_id) != Type::Int {
+                    return Err(semantic(
+                        scrutinee.span,
+                        format!(
+                            "`match` takes an Int, found {}",
+                            self.describe(self.ty(scrutinee_id))
+                        ),
+                    ));
+                }
+                let id = self.reserve(Type::Int);
+                let mut seen: std::collections::BTreeMap<i32, Span> =
+                    std::collections::BTreeMap::new();
+                let mut lowered = Vec::with_capacity(arms.len());
+                let mut ty: Option<(Type, Span)> = None;
+                for arm in arms {
+                    for value in &arm.values {
+                        if seen.insert(value.value, value.span).is_some() {
+                            return Err(semantic(
+                                value.span,
+                                format!("`match` already has an arm for {}", value.value),
+                            ));
+                        }
+                    }
+                    let block = self.nested(&arm.body)?;
+                    let arm_ty = self.ty(block.result);
+                    if let Some((first, _)) = ty
+                        && first != arm_ty
+                    {
+                        return Err(semantic(
+                            arm.body.result.span,
+                            format!(
+                                "`match` arms give {} and {}; they must agree",
+                                self.describe(first),
+                                self.describe(arm_ty)
+                            ),
+                        ));
+                    }
+                    ty = Some((arm_ty, arm.body.result.span));
+                    lowered.push((arm.values.iter().map(|v| v.value).collect(), block));
+                }
+                let otherwise_block = self.nested(otherwise)?;
+                let otherwise_ty = self.ty(otherwise_block.result);
+                if let Some((first, _)) = ty
+                    && first != otherwise_ty
+                {
+                    return Err(semantic(
+                        otherwise.result.span,
+                        format!(
+                            "`match` arms give {} and {}; they must agree",
+                            self.describe(first),
+                            self.describe(otherwise_ty)
+                        ),
+                    ));
+                }
+                Ok(self.place(
+                    id,
+                    otherwise_ty,
+                    Op::Match {
+                        scrutinee: scrutinee_id,
+                        arms: lowered,
+                        otherwise: otherwise_block,
+                    },
+                ))
+            }
             ExprKind::Loop {
                 count,
                 name,
@@ -1119,6 +1189,32 @@ impl<'a> Builder<'a> {
                 }
                 let init_id = self.value(init)?;
                 let carried = self.ty(init_id);
+                // The values the enclosing loop (or the scan) carries are
+                // read here, before this loop begins, and stand under their
+                // names inside it: they do not change while it runs, and
+                // `Carried` inside would mean this loop's own value.
+                let outer: Vec<(String, Type)> = {
+                    let mut seen = std::collections::BTreeSet::new();
+                    self.locals
+                        .iter()
+                        .rev()
+                        .filter_map(|(local_name, local)| match local {
+                            Local::Carried { depth, ty } if *depth == self.loops.len() => seen
+                                .insert(local_name.clone())
+                                .then(|| (local_name.clone(), *ty)),
+                            Local::Value(_) => {
+                                seen.insert(local_name.clone());
+                                None
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let shadows = outer.len();
+                for (outer_name, ty) in outer {
+                    let value = self.emit(ty, Op::Carried);
+                    self.locals.push((outer_name, Local::Value(value)));
+                }
                 let id = self.reserve(carried);
                 self.loops.push(carried);
                 self.locals.push((
@@ -1160,6 +1256,7 @@ impl<'a> Builder<'a> {
                     Ok((until_block, body_block))
                 })();
                 self.locals.pop();
+                self.locals.truncate(self.locals.len() - shadows);
                 self.loops.pop();
                 let (until_block, body_block) = lowered?;
                 Ok(self.place(

@@ -672,6 +672,36 @@ impl<'a> Checker<'a> {
                 }
                 then_ty
             }
+            Op::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => {
+                if self.operand(*scrutinee, position)? != Type::Int {
+                    return Err(self.fail(format!("{position} matches on a non-Int")));
+                }
+                let mut seen = std::collections::BTreeSet::new();
+                let mut ty = None;
+                for (values, block) in arms {
+                    for value in values {
+                        if !seen.insert(*value) {
+                            return Err(
+                                self.fail(format!("{position} matches {value} in two arms"))
+                            );
+                        }
+                    }
+                    let arm_ty = self.block(block)?;
+                    if ty.is_some_and(|ty| ty != arm_ty) {
+                        return Err(self.fail(format!("{position} arms yield different types")));
+                    }
+                    ty = Some(arm_ty);
+                }
+                let otherwise_ty = self.block(otherwise)?;
+                if ty.is_some_and(|ty| ty != otherwise_ty) {
+                    return Err(self.fail(format!("{position} arms yield different types")));
+                }
+                otherwise_ty
+            }
             Op::Loop {
                 count,
                 init,
@@ -911,6 +941,12 @@ fn result_type(function: &Function) -> Type {
                 Op::If {
                     then, otherwise, ..
                 } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                Op::Match {
+                    arms, otherwise, ..
+                } => arms
+                    .iter()
+                    .find_map(|(_, block)| find(&block.body, id))
+                    .or_else(|| find(&otherwise.body, id)),
                 Op::Loop { until, body, .. } => until
                     .as_ref()
                     .and_then(|block| find(&block.body, id))
@@ -965,6 +1001,13 @@ fn block_writes(instructions: &[Instruction], writers: &[bool]) -> bool {
             Op::If {
                 then, otherwise, ..
             } => block_writes(&then.body, writers) || block_writes(&otherwise.body, writers),
+            Op::Match {
+                arms, otherwise, ..
+            } => {
+                arms.iter()
+                    .any(|(_, block)| block_writes(&block.body, writers))
+                    || block_writes(&otherwise.body, writers)
+            }
             Op::Loop { until, body, .. } => {
                 until
                     .as_ref()
@@ -984,6 +1027,12 @@ fn first_writing_call(instructions: &[Instruction], writers: &[bool]) -> Option<
             Op::If {
                 then, otherwise, ..
             } => first_writing_call(&then.body, writers)
+                .or_else(|| first_writing_call(&otherwise.body, writers)),
+            Op::Match {
+                arms, otherwise, ..
+            } => arms
+                .iter()
+                .find_map(|(_, block)| first_writing_call(&block.body, writers))
                 .or_else(|| first_writing_call(&otherwise.body, writers)),
             Op::Loop { until, body, .. } => until
                 .as_ref()

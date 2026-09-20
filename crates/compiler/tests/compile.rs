@@ -566,3 +566,46 @@ fn a_function_writes_a_memory_for_the_steps_but_init_does_not() {
     .to_string();
     assert!(message.contains("use `scan`"), "{message}");
 }
+
+#[test]
+fn a_match_is_checked_for_its_values_types_and_last_arm() {
+    let prefix = "kernel t.k@1 { requires { field.write; } output r: Rows<Int>; compute { let i = element();";
+    compile(&format!(
+        "{prefix} return match i {{ 1 => 10, 2 | 3 => {{ let x = i; x }}, _ => 0 }}; }} }}"
+    ))
+    .unwrap_or_else(|error| panic!("{error}"));
+    let message = compile(&format!(
+        "{prefix} return match i {{ 1 => 10, 2 | 1 => 20, _ => 0 }}; }} }}"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("already has an arm for 1"), "{message}");
+    let message = compile(&format!(
+        "{prefix} return match i {{ 1 => 10, _ => 0.5 }}; }} }}"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("must agree"), "{message}");
+    let message = compile(&format!(
+        "{prefix} return match float(i) {{ 1 => 10, _ => 0 }}; }} }}"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("takes an Int"), "{message}");
+    let message = compile(&format!(
+        "{prefix} return match i {{ 1 => 10, 2 => 20 }}; }} }}"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("`_ => ...`"), "{message}");
+}
+
+#[test]
+fn a_nested_loop_reads_the_enclosing_loops_carried_value() {
+    // The inner loop reads `outer`, carried by the loop around it, and a
+    // scan's step reads its own carried value inside a loop.
+    compile("kernel t.k@1 { requires { field.write; } output r: Rows<Int>; compute { return loop 3 with outer = 1 { loop 2 with inner = outer { inner + outer } }; } }")
+        .unwrap_or_else(|error| panic!("{error}"));
+    compile("kernel t.s@1 { requires { field.read; field.write; } input rows: Rows<Int>; output r: Rows<Int>; scan with acc = 0 { return loop 2 with k = acc { k + acc + sample(rows) }; } }")
+        .unwrap_or_else(|error| panic!("{error}"));
+}

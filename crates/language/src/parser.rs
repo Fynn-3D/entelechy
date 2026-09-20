@@ -2,9 +2,9 @@
 
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
-    BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, Kernel, MergeDecl,
-    NodeDecl, NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, ScatterDecl, SourceRef, Span,
-    Spanned, StructDecl, TypeAlias, Use,
+    BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, Kernel, MatchArm,
+    MergeDecl, NodeDecl, NodeKind, NodeMember, ParamDecl, ParseError, PortDecl, ScatterDecl,
+    SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -762,6 +762,18 @@ impl Parser {
     }
 
     /// `{ let ...; return expr; }` or `{ let ...; expr }`.
+    /// A `match` arm's body: a block, or a bare expression.
+    fn arm_body(&mut self) -> Result<Block, ParseError> {
+        if self.is_punct("{") {
+            self.block()
+        } else {
+            Ok(Block {
+                lets: Vec::new(),
+                result: self.expr()?,
+            })
+        }
+    }
+
     fn block(&mut self) -> Result<Block, ParseError> {
         self.expect_punct("{")?;
         let mut lets = Vec::new();
@@ -1012,6 +1024,66 @@ impl Parser {
                     span,
                 })
             }
+            Token::Ident(name) if name == "match" => {
+                self.next();
+                let scrutinee = self.expr()?;
+                self.expect_punct("{")?;
+                let mut arms = Vec::new();
+                let otherwise = loop {
+                    if self.is_keyword("_") {
+                        self.next();
+                        self.expect_punct("=>")?;
+                        let body = self.arm_body()?;
+                        self.eat_punct(",");
+                        self.expect_punct("}")?;
+                        break body;
+                    }
+                    let mut values = Vec::new();
+                    loop {
+                        let negative = self.eat_punct("-");
+                        let (value, value_span) = match self.next() {
+                            (Token::Int(value), value_span) => (value, value_span),
+                            (token, token_span) => {
+                                return Err(ParseError {
+                                    span: token_span,
+                                    message: format!(
+                                        "a `match` arm takes integer values or `_`, found {}",
+                                        token.describe()
+                                    ),
+                                });
+                            }
+                        };
+                        values.push(Spanned {
+                            value: if negative {
+                                value.wrapping_neg()
+                            } else {
+                                value
+                            },
+                            span: value_span,
+                        });
+                        if !self.eat_punct("|") {
+                            break;
+                        }
+                    }
+                    self.expect_punct("=>")?;
+                    let body = self.arm_body()?;
+                    arms.push(MatchArm { values, body });
+                    if !self.eat_punct(",") && !self.is_punct("}") {
+                        return Err(self.unexpected("`,` between `match` arms"));
+                    }
+                    if self.is_punct("}") {
+                        return Err(self.error("a `match` ends with a `_ => ...` arm"));
+                    }
+                };
+                Ok(Expr {
+                    kind: ExprKind::Match {
+                        scrutinee: Box::new(scrutinee),
+                        arms,
+                        otherwise: Box::new(otherwise),
+                    },
+                    span,
+                })
+            }
             Token::Ident(name) if name == "loop" => {
                 self.next();
                 let count = match self.next() {
@@ -1098,9 +1170,9 @@ impl Parser {
 }
 
 /// Words that cannot name values.
-const RESERVED: [&str; 20] = [
-    "let", "return", "if", "else", "loop", "with", "until", "kernel", "struct", "type", "node",
-    "use", "from", "input", "output", "memory", "graph", "merge", "scan", "scatter",
+const RESERVED: [&str; 21] = [
+    "let", "return", "if", "else", "match", "loop", "with", "until", "kernel", "struct", "type",
+    "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan", "scatter",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -1199,6 +1271,40 @@ kernel image.grayscale@1 {
             unreachable!()
         };
         assert!(matches!(negated.kind, ExprKind::Neg(_)));
+    }
+
+    #[test]
+    fn match_arms_take_values_blocks_and_a_last_underscore() {
+        let kernel = parse(
+            "kernel t.k@1 { compute {
+                let k = match op & 15 { 0 => 1, 1 | -2 => { let x = 2; x }, _ => 0, };
+                return k;
+            } }",
+        )
+        .unwrap();
+        let ExprKind::Match {
+            arms, otherwise, ..
+        } = &kernel.compute.lets[0].1.kind
+        else {
+            panic!("expected a match");
+        };
+        assert_eq!(arms.len(), 2);
+        assert_eq!(
+            arms[1].values.iter().map(|v| v.value).collect::<Vec<_>>(),
+            [1, -2]
+        );
+        assert_eq!(arms[1].body.lets.len(), 1);
+        assert!(otherwise.lets.is_empty());
+        let error =
+            parse("kernel t.k@1 { compute { return match 1 { 0 => 1, 2 => 3 }; } }").unwrap_err();
+        assert!(error.message.contains("`_ => ...`"), "{}", error.message);
+        let error =
+            parse("kernel t.k@1 { compute { return match 1 { x => 1, _ => 3 }; } }").unwrap_err();
+        assert!(
+            error.message.contains("integer values"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

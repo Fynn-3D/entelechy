@@ -1031,3 +1031,28 @@ fn memories_are_written_step_by_step_and_come_out_as_outputs() {
         "the input is a copy's source, never written"
     );
 }
+
+#[test]
+fn a_match_takes_the_arm_holding_the_value_or_the_last() {
+    // Several values an arm, negative values, a block arm with a `let`,
+    // and the `_` arm; nested in a loop so it runs per iteration.
+    let source = "kernel test.pick@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element() - 3; let picked = match i { 0 => 100, 1 | 2 => { let doubled = i * 2; doubled }, -1 | -3 => -7, 5 => 5, _ => 42 }; let summed = loop 4 with acc = 0 { acc + match index() { 0 | 3 => 1, _ => 10 } }; return picked * 1000 + summed; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(10),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let words: Vec<i32> = (0..10)
+        .map(|i| host.element(output, i).unwrap()[0] as i32)
+        .collect();
+    // i = -3 .. 6; the loop adds 1 + 10 + 10 + 1 = 22 every time.
+    let picked = [-7, 42, -7, 100, 2, 4, 42, 42, 5, 42];
+    assert_eq!(words, picked.map(|p| p * 1000 + 22).to_vec(), "{words:?}");
+}

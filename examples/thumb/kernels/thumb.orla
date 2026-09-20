@@ -188,7 +188,8 @@ kernel thumb.step@1 {
         let off5 = (op >>> 6) & 31;
         let sp = at(regs, 13);
         let carry = bit(flags, 1);
-        let step = if top == 0 {
+        let step = match top {
+            0 => {
             if (op >>> 11) & 3 != 3 {
                 // Format 1: shift by an immediate; a zero LSR or ASR is 32.
                 let opc = (op >>> 11) & 3;
@@ -204,7 +205,8 @@ kernel thumb.step@1 {
                 put(regs, rd, r);
                 Step { next: pc + 2, flags: if bit(op, 9) == 0 { add_flags(vs, operand, r) } else { sub_flags(vs, operand, r) } }
             }
-        } else if top == 1 {
+            },
+            1 => {
             // Format 3: move, compare, add, subtract an 8-bit immediate.
             let opc = (op >>> 11) & 3;
             let d = (op >>> 8) & 7;
@@ -213,43 +215,46 @@ kernel thumb.step@1 {
             else if opc == 1 { Step { next: pc + 2, flags: sub_flags(a, imm8, sub_wrap(a, imm8)) } }
             else if opc == 2 { let r = add_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: add_flags(a, imm8, r) } }
             else { let r = sub_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: sub_flags(a, imm8, r) } }
-        } else if top == 2 {
+            },
+            2 => {
             if (op >>> 10) == 0x10 {
                 // Format 4: the ALU on two low registers.
                 let opc = (op >>> 6) & 15;
                 let amount = vs & 0xFF;
-                if opc == 0 { let r = vd & vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
-                else if opc == 1 { let r = vd ^ vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
-                else if opc == 2 { let s = lsl(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
-                else if opc == 3 { let s = lsr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
-                else if opc == 4 { let s = asr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
-                else if opc == 5 {
-                    // Add with carry: the carry out of either addition.
-                    let r1 = add_wrap(vd, vs);
-                    let r = add_wrap(r1, carry);
-                    let c = if ult(r1, vd) || (carry == 1 && r1 == -1) { 2 } else { 0 };
-                    let v = if ((vd ^ r) & (vs ^ r)) < 0 { 1 } else { 0 };
-                    put(regs, rd, r);
-                    Step { next: pc + 2, flags: nz(r) | c | v }
+                match opc {
+                    0 => { let r = vd & vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    1 => { let r = vd ^ vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    2 => { let s = lsl(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    3 => { let s = lsr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    4 => { let s = asr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    5 => {
+                        // Add with carry: the carry out of either addition.
+                        let r1 = add_wrap(vd, vs);
+                        let r = add_wrap(r1, carry);
+                        let c = if ult(r1, vd) || (carry == 1 && r1 == -1) { 2 } else { 0 };
+                        let v = if ((vd ^ r) & (vs ^ r)) < 0 { 1 } else { 0 };
+                        put(regs, rd, r);
+                        Step { next: pc + 2, flags: nz(r) | c | v }
+                    },
+                    6 => {
+                        // Subtract with carry: rd - rs - (1 - C).
+                        let r1 = sub_wrap(vd, vs);
+                        let r = sub_wrap(r1, 1 - carry);
+                        let c = if !ult(vd, vs) && !(carry == 0 && r1 == 0) { 2 } else { 0 };
+                        let v = if ((vd ^ vs) & (vd ^ r)) < 0 { 1 } else { 0 };
+                        put(regs, rd, r);
+                        Step { next: pc + 2, flags: nz(r) | c | v }
+                    },
+                    7 => { let s = ror(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } },
+                    8 => Step { next: pc + 2, flags: keep_cv(flags, vd & vs) },
+                    9 => { let r = sub_wrap(0, vs); put(regs, rd, r); Step { next: pc + 2, flags: sub_flags(0, vs, r) } },
+                    10 => Step { next: pc + 2, flags: sub_flags(vd, vs, sub_wrap(vd, vs)) },
+                    11 => Step { next: pc + 2, flags: add_flags(vd, vs, add_wrap(vd, vs)) },
+                    12 => { let r = vd | vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    13 => { let r = mul_wrap(vd, vs); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    14 => { let r = vd & (vs ^ -1); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } },
+                    _ => { let r = vs ^ -1; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
                 }
-                else if opc == 6 {
-                    // Subtract with carry: rd - rs - (1 - C).
-                    let r1 = sub_wrap(vd, vs);
-                    let r = sub_wrap(r1, 1 - carry);
-                    let c = if !ult(vd, vs) && !(carry == 0 && r1 == 0) { 2 } else { 0 };
-                    let v = if ((vd ^ vs) & (vd ^ r)) < 0 { 1 } else { 0 };
-                    put(regs, rd, r);
-                    Step { next: pc + 2, flags: nz(r) | c | v }
-                }
-                else if opc == 7 { let s = ror(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
-                else if opc == 8 { Step { next: pc + 2, flags: keep_cv(flags, vd & vs) } }
-                else if opc == 9 { let r = sub_wrap(0, vs); put(regs, rd, r); Step { next: pc + 2, flags: sub_flags(0, vs, r) } }
-                else if opc == 10 { Step { next: pc + 2, flags: sub_flags(vd, vs, sub_wrap(vd, vs)) } }
-                else if opc == 11 { Step { next: pc + 2, flags: add_flags(vd, vs, add_wrap(vd, vs)) } }
-                else if opc == 12 { let r = vd | vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
-                else if opc == 13 { let r = mul_wrap(vd, vs); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
-                else if opc == 14 { let r = vd & (vs ^ -1); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
-                else { let r = vs ^ -1; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
             } else if (op >>> 10) == 0x11 {
                 // Format 5: add, compare, move on high registers, and BX.
                 let opc = (op >>> 8) & 3;
@@ -292,7 +297,8 @@ kernel thumb.step@1 {
                     Step { next: pc + 2, flags: flags }
                 }
             }
-        } else if top == 3 {
+            },
+            3 => {
             // Format 9: load or store a word or byte at an immediate offset.
             let b = bit(op, 12);
             let l = bit(op, 11);
@@ -300,7 +306,8 @@ kernel thumb.step@1 {
             if l == 1 { put(regs, rd, if b == 1 { rd8(ram, a) } else { rd32(ram, a) }) }
             else if b == 1 { wr8(ram, a, vd) } else { wr32(ram, a, vd) };
             Step { next: pc + 2, flags: flags }
-        } else if top == 4 {
+            },
+            4 => {
             if bit(op, 12) == 0 {
                 // Format 10: a halfword at an immediate offset.
                 let a = add_wrap(vs, off5 * 2);
@@ -313,7 +320,8 @@ kernel thumb.step@1 {
                 if bit(op, 11) == 1 { put(regs, d, rd32(ram, a)) } else { wr32(ram, a, at(regs, d)) };
                 Step { next: pc + 2, flags: flags }
             }
-        } else if top == 5 {
+            },
+            5 => {
             if bit(op, 12) == 0 {
                 // Format 12: an address relative to the pc or the stack.
                 let base = if bit(op, 11) == 1 { sp } else { (pc + 4) & -4 };
@@ -347,7 +355,8 @@ kernel thumb.step@1 {
             } else {
                 Step { next: pc + 2, flags: flags }
             }
-        } else if top == 6 {
+            },
+            6 => {
             if bit(op, 12) == 0 {
                 // Format 15: store or load multiple, the base written back.
                 let b = (op >>> 8) & 7;
@@ -368,7 +377,8 @@ kernel thumb.step@1 {
                 else if holds(cond, flags) { Step { next: pc + 4 + sext(imm8, 8) * 2, flags: flags } }
                 else { Step { next: pc + 2, flags: flags } }
             }
-        } else {
+            },
+            _ => {
             let off11 = op & 0x7FF;
             if bit(op, 12) == 0 {
                 // Format 18: an unconditional branch.
@@ -382,6 +392,7 @@ kernel thumb.step@1 {
                 let target = add_wrap(at(regs, 14), off11 << 1);
                 put(regs, 14, (pc + 2) | 1);
                 Step { next: target, flags: flags }
+            }
             }
         };
         put(regs, 15, step.next & 0xFFFF);

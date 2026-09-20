@@ -252,6 +252,16 @@ enum Instr {
         dst: usize,
         n: usize,
     },
+    Match {
+        scrutinee: usize,
+        /// Each arm's values, code and result; the first holding the
+        /// value runs.
+        arms: Vec<(Vec<i32>, Vec<Instr>, usize)>,
+        otherwise: Vec<Instr>,
+        otherwise_result: usize,
+        dst: usize,
+        n: usize,
+    },
     Loop {
         count: u32,
         init: usize,
@@ -791,6 +801,29 @@ impl FunctionCompiler<'_> {
                     condition: self.loc(condition).at,
                     then: then_code,
                     then_result,
+                    otherwise: otherwise_code,
+                    otherwise_result,
+                    dst: dst.at,
+                    n: dst.n,
+                }
+            }
+            Op::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => {
+                let dst = define(self);
+                let arms = arms
+                    .iter()
+                    .map(|(values, block)| {
+                        let (code, result) = self.nested(block);
+                        (values.clone(), code, result)
+                    })
+                    .collect();
+                let (otherwise_code, otherwise_result) = self.nested(otherwise);
+                Instr::Match {
+                    scrutinee: self.loc(scrutinee).at,
+                    arms,
                     otherwise: otherwise_code,
                     otherwise_result,
                     dst: dst.at,
@@ -1494,6 +1527,27 @@ impl<'p, 's> Machine<'p, 's> {
                     self.run(otherwise, fp)?;
                     *otherwise_result
                 };
+                if result != *dst {
+                    self.stack
+                        .copy_within(fp + result..fp + result + n, fp + dst);
+                }
+            }
+            Instr::Match {
+                scrutinee,
+                arms,
+                otherwise,
+                otherwise_result,
+                dst,
+                n,
+            } => {
+                let value = s[fp + scrutinee] as i32;
+                let (code, result) = arms
+                    .iter()
+                    .find(|(values, _, _)| values.contains(&value))
+                    .map_or((otherwise, *otherwise_result), |(_, code, result)| {
+                        (code, *result)
+                    });
+                self.run(code, fp)?;
                 if result != *dst {
                     self.stack
                         .copy_within(fp + result..fp + result + n, fp + dst);

@@ -74,6 +74,27 @@ fn write_instruction(
             write_block(f, otherwise, depth + 1)?;
             writeln!(f, "{indent}}}")
         }
+        Op::Match {
+            scrutinee,
+            arms,
+            otherwise,
+        } => {
+            writeln!(f, "{indent}{id}: {ty} = match {scrutinee} {{")?;
+            for (values, block) in arms {
+                let values = values
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                writeln!(f, "{indent}  {values} => {{")?;
+                write_block(f, block, depth + 2)?;
+                writeln!(f, "{indent}  }}")?;
+            }
+            writeln!(f, "{indent}  _ => {{")?;
+            write_block(f, otherwise, depth + 2)?;
+            writeln!(f, "{indent}  }}")?;
+            writeln!(f, "{indent}}}")
+        }
         Op::Loop {
             count,
             init,
@@ -127,6 +148,7 @@ impl fmt::Display for Op {
                 write!(f, "{}({})", intrinsic.name(), list(args))
             }
             Self::If { condition, .. } => write!(f, "if {condition} {{ ... }}"),
+            Self::Match { scrutinee, .. } => write!(f, "match {scrutinee} {{ ... }}"),
             Self::Loop { count, init, .. } => write!(f, "loop {count} carrying {init} {{ ... }}"),
             Self::Carried => f.write_str("carried"),
             Self::Index => f.write_str("index"),

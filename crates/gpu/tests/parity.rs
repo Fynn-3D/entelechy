@@ -1286,3 +1286,34 @@ fn long_rows_are_dispatched_as_a_grid() {
             .all(|(i, w)| *w == i as u32 * 3 + 1)
     );
 }
+
+#[test]
+fn a_match_is_a_switch_on_the_gpu() {
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.pick@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element() - 3; let picked = match i { 0 => 100, 1 | 2 => { let doubled = i * 2; doubled }, -1 | -3 => -7, 5 => 5, _ => 42 }; let summed = loop 4 with acc = 0 { acc + match index() { 0 | 3 => 1, _ => 10 } }; return picked * 1000 + summed; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 16);
+    let invocation = orla_abi::Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(10),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = orla_cpu::CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu).unwrap().words().to_vec();
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let device = host.resident(out).unwrap().expect("resident");
+    let bytes = Backend::download(&gpu, device, cpu_words.len() * 4).unwrap();
+    let gpu_words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    assert_eq!(cpu_words, gpu_words);
+    assert_eq!(cpu_words[3] as i32, 100_022);
+}

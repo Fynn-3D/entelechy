@@ -671,6 +671,17 @@ pub enum Op {
         /// Block taken otherwise.
         otherwise: Block,
     },
+    /// Evaluate the arm whose values hold the `Int` `scrutinee`, else
+    /// `otherwise`, and yield that block's result. Only that block runs.
+    /// No value appears in two arms.
+    Match {
+        /// The `Int` matched.
+        scrutinee: ValueId,
+        /// The arms in order: the values each takes, and its block.
+        arms: Vec<(Vec<i32>, Block)>,
+        /// The block taken when no arm holds the value.
+        otherwise: Block,
+    },
     /// Run `body` at most `count` times, threading one carried value: it
     /// starts as `init`, each iteration reads it through [`Op::Carried`] and
     /// yields its replacement. Before each iteration `until` is evaluated
@@ -790,6 +801,14 @@ impl Function {
                         Op::If {
                             then, otherwise, ..
                         } => count(&then.body) + count(&otherwise.body),
+                        Op::Match {
+                            arms, otherwise, ..
+                        } => {
+                            arms.iter()
+                                .map(|(_, block)| count(&block.body))
+                                .sum::<usize>()
+                                + count(&otherwise.body)
+                        }
                         Op::Loop { until, body, .. } => {
                             until.as_ref().map_or(0, |block| count(&block.body)) + count(&body.body)
                         }
