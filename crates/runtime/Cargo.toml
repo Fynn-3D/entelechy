@@ -11,7 +11,6 @@ orla-rules = { path = "../rules" }
 orla-abi = { path = "../abi" }
 orla-ir = { path = "../ir" }
 orla-compiler = { path = "../compiler" }
-orla-language = { path = "../language" }
 orla-cpu = { path = "../cpu" }
 
 [lints]

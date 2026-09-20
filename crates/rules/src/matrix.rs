@@ -8,7 +8,7 @@
 /// a float.
 pub trait Arith {
     /// A float, as this backend holds it.
-    type V: Copy;
+    type V: Clone;
     /// `a + b`.
     fn add(&mut self, a: Self::V, b: Self::V) -> Self::V;
     /// `a - b`.
@@ -47,28 +47,22 @@ impl Arith for Floats {
 pub struct Text;
 
 impl Arith for Text {
-    type V = &'static str;
-    fn add(&mut self, a: &'static str, b: &'static str) -> &'static str {
-        leak(format!("({a} + {b})"))
+    type V = String;
+    fn add(&mut self, a: String, b: String) -> String {
+        format!("({a} + {b})")
     }
-    fn sub(&mut self, a: &'static str, b: &'static str) -> &'static str {
-        leak(format!("({a} - {b})"))
+    fn sub(&mut self, a: String, b: String) -> String {
+        format!("({a} - {b})")
     }
-    fn mul(&mut self, a: &'static str, b: &'static str) -> &'static str {
-        leak(format!("({a} * {b})"))
+    fn mul(&mut self, a: String, b: String) -> String {
+        format!("({a} * {b})")
     }
-    fn div(&mut self, a: &'static str, b: &'static str) -> &'static str {
-        leak(format!("({a} / {b})"))
+    fn div(&mut self, a: String, b: String) -> String {
+        format!("({a} / {b})")
     }
-    fn neg(&mut self, a: &'static str) -> &'static str {
-        leak(format!("(-{a})"))
+    fn neg(&mut self, a: String) -> String {
+        format!("(-{a})")
     }
-}
-
-/// Text built while a shader is generated, once per Kernel version;
-/// the pieces are small and few.
-fn leak(text: String) -> &'static str {
-    Box::leak(text.into_boxed_str())
 }
 
 /// The sum of the products `x[k] * y[k]`, first product first.
@@ -89,7 +83,10 @@ pub fn mul_mat_mat<A: Arith>(a: &mut A, n: usize, x: &[A::V], y: &[A::V]) -> Vec
     let mut out = Vec::with_capacity(n * n);
     for c in 0..n {
         for r in 0..n {
-            out.push(dot(a, (0..n).map(|k| (x[k * n + r], y[c * n + k]))));
+            out.push(dot(
+                a,
+                (0..n).map(|k| (x[k * n + r].clone(), y[c * n + k].clone())),
+            ));
         }
     }
     out
@@ -98,30 +95,30 @@ pub fn mul_mat_mat<A: Arith>(a: &mut A, n: usize, x: &[A::V], y: &[A::V]) -> Vec
 /// `x * v` for a matrix of order `n` and a column vector.
 pub fn mul_mat_vec<A: Arith>(a: &mut A, n: usize, x: &[A::V], v: &[A::V]) -> Vec<A::V> {
     (0..n)
-        .map(|r| dot(a, (0..n).map(|c| (x[c * n + r], v[c]))))
+        .map(|r| dot(a, (0..n).map(|c| (x[c * n + r].clone(), v[c].clone()))))
         .collect()
 }
 
 /// `v * x` for a row vector and a matrix of order `n`.
 pub fn mul_vec_mat<A: Arith>(a: &mut A, n: usize, v: &[A::V], x: &[A::V]) -> Vec<A::V> {
     (0..n)
-        .map(|c| dot(a, (0..n).map(|r| (v[r], x[c * n + r]))))
+        .map(|c| dot(a, (0..n).map(|r| (v[r].clone(), x[c * n + r].clone()))))
         .collect()
 }
 
 /// The matrix with rows and columns exchanged.
-pub fn transpose<V: Copy>(n: usize, x: &[V]) -> Vec<V> {
+pub fn transpose<V: Clone>(n: usize, x: &[V]) -> Vec<V> {
     let mut out = Vec::with_capacity(n * n);
     for c in 0..n {
         for r in 0..n {
-            out.push(x[r * n + c]);
+            out.push(x[r * n + c].clone());
         }
     }
     out
 }
 
 /// The matrix without row `row` and column `col`.
-fn minor<V: Copy>(n: usize, x: &[V], row: usize, col: usize) -> Vec<V> {
+fn minor<V: Clone>(n: usize, x: &[V], row: usize, col: usize) -> Vec<V> {
     let mut out = Vec::with_capacity((n - 1) * (n - 1));
     for c in 0..n {
         if c == col {
@@ -129,7 +126,7 @@ fn minor<V: Copy>(n: usize, x: &[V], row: usize, col: usize) -> Vec<V> {
         }
         for r in 0..n {
             if r != row {
-                out.push(x[c * n + r]);
+                out.push(x[c * n + r].clone());
             }
         }
     }
@@ -140,13 +137,13 @@ fn minor<V: Copy>(n: usize, x: &[V], row: usize, col: usize) -> Vec<V> {
 /// row.
 pub fn determinant<A: Arith>(a: &mut A, n: usize, x: &[A::V]) -> A::V {
     if n == 1 {
-        return x[0];
+        return x[0].clone();
     }
     let mut total = None;
     for c in 0..n {
         let sub = minor(n, x, 0, c);
         let d = determinant(a, n - 1, &sub);
-        let term = a.mul(x[c * n], d);
+        let term = a.mul(x[c * n].clone(), d);
         total = Some(match (total, c % 2) {
             (None, _) => term,
             (Some(total), 0) => a.add(total, term),
@@ -168,7 +165,7 @@ pub fn inverse<A: Arith>(a: &mut A, n: usize, x: &[A::V]) -> Vec<A::V> {
             let sub = minor(n, x, c, r);
             let d = determinant(a, n - 1, &sub);
             let cofactor = if (r + c) % 2 == 0 { d } else { a.neg(d) };
-            out.push(a.div(cofactor, det));
+            out.push(a.div(cofactor, det.clone()));
         }
     }
     out
@@ -204,7 +201,11 @@ mod tests {
         }
         let mut t = Text;
         assert_eq!(
-            determinant(&mut t, 2, &["a", "b", "c", "d"]),
+            determinant(
+                &mut t,
+                2,
+                &["a".to_string(), "b".into(), "c".into(), "d".into()]
+            ),
             "((a * d) - (c * b))"
         );
     }

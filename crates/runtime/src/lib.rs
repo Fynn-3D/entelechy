@@ -728,19 +728,14 @@ impl Runtime {
         self.prepare_module(module, source)
     }
 
-    /// Prepares an already parsed Kernel. `id` names an anonymous inline
-    /// Kernel; `source` is kept for inspection.
-    pub fn prepare_kernel(
+    /// Backend-prepares a module already compiled and validated; `source`
+    /// is kept for inspection. The runtime takes IR: what compiled it is
+    /// the caller's business.
+    pub fn prepare_module(
         &self,
-        kernel: &orla_language::Kernel,
-        id: Option<&KernelId>,
+        module: Validated,
         source: &str,
     ) -> Result<Candidate, PrepareError> {
-        let module = orla_compiler::compile_kernel(kernel, id).map_err(PrepareError::Compile)?;
-        self.prepare_module(module, source)
-    }
-
-    fn prepare_module(&self, module: Validated, source: &str) -> Result<Candidate, PrepareError> {
         prepare_on(self.backend_for(&module), module, source.to_owned())
     }
 

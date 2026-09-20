@@ -253,6 +253,20 @@ words, so a change to the interpreter's rounding needs a change here.
 
 ## Open
 
+A structure round against the Code Rules (no behaviour change; the
+matrix and every replay bit for bit): the rules every backend shares
+moved out of the CPU crate into `orla-rules`; `gpu::execute` is a
+skeleton over `stage`, `fold`, `combine` and the adoption of outputs;
+the interpreter is `eval/{code,compile,run}.rs`; the lowering is
+`lower/{mod,declare,expr,builtins}.rs`; the matrix formulas' text form
+builds `String`s, so nothing is leaked; and the runtime takes IR
+(`prepare_module`), the session compiling what it publishes, so
+`orla-runtime` no longer depends on the language crate. Left as they
+are, deliberately: the flat dispatch matches (`Machine::step`,
+`Fx::instruction`, `validate::instruction`, `Builder::value`,
+`Builder::call`), each one arm per operation, which a split would
+only scatter.
+
 Seen once, not again: `crates/cli/tests/protocol.rs`
 `fields_come_in_through_write_and_buttons_reach_kernels` failed in a
 full `cargo test --workspace` that ran beside a release replay loop:

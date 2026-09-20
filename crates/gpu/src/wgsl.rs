@@ -317,8 +317,8 @@ fn button_down(code: i32) -> bool {{
         }
         let name = wgsl_type(ty);
         let n = usize::from(ty.order().unwrap_or(0));
-        let entries: Vec<&'static str> = (0..n * n)
-            .map(|k| &*Box::leak(format!("m[{}][{}]", k / n, k % n).into_boxed_str()))
+        let entries: Vec<String> = (0..n * n)
+            .map(|k| format!("m[{}][{}]", k / n, k % n))
             .collect();
         let inverse = orla_rules::matrix::inverse(&mut orla_rules::matrix::Text, n, &entries);
         let _ = writeln!(

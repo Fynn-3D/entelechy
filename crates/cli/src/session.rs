@@ -1147,7 +1147,10 @@ impl Session {
                 kernels.insert(id, text);
                 continue;
             }
-            match self.runtime.prepare_kernel(&kernel, Some(&id), &text) {
+            let prepared = orla_compiler::compile_kernel(&kernel, Some(&id))
+                .map_err(orla_runtime::PrepareError::Compile)
+                .and_then(|module| self.runtime.prepare_module(module, &text));
+            match prepared {
                 Ok(candidate) => {
                     let expect = match self.runtime.kernel(&id) {
                         Some(version) => Expect::Generation(version.generation()),
@@ -1263,8 +1266,10 @@ impl Session {
             }
         }
         document.inherit(&structs, &types, &functions);
+        let module =
+            orla_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| e.to_string())?;
         self.runtime
-            .prepare_kernel(&document.kernels[0], None, source)
+            .prepare_module(module, source)
             .map_err(|e| e.to_string())
     }
 
