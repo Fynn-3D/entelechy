@@ -19,3 +19,8 @@ all = "warn"
 # tens of seconds, so that crate alone is optimised in dev builds.
 [profile.dev.package.orla-cpu]
 opt-level = 3
+
+# Line tables are enough for a backtrace and compile faster than full
+# debug info.
+[profile.dev]
+debug = "line-tables-only"
