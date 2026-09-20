@@ -25,9 +25,33 @@ pub const INPUT_BINDING: u32 = 3;
 pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
 /// button bits]`, `[pointer.x, pointer.y, depth, rate]`, two slots of key
-/// bits, `[wheel.x, wheel.y, window.x, window.y]`, and `[scale, 0, 0,
-/// 0]`. Each input then has `[width, height, depth, 0]`.
+/// bits, `[wheel.x, wheel.y, window.x, window.y]`, and `[scale, fold, 0,
+/// 0]`, where `fold` is the elements each unit of `gid.y` stands for
+/// when a long `Rows` domain is dispatched as a grid of workgroups (zero
+/// otherwise). Each input then has `[width, height, depth, 0]`.
 pub const CONTEXT_HEAD: usize = 6;
+
+/// The most workgroups one dispatch dimension takes.
+pub const MAX_GROUPS: u32 = 65535;
+
+/// How a map over `domain` is dispatched: the workgroups in x, y and z,
+/// and the fold (elements per unit of `gid.y`) when rows are too many
+/// for one dimension.
+pub fn dispatch(domain: orla_abi::Domain) -> (u32, u32, u32, u32) {
+    let groups_x = domain.width().div_ceil(WORKGROUP);
+    if domain.shape() == orla_abi::Shape::Rows && groups_x > MAX_GROUPS {
+        let fold = MAX_GROUPS * WORKGROUP;
+        let strips = domain.width().div_ceil(fold);
+        (MAX_GROUPS, strips.div_ceil(WORKGROUP), 1, fold)
+    } else {
+        (
+            groups_x,
+            domain.height().div_ceil(WORKGROUP),
+            domain.depth(),
+            0,
+        )
+    }
+}
 
 fn wgsl_type(ty: Type) -> String {
     match ty {
@@ -57,6 +81,8 @@ fn literal(value: &Value) -> String {
     };
     match value {
         Value::Float(v) => f(*v),
+        // WGSL has no literal for the most negative int; its bits do.
+        Value::Int(i32::MIN) => "bitcast<i32>(0x80000000u)".to_owned(),
         Value::Int(v) => format!("{v}i"),
         Value::Bool(v) => v.to_string(),
         Value::Vec2([x, y]) => format!("vec2<f32>({}, {})", f(*x), f(*y)),
@@ -230,6 +256,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let n = u32(ctx[0].x);
     var carried: {} = init();
     for (var i: u32 = 0u; i < n; i = i + 1u) {{
+        storageBarrier();
         carried = entry(vec3<f32>(f32(i), 0.0, 0.0), i, carried);
         store_out0(i, carried);
     }}
@@ -250,11 +277,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let w = u32(ctx[0].x);
     let h = u32(ctx[0].y);
     let d = u32(ctx[1].z);
-    if (gid.x >= w || gid.y >= h || gid.z >= d) {{
+    let fold = u32(ctx[5].y);
+    var x = gid.x;
+    var y = gid.y;
+    if (fold != 0u) {{
+        x = gid.x + gid.y * fold;
+        y = 0u;
+    }}
+    if (x >= w || y >= h || gid.z >= d) {{
         return;
     }}
-    let element = (gid.z * h + gid.y) * w + gid.x;
-    let coord = vec3<f32>(f32(gid.x), f32(gid.y), f32(gid.z));
+    let element = (gid.z * h + y) * w + x;
+    let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
     store_out0(element, entry(coord, element));
 }}"
     );

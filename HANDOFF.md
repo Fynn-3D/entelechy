@@ -54,7 +54,10 @@ plan is drawn every evaluation and the extent is in the cache key; the
 listener tells a WebSocket from a line client by the first four bytes
 (`GET `) and never serves a page, so a bridge's files are opened from
 disk, and `orla.js` is a classic script because browsers refuse module
-imports between file URLs; the JIT is on Cranelift 0.131 (the newest that
+imports between file URLs; a scan's step loop on the GPU has a
+`storageBarrier()` between steps because the Metal compiler hoisted a
+step's first memory load out of the loop (every step read the starting
+value; the CHIP-8 escaped it by writing before reading); the JIT is on Cranelift 0.131 (the newest that
 builds on Rust 1.93), returns every function's result through a
 caller-provided stack slot (arm64 refuses a struct's worth of return
 registers), keeps `unsafe` to the one crate that calls the code it made
@@ -86,31 +89,34 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-Machines on the JIT, which now compiles map and scan Kernels (a scan's
-`init`, its carried words and index outside loops, `put` into working
-copies of the memories that become the outputs; every example replay
-passes on `--backend jit` bit for bit against the CPU, the raymarch,
-voxel and showcase scenes twenty to thirty-five times faster and four
-million CHIP-8 steps in 0.18 s against 1.67 s). Two directions, in order:
+A GBA. The measurement is in: the [Thumb core](examples/thumb/README.md)
+(every format of the ARM7TDMI's 16-bit set, ~300 lines) steps 19 million
+instructions a second on the JIT, 1.6 million on the interpreter, which
+is above a GBA's 16.78 MHz clock before wait states, so the core is not
+the problem; the machine around it is. In order:
 
-1. A GBA as the flagship machine: an ARM7TDMI core as one scan with
-   memories for the BIOS, work RAM, VRAM, palettes and OAM, a PPU as map
-   Kernels over VRAM. Sixteen million cycles a second is about the
-   interpreter-free step rate the CHIP-8 measured (twenty-two million
-   trivial steps a second), so a GBA needs each step to be several
-   instructions and the PPU on the GPU; measure a scan with a real
-   fetch-decode-execute before committing to full speed.
-2. Reductions and scatters on the JIT: the map part compiles as today,
-   the fold and the in-order apply follow the CPU's, so a scene that
-   mixes them no longer switches to the interpreter mid-graph.
+1. The ARM state of the core (32-bit instructions, the same registers
+   and flags, mode switching through BX), since the BIOS and interrupt
+   handlers run in ARM; and the banked registers and CPSR/SPSR for IRQ
+   and SWI.
+2. The memory map as one `Words` memory with an address decoder in the
+   store and load functions (BIOS, EWRAM, IWRAM, I/O registers, palette,
+   VRAM, OAM, ROM), the ROM a `.field` input the Host watches.
+3. A PPU as map Kernels over VRAM, palette and OAM for mode 0 and mode 3
+   first, one scanline's worth of steps between draws; then DMA, timers,
+   the interrupt controller and the keypad register.
+4. Reductions and scatters on the JIT, so a scene that mixes them no
+   longer switches to the interpreter mid-graph.
 
-Done on the way: `put` inside functions with a Field parameter (a store
-helper for a core, refused in `init` even through a call) and `>>>`,
-the logical shift right, on all three backends.
+Done on the way here: `put` inside functions with a Field parameter
+(refused in `init` even through a call), `>>>`, `add_wrap`/`sub_wrap`/
+`mul_wrap`, hexadecimal literals, and two GPU fixes (a `storageBarrier`
+between a scan's steps, long `Rows` maps dispatched as a grid).
 
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
-words, so a change to the interpreter's rounding needs a change here.
+words, so a change to the interpreter's rounding needs a change here;
+the GPU runs a scan on one thread, so a machine belongs on the JIT.
 
 ## Open
 

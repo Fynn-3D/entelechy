@@ -76,6 +76,10 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   registers and screen as memories a `scan` reads and writes step by
   step and feeds back frame to frame; every opcode; the replay plays it
   with the keys.
+- [thumb](thumb/README.md): a Thumb core, the ARM7TDMI's 16-bit
+  instruction set as a `scan` over RAM and registers, every format,
+  running a hand-assembled program that paints a framebuffer; the JIT
+  steps it faster than a Game Boy Advance's own clock.
 - [text](text/README.md): text as rows of glyphs drawn by a Kernel through
   a font atlas the Host watches; a title, the whole font, and the pointer's
   x as digits; the font was baked from rows of bits by `run --save`.

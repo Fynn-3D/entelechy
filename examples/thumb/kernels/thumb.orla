@@ -1,0 +1,410 @@
+// A Thumb core: the ARM7TDMI's 16-bit instruction set (the mode a Game
+// Boy Advance runs most of its code in) as ordered work. RAM is a memory
+// of words addressed by the byte, the registers a memory of sixteen plus
+// the flags; each step fetches, decodes and executes one instruction. The
+// program is a hand-assembled loop that paints a 32 by 32 framebuffer
+// in RAM and counts its frames; the picture is the framebuffer.
+type Words = Rows<Int>;
+
+// The program, halfword by halfword (bytes by arithmetic, as the CHIP-8
+// does). Registers: r7 the framebuffer, r6 the frame count t, r5 y, r4 x.
+// Each cell of the picture is (x ^ y) + t; `tick` then counts the frame
+// into RAM at 0x0FF0, going through the stack, a high register and a
+// halfword store on the way, so most of the instruction formats run.
+kernel thumb.rom@1 {
+    requires { field.write; }
+    output result: Words;
+    compute {
+        let i = element();
+        return
+            if i == 0 { 0x4F10 }        // 0000: ldr r7, =0x1000
+            else if i == 1 { 0x2600 }   // 0002: movs r6, #0
+            else if i == 2 { 0x2500 }   // 0004: frame: movs r5, #0
+            else if i == 3 { 0x2400 }   // 0006: yloop: movs r4, #0
+            else if i == 4 { 0x0020 }   // 0008: xloop: movs r0, r4
+            else if i == 5 { 0x4068 }   // 000A: eors r0, r5
+            else if i == 6 { 0x1980 }   // 000C: adds r0, r0, r6
+            else if i == 7 { 0x0169 }   // 000E: lsls r1, r5, #5
+            else if i == 8 { 0x1909 }   // 0010: adds r1, r1, r4
+            else if i == 9 { 0x5478 }   // 0012: strb r0, [r7, r1]
+            else if i == 10 { 0x3401 }  // 0014: adds r4, #1
+            else if i == 11 { 0x2C20 }  // 0016: cmp r4, #32
+            else if i == 12 { 0xD1F6 }  // 0018: bne xloop
+            else if i == 13 { 0x3501 }  // 001A: adds r5, #1
+            else if i == 14 { 0x2D20 }  // 001C: cmp r5, #32
+            else if i == 15 { 0xD1F2 }  // 001E: bne yloop
+            else if i == 16 { 0xF000 }  // 0020: bl tick
+            else if i == 17 { 0xF801 }
+            else if i == 18 { 0xE7EE }  // 0024: b frame
+            else if i == 19 { 0xB501 }  // 0026: tick: push {r0, lr}
+            else if i == 20 { 0x3601 }  // 0028: adds r6, #1
+            else if i == 21 { 0x4807 }  // 002A: ldr r0, =0x0FF0
+            else if i == 22 { 0x6006 }  // 002C: str r6, [r0]
+            else if i == 23 { 0xB082 }  // 002E: sub sp, #8
+            else if i == 24 { 0x9601 }  // 0030: str r6, [sp, #4]
+            else if i == 25 { 0x9801 }  // 0032: ldr r0, [sp, #4]
+            else if i == 26 { 0xB002 }  // 0034: add sp, #8
+            else if i == 27 { 0x4680 }  // 0036: mov r8, r0
+            else if i == 28 { 0x4440 }  // 0038: add r0, r8
+            else if i == 29 { 0x87F8 }  // 003A: strh r0, [r7, #62]
+            else if i == 30 { 0x8FF9 }  // 003C: ldrh r1, [r7, #62]
+            else if i == 31 { 0x5F3A }  // 003E: ldrsh r2, [r7, r4]
+            else if i == 32 { 0x43D3 }  // 0040: mvns r3, r2
+            else if i == 33 { 0xBD01 }  // 0042: pop {r0, pc}
+            else if i == 34 { 0x1000 }  // 0044: .word 0x1000
+            else if i == 35 { 0x0000 }
+            else if i == 36 { 0x0FF0 }  // 0048: .word 0x0FF0
+            else if i == 37 { 0x0000 }
+            else { 0 };
+    }
+}
+
+// RAM at power-on: the program's halfwords packed little-endian into
+// words from address 0, zeros elsewhere (8 KiB: 2048 words).
+kernel thumb.boot@1 {
+    requires { field.read; field.write; }
+    input rom: Words;
+    output result: Words;
+    compute {
+        let w = element();
+        let lo = if 2 * w < count(rom) { at(rom, 2 * w) } else { 0 };
+        let hi = if 2 * w + 1 < count(rom) { at(rom, 2 * w + 1) } else { 0 };
+        return lo | (hi << 16);
+    }
+}
+
+// The registers: r0..r15 at 0..15 (r13 the stack pointer, r14 the link,
+// r15 the address of the instruction to run), the flags at 16 as
+// N Z C V in bits 3..0. The stack starts at 0x0FE0, the program at 0.
+kernel thumb.start@1 {
+    requires { field.write; }
+    output result: Words;
+    compute {
+        let r = element();
+        return if r == 13 { 0x0FE0 } else { 0 };
+    }
+}
+
+// One instruction per element of `ticks`; the halfword it ran is the
+// output, for the record.
+kernel thumb.step@1 {
+    requires { field.read; field.write; }
+    input ticks: Rows<Int>;
+    memory ram: Words;
+    memory regs: Words;
+    output result: Rows<Int>;
+    struct Shifted { value: Int; carry: Int; }
+    struct Step { next: Int; flags: Int; }
+
+    // Memory by the byte, halfword and word, little-endian, aligned
+    // by dropping the low address bits; a store yields what it wrote.
+    fn rd32(m: Words, a: Int) -> Int { return at(m, a >>> 2); }
+    fn rd16(m: Words, a: Int) -> Int { return (at(m, a >>> 2) >>> ((a & 2) * 8)) & 0xFFFF; }
+    fn rd8(m: Words, a: Int) -> Int { return (at(m, a >>> 2) >>> ((a & 3) * 8)) & 0xFF; }
+    fn wr32(m: Words, a: Int, v: Int) -> Int { return put(m, a >>> 2, v); }
+    fn wr16(m: Words, a: Int, v: Int) -> Int {
+        let sh = (a & 2) * 8;
+        let w = at(m, a >>> 2);
+        return put(m, a >>> 2, (w & ((0xFFFF << sh) ^ -1)) | ((v & 0xFFFF) << sh));
+    }
+    fn wr8(m: Words, a: Int, v: Int) -> Int {
+        let sh = (a & 3) * 8;
+        let w = at(m, a >>> 2);
+        return put(m, a >>> 2, (w & ((0xFF << sh) ^ -1)) | ((v & 0xFF) << sh));
+    }
+
+    // Flags: N and Z from a result; the unsigned compare; the carry and
+    // overflow of an add and of a subtract.
+    fn nz(v: Int) -> Int { return (if v < 0 { 8 } else { 0 }) | (if v == 0 { 4 } else { 0 }); }
+    fn ult(a: Int, b: Int) -> Bool { return (a ^ 0x80000000) < (b ^ 0x80000000); }
+    fn add_flags(a: Int, b: Int, r: Int) -> Int {
+        return nz(r) | (if ult(r, a) { 2 } else { 0 }) | (if ((a ^ r) & (b ^ r)) < 0 { 1 } else { 0 });
+    }
+    fn sub_flags(a: Int, b: Int, r: Int) -> Int {
+        return nz(r) | (if ult(a, b) { 0 } else { 2 }) | (if ((a ^ b) & (a ^ r)) < 0 { 1 } else { 0 });
+    }
+    fn keep_cv(flags: Int, v: Int) -> Int { return nz(v) | (flags & 3); }
+    fn keep_v(flags: Int, v: Int, carry: Int) -> Int { return nz(v) | (carry << 1) | (flags & 1); }
+    fn bit(v: Int, n: Int) -> Int { return (v >>> n) & 1; }
+    fn sext(v: Int, bits: Int) -> Int { return (v << (32 - bits)) >> (32 - bits); }
+    fn popcount8(bits: Int) -> Int { return loop 8 with n = 0 { n + bit(bits, index()) }; }
+
+    // The barrel shifter by an amount 0..255, with the carry out; an
+    // amount of zero leaves the value and the carry alone.
+    fn lsl(v: Int, n: Int, c: Int) -> Shifted {
+        return if n == 0 { Shifted { value: v, carry: c } }
+            else if n < 32 { Shifted { value: v << n, carry: bit(v, 32 - n) } }
+            else if n == 32 { Shifted { value: 0, carry: v & 1 } }
+            else { Shifted { value: 0, carry: 0 } };
+    }
+    fn lsr(v: Int, n: Int, c: Int) -> Shifted {
+        return if n == 0 { Shifted { value: v, carry: c } }
+            else if n < 32 { Shifted { value: v >>> n, carry: bit(v, n - 1) } }
+            else if n == 32 { Shifted { value: 0, carry: bit(v, 31) } }
+            else { Shifted { value: 0, carry: 0 } };
+    }
+    fn asr(v: Int, n: Int, c: Int) -> Shifted {
+        return if n == 0 { Shifted { value: v, carry: c } }
+            else if n < 32 { Shifted { value: v >> n, carry: bit(v, n - 1) } }
+            else { Shifted { value: v >> 31, carry: bit(v, 31) } };
+    }
+    fn ror(v: Int, n: Int, c: Int) -> Shifted {
+        let k = n & 31;
+        return if n == 0 { Shifted { value: v, carry: c } }
+            else if k == 0 { Shifted { value: v, carry: bit(v, 31) } }
+            else { Shifted { value: (v >>> k) | (v << (32 - k)), carry: bit(v, k - 1) } };
+    }
+
+    // Whether a condition holds under the flags.
+    fn holds(cond: Int, f: Int) -> Bool {
+        let n = bit(f, 3) == 1;
+        let z = bit(f, 2) == 1;
+        let c = bit(f, 1) == 1;
+        let v = bit(f, 0) == 1;
+        return if cond == 0 { z } else if cond == 1 { !z }
+            else if cond == 2 { c } else if cond == 3 { !c }
+            else if cond == 4 { n } else if cond == 5 { !n }
+            else if cond == 6 { v } else if cond == 7 { !v }
+            else if cond == 8 { c && !z } else if cond == 9 { !c || z }
+            else if cond == 10 { n == v } else if cond == 11 { n != v }
+            else if cond == 12 { !z && n == v } else if cond == 13 { z || n != v }
+            else { true };
+    }
+
+    // Registers: a read of r15 is the instruction's address plus four,
+    // as the pipeline shows it; a write to r15 is a branch.
+    fn reg(r: Words, i: Int, pc: Int) -> Int { return if i == 15 { pc + 4 } else { at(r, i) }; }
+
+    scan with n = 0 {
+        let pc = at(regs, 15);
+        let flags = at(regs, 16);
+        let op = rd16(ram, pc);
+        let top = op >>> 13;
+        let rd = op & 7;
+        let rs = (op >>> 3) & 7;
+        let vd = at(regs, rd);
+        let vs = at(regs, rs);
+        let imm8 = op & 0xFF;
+        let off5 = (op >>> 6) & 31;
+        let sp = at(regs, 13);
+        let carry = bit(flags, 1);
+        let step = if top == 0 {
+            if (op >>> 11) & 3 != 3 {
+                // Format 1: shift by an immediate; a zero LSR or ASR is 32.
+                let opc = (op >>> 11) & 3;
+                let s = if opc == 0 { lsl(vs, off5, carry) }
+                    else if opc == 1 { lsr(vs, if off5 == 0 { 32 } else { off5 }, carry) }
+                    else { asr(vs, if off5 == 0 { 32 } else { off5 }, carry) };
+                put(regs, rd, s.value);
+                Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) }
+            } else {
+                // Format 2: add or subtract a register or a 3-bit immediate.
+                let operand = if bit(op, 10) == 1 { (op >>> 6) & 7 } else { at(regs, (op >>> 6) & 7) };
+                let r = if bit(op, 9) == 0 { add_wrap(vs, operand) } else { sub_wrap(vs, operand) };
+                put(regs, rd, r);
+                Step { next: pc + 2, flags: if bit(op, 9) == 0 { add_flags(vs, operand, r) } else { sub_flags(vs, operand, r) } }
+            }
+        } else if top == 1 {
+            // Format 3: move, compare, add, subtract an 8-bit immediate.
+            let opc = (op >>> 11) & 3;
+            let d = (op >>> 8) & 7;
+            let a = at(regs, d);
+            if opc == 0 { put(regs, d, imm8); Step { next: pc + 2, flags: keep_cv(flags, imm8) } }
+            else if opc == 1 { Step { next: pc + 2, flags: sub_flags(a, imm8, sub_wrap(a, imm8)) } }
+            else if opc == 2 { let r = add_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: add_flags(a, imm8, r) } }
+            else { let r = sub_wrap(a, imm8); put(regs, d, r); Step { next: pc + 2, flags: sub_flags(a, imm8, r) } }
+        } else if top == 2 {
+            if (op >>> 10) == 0x10 {
+                // Format 4: the ALU on two low registers.
+                let opc = (op >>> 6) & 15;
+                let amount = vs & 0xFF;
+                if opc == 0 { let r = vd & vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
+                else if opc == 1 { let r = vd ^ vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
+                else if opc == 2 { let s = lsl(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
+                else if opc == 3 { let s = lsr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
+                else if opc == 4 { let s = asr(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
+                else if opc == 5 {
+                    // Add with carry: the carry out of either addition.
+                    let r1 = add_wrap(vd, vs);
+                    let r = add_wrap(r1, carry);
+                    let c = if ult(r1, vd) || (carry == 1 && r1 == -1) { 2 } else { 0 };
+                    let v = if ((vd ^ r) & (vs ^ r)) < 0 { 1 } else { 0 };
+                    put(regs, rd, r);
+                    Step { next: pc + 2, flags: nz(r) | c | v }
+                }
+                else if opc == 6 {
+                    // Subtract with carry: rd - rs - (1 - C).
+                    let r1 = sub_wrap(vd, vs);
+                    let r = sub_wrap(r1, 1 - carry);
+                    let c = if !ult(vd, vs) && !(carry == 0 && r1 == 0) { 2 } else { 0 };
+                    let v = if ((vd ^ vs) & (vd ^ r)) < 0 { 1 } else { 0 };
+                    put(regs, rd, r);
+                    Step { next: pc + 2, flags: nz(r) | c | v }
+                }
+                else if opc == 7 { let s = ror(vd, amount, carry); put(regs, rd, s.value); Step { next: pc + 2, flags: keep_v(flags, s.value, s.carry) } }
+                else if opc == 8 { Step { next: pc + 2, flags: keep_cv(flags, vd & vs) } }
+                else if opc == 9 { let r = sub_wrap(0, vs); put(regs, rd, r); Step { next: pc + 2, flags: sub_flags(0, vs, r) } }
+                else if opc == 10 { Step { next: pc + 2, flags: sub_flags(vd, vs, sub_wrap(vd, vs)) } }
+                else if opc == 11 { Step { next: pc + 2, flags: add_flags(vd, vs, add_wrap(vd, vs)) } }
+                else if opc == 12 { let r = vd | vs; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
+                else if opc == 13 { let r = mul_wrap(vd, vs); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
+                else if opc == 14 { let r = vd & (vs ^ -1); put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
+                else { let r = vs ^ -1; put(regs, rd, r); Step { next: pc + 2, flags: keep_cv(flags, r) } }
+            } else if (op >>> 10) == 0x11 {
+                // Format 5: add, compare, move on high registers, and BX.
+                let opc = (op >>> 8) & 3;
+                let hd = rd | (bit(op, 7) << 3);
+                let hs = rs | (bit(op, 6) << 3);
+                let a = reg(regs, hd, pc);
+                let b = reg(regs, hs, pc);
+                if opc == 0 {
+                    let r = add_wrap(a, b);
+                    if hd == 15 { Step { next: r & -2, flags: flags } }
+                    else { put(regs, hd, r); Step { next: pc + 2, flags: flags } }
+                } else if opc == 1 { Step { next: pc + 2, flags: sub_flags(a, b, sub_wrap(a, b)) } }
+                else if opc == 2 {
+                    if hd == 15 { Step { next: b & -2, flags: flags } }
+                    else { put(regs, hd, b); Step { next: pc + 2, flags: flags } }
+                } else {
+                    // BX: a branch to a Thumb address; an ARM address (bit 0
+                    // clear) is followed as Thumb, this core knowing no other.
+                    Step { next: b & -2, flags: flags }
+                }
+            } else if (op >>> 11) == 0x9 {
+                // Format 6: a word relative to the pipeline's pc, word-aligned.
+                put(regs, (op >>> 8) & 7, rd32(ram, ((pc + 4) & -4) + imm8 * 4));
+                Step { next: pc + 2, flags: flags }
+            } else {
+                // Formats 7 and 8: load or store with a register offset.
+                let a = add_wrap(at(regs, rs), at(regs, (op >>> 6) & 7));
+                if bit(op, 9) == 0 {
+                    let l = bit(op, 11);
+                    let b = bit(op, 10);
+                    if l == 1 { put(regs, rd, if b == 1 { rd8(ram, a) } else { rd32(ram, a) }) }
+                    else if b == 1 { wr8(ram, a, vd) } else { wr32(ram, a, vd) };
+                    Step { next: pc + 2, flags: flags }
+                } else {
+                    let sh = (op >>> 10) & 3;
+                    if sh == 0 { wr16(ram, a, vd) }
+                    else if sh == 1 { put(regs, rd, rd16(ram, a)) }
+                    else if sh == 2 { put(regs, rd, sext(rd8(ram, a), 8)) }
+                    else { put(regs, rd, sext(rd16(ram, a), 16)) };
+                    Step { next: pc + 2, flags: flags }
+                }
+            }
+        } else if top == 3 {
+            // Format 9: load or store a word or byte at an immediate offset.
+            let b = bit(op, 12);
+            let l = bit(op, 11);
+            let a = add_wrap(vs, if b == 1 { off5 } else { off5 * 4 });
+            if l == 1 { put(regs, rd, if b == 1 { rd8(ram, a) } else { rd32(ram, a) }) }
+            else if b == 1 { wr8(ram, a, vd) } else { wr32(ram, a, vd) };
+            Step { next: pc + 2, flags: flags }
+        } else if top == 4 {
+            if bit(op, 12) == 0 {
+                // Format 10: a halfword at an immediate offset.
+                let a = add_wrap(vs, off5 * 2);
+                if bit(op, 11) == 1 { put(regs, rd, rd16(ram, a)) } else { wr16(ram, a, vd) };
+                Step { next: pc + 2, flags: flags }
+            } else {
+                // Format 11: a word relative to the stack pointer.
+                let d = (op >>> 8) & 7;
+                let a = add_wrap(sp, imm8 * 4);
+                if bit(op, 11) == 1 { put(regs, d, rd32(ram, a)) } else { wr32(ram, a, at(regs, d)) };
+                Step { next: pc + 2, flags: flags }
+            }
+        } else if top == 5 {
+            if bit(op, 12) == 0 {
+                // Format 12: an address relative to the pc or the stack.
+                let base = if bit(op, 11) == 1 { sp } else { (pc + 4) & -4 };
+                put(regs, (op >>> 8) & 7, add_wrap(base, imm8 * 4));
+                Step { next: pc + 2, flags: flags }
+            } else if (op >>> 8) == 0xB0 {
+                // Format 13: the stack pointer moved by a word count.
+                let k = (op & 127) * 4;
+                put(regs, 13, if bit(op, 7) == 1 { sub_wrap(sp, k) } else { add_wrap(sp, k) });
+                Step { next: pc + 2, flags: flags }
+            } else if (op >>> 9) & 3 == 2 {
+                // Format 14: push or pop the low registers, and lr or pc.
+                let extra = bit(op, 8);
+                let list = op & 0xFF;
+                if bit(op, 11) == 0 {
+                    let base = sub_wrap(sp, 4 * (popcount8(list) + extra));
+                    let after = loop 8 with a = base {
+                        if bit(list, index()) == 1 { wr32(ram, a, at(regs, index())); a + 4 } else { a }
+                    };
+                    if extra == 1 { wr32(ram, after, at(regs, 14)) } else { 0 };
+                    put(regs, 13, base);
+                    Step { next: pc + 2, flags: flags }
+                } else {
+                    let after = loop 8 with a = sp {
+                        if bit(list, index()) == 1 { put(regs, index(), rd32(ram, a)); a + 4 } else { a }
+                    };
+                    let target = if extra == 1 { rd32(ram, after) & -2 } else { pc + 2 };
+                    put(regs, 13, if extra == 1 { after + 4 } else { after });
+                    Step { next: target, flags: flags }
+                }
+            } else {
+                Step { next: pc + 2, flags: flags }
+            }
+        } else if top == 6 {
+            if bit(op, 12) == 0 {
+                // Format 15: store or load multiple, the base written back.
+                let b = (op >>> 8) & 7;
+                let list = op & 0xFF;
+                let l = bit(op, 11);
+                let after = loop 8 with a = at(regs, b) {
+                    if bit(list, index()) == 1 {
+                        if l == 1 { put(regs, index(), rd32(ram, a)) } else { wr32(ram, a, at(regs, index())) };
+                        a + 4
+                    } else { a }
+                };
+                if l == 0 || bit(list, b) == 0 { put(regs, b, after) } else { 0 };
+                Step { next: pc + 2, flags: flags }
+            } else {
+                // Format 16: a conditional branch; format 17, SWI, is a no-op.
+                let cond = (op >>> 8) & 15;
+                if cond == 15 { Step { next: pc + 2, flags: flags } }
+                else if holds(cond, flags) { Step { next: pc + 4 + sext(imm8, 8) * 2, flags: flags } }
+                else { Step { next: pc + 2, flags: flags } }
+            }
+        } else {
+            let off11 = op & 0x7FF;
+            if bit(op, 12) == 0 {
+                // Format 18: an unconditional branch.
+                Step { next: pc + 4 + sext(off11, 11) * 2, flags: flags }
+            } else if bit(op, 11) == 0 {
+                // Format 19, first half: the high part of the offset into lr.
+                put(regs, 14, add_wrap(pc + 4, sext(off11, 11) << 12));
+                Step { next: pc + 2, flags: flags }
+            } else {
+                // Format 19, second half: the call, lr the return with bit 0.
+                let target = add_wrap(at(regs, 14), off11 << 1);
+                put(regs, 14, (pc + 2) | 1);
+                Step { next: target, flags: flags }
+            }
+        };
+        put(regs, 15, step.next & 0xFFFF);
+        put(regs, 16, step.flags);
+        return op;
+    }
+}
+
+// The framebuffer at 0x1000, 32 by 32 bytes, each a colour by its value.
+kernel thumb.view@1 {
+    requires { field.read; field.write; }
+    input ram: Words;
+    output result: Image;
+    compute {
+        let uv = (coord() + vec2(0.5, 0.5)) / domain() * vec2(32.0, 32.0);
+        let cell = floor(uv);
+        let a = 0x1000 + int(cell.y) * 32 + int(cell.x);
+        let v = (at(ram, a >>> 2) >>> ((a & 3) * 8)) & 0xFF;
+        let t = float(v) / 255.0;
+        let local = fract(uv);
+        let edge = local.x < 0.06 || local.y < 0.06;
+        let colour = vec3(t, fract(t * 4.0) * 0.6 + 0.2, 1.0 - t);
+        let shaded = if edge { colour * 0.7 } else { colour };
+        return vec4(shaded.x, shaded.y, shaded.z, 1.0);
+    }
+}

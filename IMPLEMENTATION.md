@@ -158,7 +158,18 @@ capability claim.
   bit operators, this is what a machine needs: random-access RAM written
   step by step, persisting across frames through `<~`; the
   [CHIP-8 example](examples/chip8/README.md) is one, every opcode, its
-  replay reading the screen memory on both backends.
+  replay reading the screen memory on both backends; the
+  [Thumb example](examples/thumb/README.md) is a 32-bit one, the
+  ARM7TDMI's 16-bit instruction set with byte-addressed RAM through
+  store functions, wrapping arithmetic and the logical shift, checked
+  against a reference simulator on all three backends. Two GPU facts
+  came out of it: a scan step's first load of a memory element was
+  hoisted out of the step loop by the Metal compiler, so the loop now
+  has a `storageBarrier()` between steps
+  ([regression test](crates/gpu/tests/parity.rs)); and a `Rows` map of
+  more than 524,280 elements exceeded the 65,535 workgroups one
+  dispatch dimension allows, so long rows are dispatched as a grid, the
+  fold carried in the context ([dispatch](crates/gpu/src/wgsl.rs)).
 - Ordered work is the third execution mode, declared by `scan with name =
   init { ... }` in place of `compute`: the entry runs once per element of
   the first input, in order, reading the previous result through the same

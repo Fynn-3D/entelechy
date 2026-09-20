@@ -1,0 +1,23 @@
+// rom -> boot (RAM) ; start (registers) -> machine, whose two memories
+// feed back frame to frame -> view of the framebuffer in RAM
+use "kernels/";
+
+param speed: Int = 9363;           // instructions per frame: one frame of the program
+
+node rom: thumb.rom@1 { domain = 38; }
+node boot: thumb.boot@1 { rom <- rom.result; domain = 2048; }
+node start: thumb.start@1 { domain = 17; }
+node ticks: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = speed;
+    compute { return 0; }
+}
+node machine: thumb.step@1 {
+    ticks <- ticks.result;
+    ram <~ machine.ram from boot.result;
+    regs <~ machine.regs from start.result;
+}
+node view: thumb.view@1 { ram <- machine.ram; domain = window(); }
+
+output result <- view.result;

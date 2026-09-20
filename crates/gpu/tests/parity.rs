@@ -1203,3 +1203,86 @@ fn integer_arithmetic_matches_between_backends() {
             && cpu_words[6..].iter().any(|w| (*w as i32) < 0)
     );
 }
+
+#[test]
+fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
+    // A step whose first act is to read a memory element the previous step
+    // wrote: without a barrier between steps the Metal compiler hoisted
+    // that load out of the walk, and every step read the starting value.
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.pc@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory regs: Rows<Int>; output result: Rows<Int>; scan with n = 0 { let pc = at(regs, 15); put(regs, 15, pc + 2); return pc; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 16);
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let ticks = host
+        .adopt(orla_abi::FieldData::from_words(ints.clone(), Domain::Rows(5), vec![0; 5]).unwrap())
+        .unwrap();
+    let regs = host
+        .adopt(orla_abi::FieldData::from_words(ints, Domain::Rows(17), vec![0; 17]).unwrap())
+        .unwrap();
+    let invocation = orla_abi::Invocation {
+        inputs: vec![ticks, regs],
+        params: vec![],
+        domain: Domain::Rows(5),
+        context: orla_abi::Context::default(),
+    };
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let outputs =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap();
+    let words = |handle: orla_abi::Handle, n: usize| -> Vec<u32> {
+        let device = host.resident(handle).unwrap().expect("resident");
+        let bytes = Backend::download(&gpu, device, n * 4).unwrap();
+        bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    };
+    assert_eq!(words(outputs[0], 5), [0, 2, 4, 6, 8]);
+    assert_eq!(words(outputs[1], 17)[15], 10);
+}
+
+#[test]
+fn long_rows_are_dispatched_as_a_grid() {
+    // More elements than 65,535 workgroups of eight cover in one
+    // dimension: the dispatch folds them and every element is computed.
+    let Some(gpu) = gpu() else { return };
+    let source = "kernel test.long@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 3 + 1; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let count = 1_100_000u32;
+    let mut host = Host::new(1 << 24);
+    let invocation = orla_abi::Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(count),
+        context: orla_abi::Context::default(),
+    };
+    let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(&mut host, all());
+    let out =
+        Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
+    let device = host.resident(out).unwrap().expect("resident");
+    let bytes = Backend::download(&gpu, device, count as usize * 4).unwrap();
+    let words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    for probe in [
+        0u32,
+        7,
+        524_279,
+        524_280,
+        524_281,
+        1_048_559,
+        1_048_560,
+        count - 1,
+    ] {
+        assert_eq!(words[probe as usize], probe * 3 + 1, "element {probe}");
+    }
+    assert!(
+        words
+            .iter()
+            .enumerate()
+            .all(|(i, w)| *w == i as u32 * 3 + 1)
+    );
+}

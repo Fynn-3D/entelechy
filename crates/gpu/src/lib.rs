@@ -498,7 +498,8 @@ impl Backend for GpuBackend {
         context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
         let window = invocation.context.window;
         context.extend_from_slice(&[input.wheel[0], input.wheel[1], window[0], window[1]]);
-        context.extend_from_slice(&[invocation.context.scale, 0.0, 0.0, 0.0]);
+        let (groups_x, groups_y, groups_z, fold) = wgsl::dispatch(domain);
+        context.extend_from_slice(&[invocation.context.scale, fold as f32, 0.0, 0.0]);
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
@@ -605,11 +606,7 @@ impl Backend for GpuBackend {
             if scanning {
                 pass.dispatch_workgroups(1, 1, 1);
             } else {
-                pass.dispatch_workgroups(
-                    domain.width().div_ceil(wgsl::WORKGROUP),
-                    domain.height().div_ceil(wgsl::WORKGROUP),
-                    domain.depth(),
-                );
+                pass.dispatch_workgroups(groups_x, groups_y, groups_z);
             }
         }
         // The fold: level by level into a second buffer, alternating, in
