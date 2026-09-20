@@ -14,64 +14,35 @@ kernel chip8.rom@1 {
     requires { field.write; }
     output result: Bytes;
     compute {
-        let i = element();
-        return
-            if i == 0 { 96 }
-            else if i == 1 { 0 }
-            else if i == 2 { 97 }
-            else if i == 3 { 0 }
-            else if i == 4 { 162 }
-            else if i == 5 { 50 }
-            else if i == 6 { 208 }
-            else if i == 7 { 21 }
-            else if i == 8 { 110 }
-            else if i == 9 { 1 }
-            else if i == 10 { 254 }
-            else if i == 11 { 21 }
-            else if i == 12 { 254 }
-            else if i == 13 { 7 }
-            else if i == 14 { 62 }
-            else if i == 15 { 0 }
-            else if i == 16 { 18 }
-            else if i == 17 { 12 }
-            else if i == 18 { 208 }
-            else if i == 19 { 21 }
-            else if i == 20 { 110 }
-            else if i == 21 { 4 }
-            else if i == 22 { 238 }
-            else if i == 23 { 161 }
-            else if i == 24 { 112 }
-            else if i == 25 { 255 }
-            else if i == 26 { 110 }
-            else if i == 27 { 6 }
-            else if i == 28 { 238 }
-            else if i == 29 { 161 }
-            else if i == 30 { 112 }
-            else if i == 31 { 1 }
-            else if i == 32 { 110 }
-            else if i == 33 { 2 }
-            else if i == 34 { 238 }
-            else if i == 35 { 161 }
-            else if i == 36 { 113 }
-            else if i == 37 { 255 }
-            else if i == 38 { 110 }
-            else if i == 39 { 8 }
-            else if i == 40 { 238 }
-            else if i == 41 { 161 }
-            else if i == 42 { 113 }
-            else if i == 43 { 1 }
-            else if i == 44 { 208 }
-            else if i == 45 { 21 }
-            else if i == 46 { 18 }
-            else if i == 47 { 8 }
-            else if i == 48 { 0 }
-            else if i == 49 { 0 }
-            else if i == 50 { 240 }
-            else if i == 51 { 144 }
-            else if i == 52 { 144 }
-            else if i == 53 { 144 }
-            else if i == 54 { 240 }
-            else { 0 };
+        let program = [
+            0x60, 0x00,    // 200: V0 = 0
+            0x61, 0x00,    // 202: V1 = 0
+            0xA2, 0x32,    // 204: I = 0x232, the sprite
+            0xD0, 0x15,    // 206: draw: the sprite at (V0, V1), 5 rows
+            0x6E, 0x01,    // 208: VE = 1
+            0xFE, 0x15,    // 20A: DT = VE
+            0xFE, 0x07,    // 20C: wait: VE = DT
+            0x3E, 0x00,    // 20E: skip if VE == 0
+            0x12, 0x0C,    // 210: jump wait
+            0xD0, 0x15,    // 212: erase: draw again (xor)
+            0x6E, 0x04,    // 214: VE = key 4
+            0xEE, 0xA1,    // 216: skip if key VE is up
+            0x70, 0xFF,    // 218: V0 -= 1
+            0x6E, 0x06,    // 21A: VE = key 6
+            0xEE, 0xA1,    // 21C: skip if key VE is up
+            0x70, 0x01,    // 21E: V0 += 1
+            0x6E, 0x02,    // 220: VE = key 2
+            0xEE, 0xA1,    // 222: skip if key VE is up
+            0x71, 0xFF,    // 224: V1 -= 1
+            0x6E, 0x08,    // 226: VE = key 8
+            0xEE, 0xA1,    // 228: skip if key VE is up
+            0x71, 0x01,    // 22A: V1 += 1
+            0xD0, 0x15,    // 22C: draw
+            0x12, 0x08,    // 22E: jump 208
+            0x00, 0x00,    // 230: padding
+            0xF0, 0x90, 0x90, 0x90, 0xF0,    // 232: the box, 5 rows
+        ];
+        return program[element()];
     }
 }
 
@@ -81,89 +52,27 @@ kernel chip8.boot@1 {
     input rom: Bytes;
     output result: Bytes;
 
+    // The sixteen hexadecimal digits, five rows of eight pixels each.
     fn font(i: Int) -> Int {
-        return
-            if i == 0 { 240 }
-            else if i == 1 { 144 }
-            else if i == 2 { 144 }
-            else if i == 3 { 144 }
-            else if i == 4 { 240 }
-            else if i == 5 { 32 }
-            else if i == 6 { 96 }
-            else if i == 7 { 32 }
-            else if i == 8 { 32 }
-            else if i == 9 { 112 }
-            else if i == 10 { 240 }
-            else if i == 11 { 16 }
-            else if i == 12 { 240 }
-            else if i == 13 { 128 }
-            else if i == 14 { 240 }
-            else if i == 15 { 240 }
-            else if i == 16 { 16 }
-            else if i == 17 { 240 }
-            else if i == 18 { 16 }
-            else if i == 19 { 240 }
-            else if i == 20 { 144 }
-            else if i == 21 { 144 }
-            else if i == 22 { 240 }
-            else if i == 23 { 16 }
-            else if i == 24 { 16 }
-            else if i == 25 { 240 }
-            else if i == 26 { 128 }
-            else if i == 27 { 240 }
-            else if i == 28 { 16 }
-            else if i == 29 { 240 }
-            else if i == 30 { 240 }
-            else if i == 31 { 128 }
-            else if i == 32 { 240 }
-            else if i == 33 { 144 }
-            else if i == 34 { 240 }
-            else if i == 35 { 240 }
-            else if i == 36 { 16 }
-            else if i == 37 { 32 }
-            else if i == 38 { 64 }
-            else if i == 39 { 64 }
-            else if i == 40 { 240 }
-            else if i == 41 { 144 }
-            else if i == 42 { 240 }
-            else if i == 43 { 144 }
-            else if i == 44 { 240 }
-            else if i == 45 { 240 }
-            else if i == 46 { 144 }
-            else if i == 47 { 240 }
-            else if i == 48 { 16 }
-            else if i == 49 { 240 }
-            else if i == 50 { 240 }
-            else if i == 51 { 144 }
-            else if i == 52 { 240 }
-            else if i == 53 { 144 }
-            else if i == 54 { 144 }
-            else if i == 55 { 224 }
-            else if i == 56 { 144 }
-            else if i == 57 { 224 }
-            else if i == 58 { 144 }
-            else if i == 59 { 224 }
-            else if i == 60 { 240 }
-            else if i == 61 { 128 }
-            else if i == 62 { 128 }
-            else if i == 63 { 128 }
-            else if i == 64 { 240 }
-            else if i == 65 { 224 }
-            else if i == 66 { 144 }
-            else if i == 67 { 144 }
-            else if i == 68 { 144 }
-            else if i == 69 { 224 }
-            else if i == 70 { 240 }
-            else if i == 71 { 128 }
-            else if i == 72 { 240 }
-            else if i == 73 { 128 }
-            else if i == 74 { 240 }
-            else if i == 75 { 240 }
-            else if i == 76 { 128 }
-            else if i == 77 { 240 }
-            else if i == 78 { 128 }
-            else if i == 79 { 128 }
-            else { 0 };
+        let glyphs = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0,    // 0
+            0x20, 0x60, 0x20, 0x20, 0x70,    // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0,    // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0,    // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10,    // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0,    // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0,    // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40,    // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0,    // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0,    // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90,    // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0,    // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0,    // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0,    // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0,    // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80,    // F
+        ];
+        return glyphs[i];
     }
 
     compute {

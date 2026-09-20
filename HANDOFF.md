@@ -127,14 +127,26 @@ out of scope. Rated 9.3/10 in the last assessment; the remaining gaps
 are the ones below.
 
 1. The language's data types, agreed order, one round each:
-   a. Fixed-size arrays `[T; N]` in struct fields, `let`s and literals
-      (`[1, 2, 3]`), constant and dynamic index, so a lookup table, a
-      ROM or a register file is written as data rather than as an `if`
-      chain or a memory. IR: a type `Array(T, N)` laid out as N times
-      T's words; CPU: frame words plus an offset; GPU: a WGSL array;
-      JIT: a stack slot or a select chain for a dynamic index. Add a
-      matrix feature row, a `help`/DOCUMENTS line, rewrite the CHIP-8
-      font and the Thumb ROM with it.
+   a. Done: fixed-size arrays `[T; N]` (any element type, nested too)
+      in struct fields, `let`s, arguments, results and Field elements;
+      literals `[1, 2, 3]` and `[v; N]`; a literal index is an
+      `extract` checked at compile time, a run-time index the new
+      `subscript` op, clamped like `at`. Chosen shape: an array is a
+      struct of N fields marked with its element (`StructDef::element`)
+      and interned by the compiler, so layout, construction, extraction,
+      the mixers, the scatter combines and the trace came with the
+      struct code on all three backends; only `subscript` was new (CPU:
+      a word copy at a clamped offset; GPU: `alias S = array<T, N>` and
+      `v[clamp(i, 0, N - 1)]`, which naga takes on a `let` array; JIT:
+      the array spilled to a stack slot, one load per word of the
+      element). Up to 4096 elements; `Extract`'s index widened to u32
+      for it. The CHIP-8 font and program and the Thumb program are
+      arrays now; their replays are bit for bit what they were. Not
+      done, on purpose: array params (nothing crosses the ABI), an
+      out-of-range failure (clamping is the Field rule), and hoisting a
+      constant array out of the per-element code on the JIT (the ROMs
+      run once at boot, so nothing asked for it; a scan reading a
+      256-entry table every step would).
    b. Matrices `Mat2/3/4`: column constructors, `Mat * Vec`, `Mat *
       Mat`, `transpose`, `determinant`, `inverse`; WGSL native, CPU and
       JIT as N by N floats; rewrite one rotation in raymarch or model.
