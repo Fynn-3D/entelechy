@@ -32,21 +32,40 @@ fn talk(scene: &Path, requests: &[Json]) -> Vec<Json> {
         .arg(scene)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let stdout = BufReader::new(child.stdout.take().unwrap());
+    // What the child says on stderr, drained as it comes so a talkative
+    // child never blocks on a full pipe, kept for a diagnosis.
+    let mut stderr = child.stderr.take().unwrap();
+    let said = std::thread::spawn(move || {
+        let mut said = String::new();
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut said);
+        said
+    });
     let mut lines = stdout.lines();
     let mut responses = Vec::new();
     for request in requests {
         writeln!(stdin, "{request}").unwrap();
         stdin.flush().unwrap();
-        let line = lines.next().unwrap().unwrap();
+        // A missing answer is the served child gone: say how, with what
+        // it said, rather than just where.
+        let Some(line) = lines.next() else {
+            drop(stdin);
+            let status = child.wait().unwrap();
+            let said = said.join().unwrap_or_default();
+            panic!(
+                "`orla serve` answered nothing to {request}: it exited with {status}, having said:\n{said}"
+            );
+        };
+        let line = line.unwrap();
         responses.push(serde_json::from_str(&line).unwrap());
     }
     drop(stdin);
     child.wait().unwrap();
+    let _ = said.join();
     responses
 }
 

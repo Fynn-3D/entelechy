@@ -249,13 +249,16 @@ words, so a change to the interpreter's rounding needs a change here.
 
 ## Open
 
-Seen once: `crates/cli/tests/protocol.rs`
+Seen once, not again: `crates/cli/tests/protocol.rs`
 `fields_come_in_through_write_and_buttons_reach_kernels` failed in a
-full `cargo test --workspace` (the served child's first line never
-came) and passed alone and in the next full run; the tests in that
-binary spawn `orla serve` while the GPU tests hold the device, so it
-may be the device under load rather than the protocol. Worth a retry
-before a hunt.
+full `cargo test --workspace` that ran beside a release replay loop:
+the served child's stdout ended before its first answer (`serve`
+defaults to the CPU backend, so not the GPU). It did not come back in
+25 runs of that test binary under GPU test load nor in two full
+suites under the replay loop. The harness now drains the child's
+stderr on a thread and, when an answer is missing, reports the child's
+exit status and everything it said, so a next time is a diagnosis
+rather than a position.
 
 Not hand-tested: the Player's real right and middle buttons and wheel,
 gamepad hardware (none connected), and a live resize of a window-sized
