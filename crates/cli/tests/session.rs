@@ -527,3 +527,51 @@ fn libraries_share_declarations_through_use_and_refuse_conflicts() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn functions_are_shared_through_use_and_conflicts_are_refused() {
+    let dir = scratch("functions");
+    std::fs::write(
+        dir.join("kernels/math.orla"),
+        "fn twice(x: Float) -> Float { return x * 2.0; }
+fn peek(f: Image, c: Vec2) -> Vec4 { return at(f, c); }
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"kernels/\";
+node seed: life.seed@1 { domain = vec2(8, 8); }
+node view: kernel { requires { field.read; field.write; } input cells: Image <- seed.result; output result: Image;
+    compute { let c = peek(cells, coord()); return vec4(twice(c.r), c.g, c.b, 1.0); } }
+output result <- view.result;
+",
+    )
+    .unwrap();
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(dir.join("scene.osn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    // The same name from a second file is a conflict, named by both files.
+    std::fs::write(
+        dir.join("kernels/more.orla"),
+        "fn twice(x: Float) -> Float { return x + x; }\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(dir.join("scene.osn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("fn `twice` is declared by both") && stdout.contains("more.orla"),
+        "{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

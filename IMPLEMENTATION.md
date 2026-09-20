@@ -207,6 +207,11 @@ capability claim.
   `wheel()`, and `key(code)` behind `input.read`; only nodes that declare it
   re-execute when input changes ([ABI](crates/abi/src/lib.rs),
   [parity](crates/gpu/tests/parity.rs)).
+- Functions are shared like structs: declared at a document's top level
+  and inherited through `use`; one with a Field parameter is a template
+  the compiler instantiates per bound port, so a grid walk or a staggered
+  read is written once for every Kernel that needs it
+  ([lowering](crates/compiler/src/lower.rs), [tests](crates/compiler/tests/compile.rs)).
 - An evaluation can be demanded: `Evaluator::evaluate_for` runs the named
   nodes, what they read, every `<~` source, and never-produced outputs, and
   leaves the rest at its last value; a replay demands the picture only on

@@ -17,6 +17,9 @@ rest ──┴─ hand
   between cells) and adds the forces: the hand's motion over a soft
   disc, the plume's push, the lift of warm smoke, and vorticity
   confinement, which keeps the small eddies the grid would smooth away.
+- `flow_at` reads the staggered velocity at a point; it is one function
+  at the top of the file with the velocity as a parameter, called by the
+  advection, the smoke and the picture on their own velocity ports.
 - The grid is staggered: a cell's x-velocity stands on its left face and
   its y-velocity on its top face, so `fluid.divergence` and the pressure
   gradient in `fluid.project` are face differences that agree with the

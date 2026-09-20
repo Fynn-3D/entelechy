@@ -209,7 +209,7 @@ impl Graph {
                 path.display()
             ))
         };
-        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new())));
+        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
         let lowered = document::lower(
             &document,
             text,
@@ -248,7 +248,7 @@ impl Graph {
                 path.display()
             ))
         };
-        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new())));
+        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
         document::lower(
             document,
             "",
@@ -271,7 +271,7 @@ impl Graph {
         base: &std::path::Path,
         loader: &mut Loader<'_>,
     ) -> Result<Lowered, DocumentError> {
-        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new())));
+        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
         document::lower(document, text, name, base, loader, &mut none)
     }
 

@@ -115,6 +115,11 @@ plus a hit sound the rules trigger, played by the sound card with the
 device pacing the game at sixty blocks a second; six seconds on the GPU
 ran with no underruns and no drops. A gamepad maps to the keyboard's
 codes in the Player (untested on hardware here: none was connected).
+Functions cross files like structs: a top-level `fn` is shared through
+`use`, and one with a Field parameter is instantiated per port it is
+called with, so the voxel editor's walk and the fluid's staggered read
+exist once. The math builtins take vectors and broadcast Floats, and
+`orla check` compiles the libraries a scene uses.
 Replays evaluate on demand: a frame runs the state and the nodes its
 expectations name, and the picture only when a pixel expectation
 follows, so the whole example suite replays on the CPU in seconds

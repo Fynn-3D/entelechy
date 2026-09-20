@@ -92,8 +92,14 @@ second (zero without a device), need `time.read`; `pointer()`,
 `pointer_down()`, `button(n)` (0 left, 1 right, 2 middle), `wheel()` (what
 scrolled since the last evaluation, as a `Vec2`), and `key(code)` need
 `input.read`. Reading a port needs
-`field.read`, writing `field.write`. A struct or `type` declared at the top
-of a document is shared by every Kernel in it.
+`field.read`, writing `field.write`. A struct, `type`, or `fn` declared at
+the top of a document is shared by every Kernel in it, and by every Kernel
+of a document that `use`s it; a function calls only what is declared above
+it. A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)
+-> Hit` reads its parameter with `at`, `at_linear`, `size`, or `count`, and
+a call names an input port for it, `cast(world, eye)`; the function is
+instantiated once per port it is called with, checked by shape and
+layout. `sample` stays in `compute`, where the element's own address is.
 
 A Kernel with a `merge` is a reduction, the one execution mode besides
 the map:

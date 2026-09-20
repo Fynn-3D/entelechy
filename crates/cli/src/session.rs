@@ -142,6 +142,14 @@ fn expand_use(path: &Path, trailing_slash: bool) -> Vec<PathBuf> {
     }
 }
 
+/// What a document shares with the Kernels that use it: structs, type
+/// aliases, and functions.
+pub type Declarations = (
+    Vec<orla_language::StructDecl>,
+    Vec<orla_language::TypeAlias>,
+    Vec<orla_language::FnDecl>,
+);
+
 /// Every document a `use` list reaches, recursively, each once, in the
 /// order reached: what a check compiles beyond the file it was given.
 pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<PathBuf>, String> {
@@ -181,22 +189,14 @@ pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<Pa
 /// the used files and directories and, recursively, what they use. The
 /// same declaration reached twice is one; two different declarations of
 /// one name are refused.
-pub fn declarations_for(
-    base: &Path,
-    uses: &[orla_language::Use],
-) -> Result<
-    (
-        Vec<orla_language::StructDecl>,
-        Vec<orla_language::TypeAlias>,
-    ),
-    String,
-> {
+pub fn declarations_for(base: &Path, uses: &[orla_language::Use]) -> Result<Declarations, String> {
     fn gather(
         base: &Path,
         uses: &[orla_language::Use],
         visited: &mut std::collections::BTreeSet<PathBuf>,
         structs: &mut Vec<(orla_language::StructDecl, PathBuf)>,
         types: &mut Vec<(orla_language::TypeAlias, PathBuf)>,
+        functions: &mut Vec<(orla_language::FnDecl, PathBuf)>,
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
@@ -213,7 +213,22 @@ pub fn declarations_for(
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
-                gather(&dir, &document.uses, visited, structs, types)?;
+                gather(&dir, &document.uses, visited, structs, types, functions)?;
+                for decl in &document.functions {
+                    // A function has no layout to compare; one name, one file.
+                    if let Some((_, other)) = functions
+                        .iter()
+                        .find(|(f, _)| f.name.value == decl.name.value)
+                    {
+                        return Err(format!(
+                            "fn `{}` is declared by both {} and {}",
+                            decl.name.value,
+                            other.display(),
+                            file.display()
+                        ));
+                    }
+                    functions.push((decl.clone(), file.clone()));
+                }
                 for decl in &document.structs {
                     match structs
                         .iter()
@@ -250,11 +265,19 @@ pub fn declarations_for(
         Ok(())
     }
     let mut visited = std::collections::BTreeSet::new();
-    let (mut structs, mut types) = (Vec::new(), Vec::new());
-    gather(base, uses, &mut visited, &mut structs, &mut types)?;
+    let (mut structs, mut types, mut functions) = (Vec::new(), Vec::new(), Vec::new());
+    gather(
+        base,
+        uses,
+        &mut visited,
+        &mut structs,
+        &mut types,
+        &mut functions,
+    )?;
     Ok((
         structs.into_iter().map(|(s, _)| s).collect(),
         types.into_iter().map(|(t, _)| t).collect(),
+        functions.into_iter().map(|(f, _)| f).collect(),
     ))
 }
 
@@ -283,6 +306,7 @@ pub struct Session {
     /// level, which a Kernel published through the protocol inherits.
     shared_structs: Vec<orla_language::StructDecl>,
     shared_types: Vec<orla_language::TypeAlias>,
+    shared_functions: Vec<orla_language::FnDecl>,
     /// Caller overrides of graph parameters.
     params: BTreeMap<String, Value>,
     /// Kernel text by id for every document that published Kernels; the
@@ -314,8 +338,9 @@ struct DocumentState {
 fn declarations_key(
     structs: &[orla_language::StructDecl],
     types: &[orla_language::TypeAlias],
+    functions: &[orla_language::FnDecl],
 ) -> String {
-    format!("{structs:?}{types:?}")
+    format!("{structs:?}{types:?}{functions:?}")
 }
 
 impl Session {
@@ -339,6 +364,7 @@ impl Session {
             sub_graphs: BTreeMap::new(),
             shared_structs: Vec::new(),
             shared_types: Vec::new(),
+            shared_functions: Vec::new(),
             params: BTreeMap::new(),
             documents: BTreeMap::new(),
             owners: BTreeMap::new(),
@@ -530,11 +556,16 @@ impl Session {
         let mut document = document;
         let mut declarations = String::new();
         match declarations_for(&base, &document.uses) {
-            Ok((structs, types)) => {
-                declarations = declarations_key(&structs, &types);
+            Ok((structs, types, functions)) => {
+                declarations = declarations_key(&structs, &types, &functions);
                 self.shared_structs = structs.iter().chain(&document.structs).cloned().collect();
                 self.shared_types = types.iter().chain(&document.types).cloned().collect();
-                document.inherit(&structs, &types);
+                self.shared_functions = functions
+                    .iter()
+                    .chain(&document.functions)
+                    .cloned()
+                    .collect();
+                document.inherit(&structs, &types, &functions);
             }
             Err(error) => events.push(Event::Rejected {
                 path: root.clone(),
@@ -598,7 +629,7 @@ impl Session {
                     .ok()
                     .and_then(|text| orla_language::parse_document(&text).ok())
                     .and_then(|doc| declarations_for(&dir, &doc.uses).ok())
-                    .map(|(s, t)| declarations_key(&s, &t))
+                    .map(|(s, t, f)| declarations_key(&s, &t, &f))
                     .unwrap_or_default()
             };
             self.publish_document(&path, current, defined, &key, events);
@@ -682,9 +713,9 @@ impl Session {
                 .to_path_buf();
             let mut document = document;
             let declarations = match declarations_for(&dir, &document.uses) {
-                Ok((structs, types)) => {
-                    document.inherit(&structs, &types);
-                    declarations_key(&structs, &types)
+                Ok((structs, types, functions)) => {
+                    document.inherit(&structs, &types, &functions);
+                    declarations_key(&structs, &types, &functions)
                 }
                 Err(error) => {
                     events.push(Event::Rejected {
@@ -876,8 +907,8 @@ impl Session {
             ));
         }
         let base = self.root.parent().unwrap_or_else(|| Path::new("."));
-        let (mut structs, mut types) = if document.uses.is_empty() {
-            (Vec::new(), Vec::new())
+        let (mut structs, mut types, mut functions) = if document.uses.is_empty() {
+            (Vec::new(), Vec::new(), Vec::new())
         } else {
             declarations_for(base, &document.uses).map_err(|e| e.to_string())?
         };
@@ -893,7 +924,16 @@ impl Session {
                 types.push(shared.clone());
             }
         }
-        document.inherit(&structs, &types);
+        for shared in &self.shared_functions {
+            let declared = |d: &orla_language::FnDecl| d.name.value == shared.name.value;
+            if !document.functions.iter().any(declared)
+                && !functions.iter().any(declared)
+                && !document.kernels[0].functions.iter().any(declared)
+            {
+                functions.push(shared.clone());
+            }
+        }
+        document.inherit(&structs, &types, &functions);
         self.runtime
             .prepare_kernel(&document.kernels[0], None, source)
             .map_err(|e| e.to_string())

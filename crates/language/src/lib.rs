@@ -69,6 +69,9 @@ pub struct Document {
     pub structs: Vec<StructDecl>,
     /// Port type aliases declared at the top level, shared the same way.
     pub types: Vec<TypeAlias>,
+    /// Functions declared at the top level, shared the same way; one with
+    /// a Field parameter is instantiated per port it is called with.
+    pub functions: Vec<FnDecl>,
     /// Kernels defined at the top level, document structs already prepended.
     pub kernels: Vec<Kernel>,
     /// External images the caller supplies: `input name: Image;`.
@@ -86,8 +89,8 @@ impl Document {
     /// Puts declarations from used documents in front of every Kernel's
     /// own, so a struct or type declared once is the same layout in every
     /// file that uses it.
-    pub fn inherit(&mut self, structs: &[StructDecl], types: &[TypeAlias]) {
-        if structs.is_empty() && types.is_empty() {
+    pub fn inherit(&mut self, structs: &[StructDecl], types: &[TypeAlias], functions: &[FnDecl]) {
+        if structs.is_empty() && types.is_empty() && functions.is_empty() {
             return;
         }
         let prepend = |kernel: &mut Kernel| {
@@ -97,6 +100,9 @@ impl Document {
             let mut aliases = types.to_vec();
             aliases.append(&mut kernel.types);
             kernel.types = aliases;
+            let mut shared = functions.to_vec();
+            shared.append(&mut kernel.functions);
+            kernel.functions = shared;
         };
         for kernel in &mut self.kernels {
             prepend(kernel);

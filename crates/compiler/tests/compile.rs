@@ -325,6 +325,49 @@ fn rate_is_context_under_time_read() {
 }
 
 #[test]
+fn functions_with_field_parameters_are_instantiated_per_port() {
+    let module = compile(
+        "kernel test.peek@1 { requires { field.read; field.write; } input a: Grid<Float>; input b: Grid<Float>; output result: Grid<Float>;
+            fn half(x: Float) -> Float { return x * 0.5; }
+            fn peek(f: Grid<Float>, c: Vec2) -> Float { return half(at(f, c)) + at(f, c + vec2(1.0, 0.0)); }
+            fn both(f: Grid<Float>, g: Grid<Float>, c: Vec2) -> Float { return peek(f, c) + peek(g, c) + size(g).x; }
+            compute { let c = coord(); return peek(a, c) + peek(b, c) + peek(a, c * 2.0) + both(a, b, c); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = module.to_string();
+    assert!(
+        text.contains("peek<a>") && text.contains("peek<b>") && text.contains("both<a, b>"),
+        "{text}"
+    );
+    assert_eq!(
+        module.functions.len(),
+        4,
+        "half, peek<a>, peek<b>, both<a, b>: {text}"
+    );
+    assert!(text.contains("host at input1"), "{text}");
+
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input a: Grid<Float>; input r: Rows<Float>; output result: Grid<Float>; fn peek(f: Grid<Float>, c: Vec2) -> Float { return at(f, c); } compute { return peek(r, coord()); } }",
+    );
+    assert!(message.contains("expects Grid<Float> for `f`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input a: Grid<Float>; output result: Grid<Float>; fn peek(f: Grid<Float>, c: Vec2) -> Float { return peek(f, c); } compute { return peek(a, coord()); } }",
+    );
+    assert!(message.contains("calls itself"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input a: Grid<Float>; output result: Grid<Float>; fn peek(f: Grid<Float>) -> Float { return sample(f); } compute { return peek(a); } }",
+    );
+    assert!(
+        message.contains("only available inside `compute`"),
+        "{message}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input a: Grid<Float>; output result: Grid<Float>; fn peek(f: Nope, c: Vec2) -> Float { return 1.0; } compute { return peek(a, coord()); } }",
+    );
+    assert!(message.contains("is not a type"), "{message}");
+}
+
+#[test]
 fn math_builtins_take_vectors_and_broadcast_floats() {
     let module = compile(
         "kernel test.math@1 { requires { field.write; } output result: Rows<Vec3>; compute {

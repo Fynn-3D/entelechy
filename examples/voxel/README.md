@@ -25,6 +25,10 @@ begin ┘                                                └─ backup (feeds ba
   returns the backup; a reset returns the seed.
 - `voxel.keep` is the backup: it takes the volume as it stood before
   each stroke, so undo restores it, and undo again restores the stroke.
+- The camera, the walk, the palette and the solidity test are functions
+  declared once at the top of the file; `cast` and `solid` take the
+  volume as a parameter, so the state and the picture call the same
+  code on whichever volume they read.
 - `voxel.draw` walks the same volume per pixel with the same camera,
   lights faces by direction, darkens them where neighbours crowd the
   face, outlines the voxel under the pointer, draws a floor whose grid

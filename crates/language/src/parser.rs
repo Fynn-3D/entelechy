@@ -18,6 +18,7 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
         uses: Vec::new(),
         structs: Vec::new(),
         types: Vec::new(),
+        functions: Vec::new(),
         kernels: Vec::new(),
         inputs: Vec::new(),
         params: Vec::new(),
@@ -52,6 +53,10 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
                 parser.next();
                 document.types.push(parser.type_alias()?);
             }
+            Token::Ident(word) if word == "fn" => {
+                parser.next();
+                document.functions.push(parser.function()?);
+            }
             Token::Ident(word) if word == "input" => {
                 parser.next();
                 document.inputs.push(parser.port(false)?);
@@ -74,16 +79,18 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
             }
             _ => {
                 return Err(parser.unexpected(
-                    "`use`, `struct`, `type`, `kernel`, `input`, `param`, `output`, or `node`",
+                    "`use`, `struct`, `type`, `fn`, `kernel`, `input`, `param`, `output`, or `node`",
                 ));
             }
         }
     }
     // Document structs and aliases come first in every Kernel, so a
     // Rows<Particle> declared once means the same layout in all of them.
-    if !document.structs.is_empty() || !document.types.is_empty() {
+    if !document.structs.is_empty() || !document.types.is_empty() || !document.functions.is_empty()
+    {
         let shared = document.structs.clone();
         let shared_types = document.types.clone();
+        let shared_functions = document.functions.clone();
         let prepend = |kernel: &mut Kernel| {
             let mut structs = shared.clone();
             structs.append(&mut kernel.structs);
@@ -91,6 +98,9 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
             let mut types = shared_types.clone();
             types.append(&mut kernel.types);
             kernel.types = types;
+            let mut functions = shared_functions.clone();
+            functions.append(&mut kernel.functions);
+            kernel.functions = functions;
         };
         for kernel in &mut document.kernels {
             prepend(kernel);
@@ -649,7 +659,8 @@ impl Parser {
         while !self.is_punct(")") {
             let arg = self.ident("an argument name")?;
             self.expect_punct(":")?;
-            let ty = self.ident("a type")?;
+            // A value type, or a port type for a Field parameter.
+            let ty = self.port_type()?;
             args.push((arg, ty));
             if !self.eat_punct(",") {
                 break;
@@ -1124,6 +1135,26 @@ mod document_tests {
                 .map(|s| s.name.value.as_str())
                 .collect::<Vec<_>>(),
             ["P", "Q"]
+        );
+    }
+
+    #[test]
+    fn document_functions_are_shared_and_may_take_fields() {
+        let document = parse_document(
+            "fn twice(x: Float) -> Float { return x * 2.0; }
+             fn peek(f: Grid<Float>, c: Vec2) -> Float { return at(f, c); }
+             kernel a.k@1 { requires { field.write; } output r: Rows<Float>; fn own(x: Float) -> Float { return x; } compute { return twice(1.0); } }",
+        )
+        .unwrap();
+        assert_eq!(document.functions.len(), 2);
+        assert_eq!(document.functions[1].args[0].1.value, "Grid<Float>");
+        assert_eq!(
+            document.kernels[0]
+                .functions
+                .iter()
+                .map(|f| f.name.value.as_str())
+                .collect::<Vec<_>>(),
+            ["twice", "peek", "own"]
         );
     }
 }

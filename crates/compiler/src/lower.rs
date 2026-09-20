@@ -1,5 +1,7 @@
 //! Semantic analysis and lowering from AST to IR.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use orla_ir::{
@@ -125,19 +127,52 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     let structs = structs(kernel)?;
     let aliases = aliases(kernel, &structs)?;
     let manifest = manifest(kernel, id, &structs, &aliases)?;
-    let mut functions: Vec<(String, Function)> = Vec::new();
+    // Functions: one with a Field parameter is a template, instantiated
+    // per port it is called with; the others lower in order, so a
+    // function calls only what is defined above it.
+    let shared = Shared {
+        manifest: &manifest,
+        structs: &structs,
+        aliases: &aliases,
+        functions: RefCell::new(Vec::new()),
+        templates: Vec::new(),
+        instances: RefCell::new(BTreeMap::new()),
+        instantiating: RefCell::new(Vec::new()),
+    };
+    let mut shared = shared;
     for declaration in &kernel.functions {
-        if functions
+        let taken = shared
+            .functions
+            .borrow()
             .iter()
             .any(|(name, _)| *name == declaration.name.value)
-        {
+            || shared
+                .templates
+                .iter()
+                .any(|t| t.name.value == declaration.name.value);
+        if taken {
             return Err(semantic(
                 declaration.name.span,
                 format!("function `{}` is defined twice", declaration.name.value),
             ));
         }
-        let function = lower_function(&manifest, &structs, &functions, declaration)?;
-        functions.push((declaration.name.value.clone(), function));
+        let mut has_field = false;
+        for (_, ty) in &declaration.args {
+            if resolve_type(ty, &structs).is_err() {
+                port_type(ty, &structs, &aliases)
+                    .map_err(|_| semantic(ty.span, format!("`{}` is not a type", ty.value)))?;
+                has_field = true;
+            }
+        }
+        if has_field {
+            shared.templates.push(declaration);
+            continue;
+        }
+        let function = lower_function(&shared, declaration, Vec::new(), &declaration.name.value)?;
+        shared
+            .functions
+            .borrow_mut()
+            .push((declaration.name.value.clone(), function));
     }
     let expected = match manifest.outputs.first() {
         Some(port) => port.element(),
@@ -149,7 +184,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         }
     };
     let entry = {
-        let mut builder = Builder::new(&manifest, &structs, &functions, true, "compute");
+        let mut builder = Builder::new(&shared, true, "compute", Vec::new());
         if let Some(carry) = &kernel.carry {
             builder.locals.push((
                 carry.name.value.clone(),
@@ -177,7 +212,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     let merge = match &kernel.merge {
         None => None,
         Some(decl) => {
-            let mut builder = Builder::new(&manifest, &structs, &functions, false, "merge");
+            let mut builder = Builder::new(&shared, false, "merge", Vec::new());
             if decl.a.value == decl.b.value {
                 return Err(semantic(
                     decl.b.span,
@@ -204,7 +239,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     let init = match &kernel.carry {
         None => None,
         Some(carry) => {
-            let mut builder = Builder::new(&manifest, &structs, &functions, false, "init");
+            let mut builder = Builder::new(&shared, false, "init", Vec::new());
             let result = builder.value(&carry.init)?;
             let actual = builder.ty(result);
             if actual != expected {
@@ -220,10 +255,12 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             Some(builder.finish(vec![result]))
         }
     };
+    let Shared { functions, .. } = shared;
+    let functions: Vec<Function> = functions.into_inner().into_iter().map(|(_, f)| f).collect();
     Ok(Module {
         manifest,
         structs,
-        functions: functions.into_iter().map(|(_, f)| f).collect(),
+        functions,
         entry,
         merge,
         init,
@@ -539,14 +576,35 @@ fn constructor(ty: Type) -> Option<&'static str> {
     }
 }
 
+/// What every block of a Kernel resolves names against: its manifest,
+/// structs, aliases, the functions lowered so far (a call's index), the
+/// templates with Field parameters, and their instances by binding.
+struct Shared<'a> {
+    manifest: &'a Manifest,
+    structs: &'a [StructDef],
+    aliases: &'a [(String, PortType)],
+    functions: RefCell<Vec<(String, Function)>>,
+    templates: Vec<&'a FnDecl>,
+    /// Instantiated templates by (name, bound input indices) to function index.
+    instances: RefCell<BTreeMap<(String, Vec<u32>), u32>>,
+    /// Templates being instantiated, to refuse a template calling itself.
+    instantiating: RefCell<Vec<String>>,
+}
+
+/// Lowers a function body. `fields` binds its Field parameters to input
+/// ports, for an instance of a template; `name` names the result.
 fn lower_function(
-    manifest: &Manifest,
-    structs: &[StructDef],
-    functions: &[(String, Function)],
+    shared: &Shared<'_>,
     declaration: &FnDecl,
+    fields: Vec<(String, u32)>,
+    name: &str,
 ) -> Result<Function, CompileError> {
-    let mut builder = Builder::new(manifest, structs, functions, false, &declaration.name.value);
+    let structs = shared.structs;
+    let mut builder = Builder::new(shared, false, name, fields);
     for (name, ty) in &declaration.args {
+        if builder.fields.iter().any(|(field, _)| field == &name.value) {
+            continue;
+        }
         let ty = resolve_type(ty, structs)?;
         if builder
             .args
@@ -591,10 +649,12 @@ enum Local {
 struct Builder<'a> {
     manifest: &'a Manifest,
     structs: &'a [StructDef],
-    functions: &'a [(String, Function)],
+    shared: &'a Shared<'a>,
     is_entry: bool,
     name: String,
     args: Vec<(String, Type)>,
+    /// Field parameters bound to input ports, for a template's instance.
+    fields: Vec<(String, u32)>,
     /// Visible bindings, innermost last.
     locals: Vec<(String, Local)>,
     /// Index into `locals` where each open block scope starts.
@@ -608,20 +668,15 @@ struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    fn new(
-        manifest: &'a Manifest,
-        structs: &'a [StructDef],
-        functions: &'a [(String, Function)],
-        is_entry: bool,
-        name: &str,
-    ) -> Self {
+    fn new(shared: &'a Shared<'a>, is_entry: bool, name: &str, fields: Vec<(String, u32)>) -> Self {
         Self {
-            manifest,
-            structs,
-            functions,
+            manifest: shared.manifest,
+            structs: shared.structs,
+            shared,
             is_entry,
             name: name.to_owned(),
             args: Vec::new(),
+            fields,
             locals: Vec::new(),
             scopes: vec![0],
             buffers: vec![Vec::new()],
@@ -1055,6 +1110,88 @@ impl<'a> Builder<'a> {
     }
 
     /// Resolves an input port by name.
+    /// Calls a template: its Field parameters bind to the input ports the
+    /// arguments name, checked by shape and layout; the instance for that
+    /// binding is lowered once and called by value with the other
+    /// arguments.
+    fn instantiate(
+        &mut self,
+        template: &FnDecl,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<ValueId, CompileError> {
+        let name = template.name.value.as_str();
+        self.arity(name, args, template.args.len(), span)?;
+        let mut fields = Vec::new();
+        let mut indices = Vec::new();
+        let mut values = Vec::new();
+        for ((param, ty), arg) in template.args.iter().zip(args) {
+            match resolve_type(ty, self.structs) {
+                Ok(expected) => {
+                    let id = self.value(arg)?;
+                    if self.ty(id) != expected {
+                        return Err(semantic(
+                            arg.span,
+                            format!(
+                                "`{name}` expects {} here, found {}",
+                                self.describe(expected),
+                                self.describe(self.ty(id))
+                            ),
+                        ));
+                    }
+                    values.push(id);
+                }
+                Err(_) => {
+                    let declared = port_type(ty, self.structs, self.shared.aliases)?;
+                    let (index, port) = self.input_index(arg, name)?;
+                    if port.ty.shape != declared.shape || port.ty.schema != declared.schema {
+                        return Err(semantic(
+                            arg.span,
+                            format!(
+                                "`{name}` expects {} for `{}`, but `{}` is {}",
+                                ty.value, param.value, port.name, port.ty
+                            ),
+                        ));
+                    }
+                    fields.push((param.value.clone(), index));
+                    indices.push(index);
+                }
+            }
+        }
+        let key = (name.to_owned(), indices.clone());
+        let existing = self.shared.instances.borrow().get(&key).copied();
+        let index = match existing {
+            Some(index) => index,
+            None => {
+                if self.shared.instantiating.borrow().iter().any(|n| n == name) {
+                    return Err(semantic(span, format!("function `{name}` calls itself")));
+                }
+                self.shared.instantiating.borrow_mut().push(name.to_owned());
+                let bound = indices
+                    .iter()
+                    .map(|i| self.manifest.inputs[*i as usize].name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let instance =
+                    lower_function(self.shared, template, fields, &format!("{name}<{bound}>"));
+                self.shared.instantiating.borrow_mut().pop();
+                let instance = instance?;
+                let index = {
+                    let mut functions = self.shared.functions.borrow_mut();
+                    functions.push((format!("{name}<{bound}>"), instance));
+                    (functions.len() - 1) as u32
+                };
+                self.shared.instances.borrow_mut().insert(key, index);
+                index
+            }
+        };
+        let ret = {
+            let functions = self.shared.functions.borrow();
+            result_type(&functions[index as usize].1)
+        };
+        Ok(self.emit(ret, Op::Call(index, values)))
+    }
+
     fn input_index(&self, expr: &Expr, what: &str) -> Result<(u32, &Port), CompileError> {
         let ExprKind::Name(name) = &expr.kind else {
             return Err(semantic(
@@ -1062,6 +1199,10 @@ impl<'a> Builder<'a> {
                 format!("`{what}` expects an input port name"),
             ));
         };
+        // A Field parameter stands for the port it was bound to.
+        if let Some((_, index)) = self.fields.iter().find(|(field, _)| field == name) {
+            return Ok((*index, &self.manifest.inputs[*index as usize]));
+        }
         let index = self
             .manifest
             .inputs
@@ -1348,11 +1489,18 @@ impl<'a> Builder<'a> {
                     })?;
                     return Ok(self.emit(ty, Op::Intrinsic(intrinsic, ids)));
                 }
-                if let Some(index) = self.functions.iter().position(|(f, _)| f == name) {
-                    let function = &self.functions[index].1;
-                    self.arity(name, args, function.args.len(), span)?;
-                    let expected = function.args.clone();
-                    let ret = result_type(function);
+                let found = {
+                    let functions = self.shared.functions.borrow();
+                    functions.iter().position(|(f, _)| f == name).map(|index| {
+                        (
+                            index,
+                            functions[index].1.args.clone(),
+                            result_type(&functions[index].1),
+                        )
+                    })
+                };
+                if let Some((index, expected, ret)) = found {
+                    self.arity(name, args, expected.len(), span)?;
                     let mut ids = Vec::with_capacity(args.len());
                     for (arg, expected) in args.iter().zip(expected) {
                         let id = self.value(arg)?;
@@ -1369,6 +1517,10 @@ impl<'a> Builder<'a> {
                         ids.push(id);
                     }
                     return Ok(self.emit(ret, Op::Call(index as u32, ids)));
+                }
+                if let Some(template) = self.shared.templates.iter().find(|t| t.name.value == name)
+                {
+                    return self.instantiate(template, args, span);
                 }
                 Err(semantic(
                     span,

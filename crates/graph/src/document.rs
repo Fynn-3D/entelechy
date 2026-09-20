@@ -53,6 +53,7 @@ pub type Declare<'a> = dyn FnMut(
         (
             Vec<orla_language::StructDecl>,
             Vec<orla_language::TypeAlias>,
+            Vec<orla_language::FnDecl>,
         ),
         String,
     > + 'a;
@@ -158,9 +159,9 @@ pub(crate) fn lower(
     declare: &mut Declare<'_>,
 ) -> Result<Lowered, DocumentError> {
     let mut document = document.clone();
-    let (structs, types) =
+    let (structs, types, functions) =
         declare(base, &document.uses).map_err(|message| error(Span::default(), message))?;
-    document.inherit(&structs, &types);
+    document.inherit(&structs, &types, &functions);
     let document = &document;
     let mut lowering = Lowering {
         loader,
@@ -493,9 +494,9 @@ impl Lowering<'_, '_> {
                     let mut sub_document = orla_language::parse_document(&text)
                         .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
                     let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
-                    let (structs, types) = (self.declare)(sub_base, &sub_document.uses)
+                    let (structs, types, functions) = (self.declare)(sub_base, &sub_document.uses)
                         .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
-                    sub_document.inherit(&structs, &types);
+                    sub_document.inherit(&structs, &types, &functions);
                     let sub_name = resolved
                         .file_stem()
                         .and_then(|stem| stem.to_str())

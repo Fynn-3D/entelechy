@@ -50,7 +50,11 @@ kernel fluid.hand@1 {
 // on its top face, so the divergence and the pressure gradient are face
 // differences that agree with the Jacobi stencil, and the projection can
 // drive the divergence to zero. Reading the velocity at a point offsets
-// each component by half a cell; each Kernel that reads it has flow_at.
+// each component by half a cell.
+fn flow_at(velocity: Flow, p: Vec2) -> Vec2 {
+    return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
+}
+
 // Advection of the velocity by itself, semi-Lagrangian with a midpoint
 // step, then the forces: vorticity confinement, the hand, the plume, and
 // the lift of warm smoke; the border cells are walls.
@@ -68,14 +72,10 @@ kernel fluid.advect@1 {
     param source: Float = 1.0;
     output result: Flow;
 
-    fn flow_at(p: Vec2) -> Vec2 {
-        return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
-    }
-
     // Where the fluid at p came from, and what it carried.
     fn carried(p: Vec2, dt: Float) -> Vec2 {
-        let mid = flow_at(p - flow_at(p) * (0.5 * dt));
-        return flow_at(p - mid * dt);
+        let mid = flow_at(velocity, p - flow_at(velocity, p) * (0.5 * dt));
+        return flow_at(velocity, p - mid * dt);
     }
 
     // Vorticity at the cell's corner, from the faces around it.
@@ -191,15 +191,11 @@ kernel fluid.smoke@1 {
     param fade: Float = 0.993;
     param source: Float = 1.0;
     output result: Amount;
-    fn flow_at(p: Vec2) -> Vec2 {
-        return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
-    }
-
     compute {
         let c = coord();
         let ext = domain();
         let here = c + vec2(0.5, 0.5);
-        let carried = at_linear(previous, here - flow_at(here) * dt);
+        let carried = at_linear(previous, here - flow_at(velocity, here) * dt);
         let h = at(hand, 0);
         let d = here - vec2(h.x, h.y);
         let near = if h.down { exp(-dot(d, d) / (radius * radius)) } else { 0.0 };
@@ -215,13 +211,9 @@ kernel fluid.draw@1 {
     input smoke: Amount;
     input velocity: Flow;
     output result: Image;
-    fn flow_at(p: Vec2) -> Vec2 {
-        return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
-    }
-
     compute {
         let s = clamp(sample(smoke), 0.0, 1.0);
-        let speed = length(flow_at(coord() + vec2(0.5, 0.5)));
+        let speed = length(flow_at(velocity, coord() + vec2(0.5, 0.5)));
         let calm = vec3(0.92, 0.88, 0.82);
         let fast = vec3(0.45, 0.7, 1.0);
         let tint = mix(calm, fast, clamp(speed * 0.2, 0.0, 1.0));

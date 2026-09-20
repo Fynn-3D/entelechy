@@ -90,8 +90,10 @@ fn check(args: &[String]) -> Result<(), String> {
             }
         };
         let mut document = document;
-        if let Ok((structs, types)) = orla::session::declarations_for(base, &document.uses) {
-            document.inherit(&structs, &types);
+        if let Ok((structs, types, functions)) =
+            orla::session::declarations_for(base, &document.uses)
+        {
+            document.inherit(&structs, &types, &functions);
         }
         let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
             .kernels
@@ -137,7 +139,9 @@ fn check(args: &[String]) -> Result<(), String> {
                     };
                     let dir = path.parent().unwrap_or_else(|| Path::new("."));
                     match orla::session::declarations_for(dir, &used_document.uses) {
-                        Ok((structs, types)) => used_document.inherit(&structs, &types),
+                        Ok((structs, types, functions)) => {
+                            used_document.inherit(&structs, &types, &functions)
+                        }
                         Err(error) => {
                             failures += 1;
                             println!("{}: {error}", path.display());
