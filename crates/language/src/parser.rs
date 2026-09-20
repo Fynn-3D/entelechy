@@ -808,7 +808,7 @@ impl Parser {
     }
 
     fn comparison(&mut self) -> Result<Expr, ParseError> {
-        let left = self.additive()?;
+        let left = self.bit_or()?;
         let op = match self.peek() {
             Token::Punct("<") => BinaryOp::Less,
             Token::Punct("<=") => BinaryOp::LessEqual,
@@ -819,7 +819,7 @@ impl Parser {
             _ => return Ok(left),
         };
         self.next();
-        let right = self.additive()?;
+        let right = self.bit_or()?;
         let result = binary(op, left, right);
         if matches!(
             self.peek(),
@@ -828,6 +828,54 @@ impl Parser {
             return Err(self.error("comparisons do not chain; parenthesize or use `&&`"));
         }
         Ok(result)
+    }
+
+    /// The integer bit operators bind between comparison and arithmetic,
+    /// loosest first: `|`, then `^`, then `&`, then the shifts.
+    fn bit_or(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.bit_xor()?;
+        while self.is_punct("|") {
+            self.next();
+            let right = self.bit_xor()?;
+            left = binary(BinaryOp::BitOr, left, right);
+        }
+        Ok(left)
+    }
+
+    fn bit_xor(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.bit_and()?;
+        while self.is_punct("^") {
+            self.next();
+            let right = self.bit_and()?;
+            left = binary(BinaryOp::BitXor, left, right);
+        }
+        Ok(left)
+    }
+
+    fn bit_and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.shift()?;
+        while self.is_punct("&") {
+            self.next();
+            let right = self.shift()?;
+            left = binary(BinaryOp::BitAnd, left, right);
+        }
+        Ok(left)
+    }
+
+    fn shift(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.additive()?;
+        loop {
+            let op = if self.is_punct("<<") {
+                BinaryOp::Shl
+            } else if self.is_punct(">>") {
+                BinaryOp::Shr
+            } else {
+                return Ok(left);
+            };
+            self.next();
+            let right = self.additive()?;
+            left = binary(op, left, right);
+        }
     }
 
     fn additive(&mut self) -> Result<Expr, ParseError> {
@@ -1086,6 +1134,22 @@ kernel image.grayscale@1 {
         };
         assert_eq!(name, "mix");
         assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn bit_operators_bind_between_comparison_and_arithmetic() {
+        let kernel = parse("kernel t.k@1 { compute { return a & b == c << 1 + d | e; } }").unwrap();
+        let ExprKind::Binary(BinaryOp::Equal, left, right) = &kernel.compute.result.kind else {
+            panic!("expected `==` at the top");
+        };
+        assert!(matches!(left.kind, ExprKind::Binary(BinaryOp::BitAnd, ..)));
+        let ExprKind::Binary(BinaryOp::BitOr, shifted, _) = &right.kind else {
+            panic!("expected `|` below `==`");
+        };
+        let ExprKind::Binary(BinaryOp::Shl, _, count) = &shifted.kind else {
+            panic!("expected `<<` below `|`");
+        };
+        assert!(matches!(count.kind, ExprKind::Binary(BinaryOp::Add, ..)));
     }
 
     #[test]

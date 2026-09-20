@@ -925,3 +925,44 @@ fn the_window_reaches_kernels_as_context() {
         [0.0, 0.0, 1.0]
     );
 }
+
+#[test]
+fn bit_operators_work_on_ints_with_the_count_modulo_32() {
+    let source = "kernel test.bits@1 { requires { field.write; } param a: Int = 0; param b: Int = 0; output result: Rows<Bits>; struct Bits { and: Int; or: Int; xor: Int; shl: Int; shr: Int; wide: Int; nibble: Int; } compute { return Bits { and: a & b, or: a | b, xor: a ^ b, shl: a << b, shr: a >> b, wide: 1 << 33, nibble: (a >> 4) & 15 }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(64);
+    let run = |host: &mut Host, a: i32, b: i32| -> Vec<i32> {
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(a), Value::Int(b)],
+            domain: Domain::Rows(1),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(host, granted());
+        let output = CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0];
+        host.element(output, 0)
+            .unwrap()
+            .iter()
+            .map(|w| *w as i32)
+            .collect()
+    };
+    assert_eq!(
+        run(&mut host, 0xF0, 0x3C),
+        [
+            0x30,
+            0xFC,
+            0xCC,
+            0xF0 << (0x3C % 32),
+            0xF0 >> (0x3C % 32),
+            2,
+            0xF
+        ]
+    );
+    // A negative number shifts right arithmetically, and its bits are two's complement.
+    assert_eq!(
+        run(&mut host, -8, 1),
+        [-8 & 1, -8 | 1, -8 ^ 1, -16, -4, 2, 15]
+    );
+}

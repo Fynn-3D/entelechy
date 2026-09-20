@@ -304,6 +304,16 @@ pub enum BinaryOp {
     And,
     /// `a || b`
     Or,
+    /// `a & b` on integers.
+    BitAnd,
+    /// `a | b` on integers.
+    BitOr,
+    /// `a ^ b` on integers.
+    BitXor,
+    /// `a << b` on integers; the count is taken modulo 32.
+    Shl,
+    /// `a >> b` on integers, arithmetic; the count is taken modulo 32.
+    Shr,
 }
 
 impl BinaryOp {
@@ -311,9 +321,14 @@ impl BinaryOp {
     /// Arithmetic: vectors combine componentwise with vectors of the same
     /// size or with a float on either side; integers only with integers.
     /// Comparisons take two scalars of one type and give `Bool`; equality
-    /// also compares `Bool`s. `&&` and `||` take `Bool`s.
+    /// also compares `Bool`s. `&&` and `||` take `Bool`s. The bit
+    /// operators and shifts take two `Int`s.
     pub fn result_type(self, a: Type, b: Type) -> Option<Type> {
         match self {
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr => match (a, b) {
+                (Type::Int, Type::Int) => Some(Type::Int),
+                _ => None,
+            },
             Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem => match (a, b) {
                 (Type::Float, Type::Float) => Some(Type::Float),
                 (Type::Int, Type::Int) => Some(Type::Int),
@@ -365,6 +380,11 @@ impl BinaryOp {
             Self::NotEqual => "!=",
             Self::And => "&&",
             Self::Or => "||",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
         }
     }
 }

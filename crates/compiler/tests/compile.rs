@@ -495,3 +495,15 @@ fn window_and_scale_are_context_under_input_read() {
     );
     assert!(message.contains("needs `input.read`"), "{message}");
 }
+
+#[test]
+fn bit_operators_take_ints_only() {
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.5 & 2.0; } }",
+    );
+    assert!(message.contains("cannot apply `&`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return 1 << 2.0; } }",
+    );
+    assert!(message.contains("cannot apply `<<`"), "{message}");
+}

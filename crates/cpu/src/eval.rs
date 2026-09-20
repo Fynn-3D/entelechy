@@ -615,6 +615,16 @@ impl FunctionCompiler<'_> {
                 let (ta, tb) = (self.ty(a), self.ty(b));
                 let (la, lb) = (self.loc(a), self.loc(b));
                 match op {
+                    BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr => Instr::IBin {
+                        op: *op,
+                        dst: dst.at,
+                        a: la.at,
+                        b: lb.at,
+                    },
                     BinaryOp::Add
                     | BinaryOp::Sub
                     | BinaryOp::Mul
@@ -1239,6 +1249,12 @@ impl<'p, 's> Machine<'p, 's> {
                     BinaryOp::Div => a.checked_div(b).ok_or(ArithmeticError::Overflow),
                     BinaryOp::Rem if b == 0 => Err(ArithmeticError::DivisionByZero),
                     BinaryOp::Rem => a.checked_rem(b).ok_or(ArithmeticError::Overflow),
+                    BinaryOp::BitAnd => Ok(a & b),
+                    BinaryOp::BitOr => Ok(a | b),
+                    BinaryOp::BitXor => Ok(a ^ b),
+                    // The count modulo 32, as the GPU masks it.
+                    BinaryOp::Shl => Ok(a.wrapping_shl(b as u32)),
+                    BinaryOp::Shr => Ok(a.wrapping_shr(b as u32)),
                     _ => unreachable!("compiled from an arithmetic operator"),
                 };
                 let v = result.map_err(|e| self.arithmetic(e))?;

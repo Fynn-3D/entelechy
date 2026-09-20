@@ -1238,12 +1238,21 @@ impl Emitter<'_> {
                     BinaryOp::NotEqual => "!=",
                     BinaryOp::And => "&&",
                     BinaryOp::Or => "||",
+                    BinaryOp::BitAnd => "&",
+                    BinaryOp::BitOr => "|",
+                    BinaryOp::BitXor => "^",
+                    BinaryOp::Shl => "<<",
+                    BinaryOp::Shr => ">>",
                 };
-                // A whole-vector comparison folds the componentwise one.
+                // A whole-vector comparison folds the componentwise one; a
+                // shift takes its count unsigned, masked to the width.
                 let vector = self.type_of(*a).components().is_some();
                 match op {
                     BinaryOp::Equal if vector => format!("all({} == {})", v(a), v(b)),
                     BinaryOp::NotEqual if vector => format!("any({} != {})", v(a), v(b)),
+                    BinaryOp::Shl | BinaryOp::Shr => {
+                        format!("({} {symbol} (u32({}) & 31u))", v(a), v(b))
+                    }
                     _ => format!("({} {symbol} {})", v(a), v(b)),
                 }
             }

@@ -885,6 +885,11 @@ impl<'a> Builder<'a> {
                     orla_language::BinaryOp::NotEqual => BinaryOp::NotEqual,
                     orla_language::BinaryOp::And => BinaryOp::And,
                     orla_language::BinaryOp::Or => BinaryOp::Or,
+                    orla_language::BinaryOp::BitAnd => BinaryOp::BitAnd,
+                    orla_language::BinaryOp::BitOr => BinaryOp::BitOr,
+                    orla_language::BinaryOp::BitXor => BinaryOp::BitXor,
+                    orla_language::BinaryOp::Shl => BinaryOp::Shl,
+                    orla_language::BinaryOp::Shr => BinaryOp::Shr,
                 };
                 let left = self.value(left)?;
                 let right = self.value(right)?;

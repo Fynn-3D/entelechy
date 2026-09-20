@@ -408,6 +408,16 @@ pub enum BinaryOp {
     And,
     /// `||`
     Or,
+    /// `&` on integers
+    BitAnd,
+    /// `|` on integers
+    BitOr,
+    /// `^` on integers
+    BitXor,
+    /// `<<` on integers
+    Shl,
+    /// `>>` on integers, arithmetic
+    Shr,
 }
 
 /// An expression.

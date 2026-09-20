@@ -790,6 +790,14 @@ fn remainder_widening_and_vector_equality_match_between_backends() {
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let (cpu, device) = both_module(&gpu, &module, &[], (1, 1), vec![], Domain::Grid(16, 8));
     assert!(mismatch(&cpu, &device, 1e-6) <= 1e-6);
+    // The bit operators, the shift count modulo 32, and an arithmetic shift
+    // of a negative number, exact on both.
+    let bits = compile("kernel test.bits@1 { requires { field.write; } output result: Image; compute { let c = coord(); let x = int(c.x); let y = int(c.y) - 4; return vec4(float((x & 5) | (y ^ 3)), float((x << 33) + (y << (x % 4))), float(y >> 1), float((x * 37) ^ (y * 11) & 255)); } }").unwrap_or_else(|error| panic!("{error}"));
+    let (bits_cpu, bits_gpu) = both_module(&gpu, &bits, &[], (1, 1), vec![], Domain::Grid(16, 8));
+    assert_eq!(mismatch(&bits_cpu, &bits_gpu, 0.0), 0.0);
+    assert_eq!(bits_cpu[3][0], (3 & 5 | (-4 ^ 3)) as f32);
+    assert_eq!(bits_cpu[3][1], ((3 << 1) + (-4 << 3)) as f32);
+    assert_eq!(bits_cpu[3][2], -2.0);
     let at = |x: usize, y: usize| cpu[y * 16 + x];
     assert_eq!(at(9, 0)[0], 2.0 / 7.0);
     assert!(

@@ -57,7 +57,9 @@ struct's scalars in order, integers and booleans exact. Inside `compute`,
 Expressions are `let` bindings and a result; `+ - * /` and `%` (the
 remainder, truncated like `/`, on `Int` and `Float` alike, and
 componentwise on vectors) with `Int` and `Float` kept apart except that
-`vec2`, `vec3`, and `vec4` take `Int` components and widen them; `==` and
+`vec2`, `vec3`, and `vec4` take `Int` components and widen them; `& | ^`
+and `<< >>` work on `Int`s (the shift count modulo 32, `>>` arithmetic),
+binding between comparison and arithmetic as in Rust; `==` and
 `!=` compare scalars and whole vectors; `<` and the rest compare scalars;
 `if c { a } else { b }` and `loop n with x = init until done { next }` are
 expressions; `Name { a: .., b: .. }` builds a struct and
