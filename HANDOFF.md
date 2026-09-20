@@ -89,34 +89,30 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-A GBA. The measurement is in: the [Thumb core](examples/thumb/README.md)
-(every format of the ARM7TDMI's 16-bit set, ~300 lines) steps 19 million
-instructions a second on the JIT, 1.6 million on the interpreter, which
-is above a GBA's 16.78 MHz clock before wait states, so the core is not
-the problem; the machine around it is. In order:
+The machine substrate is proven and closed for now: a machine is a
+`scan` over memories (`put`, also from functions with a Field
+parameter), with `>>>`, `add_wrap`/`sub_wrap`/`mul_wrap` and hexadecimal
+literals for its ALU, stepped by the JIT; the
+[CHIP-8](examples/chip8/README.md) and the
+[Thumb core](examples/thumb/README.md) (every format of the ARM7TDMI's
+16-bit set, 19 million instructions a second on the JIT, above a GBA's
+clock) are the proofs. A whole emulator (GBA or otherwise) is a project
+of its own, not a next step of this repository. Back to the platform:
 
-1. The ARM state of the core (32-bit instructions, the same registers
-   and flags, mode switching through BX), since the BIOS and interrupt
-   handlers run in ARM; and the banked registers and CPSR/SPSR for IRQ
-   and SWI.
-2. The memory map as one `Words` memory with an address decoder in the
-   store and load functions (BIOS, EWRAM, IWRAM, I/O registers, palette,
-   VRAM, OAM, ROM), the ROM a `.field` input the Host watches.
-3. A PPU as map Kernels over VRAM, palette and OAM for mode 0 and mode 3
-   first, one scanline's worth of steps between draws; then DMA, timers,
-   the interrupt controller and the keypad register.
-4. Reductions and scatters on the JIT, so a scene that mixes them no
-   longer switches to the interpreter mid-graph.
-
-Done on the way here: `put` inside functions with a Field parameter
-(refused in `init` even through a call), `>>>`, `add_wrap`/`sub_wrap`/
-`mul_wrap`, hexadecimal literals, and two GPU fixes (a `storageBarrier`
-between a scan's steps, long `Rows` maps dispatched as a grid).
+1. Reductions and scatters on the JIT: the map part compiles as today,
+   the fold and the in-order apply follow the CPU's, so a scene that
+   mixes them no longer switches to the interpreter mid-graph; the JIT
+   then covers every mode and can be the default where no GPU is.
+2. A Godot bridge (`/usr/local/bin/godot` is installed): a client of the
+   protocol like the Blender and web bridges, a texture from `read`, the
+   input from the scene, params from the inspector.
+3. What a session of play turns up: the voxel editor and the showcase
+   were rated on interactivity; the JIT closed the CPU gap, the GPU scan
+   is one thread (a machine belongs on the JIT).
 
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
-words, so a change to the interpreter's rounding needs a change here;
-the GPU runs a scan on one thread, so a machine belongs on the JIT.
+words, so a change to the interpreter's rounding needs a change here.
 
 ## Open
 
