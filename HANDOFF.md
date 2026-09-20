@@ -129,10 +129,13 @@ and 2 are done and exceeded; phase 3's surfaces (the creation protocol
 with positioned diagnostics, preview, atomic publish, compose, `help`,
 the registry) are done and its demonstration is on record as the
 `scanline` example, an agent's `agent.jsonl` replayed by a protocol
-test; phase 4 has fusion, Metal through wgpu and a JIT the plan never
-asked for, and lacks an IR optimizer, a scheduler beyond one worker
-thread, WASM, async Kernels, state migration beyond `<~ from`, and
-packages; phase 5's domains are touched ahead of order (audio,
+test; phase 4 has fusion, Metal through wgpu, a JIT the plan never asked
+for, and state migration (section 24: `<~ … migrate id@v`, a map
+Kernel run once over the old state when a republished Kernel changed
+its layout; without one the port restarts from its initial and says
+so; a failing migration leaves the state as it was), and lacks an IR
+optimizer, a scheduler beyond one worker thread, WASM, async Kernels,
+and packages; phase 5's domains are touched ahead of order (audio,
 geometry, simulation, machines). The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar
 took that in: a node's name and a source reference accept any word,

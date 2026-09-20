@@ -779,3 +779,68 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
     );
     assert_eq!(ok(17)["bye"], true);
 }
+
+/// The migrate example's `agent.jsonl`: an agent changes what a running
+/// tally carries, publishing the new Kernel and a migration, and the
+/// count goes on; then it drops the migration and the old layout comes
+/// back, and the tally restarts from its seed, reported.
+#[test]
+fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/migrate");
+    let dir = std::env::temp_dir().join(format!("orla-protocol-migrate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    std::fs::copy(
+        example.join("kernels/tally.orla"),
+        dir.join("kernels/tally.orla"),
+    )
+    .unwrap();
+    std::fs::copy(example.join("scene.osn"), dir.join("scene.osn")).unwrap();
+    let requests: Vec<Json> = std::fs::read_to_string(example.join("agent.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let responses = talk(&dir.join("scene.osn"), &requests);
+    let ok = |index: usize| -> &Json {
+        assert!(
+            responses[index].get("ok").is_some(),
+            "request {} failed: {}",
+            requests[index]["id"],
+            responses[index]
+        );
+        &responses[index]["ok"]
+    };
+    let state = |index: usize| -> Vec<i32> {
+        orla::protocol::unbase64(ok(index)["data"].as_str().unwrap())
+            .unwrap()
+            .chunks(4)
+            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect()
+    };
+    assert_eq!(state(4), vec![3], "three evaluations counted");
+    assert_eq!(ok(5)["id"], "tally.upgrade@1");
+    assert_eq!(ok(6)["id"], "tally.step@1");
+    // Composed with `migrate`, the next evaluation carries the state over.
+    assert_eq!(
+        ok(9)["migrated"],
+        json!([{ "node": "count", "port": "previous", "kernel": "tally.upgrade@1" }])
+    );
+    assert_eq!(ok(9)["reset"], json!([]));
+    assert_eq!(
+        state(10),
+        vec![4, 8],
+        "the count went on, the double from it"
+    );
+    assert_eq!(ok(11)["migrated"], json!([]));
+    assert_eq!(state(12), vec![5, 10]);
+    // Without a migration, the old layout back: the state restarts.
+    assert_eq!(ok(15)["migrated"], json!([]));
+    let reset = ok(15)["reset"].as_array().unwrap();
+    assert_eq!(reset.len(), 1, "{}", responses[15]);
+    assert_eq!(reset[0]["node"], "count");
+    assert!(reset[0]["reason"].as_str().unwrap().contains("laid out as"));
+    assert_eq!(state(16), vec![1]);
+    assert_eq!(ok(17)["bye"], true);
+}

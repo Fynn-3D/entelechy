@@ -108,3 +108,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   refused at a line and column, repairs it, publishes, composes it into
   the running scene and sees the picture change; a test replays the
   record.
+- [migrate](migrate/README.md): state migration on record: an agent
+  changes what a running tally carries, publishes the new Kernel and a
+  migration, and the count goes on; without a migration the state
+  restarts and the report says so.

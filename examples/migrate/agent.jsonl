@@ -1,0 +1,18 @@
+{"id": 1, "op": "status"}
+{"id": 2, "op": "evaluate", "time": 0.0}
+{"id": 3, "op": "evaluate", "time": 0.1}
+{"id": 4, "op": "evaluate", "time": 0.2}
+{"id": 5, "op": "read", "node": "count"}
+{"id": 6, "op": "publish", "source": "// From the tally as it was to the tally as it is: the count kept, the\n// double made from it.\nkernel tally.upgrade@1 {\n    requires { field.read; field.write; }\n    struct Old { count: Int; }\n    struct Tally { count: Int; doubled: Int; }\n    input old: Rows<Old>;\n    output result: Rows<Tally>;\n    compute {\n        let o = sample(old);\n        return Tally { count: o.count, doubled: o.count * 2 };\n    }\n}\n", "expect": "absent"}
+{"id": 7, "op": "publish", "source": "// The tally carries its double too, now.\nkernel tally.step@1 {\n    requires { field.read; field.write; }\n    struct Tally { count: Int; doubled: Int; }\n    input previous: Rows<Tally>;\n    output result: Rows<Tally>;\n    compute {\n        let t = sample(previous);\n        return Tally { count: t.count + 1, doubled: (t.count + 1) * 2 };\n    }\n}\n", "expect": "any"}
+{"id": 8, "op": "document"}
+{"id": 9, "op": "compose", "text": "// A tally counting evaluations, its state fed back through the graph,\n// carried into the new tally by tally.upgrade@1 when the layout changes.\nuse \"kernels/\";\n\nnode seed: tally.zero@1 { domain = 1; }\nnode count: tally.step@1 { previous <~ count.result from seed.result migrate tally.upgrade@1; }\n\noutput result <- count.result;\n"}
+{"id": 10, "op": "evaluate", "time": 0.3}
+{"id": 11, "op": "read", "node": "count"}
+{"id": 12, "op": "evaluate", "time": 0.4}
+{"id": 13, "op": "read", "node": "count"}
+{"id": 14, "op": "compose", "text": "// A tally counting evaluations, its state fed back through the graph.\nuse \"kernels/\";\n\nnode seed: tally.zero@1 { domain = 1; }\nnode count: tally.step@1 { previous <~ count.result from seed.result; }\n\noutput result <- count.result;\n"}
+{"id": 15, "op": "publish", "source": "kernel tally.step@1 {\n    requires { field.read; field.write; }\n    struct Tally { count: Int; }\n    input previous: Rows<Tally>;\n    output result: Rows<Tally>;\n    compute {\n        let t = sample(previous);\n        return Tally { count: t.count + 1 };\n    }\n}\n", "expect": "any"}
+{"id": 16, "op": "evaluate", "time": 0.5}
+{"id": 17, "op": "read", "node": "count"}
+{"id": 18, "op": "quit"}
