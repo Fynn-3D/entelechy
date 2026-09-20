@@ -12,82 +12,104 @@ expect state.result[0].face = 0 1 0
 expect state.result[0].tool = 0
 expect 4 4 = 0.205 0.213 0.237 0.02          # the sky is dark
 
-# A click places a white voxel on that face: (27, 12, 27) is 62811.
+# The left button places a white voxel on that face at once, (27, 12,
+# 27) at 62811, and again every fourth frame while held: the pointer
+# then sees the new voxel's near face, so (27, 12, 28) at 65115 follows.
 pointer 240 157 down
 frame 0.03
-pointer up
-frame 0.05
 expect state.result[0].apply = true
+expect state.result[0].begin = true
 expect world.result[62811] = 1
-
-# Z undoes it, and Z again brings it back.
-key 90 down
+frame 0.05
 frame 0.07
-expect world.result[62811] = 0
-key 90 up
 frame 0.08
-key 90 down
+expect world.result[65115] = 0
 frame 0.1
-expect world.result[62811] = 1
-key 90 up
+expect state.result[0].apply = true
+expect state.result[0].begin = false
+expect world.result[65115] = 1
+pointer up
 frame 0.12
 
-# The second item is the eraser; the same click removes it.
-pointer 126 238 down
+# Z undoes the whole stroke, and Z again brings it back.
+key 90 down
 frame 0.13
-pointer up
+expect world.result[62811] = 0
+expect world.result[65115] = 0
+key 90 up
 frame 0.15
-expect state.result[0].tool = 1
-pointer 240 157 up
+key 90 down
 frame 0.17
-pointer 240 157 down
+expect world.result[62811] = 1
+expect world.result[65115] = 1
+key 90 up
 frame 0.18
-pointer up
+key 90 down
 frame 0.2
+key 90 up
+frame 0.22
 expect world.result[62811] = 0
 
-# The fourth item cycles the colour, the third is the brush: the tree's
-# top voxel (27, 11, 27), 62763, turns red.
-pointer 278 238 down
-frame 0.22
-pointer up
+# The middle button orbits: sixty pixels are 0.48 of yaw.
+pointer 100 100 up
 frame 0.23
-expect state.result[0].colour = 2
-pointer 202 238 down
+button middle down
 frame 0.25
-pointer up
+pointer 130 100 up
 frame 0.27
-expect state.result[0].tool = 2
-pointer 240 157 up
+pointer 160 100 up
 frame 0.28
-pointer 240 157 down
+button middle up
 frame 0.3
-pointer up
-frame 0.32
-expect world.result[62763] = 2
-
-# The right button erases whatever the tool; the wheel zooms in.
-button right down
-frame 0.325
-expect world.result[62763] = 0
-expect state.result[0].act = 1
-button right up
-frame 0.327
-wheel 0 1
-frame 0.328
-expect state.result[0].zoom = 0.72 0.001
-frame 0.329
-expect state.result[0].zoom = 0.72 0.001
-
-# A drag orbits and edits nothing: sixty pixels are 0.48 of yaw.
-pointer 100 100 down
-frame 0.33
-pointer 130 100 down
-frame 0.35
-pointer 160 100 down
-frame 0.37
-pointer up
-frame 0.38
 expect state.result[0].yaw = 1.18 0.001
-expect state.result[0].apply = false
-expect world.result[62763] = 0
+expect state.result[0].pitch = 0.5 0.001
+
+# With Shift the middle button pans, by what the pointer covers.
+pointer 100 100 up
+key 16 down
+frame 0.32
+button middle down
+frame 0.33
+pointer 130 120 up
+frame 0.35
+button middle up
+frame 0.37
+key 16 up
+frame 0.38
+expect state.result[0].pan = -2.5013 2.1634 2.9688 0.002
+expect state.result[0].yaw = 1.18 0.001
+
+# The wheel zooms in.
+wheel 0 1
+frame 0.4
+expect state.result[0].zoom = 0.72 0.001
+
+# The right button erases whatever the tool, and holding it keeps
+# erasing; the voxel first under the pointer here is (24, 12, 28), 65112.
+pointer 240 157 up
+frame 0.42
+expect state.result[0].hit = 24 12 28
+button right down
+frame 0.43
+expect state.result[0].act = 1
+expect world.result[65112] = 0
+frame 0.45
+frame 0.47
+frame 0.48
+frame 0.5
+button right up
+frame 0.52
+key 90 down
+frame 0.53
+expect world.result[65112] = 3                # undo restores the stroke
+key 90 up
+frame 0.55
+
+# The last item resets the model and the view.
+pointer 430 238 down
+frame 0.57
+pointer up
+frame 0.58
+expect state.result[0].yaw = 0.7 0.001
+expect state.result[0].pan = 0 0 0
+expect state.result[0].zoom = 0.8 0.001
