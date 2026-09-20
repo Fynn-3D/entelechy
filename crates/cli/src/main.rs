@@ -13,18 +13,18 @@ usage:
       Parse documents, compile their Kernels, and print manifests or diagnostics.
   orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
                        [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
-                       [--out <file.ppm>] [--watch] [--backend cpu|gpu]
+                       [--out <file.ppm>] [--watch] [--backend cpu|gpu|jit]
                        [--param <name>=<literal>]... [--no-fusion]
                        [--window <w>x<h>[@<scale>]]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version. --window is the window a scene sized by `window()`
       would fill, in pixels, with its scale factor.
-  orla replay <file.replay>... [--backend cpu|gpu]
+  orla replay <file.replay>... [--backend cpu|gpu|jit]
       Drive scenes through scripted frames and inputs and check pixels.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
       Print the flattened graph and what would execute, fused groups marked.
-  orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu]
+  orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu|jit]
                          [--listen <host:port>] [--window <w>x<h>[@<scale>]]
       Serve the creation protocol: JSON requests on stdin, one response per
       line on stdout, and on every connection to --listen, where a client's

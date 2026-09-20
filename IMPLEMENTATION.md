@@ -26,6 +26,7 @@ capability claim.
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [interpreter](crates/cpu/src/eval.rs) | [execution tests](crates/cpu/tests/execute.rs) |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs) | [hot swap tests](crates/runtime/tests/hot_swap.rs) |
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs) | [CPU/GPU parity tests](crates/gpu/tests/parity.rs) (skip without an adapter) |
+| JIT backend | [jit](crates/jit/src/lib.rs), [Cranelift emission](crates/jit/src/codegen.rs) | [CPU/JIT parity tests](crates/jit/tests/parity.rs), every example replay on `jit` |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
 | Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [end-to-end client test](crates/cli/tests/protocol.rs) |
@@ -379,6 +380,21 @@ capability claim.
   Kernels of every document a scene uses, not only the scene's own. `time()` needs `time.read`;
   only nodes that declare it re-execute when time advances
   ([clock caching test](crates/graph/tests/composition.rs)).
+- The JIT backend ([crate](crates/jit)) is the interface layer's third
+  backend and the one crate that takes `unsafe`: it compiles a validated
+  module's functions to native code through Cranelift when the Kernel is
+  prepared (every value its words in the ABI's layout, `if` and `loop`
+  as blocks with block parameters, a function's result through a
+  caller-provided slot, integer arithmetic checked as the interpreter
+  checks it with the first failure recorded in a context struct, Field
+  reads and the transcendental functions through Rust helpers by symbol
+  so they round the same), and runs the entry once per element over the
+  CPU's threads. Map Kernels compile; the other modes and the native
+  operations run on the interpreter under it. The parity test holds the
+  whole map vocabulary bit for bit and every example replay passes on
+  `jit`; the raymarch, voxel and showcase scenes run twenty to thirty-five
+  times faster than the interpreter ([lib](crates/jit/src/lib.rs),
+  [codegen](crates/jit/src/codegen.rs), [tests](crates/jit/tests/parity.rs)).
 - The CPU backend compiles a module to word-addressed code once per
   execution and runs it once per element: every value has a fixed word
   offset in the ABI's own layout, so arguments, struct fields, vector

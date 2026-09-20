@@ -292,8 +292,10 @@ authored `tests/`. Demo-specific documentation belongs in that directory. Follow
 `examples/README.md`; do not add flat examples or a redundant project manifest.
 Keep the runtime crates (host, abi, ir, compiler, language, cpu, gpu, runtime,
 graph, and the `orla` CLI) free of external dependencies; the interface layer
-(the Player, `orla-import`, `orla-export`) is the only place that may take
-them, for devices and for formats that are not worth decoding twice.
+(the Player, `orla-import`, `orla-export`, `orla-jit`) is the only place that
+may take them, for devices, for formats that are not worth decoding twice,
+and for a code generator. `orla-jit` is also the one crate allowed `unsafe`:
+it calls the code it produces, and nothing else.
 Bridges to other programs live in `bridges/<program>/`, written in that
 program's own language (Blender's Python), outside the Rust workspace; they
 speak only the public contracts (the protocol and the Host's file formats),

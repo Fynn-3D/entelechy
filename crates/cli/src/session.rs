@@ -427,7 +427,12 @@ impl Session {
                 let backend: Box<dyn Backend> = Box::new(gpu);
                 Ok(Runtime::with_backend(budget_words, backend))
             }
-            other => Err(format!("unknown backend `{other}`; use cpu or gpu")),
+            "jit" => {
+                let jit = orla_jit::JitBackend::new()?;
+                let backend: Box<dyn Backend> = Box::new(jit);
+                Ok(Runtime::with_backend(budget_words, backend))
+            }
+            other => Err(format!("unknown backend `{other}`; use cpu, gpu, or jit")),
         }
     }
 

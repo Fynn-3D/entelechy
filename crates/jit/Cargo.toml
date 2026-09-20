@@ -1,0 +1,32 @@
+[package]
+name = "orla-jit"
+description = "JIT backend: compiles Orla IR to native code through Cranelift and runs it on the CPU"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-abi = { path = "../abi" }
+orla-ir = { path = "../ir" }
+orla-cpu = { path = "../cpu" }
+orla-runtime = { path = "../runtime" }
+# 0.131 is the newest Cranelift that builds on Rust 1.93; later ones want 1.94.
+cranelift-codegen = "0.131"
+cranelift-frontend = "0.131"
+cranelift-jit = "0.131"
+cranelift-module = "0.131"
+cranelift-native = "0.131"
+
+[dev-dependencies]
+orla-compiler = { path = "../compiler" }
+
+# The one crate that calls code it produced: it takes its own lints
+# rather than the workspace's `unsafe_code = "forbid"`, and keeps every
+# `unsafe` block to the call into the compiled function and the reads
+# through the pointers that function was handed.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = "warn"

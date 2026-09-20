@@ -25,7 +25,7 @@ use winit::window::{Window, WindowId};
 const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
-              [--window <w>x<h>] [--backend gpu|cpu]
+              [--window <w>x<h>] [--backend gpu|cpu|jit]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the

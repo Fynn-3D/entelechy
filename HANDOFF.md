@@ -11,9 +11,10 @@ written while the code has one `Handle`.
 The previous implementation at `../bak/orla` is a read-only reference.
 
 Layering as decided: the runtime crates and the `orla` CLI take no external
-dependencies; the interface layer (L8: `cli`, `player`, `import`, `export`) is
-the only place that may (player: winit, softbuffer, cpal, gilrs; gpu: wgpu;
-import: symphonia; export: none). Crates are named by what they are, not by
+dependencies; the interface layer (L8: `cli`, `player`, `import`, `export`,
+`jit`) is the only place that may (player: winit, softbuffer, cpal, gilrs;
+gpu: wgpu; import: symphonia; export: none; jit: cranelift 0.131, the
+newest that builds on Rust 1.93, and the one crate with `unsafe`). Crates are named by what they are, not by
 layer. Bridges live in `bridges/<program>/` in that program's language, outside
 the workspace, speaking only the protocol and the Host's file formats.
 
@@ -53,12 +54,17 @@ plan is drawn every evaluation and the extent is in the cache key; the
 listener tells a WebSocket from a line client by the first four bytes
 (`GET `) and never serves a page, so a bridge's files are opened from
 disk, and `orla.js` is a classic script because browsers refuse module
-imports between file URLs.
+imports between file URLs; the JIT is on Cranelift 0.131 (the newest that
+builds on Rust 1.93), returns every function's result through a
+caller-provided stack slot (arm64 refuses a struct's worth of return
+registers), keeps `unsafe` to the one crate that calls the code it made
+(its own `[lints]` instead of the workspace's `forbid`), and prepares one
+compiled module per Kernel version, freed with it.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
-the example-replay test is the slow one), and every replay on both backends:
-`for f in examples/*/tests/*.replay; do for b in gpu cpu; do
+the example-replay test is the slow one), and every replay on the three backends:
+`for f in examples/*/tests/*.replay; do for b in gpu cpu jit; do
 ./target/release/orla replay $f --backend $b; done; done` (about 20 s after
 `cargo build --release`). Tests in one binary run in parallel: a test that
 writes files takes a directory of its own (`scratch_in`, or a named scratch).
@@ -80,26 +86,23 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-The optional JIT backend, `orla-jit`, in the interface layer beside
-`gpu`: Cranelift 0.131 is the newest that builds on this machine's Rust
-1.93 (0.132 and later want 1.94), probed in a scratch crate with blocks,
-block params, `brif`, `sadd_overflow`, `fcvt_to_sint_sat`, `floor`, and
-an imported `extern "C"` symbol; `iconst` takes an `i64`. The crate needs
-`unsafe` (calling code it produced), so it declares its own lints instead
-of the workspace's `forbid`. Plan: compile each function of a validated
-module to a Cranelift function with values scalarised to `f32`/`i32`
-words in the ABI's layout, structs flattened, `If` and `Loop` as blocks
-with block parameters, checked integer arithmetic storing an error code
-into a context struct; Field reads, `at_linear`, and libm through
-imported helpers at first; `prepare` compiles once per version, the
-entry runs one element per call over rows in threads as the CPU does;
-reduce, scan, scatter and native ops delegate to the CPU backend at
-first. `--backend jit` on `run`, `replay`, `serve` and the Player.
-Acceptance: every example replay passes on `jit` bit for bit against the
-CPU, and the voxel and raymarch scenes are several times faster than the
-interpreter. After that, machines: a GBA is within reach of memories and
-a JIT; an NDS is not full speed without mixed backends and a
-recompiler.
+Scan mode in the JIT. `orla-jit` compiles map Kernels to native code
+through Cranelift (values scalarised to words in the ABI's layout, `if`
+and `loop` as blocks with block parameters, a function's result through a
+caller-provided slot because arm64 has too few return registers for a
+struct, integer failures recorded in a context struct and reported at
+their element, Field reads and libm through helpers by symbol so they
+round exactly as the interpreter does; every example replay passes on
+`--backend jit` bit for bit against the CPU, twenty to thirty-five times
+faster on the raymarch, voxel and showcase scenes), but a scan, a
+reduction, a scatter and the native operations still run on the
+interpreter under it, so the CHIP-8 steps at the interpreter's speed. The
+step: compile scan Kernels (`init`, `Carried` and `Index` outside loops,
+`Put` into memory buffers passed through the context, the row-serial
+order the CPU keeps) so a machine's whole step is native; reduce and
+scatter may follow or stay interpreted. Then machines: a GBA is within
+reach of memories and a compiled scan; an NDS is not full speed without
+mixed backends and a recompiler.
 
 ## Open
 
@@ -118,6 +121,7 @@ watch polls every 200 ms and can observe a half-written file; the next write
 is picked up. The CPU interpreter is the reference; it compiles to
 word-addressed code and runs the raymarch scene at 400x260 in about 0.35 s
 and a voxel frame at 960x540 in about 1.3 s on ten cores, so it is still
-not interactive for those. The worker is one FIFO thread.
+not interactive for those; the JIT runs the same frames in 22 ms and
+92 ms. The worker is one FIFO thread.
 Audio pacing is one block behind the ring. Native manifests print element
 types as anonymous structs.

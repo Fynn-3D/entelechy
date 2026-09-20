@@ -19,6 +19,7 @@ orla-ir = { path = "../ir" }
 orla-graph = { path = "../graph" }
 orla-runtime = { path = "../runtime" }
 orla-gpu = { path = "../gpu" }
+orla-jit = { path = "../jit" }
 serde_json = "1"
 
 [lints]

@@ -334,6 +334,20 @@ fn every_example_replay_passes_and_failures_are_reported() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(stdout.contains("blinker.replay: ok"), "{stdout}");
+    // The same replays on the JIT: native code, the interpreter's words.
+    let output = Command::new(orla)
+        .arg("replay")
+        .args(["--backend", "jit"])
+        .args(&replays)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("voxel.replay: ok"), "{stdout}");
 
     let dir = scratch("replay");
     std::fs::write(

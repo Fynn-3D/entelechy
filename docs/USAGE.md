@@ -62,12 +62,19 @@ through the protocol to observe its image.
 
 ## Backends
 
-`run` and the Player take `--backend cpu|gpu`. The CPU interpreter is the
-reference and reports per-pixel integer failures; the GPU backend runs the
-same IR as WGSL compute through wgpu, keeps images resident on the device
-between nodes and frames, and reads pixels back only when something
-observes them. It is the one to use for anything interactive. The Player
-defaults to the GPU when a device is available.
+`run`, `replay`, `serve` and the Player take `--backend cpu|gpu|jit`. The
+CPU interpreter is the reference and reports per-pixel integer failures;
+the GPU backend runs the same IR as WGSL compute through wgpu, keeps
+images resident on the device between nodes and frames, and reads pixels
+back only when something observes them, and is the one to use for
+anything interactive with a device; the JIT compiles the same IR to
+native code through Cranelift when a Kernel is prepared and runs it on
+the CPU's threads, bit for bit what the interpreter computes and ten to
+thirty times faster on the examples, so a machine without a usable GPU
+still runs the interactive scenes. The JIT compiles map Kernels; a
+reduction, a scan, a scatter and the native operations run on the
+interpreter under it. The Player defaults to the GPU when a device is
+available.
 
 ```sh
 cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm
