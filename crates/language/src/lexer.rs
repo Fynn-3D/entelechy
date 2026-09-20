@@ -34,9 +34,9 @@ pub(crate) struct Lexeme {
     pub end: usize,
 }
 
-const PUNCTS: [&str; 31] = [
-    "->", "<-", "<~", "<=", ">=", "==", "!=", "&&", "||", "<<", ">>", "{", "}", "(", ")", ":", ";",
-    ",", "=", ".", "@", "+", "-", "*", "/", "%", "<", ">", "&", "|", "^",
+const PUNCTS: [&str; 32] = [
+    "->", "<-", "<~", "<=", ">=", "==", "!=", "&&", "||", ">>>", "<<", ">>", "{", "}", "(", ")",
+    ":", ";", ",", "=", ".", "@", "+", "-", "*", "/", "%", "<", ">", "&", "|", "^",
 ];
 const SINGLE_EXTRA: [&str; 1] = ["!"];
 
@@ -144,7 +144,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             });
             continue;
         }
-        let rest: String = chars[index..chars.len().min(index + 2)].iter().collect();
+        let rest: String = chars[index..chars.len().min(index + 3)].iter().collect();
         let punct = PUNCTS
             .iter()
             .chain(SINGLE_EXTRA.iter())

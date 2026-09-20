@@ -170,6 +170,18 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
                 return Err(error(&init.name, "`init` takes no arguments"));
             }
             let init_types = validate_function(&module, init, module.functions.len() + 1, false)?;
+            // The steps write; the carried value's start is before them,
+            // so `init` may not call a function that writes.
+            let writers = writers(&module.functions);
+            if let Some(callee) = first_writing_call(&init.body, &writers) {
+                return Err(error(
+                    &init.name,
+                    format!(
+                        "`init` calls `{}`, which writes a memory; the initial carried value is before the first step",
+                        module.functions[callee].name
+                    ),
+                ));
+            }
             let actual = init.results.first().map(|r| init_types[r.0 as usize]);
             if init.results.len() != 1 || actual != Some(element) {
                 return Err(error(
@@ -756,7 +768,11 @@ impl<'a> Checker<'a> {
                 Type::Float
             }
             Op::Put(input, index, value) => {
-                self.entry_only(position)?;
+                // The entry and the functions it calls write; `init`
+                // (validated after the functions) does not.
+                if !self.is_entry && self.index >= self.module.functions.len() {
+                    return Err(self.fail(format!("{position} writes a memory outside the steps")));
+                }
                 self.require(Capability::FieldWrite, position)?;
                 let manifest = &self.module.manifest;
                 if manifest.mode != Mode::Scan {
@@ -921,6 +937,62 @@ pub fn linear_index_type(shape: Shape) -> Type {
 }
 
 /// Checks one function and returns the type of every slot.
+/// Which functions write a memory, themselves or through a call: a
+/// fixed point over the call graph (recursion is refused elsewhere).
+fn writers(functions: &[Function]) -> Vec<bool> {
+    let mut writers = vec![false; functions.len()];
+    loop {
+        let mut changed = false;
+        for (index, function) in functions.iter().enumerate() {
+            if !writers[index] && block_writes(&function.body, &writers) {
+                writers[index] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            return writers;
+        }
+    }
+}
+
+/// Whether a block writes a memory: a `put`, or a call to a writer.
+fn block_writes(instructions: &[Instruction], writers: &[bool]) -> bool {
+    instructions
+        .iter()
+        .any(|instruction| match &instruction.op {
+            Op::Put(..) => true,
+            Op::Call(callee, _) => writers[*callee as usize],
+            Op::If {
+                then, otherwise, ..
+            } => block_writes(&then.body, writers) || block_writes(&otherwise.body, writers),
+            Op::Loop { until, body, .. } => {
+                until
+                    .as_ref()
+                    .is_some_and(|block| block_writes(&block.body, writers))
+                    || block_writes(&body.body, writers)
+            }
+            _ => false,
+        })
+}
+
+/// The first call in a block to a function that writes a memory.
+fn first_writing_call(instructions: &[Instruction], writers: &[bool]) -> Option<usize> {
+    instructions
+        .iter()
+        .find_map(|instruction| match &instruction.op {
+            Op::Call(callee, _) if writers[*callee as usize] => Some(*callee as usize),
+            Op::If {
+                then, otherwise, ..
+            } => first_writing_call(&then.body, writers)
+                .or_else(|| first_writing_call(&otherwise.body, writers)),
+            Op::Loop { until, body, .. } => until
+                .as_ref()
+                .and_then(|block| first_writing_call(&block.body, writers))
+                .or_else(|| first_writing_call(&body.body, writers)),
+            _ => None,
+        })
+}
+
 fn validate_function(
     module: &Module,
     function: &Function,

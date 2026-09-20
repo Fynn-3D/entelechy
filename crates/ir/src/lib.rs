@@ -319,6 +319,9 @@ pub enum BinaryOp {
     Shl,
     /// `a >> b` on integers, arithmetic; the count is taken modulo 32.
     Shr,
+    /// `a >>> b` on integers, logical (zeros shifted in); the count is
+    /// taken modulo 32.
+    Ushr,
 }
 
 impl BinaryOp {
@@ -330,10 +333,12 @@ impl BinaryOp {
     /// operators and shifts take two `Int`s.
     pub fn result_type(self, a: Type, b: Type) -> Option<Type> {
         match self {
-            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr => match (a, b) {
-                (Type::Int, Type::Int) => Some(Type::Int),
-                _ => None,
-            },
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr | Self::Ushr => {
+                match (a, b) {
+                    (Type::Int, Type::Int) => Some(Type::Int),
+                    _ => None,
+                }
+            }
             Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem => match (a, b) {
                 (Type::Float, Type::Float) => Some(Type::Float),
                 (Type::Int, Type::Int) => Some(Type::Int),
@@ -390,6 +395,7 @@ impl BinaryOp {
             Self::BitXor => "^",
             Self::Shl => "<<",
             Self::Shr => ">>",
+            Self::Ushr => ">>>",
         }
     }
 }

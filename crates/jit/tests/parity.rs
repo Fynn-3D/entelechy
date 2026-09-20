@@ -72,7 +72,7 @@ fn the_vocabulary_matches_the_interpreter_bit_for_bit() {
                 Acc { sum: acc.sum + sin(acc.sum + x) * 0.5 + float(index()), count: acc.count + 1 }
             };
             let m = if c.on { mix(w, v, k) } else { normalize(w) * length(v) };
-            let bits = (i << 3) ^ (i >> 1) | (n & 5);
+            let bits = (i << 3) ^ (i >> 1) | (n & 5) ^ ((0 - i) >>> 3);
             let trig = tan(x * 0.1) + asin(fract(x * 0.13)) + acos(fract(x * 0.17)) + atan(x) + atan2(x, 3.0) + exp(k * x) + log(x + 1.0) + pow(x + 1.0, 1.5) + sqrt(x);
             let shaped = smoothstep(2.0, 9.0, x) + step(4.0, x) + floor(x * 0.9) + ceil(x * 0.2) + round(x * 0.5) + sign(x - 5.0) + abs(x - 6.0) + clamp(x, 2.0, 8.0) + max(x, 3.0) + min(x, 4.0);
             let ints = clamp(i * 3, 2, 20) + max(i, 4) + min(i, 3) + abs(i - 4) + sign(i - 2) + (i % 3) + (i / 2) + int(x * 1.5) + int(c.on);
@@ -233,9 +233,10 @@ fn scans_and_their_memories_match_the_interpreter() {
     // reading its carried value and the step index outside any loop, with
     // a loop inside a step and writes outside both memories dropped.
     let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; }
+        fn flip(s: Grid<Int>, p: Vec2, seen: Int) -> Int { return put(s, p, (1 - seen) >>> 0); }
         scan with at_ = vec2(3.0, 2.0) {
             let seen = at(screen, at_);
-            put(screen, at_, 1 - seen);
+            flip(screen, at_, seen);
             let t = at(tally, seen);
             put(tally, seen, Cell { hits: t.hits + 1, last: float(index()) });
             put(screen, vec2(-1.0, 0.0), 9);

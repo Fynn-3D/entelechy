@@ -636,7 +636,8 @@ impl FunctionCompiler<'_> {
                     | BinaryOp::BitOr
                     | BinaryOp::BitXor
                     | BinaryOp::Shl
-                    | BinaryOp::Shr => Instr::IBin {
+                    | BinaryOp::Shr
+                    | BinaryOp::Ushr => Instr::IBin {
                         op: *op,
                         dst: dst.at,
                         a: la.at,
@@ -1302,6 +1303,7 @@ impl<'p, 's> Machine<'p, 's> {
                     // The count modulo 32, as the GPU masks it.
                     BinaryOp::Shl => Ok(a.wrapping_shl(b as u32)),
                     BinaryOp::Shr => Ok(a.wrapping_shr(b as u32)),
+                    BinaryOp::Ushr => Ok((a as u32).wrapping_shr(b as u32) as i32),
                     _ => unreachable!("compiled from an arithmetic operator"),
                 };
                 let v = result.map_err(|e| self.arithmetic(e))?;

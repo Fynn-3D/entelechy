@@ -886,6 +886,8 @@ impl Parser {
         loop {
             let op = if self.is_punct("<<") {
                 BinaryOp::Shl
+            } else if self.is_punct(">>>") {
+                BinaryOp::Ushr
             } else if self.is_punct(">>") {
                 BinaryOp::Shr
             } else {

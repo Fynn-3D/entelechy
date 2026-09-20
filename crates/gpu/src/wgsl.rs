@@ -1295,6 +1295,7 @@ impl Emitter<'_> {
                     BinaryOp::BitXor => "^",
                     BinaryOp::Shl => "<<",
                     BinaryOp::Shr => ">>",
+                    BinaryOp::Ushr => ">>",
                 };
                 // A whole-vector comparison folds the componentwise one; a
                 // shift takes its count unsigned, masked to the width.
@@ -1304,6 +1305,9 @@ impl Emitter<'_> {
                     BinaryOp::NotEqual if vector => format!("any({} != {})", v(a), v(b)),
                     BinaryOp::Shl | BinaryOp::Shr => {
                         format!("({} {symbol} (u32({}) & 31u))", v(a), v(b))
+                    }
+                    BinaryOp::Ushr => {
+                        format!("i32(u32({}) >> (u32({}) & 31u))", v(a), v(b))
                     }
                     _ => format!("({} {symbol} {})", v(a), v(b)),
                 }

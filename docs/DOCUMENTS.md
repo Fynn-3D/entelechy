@@ -58,7 +58,8 @@ Expressions are `let` bindings and a result; `+ - * /` and `%` (the
 remainder, truncated like `/`, on `Int` and `Float` alike, and
 componentwise on vectors) with `Int` and `Float` kept apart except that
 `vec2`, `vec3`, and `vec4` take `Int` components and widen them; `& | ^`
-and `<< >>` work on `Int`s (the shift count modulo 32, `>>` arithmetic),
+and `<< >> >>>` work on `Int`s (the shift count modulo 32, `>>`
+arithmetic, `>>>` logical),
 binding between comparison and arithmetic as in Rust; `==` and
 `!=` compare scalars and whole vectors; `<` and the rest compare scalars;
 `if c { a } else { b }` and `loop n with x = init until done { next }` are
@@ -193,7 +194,11 @@ an address outside the memory is dropped, never clamped) and yields the
 value written. What the steps left there is the output of that name,
 listed after the Kernel's own output. Only ordered work may write, so
 every backend applies the writes in one order, and the bound Field is
-never touched: a failed evaluation leaves it as it was. An expression
+never touched: a failed evaluation leaves it as it was. A function may
+`put` into a Field parameter, so a store is written once and called from
+the steps (`fn store(m: Rows<Int>, a: Int, v: Int) -> Int { return
+put(m, a, v); }`); it is a step's write, in the step's order, and the
+initial carried value may not write. An expression
 followed by `;` is a statement for its effect, `put(ram, a, v);`, the
 same as `let _ = put(ram, a, v);`; a binding named `_` binds nothing.
 

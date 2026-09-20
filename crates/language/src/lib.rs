@@ -422,6 +422,8 @@ pub enum BinaryOp {
     Shl,
     /// `>>` on integers, arithmetic
     Shr,
+    /// `>>>` on integers, logical
+    Ushr,
 }
 
 /// An expression.

@@ -1083,6 +1083,10 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let count = self.b.ins().band_imm(wb[0], 31);
                 vec![self.b.ins().sshr(wa[0], count)]
             }
+            BinaryOp::Ushr => {
+                let count = self.b.ins().band_imm(wb[0], 31);
+                vec![self.b.ins().ushr(wa[0], count)]
+            }
         }
     }
 

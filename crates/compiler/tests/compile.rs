@@ -545,3 +545,24 @@ fn memories_are_ordered_work_written_with_put() {
     );
     assert!(message.contains("cannot be a memory"), "{message}");
 }
+
+#[test]
+fn a_function_writes_a_memory_for_the_steps_but_init_does_not() {
+    let prefix = "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; fn store(m: Rows<Int>, a: Int, v: Int) -> Int { return put(m, a, v); }";
+    compile(&format!(
+        "{prefix} scan with acc = 0 {{ store(ram, index(), acc); return acc + 1; }} }}"
+    ))
+    .unwrap_or_else(|error| panic!("{error}"));
+    let message = compile(&format!(
+        "{prefix} scan with acc = store(ram, 0, 1) {{ return acc + 1; }} }}"
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("before the first step"), "{message}");
+    let message = compile(
+        "kernel t.k@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; fn store(m: Rows<Int>, a: Int, v: Int) -> Int { return put(m, a, v); } compute { return store(ram, 0, 1); } }",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("use `scan`"), "{message}");
+}

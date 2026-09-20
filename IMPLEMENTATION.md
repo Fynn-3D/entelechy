@@ -143,7 +143,10 @@ capability claim.
   is an input and an output at once (last in both lists of the
   manifest, named in `memories`), which a scan's steps read with `at` as
   the earlier steps left it and write with `put(ram, address, value)` in
-  step order, an address outside dropped. The CPU works on a copy of the
+  step order, an address outside dropped; a function may `put` into a
+  Field parameter, so a store is written once (it is a write of the step
+  that calls it, and `init` may not call one, checked over the call
+  graph). The CPU works on a copy of the
   bound Field and hands the copy back as the output; the GPU copies the
   input's buffer, binds the copy read-write, and adopts it as the output;
   the bound Field is never written, so a failed evaluation commits

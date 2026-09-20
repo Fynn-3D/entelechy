@@ -104,6 +104,10 @@ million CHIP-8 steps in 0.18 s against 1.67 s). Two directions, in order:
    the fold and the in-order apply follow the CPU's, so a scene that
    mixes them no longer switches to the interpreter mid-graph.
 
+Done on the way: `put` inside functions with a Field parameter (a store
+helper for a core, refused in `init` even through a call) and `>>>`,
+the logical shift right, on all three backends.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

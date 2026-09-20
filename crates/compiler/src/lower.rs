@@ -917,6 +917,7 @@ impl<'a> Builder<'a> {
                     orla_language::BinaryOp::BitXor => BinaryOp::BitXor,
                     orla_language::BinaryOp::Shl => BinaryOp::Shl,
                     orla_language::BinaryOp::Shr => BinaryOp::Shr,
+                    orla_language::BinaryOp::Ushr => BinaryOp::Ushr,
                 };
                 let left = self.value(left)?;
                 let right = self.value(right)?;
@@ -1394,7 +1395,15 @@ impl<'a> Builder<'a> {
     fn call(&mut self, name: &str, args: &[Expr], span: Span) -> Result<ValueId, CompileError> {
         match name {
             "put" => {
-                self.entry_only(name, span)?;
+                // A write belongs to a step: the entry, or a function the
+                // step calls with the memory as a Field parameter. The
+                // carried value's start is before every step.
+                if self.name == "init" {
+                    return Err(semantic(
+                        span,
+                        "`put` writes step by step; the initial carried value is before the first step",
+                    ));
+                }
                 self.require(name, Capability::FieldWrite, span)?;
                 self.arity(name, args, 3, span)?;
                 let (input, port) = self.input_index(&args[0], name)?;
