@@ -2,200 +2,65 @@
 
 ## Context
 
-Conversation is Chinese; source, docs, and commits are English. Local commits are
-authorized; do not merge or push. Preserve both architectural bibles verbatim.
+Conversation is Chinese; source, docs, and commits are English. Local commits
+on `feat/first-proof` are authorized; do not merge or push. Commit as the
+configured identity. Preserve both architectural bibles verbatim (`Orla Architecture
+Plan.md`, `Orla — Minimal Core Architecture.md`); their handle lists stay as
+written while the code has one `Handle`.
 
-This implementation started on 2026-09-19 from the architecture documents alone.
-The previous implementation lives outside the repository at `../bak/orla` as a
-read-only reference; study its invariants, do not port it wholesale. Its typed
-Field decision is implemented: the Host exposes one resource in three shapes.
+The previous implementation at `../bak/orla` is a read-only reference.
 
-The runtime crates have no external dependencies; only the interface layer takes them: the Player depends on winit
-and softbuffer and the GPU backend on wgpu. The runtime holds one backend
-chosen at construction; `prepare` builds backend state so `publish` stays a
-pointer swap. The language covers the Phase 1 constructs plus
-structured control flow: one `compute` block per Kernel, one output,
-helper functions without recursion, Float/Int/Bool/Vec2/Vec3/Vec4 parameters,
-vector intrinsics, `time()` behind `time.read`, `if` expressions, bounded
-`loop` expressions carrying one value, and structs so that one value can be
-a bundle. Structs stay inside the Kernel; the Typed Field decision governs
-how record data will eventually cross the ABI. `.osn` scenes bind nodes to
-`KernelId`s; the CLI session and the Player resolve sources from the
-filesystem by polling modification stamps.
+Layering as decided: the runtime crates and the `orla` CLI take no external
+dependencies; the interface layer (L8: `cli`, `player`, `import`, `export`) is
+the only place that may (player: winit, softbuffer, cpal, gilrs; gpu: wgpu;
+import: symphonia; export: none). Crates are named by what they are, not by
+layer. Bridges live in `bridges/<program>/` in that program's language, outside
+the workspace, speaking only the protocol and the Host's file formats.
 
-Documents are a public contract now: `.orla` libraries and `.osn` graphs
-share one grammar ([docs/DOCUMENTS.md](docs/DOCUMENTS.md)); a node
-references a Kernel by id or carries it inline; `use` brings in libraries.
-Graphs expose named inputs, params, and outputs and are placed as nodes with
-`node name: graph "path.osn" { ... }`; placement flattens the sub-graph into
-the parent with prefixed node ids, so the evaluator and state keys are
-unchanged.
+Decisions not recoverable from code: lossy audio is decoded (importer) but
+never encoded (WAV is the way out; ffmpeg compresses); JPEG is not decoded
+(convert to PNG); interlaced PNG is refused; `.wav` saves at 48 kHz; a node's
+`times` is structural, so a param it names lowers the document again; `sample`
+stays in `compute` while functions with Field parameters use `at`/`at_linear`.
 
-State and input now exist: `<~ ... from ...` bindings hold Graph state with
-atomic end-of-evaluation commit, and `pointer()`, `pointer_down()`,
-`button()`, `wheel()`, `key()` read context behind `input.read`. `orla replay` runs an example's `.replay`
-tests; the Life example is the first with a `tests/` directory.
+Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
+--workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
+the example-replay test is the slow one), and every replay on both backends:
+`for f in examples/*/tests/*.replay; do for b in gpu cpu; do
+./target/release/orla replay $f --backend $b; done; done` (about 20 s after
+`cargo build --release`). Tests in one binary run in parallel: a test that
+writes files takes a directory of its own (`scratch_in`, or a named scratch).
 
-The creation protocol exists: `orla serve` speaks JSON lines over stdin and
-stdout ([docs/PROTOCOL.md](docs/PROTOCOL.md)); the end-to-end test drives
-the binary as a client.
-
-Fusion exists: pointwise chains run as one detached Kernel version, bit-
-identical to the materialized chain, with pinning to observe absorbed nodes.
-
-Residency exists: GPU images stay on the device between nodes and frames;
-the Host owns them as resident slots; `Runtime::image` is the observation
-boundary.
-
-The Player presents resident outputs on the device through a blit shader;
-downloads happen only on the CPU path or when the window cannot take a
-frame.
-
-The Player serves the protocol with `--serve`: requests arrive on stdin
-between frames, `evaluate` answers with a window frame under the person's
-input, and `read` observes the shown output.
-
-There is one resource now. A Field has a shape, `Rows<T>`, `Grid<T>`, or
-`Volume<T>`, and an element layout; `Image` is an alias for `Grid<Vec4>`
-and `type Name = Shape<T>;` declares more. Capabilities are `field.read`
-and `field.write` for every shape. The Host stores words for everything
-and offers pixel views; both backends transport words, so integers and
-booleans are exact and the examples render identically on the CPU and the
-GPU. Audio sample blocks and geometry attributes are rows of this model
-plus device adapters, nothing more.
-
-Audio exists as a device adapter in the Player: a `Rows<Float>` or
-`Rows<Vec2>` graph output is played through a lock-free ring at the
-device's rate (48 kHz when offered); the device's clock is context
-(`rate()`) and paces evaluation, so a block is computed when the ring can
-take it; the callback never waits or allocates. The audio example is a synthesizer whose phase
-crosses blocks through Graph state; its oscilloscope replay pins that.
-
-A node's `domain` can be an expression over its inputs and parameters
-(`size(map) * tile`, `4 * count(faces)`), so topology-changing Kernels
-size their own output; the mesh example subdivides its torus that way.
-
-Ordered work exists as the third execution mode: `scan with y = init {
-... }` walks a Kernel's first input in order, carrying a value, on one
-thread on either backend; the audio example's low-pass filter is one,
-its memory crossing blocks through Graph state.
-
-Reduction exists as the second execution mode: a Kernel with `merge(a,
-b)` maps over its first input and folds pairwise into one `Rows` element
-on both backends, in the same tree; the exposure example meters a frame
-and tone-maps by the result.
-
-Geometry exists as the first native operation: `native.rasterize@1` takes
-vertex and triangle rows and writes a surface grid (depth, normal, uv,
-triangle id); the CPU reference and the GPU render pipeline agree on
-interior pixels; the mesh example builds, projects, rasterizes, and
-shades a torus with three Kernels around it.
-
-Preparation is off the frame thread: the runtime prepares behind tickets on
-one worker, the session republishes running Kernels through it, and the
-evaluator runs groups unfused until their fused version arrives. `serve` and
-the Player enable the worker; the one-shot tools prepare inline. Measured on
-the GPU: a saved edit to the ray-march Kernel used to hold a frame for
-about 70 ms and now holds none; the swap lands about 110 ms later.
+The Blender bridge is tested headless: `orla serve examples/mesh/scene.osn
+--listen 127.0.0.1:0` (port on stderr) then
+`/Applications/Blender.app/Contents/MacOS/Blender -b --python
+bridges/blender/test_bridge.py -- --port <port> --out <dir>`. The user's own
+Blender runs an MCP add-on on 127.0.0.1:9876 that executes Python sent as
+`{"type":"execute","code":...,"strict_json":false}` terminated by `\0`,
+answering the same way; the bridge was driven live through it (push with Live,
+pull, Watch, publish, `param level`). A play session's Player and scratch
+files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-Every device the architecture named has an adapter and all three
-execution modes exist: map, reduce, and scan. The language is complete
-for the architecture's Phase 1 and the resource model is converged. Sorting's home is a Kernel pattern, not a primitive: rank then gather,
-two bounded loops over the rows (the sort example), quadratic and exact;
-a native sort would be an algorithm, which native operations are not
-for, and a scatter primitive is deliberately absent from the map mode.
-Declarations cross files: a `.orla` may `use` another for its structs
-and aliases, a scene's `use` gives them to its inline Kernels, changes
-republish dependents, and conflicting declarations are refused. The
-music library reads the game's state row through the game's own
-declaration. The SLG has music: a chiptune sequencer as a row carried across blocks
-plus a hit sound the rules trigger, played by the sound card with the
-device pacing the game at sixty blocks a second; six seconds on the GPU
-ran with no underruns and no drops. A gamepad maps to the keyboard's
-codes in the Player (untested on hardware here: none was connected).
-Files are inputs: `input atlas: Image = "atlas.png";` reads a file into
-the Host and watches it, `run --save` and the protocol write any Field
-out as `.field`, `.png`, `.ppm`, `.pgm`, or `.wav`, PNG and WAV decode
-with no dependency, the tiles example reads its atlas from a PNG it
-baked and the sampler plays a drum from a WAV it baked; the Host's
-third gap is closed. `orla-import`, a new interface-layer crate, is where
-converters and their dependencies live: `import` turns a glTF or GLB into
-those files (the model example spins a textured crate that came in that
-way) and decodes MP3, OGG, FLAC and AAC into WAV through symphonia;
-`orla-export` writes the way out, GLB, WAV and PNG, and the crate comes
-back through the importer bit for bit. The protocol listens on a socket
-(`--listen`), and `bridges/blender` is a Blender add-on that pushes
-meshes as the Host's files with live sync, pulls rows and pictures back,
-sets params and publishes Kernels; it was exercised headless against a
-serving session.
-Functions cross files like structs: a top-level `fn` is shared through
-`use`, and one with a Field parameter is instantiated per port it is
-called with, so the voxel editor's walk and the fluid's staggered read
-exist once. The math builtins take vectors and broadcast Floats, and
-`orla check` compiles the libraries a scene uses.
-A node repeats: `times = N;` with `carry port <- output;` expands a
-Kernel node or a placed graph into a chain, `N` a literal or a graph
-param that resizes a running scene when it changes; the fluid solve,
-the SLG passes and the mesh subdivision level use it.
-Replays evaluate on demand: a frame runs the state and the nodes its
-expectations name, and the picture only when a pixel expectation
-follows, so the whole example suite replays on the CPU in seconds
-rather than minutes, and the protocol's `evaluate` takes `nodes` the
-same way.
-The voxel editor is the first tool: a 48³ `Volume<Int>` fed back and
-edited a voxel per click, the voxel under the pointer found by a grid
-walk in the state row, a backup volume for one level of undo (undo
-twice is redo), the same walk per pixel for the picture; it needed
-nothing new in the Kernel, and the gaps it found were the Host's, now
-closed: the right and middle buttons and the wheel are input (the
-editor erases with the right button and zooms with the wheel), and the
-protocol's `write` replaces a state port's committed words, so a saved
-Field comes back in; `read` takes it out.
-The fluid is an Eulerian smoke simulation: a staggered velocity grid
-and a smoke grid fed back through the Graph, semi-Lagrangian advection
-by `at_linear`, vorticity confinement, a Jacobi pressure solve as one
-Kernel placed forty times through a sub-graph, the projection; 52
-nodes at 5 ms a frame on the GPU, and a `merge` Kernel sums the
-divergence so the replay asserts the projection removed it.
-The showcase is a product page at 720p: a gamepad as a signed-distance
-model with GGX shading, a soft shadow, a floor reflection and a toolbar,
-orbited by the pointer, at 27 ms a frame on the GPU including the read
-back; the state row and the picture are two Kernels, and the toolbar's
-geometry scales with the height so the fixture is a sixty-fourth of
-the pixels.
-SLG (a tactics game) is the second whole application and the larger
-one: a turn state machine over one row, orders applied by a unit row,
-movement ranges as a relaxation Kernel placed through a sub-graph that
-takes Fields as inputs (graph inputs may now be any port type), an enemy
-that walks to the fords by a second range seeded at its prey; 37 nodes,
-one frame in 5 ms on the GPU and 56 ms on the CPU. Snake is the first whole application: five Kernels, a state row and a
-cell grid fed back through the Graph, keys and clock as context, food by
-hash and probe; it needed nothing new, which is the point of the
-example. Interpolation exists as `at_linear`, gated by an all-float layout rather
-than by the word `Image`. What remains is optional and can be picked by
-need: reductions and scans that keep their scratch resident across
-frames; a parallel scan for bodies the author declares associative,
-reusing the reduce tree; mip chains, which are a downsampling Kernel per
-level with `domain = size(source) / 2` and need no primitive.
+Text rendering, the largest gap for tools: a glyph atlas as a PNG input
+(baked by a Kernel with `run --save`, or imported) plus a documented row layout
+for text (`Rows<Glyph>` of code, position, size) and a Kernel that draws it,
+with no new primitive. Acceptance: an example (or the voxel editor's bar)
+draws a label; its replay pins pixels of the text on both backends; the
+atlas is an asset the Host watches. If the user prefers another item, the
+ranked list from the last assessment is: CPU interpreter speed (a bytecode or
+JIT path), a scatter primitive with a stated determinism rule, window size
+and DPI as context, a second bridge (Godot or web) to prove bridges are not
+Blender-specific.
 
 ## Open
 
-The watch loop polls every 200 ms and can observe a half-written file; the next
-write is picked up because the stamp changes again. Exports are PPM only.
-The CPU interpreter stays the reference and the frame-rate floor: the
-ray-march example takes over a second per frame there.
-Life and particles have replay tests; the other examples are time-driven
-renders whose pixels a replay could still pin down at fixed times.
-The worker is one thread with a FIFO queue: a burst of edits prepares in
-order, and a superseded edit still occupies the queue until its turn.
-Audio pacing is one block behind the ring: the Player evaluates when the
-ring can take a block, so a slow evaluation is still an underrun. The
-device is opened at 48 kHz when offered and otherwise at its default
-rate, which Kernels see through `rate()`.
-Native manifests print their element types as anonymous structs (`S0`);
-the contract text names the fields. The handle type is `Handle`: the
-architecture documents list several handle kinds as examples of opaque
-handles, and the Typed Field decision converged them into one, so the
-code has one name and the documents keep their lists as written.
+Not hand-tested: the Player's real right and middle buttons and wheel, and
+gamepad hardware (none connected). The Blender bridge ran on Blender 5.2
+only; Watch polls (default 0.5 s) and reads whole rows each tick. The file
+watch polls every 200 ms and can observe a half-written file; the next write
+is picked up. The CPU interpreter is the reference and the frame-rate floor
+(seconds per frame for ray marching at 720p). The worker is one FIFO thread.
+Audio pacing is one block behind the ring. Native manifests print element
+types as anonymous structs.
