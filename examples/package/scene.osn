@@ -1,0 +1,25 @@
+// A picture through a package's preset: `use` of the package brings its
+// Kernels (its manifest's versions checked), and its `nes` graph is
+// placed as a node by path.
+use "../pixelfx.orlapkg";
+
+param cell: Float = 8.0;
+
+node picture: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(160, 120);
+    compute {
+        let u = (coord() + 0.5) / domain();
+        let disc = length(u - vec2(0.5, 0.5)) < 0.3;
+        let color = if disc { vec3(0.9, 0.6, 0.2) * (0.5 + 0.5 * u.y) } else { vec3(0.2, 0.3, 0.6) * u.x };
+        return vec4(color, 1.0);
+    }
+}
+
+node nes: graph "../pixelfx.orlapkg/graphs/nes.osn" {
+    source <- picture.result;
+    cell = cell;
+}
+
+output result <- nes.result;

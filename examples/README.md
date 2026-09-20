@@ -112,3 +112,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   changes what a running tally carries, publishes the new Kernel and a
   migration, and the count goes on; without a migration the state
   restarts and the report says so.
+- [package](package/README.md): a scene using the `pixelfx.orlapkg`
+  package beside it for its Kernels and placing its NES preset by path;
+  the package is what `orla pack` carries as one file.
