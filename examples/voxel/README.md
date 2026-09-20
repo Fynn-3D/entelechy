@@ -36,9 +36,12 @@ begin ┘                                                └─ backup (feeds ba
   the axes at the top right as the camera sees them, and the bar last:
   place, erase, paint, the colour (a click cycles it), undo, reset.
 
-The bar and the compass are laid out for a 540-high frame and scaled
-with the height, which the Kernels take as parameters, so the replay
-runs at a sixteenth of the pixels and asserts on
+The picture fills the window at the window's resolution (`domain =
+window();`); the bar and the compass are laid out in logical pixels, with
+the window's scale factor (`scale()`) as the unit, so they keep their
+size on screen however the window is sized, and the replay declares a
+240 by 135 window at a quarter of the scale: a sixteenth of the pixels
+with the bar at a quarter size. It asserts on
 the state row and the volume: the voxel under the pointer, a held left
 button that places a voxel and then another, undo and redo of the
 stroke, the middle button orbiting, Shift and the middle button panning,

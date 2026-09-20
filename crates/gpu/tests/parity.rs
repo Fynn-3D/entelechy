@@ -283,7 +283,7 @@ fn structs_match_between_backends() {
 fn input_context_matches_between_backends() {
     let Some(gpu) = gpu() else { return };
     let source = "kernel test.input@1 { requires { field.write; input.read; time.read; } output result: Image; compute {
-        let d = length(coord() - pointer());
+        let d = length(coord() - pointer()) + window().y - scale();
         let k = float(key(65)) + float(key(37)) * 2.0 + float(key(255)) * 4.0 + float(key(-1)) * 8.0 + float(key(300)) * 16.0;
         return vec4(d, float(pointer_down()), k, time());
     } }";
@@ -302,6 +302,8 @@ fn input_context_matches_between_backends() {
             time: 0.5,
             rate: 0.0,
             input,
+            window: [6.0, 3.0],
+            scale: 2.0,
         },
     };
     let mut scope = Scope::new(&mut host, all());
@@ -314,7 +316,7 @@ fn input_context_matches_between_backends() {
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
     let cpu = host.image(cpu_out).unwrap().pixels().to_vec();
     let gpu_pixels = materialized(&gpu, &mut host, gpu_out);
-    assert_eq!(cpu[0], [f32::sqrt(10.0), 1.0, 5.0, 0.5]);
+    assert_eq!(cpu[0], [f32::sqrt(10.0) + 1.0, 1.0, 5.0, 0.5]);
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
 }
 

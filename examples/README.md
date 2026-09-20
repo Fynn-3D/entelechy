@@ -53,9 +53,9 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   relaxation sub-graph placed three times, an enemy that walks to the
   fords; the replay asserts on the state rows.
 - [showcase](showcase/README.md): a gamepad as a signed-distance model
-  under physically based shading at 720p, orbited by a drag, recoloured
-  and refinished from a centred toolbar; one state row, one picture, the
-  replay asserts on the row.
+  under physically based shading, filling the window, orbited by a drag,
+  recoloured and refinished from a toolbar laid out in logical pixels;
+  one state row, one picture, the replay asserts on the row.
 - [fluid](fluid/README.md): smoke by the Navier-Stokes equations: a
   staggered velocity grid carried by itself, a pressure solve as one
   Jacobi Kernel placed forty times, the projection, the smoke it carries;

@@ -1140,3 +1140,67 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
     evaluator.clear(&mut runtime);
     assert_eq!(runtime.host().live(), 0);
 }
+
+#[test]
+fn a_domain_may_take_the_window_and_follows_it() {
+    let mut runtime = runtime();
+    let graph = Graph::parse(
+        "node source: image.gradient@1 { domain = window() / scale(); }\noutput r <- source.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    // No window: the node cannot be sized, and the error says what to pass.
+    let error = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("no window"), "{error}");
+    let mut context = Context {
+        window: [8.0, 6.0],
+        scale: 2.0,
+        ..Context::default()
+    };
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &context,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        runtime.host().image_size(report.output).unwrap(),
+        (4, 3),
+        "the window in logical pixels"
+    );
+    // The same window: nothing runs again. A resized one: the node runs at
+    // the new extent, without the graph changing.
+    let again = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &context,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(again.executed.is_empty());
+    context.window = [16.0, 6.0];
+    let resized = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &context,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(resized.executed, ids(&["source"]));
+    assert_eq!(runtime.host().image_size(resized.output).unwrap(), (8, 3));
+}

@@ -443,7 +443,14 @@ impl Evaluator {
         overrides: &BTreeMap<String, Value>,
     ) -> Result<Vec<PlanEntry>, EvaluateError> {
         let order = graph.order()?;
-        let groups = self.plan(graph, &order, runtime, externals, overrides)?;
+        let groups = self.plan(
+            graph,
+            &order,
+            runtime,
+            externals,
+            overrides,
+            &Context::default(),
+        )?;
         Ok(groups
             .into_iter()
             .map(|group| PlanEntry {
@@ -540,7 +547,7 @@ impl Evaluator {
         let order = graph.order()?;
         self.prune(graph, runtime);
         let needed = demand.map(|demand| self.needed(graph, demand));
-        let groups = self.plan(graph, &order, runtime, externals, params)?;
+        let groups = self.plan(graph, &order, runtime, externals, params, context)?;
         // Nodes absorbed into a group are no longer materialized.
         let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
         let stale: Vec<NodeId> = self
@@ -656,6 +663,7 @@ impl Evaluator {
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         overrides: &BTreeMap<String, Value>,
+        context: &Context,
     ) -> Result<Vec<Group>, EvaluateError> {
         let mut groups: Vec<Group> = Vec::with_capacity(order.len());
         for index in order {
@@ -714,6 +722,7 @@ impl Evaluator {
                 externals,
                 &domains,
                 overrides,
+                context,
             );
             let ports: Vec<(String, Binding)> = groups[position]
                 .node
@@ -927,6 +936,7 @@ impl Evaluator {
         externals: &BTreeMap<String, Handle>,
         domains: &BTreeMap<NodeId, Domain>,
         overrides: &BTreeMap<String, Value>,
+        context: &Context,
     ) -> Option<Domain> {
         let manifest = group.version.manifest();
         if manifest.mode == orla_ir::Mode::Reduce {
@@ -969,7 +979,7 @@ impl Evaluator {
                         None => manifest_default.or_else(|| graph_param(graph, name, overrides)),
                     }
                 };
-                expr.resolve(&port, &param).ok()
+                expr.resolve(&port, &param, &window_context(context)).ok()
             }
             None => {
                 let first = manifest.inputs.first()?;
@@ -1262,7 +1272,7 @@ impl Evaluator {
                             .map(|index| params[index])
                             .or_else(|| graph_param(graph, name, overrides))
                     };
-                    expr.resolve(&port, &param)
+                    expr.resolve(&port, &param, &window_context(context))
                         .map_err(|e| EvaluateError::Domain {
                             node: node.id.clone(),
                             message: e.message,
@@ -1281,7 +1291,7 @@ impl Evaluator {
             domain,
             time: reads_clock
                 .then_some(context.time.to_bits() ^ context.rate.to_bits().rotate_left(7)),
-            input: reads_input.then_some(context.input.fingerprint()),
+            input: reads_input.then_some(context.input_fingerprint()),
         };
         Ok((
             Invocation {
@@ -1366,4 +1376,14 @@ fn release(runtime: &mut Runtime, handle: Handle) {
     // means the interface released them behind our back, which is the only
     // case where ignoring the error is correct.
     let _ = runtime.host_mut().release(handle);
+}
+
+/// What a domain expression may take from the context: the window's size
+/// while one is open, and its scale.
+fn window_context(context: &Context) -> impl Fn(&str) -> Option<Value> + '_ {
+    move |name: &str| match name {
+        "window" if context.has_window() => Some(Value::Vec2(context.window)),
+        "scale" => Some(Value::Float(context.scale)),
+        _ => None,
+    }
 }

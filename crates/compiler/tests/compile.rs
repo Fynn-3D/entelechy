@@ -480,3 +480,18 @@ fn scatter_names_its_target_and_rule_and_is_checked() {
     );
     assert!(message.contains("not both"), "{message}");
 }
+
+#[test]
+fn window_and_scale_are_context_under_input_read() {
+    let module = compile(
+        "kernel test.fit@1 { requires { field.write; input.read; } output result: Rows<Vec2>; compute { return window() / scale(); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = module.to_string();
+    assert!(text.contains("context window"), "{text}");
+    assert!(text.contains("context scale"), "{text}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Vec2>; compute { return window(); } }",
+    );
+    assert!(message.contains("needs `input.read`"), "{message}");
+}

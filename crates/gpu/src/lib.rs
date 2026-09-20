@@ -398,7 +398,9 @@ impl Backend for GpuBackend {
             invocation.context.rate,
         ];
         context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
-        context.extend_from_slice(&[input.wheel[0], input.wheel[1], 0.0, 0.0]);
+        let window = invocation.context.window;
+        context.extend_from_slice(&[input.wheel[0], input.wheel[1], window[0], window[1]]);
+        context.extend_from_slice(&[invocation.context.scale, 0.0, 0.0, 0.0]);
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());

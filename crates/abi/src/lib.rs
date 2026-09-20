@@ -25,7 +25,8 @@ pub enum Capability {
     FieldWrite,
     /// Read the session clock.
     TimeRead,
-    /// Read pointer and key state.
+    /// Read pointer and key state, and the window they arrive through:
+    /// its size in pixels and its scale factor.
     InputRead,
 }
 
@@ -412,7 +413,7 @@ impl InputState {
 /// `C` in `Y = K(X, P, C)`: what the world looks like for one evaluation.
 /// Context is not a resource; Kernels read it through builtins behind
 /// `time.read` and `input.read`.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Context {
     /// Session time in seconds.
     pub time: f32,
@@ -421,6 +422,49 @@ pub struct Context {
     pub rate: f32,
     /// Pointer and key state.
     pub input: InputState,
+    /// The window's size in physical pixels, or zero by zero when no
+    /// window is open. A device fact, like the sound card's rate: a
+    /// node's `domain` may take it, so a picture fills the window at the
+    /// window's resolution.
+    pub window: [f32; 2],
+    /// The window's scale factor: physical pixels per logical pixel, so a
+    /// Kernel can lay out a bar at a constant physical size. One without
+    /// a window.
+    pub scale: f32,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            time: 0.0,
+            rate: 0.0,
+            input: InputState::default(),
+            window: [0.0, 0.0],
+            scale: 1.0,
+        }
+    }
+}
+
+impl Context {
+    /// Whether a window is open: both sides of `window` are positive.
+    pub fn has_window(&self) -> bool {
+        self.window[0] > 0.0 && self.window[1] > 0.0
+    }
+
+    /// A hash of what `input.read` observes besides time: the input state,
+    /// the window's size, and its scale.
+    pub fn input_fingerprint(&self) -> u64 {
+        let mut hash = self.input.fingerprint();
+        for word in [
+            self.window[0].to_bits(),
+            self.window[1].to_bits(),
+            self.scale.to_bits(),
+        ] {
+            hash ^= word as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash
+    }
 }
 
 /// Everything a Kernel receives for one execution: `X`, `P` and `C` in

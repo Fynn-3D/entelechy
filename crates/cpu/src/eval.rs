@@ -303,6 +303,12 @@ enum Instr {
     Wheel {
         dst: usize,
     },
+    Window {
+        dst: usize,
+    },
+    Scale {
+        dst: usize,
+    },
     Count {
         dst: usize,
         input: usize,
@@ -820,6 +826,12 @@ impl FunctionCompiler<'_> {
                 code: self.loc(code).at,
             },
             Op::Wheel => Instr::Wheel {
+                dst: define(self).at,
+            },
+            Op::Window => Instr::Window {
+                dst: define(self).at,
+            },
+            Op::Scale => Instr::Scale {
                 dst: define(self).at,
             },
             Op::Key(code) => Instr::Key {
@@ -1456,6 +1468,12 @@ impl<'p, 's> Machine<'p, 's> {
                 s[fp + dst] = x.to_bits();
                 s[fp + dst + 1] = y.to_bits();
             }
+            Instr::Window { dst } => {
+                let [w, h] = program.context.window;
+                s[fp + dst] = w.to_bits();
+                s[fp + dst + 1] = h.to_bits();
+            }
+            Instr::Scale { dst } => s[fp + dst] = program.context.scale.to_bits(),
             Instr::Count { dst, input } => {
                 s[fp + dst] = program.inputs[*input].domain.count() as u32;
             }

@@ -10,6 +10,8 @@
 //! pointer up                # release without moving
 //! button right down         # a pointer button: left, right, middle; `up` releases
 //! wheel 0 -1                # what the wheel scrolls before the next frame only
+//! window 240 135            # the window's size in pixels, for `window()`,
+//! window 240 135 0.25       # and its scale factor (one when not given)
 //! key 67 down               # press a key by code; `up` releases
 //! reset                     # forget committed state
 //! param exposure 1.5        # override a graph parameter (a literal)
@@ -66,6 +68,13 @@ pub enum Step {
     },
     /// What the wheel scrolls for the next frame.
     Wheel([f32; 2]),
+    /// The window's size in pixels and its scale factor from here on.
+    Window {
+        /// Width and height in pixels.
+        size: [f32; 2],
+        /// Physical pixels per logical pixel.
+        scale: f32,
+    },
     /// Forget committed state.
     Reset,
     /// Override a graph parameter.
@@ -180,6 +189,19 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 down: *state == "down",
             }),
             ["wheel", x, y] => steps.push(Step::Wheel([number(x, "x")?, number(y, "y")?])),
+            ["window", w, h, rest @ ..] if rest.len() <= 1 => {
+                let scale = match rest {
+                    [s] => number(s, "scale")?,
+                    _ => 1.0,
+                };
+                let size = [number(w, "width")?, number(h, "height")?];
+                if size[0] <= 0.0 || size[1] <= 0.0 || scale <= 0.0 {
+                    return Err(error(
+                        "window takes a positive width, height, and scale".into(),
+                    ));
+                }
+                steps.push(Step::Window { size, scale });
+            }
             ["key", code, state @ ("down" | "up")] => steps.push(Step::Key {
                 code: code
                     .parse::<i32>()
@@ -308,15 +330,19 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
         })
         .unwrap_or_default();
     let mut input = InputState::default();
+    let mut window = ([0.0, 0.0], 1.0);
     let mut last: Option<Report> = None;
     let mut outcome = Outcome::default();
     for (position, step) in replay.steps.iter().enumerate() {
         match step {
+            Step::Window { size, scale } => window = (*size, *scale),
             Step::Frame(time) => {
                 let context = Context {
                     time: *time,
                     rate: 0.0,
                     input,
+                    window: window.0,
+                    scale: window.1,
                 };
                 // The picture is demanded only when a pixel expectation
                 // follows this frame, before the next.

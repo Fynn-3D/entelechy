@@ -346,10 +346,18 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             Ok(json!({ "name": name, "value": value_json(&value), "events": events_json(&events) }))
         }
         "evaluate" => {
+            let number_at = |list: &Vec<Json>, index: usize| {
+                list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
+            };
             let mut context = Context {
                 time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0) as f32,
                 rate: request.get("rate").and_then(Json::as_f64).unwrap_or(0.0) as f32,
                 input: InputState::default(),
+                window: request
+                    .get("window")
+                    .and_then(Json::as_array)
+                    .map_or([0.0, 0.0], |w| [number_at(w, 0), number_at(w, 1)]),
+                scale: request.get("scale").and_then(Json::as_f64).unwrap_or(1.0) as f32,
             };
             if let Some(pointer) = request.get("pointer").and_then(Json::as_array) {
                 context.input.pointer = [

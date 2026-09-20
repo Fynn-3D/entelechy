@@ -670,6 +670,12 @@ pub enum Op {
     /// What the wheel scrolled since the last evaluation, as `Vec2`.
     /// Context: `input.read`.
     Wheel,
+    /// The window's size in physical pixels as `Vec2`, zero by zero
+    /// without a window. Context: `input.read`.
+    Window,
+    /// The window's scale factor, physical pixels per logical pixel, as
+    /// `Float`; one without a window. Context: `input.read`.
+    Scale,
     /// Whether the key with the given `Int` code is held, as `Bool`.
     /// Context: `input.read`.
     Key(ValueId),

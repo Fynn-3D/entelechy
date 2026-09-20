@@ -123,7 +123,7 @@ fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> 
     let domain = DomainExpr::from_expr(expr).map_err(|e| error(expr.span, e.message))?;
     if domain.is_constant() {
         let literal = domain
-            .resolve(&|_| None, &|_| None)
+            .resolve(&|_| None, &|_| None, &|_| None)
             .map_err(|e| error(expr.span, e.message))?;
         Ok(DomainSpec::Literal(literal))
     } else {

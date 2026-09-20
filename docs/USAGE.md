@@ -25,7 +25,9 @@ document names its Kernel sources with `use`; `--library <dir|file>` adds
 more. External Fields declared with `input <name>: Image;` in the scene are
 bound with `--input <name>=<file.ppm>`, or read from the file the input
 names (`input atlas: Image = "atlas.ppm";`), which the Host watches; graph
-parameters are overridden with `--param <name>=<literal>`. `--save
+parameters are overridden with `--param <name>=<literal>`; a scene sized
+by the window (`domain = window();`) takes `--window <w>x<h>` in pixels,
+with `@<scale>` for a scale factor other than one. `--save
 <node.port>=<file>` writes any node's output after the evaluation: `.field`
 for any Field, `.png` or `.ppm` for a grid of pixels (a `Grid<Float>` as
 gray), `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
@@ -95,8 +97,14 @@ frame, pure nodes stay cached. Use a release build for interactive frame rates.
 cargo run --release -p orla-player -- examples/material-ball/scene.osn
 ```
 
-`--scale <n>` sets the initial window magnification, `--backend` picks the
-backend, and `--input` binds external images as for `run`. On the GPU the
+`--scale <n>` sets the initial window magnification, `--window <w>x<h>`
+opens the window at that logical size instead, `--backend` picks the
+backend, and `--input` binds external images as for `run`. The window's
+size in physical pixels and its scale factor are context: a node with
+`domain = window();` fills the window at the window's resolution and
+follows a resize, and Kernels that declare `input.read` read `window()`
+and `scale()`, so a toolbar laid out in units of `scale()` keeps its
+size on screen. On the GPU the
 window is drawn from the resident output directly; the title shows the
 presentation path and how many frames had to be downloaded. The pointer and
 keys reach Kernels that declare `input.read`; F5 resets Graph state; Escape
@@ -163,8 +171,9 @@ cargo run -p orla-export -- atlas.field --out atlas.png
 ## Replay tests
 
 An application's tests are `.replay` files next to its scene: scripted frames,
-pointer and key input, state resets, and expectations. No Rust is needed to
-test a scene. An expectation is a pixel of the output
+pointer and key input, the window (`window 240 135 0.25`: its size in
+pixels and its scale factor), state resets, and expectations. No Rust is
+needed to test a scene. An expectation is a pixel of the output
 (`expect 11 10 = 1.0 1.0 1.0`, with an optional tolerance) or a field of an
 element of a node's output, named as the Kernel declared it
 (`expect step.result[0].score = 1`, `expect mix.result[0] = -0.125 -0.125 0.01`):

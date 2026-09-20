@@ -1,8 +1,11 @@
 scene voxel.osn
 
-# A sixteenth of the pixels: the bar's items are centred at x 72.5,
-# 91.5, 110.5, 129.5, 148.5, 167.5 and y 127; the middle of the picture,
-# (120, 78), looks down on the top of the tree, voxel (27, 11, 27).
+# A 240 by 135 window at a quarter of the scale: a sixteenth of the
+# pixels, the bar laid out at a quarter size, so its items are centred
+# at x 72.5, 91.5, 110.5, 129.5, 148.5, 167.5 and y 127; the middle of
+# the picture, (120, 78), looks down on the top of the tree, voxel
+# (27, 11, 27).
+window 240 135 0.25
 frame 0.0
 pointer 120 78 up
 frame 0.02

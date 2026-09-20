@@ -60,7 +60,10 @@ defines the same id republishes it from the file.
 `evaluate` takes `time`, `rate` (the sound device's clock, for Kernels
 that read it; zero when absent), `pointer`, `down`, `buttons` (the pointer
 buttons held, by number: 0 left, 1 right, 2 middle), `wheel` (what scrolled
-since the last evaluation), and `keys`. With `nodes`, it evaluates only
+since the last evaluation), `keys`, and the window as `window` (`[w, h]`
+in pixels; absent means none) and `scale` (its scale factor, one when
+absent). Inside the Player the window is the person's and these two are
+ignored. With `nodes`, it evaluates only
 those nodes, what they read, the state (which must advance), and any
 output never produced; the rest keeps its last value. An agent watching
 a state row pays for the state, not the picture.

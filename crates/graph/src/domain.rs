@@ -3,11 +3,12 @@
 //!
 //! The expression language is deliberately small: numbers, `vec2` and
 //! `vec3`, `+ - * /`, negation, `count(port)` and `size(port)` over the
-//! node's input ports, `max`, `min`, `floor`, `ceil`, and names that are
-//! the node's parameters or the graph's. It says how big an output is in
-//! terms of what comes in, so a Kernel that changes topology (four
-//! triangles per triangle, a map at sixteen pixels per tile) can size its
-//! output without the graph repeating the arithmetic by hand.
+//! node's input ports, `window()` and `scale()` from the context, `max`,
+//! `min`, `floor`, `ceil`, and names that are the node's parameters or the
+//! graph's. It says how big an output is in terms of what comes in, so a
+//! Kernel that changes topology (four triangles per triangle, a map at
+//! sixteen pixels per tile) can size its output without the graph
+//! repeating the arithmetic by hand, and a picture can fill the window.
 
 use std::fmt;
 
@@ -80,6 +81,9 @@ pub enum DomainExpr {
     /// `size(port)`: the extent the port is bound to, as `Int`, `Vec2`, or
     /// `Vec3`.
     Size(String),
+    /// `window()`, the window's size in pixels, or `scale()`, its scale
+    /// factor: context, by name.
+    Context(String),
     /// `vec2(...)` or `vec3(...)`.
     Vector(Vec<DomainExpr>),
     /// `max`, `min`, `floor`, `ceil` by name.
@@ -159,6 +163,12 @@ impl DomainExpr {
                         Self::Size(port.clone())
                     }
                 }
+                "window" | "scale" => {
+                    if !args.is_empty() {
+                        return Err(fail(format!("`{name}` takes no arguments")));
+                    }
+                    Self::Context(name.clone())
+                }
                 "max" | "min" | "floor" | "ceil" => {
                     let arity = if name == "floor" || name == "ceil" {
                         1
@@ -177,7 +187,7 @@ impl DomainExpr {
                 }
                 other => {
                     return Err(fail(format!(
-                        "`{other}` cannot size a domain; use numbers, `vec2`/`vec3`, `count(port)`, `size(port)`, `max`, `min`, `floor`, `ceil`, and parameters"
+                        "`{other}` cannot size a domain; use numbers, `vec2`/`vec3`, `count(port)`, `size(port)`, `window()`, `scale()`, `max`, `min`, `floor`, `ceil`, and parameters"
                     )));
                 }
             },
@@ -193,7 +203,7 @@ impl DomainExpr {
     pub fn is_constant(&self) -> bool {
         match self {
             Self::Int(_) | Self::Float(_) => true,
-            Self::Name(_) | Self::Count(_) | Self::Size(_) => false,
+            Self::Name(_) | Self::Count(_) | Self::Size(_) | Self::Context(_) => false,
             Self::Vector(parts) | Self::Call(_, parts) => parts.iter().all(Self::is_constant),
             Self::Neg(inner) => inner.is_constant(),
             Self::Binary(_, a, b) => a.is_constant() && b.is_constant(),
@@ -201,14 +211,16 @@ impl DomainExpr {
     }
 
     /// Resolves the expression to an extent. `port` gives the extent an
-    /// input port is bound to and `param` the value of a parameter, each
+    /// input port is bound to, `param` the value of a parameter, and
+    /// `context` the window's size (`window`) or scale (`scale`), each
     /// `None` when unknown.
     pub fn resolve(
         &self,
         port: &dyn Fn(&str) -> Option<Domain>,
         param: &dyn Fn(&str) -> Option<Value>,
+        context: &dyn Fn(&str) -> Option<Value>,
     ) -> Result<Domain, DomainError> {
-        let value = self.value(port, param)?;
+        let value = self.value(port, param, context)?;
         let fail = |message: String| DomainError {
             span: Span::default(),
             message,
@@ -241,6 +253,7 @@ impl DomainExpr {
         &self,
         port: &dyn Fn(&str) -> Option<Domain>,
         param: &dyn Fn(&str) -> Option<Value>,
+        context: &dyn Fn(&str) -> Option<Value>,
     ) -> Result<Value, DomainError> {
         let fail = |message: String| DomainError {
             span: Span::default(),
@@ -268,10 +281,15 @@ impl DomainExpr {
                 port(name)
                     .ok_or_else(|| fail(format!("`size({name})`: `{name}` is not a bound input")))?,
             ),
+            Self::Context(name) => context(name).ok_or_else(|| {
+                fail(format!(
+                    "`{name}()`: the evaluation has no window; the Player opens one, `run` takes `--window`, and a replay says `window w h`"
+                ))
+            })?,
             Self::Vector(parts) => {
                 let mut components = [0.0; 3];
                 for (slot, part) in components.iter_mut().zip(parts) {
-                    *slot = match part.value(port, param)? {
+                    *slot = match part.value(port, param, context)? {
                         Value::Int(v) => v as f32,
                         Value::Float(v) => v,
                         other => {
@@ -290,7 +308,7 @@ impl DomainExpr {
             Self::Call(name, args) => {
                 let values = args
                     .iter()
-                    .map(|arg| arg.value(port, param))
+                    .map(|arg| arg.value(port, param, context))
                     .collect::<Result<Vec<_>, _>>()?;
                 match (name.as_str(), &values[..]) {
                     ("floor", [v]) => map(*v, f32::floor),
@@ -300,9 +318,12 @@ impl DomainExpr {
                     _ => unreachable!("accepted calls have their arity"),
                 }
             }
-            Self::Neg(inner) => map(inner.value(port, param)?, |v| -v),
+            Self::Neg(inner) => map(inner.value(port, param, context)?, |v| -v),
             Self::Binary(op, a, b) => {
-                let (a, b) = (a.value(port, param)?, b.value(port, param)?);
+                let (a, b) = (
+                    a.value(port, param, context)?,
+                    b.value(port, param, context)?,
+                );
                 match op {
                     DomainOp::Add => zip(a, b, |x, y| x + y, |x, y| x.wrapping_add(y))?,
                     DomainOp::Sub => zip(a, b, |x, y| x - y, |x, y| x.wrapping_sub(y))?,
@@ -398,6 +419,7 @@ impl fmt::Display for DomainExpr {
             Self::Name(name) => f.write_str(name),
             Self::Count(port) => write!(f, "count({port})"),
             Self::Size(port) => write!(f, "size({port})"),
+            Self::Context(name) => write!(f, "{name}()"),
             Self::Vector(parts) => {
                 write!(f, "vec{}(", parts.len())?;
                 for (index, part) in parts.iter().enumerate() {
@@ -464,7 +486,14 @@ mod tests {
             "levels" => Some(Value::Int(2)),
             _ => None,
         };
+        let context = |name: &str| match name {
+            "window" => Some(Value::Vec2([640.0, 480.0])),
+            "scale" => Some(Value::Float(2.0)),
+            _ => None,
+        };
         let cases = [
+            ("window()", Domain::Grid(640, 480)),
+            ("window() / scale()", Domain::Grid(320, 240)),
             ("size(map) * tile", Domain::Grid(320, 240)),
             ("4 * count(faces)", Domain::Rows(9216)),
             ("count(faces) + 3 * count(faces)", Domain::Rows(9216)),
@@ -480,31 +509,42 @@ mod tests {
         ];
         for (text, expected) in cases {
             let expr = parse(text);
-            assert_eq!(expr.resolve(&port, &param).unwrap(), expected, "{text}");
+            assert_eq!(
+                expr.resolve(&port, &param, &context).unwrap(),
+                expected,
+                "{text}"
+            );
             let printed = expr.to_string();
             assert_eq!(parse(&printed), expr, "{text} printed as {printed}");
         }
         assert!(parse("256").is_constant());
         assert!(!parse("size(map)").is_constant());
+        assert!(!parse("window()").is_constant());
         assert_eq!(
             parse("(size(map) + 1) * tile").to_string(),
             "(size(map) + 1) * tile"
         );
 
-        let error = parse("size(nowhere)").resolve(&port, &param).unwrap_err();
+        let error = parse("size(nowhere)")
+            .resolve(&port, &param, &context)
+            .unwrap_err();
         assert!(error.to_string().contains("not a bound input"), "{error}");
         assert_eq!(
-            parse("count(faces) / 7").resolve(&port, &param).unwrap(),
+            parse("count(faces) / 7")
+                .resolve(&port, &param, &context)
+                .unwrap(),
             Domain::Rows(329),
             "ints divide like ints"
         );
         let error = parse("count(faces) / 7.0")
-            .resolve(&port, &param)
+            .resolve(&port, &param, &context)
             .unwrap_err();
         assert!(error.to_string().contains("positive whole"), "{error}");
-        let error = parse("size(map) * 1.5").resolve(&port, &param).unwrap_err();
+        let error = parse("size(map) * 1.5")
+            .resolve(&port, &param, &context)
+            .unwrap_err();
         assert!(error.to_string().contains("positive whole"), "{error}");
-        let error = parse("scale").resolve(&port, &param).unwrap_err();
+        let error = parse("scale").resolve(&port, &param, &context).unwrap_err();
         assert!(error.to_string().contains("neither a parameter"), "{error}");
         let error =
             DomainExpr::from_expr(&orla_language::parse_literal("sin(2.0)").unwrap()).unwrap_err();

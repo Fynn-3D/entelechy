@@ -703,6 +703,14 @@ impl<'a> Checker<'a> {
                 self.require(Capability::InputRead, position)?;
                 Type::Vec2
             }
+            Op::Window => {
+                self.require(Capability::InputRead, position)?;
+                Type::Vec2
+            }
+            Op::Scale => {
+                self.require(Capability::InputRead, position)?;
+                Type::Float
+            }
             Op::Time => {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float

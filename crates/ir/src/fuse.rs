@@ -382,6 +382,8 @@ impl<'a> Renumber<'a> {
             | Op::Pointer
             | Op::PointerDown
             | Op::Wheel
+            | Op::Window
+            | Op::Scale
             | Op::Element
             | Op::Sample(_)
             | Op::Count(_)

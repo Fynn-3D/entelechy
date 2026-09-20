@@ -875,3 +875,53 @@ fn scatters_combine_into_the_target_in_element_order() {
     let w = host.element(output, 0).unwrap();
     assert_eq!((w[0] as i32, f32::from_bits(w[1])), (7, -1.0));
 }
+
+#[test]
+fn the_window_reaches_kernels_as_context() {
+    let module = compile(
+        "kernel test.fit@1 { requires { field.write; input.read; } output result: Rows<Vec3>; compute { let w = window(); return vec3(w.x, w.y, scale()); } }",
+    )
+    .unwrap();
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: Context {
+            window: [1920.0, 1080.0],
+            scale: 2.0,
+            ..Context::default()
+        },
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::FieldWrite, Capability::InputRead]
+            .into_iter()
+            .collect(),
+    );
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let words = host.element(output, 0).unwrap();
+    assert_eq!(
+        words.iter().map(|w| f32::from_bits(*w)).collect::<Vec<_>>(),
+        [1920.0, 1080.0, 2.0]
+    );
+    // Without a window the size is zero and the scale one.
+    let plain = Invocation {
+        context: Context::default(),
+        ..invocation
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::FieldWrite, Capability::InputRead]
+            .into_iter()
+            .collect(),
+    );
+    let output = CpuBackend.execute(&module, &plain, &mut scope).unwrap()[0];
+    let words = host.element(output, 0).unwrap();
+    assert_eq!(
+        words.iter().map(|w| f32::from_bits(*w)).collect::<Vec<_>>(),
+        [0.0, 0.0, 1.0]
+    );
+}

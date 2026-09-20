@@ -224,6 +224,18 @@ capability claim.
   `wheel()`, and `key(code)` behind `input.read`; only nodes that declare it
   re-execute when input changes ([ABI](crates/abi/src/lib.rs),
   [parity](crates/gpu/tests/parity.rs)).
+- The window is context too, a device fact like the sound card's rate:
+  `Context` carries its size in physical pixels and its scale factor, a
+  node's `domain` may take them (`domain = window();`) and so may a
+  Kernel under `input.read` (`window()`, `scale()`), and since the plan
+  is drawn every evaluation and the extent is part of a node's cache
+  key, a resize re-executes the nodes it sizes and nothing else
+  ([domain](crates/graph/src/domain.rs), [evaluator](crates/graph/src/evaluate.rs),
+  [graph test](crates/graph/tests/composition.rs)). The Player hands its
+  window over each frame, `run` takes `--window`, and a replay declares
+  one ([replay](crates/cli/src/replay.rs)); the voxel editor and the
+  showcase fill the window at its resolution with their bars laid out in
+  units of `scale()`, and their replays run at a fraction of both.
 - Assets are inputs with files: `input atlas: Image = "atlas.ppm";` names
   a file the session reads into the Host and re-reads when its stamp
   changes, so a picture edited on disk changes the running scene; `.png`

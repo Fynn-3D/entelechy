@@ -1,8 +1,9 @@
-// begin seeds the state; state feeds back; render is the picture.
+// begin seeds the state; state feeds back; render is the picture, which
+// fills the window at the window's resolution.
 use "kernels/";
 
 node begin: show.begin@1 { domain = 1; }
 node state: show.state@1 { previous <~ state.result from begin.result; }
-node view: show.render@1 { state <- state.result; domain = vec2(1280, 720); }
+node view: show.render@1 { state <- state.result; domain = window(); }
 
 output result <- view.result;

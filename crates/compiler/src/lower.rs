@@ -1477,6 +1477,16 @@ impl<'a> Builder<'a> {
                 self.arity(name, args, 0, span)?;
                 Ok(self.emit(Type::Float, Op::Rate))
             }
+            "window" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Vec2, Op::Window))
+            }
+            "scale" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 0, span)?;
+                Ok(self.emit(Type::Float, Op::Scale))
+            }
             "pointer" => {
                 self.require(name, Capability::InputRead, span)?;
                 self.arity(name, args, 0, span)?;

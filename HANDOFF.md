@@ -30,7 +30,12 @@ order is its determinism rule (sources applied one after another in element
 order, floats included), which the GPU honours by applying the pairs in one
 invocation after a parallel map, rather than with atomics: exact and slow
 for very many sources, and a place to optimise later without changing any
-result (int `sum`, `min`, `max`, and `last` by index are order-free).
+result (int `sum`, `min`, `max`, and `last` by index are order-free); the
+window is context under `input.read` rather than a capability of its own
+(its size is in physical pixels, its scale factor is what a bar laid out
+in logical pixels divides by), the Player reports a default 960x540 window
+before its own opens, and a resize needs no structural step because the
+plan is drawn every evaluation and the extent is in the cache key.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -52,27 +57,29 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-Window size and DPI as context: a scene today sizes its picture with a
-literal `domain` and passes the height to Kernels as a parameter (the
-voxel editor's bar, the showcase's toolbar), so a resized window shows a
-scaled picture rather than more of it. The Player should hand the window's
-size in pixels and its scale factor to the Graph as context, a node's
-`domain` should be able to name them (`domain = window();` or
-`size(window)`), and the change should be a structural one the session
-handles as it handles a graph param that sizes the document. Acceptance:
-the voxel editor and the showcase fill a resized window at the window's
-resolution with their bars at a constant physical size, `run` and `replay`
-take `--window w h` (and a scale) so the same scenes still replay, and
-nothing changes for scenes that do not ask. If the user prefers another
-item, the rest of the ranked list is: a second bridge (Godot or web) to
-prove bridges are not Blender-specific, labels on the voxel editor's bar
-through the text library, caching the CPU's compiled program across
-frames, and atomics for the order-free scatter rules on the GPU.
+A second bridge, to prove bridges are not Blender-specific: Godot or the
+web. A web bridge is the smaller and the more telling one: a page that
+opens the socket (through a small relay, since browsers speak WebSocket,
+or a `--listen` that speaks it), shows the frame `read` returns, sends the
+pointer and keys with `evaluate`, and lets a text area `publish` a Kernel;
+the bridge in JavaScript only, outside the workspace, speaking the
+protocol and nothing else, tested headless the way the Blender one is.
+Acceptance: `bridges/web` drives `examples/text` and `examples/voxel`
+(labels and a tool) from a browser with no Rust change beyond, at most,
+a WebSocket framing in the listener, and its README says what a bridge
+needs and no more. If the user prefers another item, the rest of the
+ranked list is: labels on the voxel editor's bar through the text
+library, caching the CPU's compiled program across frames, atomics for
+the order-free scatter rules on the GPU, and `window()` in the protocol's
+headless `serve` (today a client passes `window` with each `evaluate`).
 
 ## Open
 
-Not hand-tested: the Player's real right and middle buttons and wheel, and
-gamepad hardware (none connected). The Blender bridge ran on Blender 5.2
+Not hand-tested: the Player's real right and middle buttons and wheel,
+gamepad hardware (none connected), and a live resize of a window-sized
+scene in the Player (the Player was opened on the voxel editor and
+presented; the resize mechanism is covered by the graph test, not by a
+hand on the window's corner). The Blender bridge ran on Blender 5.2
 only; Watch polls (default 0.5 s) and reads whole rows each tick. The file
 watch polls every 200 ms and can observe a half-written file; the next write
 is picked up. The CPU interpreter is the reference; it compiles to

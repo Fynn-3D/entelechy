@@ -25,9 +25,9 @@ pub const INPUT_BINDING: u32 = 3;
 pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
 /// button bits]`, `[pointer.x, pointer.y, depth, rate]`, two slots of key
-/// bits, and `[wheel.x, wheel.y, 0, 0]`. Each input then has `[width,
-/// height, depth, 0]`.
-pub const CONTEXT_HEAD: usize = 5;
+/// bits, `[wheel.x, wheel.y, window.x, window.y]`, and `[scale, 0, 0,
+/// 0]`. Each input then has `[width, height, depth, 0]`.
+pub const CONTEXT_HEAD: usize = 6;
 
 fn wgsl_type(ty: Type) -> String {
     match ty {
@@ -979,6 +979,8 @@ impl Emitter<'_> {
             Op::PointerDown => "button_down(0)".to_owned(),
             Op::Button(code) => format!("button_down({})", v(code)),
             Op::Wheel => "ctx[4].xy".to_owned(),
+            Op::Window => "ctx[4].zw".to_owned(),
+            Op::Scale => "ctx[5].x".to_owned(),
             Op::Key(code) => format!("key_down({})", v(code)),
             Op::Element => "i32(element)".to_owned(),
             Op::Count(input) => {

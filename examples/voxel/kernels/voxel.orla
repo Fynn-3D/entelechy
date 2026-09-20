@@ -128,23 +128,22 @@ kernel voxel.begin@1 {
 }
 
 // The bar: six items of 64 pixels with 12 between, centred at the bottom,
-// laid out for a 540-high frame and scaled with the frame's height.
+// laid out in logical pixels (the window's scale factor is the unit), so
+// it keeps its size on screen however large the window is.
 // Place, erase, paint, the colour (a click cycles it), undo, reset.
 kernel voxel.state@1 {
     requires { field.read; field.write; input.read; }
     input previous: Studio;
     input voxels: Voxels;
-    param width: Float = 960.0;
-    param height: Float = 540.0;
     param repeat: Int = 4;
     output result: Studio;
 
-    fn item_at(px: Float, py: Float, width: Float, height: Float) -> Int {
-        let unit = height / 540.0;
+    fn item_at(px: Float, py: Float, width: Float, height: Float, unit: Float) -> Int {
         let x = px / unit;
         let y = py / unit;
+        let bottom = height / unit;
         let left = width / unit * 0.5 - 222.0;
-        let inside = y >= 540.0 - 56.0 && y <= 540.0 - 8.0 && x >= left && x <= left + 444.0;
+        let inside = y >= bottom - 56.0 && y <= bottom - 8.0 && x >= left && x <= left + 444.0;
         let slot = int(floor((x - left) / 76.0));
         let within = (x - left) - float(slot) * 76.0 <= 64.0;
         return if inside && within && slot >= 0 && slot < 6 { slot } else { -1 };
@@ -157,8 +156,14 @@ kernel voxel.state@1 {
         let right = button(1);
         let middle = button(2);
         let shift = key(16);
-        let hover = item_at(p.x, p.y, width, height);
-        let on_compass = length(p / (height / 540.0) - vec2(width / (height / 540.0) - 52.0, 52.0)) < 44.0;
+        // The picture fills the window; the bar and the compass are laid
+        // out in logical pixels.
+        let win = window();
+        let width = win.x;
+        let height = win.y;
+        let unit = scale();
+        let hover = item_at(p.x, p.y, width, height, unit);
+        let on_compass = length(p / unit - vec2(width / unit - 52.0, 52.0)) < 44.0;
         let n = size(voxels).x;
         // The middle button orbits; with Shift it pans, by what the
         // pointer covers at the model's distance.
@@ -176,7 +181,7 @@ kernel voxel.state@1 {
         let pressed = left && !s.down;
         let released = !left && s.down;
         let on_bar = if pressed { hover >= 0 } else if released { false } else { s.on_bar };
-        let item = if released && s.on_bar { item_at(s.px, s.py, width, height) } else { -1 };
+        let item = if released && s.on_bar { item_at(s.px, s.py, width, height, unit) } else { -1 };
         let reset = item == 5;
         let pan = if reset { vec3(0.0, 0.0, 0.0) } else { moved_pan };
         let eye = eye_at(yaw, pitch, zoom, n, pan);
@@ -255,11 +260,9 @@ kernel voxel.keep@1 {
 // the face; the voxel under the pointer outlined; a floor whose grid
 // fades with distance; a compass of the axes; the bar.
 kernel voxel.draw@1 {
-    requires { field.read; field.write; }
+    requires { field.read; field.write; input.read; }
     input voxels: Voxels;
     input state: Studio;
-    param width: Float = 960.0;
-    param height: Float = 540.0;
     output result: Image;
 
     // Occlusion on a face from the four voxels beside it, each weighing
@@ -313,6 +316,9 @@ kernel voxel.draw@1 {
     compute {
         let s = at(state, 0);
         let px = coord();
+        let extent = domain();
+        let width = extent.x;
+        let height = extent.y;
         let n = size(voxels).x;
         let eye = eye_at(s.yaw, s.pitch, s.zoom, n, s.pan);
         let fwd = forward(s.yaw, s.pitch);
@@ -348,11 +354,12 @@ kernel voxel.draw@1 {
                 sky + vec3(line + glow, line + glow, line + glow) + x_axis + z_axis
             } else { sky }
         };
-        // The bar and the compass are laid out for a 540-high frame and
-        // scaled with the frame's height.
-        let unit = height / 540.0;
+        // The bar and the compass are laid out in logical pixels: the
+        // window's scale factor is the unit.
+        let unit = scale();
         let q = (px + vec2(0.5, 0.5)) / unit;
         let wd = width / unit;
+        let hd = height / unit;
         // The compass at the top right: the axes as the camera sees them.
         let d = q - vec2(wd - 52.0, 52.0);
         let m = nearer_mark(nearer_mark(nearer_mark(
@@ -368,8 +375,8 @@ kernel voxel.draw@1 {
         // The bar, drawn over everything.
         let left = wd * 0.5 - 222.0;
         let slot = int(floor((q.x - left) / 76.0));
-        let u = vec2((q.x - left) - float(slot) * 76.0 - 32.0, q.y - (540.0 - 32.0));
-        let in_bar = q.y >= 540.0 - 56.0 && q.y <= 540.0 - 8.0 && q.x >= left && q.x <= left + 444.0;
+        let u = vec2((q.x - left) - float(slot) * 76.0 - 32.0, q.y - (hd - 32.0));
+        let in_bar = q.y >= hd - 56.0 && q.y <= hd - 8.0 && q.x >= left && q.x <= left + 444.0;
         let in_item = in_bar && slot >= 0 && slot < 6 && abs(u.x) <= 32.0;
         let active = in_item && slot == s.tool;
         let hovered = in_item && slot == s.hover;

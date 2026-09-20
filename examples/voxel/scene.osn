@@ -1,6 +1,7 @@
 // seed is the starting model; state feeds back and reads last frame's
 // world to find the voxel under the pointer; world applies the edit;
-// backup keeps the version before it; view is the picture.
+// backup keeps the version before it; view is the picture, which fills
+// the window at the window's resolution.
 use "kernels/";
 
 node seed: voxel.seed@1 { domain = vec3(48, 48, 48); }
@@ -21,6 +22,6 @@ node backup: voxel.keep@1 {
     world <~ world.result from seed.result;
     state <- state.result;
 }
-node view: voxel.draw@1 { voxels <- world.result; state <- state.result; domain = vec2(960, 540); }
+node view: voxel.draw@1 { voxels <- world.result; state <- state.result; domain = window(); }
 
 output result <- view.result;

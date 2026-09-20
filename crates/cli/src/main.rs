@@ -15,9 +15,11 @@ usage:
                        [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu]
                        [--param <name>=<literal>]... [--no-fusion]
+                       [--window <w>x<h>[@<scale>]]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
-      running version.
+      running version. --window is the window a scene sized by `window()`
+      would fill, in pixels, with its scale factor.
   orla replay <file.replay>... [--backend cpu|gpu]
       Drive scenes through scripted frames and inputs and check pixels.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
@@ -213,6 +215,8 @@ struct RunOptions {
     backend: String,
     params: Vec<(String, orla_runtime::Value)>,
     fusion: bool,
+    /// The window's size in pixels and scale factor, for `window()`.
+    window: Option<([f32; 2], f32)>,
 }
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {
@@ -226,6 +230,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         backend: "cpu".into(),
         params: Vec::new(),
         fusion: true,
+        window: None,
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -237,6 +242,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         };
         match arg.as_str() {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
+            "--window" => options.window = Some(orla::parse_window(&value("--window")?)?),
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
             "--no-fusion" => options.fusion = false,
@@ -298,7 +304,8 @@ fn run(args: &[String]) -> Result<(), String> {
     let events = session.sync();
     report_events(&events);
     let clock = Instant::now();
-    let mut healthy = evaluate_and_export(&mut session, &options.out, &options.saves, 0.0);
+    let window = options.window;
+    let mut healthy = evaluate_and_export(&mut session, &options.out, &options.saves, 0.0, window);
     let _ = &clock;
     if !options.watch {
         return if healthy {
@@ -333,6 +340,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 &options.out,
                 &options.saves,
                 clock.elapsed().as_secs_f32(),
+                window,
             );
         }
     }
@@ -534,10 +542,14 @@ fn evaluate_and_export(
     out: &Path,
     saves: &[(String, String, PathBuf)],
     time: f32,
+    window: Option<([f32; 2], f32)>,
 ) -> bool {
     let started = Instant::now();
+    let (size, scale) = window.unwrap_or(([0.0, 0.0], 1.0));
     let context = Context {
         time,
+        window: size,
+        scale,
         ..Context::default()
     };
     match session.evaluate(&context) {

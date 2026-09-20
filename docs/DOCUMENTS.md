@@ -90,8 +90,12 @@ current address and extent over a grid or volume. `time()` and `rate()`,
 the session clock in seconds and the sound device's clock in samples per
 second (zero without a device), need `time.read`; `pointer()`,
 `pointer_down()`, `button(n)` (0 left, 1 right, 2 middle), `wheel()` (what
-scrolled since the last evaluation, as a `Vec2`), and `key(code)` need
-`input.read`. Reading a port needs
+scrolled since the last evaluation, as a `Vec2`), `key(code)`, and the
+window they arrive through, `window()` (its size in physical pixels as a
+`Vec2`, zero by zero without one) and `scale()` (physical pixels per
+logical pixel, one without a window), need `input.read`; a bar laid out
+in units of `scale()` keeps its size on screen whatever the window's
+size or density. Reading a port needs
 `field.read`, writing `field.write`. A document's `input name: Type;` is a
 Field the caller supplies; `input atlas: Image = "atlas.ppm";` names a file
 the Host reads for it, relative to the document, and reads again whenever
@@ -248,9 +252,15 @@ output result <- display.result;      // named graph output; sub-graph outputs
    comes in: `size(port)` (the extent a port is bound to, as a count, a
    pair, or a triple), `count(port)`, the node's parameters and the
    graph's by name, numbers, `vec2`/`vec3`, `+ - * /`, `max`, `min`,
-   `floor`, and `ceil`; it resolves when the node binds, and its sides
-   must come out positive and whole. `domain = size(map) * tile;` draws a
-   map at its tile size; `domain = 4 * count(faces);` sizes a subdivision.
+   `floor`, `ceil`, and the window as context: `window()` (its size in
+   pixels) and `scale()` (its scale factor); it resolves when the node
+   binds, and its sides must come out positive and whole. `domain =
+   size(map) * tile;` draws a map at its tile size; `domain = 4 *
+   count(faces);` sizes a subdivision; `domain = window();` fills the
+   window at the window's resolution, and the node runs again at the new
+   extent when the window is resized. The Player provides the window;
+   `run` takes `--window <w>x<h>[@<scale>]` and a replay says `window w h
+   [scale]`, so the same scene runs and replays without one.
    A binding must match the port's shape and element layout, whatever
    either side calls it.
 6. A Kernel id is unique across everything a graph loads; the same id from

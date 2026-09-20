@@ -25,10 +25,13 @@ use winit::window::{Window, WindowId};
 const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
-              [--backend gpu|cpu]
+              [--window <w>x<h>] [--backend gpu|cpu]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
-      and keys reach Kernels that declare `input.read`. F5 resets state;
+      and keys reach Kernels that declare `input.read`, and so do the
+      window's size in pixels and its scale factor, which a node's `domain`
+      may take as `window()`; --window opens the window at that logical size
+      instead of the output's size times --scale. F5 resets state;
       Tab cycles the preview through the graph's nodes and back to the output.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
@@ -36,11 +39,16 @@ usage:
       publish, compose, and param land in the frame a person watches, and
       its evaluate observes that person's input.";
 
+/// The window `window()` reads before one opens, when none was asked for.
+const DEFAULT_WINDOW: (u32, u32) = (960, 540);
+
 struct Options {
     scene: PathBuf,
     kernels: Option<PathBuf>,
     inputs: Vec<(String, PathBuf)>,
     scale: u32,
+    /// The window's logical size, when given; else the output's times `scale`.
+    window: Option<(u32, u32)>,
     backend: Option<String>,
     serve: bool,
     listen: Option<String>,
@@ -55,6 +63,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         kernels: None,
         inputs: Vec::new(),
         scale: 2,
+        window: None,
         backend: None,
         serve: false,
         listen: None,
@@ -94,6 +103,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     .filter(|scale| *scale > 0)
                     .ok_or_else(|| "--scale needs a positive integer".to_string())?;
             }
+            "--window" => {
+                let ([w, h], _) = orla::parse_window(&value("--window")?)?;
+                options.window = Some((w as u32, h as u32));
+            }
             "--input" => {
                 let binding = value("--input")?;
                 let (name, path) = binding
@@ -116,6 +129,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
 struct Player {
     session: Session,
     scale: u32,
+    /// The logical size the window opens at, when asked for; also what
+    /// `window()` reads before the window exists.
+    requested: Option<(u32, u32)>,
     clock: Instant,
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
@@ -144,10 +160,28 @@ struct Player {
 
 impl Player {
     fn context(&self) -> Context {
+        // The window's physical size and scale factor; before it opens, the
+        // requested size at scale one, or a plain default, so a scene sized
+        // by the window has something to fill on its first evaluation.
+        let (window, scale) = match &self.window {
+            Some(window) => {
+                let size = window.inner_size();
+                (
+                    [size.width as f32, size.height as f32],
+                    window.scale_factor() as f32,
+                )
+            }
+            None => {
+                let (w, h) = self.requested.unwrap_or(DEFAULT_WINDOW);
+                ([w as f32, h as f32], 1.0)
+            }
+        };
         Context {
             time: self.clock.elapsed().as_secs_f32(),
             rate: self.audio.as_ref().map_or(0.0, |audio| audio.rate() as f32),
             input: self.input,
+            window,
+            scale,
         }
     }
 
@@ -475,9 +509,12 @@ impl ApplicationHandler for Player {
         } else {
             self.last_size
         };
+        let (logical_width, logical_height) = self
+            .requested
+            .unwrap_or((width * self.scale, height * self.scale));
         let attributes = Window::default_attributes()
             .with_title("Orla Player")
-            .with_inner_size(LogicalSize::new(width * self.scale, height * self.scale));
+            .with_inner_size(LogicalSize::new(logical_width, logical_height));
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(error) => {
@@ -648,6 +685,7 @@ fn main() -> ExitCode {
     let mut player = Player {
         session,
         scale: options.scale,
+        requested: options.window,
         clock: Instant::now(),
         window: None,
         surface: None,
