@@ -219,6 +219,11 @@ capability claim.
   against reference vectors; `run --save` and the protocol's `read`
   produce them ([session](crates/cli/src/session.rs),
   [tests](crates/cli/tests/session.rs)).
+- Models come in through a tool: `orla import` reads glTF/GLB (external,
+  data-URI or GLB buffers; every accessor type; node transforms baked;
+  normals computed when absent) and writes vertex and triangle rows as
+  `.field` and the base colour texture as PNG; the runtime never sees
+  glTF ([gltf](crates/cli/src/gltf.rs), [model example](examples/model/README.md)).
 - Functions are shared like structs: declared at a document's top level
   and inherited through `use`; one with a Field parameter is a template
   the compiler instantiates per bound port, so a grid walk or a staggered

@@ -6,6 +6,7 @@
 //! successful output when a change is rejected. Source resolution lives
 //! here, not in the runtimes.
 
+pub mod gltf;
 pub mod inflate;
 pub mod png;
 pub mod ppm;

@@ -1,0 +1,12 @@
+// The crate at a quarter of the pixels.
+use "../kernels/";
+
+input mesh: Model = "../assets/crate.vertices.field";
+input faces: Triangles = "../assets/crate.triangles.field";
+input albedo: Image = "../assets/crate.albedo.png";
+
+node project: model.project@1 { mesh <- mesh; }
+node raster: native.rasterize@1 { vertices <- project.result; triangles <- faces; domain = vec2(320, 240); }
+node view: model.shade@1 { surface <- raster.surface; albedo <- albedo; }
+
+output result <- view.result;

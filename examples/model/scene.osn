@@ -1,0 +1,14 @@
+// The crate's vertices, triangles and texture come from files written by
+//   orla import examples/model/source/crate.glb --out examples/model/assets
+// and the Host watches them: re-import, and the window follows.
+use "kernels/";
+
+input mesh: Model = "assets/crate.vertices.field";
+input faces: Triangles = "assets/crate.triangles.field";
+input albedo: Image = "assets/crate.albedo.png";
+
+node project: model.project@1 { mesh <- mesh; }
+node raster: native.rasterize@1 { vertices <- project.result; triangles <- faces; domain = vec2(640, 480); }
+node view: model.shade@1 { surface <- raster.surface; albedo <- albedo; }
+
+output result <- view.result;

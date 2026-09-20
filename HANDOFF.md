@@ -120,7 +120,8 @@ the Host and watches it, `run --save` and the protocol write any Field
 out as `.field`, `.png`, `.ppm`, `.pgm`, or `.wav`, PNG and WAV decode
 with no dependency, the tiles example reads its atlas from a PNG it
 baked and the sampler plays a drum from a WAV it baked; the Host's
-third gap is closed.
+third gap is closed. `orla import` turns a glTF or GLB into those files,
+and the model example spins a textured crate that came in that way.
 Functions cross files like structs: a top-level `fn` is shared through
 `use`, and one with a Field parameter is instantiated per port it is
 called with, so the voxel editor's walk and the fluid's staggered read

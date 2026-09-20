@@ -123,6 +123,20 @@ swap happens when the replacement is ready, so a republish never stalls a
 frame. The same holds for fused groups, which run as separate nodes until
 their fused version arrives.
 
+## Import a model
+
+Read a glTF or GLB model and write what a scene takes as inputs: vertices
+as rows of `{position, normal, uv}` with every node's transform baked in,
+triangles as rows of three indices, and the base colour texture as a PNG,
+into `--out <dir>` (the model's directory by default). Skins, animations,
+sparse accessors and JPEG textures are reported and left out. The runtime
+knows nothing of glTF; the importer speaks the Host's file formats, so a
+model in another format needs only another tool.
+
+```sh
+cargo run -- import examples/model/source/crate.glb --out examples/model/assets
+```
+
 ## Replay tests
 
 An application's tests are `.replay` files next to its scene: scripted frames,
