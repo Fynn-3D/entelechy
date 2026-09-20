@@ -838,10 +838,12 @@ fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
     plain.clear(&mut runtime);
 
     // Every frame is right whether or not the fused versions have arrived.
-    // The chain grows as they do: nothing, then gray with source, then
+    // The chain grows as they do, in whichever order the worker finishes
+    // them: nothing, then gray with source or inv with gray, then
     // everything under inv; it never comes apart.
     let whole = vec![(NodeId("inv".into()), ids(&["gray", "source"]))];
-    let partial = vec![(NodeId("gray".into()), ids(&["source"]))];
+    let tail = vec![(NodeId("gray".into()), ids(&["source"]))];
+    let head = vec![(NodeId("inv".into()), ids(&["gray"]))];
     let mut evaluator = Evaluator::new();
     let mut fused_since = None;
     for frame in 0..2000 {
@@ -863,7 +865,7 @@ fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
         } else {
             assert!(fused_since.is_none(), "a fused group does not come apart");
             assert!(
-                report.fused.is_empty() || report.fused == partial,
+                report.fused.is_empty() || report.fused == tail || report.fused == head,
                 "frame {frame}: {:?}",
                 report.fused
             );
