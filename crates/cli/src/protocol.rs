@@ -35,6 +35,7 @@
 use std::io::{BufRead, Write};
 
 use orla_graph::{Binding, ParamValue, Source};
+use orla_ir::{Type, Validated};
 use orla_runtime::{Context, Expect, Generation, InputState, KernelId, Manifest, Shape, Value};
 use serde_json::{Value as Json, json};
 
@@ -285,6 +286,59 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
     }
 }
 
+/// The context an `evaluate` or `trace` request describes: time, rate,
+/// the pointer, buttons, wheel and keys, and the window (the request's,
+/// else the session's, else none).
+pub fn context_of(session: &Session, request: &Json) -> Context {
+    let number_at = |list: &Vec<Json>, index: usize| {
+        list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
+    };
+    // The window: the request's, else the session's, else none.
+    let (window, scale) = match request.get("window").and_then(Json::as_array) {
+        Some(w) => (
+            [number_at(w, 0), number_at(w, 1)],
+            request.get("scale").and_then(Json::as_f64).unwrap_or(1.0) as f32,
+        ),
+        None => session.window().unwrap_or(([0.0, 0.0], 1.0)),
+    };
+    let mut context = Context {
+        time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0) as f32,
+        rate: request.get("rate").and_then(Json::as_f64).unwrap_or(0.0) as f32,
+        input: InputState::default(),
+        window,
+        scale,
+    };
+    if let Some(pointer) = request.get("pointer").and_then(Json::as_array) {
+        context.input.pointer = [
+            pointer.first().and_then(Json::as_f64).unwrap_or(0.0) as f32,
+            pointer.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
+        ];
+    }
+    context.input.pointer_down = request.get("down").and_then(Json::as_bool).unwrap_or(false);
+    if let Some(buttons) = request.get("buttons").and_then(Json::as_array) {
+        for button in buttons.iter().filter_map(Json::as_i64) {
+            match button {
+                0 => context.input.pointer_down = true,
+                1 => context.input.pointer_right = true,
+                2 => context.input.pointer_middle = true,
+                _ => {}
+            }
+        }
+    }
+    if let Some(wheel) = request.get("wheel").and_then(Json::as_array) {
+        context.input.wheel = [
+            wheel.first().and_then(Json::as_f64).unwrap_or(0.0) as f32,
+            wheel.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
+        ];
+    }
+    if let Some(keys) = request.get("keys").and_then(Json::as_array) {
+        for key in keys.iter().filter_map(Json::as_i64) {
+            context.input.set_key(key as i32, true);
+        }
+    }
+    context
+}
+
 /// The JSON form of an evaluation report.
 pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
     let host = session.runtime().host();
@@ -302,6 +356,123 @@ pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
         "committed": report.committed.iter().map(|(node, port)| json!([node.to_string(), port])).collect::<Vec<_>>(),
         "fused": report.fused.iter().map(|(node, absorbed)| json!({ "node": node.to_string(), "absorbed": absorbed.iter().map(ToString::to_string).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "outputs": outputs,
+        "timings": report.timings.iter().map(|(node, took)| json!({ "node": node.to_string(), "millis": took.as_secs_f64() * 1000.0 })).collect::<Vec<_>>(),
+    })
+}
+
+/// Words a value of `ty` takes.
+fn words_of(module: &Validated, ty: Type) -> usize {
+    match ty {
+        Type::Float | Type::Int | Type::Bool => 1,
+        Type::Vec2 => 2,
+        Type::Vec3 => 3,
+        Type::Vec4 => 4,
+        Type::Struct(index) => module.structs[index as usize]
+            .fields
+            .iter()
+            .map(|field| words_of(module, field.ty))
+            .sum(),
+    }
+}
+
+/// A type's name as the source spells it: a struct by its name.
+pub fn type_name(module: &Validated, ty: Type) -> String {
+    match ty {
+        Type::Struct(index) => module.structs[index as usize].name.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// A traced value's words as JSON: numbers, booleans, vectors as arrays,
+/// structs as objects by field name.
+pub fn words_json(module: &Validated, ty: Type, words: &[u32]) -> Json {
+    match ty {
+        Type::Float => json!(f32::from_bits(words[0])),
+        Type::Int => json!(words[0] as i32),
+        Type::Bool => json!(words[0] != 0),
+        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
+            json!(words.iter().map(|w| f32::from_bits(*w)).collect::<Vec<_>>())
+        }
+        Type::Struct(index) => {
+            let mut object = serde_json::Map::new();
+            let mut cursor = 0;
+            for field in &module.structs[index as usize].fields {
+                let n = words_of(module, field.ty);
+                object.insert(
+                    field.name.clone(),
+                    words_json(module, field.ty, &words[cursor..cursor + n]),
+                );
+                cursor += n;
+            }
+            Json::Object(object)
+        }
+    }
+}
+
+/// A traced value's words as text, the way the source would write them;
+/// an `Int` of sixteen or more also in hex.
+pub fn words_text(module: &Validated, ty: Type, words: &[u32]) -> String {
+    match ty {
+        Type::Float => format!("{}", f32::from_bits(words[0])),
+        Type::Int => {
+            let v = words[0] as i32;
+            if v.unsigned_abs() >= 16 {
+                format!("{v} (0x{:X})", words[0])
+            } else {
+                v.to_string()
+            }
+        }
+        Type::Bool => (words[0] != 0).to_string(),
+        Type::Vec2 | Type::Vec3 | Type::Vec4 => format!(
+            "vec{}({})",
+            words.len(),
+            words
+                .iter()
+                .map(|w| f32::from_bits(*w).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Type::Struct(index) => {
+            let def = &module.structs[index as usize];
+            let mut cursor = 0;
+            let fields: Vec<String> = def
+                .fields
+                .iter()
+                .map(|field| {
+                    let n = words_of(module, field.ty);
+                    let text = format!(
+                        "{}: {}",
+                        field.name,
+                        words_text(module, field.ty, &words[cursor..cursor + n])
+                    );
+                    cursor += n;
+                    text
+                })
+                .collect();
+            format!("{} {{ {} }}", def.name, fields.join(", "))
+        }
+    }
+}
+
+/// The JSON form of a trace: the node, its Kernel, the element, every
+/// binding and every result with its type and value.
+pub fn trace_json(
+    module: &Validated,
+    node: &str,
+    kernel: &KernelId,
+    trace: &orla_cpu::Trace,
+) -> Json {
+    let values = |list: &[orla_cpu::TraceValue]| {
+        list.iter()
+            .map(|value| json!({ "name": value.name, "type": type_name(module, value.ty), "value": words_json(module, value.ty, &value.words), "ran": value.ran }))
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "node": node,
+        "kernel": kernel.to_string(),
+        "at": trace.at,
+        "bindings": values(&trace.bindings),
+        "results": values(&trace.results),
     })
 }
 
@@ -440,53 +611,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             Ok(json!({ "name": name, "value": value_json(&value), "events": events_json(&events) }))
         }
         "evaluate" => {
-            let number_at = |list: &Vec<Json>, index: usize| {
-                list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
-            };
-            // The window: the request's, else the session's, else none.
-            let (window, scale) = match request.get("window").and_then(Json::as_array) {
-                Some(w) => (
-                    [number_at(w, 0), number_at(w, 1)],
-                    request.get("scale").and_then(Json::as_f64).unwrap_or(1.0) as f32,
-                ),
-                None => session.window().unwrap_or(([0.0, 0.0], 1.0)),
-            };
-            let mut context = Context {
-                time: request.get("time").and_then(Json::as_f64).unwrap_or(0.0) as f32,
-                rate: request.get("rate").and_then(Json::as_f64).unwrap_or(0.0) as f32,
-                input: InputState::default(),
-                window,
-                scale,
-            };
-            if let Some(pointer) = request.get("pointer").and_then(Json::as_array) {
-                context.input.pointer = [
-                    pointer.first().and_then(Json::as_f64).unwrap_or(0.0) as f32,
-                    pointer.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
-                ];
-            }
-            context.input.pointer_down =
-                request.get("down").and_then(Json::as_bool).unwrap_or(false);
-            if let Some(buttons) = request.get("buttons").and_then(Json::as_array) {
-                for button in buttons.iter().filter_map(Json::as_i64) {
-                    match button {
-                        0 => context.input.pointer_down = true,
-                        1 => context.input.pointer_right = true,
-                        2 => context.input.pointer_middle = true,
-                        _ => {}
-                    }
-                }
-            }
-            if let Some(wheel) = request.get("wheel").and_then(Json::as_array) {
-                context.input.wheel = [
-                    wheel.first().and_then(Json::as_f64).unwrap_or(0.0) as f32,
-                    wheel.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
-                ];
-            }
-            if let Some(keys) = request.get("keys").and_then(Json::as_array) {
-                for key in keys.iter().filter_map(Json::as_i64) {
-                    context.input.set_key(key as i32, true);
-                }
-            }
+            let context = context_of(session, request);
             let report = match request.get("nodes").and_then(Json::as_array) {
                 Some(nodes) => {
                     let demand = nodes
@@ -500,6 +625,35 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             }
             .map_err(|e| failure(e.to_string()))?;
             Ok(report_json(session, &report))
+        }
+        "trace" => {
+            let node = text_field("node")?;
+            let at = match (
+                request.get("at").and_then(Json::as_array),
+                request.get("element").and_then(Json::as_u64),
+            ) {
+                (Some(list), _) => {
+                    let axis = |i: usize| list.get(i).and_then(Json::as_u64).unwrap_or(0) as u32;
+                    [axis(0), axis(1), axis(2)]
+                }
+                (None, Some(element)) => [element as u32, 0, 0],
+                (None, None) => {
+                    return Err(failure(
+                        "`trace` names the element as `at`: [x, y, z] or `element`: n",
+                    ));
+                }
+            };
+            let context = context_of(session, request);
+            let id = orla_graph::NodeId(node.clone());
+            let (trace, kernel) = session.trace(&id, at, &context).map_err(failure)?;
+            let version = session
+                .runtime()
+                .kernel(&kernel)
+                .ok_or_else(|| failure(format!("`{kernel}` is not published")))?;
+            let module = version
+                .module()
+                .ok_or_else(|| failure("a native operation has no trace"))?;
+            Ok(trace_json(module, &node, &kernel, &trace))
         }
         "write" => {
             let node = text_field("node")?;

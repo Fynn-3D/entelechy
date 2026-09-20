@@ -776,6 +776,8 @@ struct Builder<'a> {
     types: Vec<Type>,
     /// Carried types of enclosing loops, innermost last.
     loops: Vec<Type>,
+    /// Every `let`, in source order, with its value: what a trace shows.
+    bindings: Vec<(ValueId, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -793,6 +795,7 @@ impl<'a> Builder<'a> {
             buffers: vec![Vec::new()],
             types: Vec::new(),
             loops: Vec::new(),
+            bindings: Vec::new(),
         }
     }
 
@@ -803,6 +806,7 @@ impl<'a> Builder<'a> {
             args: self.args.into_iter().map(|(_, ty)| ty).collect(),
             body,
             results,
+            bindings: self.bindings,
         }
     }
 
@@ -879,6 +883,9 @@ impl<'a> Builder<'a> {
                     ));
                 }
                 let id = self.value(value)?;
+                if name.value != "_" {
+                    self.bindings.push((id, name.value.clone()));
+                }
                 self.locals.push((name.value.clone(), Local::Value(id)));
             }
             self.value(&block.result)

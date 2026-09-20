@@ -228,6 +228,206 @@ fn reduce(
     Ok(vec![output])
 }
 
+/// One named value of a traced element: what a `let` held when the
+/// element finished (its last assignment; zeros if its block never ran).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceValue {
+    /// The binding's name.
+    pub name: String,
+    /// Its type.
+    pub ty: Type,
+    /// Its words, in the ABI's layout.
+    pub words: Vec<u32>,
+    /// Whether the binding's block ran for this element: a `let` in the
+    /// branch of an `if` not taken did not, and its words mean nothing.
+    /// A `let` in a loop body counts as run when the loop ran.
+    pub ran: bool,
+}
+
+/// One element of a Kernel run on the interpreter, every binding shown.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trace {
+    /// The element's coordinates (a scan's step is `[step, 0, 0]`).
+    pub at: [u32; 3],
+    /// Every `let` of the entry, in source order.
+    pub bindings: Vec<TraceValue>,
+    /// The entry's results: the outputs' elements (a scan's next carried
+    /// value, a scatter's pair, a reduction's element before the fold).
+    pub results: Vec<TraceValue>,
+}
+
+/// Which values of the entry were computed for the element just run,
+/// read back from the conditions: a value in the branch of an `if` ran
+/// when the `if` ran and its condition chose that branch; a value in a
+/// loop ran when the loop did (its last iteration's value is shown).
+fn ran_values(entry: &orla_ir::Function, machine: &eval::Machine<'_, '_>) -> Vec<bool> {
+    fn walk(
+        instructions: &[orla_ir::Instruction],
+        live: bool,
+        machine: &eval::Machine<'_, '_>,
+        ran: &mut [bool],
+    ) {
+        for instruction in instructions {
+            ran[instruction.id.0 as usize] = live;
+            match &instruction.op {
+                orla_ir::Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => {
+                    let chosen = live && machine.entry_value(*condition)[0] != 0;
+                    walk(&then.body, chosen, machine, ran);
+                    walk(&otherwise.body, live && !chosen, machine, ran);
+                }
+                orla_ir::Op::Loop { until, body, .. } => {
+                    if let Some(until) = until {
+                        walk(&until.body, live, machine, ran);
+                    }
+                    walk(&body.body, live, machine, ran);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut ran = vec![false; entry.slot_count()];
+    walk(&entry.body, true, machine, &mut ran);
+    ran
+}
+
+/// The type of a value of a function, by id, nested blocks included.
+fn type_of(function: &orla_ir::Function, id: orla_ir::ValueId) -> Option<Type> {
+    fn find(instructions: &[orla_ir::Instruction], id: orla_ir::ValueId) -> Option<Type> {
+        for instruction in instructions {
+            if instruction.id == id {
+                return Some(instruction.ty);
+            }
+            let nested = match &instruction.op {
+                orla_ir::Op::If {
+                    then, otherwise, ..
+                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
+                orla_ir::Op::Loop { until, body, .. } => until
+                    .as_ref()
+                    .and_then(|block| find(&block.body, id))
+                    .or_else(|| find(&body.body, id)),
+                _ => None,
+            };
+            if nested.is_some() {
+                return nested;
+            }
+        }
+        None
+    }
+    find(&function.body, id)
+}
+
+/// Runs one element of `module` on the interpreter and returns every
+/// binding of its entry: element `at` of a map (or of the map part of a
+/// reduction or a scatter), or step `at[0]` of a scan, the earlier steps
+/// run first so the memories and the carried value are as that step saw
+/// them. Nothing is written back; the scope's Fields are only read.
+pub fn trace(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+    at: [u32; 3],
+) -> Result<Trace, ExecutionError> {
+    check_invocation(module, invocation)?;
+    let mode = module.manifest.mode;
+    let domain = match mode {
+        Mode::Map => invocation.domain,
+        Mode::Reduce => scope.size(invocation.inputs[0])?,
+        Mode::Scan => check_scan(invocation, scope)?,
+        Mode::Scatter { base, .. } => {
+            check_scatter(invocation, scope, base as usize)?;
+            scope.size(invocation.inputs[0])?
+        }
+    };
+    let inside = if mode == Mode::Scan {
+        (at[0] as usize) < domain.count()
+    } else {
+        at[0] < domain.width() && at[1] < domain.height() && at[2] < domain.depth()
+    };
+    if !inside {
+        return Err(ExecutionError::Device(format!(
+            "element ({}, {}, {}) is outside the domain {domain}",
+            at[0], at[1], at[2]
+        )));
+    }
+    let program = eval::Program::new(module, invocation, scope, domain)?;
+    let mut machine = eval::Machine::new(&program);
+    let words: usize = module
+        .manifest
+        .outputs
+        .iter()
+        .take(if mode == Mode::Scan { 1 } else { usize::MAX })
+        .map(|port| port.ty.schema.words())
+        .sum();
+    let stride = match mode {
+        Mode::Scatter { .. } => {
+            address_words(domain) + module.manifest.outputs[0].ty.schema.words()
+        }
+        _ => words,
+    };
+    let mut out = vec![0u32; stride];
+    if mode == Mode::Scan {
+        let mut carried = vec![0u32; stride];
+        machine.run_init_words(&mut carried)?;
+        for step in 0..=at[0] {
+            if step == at[0] {
+                machine.clear_entry_frame();
+            }
+            machine.run_scan_step(step, &carried, &mut out)?;
+            carried.copy_from_slice(&out);
+        }
+    } else {
+        machine.run_entry_words(at, &mut out)?;
+    }
+    let entry = &module.entry;
+    let ran = ran_values(entry, &machine);
+    let bindings = entry
+        .bindings
+        .iter()
+        .map(|(id, name)| TraceValue {
+            name: name.clone(),
+            ty: type_of(entry, *id).unwrap_or(Type::Float),
+            words: machine.entry_value(*id),
+            ran: ran[id.0 as usize],
+        })
+        .collect();
+    let names: Vec<String> =
+        if mode == Mode::Map && module.manifest.outputs.len() == entry.results.len() {
+            module
+                .manifest
+                .outputs
+                .iter()
+                .map(|port| port.name.clone())
+                .collect()
+        } else {
+            entry.results.iter().map(|_| "result".to_owned()).collect()
+        };
+    let results = entry
+        .results
+        .iter()
+        .zip(names)
+        .enumerate()
+        .map(|(index, (id, name))| TraceValue {
+            name,
+            ty: type_of(entry, *id).unwrap_or(Type::Float),
+            words: machine.entry_result(index),
+            ran: true,
+        })
+        .collect();
+    Ok(Trace {
+        at: if mode == Mode::Scan {
+            [at[0], 0, 0]
+        } else {
+            at
+        },
+        bindings,
+        results,
+    })
+}
+
 /// Checks a scan's invocation: it runs over its first input's rows and
 /// writes as many; the domain says so. Every backend applies this.
 pub fn check_scan(invocation: &Invocation, scope: &Scope<'_>) -> Result<Domain, ExecutionError> {

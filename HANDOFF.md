@@ -72,7 +72,10 @@ strings owned by the session until the next call and a Field's words
 until the next evaluate, request or close (the Host may release them),
 its header written by hand rather than generated so no build dependency
 comes in, and the whole protocol reachable through one `orla_request`
-so the fast path stays ten functions.
+so the fast path stays ten functions; a trace is of the evaluation
+that would follow the one it runs first (the node's `<~` inputs are the
+state just committed) because the inputs of the evaluation just done are
+gone once it commits, and the trace commits nothing itself.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -129,11 +132,13 @@ and so is the in-process door: `orla-ffi`, a C ABI over the session
 (`crates/ffi/include/orla.h`, `bridges/c/hello.c` links it), the
 Fields read where they lie.
 
-1. The Kernel language's gaps, in two parts. First a debugging surface:
-   `trace`, one element (or one scan step) of a node run on the
-   interpreter with every named binding's value printed, calls
-   followed, as a CLI command and a protocol op; and per-node timings in
-   the evaluation report, shown by `run --profile`. Then the language's
+1. The Kernel language's gaps. The debugging surface is in: `orla
+   trace` and the protocol's `trace` run one element or one scan step of
+   a node on the interpreter and show every `let` with its value, the
+   ones in branches not taken marked; `run --profile` and the report's
+   `timings` time each node. Calls are not followed (a called function's
+   frame is gone when the entry returns) and a loop's bindings show the
+   last iteration: two places to deepen if wanted. Next the language's
    ceiling where it was felt writing the CHIP-8 and Thumb cores: a
    `match` on an `Int` (a decoder is one, not an `if` chain; the GPU
    emits a `switch`, the JIT a jump table), an outer loop's carried

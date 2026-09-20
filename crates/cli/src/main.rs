@@ -15,11 +15,19 @@ usage:
                        [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu|jit]
                        [--param <name>=<literal>]... [--no-fusion]
-                       [--window <w>x<h>[@<scale>]]
+                       [--window <w>x<h>[@<scale>]] [--profile]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version. --window is the window a scene sized by `window()`
       would fill, in pixels, with its scale factor.
+      --profile prints how long each executed node took.
+  orla trace <scene.osn> --node <name> (--element <i> | --at <x> <y> [<z>])
+                         [--time <seconds>] [--param <name>=<literal>]...
+                         [--window <w>x<h>[@<scale>]] [--library <dir|file>]
+                         [--backend cpu|gpu|jit]
+      Evaluate the scene, then run one element of a node's Kernel (or one
+      step of a scan) on the interpreter and print every `let` of it with
+      its value, and the result. Nothing is committed by the trace.
   orla replay <file.replay>... [--backend cpu|gpu|jit]
       Drive scenes through scripted frames and inputs and check pixels.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
@@ -40,6 +48,7 @@ fn main() -> ExitCode {
         Some("replay") => replay(&args[1..]),
         Some("serve") => serve(&args[1..]),
         Some("graph") => graph(&args[1..]),
+        Some("trace") => trace(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -219,6 +228,8 @@ struct RunOptions {
     fusion: bool,
     /// The window's size in pixels and scale factor, for `window()`.
     window: Option<([f32; 2], f32)>,
+    /// Whether to print each executed node's time.
+    profile: bool,
 }
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {
@@ -233,6 +244,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         params: Vec::new(),
         fusion: true,
         window: None,
+        profile: false,
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -248,6 +260,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
             "--no-fusion" => options.fusion = false,
+            "--profile" => options.profile = true,
             "--backend" => options.backend = value("--backend")?,
             "--param" => {
                 let binding = value("--param")?;
@@ -307,7 +320,14 @@ fn run(args: &[String]) -> Result<(), String> {
     report_events(&events);
     let clock = Instant::now();
     let window = options.window;
-    let mut healthy = evaluate_and_export(&mut session, &options.out, &options.saves, 0.0, window);
+    let mut healthy = evaluate_and_export(
+        &mut session,
+        &options.out,
+        &options.saves,
+        0.0,
+        window,
+        options.profile,
+    );
     let _ = &clock;
     if !options.watch {
         return if healthy {
@@ -343,6 +363,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 &options.saves,
                 clock.elapsed().as_secs_f32(),
                 window,
+                options.profile,
             );
         }
     }
@@ -541,6 +562,108 @@ fn replay(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// `orla trace`: one element of a node, every binding printed.
+fn trace(args: &[String]) -> Result<(), String> {
+    let mut rest = Vec::new();
+    let mut node = None;
+    let mut at: Option<[u32; 3]> = None;
+    let mut time = 0.0f32;
+    let mut iter = args.iter().peekable();
+    let number = |text: &str, flag: &str| -> Result<u32, String> {
+        text.parse::<u32>()
+            .map_err(|_| format!("{flag} takes whole numbers, not `{text}`"))
+    };
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--node" => node = iter.next().cloned(),
+            "--element" => {
+                let text = iter.next().ok_or("--element needs a value")?;
+                at = Some([number(text, "--element")?, 0, 0]);
+            }
+            "--at" => {
+                let x = iter.next().ok_or("--at needs <x> <y> [<z>]")?;
+                let y = iter.next().ok_or("--at needs <x> <y> [<z>]")?;
+                let z = match iter.peek() {
+                    Some(next) if !next.starts_with("--") && next.parse::<u32>().is_ok() => {
+                        number(iter.next().expect("peeked"), "--at")?
+                    }
+                    _ => 0,
+                };
+                at = Some([number(x, "--at")?, number(y, "--at")?, z]);
+            }
+            "--time" => {
+                let text = iter.next().ok_or("--time needs a value")?;
+                time = text
+                    .parse()
+                    .map_err(|_| format!("--time takes seconds, not `{text}`"))?;
+            }
+            _ => rest.push(arg.clone()),
+        }
+    }
+    let node = node.ok_or("trace needs --node <name>")?;
+    let at = at.ok_or("trace needs --element <i> or --at <x> <y> [<z>]")?;
+    let options = parse_run(&rest)?;
+    let runtime = Session::runtime_for(&options.backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
+    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
+    for (name, path) in &options.inputs {
+        session
+            .bind_external(name, path)
+            .map_err(|e| e.to_string())?;
+    }
+    for (name, value) in &options.params {
+        session.set_param(name, *value);
+    }
+    session.set_fusion(options.fusion);
+    report_events(&session.sync());
+    let (size, scale) = options.window.unwrap_or(([0.0, 0.0], 1.0));
+    let context = Context {
+        time,
+        window: size,
+        scale,
+        ..Context::default()
+    };
+    let id = orla_graph::NodeId(node.clone());
+    let (traced, kernel) = session.trace(&id, at, &context)?;
+    let version = session
+        .runtime()
+        .kernel(&kernel)
+        .ok_or_else(|| format!("`{kernel}` is not published"))?;
+    let module = version.module().ok_or("a native operation has no trace")?;
+    let scan = module.manifest.mode == orla_ir::Mode::Scan;
+    let place = if scan {
+        format!("step {}", traced.at[0])
+    } else if traced.at[2] > 0 {
+        format!(
+            "element ({}, {}, {})",
+            traced.at[0], traced.at[1], traced.at[2]
+        )
+    } else {
+        format!("element ({}, {})", traced.at[0], traced.at[1])
+    };
+    println!("{node} ({kernel}), {place}, as the evaluation after time {time} runs it");
+    for value in &traced.bindings {
+        let shown = if value.ran {
+            orla::protocol::words_text(module, value.ty, &value.words)
+        } else {
+            "- (not run)".to_owned()
+        };
+        println!(
+            "  {}: {} = {shown}",
+            value.name,
+            orla::protocol::type_name(module, value.ty)
+        );
+    }
+    for value in &traced.results {
+        println!(
+            "  -> {}: {} = {}",
+            value.name,
+            orla::protocol::type_name(module, value.ty),
+            orla::protocol::words_text(module, value.ty, &value.words)
+        );
+    }
+    Ok(())
+}
+
 fn report_events(events: &[Event]) {
     for event in events {
         eprintln!("{event}");
@@ -553,6 +676,7 @@ fn evaluate_and_export(
     saves: &[(String, String, PathBuf)],
     time: f32,
     window: Option<([f32; 2], f32)>,
+    profile: bool,
 ) -> bool {
     let started = Instant::now();
     let (size, scale) = window.unwrap_or(([0.0, 0.0], 1.0));
@@ -582,6 +706,12 @@ fn evaluate_and_export(
                 )
                 .collect::<Vec<_>>()
                 .join(", ");
+            if profile {
+                for (node, took) in &report.timings {
+                    let name = node.to_string();
+                    eprintln!("  {name:<28} {:>9.3} ms", took.as_secs_f64() * 1000.0);
+                }
+            }
             for (node, port, path) in saves {
                 match session.save(&orla_graph::NodeId(node.clone()), port, path) {
                     Ok(()) => eprintln!("saved {node}.{port} -> {}", path.display()),

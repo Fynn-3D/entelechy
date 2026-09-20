@@ -773,6 +773,10 @@ pub struct Function {
     pub body: Vec<Instruction>,
     /// Values returned, in order.
     pub results: Vec<ValueId>,
+    /// Named values, for inspection: the `let` bindings in source order,
+    /// each with the value it names. No part of the program's meaning;
+    /// a trace reads them.
+    pub bindings: Vec<(ValueId, String)>,
 }
 
 impl Function {

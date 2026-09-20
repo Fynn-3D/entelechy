@@ -83,6 +83,18 @@ those nodes, what they read, the state (which must advance), and any
 output never produced; the rest keeps its last value. An agent watching
 a state row pays for the state, not the picture.
 
+`trace` runs one element of a node on the interpreter and answers with
+every binding of it: `node`, and `at` (`[x, y, z]`, an element of a map)
+or `element` (a step of a scan), with the fields `evaluate` takes for the
+context; the scene is evaluated first under that context, with the
+node's sources pinned so their Fields exist, and the trace is of the
+evaluation that would follow (its `<~` inputs the state just committed),
+nothing being committed by the trace itself. The answer has `kernel`,
+`at`, `bindings` and `results`, each a list of `{name, type, value, ran}`
+with a struct as an object by field name and `ran` false for a `let` in
+a branch the element did not take. An evaluation's report carries
+`timings`, `{node, millis}` for every node that executed, in order.
+
 `read` with `format: "field"` returns any Field as the Host's file format
 (what `run --save` writes and an `input` reads), and `write` with the same
 format takes one back, checked against the port's layout and extent.

@@ -1695,6 +1695,7 @@ name = "orla"
 version = "0.1.0"
 dependencies = [
  "orla-compiler",
+ "orla-cpu",
  "orla-gpu",
  "orla-graph",
  "orla-ir",

@@ -241,6 +241,10 @@ pub struct Report {
     /// Groups that ran as one Kernel: the executing node and the nodes it
     /// absorbed, whose images were never materialized.
     pub fused: Vec<(NodeId, Vec<NodeId>)>,
+    /// How long each executed node's Kernel took, in evaluation order:
+    /// the backend's execute call, a GPU dispatch not waited for counting
+    /// as its submission.
+    pub timings: Vec<(NodeId, std::time::Duration)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -370,6 +374,11 @@ impl Evaluator {
     }
 
     /// Lets a node be absorbed again.
+    pub fn pins(&self) -> &BTreeSet<NodeId> {
+        &self.pinned
+    }
+
+    /// Lets fusion have `node` back.
     pub fn unpin(&mut self, node: &NodeId) {
         self.pinned.remove(node);
     }
@@ -495,6 +504,25 @@ impl Evaluator {
         self.evaluate_with(graph, runtime, externals, context, params, Some(demand))
     }
 
+    /// The invocation `node` would execute with now, its Kernel `version`
+    /// unfused: the inputs from the cache and the committed state, the
+    /// params and the domain resolved as an evaluation resolves them. For
+    /// a trace, after an evaluation that produced what the node reads.
+    #[allow(clippy::too_many_arguments)]
+    pub fn invocation(
+        &self,
+        graph: &Graph,
+        node: &Node,
+        version: &Arc<KernelVersion>,
+        runtime: &Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+    ) -> Result<Invocation, EvaluateError> {
+        self.bind(graph, node, version, runtime, externals, context, params)
+            .map(|(invocation, _)| invocation)
+    }
+
     /// The nodes an evaluation under `demand` must run: see
     /// [`Evaluator::evaluate_for`].
     fn needed(&self, graph: &Graph, demand: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
@@ -562,6 +590,7 @@ impl Evaluator {
         let mut executed = Vec::new();
         let mut reused = Vec::new();
         let mut fused = Vec::new();
+        let mut timings = Vec::new();
         for group in &groups {
             let node = &group.node;
             if needed
@@ -590,12 +619,14 @@ impl Evaluator {
                 reused.push(node.id.clone());
                 continue;
             }
+            let started = std::time::Instant::now();
             let outputs = runtime
                 .execute(&group.version, &invocation)
                 .map_err(|error| EvaluateError::Execution {
                     node: node.id.clone(),
                     error,
                 })?;
+            timings.push((node.id.clone(), started.elapsed()));
             self.epoch += 1;
             let fresh = Cached {
                 key,
@@ -647,6 +678,7 @@ impl Evaluator {
         Ok(Report {
             output,
             executed,
+            timings,
             reused,
             committed,
             outputs,

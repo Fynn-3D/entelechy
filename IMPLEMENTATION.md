@@ -30,6 +30,7 @@ capability claim.
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs) | [composition tests](crates/graph/tests/composition.rs) |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
 | Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [end-to-end client test](crates/cli/tests/protocol.rs) |
+| Trace and profile | [trace](crates/cpu/src/lib.rs), [session](crates/cli/src/session.rs), [`orla trace`](crates/cli/src/main.rs) | [binary test](crates/cli/tests/session.rs), [protocol test](crates/cli/tests/protocol.rs) |
 | C ABI host | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
 | Player | [window loop](crates/player/src/main.rs), [CPU blit](crates/player/src/lib.rs), [device presenter](crates/gpu/src/present.rs) | Presentation unit tests, blit shader compile test; [material ball](examples/material-ball/README.md) for the live loop |
 
@@ -453,6 +454,20 @@ capability claim.
   match a single-threaded run ([parallel rows test](crates/cpu/tests/execute.rs)),
   and the GPU parity tests and every example replay hold the two backends
   to the same pixels.
+- A Kernel can be looked into: every function keeps its `let` bindings
+  as a side table of names to values (`Function.bindings`, no part of
+  the program's meaning, renumbered through fusion), the interpreter
+  keeps every value's frame location, and `orla_cpu::trace` runs one
+  element (a scan's step after the steps before it, on a frame cleared
+  first) and reads the bindings back, marking which ran by walking the
+  entry with the `if` conditions' values (a loop's body counts as run
+  when the loop did). The session evaluates first with the node's
+  sources pinned, builds the node's invocation as an evaluation would
+  and traces on the interpreter without committing; `orla trace` prints
+  it, the protocol's `trace` answers it as JSON, and the evaluation
+  report times every executed node (`run --profile`)
+  ([trace](crates/cpu/src/lib.rs), [session](crates/cli/src/session.rs),
+  [protocol](crates/cli/src/protocol.rs)).
 - Undeclared capabilities are compile-time diagnostics with positions
   ([compile tests](crates/compiler/tests/compile.rs)); the IR validator remains
   the backstop.

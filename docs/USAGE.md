@@ -33,11 +33,32 @@ for any Field, `.png` or `.ppm` for a grid of pixels (a `Grid<Float>` as
 gray), `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
 floats; the node is pinned so fusion keeps it. A Kernel that draws a
 sprite sheet or synthesizes a drum, and a `--save`, are how an asset is
-made; `--out` is written only when the output is a picture.
+made; `--out` is written only when the output is a picture. `--profile`
+prints how long each executed node's Kernel took.
 
 ```sh
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
 ```
+
+## Tracing one element
+
+```sh
+cargo run --release -- trace examples/thumb/scene.osn --node machine --element 9352 --window 128x128
+cargo run -- trace examples/life/scene.osn --node life --at 3 4
+```
+
+evaluates the scene once (at `--time`, default zero, under `--param`
+and `--window` as `run` takes them), then runs one element of the named
+node's Kernel on the interpreter, element `--at x y [z]` of a map or step
+`--element i` of a scan, the steps before it run first so the memories
+and the carried value are as that step sees them, and prints every `let`
+of the entry in source order with its type and value, then the result;
+an `Int` of sixteen or more also in hex, a struct by its fields. A `let`
+in the branch of an `if` the element did not take reads `- (not run)`; a
+`let` in a loop shows its last iteration's value. The trace is of the
+evaluation after the one just run (the node's `<~` inputs are the state
+that evaluation committed), and commits nothing itself. Over the
+protocol, `trace` is the same as JSON.
 
 ## Inspecting a graph
 

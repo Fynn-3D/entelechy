@@ -1058,6 +1058,7 @@ mod tests {
                 args: vec![],
                 body: vec![instruction(0, Type::Vec4, Op::Sample(0))],
                 results: vec![ValueId(0)],
+                bindings: vec![],
             },
             merge: None,
             init: None,

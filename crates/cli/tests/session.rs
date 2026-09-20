@@ -818,3 +818,86 @@ output result <- count.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_binary_traces_one_step_of_a_scan_and_profiles_a_run() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let dir = scratch("trace");
+    // A tally over four cells of memory, six steps a frame: the first
+    // evaluation leaves [2, 2, 1, 1]; the next one's step 5 finds cell 1
+    // at 3, writes 4, and its `if` takes the branch with the product.
+    std::fs::write(
+        dir.join("kernels/tally.orla"),
+        "kernel tally.step@1 {
+    requires { field.read; field.write; }
+    input ticks: Rows<Int>;
+    memory ram: Rows<Int>;
+    output result: Rows<Int>;
+    scan with acc = 0 {
+        let cell = index() % 4;
+        let v = at(ram, cell) + 1;
+        put(ram, cell, v);
+        let big = if v > 1 { let product = v * 100; product } else { let none = 0; none };
+        return acc + v;
+    }
+}
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("tally.osn"),
+        "use \"kernels/\";
+node ticks: kernel { requires { field.write; } output result: Rows<Int>; domain = 6; compute { return 0; } }
+node zeros: kernel { requires { field.write; } output result: Rows<Int>; domain = 4; compute { return 0; } }
+node tally: tally.step@1 { ticks <- ticks.result; ram <~ tally.ram from zeros.result; }
+output result <- tally.result;
+",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .args(["trace", "--node", "tally", "--element", "5"])
+        .arg(dir.join("tally.osn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.starts_with("tally (tally.step@1), step 5"),
+        "{stdout}"
+    );
+    for line in [
+        "  cell: Int = 1",
+        "  v: Int = 4",
+        "  product: Int = 400 (0x190)",
+        "  none: Int = - (not run)",
+        "  big: Int = 400 (0x190)",
+        "  -> result: Int = 18 (0x12)",
+    ] {
+        assert!(stdout.contains(line), "{line:?} in {stdout}");
+    }
+    // A step outside the frame is refused, not computed.
+    let output = Command::new(orla)
+        .args(["trace", "--node", "tally", "--element", "6"])
+        .arg(dir.join("tally.osn"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside the domain"));
+    // --profile names every executed node with its time.
+    let output = Command::new(orla)
+        .args(["run", "--profile", "--out"])
+        .arg(dir.join("out.ppm"))
+        .arg(dir.join("tally.osn"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("  tally ") && stderr.contains(" ms"),
+        "{stderr}"
+    );
+}

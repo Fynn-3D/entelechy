@@ -239,11 +239,30 @@ pub fn fuse(
         .iter()
         .map(|id| consumer_renumber.map(*id))
         .collect();
+    let bindings = producer
+        .entry
+        .bindings
+        .iter()
+        .map(|(id, name)| {
+            (
+                entry_renumber.map(*id),
+                format!("{}/{name}", producer.manifest.id),
+            )
+        })
+        .chain(
+            consumer
+                .entry
+                .bindings
+                .iter()
+                .map(|(id, name)| (consumer_renumber.map(*id), name.clone())),
+        )
+        .collect();
     let entry = Function {
         name: consumer.entry.name.clone(),
         args: Vec::new(),
         body,
         results,
+        bindings,
     };
     validate(Module {
         manifest,
@@ -293,6 +312,11 @@ impl<'a> Renumber<'a> {
             args: function.args.iter().map(|ty| (self.types)(*ty)).collect(),
             body,
             results: function.results.iter().map(|id| self.map(*id)).collect(),
+            bindings: function
+                .bindings
+                .iter()
+                .map(|(id, name)| (self.map(*id), name.clone()))
+                .collect(),
         }
     }
 

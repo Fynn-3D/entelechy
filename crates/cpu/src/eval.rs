@@ -353,6 +353,8 @@ struct Code {
     args: Vec<Loc>,
     results: Vec<Loc>,
     code: Vec<Instr>,
+    /// Where every value of the function lives in its frame, by id.
+    locs: Vec<Loc>,
 }
 
 /// An input the scope lent for the execution.
@@ -522,6 +524,7 @@ fn compile_function(shared: &Shared, function: &Function, carry: Option<Type>) -
         args: compiler.args,
         results,
         code,
+        locs: compiler.locs,
     }
 }
 
@@ -1212,6 +1215,30 @@ impl<'p, 's> Machine<'p, 's> {
         let result = merge.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
+    }
+
+    /// Zeros the entry's frame, so a trace of one step shows nothing
+    /// left over from the steps before it.
+    pub(crate) fn clear_entry_frame(&mut self) {
+        let frame = self.program.entry.frame;
+        if self.stack.len() < frame {
+            self.stack.resize(frame, 0);
+        }
+        self.stack[..frame].fill(0);
+    }
+
+    /// The words of the entry's value `id`, as the last run of the entry
+    /// left them in its frame (the frame begins at the stack's start):
+    /// the value's last assignment, or zeros if its block never ran.
+    pub(crate) fn entry_value(&self, id: orla_ir::ValueId) -> Vec<u32> {
+        let loc = self.program.entry.locs[id.0 as usize];
+        self.stack[loc.at..loc.at + loc.n].to_vec()
+    }
+
+    /// The words of the entry's `index`th result after a run.
+    pub(crate) fn entry_result(&self, index: usize) -> Vec<u32> {
+        let loc = self.program.entry.results[index];
+        self.stack[loc.at..loc.at + loc.n].to_vec()
     }
 
     /// The memories as the steps left them, by input index.

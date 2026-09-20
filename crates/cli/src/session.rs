@@ -1297,6 +1297,83 @@ impl Session {
         )
     }
 
+    /// Runs one element of `node`'s Kernel on the interpreter and returns
+    /// every binding of it: element `at` of a map, step `at[0]` of a scan.
+    /// The scene is evaluated first under `context`, with the node's
+    /// sources pinned so their Fields exist, and the node's invocation is
+    /// what an evaluation would give it now; nothing is committed by the
+    /// trace itself. Pins the trace added are removed again.
+    pub fn trace(
+        &mut self,
+        node: &orla_graph::NodeId,
+        at: [u32; 3],
+        context: &Context,
+    ) -> Result<(orla_cpu::Trace, KernelId), String> {
+        let graph = self.graph.as_ref().ok_or("no scene is loaded")?;
+        let target = graph
+            .nodes
+            .iter()
+            .find(|n| &n.id == node)
+            .ok_or_else(|| format!("no node named `{node}`"))?
+            .clone();
+        let version = self
+            .runtime
+            .kernel(&target.kernel)
+            .ok_or_else(|| format!("`{}` is not published", target.kernel))?;
+        if version.module().is_none() {
+            return Err(format!(
+                "`{}` is a native operation; there is nothing to trace",
+                target.kernel
+            ));
+        }
+        // The sources the node reads must have Fields: pin them for this
+        // evaluation, then let fusion have them back.
+        let mut pinned = Vec::new();
+        for binding in target.inputs.values() {
+            let sources = match binding {
+                orla_graph::Binding::Now(source) => vec![source],
+                orla_graph::Binding::Previous { source, initial } => vec![source, initial],
+            };
+            for source in sources {
+                if let orla_graph::Source::Node { node, .. } = source
+                    && !self.evaluator.pins().contains(node)
+                {
+                    self.evaluator.pin(node.clone());
+                    pinned.push(node.clone());
+                }
+            }
+        }
+        let traced = (|| {
+            self.evaluate(context).map_err(|error| error.to_string())?;
+            let graph = self.graph.as_ref().ok_or("no scene is loaded")?;
+            let invocation = self
+                .evaluator
+                .invocation(
+                    graph,
+                    &target,
+                    &version,
+                    &self.runtime,
+                    &self.externals,
+                    context,
+                    &self.params,
+                )
+                .map_err(|error| error.to_string())?;
+            for handle in &invocation.inputs {
+                self.runtime
+                    .materialize(*handle)
+                    .map_err(|error| error.to_string())?;
+            }
+            let module = version.module().expect("checked above");
+            let granted = module.manifest.requires.clone();
+            let mut scope = orla_runtime::Scope::new(self.runtime.host_mut(), granted);
+            orla_cpu::trace(module, &invocation, &mut scope, at).map_err(|error| error.to_string())
+        })();
+        for node in pinned {
+            self.evaluator.unpin(&node);
+        }
+        traced.map(|trace| (trace, target.kernel.clone()))
+    }
+
     /// Evaluates only what `demand` needs; see
     /// [`orla_graph::Evaluator::evaluate_for`].
     pub fn evaluate_for(

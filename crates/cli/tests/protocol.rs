@@ -549,3 +549,60 @@ output result <- fill.result;
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/chip8/scene.osn");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0, "window": [128, 64] }),
+            json!({ "id": 2, "op": "trace", "node": "machine", "element": 0, "window": [128, 64] }),
+            json!({ "id": 3, "op": "trace", "node": "view", "at": [4, 4], "window": [128, 64] }),
+            json!({ "id": 4, "op": "trace", "node": "nowhere", "element": 0 }),
+            json!({ "id": 5, "op": "trace", "node": "machine" }),
+        ],
+    );
+    let timings = responses[0]["ok"]["timings"].as_array().unwrap();
+    assert!(
+        timings
+            .iter()
+            .any(|t| t["node"] == "machine" && t["millis"].is_number()),
+        "{timings:?}"
+    );
+    let trace = &responses[1]["ok"];
+    assert_eq!(trace["kernel"], "chip8.step@1");
+    assert_eq!(trace["at"], json!([0, 0, 0]));
+    let bindings = trace["bindings"].as_array().unwrap();
+    let pc = bindings.iter().find(|b| b["name"] == "pc").unwrap();
+    assert_eq!(pc["type"], "Int");
+    assert!(pc["value"].as_i64().unwrap() >= 512, "{pc}");
+    assert!(
+        bindings
+            .iter()
+            .any(|b| b["name"] == "drawn" && b["type"] == "Draw" && b["value"].is_object())
+    );
+    assert!(
+        bindings.iter().any(|b| b["ran"] == false),
+        "a branch not taken is marked"
+    );
+    assert_eq!(trace["results"][0]["type"], "Int");
+    let view = &responses[2]["ok"];
+    assert_eq!(view["at"], json!([4, 4, 0]));
+    assert!(
+        view["results"][0]["value"].as_array().unwrap().len() == 4,
+        "{view}"
+    );
+    assert!(
+        responses[3]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nowhere")
+    );
+    assert!(
+        responses[4]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("element")
+    );
+}

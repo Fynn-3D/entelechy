@@ -18,6 +18,7 @@ orla-language = { path = "../language" }
 orla-ir = { path = "../ir" }
 orla-graph = { path = "../graph" }
 orla-runtime = { path = "../runtime" }
+orla-cpu = { path = "../cpu" }
 orla-gpu = { path = "../gpu" }
 orla-jit = { path = "../jit" }
 serde_json = "1"
