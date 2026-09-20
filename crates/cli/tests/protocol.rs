@@ -586,6 +586,10 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
         bindings.iter().any(|b| b["ran"] == false),
         "a branch not taken is marked"
     );
+    assert!(
+        trace["calls"].is_array() && trace["calls_truncated"] == false,
+        "{trace}"
+    );
     assert_eq!(trace["results"][0]["type"], "Int");
     let view = &responses[2]["ok"];
     assert_eq!(view["at"], json!([4, 4, 0]));

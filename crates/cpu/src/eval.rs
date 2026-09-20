@@ -1132,8 +1132,22 @@ impl FunctionCompiler<'_> {
 
 /// Interpreter state for one thread: a stack of words holding every
 /// frame, and the loop indices of the running element.
+/// One call a traced run made: which function, and its frame as the
+/// call left it.
+pub(crate) struct CallRecord {
+    pub function: usize,
+    pub frame: Vec<u32>,
+}
+
+/// How many calls a trace records before it stops recording.
+pub(crate) const CALL_RECORDS: usize = 256;
+
 pub(crate) struct Machine<'p, 's> {
     program: &'p Program<'s>,
+    /// The calls made while recording, for a trace; `None` when not.
+    calls: Option<Vec<CallRecord>>,
+    /// Whether more calls happened than were recorded.
+    calls_truncated: bool,
     /// The memories' working copies, one per memory input: what the
     /// steps have written so far, and the outputs at the end.
     memories: Vec<Option<Vec<u32>>>,
@@ -1159,6 +1173,8 @@ impl<'p, 's> Machine<'p, 's> {
             .collect();
         Self {
             program,
+            calls: None,
+            calls_truncated: false,
             memories,
             stack: vec![0; program.entry.frame * 2],
             sp: 0,
@@ -1248,6 +1264,35 @@ impl<'p, 's> Machine<'p, 's> {
         let result = merge.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
+    }
+
+    /// Starts recording the calls made from here on, for a trace.
+    pub(crate) fn record_calls(&mut self) {
+        self.calls = Some(Vec::new());
+        self.calls_truncated = false;
+    }
+
+    /// The calls recorded, and whether any went unrecorded.
+    pub(crate) fn take_calls(&mut self) -> (Vec<CallRecord>, bool) {
+        (self.calls.take().unwrap_or_default(), self.calls_truncated)
+    }
+
+    /// The words of value `id` of function `function` in a recorded frame.
+    pub(crate) fn function_value(
+        &self,
+        function: usize,
+        frame: &[u32],
+        id: orla_ir::ValueId,
+    ) -> Vec<u32> {
+        let loc = self.program.functions[function].locs[id.0 as usize];
+        frame[loc.at..loc.at + loc.n].to_vec()
+    }
+
+    /// The words of the `index`th result of function `function` in a
+    /// recorded frame.
+    pub(crate) fn function_result(&self, function: usize, frame: &[u32], index: usize) -> Vec<u32> {
+        let loc = self.program.functions[function].results[index];
+        frame[loc.at..loc.at + loc.n].to_vec()
     }
 
     /// Zeros the entry's frame, so a trace of one step shows nothing
@@ -1597,6 +1642,16 @@ impl<'p, 's> Machine<'p, 's> {
                 }
                 self.sp = base + callee.frame;
                 self.run(&callee.code, base)?;
+                if let Some(records) = &mut self.calls {
+                    if records.len() < CALL_RECORDS {
+                        records.push(CallRecord {
+                            function: *function,
+                            frame: self.stack[base..base + callee.frame].to_vec(),
+                        });
+                    } else {
+                        self.calls_truncated = true;
+                    }
+                }
                 let result = callee.results[0];
                 self.stack
                     .copy_within(base + result.at..base + result.at + n, fp + dst);

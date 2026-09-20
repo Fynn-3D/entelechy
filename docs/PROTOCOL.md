@@ -97,7 +97,9 @@ evaluation that would follow (its `<~` inputs the state just committed),
 nothing being committed by the trace itself. The answer has `kernel`,
 `at`, `bindings` and `results`, each a list of `{name, type, value, ran}`
 with a struct as an object by field name and `ran` false for a `let` in
-a branch the element did not take. An evaluation's report carries
+a branch the element did not take, and `calls`, each `{function,
+bindings, results}` in the order the calls returned (`calls_truncated`
+when more than 256 were made). An evaluation's report carries
 `timings`, `{node, millis}` for every node that executed, in order.
 
 `read` with `format: "field"` returns any Field as the Host's file format

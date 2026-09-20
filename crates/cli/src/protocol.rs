@@ -472,6 +472,8 @@ pub fn trace_json(
         "kernel": kernel.to_string(),
         "at": trace.at,
         "bindings": values(&trace.bindings),
+        "calls": trace.calls.iter().map(|call| json!({ "function": call.function, "bindings": values(&call.bindings), "results": values(&call.results) })).collect::<Vec<_>>(),
+        "calls_truncated": trace.calls_truncated,
         "results": values(&trace.results),
     })
 }

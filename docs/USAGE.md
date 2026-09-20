@@ -68,7 +68,10 @@ and the carried value are as that step sees them, and prints every `let`
 of the entry in source order with its type and value, then the result;
 an `Int` of sixteen or more also in hex, a struct by its fields. A `let`
 in the branch of an `if` the element did not take reads `- (not run)`; a
-`let` in a loop shows its last iteration's value. The trace is of the
+`let` in a loop shows its last iteration's value. Every call the element
+made follows, in the order the calls returned, each with its own `let`s
+and result (the first 256; a template instance is named with its Field,
+`store<ram>`). The trace is of the
 evaluation after the one just run (the node's `<~` inputs are the state
 that evaluation committed), and commits nothing itself. Over the
 protocol, `trace` is the same as JSON.

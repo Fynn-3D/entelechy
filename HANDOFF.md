@@ -136,9 +136,9 @@ Fields read where they lie.
    trace` and the protocol's `trace` run one element or one scan step of
    a node on the interpreter and show every `let` with its value, the
    ones in branches not taken marked; `run --profile` and the report's
-   `timings` time each node. Calls are not followed (a called function's
-   frame is gone when the entry returns) and a loop's bindings show the
-   last iteration: two places to deepen if wanted. The ceiling felt
+   `timings` time each node; calls are followed (each call's frame is
+   recorded as it returns, the first 256), a loop's bindings show the
+   last iteration. The ceiling felt
    writing the CHIP-8 and Thumb cores is lifted where it was felt:
    `match` on an `Int` (a WGSL `switch`, a Cranelift jump table) and an
    enclosing loop's carried value readable inside a nested loop; both

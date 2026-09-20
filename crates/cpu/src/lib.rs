@@ -251,20 +251,43 @@ pub struct Trace {
     pub at: [u32; 3],
     /// Every `let` of the entry, in source order.
     pub bindings: Vec<TraceValue>,
+    /// Every call the element made, in the order the calls returned
+    /// (a call inside another comes first), the first `CALL_RECORDS`.
+    pub calls: Vec<TraceCall>,
+    /// Whether the element made more calls than were recorded.
+    pub calls_truncated: bool,
     /// The entry's results: the outputs' elements (a scan's next carried
     /// value, a scatter's pair, a reduction's element before the fold).
     pub results: Vec<TraceValue>,
 }
 
+/// One call the traced element made, as it returned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceCall {
+    /// The function's name (a template instance names its Field, as in
+    /// `store<ram>`).
+    pub function: String,
+    /// Every `let` of the function, in source order.
+    pub bindings: Vec<TraceValue>,
+    /// The function's results.
+    pub results: Vec<TraceValue>,
+}
+
+/// How many calls a trace records.
+pub const CALL_RECORDS: usize = eval::CALL_RECORDS;
+
 /// Which values of the entry were computed for the element just run,
 /// read back from the conditions: a value in the branch of an `if` ran
 /// when the `if` ran and its condition chose that branch; a value in a
 /// loop ran when the loop did (its last iteration's value is shown).
-fn ran_values(entry: &orla_ir::Function, machine: &eval::Machine<'_, '_>) -> Vec<bool> {
+fn ran_values(
+    entry: &orla_ir::Function,
+    value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
+) -> Vec<bool> {
     fn walk(
         instructions: &[orla_ir::Instruction],
         live: bool,
-        machine: &eval::Machine<'_, '_>,
+        value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
         ran: &mut [bool],
     ) {
         for instruction in instructions {
@@ -275,37 +298,71 @@ fn ran_values(entry: &orla_ir::Function, machine: &eval::Machine<'_, '_>) -> Vec
                     then,
                     otherwise,
                 } => {
-                    let chosen = live && machine.entry_value(*condition)[0] != 0;
-                    walk(&then.body, chosen, machine, ran);
-                    walk(&otherwise.body, live && !chosen, machine, ran);
+                    let chosen = live && value(*condition)[0] != 0;
+                    walk(&then.body, chosen, value, ran);
+                    walk(&otherwise.body, live && !chosen, value, ran);
                 }
                 orla_ir::Op::Match {
                     scrutinee,
                     arms,
                     otherwise,
                 } => {
-                    let value = machine.entry_value(*scrutinee)[0] as i32;
+                    let matched = value(*scrutinee)[0] as i32;
                     let mut taken = false;
                     for (values, block) in arms {
-                        let chosen = live && !taken && values.contains(&value);
+                        let chosen = live && !taken && values.contains(&matched);
                         taken |= chosen;
-                        walk(&block.body, chosen, machine, ran);
+                        walk(&block.body, chosen, value, ran);
                     }
-                    walk(&otherwise.body, live && !taken, machine, ran);
+                    walk(&otherwise.body, live && !taken, value, ran);
                 }
                 orla_ir::Op::Loop { until, body, .. } => {
                     if let Some(until) = until {
-                        walk(&until.body, live, machine, ran);
+                        walk(&until.body, live, value, ran);
                     }
-                    walk(&body.body, live, machine, ran);
+                    walk(&body.body, live, value, ran);
                 }
                 _ => {}
             }
         }
     }
     let mut ran = vec![false; entry.slot_count()];
-    walk(&entry.body, true, machine, &mut ran);
+    walk(&entry.body, true, value, &mut ran);
     ran
+}
+
+/// The named values of a function from its frame, the ones whose block
+/// ran marked, and its results.
+fn values_of(
+    function: &orla_ir::Function,
+    value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
+    result: &dyn Fn(usize) -> Vec<u32>,
+    result_names: Vec<String>,
+) -> (Vec<TraceValue>, Vec<TraceValue>) {
+    let ran = ran_values(function, value);
+    let bindings = function
+        .bindings
+        .iter()
+        .map(|(id, name)| TraceValue {
+            name: name.clone(),
+            ty: type_of(function, *id).unwrap_or(Type::Float),
+            words: value(*id),
+            ran: ran[id.0 as usize],
+        })
+        .collect();
+    let results = function
+        .results
+        .iter()
+        .zip(result_names)
+        .enumerate()
+        .map(|(index, (id, name))| TraceValue {
+            name,
+            ty: type_of(function, *id).unwrap_or(Type::Float),
+            words: result(index),
+            ran: true,
+        })
+        .collect();
+    (bindings, results)
 }
 
 /// The type of a value of a function, by id, nested blocks included.
@@ -395,25 +452,16 @@ pub fn trace(
         for step in 0..=at[0] {
             if step == at[0] {
                 machine.clear_entry_frame();
+                machine.record_calls();
             }
             machine.run_scan_step(step, &carried, &mut out)?;
             carried.copy_from_slice(&out);
         }
     } else {
+        machine.record_calls();
         machine.run_entry_words(at, &mut out)?;
     }
     let entry = &module.entry;
-    let ran = ran_values(entry, &machine);
-    let bindings = entry
-        .bindings
-        .iter()
-        .map(|(id, name)| TraceValue {
-            name: name.clone(),
-            ty: type_of(entry, *id).unwrap_or(Type::Float),
-            words: machine.entry_value(*id),
-            ran: ran[id.0 as usize],
-        })
-        .collect();
     let names: Vec<String> =
         if mode == Mode::Map && module.manifest.outputs.len() == entry.results.len() {
             module
@@ -425,16 +473,32 @@ pub fn trace(
         } else {
             entry.results.iter().map(|_| "result".to_owned()).collect()
         };
-    let results = entry
-        .results
+    let (bindings, results) = values_of(
+        entry,
+        &|id| machine.entry_value(id),
+        &|index| machine.entry_result(index),
+        names,
+    );
+    let (records, calls_truncated) = machine.take_calls();
+    let calls = records
         .iter()
-        .zip(names)
-        .enumerate()
-        .map(|(index, (id, name))| TraceValue {
-            name,
-            ty: type_of(entry, *id).unwrap_or(Type::Float),
-            words: machine.entry_result(index),
-            ran: true,
+        .map(|record| {
+            let function = &module.functions[record.function];
+            let (bindings, results) = values_of(
+                function,
+                &|id| machine.function_value(record.function, &record.frame, id),
+                &|index| machine.function_result(record.function, &record.frame, index),
+                function
+                    .results
+                    .iter()
+                    .map(|_| "result".to_owned())
+                    .collect(),
+            );
+            TraceCall {
+                function: function.name.clone(),
+                bindings,
+                results,
+            }
         })
         .collect();
     Ok(Trace {
@@ -444,6 +508,8 @@ pub fn trace(
             at
         },
         bindings,
+        calls,
+        calls_truncated,
         results,
     })
 }

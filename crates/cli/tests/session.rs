@@ -833,10 +833,11 @@ fn the_binary_traces_one_step_of_a_scan_and_profiles_a_run() {
     input ticks: Rows<Int>;
     memory ram: Rows<Int>;
     output result: Rows<Int>;
+    fn bump(m: Rows<Int>, a: Int, v: Int) -> Int { let doubled = v * 2; put(m, a, v); return doubled; }
     scan with acc = 0 {
         let cell = index() % 4;
         let v = at(ram, cell) + 1;
-        put(ram, cell, v);
+        bump(ram, cell, v);
         let big = if v > 1 { let product = v * 100; product } else { let none = 0; none };
         let kind = match cell { 0 | 1 => { let low = 1; low }, 3 => { let high = 3; high }, _ => 2 };
         return acc + v + kind - 1;
@@ -879,6 +880,9 @@ output result <- tally.result;
         "  low: Int = 1",
         "  high: Int = - (not run)",
         "  kind: Int = 1",
+        "  call bump<ram> #1",
+        "    doubled: Int = 8",
+        "    -> result: Int = 8",
         "  -> result: Int = 21 (0x15)",
     ] {
         assert!(stdout.contains(line), "{line:?} in {stdout}");

@@ -706,13 +706,35 @@ fn trace(args: &[String]) -> Result<(), String> {
             orla::protocol::type_name(module, value.ty)
         );
     }
-    for value in &traced.results {
-        println!(
-            "  -> {}: {} = {}",
-            value.name,
-            orla::protocol::type_name(module, value.ty),
+    let show = |value: &orla_cpu::TraceValue, indent: &str, arrow: &str| {
+        let shown = if value.ran {
             orla::protocol::words_text(module, value.ty, &value.words)
+        } else {
+            "- (not run)".to_owned()
+        };
+        println!(
+            "{indent}{arrow}{}: {} = {shown}",
+            value.name,
+            orla::protocol::type_name(module, value.ty)
         );
+    };
+    for (number, call) in traced.calls.iter().enumerate() {
+        println!("  call {} #{}", call.function, number + 1);
+        for value in &call.bindings {
+            show(value, "    ", "");
+        }
+        for value in &call.results {
+            show(value, "    ", "-> ");
+        }
+    }
+    if traced.calls_truncated {
+        println!(
+            "  ... more calls than the {} recorded",
+            orla_cpu::CALL_RECORDS
+        );
+    }
+    for value in &traced.results {
+        show(value, "  ", "-> ");
     }
     Ok(())
 }
