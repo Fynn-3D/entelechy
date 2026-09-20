@@ -297,7 +297,8 @@ may take them, for devices, for formats that are not worth decoding twice,
 and for a code generator. `orla-jit` is also the one crate allowed `unsafe`:
 it calls the code it produces, and nothing else.
 Bridges to other programs live in `bridges/<program>/`, written in that
-program's own language (Blender's Python), outside the Rust workspace; they
+program's own language (Blender's Python, a browser's JavaScript, Godot's
+GDScript), outside the Rust workspace; they
 speak only the public contracts (the protocol and the Host's file formats),
 and nothing in the workspace depends on them.
 Do not introduce scripts or interpreter dependencies in other languages.

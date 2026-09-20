@@ -3,3 +3,4 @@
 /output.ppm
 __pycache__/
 *.pyc
+/bridges/godot/.godot/

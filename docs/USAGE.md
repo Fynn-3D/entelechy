@@ -216,9 +216,12 @@ the picture as an image, sets parameters and publishes Kernels from the
 text editor; `bridges/web` is the second: a page, opened from the file,
 that connects over a WebSocket (the listener upgrades a connection that
 opens with HTTP), shows the frames, sends the pointer, keys and the
-canvas as the window, and edits and publishes Kernels. A bridge is a
-client in its host's language, outside the workspace, speaking only the
-public contracts.
+canvas as the window, and edits and publishes Kernels; `bridges/godot`
+is the third: a Godot 4 project whose `OrlaView` Control is the window
+(the frames drawn as a texture, the pointer, keys and its size sent with
+every evaluate), with the graph's params as controls and a Kernel's rows
+pulled out as an `ArrayMesh`. A bridge is a client in its host's
+language, outside the workspace, speaking only the public contracts.
 
 ## Creation protocol
 

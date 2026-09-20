@@ -83,7 +83,13 @@ bridge is tested by `node bridges/web/test.mjs` after `cargo build
 --release`: it serves the text and voxel examples itself and drives
 `bridges/web/test.html` in a headless Chrome over the DevTools protocol
 (the `--dump-dom` shortcut does not wait for asynchronous work in the
-new headless mode, which is why a runner exists). The user's own
+new headless mode, which is why a runner exists). The Godot bridge is
+tested by `godot --headless --path bridges/godot -s test.gd` after
+`cargo build --release` (`/usr/local/bin/godot`, 4.6): the script spawns
+the text, voxel and mesh sessions through `OS.execute_with_pipe`, reads
+each port from stderr, and ends with `RESULT: ok`; its scripts reach
+each other by `preload`, since a headless `-s` run has no global class
+cache. The user's own
 Blender runs an MCP add-on on 127.0.0.1:9876 that executes Python sent as
 `{"type":"execute","code":...,"strict_json":false}` terminated by `\0`,
 answering the same way; the bridge was driven live through it (push with Live,
@@ -104,12 +110,11 @@ of its own, not a next step of this repository. The JIT now covers every
 mode (a reduction folds with its compiled `merge` in the interpreter's
 tree, a scatter applies with the CPU crate's combine rule), so
 `--backend jit` never falls back to the interpreter. Back to the
-platform:
+platform. The third bridge, Godot, is in (`bridges/godot`: an
+`OrlaView` Control as the window, params as controls, an `ArrayMesh`
+from rows, tested headless with the sessions spawned by Godot itself).
 
-1. A Godot bridge (`/usr/local/bin/godot` is installed): a client of the
-   protocol like the Blender and web bridges, a texture from `read`, the
-   input from the scene, params from the inspector.
-2. What a session of play turns up: the voxel editor and the showcase
+1. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, the GPU scan
    is one thread (a machine belongs on the JIT).
 
@@ -128,7 +133,10 @@ Chrome as well as headless: the text example's title republished from
 its editor and the voxel editor filled a Retina canvas at 24 ms a frame
 and took a click; a browser refuses `file://` pages through the Chrome
 extension, so the directory was served with any static file server for
-that (`python3 -m http.server`), which the page does not need otherwise. The Blender bridge ran on Blender 5.2
+that (`python3 -m http.server`), which the page does not need otherwise.
+The Godot bridge's window was opened (no script errors) but not
+clicked through by hand; its demo scene is driven by the headless test
+instead. The Blender bridge ran on Blender 5.2
 only; Watch polls (default 0.5 s) and reads whole rows each tick. The file
 watch polls every 200 ms and can observe a half-written file; the next write
 is picked up. The CPU interpreter is the reference; it compiles to

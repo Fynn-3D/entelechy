@@ -319,8 +319,13 @@ capability claim.
   socket; [`bridges/web`](bridges/web/README.md) is the second, a page in
   JavaScript that shows the frames, sends the canvas as the window and
   the input, and publishes Kernels, checked headless by
-  [its runner](bridges/web/test.mjs); bridges are clients outside the
-  workspace.
+  [its runner](bridges/web/test.mjs);
+  [`bridges/godot`](bridges/godot/README.md) is the third, a Godot 4
+  project in GDScript: a blocking client over `StreamPeerTCP`, a Control
+  that is the window and draws each frame as a texture, an `ArrayMesh`
+  from two nodes' rows, the graph's params as controls, checked by
+  [its test](bridges/godot/test.gd), which spawns the sessions itself
+  through Godot's pipes; bridges are clients outside the workspace.
 - Models and compressed sounds come in through a tool: `orla-import`
   ([crate](crates/import)) sits in the interface layer beside the CLI and
   the Player, the only layer that takes dependencies. `import` reads
