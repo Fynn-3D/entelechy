@@ -12,11 +12,10 @@ The previous implementation at `../bak/orla` is a read-only reference.
 
 Layering as decided: the runtime crates and the `orla` CLI take no external
 dependencies; the interface layer (L8: `cli`, `player`, `import`, `export`,
-`jit`, `ffi`, `godot`) is the only place that may (player: winit,
-softbuffer, cpal, gilrs; gpu: wgpu; import: symphonia; export: none; jit:
-cranelift 0.131, the newest that builds on Rust 1.93; ffi: none; godot:
-godot-rust 0.4 with `api-4-5`, the newest on 1.93, loaded by Godot 4.6).
-`jit`, `ffi` and `godot` are the crates with `unsafe`. Crates are named by what they are, not by
+`jit`, `ffi`) is the only place that may (player: winit, softbuffer, cpal,
+gilrs; gpu: wgpu; import: symphonia; export: none; jit: cranelift 0.131,
+the newest that builds on Rust 1.93; ffi: none). `jit` and `ffi` are the
+two crates with `unsafe`. Crates are named by what they are, not by
 layer. Bridges live in `bridges/<program>/` in that program's language, outside
 the workspace, speaking only the protocol and the Host's file formats.
 
@@ -73,12 +72,7 @@ strings owned by the session until the next call and a Field's words
 until the next evaluate, request or close (the Host may release them),
 its header written by hand rather than generated so no build dependency
 comes in, and the whole protocol reachable through one `orla_request`
-so the fast path stays ten functions; the Godot extension wraps the C
-ABI rather than the session directly, so the C ABI is proven by a real
-host, and is loaded at runtime by the bridge's script
-(`GDExtensionManager.load_extension`) because a headless `-s` run has no
-editor cache of extensions, the descriptor pointing into the workspace's
-`target/release` so nothing is copied.
+so the fast path stays ten functions.
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -103,8 +97,6 @@ then `DYLD_LIBRARY_PATH=target/release ./a.out examples/text/scene.osn
 jit`, which prints the picture's size, a pixel before and after a
 publish. The Godot bridge is
 tested by `godot --headless --path bridges/godot -s test.gd` after
-`cargo build --release` (and `cargo build --release -p orla-godot` for
-the `local:` checks, which are skipped without the extension) after
 `cargo build --release` (`/usr/local/bin/godot`, 4.6): the script spawns
 the text, voxel and mesh sessions through `OS.execute_with_pipe`, reads
 each port from stderr, and ends with `RESULT: ok`; its scripts reach
@@ -137,11 +129,19 @@ and so is the in-process door: `orla-ffi`, a C ABI over the session
 (`crates/ffi/include/orla.h`, `bridges/c/hello.c` links it), the
 Fields read where they lie.
 
-The GDExtension over `orla-ffi` is in too (`crates/godot`,
-`bridges/godot/orla_local.gd`): the Godot bridge's view runs over the
-socket or in the process with the same code.
-
-1. What a session of play turns up: the voxel editor and the showcase
+1. The Kernel language's gaps, in two parts. First a debugging surface:
+   `trace`, one element (or one scan step) of a node run on the
+   interpreter with every named binding's value printed, calls
+   followed, as a CLI command and a protocol op; and per-node timings in
+   the evaluation report, shown by `run --profile`. Then the language's
+   ceiling where it was felt writing the CHIP-8 and Thumb cores: a
+   `match` on an `Int` (a decoder is one, not an `if` chain; the GPU
+   emits a `switch`, the JIT a jump table), an outer loop's carried
+   value readable inside a nested loop, and whatever else those two
+   examples show once rewritten with them. Not taken up: 64-bit ints
+   (WGSL has none), strings (text is rows of codes), dynamic sizes
+   (a graph resizes by params), `put` outside `scan` (determinism).
+2. What a session of play turns up: the voxel editor and the showcase
    were rated on interactivity; the JIT closed the CPU gap, the GPU scan
    is one thread (a machine belongs on the JIT).
 
@@ -161,14 +161,9 @@ its editor and the voxel editor filled a Retina canvas at 24 ms a frame
 and took a click; a browser refuses `file://` pages through the Chrome
 extension, so the directory was served with any static file server for
 that (`python3 -m http.server`), which the page does not need otherwise.
-The Godot bridge's window was opened (no script errors, with and
-without the extension) but not clicked through by hand; its demo scene
-is driven by the headless test instead. The first `godot --headless
---import` of the project with the extension present crashed on exit
-inside the editor's documentation generator for extension classes
-(`EditorHelp::_gen_extensions_docs`) after the import had completed; a
-second import did not, and running the project never touches that
-path. The Blender bridge ran on Blender 5.2
+The Godot bridge's window was opened (no script errors) but not
+clicked through by hand; its demo scene is driven by the headless test
+instead. The Blender bridge ran on Blender 5.2
 only; Watch polls (default 0.5 s) and reads whole rows each tick. The file
 watch polls every 200 ms and can observe a half-written file; the next write
 is picked up. The CPU interpreter is the reference; it compiles to

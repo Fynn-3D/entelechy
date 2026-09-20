@@ -31,7 +31,6 @@ capability claim.
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [ppm](crates/cli/src/ppm.rs) | [session, binary, and example-replay tests](crates/cli/tests/session.rs) |
 | Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [end-to-end client test](crates/cli/tests/protocol.rs) |
 | C ABI host | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
-| Godot extension | [godot](crates/godot/src/lib.rs), [descriptor](bridges/godot/orla.gdextension) | [the Godot bridge's test](bridges/godot/test.gd), `local:` checks |
 | Player | [window loop](crates/player/src/main.rs), [CPU blit](crates/player/src/lib.rs), [device presenter](crates/gpu/src/present.rs) | Presentation unit tests, blit shader compile test; [material ball](examples/material-ball/README.md) for the live loop |
 
 ## Contracts worth knowing
@@ -344,19 +343,6 @@ capability claim.
   The tests drive the functions from Rust as C would, and
   [`bridges/c/hello.c`](bridges/c/hello.c) links the library from C
   ([ffi](crates/ffi/src/lib.rs), [tests](crates/ffi/tests/abi.rs)).
-  `orla-godot` ([crate](crates/godot)) is the first host over it: a
-  GDExtension (godot-rust 0.4, the newest on Rust 1.93, built against
-  the 4.5 API and loaded by Godot 4.6) whose one class `OrlaSession`
-  opens a scene, evaluates under a Dictionary of input, and gives a
-  picture as an RGBAF `Image` copied once from the Host's words, a
-  Field as words with its layout, and a protocol line's answer. The
-  Godot bridge's `OrlaLocal` wraps it to answer like `OrlaClient`, so
-  the same `OrlaView` and demo run over the socket or in the process;
-  the descriptor points at the workspace's target directory and the
-  script loads it at runtime with `GDExtensionManager.load_extension`,
-  since a headless run has no editor cache. The voxel editor at 1920 by
-  1080 went from the socket's per-frame PPM to an in-process Image
-  (numbers in [the bridge's README](bridges/godot/README.md)).
 - Models and compressed sounds come in through a tool: `orla-import`
   ([crate](crates/import)) sits in the interface layer beside the CLI and
   the Player, the only layer that takes dependencies. `import` reads

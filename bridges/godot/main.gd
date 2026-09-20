@@ -1,19 +1,15 @@
-## The bridge's demo: connect to a serving session (host:port) or open a
-## scene in this process (a path to a `.osn`, with the orla-godot
-## extension built), run it frame after frame in an OrlaView, set the
-## graph's params from a side panel, reset the state, and see the round
-## trip. The view is the window either way.
+## The bridge's demo: connect to a serving session, run it frame after
+## frame in an OrlaView, set the graph's params from a side panel, reset
+## the state, and see the round trip. Everything here goes through
+## OrlaClient; the view is the window.
 extends Control
 
 const Client = preload("res://orla_client.gd")
-const Local = preload("res://orla_local.gd")
 const View = preload("res://orla_view.gd")
 
-## An OrlaClient or an OrlaLocal.
-var client: RefCounted = Client.new()
+var client: Client = Client.new()
 var view: View
 var url: LineEdit
-var backend: OptionButton
 var status: Label
 var params_box: VBoxContainer
 var run_button: Button
@@ -35,15 +31,10 @@ func _ready() -> void:
 
 	url = LineEdit.new()
 	url.text = "127.0.0.1:7788"
-	url.placeholder_text = "host:port of `orla serve --listen`, or a scene.osn path"
+	url.placeholder_text = "host:port of `orla serve --listen`"
 	side.add_child(url)
 	var row := HBoxContainer.new()
 	side.add_child(row)
-	backend = OptionButton.new()
-	for name in ["jit", "cpu", "gpu"]:
-		backend.add_item(name)
-	backend.tooltip_text = "The backend when a scene opens in this process"
-	row.add_child(backend)
 	var connect_button := Button.new()
 	connect_button.text = "Connect"
 	connect_button.pressed.connect(_connect)
@@ -71,24 +62,18 @@ func _connect() -> void:
 	view.stop()
 	run_button.text = "Run"
 	client.close()
-	var error := ""
-	if url.text.strip_edges().ends_with(".osn"):
-		client = Local.new()
-		error = client.open(url.text.strip_edges(), backend.get_item_text(backend.selected))
-	else:
-		client = Client.new()
-		var parts := url.text.split(":")
-		error = client.open(parts[0], int(parts[1]) if parts.size() > 1 else 7788)
+	client = Client.new()
+	var parts := url.text.split(":")
+	var error := client.open(parts[0], int(parts[1]) if parts.size() > 1 else 7788)
 	if not error.is_empty():
 		status.text = error
 		return
 	view.client = client
-	var info: Dictionary = client.request("status")
+	var info := client.request("status")
 	if Client.failed(info):
 		status.text = str(info["error"])
 		return
-	var where := "in this process" if client is Local else "over the socket"
-	status.text = "%s on %s, %s: %d nodes, %d kernels" % [str(info["scene"]).get_file(), info["backend"], where, info["nodes"], info["kernels"]]
+	status.text = "%s on %s: %d nodes, %d kernels" % [str(info["scene"]).get_file(), info["backend"], info["nodes"], info["kernels"]]
 	_build_params()
 	view.grab_focus()
 
@@ -121,7 +106,7 @@ func _report(result: Dictionary) -> void:
 func _build_params() -> void:
 	for child in params_box.get_children():
 		child.queue_free()
-	var graph: Dictionary = client.request("graph")
+	var graph := client.request("graph")
 	if Client.failed(graph):
 		return
 	for param in graph.get("params", []):
