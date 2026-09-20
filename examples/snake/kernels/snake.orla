@@ -34,11 +34,9 @@ kernel snake.empty@1 {
     requires { field.write; }
     output result: Board;
     compute {
-        let c = coord();
-        let x = int(c.x);
-        let y = int(c.y);
-        return if y == 12 && x >= 5 && x <= 8 { Cell { kind: 1, ttl: x - 4 } }
-            else if x == 20 && y == 12 { Cell { kind: 2, ttl: 0 } }
+        let c = icoord();
+        return if c.y == 12 && c.x >= 5 && c.x <= 8 { Cell { kind: 1, ttl: c.x - 4 } }
+            else if c == ivec2(20, 12) { Cell { kind: 2, ttl: 0 } }
             else { Cell { kind: 0, ttl: 0 } };
     }
 }
@@ -58,16 +56,16 @@ kernel snake.step@1 {
     }
 
     // Whether cell `probe` can take the food: empty, and not the new head.
-    fn free(probe: Int, width: Int, nx: Int, ny: Int) -> Bool {
-        let cell = vec2(probe % width, probe / width);
-        return at(board, cell).kind == 0 && cell != vec2(nx, ny);
+    fn free(probe: Int, width: Int, head: IVec2) -> Bool {
+        let cell = ivec2(probe % width, probe / width);
+        return at(board, cell).kind == 0 && cell != head;
     }
 
     compute {
         let g = sample(previous);
-        let extent = size(board);
-        let width = int(extent.x);
-        let height = int(extent.y);
+        let extent = isize(board);
+        let width = extent.x;
+        let height = extent.y;
         // Steering: the last arrow held wins; reversing into the body is ignored.
         let horizontal = key(37) || key(39);
         let vertical = key(38) || key(40);
@@ -81,23 +79,22 @@ kernel snake.step@1 {
         // Ticks: the clock, quantized; one move per tick.
         let tick = int(floor(time() * speed));
         let advancing = g.alive && tick != g.tick;
-        let nx = g.hx + dx;
-        let ny = g.hy + dy;
-        let inside = nx >= 0 && nx < width && ny >= 0 && ny < height;
-        let target = if inside { at(board, vec2(nx, ny)) } else { Cell { kind: 0, ttl: 0 } };
+        let next = ivec2(g.hx + dx, g.hy + dy);
+        let inside = next.x >= 0 && next.x < width && next.y >= 0 && next.y < height;
+        let target = if inside { at(board, next) } else { Cell { kind: 0, ttl: 0 } };
         // A body cell with time left after this tick is still there to hit.
         let alive = g.alive && (!advancing || (inside && !(target.kind == 1 && target.ttl > 1)));
         let moved = advancing && alive;
-        let ate = moved && nx == g.fx && ny == g.fy;
+        let ate = moved && next == ivec2(g.fx, g.fy);
         let cells = width * height;
         let seed = int(hash(float(tick) * 3.0 + float(g.score) * 7.0 + 1.0) * float(cells));
         let food = if ate {
-            loop 4096 with probe = seed until free(probe, width, nx, ny) { (probe + 1) % cells }
+            loop 4096 with probe = seed until free(probe, width, next) { (probe + 1) % cells }
         } else { g.fy * width + g.fx };
         return Game {
             ..g,
-            hx: if moved { nx } else { g.hx },
-            hy: if moved { ny } else { g.hy },
+            hx: if moved { next.x } else { g.hx },
+            hy: if moved { next.y } else { g.hy },
             dx: dx, dy: dy,
             length: if ate { g.length + 1 } else { g.length },
             alive: alive,
@@ -121,13 +118,10 @@ kernel snake.board@1 {
 
     compute {
         let g = at(game, 0);
-        let c = coord();
-        let x = int(c.x);
-        let y = int(c.y);
+        let here = icoord();
         let cell = sample(previous);
-        let here = vec2(x, y);
-        let is_head = g.advanced && here == vec2(g.hx, g.hy);
-        let is_food = here == vec2(g.fx, g.fy);
+        let is_head = g.advanced && here == ivec2(g.hx, g.hy);
+        let is_food = here == ivec2(g.fx, g.fy);
         let body = if g.advanced && cell.kind == 1 && !g.ate {
             Cell { ..cell, kind: if cell.ttl > 1 { 1 } else { 0 }, ttl: cell.ttl - 1 }
         } else { cell };

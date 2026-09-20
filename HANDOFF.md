@@ -165,9 +165,24 @@ are the ones below.
       (WGSL has none; `* (1.0 / f)`), non-square matrices, and
       `vec4(v3, 1.0)`-style constructors, which would be their own
       small round if a swizzle round ever comes.
-   c. Integer vectors `IVec2/3` for grid coordinates and addresses, so
-      `coord()`-derived indices stop converting back and forth; widens
-      the operator and `at` overload tables, medium work.
+   c. Done: integer vectors `IVec2/3` (`Type::int_components`,
+      `lanes`, `other_kind`), `ivec2/3` from `Int`s, `icoord`, `isize`,
+      `idomain`, componentwise `+ - * / % & | ^ << >> >>>` with each
+      other or an `Int`, `-v`, `==`, members, `v[i]`, `abs`, `sign`,
+      `min`, `max`, `clamp`, `float(v)` and `int(v)` between the kinds.
+      The interpreter's integer instructions took a width and strides
+      (the frame is read through `self` inside those loops, since a
+      failure is reported through `self`); the JIT zips words; WGSL is
+      native except that bit operators and shifts want both operands
+      of one type (the `Int` side widens, a scalar shift count converts
+      before it splats). Addresses: `at`, `put` and a scatter's pair
+      take an `IVec` and the compiler converts it to the float address
+      (`float_address`, and a synthesized `(Vec2, T)` pair struct for
+      a scatter), which is exact for every coordinate a Field can hold,
+      so no backend grew an integer Field path. The snake example's
+      cells are integer vectors now. Not done: `IVec4` (no address
+      needs it), integer `dot`, wrap arithmetic on vectors, `Bool`
+      vectors, and integer vectors as params.
    Not planned: Bool vectors, unsigned ints (`ult`/`udiv`/`>>>` cover
    them), 64-bit, f16, strings, dynamic sizes, packed byte or RGBA8
    Field storage (a layout matter, not a type; f32 per channel is
