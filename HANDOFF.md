@@ -2,8 +2,12 @@
 
 ## Context
 
-Conversation is Chinese; source, docs, and commits are English. Local commits
-on `feat/first-proof` are authorized; do not merge or push. Commit as the
+Conversation is Chinese; source, docs, and commits are English. `main` is
+the line, tagged `v0.1.0` at the checkpoint after the structure round; a
+round of work is a short branch off it (`feat/…`, `refactor/…`, `docs/…`),
+verified, then fast-forwarded back, one commit per block, a merge commit
+only when a fast-forward cannot do. Merging back is said once per round;
+do not push. Commit as the
 configured identity. Preserve both architectural bibles verbatim (`Orla Architecture
 Plan.md`, `Orla — Minimal Core Architecture.md`); their handle lists stay as
 written while the code has one `Handle`.
