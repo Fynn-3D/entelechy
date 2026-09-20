@@ -431,6 +431,18 @@ capability claim.
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
 
+- The GPU divides integers through a dividend the shader compiler
+  cannot narrow: a one read from the context (`wgsl::OPAQUE_ONE`) is
+  multiplied in by `whole_i32` and its vector and unsigned kin before
+  every `/` and `%`. Metal took the top sixteen bits of a word
+  (`x >>> 16`, or `(x >> 16) & 0xFFFF`) as a sixteen-bit value and
+  divided it by a constant wrongly (`0 % 6` came out 65530); the
+  [feature matrix](crates/matrix/src/lib.rs)'s `narrow division` row
+  fails without the guard. In a Graph, `size(port)` of another node's
+  memory port is the memory's extent, what it committed last or its
+  initial value's size, not the node's domain
+  ([evaluator](crates/graph/src/evaluate.rs)).
+
 - Backends implement [`Backend`](crates/runtime/src/lib.rs): `prepare` does
   the expensive work (the GPU backend compiles WGSL and builds the pipeline
   there), so `publish` is a pointer swap. GPU and CPU results agree within

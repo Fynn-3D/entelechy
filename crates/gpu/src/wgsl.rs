@@ -31,6 +31,13 @@ pub const WORKGROUP: u32 = 8;
 /// otherwise). Each input then has `[width, height, depth, 0]`.
 pub const CONTEXT_HEAD: usize = 6;
 
+/// The context word holding 1, as an expression: a value the shader
+/// compiler cannot fold, multiplied into an integer dividend so that a
+/// value it narrowed (the top sixteen bits of a word, say) is a whole
+/// `i32` again when it divides. Metal divided such a narrowed value by
+/// a constant wrongly (`(x >>> 16) % 7` came out 8192 for a zero).
+pub const OPAQUE_ONE: &str = "ctx[5].z";
+
 /// The most workgroups one dispatch dimension takes.
 pub const MAX_GROUPS: u32 = 65535;
 
@@ -322,6 +329,15 @@ fn button_down(code: i32) -> bool {{
             inverse.join(", ")
         );
     }
+    // Integer division and remainder through a dividend the compiler
+    // cannot narrow (see `OPAQUE_ONE`), scalar and vector.
+    let _ = writeln!(
+        out,
+        "fn whole_i32(x: i32) -> i32 {{ return x * i32({OPAQUE_ONE}); }}
+fn whole_u32(x: u32) -> u32 {{ return x * u32({OPAQUE_ONE}); }}
+fn whole_v2(x: vec2<i32>) -> vec2<i32> {{ return x * i32({OPAQUE_ONE}); }}
+fn whole_v3(x: vec3<i32>) -> vec3<i32> {{ return x * i32({OPAQUE_ONE}); }}"
+    );
     // Rotations by a runtime count (WGSL refuses a shift by the width),
     // the high half of a 64-bit product from 16-bit halves, and unsigned
     // division through the signed one, which this GPU gets right where
@@ -352,7 +368,8 @@ fn mulhi_i32(a: i32, b: i32) -> i32 {{
     let u = umulhi_u32(u32(a), u32(b));
     return i32(u - select(0u, u32(b), a < 0i) - select(0u, u32(a), b < 0i));
 }}
-fn udiv_u32(a: u32, b: u32) -> u32 {{
+fn udiv_u32(narrow: u32, b: u32) -> u32 {{
+    let a = whole_u32(narrow);
     if (b >= 0x80000000u) {{ return select(0u, 1u, a >= b); }}
     if (a < 0x80000000u) {{ return u32(i32(a) / i32(b)); }}
     var q = u32(i32(a >> 1u) / i32(b)) << 1u;
@@ -1615,6 +1632,16 @@ impl Emitter<'_> {
                     }
                     BinaryOp::Ushr => {
                         format!("i32(u32({}) >> (u32({}) & 31u))", v(a), v(b))
+                    }
+                    // The dividend through `whole_*`: a value the compiler
+                    // narrowed (the top half of a word) divided wrongly.
+                    BinaryOp::Div | BinaryOp::Rem if *ty == Type::Int || int_vector => {
+                        let whole = match ty.int_components() {
+                            Some(2) => "whole_v2",
+                            Some(_) => "whole_v3",
+                            None => "whole_i32",
+                        };
+                        format!("({whole}({}) {symbol} {})", widen(a), v(b))
                     }
                     _ => format!("({} {symbol} {})", v(a), v(b)),
                 }

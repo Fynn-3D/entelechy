@@ -147,6 +147,14 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: cellf.x + cellf.y + float(back).x + float(d).z, i: sum.x + sum.y + quot.x + quot.y + quot.z + bits.x + bits.y + ush.x + ush.y + m.x + m.y + m.z + site.cell.x * 100 + site.weight + looked + c[i % 2] + (-c).y + isz.x * 1000 + isz.y, b: c == ivec2(i % 16, i / 16) && d != ivec3(0, 0, 0) && !(c != c), v: vec3(float(m).x, float(sum).y, float(c[1])) }",
         ),
         (
+            "narrow division",
+            // The top half of a word, then a signed division by a
+            // constant: Metal narrowed the dividend to sixteen bits and
+            // divided wrongly until the GPU backend guarded its dividends.
+            "let word = add_wrap(mul_wrap(i, 0x10001), 0x12345); let hi = word >>> 16; let hv = ivec2(word, word * 3) >>> 16; let narrow = hi % 7 + hi / 7 + (hi % 6) * 10 + urem(hi, 7) + udiv(hi, 3) + ((word >> 16) & 0xFFFF) % 7 + (hv % 7).x + (hv / 7).y;",
+            "Out { f: 0.0, i: narrow, b: hi % 7 == 0, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",

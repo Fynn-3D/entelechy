@@ -507,7 +507,9 @@ impl Backend for GpuBackend {
         let window = invocation.context.window;
         context.extend_from_slice(&[input.wheel[0], input.wheel[1], window[0], window[1]]);
         let (groups_x, groups_y, groups_z, fold) = wgsl::dispatch(domain);
-        context.extend_from_slice(&[invocation.context.scale, fold as f32, 0.0, 0.0]);
+        // The third word is a one the shader compiler cannot see through
+        // (`wgsl::OPAQUE_ONE`); the fourth is spare.
+        context.extend_from_slice(&[invocation.context.scale, fold as f32, 1.0, 0.0]);
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
