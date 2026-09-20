@@ -21,7 +21,11 @@ Decisions not recoverable from code: lossy audio is decoded (importer) but
 never encoded (WAV is the way out; ffmpeg compresses); JPEG is not decoded
 (convert to PNG); interlaced PNG is refused; `.wav` saves at 48 kHz; a node's
 `times` is structural, so a param it names lowers the document again; `sample`
-stays in `compute` while functions with Field parameters use `at`/`at_linear`.
+stays in `compute` while functions with Field parameters use `at`/`at_linear`;
+text is a convention of the shared library, not a contract of the runtime:
+`examples/shared/text.orla` declares the glyph row and the drawing, and the
+font atlas beside it is baked from rows of bits in `font.orla` (a face is
+replaced by re-baking or by another PNG in the same 6x8 cells).
 
 Before a commit run, in this order: `cargo fmt --all`, `cargo clippy
 --workspace --all-targets -- -D warnings`, `cargo test --workspace` (about 40 s;
@@ -43,16 +47,17 @@ files may be left running or gone; nothing of it is in the repository.
 
 ## Next
 
-Text rendering, the largest gap for tools: a glyph atlas as a PNG input
-(baked by a Kernel with `run --save`, or imported) plus a documented row layout
-for text (`Rows<Glyph>` of code, position, size) and a Kernel that draws it,
-with no new primitive. Acceptance: an example (or the voxel editor's bar)
-draws a label; its replay pins pixels of the text on both backends; the
-atlas is an asset the Host watches. If the user prefers another item, the
-ranked list from the last assessment is: CPU interpreter speed (a bytecode or
-JIT path), a scatter primitive with a stated determinism rule, window size
-and DPI as context, a second bridge (Godot or web) to prove bridges are not
-Blender-specific.
+CPU interpreter speed, the largest remaining gap: the interpreter is the
+reference and the frame-rate floor (seconds per frame for ray marching at
+720p). A bytecode or a closure-compiled path over the validated IR, with
+the tree interpreter kept as the oracle, and a parity test that runs every
+example replay through both paths. Acceptance: the raymarch and voxel
+scenes several times faster on the CPU with no pixel changed on any
+replay. If the user prefers another item, the rest of the ranked list is:
+a scatter primitive with a stated determinism rule, window size and DPI
+as context, a second bridge (Godot or web) to prove bridges are not
+Blender-specific, and labels on the voxel editor's bar through the text
+library.
 
 ## Open
 

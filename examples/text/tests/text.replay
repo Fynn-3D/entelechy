@@ -1,0 +1,42 @@
+scene ../scene.osn
+
+# The title's O sits at (8, 6) at twice the size: its top row is the
+# three middle columns of the cell, so (10, 6) is ink and (8, 6) is
+# not; its middle row is the two outer columns, so (8, 12) is ink and
+# (12, 12) is the hollow.
+frame 0.0
+expect 10 6 = 1.0 0.85 0.45
+expect 8 6 = 0.09 0.1 0.13
+expect 8 12 = 1.0 0.85 0.45
+expect 12 12 = 0.09 0.1 0.13
+
+# The specimen at (8, 30), sixteen to a line: A is the 34th code, column
+# 1 of line 2, so its cell starts at (14, 46); its top row is the three
+# middle columns, its fourth row all five, its second the outer two.
+expect 15 46 = 0.75 0.78 0.85
+expect 14 46 = 0.09 0.1 0.13
+expect 14 49 = 0.75 0.78 0.85
+expect 18 49 = 0.75 0.78 0.85
+expect 15 47 = 0.09 0.1 0.13
+
+# The pointer starts at x 0: the readout is two blanks and a 0, whose
+# cell starts at (172, 6); the leading places are blank.
+expect 174 6 = 0.5 0.9 0.6
+expect 172 6 = 0.09 0.1 0.13
+expect 152 6 = 0.09 0.1 0.13
+
+# At x 123 the readout is 1 2 3: the 1's top row is the middle column
+# of its cell at (148, 6), the 2's the three middle of (160, 6), the
+# 3's the whole top row of (172, 6).
+pointer 123 40 up
+frame 0.1
+expect 152 6 = 0.5 0.9 0.6
+expect 162 6 = 0.5 0.9 0.6
+expect 172 6 = 0.5 0.9 0.6
+
+# At x 7 the tens place is blank again and the ones is a 7.
+pointer 7 40 up
+frame 0.2
+expect 162 6 = 0.09 0.1 0.13
+expect 172 6 = 0.5 0.9 0.6
+expect 178 7 = 0.5 0.9 0.6

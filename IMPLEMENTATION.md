@@ -219,6 +219,14 @@ capability claim.
   against reference vectors; `run --save` and the protocol's `read`
   produce them ([session](crates/cli/src/session.rs),
   [tests](crates/cli/tests/session.rs)).
+- Text needs no primitive: a label is `Rows<Glyph>` (code, origin,
+  scale), a font is a `Grid<Float>` atlas the Host reads from a file, and
+  `text.draw@1` paints one over a picture through a shared function any
+  Kernel may call; `text.layout@1` and `text.digits@1` make the rows
+  ([library](examples/shared/text.orla), [font](examples/shared/font.orla),
+  [text example](examples/text/README.md)). The atlas is baked by a
+  Kernel through `run --save` and both backends draw it bit for bit
+  ([replay](examples/text/tests/text.replay)).
 - A node repeats with `times = N;` and `carry port <- output;`: the
   document lowering expands it into `name/1..N` chained through the
   carried ports, with `name.port` meaning the last; `N` may be a graph

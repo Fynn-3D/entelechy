@@ -1,0 +1,51 @@
+// Text drawn by Kernels: a title from four codes at twice the size, the
+// whole font as a specimen, and the pointer's x as digits that follow it;
+// each is a row of glyphs painted over the picture through the font
+// atlas, a file the Host watches.
+use "../shared/text.orla";
+
+input font: Grid<Float> = "../shared/font.png";
+
+// The picture the text goes on.
+node back: kernel {
+    requires { field.write; }
+    output result: Image;
+    domain = vec2(192, 88);
+    compute { return vec4(0.09, 0.1, 0.13, 1.0); }
+}
+
+// A string is a row of codes: O R L A.
+node title: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 4;
+    compute {
+        let i = element();
+        return if i == 0 { 79 } else if i == 1 { 82 } else if i == 2 { 76 } else { 65 };
+    }
+}
+node title_glyphs: text.layout@1 { codes <- title.result; origin = vec2(8.0, 6.0); scale = 2.0; }
+node titled: text.draw@1 { under <- back.result; glyphs <- title_glyphs.result; font <- font; colour = vec3(1.0, 0.85, 0.45); }
+
+// Every printable code once, sixteen to a line.
+node codes: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 95;
+    compute { return 32 + element(); }
+}
+node specimen: text.layout@1 { codes <- codes.result; origin = vec2(8.0, 30.0); wrap = 16; }
+node shown: text.draw@1 { under <- titled.result; glyphs <- specimen.result; font <- font; colour = vec3(0.75, 0.78, 0.85); }
+
+// The pointer's x, as three digits at the top right.
+node probe: kernel {
+    requires { field.write; input.read; }
+    output result: Rows<Float>;
+    domain = 1;
+    compute { return pointer().x; }
+}
+node digits: text.digits@1 { values <- probe.result; places = 3; domain = places; }
+node readout: text.layout@1 { codes <- digits.result; origin = vec2(148.0, 6.0); scale = 2.0; }
+node view: text.draw@1 { under <- shown.result; glyphs <- readout.result; font <- font; colour = vec3(0.5, 0.9, 0.6); }
+
+output result <- view.result;

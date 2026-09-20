@@ -70,3 +70,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [model](model/README.md): a crate from a GLB, brought in by `orla-import`
   as vertex and triangle rows and a PNG the scene reads as inputs, spun
   and rasterized by the native rasterizer, textured with `at_linear`.
+- [text](text/README.md): text as rows of glyphs drawn by a Kernel through
+  a font atlas the Host watches; a title, the whole font, and the pointer's
+  x as digits; the font was baked from rows of bits by `run --save`.
