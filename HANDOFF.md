@@ -146,7 +146,13 @@ are the ones below.
       out-of-range failure (clamping is the Field rule), and hoisting a
       constant array out of the per-element code on the JIT (the ROMs
       run once at boot, so nothing asked for it; a scan reading a
-      256-entry table every step would).
+      256-entry table every step would). Done since: the JIT keeps a
+      constant table in read-only data and subscripts it in place, the
+      interpreter folds it into one `Words` instruction (a four-million
+      element, three-table Kernel: 524 to 40 ms on the JIT, 20 s to
+      0.6 s on the interpreter); the marching and tetris pictures did
+      not move, since their time is in `at` and the segment distances,
+      not the tables.
    b. Done: matrices `Mat2/3/4` as ABI value types (column-major
       floats; `Type::order`/`column`), `mat3(c0, c1, c2)` and
       `mat3(diagonal)`, `m[i]` a column and `v[i]` a component (both

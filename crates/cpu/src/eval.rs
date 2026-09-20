@@ -103,6 +103,11 @@ enum Instr {
         dst: usize,
         parts: Vec<Loc>,
     },
+    /// A value known when the function compiled: its words.
+    Words {
+        dst: usize,
+        words: Vec<u32>,
+    },
     /// `dst` = the `n` words of element `index` (clamped to `count`) of
     /// the array at `base`.
     Subscript {
@@ -585,6 +590,9 @@ fn compile_function(shared: &Shared, function: &Function, carry: Option<Type>) -
         args: Vec::new(),
         loops: Vec::new(),
         carry: None,
+        uses: use_counts(function, slots),
+        constants: std::collections::HashMap::new(),
+        blocks: Vec::new(),
     };
     if let Some(ty) = carry {
         compiler.carry = Some(compiler.alloc(ty));
@@ -612,6 +620,119 @@ struct FunctionCompiler<'c> {
     loops: Vec<Loc>,
     /// A scan's carried value, read by `Carried` outside every loop.
     carry: Option<Loc>,
+    /// How many instructions read each value.
+    uses: Vec<u32>,
+    /// The words of every value known when the function is compiled:
+    /// literals and the structs, arrays and matrices built from them.
+    constants: std::collections::HashMap<u32, Vec<u32>>,
+    /// The open blocks, innermost last: where each value's instruction
+    /// sits in the block's code, and which of them a fold made dead.
+    blocks: Vec<BlockState>,
+}
+
+/// A block's bookkeeping while it compiles.
+#[derive(Default)]
+struct BlockState {
+    positions: std::collections::HashMap<u32, usize>,
+    dead: Vec<usize>,
+}
+
+/// How many operands name each value, nested blocks included.
+fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
+    fn walk(instructions: &[Instruction], counts: &mut Vec<u32>) {
+        for instruction in instructions {
+            let mut note = |id: &ValueId| {
+                if let Some(count) = counts.get_mut(id.0 as usize) {
+                    *count += 1;
+                }
+            };
+            match &instruction.op {
+                Op::Unary(_, a) => note(a),
+                Op::Binary(_, a, b) => {
+                    note(a);
+                    note(b);
+                }
+                Op::Construct(parts) => parts.iter().for_each(&mut note),
+                Op::Extract(source, _) => note(source),
+                Op::Subscript(array, index) => {
+                    note(array);
+                    note(index);
+                }
+                Op::Call(_, args) | Op::Intrinsic(_, args) => args.iter().for_each(&mut note),
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => {
+                    note(condition);
+                    note(&then.result);
+                    note(&otherwise.result);
+                }
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => {
+                    note(scrutinee);
+                    for (_, block) in arms {
+                        note(&block.result);
+                    }
+                    note(&otherwise.result);
+                }
+                Op::Loop {
+                    init, until, body, ..
+                } => {
+                    note(init);
+                    if let Some(until) = until {
+                        note(&until.result);
+                    }
+                    note(&body.result);
+                }
+                Op::At(_, a) | Op::AtLinear(_, a) | Op::Key(a) | Op::Button(a) => note(a),
+                Op::Put(_, a, v) => {
+                    note(a);
+                    note(v);
+                }
+                _ => {}
+            }
+            match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => {
+                    walk(&then.body, counts);
+                    walk(&otherwise.body, counts);
+                }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    for (_, block) in arms {
+                        walk(&block.body, counts);
+                    }
+                    walk(&otherwise.body, counts);
+                }
+                Op::Loop { until, body, .. } => {
+                    if let Some(until) = until {
+                        walk(&until.body, counts);
+                    }
+                    walk(&body.body, counts);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut counts = vec![0; slots];
+    walk(&function.body, &mut counts);
+    // A result is read by the caller; a named value by a trace.
+    let read_outside = function
+        .results
+        .iter()
+        .chain(function.bindings.iter().map(|(id, _)| id));
+    for id in read_outside {
+        if let Some(count) = counts.get_mut(id.0 as usize) {
+            *count += 1;
+        }
+    }
+    counts
 }
 
 impl FunctionCompiler<'_> {
@@ -641,12 +762,26 @@ impl FunctionCompiler<'_> {
     /// Compiles a block.
     fn block(&mut self, instructions: &[Instruction]) -> Vec<Instr> {
         let mut code = Vec::with_capacity(instructions.len());
+        self.blocks.push(BlockState::default());
         for instruction in instructions {
             let slot = instruction.id.0 as usize;
             self.types[slot] = instruction.ty;
             if let Some(instr) = self.instruction(instruction) {
                 code.push(instr);
+                if let Some(block) = self.blocks.last_mut() {
+                    block.positions.insert(instruction.id.0, code.len() - 1);
+                }
             }
+            self.note_constant(instruction);
+        }
+        let block = self.blocks.pop().unwrap_or_default();
+        if !block.dead.is_empty() {
+            let mut dead = vec![false; code.len()];
+            for position in block.dead {
+                dead[position] = true;
+            }
+            let mut keep = dead.iter().map(|dead| !dead);
+            code.retain(|_| keep.next().unwrap_or(true));
         }
         code
     }
@@ -833,6 +968,33 @@ impl FunctionCompiler<'_> {
                         b: lb.at,
                     },
                 }
+            }
+            Op::Construct(parts)
+                if (matches!(ty, Type::Struct(_))
+                    || ty.order().is_some()
+                    || ty.int_components().is_some())
+                    && parts
+                        .iter()
+                        .all(|part| self.constants.contains_key(&part.0)) =>
+            {
+                // A table, known when the function compiles: its words in
+                // one instruction, and the literals it was built from
+                // dropped where nothing else reads them.
+                let dst = define(self);
+                let words: Vec<u32> = parts
+                    .iter()
+                    .flat_map(|part| self.constants[&part.0].clone())
+                    .collect();
+                if let Some(block) = self.blocks.last_mut() {
+                    for part in parts {
+                        if self.uses[part.0 as usize] == 1
+                            && let Some(position) = block.positions.get(&part.0)
+                        {
+                            block.dead.push(*position);
+                        }
+                    }
+                }
+                Instr::Words { dst: dst.at, words }
             }
             Op::Construct(parts) => {
                 let dst = define(self);
@@ -1072,6 +1234,36 @@ impl FunctionCompiler<'_> {
                 }
             }
         })
+    }
+
+    /// Records a value's words when they are known at compile time: a
+    /// literal, or a table built from known words.
+    fn note_constant(&mut self, instruction: &Instruction) {
+        let words = match &instruction.op {
+            Op::Const(value) => {
+                let (words, n) = value_words(*value);
+                Some(words[..n].to_vec())
+            }
+            Op::Construct(parts)
+                if (matches!(instruction.ty, Type::Struct(_))
+                    || instruction.ty.order().is_some()
+                    || instruction.ty.int_components().is_some())
+                    && parts
+                        .iter()
+                        .all(|part| self.constants.contains_key(&part.0)) =>
+            {
+                Some(
+                    parts
+                        .iter()
+                        .flat_map(|part| self.constants[&part.0].clone())
+                        .collect(),
+                )
+            }
+            _ => None,
+        };
+        if let Some(words) = words {
+            self.constants.insert(instruction.id.0, words);
+        }
     }
 
     /// Compiles a nested block, returning its code and where its result lives.
@@ -1512,6 +1704,9 @@ impl<'p, 's> Machine<'p, 's> {
         match instr {
             Instr::Const { dst, words, n } => {
                 s[fp + dst..fp + dst + n].copy_from_slice(&words[..*n]);
+            }
+            Instr::Words { dst, words } => {
+                s[fp + dst..fp + dst + words.len()].copy_from_slice(words);
             }
             Instr::Param { dst, at, n } => {
                 s[fp + dst..fp + dst + n].copy_from_slice(&program.params[*at..at + n]);

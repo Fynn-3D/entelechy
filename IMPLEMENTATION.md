@@ -403,6 +403,17 @@ capability claim.
   [CHIP-8](examples/chip8/kernels/chip8.orla) and
   [Thumb](examples/thumb/kernels/thumb.orla) ROMs written as data.
 
+- A table, an array whose words are known when a Kernel compiles, costs
+  nothing to build: the JIT puts its words in the module's read-only
+  data once and a `subscript` loads the element at the clamped offset
+  (an array picked out of a table of tables keeps its address, so a
+  second subscript is one more load, not a copy); the interpreter
+  folds the literals into one `Words` instruction and drops the ones
+  nothing else reads, a named one kept for its trace. Four million
+  three-table lookups: 524 ms to 40 ms on the JIT, 20 s to 0.6 s on
+  the interpreter ([JIT](crates/jit/src/codegen.rs),
+  [interpreter](crates/cpu/src/eval.rs)).
+
 - Matrices `Mat2/3/4` are value types of the ABI, column-major floats,
   with the operator table in [the IR](crates/ir/src/lib.rs) (`Mat * Mat`,
   `Mat * Vec`, `Vec * Mat`, scaling, `+ -`, `==`) and three intrinsics

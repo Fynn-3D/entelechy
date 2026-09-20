@@ -15,6 +15,7 @@
 //! the context. Field reads and the transcendental functions call the
 //! helpers in the crate root, by symbol, so they round as the CPU does.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -25,7 +26,7 @@ use cranelift_codegen::ir::{
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{FuncId, Linkage, Module as _};
+use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
 use orla_abi::Type;
 use orla_cpu::matrix::{self, Arith};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
@@ -336,8 +337,20 @@ fn result_type(function: &Function) -> Type {
 /// One function being translated.
 struct Fx<'a, 'b> {
     module: &'a Module,
+    jit: &'a mut JITModule,
     b: FunctionBuilder<'b>,
     ptr: types::Type,
+    /// The function's name, which names the tables it defines.
+    name: String,
+    /// The words of every value known when the Kernel is compiled, by
+    /// id: literals, and vectors, structs and arrays built from them.
+    constants: HashMap<u32, Vec<u32>>,
+    /// Values that live in the module's read-only data, by id: the
+    /// address of their words. An array picked out of a constant table
+    /// is one, so a table of tables is indexed without a copy.
+    pointers: HashMap<u32, Value>,
+    /// The tables defined so far, by the id of the array they hold.
+    tables: HashMap<u32, cranelift_codegen::ir::GlobalValue>,
     /// The words of every value, by id.
     values: Vec<Vec<Value>>,
     types: Vec<Type>,
@@ -372,7 +385,7 @@ impl<'a, 'b> Fx<'a, 'b> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         module: &'a Module,
-        jit: &mut JITModule,
+        jit: &'a mut JITModule,
         mut b: FunctionBuilder<'b>,
         imports: &Imports,
         functions: &[(FuncId, Signature)],
@@ -414,8 +427,13 @@ impl<'a, 'b> Fx<'a, 'b> {
         let ctx = b.block_params(entry_block)[0];
         Self {
             module,
+            jit,
             b,
             ptr,
+            name: String::new(),
+            constants: HashMap::new(),
+            pointers: HashMap::new(),
+            tables: HashMap::new(),
             values: Vec::new(),
             types: Vec::new(),
             args: Vec::new(),
@@ -445,6 +463,7 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// parameters, its body, and its return.
     fn function(mut self, function: &Function, kind: Kind) {
         let slots = function.slot_count();
+        self.name = function.name.clone();
         self.values = vec![Vec::new(); slots];
         self.types = vec![Type::Float; slots];
         let block = self.b.current_block().expect("entry block");
@@ -507,7 +526,82 @@ impl<'a, 'b> Fx<'a, 'b> {
             self.types[instruction.id.0 as usize] = instruction.ty;
             let words = self.instruction(instruction);
             self.values[instruction.id.0 as usize] = words;
+            self.note_constant(instruction);
         }
+    }
+
+    /// Records a value's words when they are known at compile time: a
+    /// literal, or a construction or extraction of known words.
+    fn note_constant(&mut self, instruction: &Instruction) {
+        use orla_abi::Value as V;
+        let id = instruction.id.0;
+        let words = match &instruction.op {
+            Op::Const(value) => Some(match value {
+                V::Float(v) => vec![v.to_bits()],
+                V::Int(v) => vec![*v as u32],
+                V::Bool(v) => vec![u32::from(*v)],
+                V::Vec2(v) => v.iter().map(|c| c.to_bits()).collect(),
+                V::Vec3(v) => v.iter().map(|c| c.to_bits()).collect(),
+                V::Vec4(v) => v.iter().map(|c| c.to_bits()).collect(),
+            }),
+            // A float vector from Int literals widens them; the words
+            // are then not the parts' words, so only all-float parts count.
+            Op::Construct(parts)
+                if instruction.ty.components().is_none()
+                    || parts.iter().all(|part| self.ty(part) == Type::Float) =>
+            {
+                parts
+                    .iter()
+                    .map(|part| self.constants.get(&part.0).cloned())
+                    .collect::<Option<Vec<_>>>()
+                    .map(|parts| parts.concat())
+            }
+            Op::Extract(source, component) => self.constants.get(&source.0).and_then(|words| {
+                let (start, n) = match self.ty(source) {
+                    Type::Struct(index) => (
+                        field_offset(self.module, index, *component as usize),
+                        word_types(self.module, instruction.ty).len(),
+                    ),
+                    other if other.order().is_some() => {
+                        let n = usize::from(other.order().unwrap_or(1));
+                        (*component as usize * n, n)
+                    }
+                    _ => (*component as usize, 1),
+                };
+                words.get(start..start + n).map(<[u32]>::to_vec)
+            }),
+            _ => None,
+        };
+        if let Some(words) = words {
+            self.constants.insert(id, words);
+        }
+    }
+
+    /// The address of a constant array's words in the module's read-only
+    /// data, defined once per array here, named after the function and
+    /// the value.
+    fn table(&mut self, id: u32) -> Value {
+        let global = match self.tables.get(&id) {
+            Some(global) => *global,
+            None => {
+                let words = self.constants.get(&id).cloned().unwrap_or_default();
+                let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+                let name = format!("{}.{id}", self.name);
+                let data = self
+                    .jit
+                    .declare_data(&name, Linkage::Local, false, false)
+                    .expect("a table's name is its own");
+                let mut description = DataDescription::new();
+                description.define(bytes.into_boxed_slice());
+                self.jit
+                    .define_data(data, &description)
+                    .expect("a table is defined once");
+                let global = self.jit.declare_data_in_func(data, self.b.func);
+                self.tables.insert(id, global);
+                global
+            }
+        };
+        self.b.ins().global_value(self.ptr, global)
     }
 
     fn words(&self, id: &orla_ir::ValueId) -> Vec<Value> {
@@ -645,6 +739,7 @@ impl<'a, 'b> Fx<'a, 'b> {
 
     fn instruction(&mut self, instruction: &Instruction) -> Vec<Value> {
         let ty = instruction.ty;
+        let id = instruction.id;
         match &instruction.op {
             Op::Const(value) => {
                 use orla_abi::Value as V;
@@ -737,9 +832,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                 }
             }
             Op::Subscript(array, index) => {
-                // The array's words go to a slot of their own; the element
-                // is loaded back at the clamped index times its width.
-                let words = self.words(array);
+                // The element is loaded at the clamped index times its
+                // width from the array's words: in the module's read-only
+                // data when the array is known at compile time (a table),
+                // where a table's inner array already lives, or else in a
+                // slot of this function's own, stored first.
                 let count = match self.ty(array) {
                     Type::Struct(struct_index) => {
                         self.module.structs[struct_index as usize].fields.len()
@@ -751,15 +848,24 @@ impl<'a, 'b> Fx<'a, 'b> {
                 };
                 let tys = word_types(self.module, ty);
                 let n = tys.len();
-                let slot = self.b.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    (words.len().max(1) * 4) as u32,
-                    2,
-                ));
-                for (k, word) in words.iter().enumerate() {
-                    self.b.ins().stack_store(*word, slot, (k * 4) as i32);
-                }
-                let base = self.b.ins().stack_addr(self.ptr, slot, 0);
+                let (base, flags) = if let Some(pointer) = self.pointers.get(&array.0) {
+                    (*pointer, self.flags.with_readonly())
+                } else if self.constants.contains_key(&array.0)
+                    && matches!(self.ty(array), Type::Struct(_))
+                {
+                    (self.table(array.0), self.flags.with_readonly())
+                } else {
+                    let words = self.words(array);
+                    let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        (words.len().max(1) * 4) as u32,
+                        2,
+                    ));
+                    for (k, word) in words.iter().enumerate() {
+                        self.b.ins().stack_store(*word, slot, (k * 4) as i32);
+                    }
+                    (self.b.ins().stack_addr(self.ptr, slot, 0), self.flags)
+                };
                 let raw = self.words(index)[0];
                 let zero = self.i32c(0);
                 let last = self.i32c(count as i64 - 1);
@@ -768,9 +874,14 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let scaled = self.b.ins().imul_imm(clamped, (n * 4) as i64);
                 let offset = self.b.ins().uextend(self.ptr, scaled);
                 let address = self.b.ins().iadd(base, offset);
+                if flags.readonly()
+                    && matches!(ty, Type::Struct(index) if self.module.structs[index as usize].is_array())
+                {
+                    self.pointers.insert(id.0, address);
+                }
                 tys.iter()
                     .enumerate()
-                    .map(|(k, t)| self.b.ins().load(*t, self.flags, address, (k * 4) as i32))
+                    .map(|(k, t)| self.b.ins().load(*t, flags, address, (k * 4) as i32))
                     .collect()
             }
             Op::Call(callee, args) => {
