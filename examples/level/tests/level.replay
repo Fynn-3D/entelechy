@@ -1,0 +1,15 @@
+scene ../scene.osn
+
+# The file says what it is: version 1, a map 24 by 14, five entities.
+# Every one of those numbers is read out of the bytes by a Kernel.
+window 480 300
+frame 0.0
+expect about.result[0] = 1.0 0.001          # the version byte
+expect about.result[1] = 24.0 0.001         # the width
+expect about.result[2] = 14.0 0.001         # the height
+expect about.result[3] = 5.0 0.001          # the count, two bytes low first
+expect 240 20 = 0.050 0.050 0.070 0.01      # outside the map
+expect 170 130 = 0.160 0.400 0.650 0.01     # water
+expect 350 110 = 0.160 0.420 0.180 0.01     # grass
+expect 240 200 = 0.160 0.190 0.160 0.01     # bare ground
+expect 345 122 = 0.957 0.441 0.398 0.01     # an entity's marker

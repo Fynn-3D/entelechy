@@ -228,7 +228,14 @@ for), a loop's count may be any `Int` expression read once before the
 loop and clamped to the bound, and a node may be a filled Field
 (`node zeros: Rows<Float> { domain = 65; }`, `value = ...` for anything
 but the element's zero), which took five zero-fill Kernels out of the
-examples. A score goes in and out: `orla-import` reads a standard MIDI file into
+examples. A file may come in as its bytes, `input level: Rows<Int> = bytes
+"level.bin";`, so a format of one's own is read by a Kernel rather than
+by a tool: the `level` example walks a header, a tile map and an entity
+list, and draws them, with no Rust and no importer. The division stands:
+what other software writes has a reader in `orla-import`, where the
+dependencies are; what is yours needs none.
+
+A score goes in and out: `orla-import` reads a standard MIDI file into
 rows of `{start, duration, pitch, velocity, channel}` in seconds, and
 `orla-export` writes those rows back as a file a music editor opens,
 both from the format's own definition and with no dependency; the

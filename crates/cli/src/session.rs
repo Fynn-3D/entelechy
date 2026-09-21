@@ -766,6 +766,25 @@ impl Session {
             .collect()
     }
 
+    /// Reads a file as its bytes: `Rows<Int>`, one element a byte, 0 to
+    /// 255. What a Kernel does with them is the Kernel's business, which
+    /// is how a scene reads a format nothing here knows.
+    pub fn load_bytes(path: &Path) -> Result<(FieldData, String), String> {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        if bytes.is_empty() {
+            return Err("the file is empty; a Field has no empty extent".into());
+        }
+        let words: Vec<u32> = bytes.iter().map(|byte| u32::from(*byte)).collect();
+        let data = FieldData::from_words(
+            orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
+            orla_runtime::Domain::Rows(words.len() as u32),
+            words,
+        )
+        .map_err(|e| e.to_string())?;
+        let detail = format!("{} byte(s)", bytes.len());
+        Ok((data, detail))
+    }
+
     /// Reads a Field file: `.field` as the Host writes it; `.png`, `.ppm`,
     /// and `.pgm` as a grid of pixels, or as a `Grid<Float>` of luminance
     /// when `want` says so; `.wav` as rows of one or two floats. Returns
@@ -829,7 +848,7 @@ impl Session {
     /// Reads every input's file that is new or changed since it was last
     /// read, and forgets inputs the scene no longer declares.
     fn sync_assets(&mut self, events: &mut Vec<Event>) {
-        let wanted: Vec<(String, PathBuf, String)> = self
+        let wanted: Vec<orla_graph::Asset> = self
             .graph
             .as_ref()
             .map(|graph| graph.assets.clone())
@@ -837,7 +856,7 @@ impl Session {
         let stale: Vec<String> = self
             .assets
             .keys()
-            .filter(|name| !wanted.iter().any(|(wanted, _, _)| wanted == *name))
+            .filter(|name| !wanted.iter().any(|asset| &asset.name == *name))
             .cloned()
             .collect();
         for name in stale {
@@ -846,7 +865,13 @@ impl Session {
                 let _ = self.runtime.host_mut().release(handle);
             }
         }
-        for (name, path, ty) in wanted {
+        for orla_graph::Asset {
+            name,
+            path,
+            ty,
+            bytes,
+        } in wanted
+        {
             let current = stamp(&path);
             if self
                 .assets
@@ -862,7 +887,12 @@ impl Session {
                     stamp: current,
                 },
             );
-            let (data, detail) = match Self::load_field(&path, Some(&ty)) {
+            let read = if bytes {
+                Self::load_bytes(&path)
+            } else {
+                Self::load_field(&path, Some(&ty))
+            };
+            let (data, detail) = match read {
                 Ok(loaded) => loaded,
                 Err(error) => {
                     events.push(Event::Rejected {

@@ -372,6 +372,9 @@ pub struct PortDecl {
     /// A directory of files the input reads frame by frame, only on a
     /// document's inputs: `input clip: Image = frames "clip/" at 30;`.
     pub frames: Option<FramesDecl>,
+    /// A file the input reads as its bytes, one to an element, only on a
+    /// document's inputs: `input level: Rows<Int> = bytes "level.bin";`.
+    pub bytes: Option<Spanned<String>>,
     /// Byte range of the wiring (`<- source`, `<~ source from initial`)
     /// in the document, so a Kernel's text can be given without it.
     pub binding_range: Option<Range<usize>>,

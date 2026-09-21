@@ -119,6 +119,9 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   to tell the inside of a circle from the outside, all of it Kernels: the
   gradient as a scatter, the step placed eight times a frame, the
   weights carried on; the plane painted as the network answers.
+- [level](level/README.md): a binary format nothing in Orla knows, read
+  by a Kernel: the scene takes the file with `bytes`, and the Kernel
+  walks the header, the tiles and the entity list. No importer, no Rust.
 - [score](score/README.md): a MIDI file played and drawn: `orla-import`
   reads it into rows of notes, a Kernel sums what sounds at each sample
   into the block the sound card takes, and another paints the piano

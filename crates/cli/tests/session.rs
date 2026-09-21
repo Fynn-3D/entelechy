@@ -1326,3 +1326,67 @@ fn a_name_a_kernel_cannot_find_names_the_file_that_declares_it() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
+    let dir = std::env::temp_dir().join(format!("orla-bytes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("blob.bin"), [79u8, 82, 76, 65, 0, 255, 128]).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "input blob: Rows<Int> = bytes \"blob.bin\";\n\
+         node read: kernel {\n\
+             requires { field.read; field.write; }\n\
+             input data: Rows<Int> <- blob;\n\
+             output result: Rows<Int>;\n\
+             domain = 7;\n\
+             compute { return at(data, element()); }\n\
+         }\n\
+         output result <- read.result;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(
+        &dir.join("scene.osn"),
+        None,
+        orla::session::DEFAULT_BUDGET_PIXELS,
+    );
+    let events = session.sync();
+    assert!(
+        events.iter().any(|event| matches!(event, Event::Loaded { name, detail, .. } if name == "blob" && detail == "7 byte(s)")),
+        "{events:?}"
+    );
+    let words = |session: &mut Session, handle| {
+        session.runtime_mut().materialize(handle).unwrap();
+        session
+            .runtime()
+            .host()
+            .data(handle)
+            .unwrap()
+            .words()
+            .to_vec()
+    };
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(
+        words(&mut session, report.output),
+        vec![79, 82, 76, 65, 0, 255, 128]
+    );
+    // The file is watched: an edit is the next sync's business.
+    std::fs::write(dir.join("blob.bin"), [1u8, 2, 3, 4, 5, 6, 7]).unwrap();
+    session.sync();
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(
+        words(&mut session, report.output),
+        vec![1, 2, 3, 4, 5, 6, 7]
+    );
+    // An empty file has no extent, and says so.
+    std::fs::write(dir.join("blob.bin"), []).unwrap();
+    let events = session.sync();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::Rejected { error, .. } if error.contains("empty"))),
+        "{events:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

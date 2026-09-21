@@ -38,6 +38,8 @@ document names its Kernel sources with `use`; `--library <dir|file>` adds
 more. External Fields declared with `input <name>: Image;` in the scene are
 bound with `--input <name>=<file.ppm>`, or read from the file the input
 names (`input atlas: Image = "atlas.ppm";`), which the Host watches, or
+read as bytes (`input level: Rows<Int> = bytes "level.bin";`, one
+integer an element, for a format a Kernel reads itself), or
 read frame by frame from a directory (`input clip: Image = frames
 "clip/" at 30;`, the frame of the moment at each evaluation); graph
 parameters are overridden with `--param <name>=<literal>`; a scene sized

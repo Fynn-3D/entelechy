@@ -144,6 +144,21 @@ pub struct Node {
     pub is_async: bool,
 }
 
+/// An external a document reads from a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Asset {
+    /// The input's name.
+    pub name: String,
+    /// The file, resolved against the document's directory.
+    pub path: PathBuf,
+    /// The type as written, which tells a picture file whether to come
+    /// in as pixels or as a `Grid<Float>`.
+    pub ty: String,
+    /// Whether the file comes in as its bytes, one to an element of a
+    /// `Rows<Int>`, rather than as a Field of its own format.
+    pub bytes: bool,
+}
+
 /// A graph document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graph {
@@ -151,11 +166,9 @@ pub struct Graph {
     pub name: String,
     /// External Field names the caller must supply.
     pub externals: Vec<String>,
-    /// Externals the document reads from files: the name, the path
-    /// resolved against the document's directory, and the type as
-    /// written, which tells a picture file whether to come in as pixels
-    /// or as a `Grid<Float>`; the Host loads and watches them.
-    pub assets: Vec<(String, PathBuf, String)>,
+    /// Externals the document reads from files; the Host loads and
+    /// watches them.
+    pub assets: Vec<Asset>,
     /// Externals the document writes as text: the name and the text,
     /// which the session supplies as `Rows<Int>` of the characters' codes.
     pub texts: Vec<(String, String)>,

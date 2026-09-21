@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Bytes in | [session](crates/cli/src/session.rs) `load_bytes`, [parser](crates/language/src/parser.rs) | [session tests](crates/cli/tests/session.rs), [level example](examples/level/tests/level.replay) |
 | MIDI in and out | [importer](crates/import/src/midi.rs), [exporter](crates/export/src/midi.rs) | [midi tests](crates/import/tests/midi.rs), [score example](examples/score/tests/score.replay) |
 | Keywords as names | [parser](crates/language/src/parser.rs) `name_not_starting_an_expression` | [parser tests](crates/language/src/parser.rs) |
 | Components in a target | [session](crates/cli/src/session.rs) `component_of` | [path replay](examples/path/tests/path.replay) |
@@ -458,6 +459,15 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- A file as its bytes: `input level: Rows<Int> = bytes "level.bin";`
+  reads any file as rows of one integer an element, 0 to 255, watched
+  and re-read like any other asset. What the bytes mean is the Kernel's
+  business, so a format of one's own needs no reader in Rust: the
+  `level` example walks a header, a tile map and an entity list, and a
+  count read from the file is a loop's count, which the compiler still
+  bounds. Formats other software writes keep their readers in
+  `orla-import`, where the dependencies are.
 
 - A score in and out (phase 5, audio): `orla-import` reads a standard
   MIDI file into rows of `{start, duration, pitch, velocity, channel}`

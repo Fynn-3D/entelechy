@@ -189,7 +189,10 @@ any Field as `.field`, the Host's own format. `run --save` and the
 protocol's `read` write all of them. `input title: Rows<Int> = text
 "ORLA";` holds text: the session supplies the characters' codes as rows
 and writes them again when the document's text changes, so a label is a
-string in the scene rather than a Kernel of cases. `input clip: Image =
+string in the scene rather than a Kernel of cases. `input level: Rows<Int> = bytes "level.bin";` reads a file as its
+bytes, one to an element, 0 to 255: what they mean is the Kernel's
+business, which is how a scene reads a format nothing here knows
+(`examples/level`). `input clip: Image =
 frames "clip/" at 30;` reads a directory frame by frame: its files in
 name order (the same formats), one per frame at the rate, the frame
 `floor(time * rate)` of the session's time wrapping at the end, brought

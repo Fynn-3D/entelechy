@@ -15,7 +15,7 @@ use orla_language::{
 };
 
 use crate::{
-    Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
+    Asset, Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
     literal_text,
 };
 
@@ -307,7 +307,7 @@ pub(crate) fn lower(
 /// What one document level exposes to its parent.
 struct Level {
     externals: Vec<String>,
-    assets: Vec<(String, PathBuf, String)>,
+    assets: Vec<Asset>,
     texts: Vec<(String, String)>,
     sequences: Vec<(String, PathBuf, String, u32)>,
     params: Vec<GraphParam>,
@@ -548,11 +548,26 @@ impl Lowering<'_, '_> {
                         "a placed graph's input is wired by the placing graph; it cannot name a file",
                     ));
                 }
-                assets.push((
-                    input.name.value.clone(),
-                    base.join(&file.value),
-                    input.ty.value.clone(),
-                ));
+                assets.push(Asset {
+                    name: input.name.value.clone(),
+                    path: base.join(&file.value),
+                    ty: input.ty.value.clone(),
+                    bytes: false,
+                });
+            }
+            if let Some(bytes) = &input.bytes {
+                if placement.is_some() {
+                    return Err(error(
+                        bytes.span,
+                        "a placed graph's input is wired by the placing graph; it cannot name a file",
+                    ));
+                }
+                assets.push(Asset {
+                    name: input.name.value.clone(),
+                    path: base.join(&bytes.value),
+                    ty: input.ty.value.clone(),
+                    bytes: true,
+                });
             }
             if let Some(text) = &input.text {
                 if placement.is_some() {
