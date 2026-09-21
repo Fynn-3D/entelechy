@@ -179,8 +179,8 @@ shows one line of frame data over the picture (the interval between
 frames and the frame rate, the evaluate and present times, each
 smoothed, present on the device including the wait for the display;
 the backend, the window and its scale, the shown image's size, what ran,
-was reused and was fused, how the frame reached the window, downloads,
-the sound device when open, the session time), the interval being the true frame cost since the picture is
+was reused and was fused, `async` runs going, how the frame reached the
+window, downloads, the sound device when open, the session time), the interval being the true frame cost since the picture is
 presented on the device without a readback; Escape
 closes the window.
 

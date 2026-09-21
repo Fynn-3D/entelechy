@@ -329,13 +329,14 @@ impl Player {
             None => String::new(),
         };
         let rest = format!(
-            "{} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | {} | downloads {}{sound} | t {:.1} s",
+            "{} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | {} | downloads {}{sound} | t {:.1} s",
             self.session.runtime().backend_name(),
             context.window[0],
             context.window[1],
             context.scale,
             report.executed.len(),
             report.reused.len(),
+            report.pending.len(),
             self.path,
             self.downloads,
             context.time,
