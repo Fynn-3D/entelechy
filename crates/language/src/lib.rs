@@ -409,6 +409,9 @@ pub struct ParamDecl {
 pub struct FnDecl {
     /// Function name.
     pub name: Spanned<String>,
+    /// Type parameters as written, `fn twice<T>(v: T) -> T`: names that
+    /// stand for whatever type the call gives them.
+    pub generics: Vec<Spanned<String>>,
     /// Arguments as `(name, type)`.
     pub args: Vec<(Spanned<String>, Spanned<String>)>,
     /// Return type name as written.
@@ -540,6 +543,9 @@ pub enum ExprKind {
         /// The `_` arm.
         otherwise: Box<Block>,
     },
+    /// `break expr;` among a loop body's statements: the loop stops
+    /// after this iteration and gives that value.
+    Break(Box<Expr>),
     /// `loop count with name = init until done { body }`.
     Loop {
         /// The iteration count: a literal, or any `Int` expression, read

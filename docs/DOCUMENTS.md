@@ -88,7 +88,11 @@ carry, and a scan's step its own, by name. A loop's count is a literal,
 which is its bound, or any `Int` expression, read once before the loop
 and clamped to `0..=65536`: `loop depth with ...` takes a parameter's
 value, so the same Kernel runs a solve to a depth the scene sets. A
-loop with a count of zero yields what it carries; `Name { a: .., b: .. }` builds
+loop with a count of zero yields what it carries. A `break` among a
+loop body's statements, `if done { break x; }`, stops the loop after
+that iteration and gives that value, of the type the loop carries: the
+iterations after it do not run, and it belongs to the innermost loop
+around it. `Name { a: .., b: .. }` builds
 a struct and `Name { ..base, a: .. }` copies one with some fields
 replaced.
 
@@ -226,7 +230,14 @@ refused by name: what they share belongs in a third both use. A function may tak
 -> Hit` reads its parameter with `at`, `at_linear`, `size`, or `count`, and
 a call names an input port for it, `cast(world, eye)`; the function is
 instantiated once per port it is called with, checked by shape and
-layout. `sample` stays in `compute`, where the element's own address is.
+layout. A function may also name type parameters, `fn twice<T>(v: T)
+-> T`, each bound by the type of the argument written for it and the
+same in every place it appears; one instance is compiled per set of
+types a call gives it, and its body is checked there, so an error says
+which instance was being compiled. A function calls only what is
+declared above it, so it never calls itself: a Kernel runs where there
+is no stack, and a `loop` with the work as its carried value is the
+form for repetition. `sample` stays in `compute`, where the element's own address is.
 
 A Kernel with a `merge` is a reduction, the one execution mode besides
 the map:

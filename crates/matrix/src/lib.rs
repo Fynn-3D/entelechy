@@ -151,6 +151,20 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: walked.a, i: walked.b + nested + counted + clamped + deep, b: walked.on, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
+            // A `break` stops its own loop and gives its value: every
+            // shape of it, and the loops around it untouched.
+            "break",
+            "let first = loop 20 with best = -1 { let c = i + index(); if c % 7 == 0 { break c; } best }; let armed = loop 8 with acc = 0 { match index() { 0 | 1 => acc + 1, 5 => { break acc * 100; }, _ => acc + 2 } }; let nested = loop 4 with outer = 0 { let inner = loop 4 with a = 0 { if a > 2 { break a; } a + 1 }; if outer > 5 { break outer; } outer + inner }; let tested = loop 12 with a = x until a > 3.0 { if a > 2.0 { break a * 10.0; } a + 0.7 }; let counted = loop n with a = 0 { if index() > i % 5 { break a * 2; } a + index() }; let never = loop 5 with a = 1 { if i < 0 { break 99; } a * 2 };",
+            "Out { f: tested, i: first + armed + nested + counted + never, b: tested > 20.0, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
+            // One function written once, lowered for each type a call
+            // gives it.
+            "type parameters",
+            "let f = twice(x * 0.5); let a = twice(i); let w = twice(v); let c = twice(Cell { a: x, b: i, on: true }.a); let chosen = pick(x, 1.5, i % 2 == 0); let which = pick(i, n, flag) + width(x) + width(ivec2(i, 2)) + width(vec4(x, 1.0, 2.0, 3.0));",
+            "Out { f: f + c + chosen, i: a + which, b: w.x > 1.0, v: w }",
+        ),
+        (
             "calls",
             "let w = twist(v + vec3(x, 0.0, 0.0), k * x); let p = peek(cells, vec2(x * 0.7, x * 0.3)); let s = score(Cell { a: x, b: i, on: true });",
             "Out { f: p + s.a, i: s.b, b: s.on, v: w }",
@@ -252,6 +266,9 @@ const HEAD: &str = "requires { field.read; field.write; input.read; time.read; }
     fn spin(a: Float) -> Mat2 { return mat2(vec2(cos(a), sin(a)), vec2(-sin(a), cos(a))); }
     struct Site { cell: IVec2; weight: Int; }
     fn walk(c: IVec2, d: IVec2) -> IVec2 { return (c + d) % ivec2(16, 4); }
+    fn twice<T>(value: T) -> T { return value + value; }
+    fn pick<T>(a: T, b: T, first: Bool) -> T { return if first { a } else { b }; }
+    fn width<T>(value: T) -> Int { let doubled = twice(value); return int(doubled == twice(value)); }
 ";
 
 const ENV: &str = "let x = float(i) * 0.37 + 0.1; let sampled = sample(rows);";

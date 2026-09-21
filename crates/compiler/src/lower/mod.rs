@@ -146,6 +146,11 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         templates: Vec::new(),
         instances: RefCell::new(BTreeMap::new()),
         instantiating: RefCell::new(Vec::new()),
+        declared: kernel
+            .functions
+            .iter()
+            .map(|f| f.name.value.clone())
+            .collect(),
     };
     let mut shared = shared;
     for declaration in &kernel.functions {
@@ -175,17 +180,26 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         }
         let mut has_field = false;
         for (_, ty) in &declaration.args {
+            if declaration.generics.iter().any(|g| g.value == ty.value) {
+                continue;
+            }
             if resolve_type(ty, &structs).is_err() {
                 port_type(ty, &structs, &aliases)
                     .map_err(|_| semantic(ty.span, format!("`{}` is not a type", ty.value)))?;
                 has_field = true;
             }
         }
-        if has_field {
+        if has_field || !declaration.generics.is_empty() {
             shared.templates.push(declaration);
             continue;
         }
-        let function = lower_function(&shared, declaration, Vec::new(), &declaration.name.value)?;
+        let function = lower_function(
+            &shared,
+            declaration,
+            Vec::new(),
+            Vec::new(),
+            &declaration.name.value,
+        )?;
         shared
             .functions
             .borrow_mut()
@@ -208,6 +222,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                 Local::Carried {
                     depth: 0,
                     ty: expected,
+                    pair: None,
                 },
             ));
         }
@@ -360,10 +375,14 @@ struct Shared<'a> {
     aliases: &'a [(String, PortType)],
     functions: RefCell<Vec<(String, Function)>>,
     templates: Vec<&'a FnDecl>,
-    /// Instantiated templates by (name, bound input indices) to function index.
-    instances: RefCell<BTreeMap<(String, Vec<u32>), u32>>,
+    /// Instantiated templates by what they were bound with, to function
+    /// index.
+    instances: RefCell<BTreeMap<Instance, u32>>,
     /// Templates being instantiated, to refuse a template calling itself.
     instantiating: RefCell<Vec<String>>,
+    /// Every function name the Kernel declares, in order, so a call to
+    /// one that is not lowered yet can say why.
+    declared: Vec<String>,
 }
 
 /// Lowers a function body. `fields` binds its Field parameters to input
@@ -372,15 +391,25 @@ fn lower_function(
     shared: &Shared<'_>,
     declaration: &FnDecl,
     fields: Vec<(String, u32)>,
+    generics: Vec<(String, Type)>,
     name: &str,
 ) -> Result<Function, CompileError> {
     let structs = shared.structs;
+    let bound = |ty: &Spanned<String>| -> Option<Type> {
+        generics
+            .iter()
+            .find(|(parameter, _)| parameter == &ty.value)
+            .map(|(_, bound)| *bound)
+    };
     let mut builder = Builder::new(shared, false, name, fields);
     for (name, ty) in &declaration.args {
         if builder.fields.iter().any(|(field, _)| field == &name.value) {
             continue;
         }
-        let ty = resolve_type(ty, structs)?;
+        let ty = match bound(ty) {
+            Some(ty) => ty,
+            None => resolve_type(ty, structs)?,
+        };
         if builder
             .args
             .iter()
@@ -393,7 +422,25 @@ fn lower_function(
         }
         builder.args.push((name.value.clone(), ty));
     }
-    let ret = resolve_type(&declaration.ret, structs)?;
+    let ret = match bound(&declaration.ret) {
+        Some(ty) => ty,
+        None => {
+            if declaration
+                .generics
+                .iter()
+                .any(|parameter| parameter.value == declaration.ret.value)
+            {
+                return Err(semantic(
+                    declaration.ret.span,
+                    format!(
+                        "`{}` returns `{}`, which no argument binds; a type parameter is bound by an argument's type",
+                        declaration.name.value, declaration.ret.value
+                    ),
+                ));
+            }
+            resolve_type(&declaration.ret, structs)?
+        }
+    };
     let result = builder.block(&declaration.body)?;
     let actual = builder.ty(result);
     if actual != ret {
@@ -410,6 +457,11 @@ fn lower_function(
     Ok(builder.finish(vec![result]))
 }
 
+/// What a template was instantiated with: its name, the input ports
+/// bound to its Field parameters, and the types bound to its type
+/// parameters, each written as the IR spells it.
+type Instance = (String, Vec<u32>, Vec<String>);
+
 /// What a name resolves to inside a block.
 #[derive(Clone)]
 enum Local {
@@ -418,6 +470,10 @@ enum Local {
     Carried {
         depth: usize,
         ty: Type,
+        /// When the loop's body may `break`, what it carries is that
+        /// value and whether it stopped; the name is the first field
+        /// of this struct.
+        pair: Option<Type>,
     },
 }
 
@@ -505,6 +561,42 @@ impl<'a> Builder<'a> {
         describe(ty, &self.structs())
     }
 
+    /// Reads the carried value of the loop being lowered: the value
+    /// itself, or the first field of what a loop with a `break` carries.
+    pub(super) fn read_carried(&mut self, ty: Type, pair: Option<Type>) -> ValueId {
+        match pair {
+            None => self.emit(ty, Op::Carried),
+            Some(pair) => {
+                let carried = self.emit(pair, Op::Carried);
+                self.emit(ty, Op::Extract(carried, 0))
+            }
+        }
+    }
+
+    /// The struct type a loop with a `break` carries: the value and
+    /// whether the loop has stopped, made once per element type.
+    pub(super) fn pair_type(&self, value: Type) -> Type {
+        let name = format!("({}, stopped)", self.describe(value));
+        if let Some(index) = self.structs().iter().position(|def| def.name == name) {
+            return Type::Struct(index as u32);
+        }
+        let mut table = self.shared.structs.borrow_mut();
+        table.push(StructDef::record(
+            name,
+            vec![
+                Field {
+                    name: "value".into(),
+                    ty: value,
+                },
+                Field {
+                    name: "stopped".into(),
+                    ty: Type::Bool,
+                },
+            ],
+        ));
+        Type::Struct((table.len() - 1) as u32)
+    }
+
     /// The struct table as it stands; a borrow tied to the Kernel, not
     /// to the builder, so a value read through it may be emitted at once.
     fn structs(&self) -> std::cell::Ref<'a, Vec<StructDef>> {
@@ -539,8 +631,17 @@ impl<'a> Builder<'a> {
     }
 
     fn block(&mut self, block: &Block) -> Result<ValueId, CompileError> {
+        self.scoped(block, |builder, result| builder.value(result))
+    }
+
+    /// Lowers a block's bindings in their own scope and then its result,
+    /// which the caller lowers: a loop body's result may `break`.
+    pub(super) fn scoped<F>(&mut self, block: &Block, result: F) -> Result<ValueId, CompileError>
+    where
+        F: FnOnce(&mut Self, &Expr) -> Result<ValueId, CompileError>,
+    {
         self.scopes.push(self.locals.len());
-        let result = (|| {
+        let lowered = (|| {
             for (name, value) in &block.lets {
                 // A statement for its effect: `put(...)`, or `let _ = ...`.
                 if name.value == "_" {
@@ -566,18 +667,18 @@ impl<'a> Builder<'a> {
                 }
                 self.locals.push((name.value.clone(), Local::Value(id)));
             }
-            self.value(&block.result)
+            result(self, &block.result)
         })();
         let start = self.scopes.pop().expect("a scope is open");
         self.locals.truncate(start);
-        result
+        lowered
     }
 
     fn name(&mut self, name: &str, span: Span) -> Result<ValueId, CompileError> {
         if let Some((_, local)) = self.locals.iter().rev().find(|(local, _)| local == name) {
             return match local.clone() {
                 Local::Value(id) => Ok(id),
-                Local::Carried { depth, ty } => {
+                Local::Carried { depth, ty, pair } => {
                     if depth != self.loops.len() {
                         return Err(semantic(
                             span,
@@ -586,7 +687,7 @@ impl<'a> Builder<'a> {
                             ),
                         ));
                     }
-                    Ok(self.emit(ty, Op::Carried))
+                    Ok(self.read_carried(ty, pair))
                 }
             };
         }
@@ -636,7 +737,35 @@ impl<'a> Builder<'a> {
         let mut fields = Vec::new();
         let mut indices = Vec::new();
         let mut values = Vec::new();
+        let mut generics: Vec<(String, Type)> = Vec::new();
         for ((param, ty), arg) in template.args.iter().zip(args) {
+            // A type parameter takes the type of the argument written
+            // here, and every later argument of that parameter must
+            // agree with it.
+            if template.generics.iter().any(|g| g.value == ty.value) {
+                let id = self.value(arg)?;
+                let actual = self.ty(id);
+                match generics
+                    .iter()
+                    .find(|(parameter, _)| parameter == &ty.value)
+                {
+                    Some((_, bound)) if *bound != actual => {
+                        return Err(semantic(
+                            arg.span,
+                            format!(
+                                "`{name}` takes `{}` as {} here, but as {} for an earlier argument",
+                                ty.value,
+                                self.describe(actual),
+                                self.describe(*bound)
+                            ),
+                        ));
+                    }
+                    Some(_) => {}
+                    None => generics.push((ty.value.clone(), actual)),
+                }
+                values.push(id);
+                continue;
+            }
             match resolve_type(ty, self.shared.structs) {
                 Ok(expected) => {
                     let id = self.value(arg)?;
@@ -669,22 +798,59 @@ impl<'a> Builder<'a> {
                 }
             }
         }
-        let key = (name.to_owned(), indices.clone());
+        let key = (
+            name.to_owned(),
+            indices.clone(),
+            generics
+                .iter()
+                .map(|(_, ty)| format!("{ty:?}"))
+                .collect::<Vec<_>>(),
+        );
         let existing = self.shared.instances.borrow().get(&key).copied();
         let index = match existing {
             Some(index) => index,
             None => {
                 if self.shared.instantiating.borrow().iter().any(|n| n == name) {
-                    return Err(semantic(span, format!("function `{name}` calls itself")));
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`{name}` calls itself, and a Kernel has no stack to call into; a `loop` with the work as its carried value is the form"
+                        ),
+                    ));
                 }
                 self.shared.instantiating.borrow_mut().push(name.to_owned());
                 let bound = indices
                     .iter()
                     .map(|i| self.manifest.inputs[*i as usize].name.clone())
+                    .chain(generics.iter().map(|(_, ty)| self.describe(*ty)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let instance =
-                    lower_function(self.shared, template, fields, &format!("{name}<{bound}>"));
+                let instance = lower_function(
+                    self.shared,
+                    template,
+                    fields,
+                    generics.clone(),
+                    &format!("{name}<{bound}>"),
+                )
+                .map_err(|error| match (error, generics.is_empty()) {
+                    // A body that does not hold for the types this call
+                    // gives it is reported where it is written, and says
+                    // which instance was being lowered.
+                    (CompileError::Semantic { span, message }, false) => {
+                        let bound = generics
+                            .iter()
+                            .map(|(parameter, ty)| {
+                                format!("`{parameter}` as {}", self.describe(*ty))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        CompileError::Semantic {
+                            span,
+                            message: format!("{message} (in `{name}` with {bound})"),
+                        }
+                    }
+                    (error, _) => error,
+                });
                 self.shared.instantiating.borrow_mut().pop();
                 let instance = instance?;
                 let index = {

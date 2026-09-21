@@ -940,6 +940,21 @@ impl Parser {
         // one that starts an expression: a call is a word and a `(`, so
         // `scatter(n, seed)` reads as a call wherever it stands.
         let name = self.name_not_starting_an_expression("a function name")?;
+        // Type parameters: names that stand for whatever type a call
+        // gives them, one instance of the function lowered for each.
+        let mut generics = Vec::new();
+        if self.eat_punct("<") {
+            while !self.is_punct(">") {
+                generics.push(self.ident("a type parameter")?);
+                if !self.eat_punct(",") {
+                    break;
+                }
+            }
+            self.expect_punct(">")?;
+            if generics.is_empty() {
+                return Err(self.error("a `<>` names at least one type parameter"));
+            }
+        }
         self.expect_punct("(")?;
         let mut args = Vec::new();
         while !self.is_punct(")") {
@@ -958,6 +973,7 @@ impl Parser {
         let body = self.block()?;
         Ok(FnDecl {
             name,
+            generics,
             args,
             ret,
             body,
@@ -1153,6 +1169,21 @@ impl Parser {
                 self.expect_punct(";")?;
                 self.expect_punct("}")?;
                 return Ok(Block { lets, result });
+            } else if self.is_keyword("break") {
+                // `break expr;` ends its block, as `return` does; the
+                // loop around it stops and gives that value.
+                let span = self.span();
+                self.next();
+                let value = self.expr()?;
+                self.expect_punct(";")?;
+                self.expect_punct("}")?;
+                return Ok(Block {
+                    lets,
+                    result: Expr {
+                        kind: ExprKind::Break(Box::new(value)),
+                        span,
+                    },
+                });
             } else if self.is_punct("}") {
                 return Err(self.error("a block must end with `return expr;` or a value"));
             } else {
@@ -1617,10 +1648,10 @@ impl Parser {
 /// function, since a call would not be told from one of these.
 const STARTS_AN_EXPRESSION: [&str; 5] = ["let", "return", "if", "match", "loop"];
 
-const RESERVED: [&str; 23] = [
-    "let", "return", "if", "else", "match", "loop", "with", "until", "kernel", "struct", "type",
-    "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan", "scatter",
-    "migrate", "package",
+const RESERVED: [&str; 24] = [
+    "let", "return", "if", "else", "match", "loop", "with", "until", "break", "kernel", "struct",
+    "type", "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan",
+    "scatter", "migrate", "package",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -1817,6 +1848,38 @@ kernel image.grayscale@1 {
         assert!(
             error.message.contains("names at least one field"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn a_break_ends_its_block_and_a_fn_may_take_type_parameters() {
+        let kernel = parse(
+            "kernel t.k@1 { fn twice<T, U>(a: T, b: U) -> T { return a; } compute { return loop 8 with a = 0 { if a > 2 { break a; } a + 1 }; } }",
+        )
+        .unwrap();
+        let generics = &kernel.functions[0].generics;
+        assert_eq!(generics.len(), 2);
+        assert_eq!(generics[0].value, "T");
+        assert_eq!(generics[1].value, "U");
+        let ExprKind::Loop { body, .. } = &kernel.compute.result.kind else {
+            panic!("expected a loop");
+        };
+        // The guard makes the `break` the block's result on one side and
+        // the rest of the block on the other.
+        let ExprKind::If { then, .. } = &body.result.kind else {
+            panic!("expected a guard");
+        };
+        assert!(matches!(then.result.kind, ExprKind::Break(_)));
+
+        let error = parse("kernel t.k@1 { compute { let break = 1; return break; } }").unwrap_err();
+        assert!(error.message.contains("a binding name"), "{error}");
+        let error =
+            parse("kernel t.k@1 { fn f<>(a: Int) -> Int { return a; } compute { return f(1); } }")
+                .unwrap_err();
+        assert!(
+            error.message.contains("at least one type parameter"),
+            "{}",
+            error.message
         );
     }
 

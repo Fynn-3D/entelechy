@@ -1084,3 +1084,41 @@ fn logical_operators_do_not_ask_the_other_side_when_the_first_settles_it() {
     // With n large the quotient is small: neither holds.
     assert_eq!(run(100).unwrap(), 0);
 }
+
+/// A `break` stops its own loop and gives its value: the iterations
+/// after it do not run, the loops around it are untouched, and work
+/// that would fail is proof of both.
+#[test]
+fn a_break_stops_its_loop_and_the_rest_of_it_never_runs() {
+    let source = "kernel test.stop@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element(); let zero = i - i; let first = loop 20 with best = -1 { let c = i + index(); if c % 7 == 0 { break c; } best }; let armed = loop 8 with acc = 0 { match index() { 0 | 1 => acc + 1, 5 => { break acc * 100; }, _ => acc + 2 } }; let nested = loop 4 with outer = 0 { let inner = loop 4 with a = 0 { if a > 2 { break a; } a + 1 }; if outer > 5 { break outer; } outer + inner }; let safe = loop 8 with a = 1 { if a > 4 { break a; } a * 2 + 100 / a }; let after = loop 6 with a = 0 { if index() == 2 { break a; } a + 100 / (2 - index()) }; return first * 1000 + armed + nested * 10 + safe + after; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(64);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(8),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let words: Vec<i32> = (0..8)
+        .map(|i| host.element(output, i).unwrap()[0] as i32)
+        .collect();
+    // `first` is the next multiple of seven at or above the element.
+    // `armed` breaks in a `match` arm on the sixth iteration, having
+    // counted 1 + 1 + 2 + 2 + 2 = 8, so 800. `nested`'s inner loop
+    // breaks at 3 and its outer at 6, which is 60 here. `safe` is 1,
+    // then 2 + 100, and 102 is over four, so it stops with 102 and the
+    // division by the carried value never sees a larger one. `after`
+    // adds 100/2 and 100/1 and breaks on the third iteration, which
+    // would divide by zero if it ran: that it finishes is the proof.
+    let expected: Vec<i32> = (0..8)
+        .map(|i| {
+            let first = (i + 6) / 7 * 7;
+            first * 1000 + 800 + 60 + 102 + 150
+        })
+        .collect();
+    assert_eq!(words, expected, "{words:?}");
+}

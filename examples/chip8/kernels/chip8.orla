@@ -207,7 +207,7 @@ kernel chip8.step@1 {
                 7 => { put(regs, x, at(regs, 19)); pc + 2 },
                 10 => {
                     // Wait for a key: the lowest one down, else stay here.
-                    let k = loop 16 with found = -1 until found >= 0 { if pressed(index()) { index() } else { -1 } };
+                    let k = loop 16 with found = -1 { if pressed(index()) { break index(); } found };
                     if k >= 0 { put(regs, x, k); pc + 2 } else { pc }
                 },
                 21 => { put(regs, 19, vx); pc + 2 },

@@ -449,6 +449,21 @@ backend. The examples use both (the snake and voxel window and board
 extents, the rubik hit, the shared text library's printable range) and
 their replays are bit for bit what they were.
 
+Three more the language was asked for, in one round. A function may
+name type parameters, `fn twice<T>(v: T) -> T`, bound by the types a
+call gives them and compiled once per set of them, on the machinery a
+Field parameter already used; no example has needed one yet, so the
+matrix carries them. A `break` among a loop body's statements stops the
+loop after that iteration and gives that value: the compiler's work
+alone, since a body that breaks carries the value and whether it
+stopped, and the exit test reads the second. And a call to a function
+that is not above the caller says why, rather than that the name is
+unknown: a call to itself says a Kernel has no stack and a `loop` is
+the form. What a `break` costs is the one carried word: the showcase's
+ray march measured about one percent slower with it at 960x540, so the
+hot loops keep their `until`; the chip8 key wait, which is a search,
+reads as one now.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

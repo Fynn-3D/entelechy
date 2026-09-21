@@ -226,7 +226,13 @@ pub fn forms() -> Vec<Form> {
             "loop",
             "expression",
             "loop n with x = init until done { next }",
-            "A bounded fold: `n` is a literal, which is its bound, or any Int expression read once and clamped to 0..=65536; `index()` is the iteration, and `until` stops it early.",
+            "A bounded fold: `n` is a literal, which is its bound, or any Int expression read once and clamped to 0..=65536; `index()` is the iteration, and `until` stops it early, as `break` does from inside.",
+        ),
+        form(
+            "break",
+            "expression",
+            "loop n with x = init { if done { break x; } next }",
+            "Among a loop body's statements: the loop stops after this iteration and gives that value, which is of the type it carries; the iterations after it do not run, and a `break` belongs to the innermost loop around it.",
         ),
         form(
             "each",
@@ -249,8 +255,8 @@ pub fn forms() -> Vec<Form> {
         form(
             "fn",
             "kernel",
-            "fn name(a: Float) -> Float { ... }",
-            "A function of the document or the Kernel; it calls only what is declared above it, and may take a Field parameter.",
+            "fn name(a: Float) -> Float { ... }   fn name<T>(a: T) -> T { ... }",
+            "A function of the document or the Kernel; it calls only what is declared above it, and so never itself, and may take a Field parameter. A `<T>` names a type parameter, bound by the type of the argument written for it, and one instance is compiled per set of types a call gives it.",
         ),
         form(
             "kernel",

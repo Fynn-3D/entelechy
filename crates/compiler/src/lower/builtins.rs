@@ -610,6 +610,26 @@ impl Builder<'_> {
                     })?;
                     return Ok(self.emit(ty, Op::Intrinsic(intrinsic, ids)));
                 }
+                // A Kernel runs where there is no stack, so a function
+                // calls only the ones above it: a call to itself, or to
+                // one declared below, says that rather than that the
+                // name is unknown.
+                if self.name.split('<').next() == Some(name) {
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`{name}` calls itself, and a Kernel has no stack to call into; a `loop` with the work as its carried value is the form"
+                        ),
+                    ));
+                }
+                if self.shared.declared.iter().any(|f| f == name) {
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`{name}` is defined below this one; a function calls only what is defined above it, so no two can call each other"
+                        ),
+                    ));
+                }
                 Err(semantic(
                     span,
                     format!(

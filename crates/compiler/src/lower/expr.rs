@@ -2,7 +2,7 @@
 //! it is lowered, with the diagnostics a mistake in one gets.
 
 use orla_ir::{BinaryOp, Block as IrBlock, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId};
-use orla_language::{Expr, ExprKind, Span};
+use orla_language::{Block, Expr, ExprKind, Span};
 
 use crate::CompileError;
 
@@ -477,6 +477,10 @@ impl Builder<'_> {
                     },
                 ))
             }
+            ExprKind::Break(_) => Err(semantic(
+                expr.span,
+                "`break` gives a `loop` its value; write it among a loop body's statements, as `if done { break x; }`",
+            )),
             ExprKind::Loop {
                 count,
                 name,
@@ -514,19 +518,32 @@ impl Builder<'_> {
                 };
                 let init_id = self.value(init)?;
                 let carried = self.ty(init_id);
+                // A body that breaks carries two things: the value, and
+                // whether the loop has stopped. The `until` test reads
+                // the second, so nothing below the compiler knows.
+                let pair = breaks(body).then(|| self.pair_type(carried));
+                let init_id = match pair {
+                    None => init_id,
+                    Some(pair) => {
+                        let running = self.emit(Type::Bool, Op::Const(Value::Bool(false)));
+                        self.emit(pair, Op::Construct(vec![init_id, running]))
+                    }
+                };
+                let held = pair.unwrap_or(carried);
                 // The values the enclosing loop (or the scan) carries are
                 // read here, before this loop begins, and stand under their
                 // names inside it: they do not change while it runs, and
                 // `Carried` inside would mean this loop's own value.
-                let outer: Vec<(String, Type)> = {
+                let outer: Vec<(String, Type, Option<Type>)> = {
                     let mut seen = std::collections::BTreeSet::new();
                     self.locals
                         .iter()
                         .rev()
                         .filter_map(|(local_name, local)| match local {
-                            Local::Carried { depth, ty } if *depth == self.loops.len() => seen
-                                .insert(local_name.clone())
-                                .then(|| (local_name.clone(), *ty)),
+                            Local::Carried { depth, ty, pair } if *depth == self.loops.len() => {
+                                seen.insert(local_name.clone())
+                                    .then(|| (local_name.clone(), *ty, *pair))
+                            }
                             Local::Value(_) => {
                                 seen.insert(local_name.clone());
                                 None
@@ -536,57 +553,67 @@ impl Builder<'_> {
                         .collect()
                 };
                 let shadows = outer.len();
-                for (outer_name, ty) in outer {
-                    let value = self.emit(ty, Op::Carried);
+                for (outer_name, ty, pair) in outer {
+                    let value = self.read_carried(ty, pair);
                     self.locals.push((outer_name, Local::Value(value)));
                 }
-                let id = self.reserve(carried);
-                self.loops.push(carried);
+                let id = self.reserve(held);
+                self.loops.push(held);
                 self.locals.push((
                     name.value.clone(),
                     Local::Carried {
                         depth: self.loops.len(),
                         ty: carried,
+                        pair,
                     },
                 ));
                 let lowered = (|| {
-                    let until_block = match until {
-                        Some(until) => {
-                            let block = self.nested_expr(until)?;
-                            if self.ty(block.result) != Type::Bool {
+                    let until_block = match pair {
+                        None => match until {
+                            Some(until) => {
+                                let block = self.nested_expr(until)?;
+                                if self.ty(block.result) != Type::Bool {
+                                    return Err(semantic(
+                                        until.span,
+                                        format!(
+                                            "`until` needs a Bool, found {}",
+                                            self.ty(block.result)
+                                        ),
+                                    ));
+                                }
+                                Some(block)
+                            }
+                            None => None,
+                        },
+                        Some(pair) => Some(self.until_or_stopped(until.as_deref(), pair)?),
+                    };
+                    let body_block = match pair {
+                        None => {
+                            let body_block = self.nested(body)?;
+                            let next = self.ty(body_block.result);
+                            if next != carried {
                                 return Err(semantic(
-                                    until.span,
+                                    body.result.span,
                                     format!(
-                                        "`until` needs a Bool, found {}",
-                                        self.ty(block.result)
+                                        "loop carries {} but the body gives {}",
+                                        self.describe(carried),
+                                        self.describe(next)
                                     ),
                                 ));
                             }
-                            Some(block)
+                            body_block
                         }
-                        None => None,
+                        Some(pair) => self.nested_with_break(body, carried, pair)?,
                     };
-                    let body_block = self.nested(body)?;
-                    let next = self.ty(body_block.result);
-                    if next != carried {
-                        return Err(semantic(
-                            body.result.span,
-                            format!(
-                                "loop carries {} but the body gives {}",
-                                self.describe(carried),
-                                self.describe(next)
-                            ),
-                        ));
-                    }
                     Ok((until_block, body_block))
                 })();
                 self.locals.pop();
                 self.locals.truncate(self.locals.len() - shadows);
                 self.loops.pop();
                 let (until_block, body_block) = lowered?;
-                Ok(self.place(
+                let value = self.place(
                     id,
-                    carried,
+                    held,
                     Op::Loop {
                         count: bound,
                         bound: run_time,
@@ -594,7 +621,183 @@ impl Builder<'_> {
                         until: until_block,
                         body: body_block,
                     },
+                );
+                Ok(match pair {
+                    None => value,
+                    Some(_) => self.emit(carried, Op::Extract(value, 0)),
+                })
+            }
+        }
+    }
+
+    /// The exit test of a loop whose body breaks: stopped already, or
+    /// else what the written `until` says.
+    fn until_or_stopped(
+        &mut self,
+        until: Option<&Expr>,
+        pair: Type,
+    ) -> Result<IrBlock, CompileError> {
+        self.buffers.push(Vec::new());
+        let built = (|| {
+            let carried = self.emit(pair, Op::Carried);
+            let stopped = self.emit(Type::Bool, Op::Extract(carried, 1));
+            let Some(until) = until else {
+                return Ok(stopped);
+            };
+            let id = self.reserve(Type::Bool);
+            let then = self.constant_block(true);
+            let otherwise = self.nested_expr(until)?;
+            if self.ty(otherwise.result) != Type::Bool {
+                return Err(semantic(
+                    until.span,
+                    format!("`until` needs a Bool, found {}", self.ty(otherwise.result)),
+                ));
+            }
+            Ok(self.place(
+                id,
+                Type::Bool,
+                Op::If {
+                    condition: stopped,
+                    then,
+                    otherwise,
+                },
+            ))
+        })();
+        let body = self.buffers.pop().expect("the nested buffer is open");
+        Ok(IrBlock {
+            body,
+            result: built?,
+        })
+    }
+
+    /// A loop body that may `break`, lowered into its own block: what it
+    /// gives is the next carried value and whether the loop stopped.
+    fn nested_with_break(
+        &mut self,
+        block: &Block,
+        carried: Type,
+        pair: Type,
+    ) -> Result<IrBlock, CompileError> {
+        self.buffers.push(Vec::new());
+        let result = self.scoped(block, |builder, result| {
+            builder.result_with_break(result, carried, pair)
+        });
+        let body = self.buffers.pop().expect("the nested buffer is open");
+        Ok(IrBlock {
+            body,
+            result: result?,
+        })
+    }
+
+    /// The result of a loop body that may `break`: every path gives the
+    /// carried value and whether it stopped, so the paths still agree on
+    /// one type and only the one taken runs.
+    fn result_with_break(
+        &mut self,
+        expr: &Expr,
+        carried: Type,
+        pair: Type,
+    ) -> Result<ValueId, CompileError> {
+        match &expr.kind {
+            ExprKind::Break(value) => {
+                let id = self.value(value)?;
+                if self.ty(id) != carried {
+                    return Err(semantic(
+                        value.span,
+                        format!(
+                            "loop carries {} but `break` gives {}",
+                            self.describe(carried),
+                            self.describe(self.ty(id))
+                        ),
+                    ));
+                }
+                let stopped = self.emit(Type::Bool, Op::Const(Value::Bool(true)));
+                Ok(self.emit(pair, Op::Construct(vec![id, stopped])))
+            }
+            ExprKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let condition_id = self.value(condition)?;
+                if self.ty(condition_id) != Type::Bool {
+                    return Err(semantic(
+                        condition.span,
+                        format!(
+                            "`if` needs a Bool condition, found {}",
+                            self.ty(condition_id)
+                        ),
+                    ));
+                }
+                let id = self.reserve(pair);
+                let then_block = self.nested_with_break(then, carried, pair)?;
+                let otherwise_block = self.nested_with_break(otherwise, carried, pair)?;
+                Ok(self.place(
+                    id,
+                    pair,
+                    Op::If {
+                        condition: condition_id,
+                        then: then_block,
+                        otherwise: otherwise_block,
+                    },
                 ))
+            }
+            ExprKind::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => {
+                let scrutinee_id = self.value(scrutinee)?;
+                if self.ty(scrutinee_id) != Type::Int {
+                    return Err(semantic(
+                        scrutinee.span,
+                        format!(
+                            "`match` takes an Int, found {}",
+                            self.describe(self.ty(scrutinee_id))
+                        ),
+                    ));
+                }
+                let id = self.reserve(pair);
+                let mut seen: std::collections::BTreeMap<i32, Span> =
+                    std::collections::BTreeMap::new();
+                let mut lowered = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    for value in &arm.values {
+                        if seen.insert(value.value, value.span).is_some() {
+                            return Err(semantic(
+                                value.span,
+                                format!("`match` already has an arm for {}", value.value),
+                            ));
+                        }
+                    }
+                    let block = self.nested_with_break(&arm.body, carried, pair)?;
+                    lowered.push((arm.values.iter().map(|v| v.value).collect(), block));
+                }
+                let otherwise_block = self.nested_with_break(otherwise, carried, pair)?;
+                Ok(self.place(
+                    id,
+                    pair,
+                    Op::Match {
+                        scrutinee: scrutinee_id,
+                        arms: lowered,
+                        otherwise: otherwise_block,
+                    },
+                ))
+            }
+            _ => {
+                let id = self.value(expr)?;
+                if self.ty(id) != carried {
+                    return Err(semantic(
+                        expr.span,
+                        format!(
+                            "loop carries {} but the body gives {}",
+                            self.describe(carried),
+                            self.describe(self.ty(id))
+                        ),
+                    ));
+                }
+                let running = self.emit(Type::Bool, Op::Const(Value::Bool(false)));
+                Ok(self.emit(pair, Op::Construct(vec![id, running])))
             }
         }
     }
@@ -627,4 +830,23 @@ impl Builder<'_> {
             .ok_or_else(|| semantic(span, format!("cannot apply `{symbol}` to {ty}")))?;
         Ok(self.emit(result, Op::Unary(op, inner)))
     }
+}
+
+/// Whether a block's result may `break`: the block's own result and the
+/// arms of the `if`s and `match`es it ends in. A nested `loop` holds its
+/// own breaks.
+fn breaks(block: &Block) -> bool {
+    fn of(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Break(_) => true,
+            ExprKind::If {
+                then, otherwise, ..
+            } => breaks(then) || breaks(otherwise),
+            ExprKind::Match {
+                arms, otherwise, ..
+            } => arms.iter().any(|arm| breaks(&arm.body)) || breaks(otherwise),
+            _ => false,
+        }
+    }
+    of(&block.result)
 }

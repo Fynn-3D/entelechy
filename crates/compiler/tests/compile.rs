@@ -895,3 +895,90 @@ fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_nam
         "`at` is a builtin of the language; a function cannot take its name (a math builtin's, like `step`, it can, and stands for it here)"
     );
 }
+
+#[test]
+fn a_function_calls_only_what_is_defined_above_it() {
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; fn fact(n: Int) -> Int { return if n <= 1 { 1 } else { n * fact(n - 1) }; } compute { return fact(element()); } }",
+    );
+    assert!(
+        message.contains("calls itself") && message.contains("no stack"),
+        "{message}"
+    );
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; fn a(n: Int) -> Int { return b(n); } fn b(n: Int) -> Int { return n; } compute { return a(element()); } }",
+    );
+    assert!(message.contains("defined below this one"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return nowhere(element()); } }",
+    );
+    assert!(message.contains("is not a builtin"), "{message}");
+}
+
+#[test]
+fn a_type_parameter_is_bound_by_the_call() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>;
+            fn twice<T>(v: T) -> T { return v + v; }
+            compute { let i = element(); return twice(float(i)) + twice(vec2(1.0, 2.0)).x + float(twice(i)); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = module.to_string();
+    assert!(
+        text.contains("twice<Float>")
+            && text.contains("twice<Vec2>")
+            && text.contains("twice<Int>"),
+        "{text}"
+    );
+    assert_eq!(module.functions.len(), 3, "one instance a type: {text}");
+
+    // The same types again are the same instance.
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn twice<T>(v: T) -> T { return v + v; } compute { return twice(1.0) + twice(2.0); } }",
+    )
+    .unwrap();
+    assert_eq!(module.functions.len(), 1);
+
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn pick<T>(a: T, b: T) -> T { return a; } compute { return pick(1.0, element()); } }",
+    );
+    assert!(message.contains("as Int here, but as Float"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn make<T>(n: Int) -> T { return n; } compute { return make(1); } }",
+    );
+    assert!(message.contains("which no argument binds"), "{message}");
+    // A body that does not hold for the types it was given says so, and
+    // says which instance it was lowering.
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn twice<T>(v: T) -> T { return v + v; } compute { return float(twice(element() > 2)); } }",
+    );
+    assert!(
+        message.contains("cannot apply `+`") && message.contains("in `twice` with `T` as Bool"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_break_stops_its_own_loop_and_gives_its_value() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>;
+            compute { let i = element(); return loop 20 with best = -1 { let c = i + index(); if c % 7 == 0 { break c; } best }; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    // The loop carries the value and whether it stopped; the test reads
+    // the second, so no backend learns a new operation.
+    let text = module.to_string();
+    assert!(text.contains("(Int, stopped)"), "{text}");
+
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element(); if i > 2 { break i; } return i; } }",
+    );
+    assert!(message.contains("gives a `loop` its value"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { return loop 4 with a = 0 { if a > 2 { break 1.5; } a + 1 }; } }",
+    );
+    assert!(
+        message.contains("loop carries Int but `break` gives Float"),
+        "{message}"
+    );
+}
