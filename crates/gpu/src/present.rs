@@ -3,7 +3,9 @@
 //! The Player hands the backend a window; the backend configures a surface
 //! on it and draws the output image with one fullscreen triangle whose
 //! fragment shader samples the image's storage buffer directly, letterboxed
-//! and nearest-neighbour scaled. The image never crosses to the Host.
+//! and nearest-neighbour scaled. The image never crosses to the Host. An
+//! overlay, `0x00RRGGBB` pixels the caller rendered, may sit in the
+//! window's top-left corner over the picture.
 
 use std::any::Any;
 
@@ -45,11 +47,13 @@ struct Frame {
     sizes: vec4<f32>,
     // placement x, y, width, height
     place: vec4<f32>,
-    // 1 when the surface encodes sRGB itself (values are written linear)
+    // 1 when the surface encodes sRGB itself (values are written linear);
+    // then the overlay's width and height, zero for none
     flags: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> image: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> overlay: array<u32>;
 
 struct Vertex { @builtin(position) position: vec4<f32> };
 
@@ -60,8 +64,20 @@ fn vs(@builtin(vertex_index) index: u32) -> Vertex {
     return Vertex(vec4<f32>(corners[index], 0.0, 1.0));
 }
 
+fn encode(c: vec3<f32>) -> vec4<f32> {
+    if (frame.flags.x > 0.5) {
+        return vec4<f32>(pow(c, vec3<f32>(2.2)), 1.0);
+    }
+    return vec4<f32>(c, 1.0);
+}
+
 @fragment
 fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    if (position.x < frame.flags.y && position.y < frame.flags.z) {
+        let o = overlay[u32(position.y) * u32(frame.flags.y) + u32(position.x)];
+        let c = vec3<f32>(f32((o >> 16u) & 255u), f32((o >> 8u) & 255u), f32(o & 255u)) / 255.0;
+        return encode(c);
+    }
     let p = position.xy - frame.place.xy;
     if (p.x < 0.0 || p.y < 0.0 || p.x >= frame.place.z || p.y >= frame.place.w) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -71,12 +87,21 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let x = min(u32(p.x * frame.sizes.z / frame.place.z), w - 1u);
     let y = min(u32(p.y * frame.sizes.w / frame.place.w), h - 1u);
     let c = clamp(image[y * w + x].rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-    if (frame.flags.x > 0.5) {
-        return vec4<f32>(pow(c, vec3<f32>(2.2)), 1.0);
-    }
-    return vec4<f32>(c, 1.0);
+    return encode(c);
 }
 ";
+
+/// Pixels drawn over the window's top-left corner: `0x00RRGGBB`, `width`
+/// per row.
+#[derive(Clone, Copy, Debug)]
+pub struct Overlay<'a> {
+    /// The pixels, row by row.
+    pub pixels: &'a [u32],
+    /// Width in window pixels.
+    pub width: u32,
+    /// Height in window pixels.
+    pub height: u32,
+}
 
 /// A window surface the backend draws resident images into.
 pub struct Presenter {
@@ -140,6 +165,16 @@ impl GpuBackend {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -181,10 +216,12 @@ impl GpuBackend {
         })
     }
 
-    /// Draws a resident image into the presenter's surface. `device` is the
-    /// image's resident object from the Host. Returns where the image was
-    /// placed, or `None` when the window cannot take a frame right now
-    /// (occluded, or the surface timed out). Nothing is read back.
+    /// Draws a resident image into the presenter's surface, with `overlay`
+    /// over its top-left corner when given. `device` is the image's
+    /// resident object from the Host. Returns where the image was placed,
+    /// or `None` when the window cannot take a frame right now (occluded,
+    /// or the surface timed out). Nothing is read back.
+    #[allow(clippy::too_many_arguments)]
     pub fn present(
         &self,
         presenter: &mut Presenter,
@@ -193,6 +230,7 @@ impl GpuBackend {
         height: u32,
         window_width: u32,
         window_height: u32,
+        overlay: Option<Overlay<'_>>,
     ) -> Result<Option<Placement>, String> {
         let image = device
             .downcast_ref::<DeviceImage>()
@@ -217,12 +255,17 @@ impl GpuBackend {
             placement.width as f32,
             placement.height as f32,
             presenter.srgb as u8 as f32,
-            0.0,
-            0.0,
+            overlay.map_or(0.0, |o| o.width as f32),
+            overlay.map_or(0.0, |o| o.height as f32),
             0.0,
         ];
         let bytes: Vec<u8> = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
         let uniform = self.buffer("blit frame", &bytes, wgpu::BufferUsages::UNIFORM);
+        let overlay_bytes: Vec<u8> = overlay
+            .map(|o| o.pixels.iter().flat_map(|p| p.to_le_bytes()).collect())
+            .unwrap_or_else(|| vec![0; 4]);
+        let overlay_buffer =
+            self.buffer("blit overlay", &overlay_bytes, wgpu::BufferUsages::STORAGE);
         let bind_group = gpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("orla blit"),
             layout: &presenter.layout,
@@ -234,6 +277,10 @@ impl GpuBackend {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: image.buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: overlay_buffer.as_entire_binding(),
                 },
             ],
         });

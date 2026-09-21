@@ -174,7 +174,14 @@ and `scale()`, so a toolbar laid out in units of `scale()` keeps its
 size on screen. On the GPU the
 window is drawn from the resident output directly; the title shows the
 presentation path and how many frames had to be downloaded. The pointer and
-keys reach Kernels that declare `input.read`; F5 resets Graph state; Escape
+keys reach Kernels that declare `input.read`; F5 resets Graph state; F10
+shows one line of frame data over the picture (the interval between
+frames and the frame rate, the evaluate and present times, each
+smoothed, present on the device including the wait for the display;
+the backend, the window and its scale, the shown image's size, what ran,
+was reused and was fused, `async` runs going, downloads, the session
+time), the interval being the true frame cost since the picture is
+presented on the device without a readback; Escape
 closes the window.
 
 A gamepad is another keyboard: the D-pad and the left stick are the

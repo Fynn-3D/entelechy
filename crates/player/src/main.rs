@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 
 use orla::session::Session;
 use orla_gpu::GpuBackend;
-use orla_gpu::present::Presenter;
+use orla_gpu::present::{Overlay, Presenter};
 use orla_player::audio::Audio;
 use orla_player::gamepad::Gamepad;
+use orla_player::hud::{self, Panel, Stats};
 use orla_player::{Placement, key_code, to_output};
 use orla_runtime::{Context, InputState};
 use serde_json::Value as Json;
@@ -32,7 +33,8 @@ usage:
       window's size in pixels and its scale factor, which a node's `domain`
       may take as `window()`; --window opens the window at that logical size
       instead of the output's size times --scale. F5 resets state;
-      Tab cycles the preview through the graph's nodes and back to the output.
+      Tab cycles the preview through the graph's nodes and back to the output;
+      F10 shows a line of frame data over the picture.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window, and on every connection to --listen <host:port>: an agent's
@@ -156,6 +158,11 @@ struct Player {
     gamepad: Option<Gamepad>,
     audio_allowed: bool,
     audio_failed: bool,
+    /// The F10 line: on or off, what it measures, and its pixels for this
+    /// frame when on.
+    hud: bool,
+    stats: Stats,
+    panel: Option<Panel>,
 }
 
 impl Player {
@@ -199,6 +206,7 @@ impl Player {
         for event in &events {
             eprintln!("{event}");
         }
+        self.stats.begin();
         let started = Instant::now();
         let context = self.context();
         self.input.wheel = [0.0, 0.0];
@@ -214,7 +222,10 @@ impl Player {
                     .as_ref()
                     .and_then(|node| self.session.cached(node, "result"))
                     .unwrap_or(displayed);
+                self.panel = self.hud.then(|| self.panel_for(&report, target, &context));
+                let presenting = Instant::now();
                 let shown = self.show(target);
+                self.stats.record(elapsed, presenting.elapsed());
                 self.play(&report);
                 if self.last_title.elapsed() > Duration::from_millis(250) {
                     let executed = report
@@ -329,6 +340,40 @@ impl Player {
         self.last_title = Instant::now() - Duration::from_secs(1);
     }
 
+    /// The F10 line for this frame: the smoothed times, then the backend,
+    /// the window, the shown image, what ran, and what waits off the frame.
+    fn panel_for(
+        &self,
+        report: &orla_graph::Report,
+        shown: orla_runtime::Handle,
+        context: &Context,
+    ) -> Panel {
+        let host = self.session.runtime().host();
+        let (width, height) = host.image_size(shown).unwrap_or((0, 0));
+        let fused: usize = report
+            .fused
+            .iter()
+            .map(|(_, absorbed)| absorbed.len())
+            .sum();
+        let view = match &self.preview {
+            Some(node) => format!("view {node}"),
+            None => "output".to_string(),
+        };
+        let rest = format!(
+            "{} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | downloads {} | t {:.1} s",
+            self.session.runtime().backend_name(),
+            context.window[0],
+            context.window[1],
+            context.scale,
+            report.executed.len(),
+            report.reused.len(),
+            report.pending.len(),
+            self.downloads,
+            context.time,
+        );
+        hud::panel(&self.stats.line(&rest), context.scale.round() as u32)
+    }
+
     /// Shows an output image: directly from the device when it is resident
     /// and a presenter exists, otherwise by downloading it and blitting.
     /// Returns a short description of the path taken.
@@ -346,7 +391,20 @@ impl Player {
                 let size = window.inner_size();
                 let backend = self.session.runtime().backend().as_any();
                 if let Some(gpu) = backend.downcast_ref::<GpuBackend>() {
-                    match gpu.present(presenter, device, width, height, size.width, size.height) {
+                    let overlay = self.panel.as_ref().map(|panel| Overlay {
+                        pixels: &panel.pixels,
+                        width: panel.width,
+                        height: panel.height,
+                    });
+                    match gpu.present(
+                        presenter,
+                        device,
+                        width,
+                        height,
+                        size.width,
+                        size.height,
+                        overlay,
+                    ) {
                         Ok(Some(placement)) => {
                             self.last_size = (width, height);
                             self.placement = placement;
@@ -485,6 +543,9 @@ impl Player {
             size.height,
             &mut buffer,
         );
+        if let Some(panel) = &self.panel {
+            hud::stamp(panel, &mut buffer, size.width, size.height);
+        }
         let _ = buffer.present();
     }
 
@@ -601,6 +662,12 @@ impl ApplicationHandler for Player {
                             self.cycle_preview();
                         }
                     }
+                    Key::Named(NamedKey::F10) => {
+                        if down {
+                            self.hud = !self.hud;
+                            self.panel = None;
+                        }
+                    }
                     Key::Named(named) => {
                         if let Some(code) = key_code(&format!("{named:?}")) {
                             self.input.set_key(code, down);
@@ -704,6 +771,9 @@ fn main() -> ExitCode {
         gamepad,
         audio_allowed: !options.no_audio,
         audio_failed: false,
+        hud: false,
+        stats: Stats::default(),
+        panel: None,
     };
     for (name, value) in &options.params {
         player.session.set_param(name, *value);

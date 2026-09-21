@@ -4,6 +4,7 @@
 
 pub mod audio;
 pub mod gamepad;
+pub mod hud;
 
 pub use orla_gpu::present::{Placement, placement};
 
