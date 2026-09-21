@@ -599,13 +599,31 @@ to 3.40 ms on the JIT and from 55.5 to 16.1 on the interpreter; the
 seconds. A grid was already split across cores, so pictures did not
 move, and `particles`, which is mostly a scatter, did not either.
 
-What remains against the old one is the shape of the call: it hands
-Cranelift a loop over the rows and we call a compiled function once an
-element, so a million elements is a million calls. Its million rows
-take 0.270 ms on the CPU where ours take 3.40, and 0.275 ms on the GPU
-where ours take 0.64. The next step, if this is worth it, is an entry
-that takes a range and loops inside, which is also what would let
-Cranelift vectorize the body.
+Then the rest of that gap, measured one piece at a time rather than
+guessed at. A map's entry takes a range and walks it itself, so a
+million elements is one call and not a million (`map_run`); `sample`
+and an `Int` `at` are loads where they were calls into Rust through a
+stack slot (`element_words`); a map with one output writes straight
+into the Field it just created, where it used to fill a buffer of its
+own, gather that into a second, and copy that into the Field; and the
+Host keeps the words a released Field gave back, so the Field a node
+makes every frame is the same memory every frame. What each was worth,
+on the old benchmark's million rows: the range 3.40 to 3.15, the loads
+3.15 to 2.84, writing in place 2.84 to 0.64, the spare buffers 0.64 to
+0.58. The interpreter kept the copies it needs to stay safe but writes
+its one output whole rather than gathering it first.
+
+Where that leaves the comparison, the same work on the same machine: a
+million rows of `vec2`, each moved by its own velocity, fed back, no
+picture. The old Orla takes 0.270 ms on the CPU and 0.275 on the GPU;
+this one takes 0.58 on the JIT and 0.70 on the GPU, having started the
+round at 6.35 and 0.63. What is left of the difference is two things:
+ten threads are made and joined for every map of every node (a
+measurement of the same work on one thread says the ten cost about a
+quarter of a millisecond to make), and a frame here is a graph
+evaluation with a state commit rather than a tick of one kernel. A
+pool of threads that stay is the next thing worth doing, and it is
+worth about that quarter.
 
 A million of something, which is the number other engines are held to:
 `million`, a million bodies each with a place, a speed and a tint,
@@ -660,16 +678,14 @@ stopped. An agent that republishes once a second would carry a few
 megabytes an hour of that, which is the allocator's business and not a
 version's.
 
-Seen once, not again: `crates/cli/tests/protocol.rs`
-`fields_come_in_through_write_and_buttons_reach_kernels` failed in a
-full `cargo test --workspace` that ran beside a release replay loop:
-the served child's stdout ended before its first answer (`serve`
-defaults to the CPU backend, so not the GPU). It did not come back in
-25 runs of that test binary under GPU test load nor in two full
-suites under the replay loop. The harness now drains the child's
-stderr on a thread and, when an answer is missing, reports the child's
-exit status and everything it said, so a next time is a diagnosis
-rather than a position.
+Seen once, then found: the protocol test whose served child's answer
+went missing. `quit` on standard input ended the process from the
+request loop while a thread of its own was still writing the answer to
+it, so about one run in a hundred lost the last line. An answer to a
+local request is written where it is made now (`protocol::Reply`), and
+a connection's answers still go through its own writer, which is what
+a socket needs. Two tests in that binary also shared a scratch
+directory and deleted it under each other; each has its own now.
 
 Not hand-tested: the Player's real right and middle buttons and wheel,
 gamepad hardware (none connected), and a live resize of a window-sized

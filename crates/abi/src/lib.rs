@@ -670,6 +670,22 @@ impl<'a> Scope<'a> {
         Ok(self.host.create(schema, domain)?)
     }
 
+    /// A new Field whose words are whatever buffer it was given: for a
+    /// backend that writes every one of them before anything reads it.
+    /// Requires `field.write`.
+    pub fn create_for_fill(&mut self, schema: Schema, domain: Domain) -> Result<Handle, AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self.host.create_for_fill(schema, domain)?)
+    }
+
+    /// The words of a Field this scope created, to fill in place: what a
+    /// backend writes into when it would otherwise fill a buffer of its
+    /// own and copy it in. Requires `field.write`.
+    pub fn words_mut(&mut self, field: Handle) -> Result<&mut [u32], AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self.host.words_mut(field)?)
+    }
+
     /// Replaces every word of a Field this scope created. Requires
     /// `field.write`.
     pub fn write_all(&mut self, field: Handle, words: &[u32]) -> Result<(), AbiError> {

@@ -40,8 +40,6 @@ const OVERFLOW: i64 = 2;
 /// The imported helpers, by function id.
 struct Imports {
     read: FuncId,
-    read_rows: FuncId,
-    sample: FuncId,
     linear: FuncId,
     key: FuncId,
     button: FuncId,
@@ -67,7 +65,8 @@ pub struct Code {
 enum Kind {
     /// A function: the context, its result's slot, its arguments' words.
     Function,
-    /// A map's entry: the context, `x`, `y`, `z`, the output slot.
+    /// A map's entry: the context, the run's first `x`, its `y` and
+    /// `z`, how many elements it holds, and where their words go.
     Map,
     /// A scan's entry: the context, the index, the carried words, the
     /// output slot.
@@ -98,8 +97,6 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     };
     let (f, i) = (types::F32, types::I32);
     let read_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
-    let rows_sig = sig(&[ptr, i, i, ptr], &[]);
-    let sample_sig = sig(&[ptr, i, i, i, i, ptr], &[]);
     let key_sig = sig(&[ptr, i], &[i]);
     let put_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
     let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
@@ -107,8 +104,6 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let binary_sig = sig(&[f, f], &[f]);
     let imports = Imports {
         read: declare(&mut jit, "orla_jit_read", &read_sig)?,
-        read_rows: declare(&mut jit, "orla_jit_read_rows", &rows_sig)?,
-        sample: declare(&mut jit, "orla_jit_sample", &sample_sig)?,
         linear: declare(&mut jit, "orla_jit_linear", &read_sig)?,
         key: declare(&mut jit, "orla_jit_key", &key_sig)?,
         button: declare(&mut jit, "orla_jit_button", &key_sig)?,
@@ -158,7 +153,10 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let entry_signature = if scan {
         sig(&[ptr, i, ptr, ptr], &[])
     } else {
-        sig(&[ptr, i, i, i, ptr], &[])
+        // A map's entry walks a run of elements itself: the context, the
+        // first `x`, the `y` and `z` they share, how many there are, and
+        // where their words go.
+        sig(&[ptr, i, i, i, i, ptr], &[])
     };
     let entry_id = jit
         .declare_function("entry", Linkage::Local, &entry_signature)
@@ -366,8 +364,6 @@ struct Fx<'a, 'b> {
     coords: Option<(Value, Value, Value, Value)>,
     calls: Vec<FuncRef>,
     read: FuncRef,
-    read_rows: FuncRef,
-    sample: FuncRef,
     linear: FuncRef,
     key: FuncRef,
     button: FuncRef,
@@ -379,6 +375,10 @@ struct Fx<'a, 'b> {
     fmodf: FuncRef,
     scratch: StackSlot,
     flags: MemFlags,
+    /// What the context and the views hold, which nothing writes while
+    /// an execution runs: marked read-only so the loads a loop repeats
+    /// are hoisted out of it rather than done again every element.
+    settled: MemFlags,
 }
 
 impl<'a, 'b> Fx<'a, 'b> {
@@ -400,8 +400,6 @@ impl<'a, 'b> Fx<'a, 'b> {
             jit.declare_func_in_func(id, b.func)
         };
         let read = import(jit, &mut b, imports.read);
-        let read_rows = import(jit, &mut b, imports.read_rows);
-        let sample = import(jit, &mut b, imports.sample);
         let linear = import(jit, &mut b, imports.linear);
         let key = import(jit, &mut b, imports.key);
         let button = import(jit, &mut b, imports.button);
@@ -443,8 +441,6 @@ impl<'a, 'b> Fx<'a, 'b> {
             coords: None,
             calls,
             read,
-            read_rows,
-            sample,
             linear,
             key,
             button,
@@ -456,6 +452,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             fmodf,
             scratch,
             flags: MemFlags::trusted(),
+            settled: MemFlags::trusted().with_readonly(),
         }
     }
 
@@ -468,11 +465,11 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.types = vec![Type::Float; slots];
         let block = self.b.current_block().expect("entry block");
         let params: Vec<Value> = self.b.block_params(block).to_vec();
+        if kind == Kind::Map {
+            return self.map_run(function, &params);
+        }
         let out = match kind {
-            Kind::Map => {
-                self.coords = Some((params[1], params[2], params[3], params[4]));
-                params[4]
-            }
+            Kind::Map => unreachable!("a map's entry walks its run"),
             Kind::Scan => {
                 // The step's coordinates are its index, as the interpreter
                 // has them; the carried words are loaded once.
@@ -517,6 +514,68 @@ impl<'a, 'b> Fx<'a, 'b> {
                 offset += 4;
             }
         }
+        self.b.ins().return_(&[]);
+        self.b.finalize();
+    }
+
+    /// A map's entry: the body under a loop over the run of elements it
+    /// was given, so the reads the body does not repeat are hoisted out
+    /// of it and a million elements is one call rather than a million.
+    fn map_run(mut self, function: &Function, params: &[Value]) {
+        let (x0, y, z, count, out0) = (params[1], params[2], params[3], params[4], params[5]);
+        let header = self.b.create_block();
+        let body_block = self.b.create_block();
+        let failed = self.b.create_block();
+        let exit = self.b.create_block();
+        self.b.append_block_param(header, types::I32);
+        self.b.append_block_param(header, self.ptr);
+        self.b.append_block_param(failed, types::I32);
+        let zero = self.i32c(0);
+        self.b.ins().jump(header, &[zero.into(), out0.into()]);
+        self.b.switch_to_block(header);
+        let taken = self.b.block_params(header)[0];
+        let out = self.b.block_params(header)[1];
+        let more = self.b.ins().icmp(IntCC::UnsignedLessThan, taken, count);
+        self.b.ins().brif(more, body_block, &[], exit, &[]);
+        self.b.switch_to_block(body_block);
+        self.b.seal_block(body_block);
+        let x = self.b.ins().iadd(x0, taken);
+        self.coords = Some((x, y, z, out));
+        self.block(&function.body);
+        let mut offset = 0i32;
+        for result in &function.results {
+            for word in self.values[result.0 as usize].clone() {
+                self.b.ins().store(self.flags, word, out, offset);
+                offset += 4;
+            }
+        }
+        // A failure stops the run where it happened, so the element the
+        // caller names is the element that failed.
+        let error = self
+            .b
+            .ins()
+            .load(types::I32, self.flags, self.ctx, offsets::ERROR);
+        let stop = self.b.ins().icmp_imm(IntCC::NotEqual, error, 0);
+        let next = self.b.ins().iadd_imm(taken, 1);
+        // What the stores just wrote is what one element takes.
+        let step = self.b.ins().iadd_imm(out, i64::from(offset));
+        self.b.ins().brif(
+            stop,
+            failed,
+            &[x.into()],
+            header,
+            &[next.into(), step.into()],
+        );
+        self.b.seal_block(header);
+        self.b.switch_to_block(failed);
+        self.b.seal_block(failed);
+        let at = self.b.block_params(failed)[0];
+        self.b
+            .ins()
+            .store(self.flags, at, self.ctx, offsets::ERROR_AT);
+        self.b.ins().jump(exit, &[]);
+        self.b.switch_to_block(exit);
+        self.b.seal_block(exit);
         self.b.ins().return_(&[]);
         self.b.finalize();
     }
@@ -723,11 +782,83 @@ impl<'a, 'b> Fx<'a, 'b> {
     }
 
     /// The view of an input: its address.
+    /// The words of one element of an input, loaded where the helper
+    /// that copies them would have been called: the extent and the
+    /// stride come from the view, and the element is clamped into the
+    /// Field exactly as `orla_jit_sample` and `orla_jit_read_rows` do.
+    /// A read is a handful of loads, and the loop around it keeps the
+    /// view's own loads in registers.
+    fn element_words(&mut self, input: u32, index: Value, tys: &[types::Type]) -> Vec<Value> {
+        let view = self.view(input);
+        let words = self
+            .b
+            .ins()
+            .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
+        let stride = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, view, offsets::VIEW_STRIDE);
+        let slot = self.b.ins().imul(index, stride);
+        let bytes = self.b.ins().imul_imm(slot, 4);
+        let offset = self.b.ins().uextend(self.ptr, bytes);
+        let at = self.b.ins().iadd(words, offset);
+        tys.iter()
+            .enumerate()
+            .map(|(k, t)| self.b.ins().load(*t, self.flags, at, (k * 4) as i32))
+            .collect()
+    }
+
+    /// This element's own place in an input, clamped into it: what
+    /// `sample` reads.
+    fn sample_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
+        let view = self.view(input);
+        let extent =
+            |fx: &mut Self, offset: i32| fx.b.ins().load(types::I32, fx.flags, view, offset);
+        let width = extent(self, offsets::VIEW_WIDTH);
+        let height = extent(self, offsets::VIEW_HEIGHT);
+        let depth = extent(self, offsets::VIEW_DEPTH);
+        let last = |fx: &mut Self, size: Value, at: Value| {
+            let end = fx.b.ins().iadd_imm(size, -1);
+            fx.b.ins().umin(at, end)
+        };
+        let cx = last(self, width, x);
+        let cy = last(self, height, y);
+        let cz = last(self, depth, z);
+        let layer = self.b.ins().imul(cz, height);
+        let row = self.b.ins().iadd(layer, cy);
+        let scaled = self.b.ins().imul(row, width);
+        self.b.ins().iadd(scaled, cx)
+    }
+
+    /// An `Int` address into a Field, clamped to its elements: what `at`
+    /// reads over rows.
+    fn rows_index(&mut self, input: u32, address: Value) -> Value {
+        let view = self.view(input);
+        let width = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, view, offsets::VIEW_WIDTH);
+        let height = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, view, offsets::VIEW_HEIGHT);
+        let depth = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, view, offsets::VIEW_DEPTH);
+        let rows = self.b.ins().imul(width, height);
+        let count = self.b.ins().imul(rows, depth);
+        let last = self.b.ins().iadd_imm(count, -1);
+        let zero = self.i32c(0);
+        let floored = self.b.ins().smax(address, zero);
+        self.b.ins().smin(floored, last)
+    }
+
     fn view(&mut self, input: u32) -> Value {
         let views = self
             .b
             .ins()
-            .load(self.ptr, self.flags, self.ctx, offsets::VIEWS);
+            .load(self.ptr, self.settled, self.ctx, offsets::VIEWS);
         self.b
             .ins()
             .iadd_imm(views, offsets::VIEW_SIZE * input as i64)
@@ -760,7 +891,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let base = self
                     .b
                     .ins()
-                    .load(self.ptr, self.flags, self.ctx, offsets::PARAMS);
+                    .load(self.ptr, self.settled, self.ctx, offsets::PARAMS);
                 word_types(self.module, ty)
                     .iter()
                     .enumerate()
@@ -1121,15 +1252,15 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let w = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, self.ctx, offsets::WIDTH);
+                    .load(types::I32, self.settled, self.ctx, offsets::WIDTH);
                 let h = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, self.ctx, offsets::HEIGHT);
+                    .load(types::I32, self.settled, self.ctx, offsets::HEIGHT);
                 let d = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, self.ctx, offsets::DEPTH);
+                    .load(types::I32, self.settled, self.ctx, offsets::DEPTH);
                 match ty {
                     Type::Int => vec![w],
                     Type::Vec2 => vec![self.u32_to_f32(w), self.u32_to_f32(h)],
@@ -1141,11 +1272,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let w = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, self.ctx, offsets::WIDTH);
+                    .load(types::I32, self.settled, self.ctx, offsets::WIDTH);
                 let h = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, self.ctx, offsets::HEIGHT);
+                    .load(types::I32, self.settled, self.ctx, offsets::HEIGHT);
                 let zh = self.b.ins().imul(z, h);
                 let row = self.b.ins().iadd(zh, y);
                 let base = self.b.ins().imul(row, w);
@@ -1154,42 +1285,44 @@ impl<'a, 'b> Fx<'a, 'b> {
             Op::Time => vec![
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::TIME),
+                    .load(types::F32, self.settled, self.ctx, offsets::TIME),
             ],
             Op::Rate => vec![
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::RATE),
+                    .load(types::F32, self.settled, self.ctx, offsets::RATE),
             ],
             Op::Pointer => vec![
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::POINTER),
+                    .load(types::F32, self.settled, self.ctx, offsets::POINTER),
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::POINTER + 4),
+                    .load(types::F32, self.settled, self.ctx, offsets::POINTER + 4),
             ],
             Op::Wheel => vec![
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::WHEEL),
+                    .load(types::F32, self.settled, self.ctx, offsets::WHEEL),
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::WHEEL + 4),
+                    .load(types::F32, self.settled, self.ctx, offsets::WHEEL + 4),
             ],
             Op::Window => vec![
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::WINDOW),
+                    .load(types::F32, self.settled, self.ctx, offsets::WINDOW),
                 self.b
                     .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::WINDOW + 4),
+                    .load(types::F32, self.settled, self.ctx, offsets::WINDOW + 4),
             ],
-            Op::Scale => vec![
-                self.b
-                    .ins()
-                    .load(types::F32, self.flags, self.ctx, offsets::SCALE),
-            ],
+            Op::Scale => {
+                vec![
+                    self.b
+                        .ins()
+                        .load(types::F32, self.settled, self.ctx, offsets::SCALE),
+                ]
+            }
             Op::PointerDown => {
                 let zero = self.i32c(0);
                 let call = self.b.ins().call(self.button, &[self.ctx, zero]);
@@ -1210,15 +1343,15 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let w = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, view, offsets::VIEW_WIDTH);
+                    .load(types::I32, self.settled, view, offsets::VIEW_WIDTH);
                 let h = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, view, offsets::VIEW_HEIGHT);
+                    .load(types::I32, self.settled, view, offsets::VIEW_HEIGHT);
                 let d = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, view, offsets::VIEW_DEPTH);
+                    .load(types::I32, self.settled, view, offsets::VIEW_DEPTH);
                 let wh = self.b.ins().imul(w, h);
                 vec![self.b.ins().imul(wh, d)]
             }
@@ -1227,15 +1360,15 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let w = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, view, offsets::VIEW_WIDTH);
+                    .load(types::I32, self.settled, view, offsets::VIEW_WIDTH);
                 let h = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, view, offsets::VIEW_HEIGHT);
+                    .load(types::I32, self.settled, view, offsets::VIEW_HEIGHT);
                 let d = self
                     .b
                     .ins()
-                    .load(types::I32, self.flags, view, offsets::VIEW_DEPTH);
+                    .load(types::I32, self.settled, view, offsets::VIEW_DEPTH);
                 match ty {
                     Type::Int => vec![w],
                     Type::Vec2 => vec![self.u32_to_f32(w), self.u32_to_f32(h)],
@@ -1244,13 +1377,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Sample(input) => {
                 let (x, y, z, _) = self.coords.expect("entry point");
-                let out = self.scratch_addr();
-                let index = self.i32c(*input as i64);
-                self.b
-                    .ins()
-                    .call(self.sample, &[self.ctx, index, x, y, z, out]);
+                let index = self.sample_index(*input, x, y, z);
                 let tys = word_types(self.module, ty);
-                self.load_scratch(&tys)
+                self.element_words(*input, index, &tys)
             }
             Op::At(input, address) => {
                 let words = self.words(address);
@@ -1258,9 +1387,9 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let index = self.i32c(*input as i64);
                 match self.ty(address) {
                     Type::Int => {
-                        self.b
-                            .ins()
-                            .call(self.read_rows, &[self.ctx, index, words[0], out]);
+                        let at = self.rows_index(*input, words[0]);
+                        let tys = word_types(self.module, ty);
+                        return self.element_words(*input, at, &tys);
                     }
                     Type::Vec2 => {
                         let zero = self.f32c(0.0);

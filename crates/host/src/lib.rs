@@ -579,6 +579,11 @@ pub struct Host {
     free: Vec<u32>,
     budget_words: usize,
     used_words: usize,
+    /// Word buffers a released Field gave back, largest last. A scene
+    /// makes and drops the same Fields every frame, and asking the
+    /// system for a megabyte and touching it again costs more than the
+    /// work that fills it; these are handed out again by `create`.
+    spare: Vec<Vec<u32>>,
 }
 
 impl Host {
@@ -588,6 +593,7 @@ impl Host {
         Self {
             slots: Vec::new(),
             free: Vec::new(),
+            spare: Vec::new(),
             budget_words,
             used_words: 0,
         }
@@ -618,7 +624,41 @@ impl Host {
 
     /// Allocates a zeroed Field.
     pub fn create(&mut self, schema: Schema, domain: Domain) -> Result<Handle, HostError> {
-        self.adopt(FieldData::new(schema, domain)?)
+        let data = match self.take_spare(&schema, domain)? {
+            Some(mut words) => {
+                words.fill(0);
+                FieldData::from_words(schema, domain, words)?
+            }
+            None => FieldData::new(schema, domain)?,
+        };
+        self.adopt(data)
+    }
+
+    /// A Field whose words are whatever the buffer it was given holds:
+    /// for a backend that writes every one of them before anything
+    /// reads it, which is what a map over a domain does. Anything else
+    /// wants [`Host::create`].
+    pub fn create_for_fill(&mut self, schema: Schema, domain: Domain) -> Result<Handle, HostError> {
+        let data = match self.take_spare(&schema, domain)? {
+            Some(words) => FieldData::from_words(schema, domain, words)?,
+            None => FieldData::new(schema, domain)?,
+        };
+        self.adopt(data)
+    }
+
+    /// A buffer of exactly the words this Field needs, from the ones
+    /// released Fields gave back.
+    fn take_spare(
+        &mut self,
+        schema: &Schema,
+        domain: Domain,
+    ) -> Result<Option<Vec<u32>>, HostError> {
+        if domain.is_empty() || schema.words() == 0 {
+            return Err(HostError::ZeroSize);
+        }
+        let wanted = domain.count() * schema.words();
+        let at = self.spare.iter().position(|buffer| buffer.len() == wanted);
+        Ok(at.map(|at| self.spare.swap_remove(at)))
     }
 
     /// Takes ownership of existing data.
@@ -731,6 +771,14 @@ impl Host {
         self.data(handle)?.element(index)
     }
 
+    /// The words of a Field, to write in place. A backend that fills a
+    /// Field it just created writes here rather than into a buffer of
+    /// its own that it then copies in: for a million elements that is
+    /// two copies of every word that nobody needs.
+    pub fn words_mut(&mut self, handle: Handle) -> Result<&mut [u32], HostError> {
+        Ok(&mut self.data_mut(handle)?.words)
+    }
+
     /// Replaces every word; the length must match.
     pub fn write_words(&mut self, handle: Handle, words: &[u32]) -> Result<(), HostError> {
         let data = self.data_mut(handle)?;
@@ -816,11 +864,38 @@ impl Host {
     /// Releases a Field, resident or not. The handle is invalid afterwards.
     pub fn release(&mut self, handle: Handle) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
-        slot.storage = Storage::Free;
+        let storage = std::mem::replace(&mut slot.storage, Storage::Free);
         let charge = std::mem::take(&mut slot.charge);
         self.used_words -= charge;
         self.free.push(handle.index);
+        // The words go into the spare pile for the next Field of that
+        // size, which is almost always the same node a frame later.
+        if let Storage::Data(data) = storage {
+            self.keep_spare(data.words);
+        }
         Ok(())
+    }
+
+    /// Keeps a released buffer for the next Field of its size. The pile
+    /// holds a handful of the largest, which is what a frame reuses;
+    /// the rest goes back to the system.
+    fn keep_spare(&mut self, words: Vec<u32>) {
+        const KEPT: usize = 8;
+        if words.is_empty() {
+            return;
+        }
+        self.spare.push(words);
+        if self.spare.len() > KEPT {
+            // The smallest is the one worth least.
+            let smallest = self
+                .spare
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, buffer)| buffer.len())
+                .map(|(at, _)| at)
+                .unwrap_or(0);
+            self.spare.swap_remove(smallest);
+        }
     }
 
     /// The image view of a Field of pixels: a copy, since the Host stores

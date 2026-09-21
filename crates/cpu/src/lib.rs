@@ -63,6 +63,19 @@ impl CpuBackend {
         let domain = invocation.domain;
         let stride: usize = strides.iter().sum();
         let count = domain.count();
+        // One output is the common case, and then what the elements
+        // wrote is already the Field's words in order: it goes in
+        // whole, rather than being gathered into a second buffer first.
+        if let [port] = &module.manifest.outputs[..] {
+            let handle = scope.create(port.ty.schema.clone(), domain)?;
+            return match scope.write_all(handle, &results) {
+                Ok(()) => Ok(vec![handle]),
+                Err(error) => {
+                    let _ = scope.release(handle);
+                    Err(error.into())
+                }
+            };
+        }
         let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
         let mut offset = 0;
         for (port, words) in module.manifest.outputs.iter().zip(&strides) {

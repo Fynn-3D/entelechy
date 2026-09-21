@@ -29,6 +29,9 @@ capability claim.
 | Bridges checked | [bridge tests](crates/cli/tests/bridges.rs), [web runner](bridges/web/test.mjs), [godot test](bridges/godot/test.gd) | run when node, Chrome and Godot are present; skipped with a word otherwise |
 | A scene to start from | [scaffold](crates/cli/src/scaffold.rs), [cli](crates/cli/src/main.rs) `new_scene` | [session tests](crates/cli/tests/session.rs) (made, checked, replayed) |
 | Rows across cores | [interpreter](crates/cpu/src/lib.rs) `compute`, [jit](crates/jit/src/lib.rs) `compute` | every replay bit for bit; measured by `orla bench` |
+| A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
+| Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
+| An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
 | A long session | [runtime](crates/runtime/src/lib.rs) `uncollected`, [session tests](crates/cli/tests/session.rs) | a thousand republishes evaluated in step |
 | Measuring a scene | [bench](crates/cli/src/bench.rs) `measure`, [cli](crates/cli/src/main.rs), [protocol](crates/cli/src/protocol.rs) `bench` | [session tests](crates/cli/tests/session.rs), [protocol tests](crates/cli/tests/protocol.rs) |
 | Named manifests | [ir display](crates/ir/src/display.rs) `type_name`, `Manifest::named`, [protocol](crates/cli/src/protocol.rs) `manifest_json`, [schema](crates/host/src/lib.rs) `describe` | [compile tests](crates/compiler/tests/compile.rs), [protocol tests](crates/cli/tests/protocol.rs), [composition](crates/graph/tests/composition.rs) |

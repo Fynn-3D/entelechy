@@ -56,11 +56,17 @@ pub struct Ctx {
     depth: u32,
     /// Zero, or the first integer failure: 1 division by zero, 2 overflow.
     error: u32,
+    /// The `x` the failure was seen at, which a map's entry writes as it
+    /// leaves its run; the caller knows the rest of the coordinates.
+    error_at: u32,
 }
 
-/// A map entry's native signature: the context, the element's
-/// coordinates, and where its output words go.
-type Entry = unsafe extern "C" fn(*mut Ctx, u32, u32, u32, *mut u32);
+/// A map entry's native signature: the context, where a run of elements
+/// starts (`x`, and the `y` and `z` they share), how many there are,
+/// and where their output words go, one element after another. The
+/// entry walks the run itself: a million elements is one call, so the
+/// reads it does not have to repeat are hoisted out of it.
+type Entry = unsafe extern "C" fn(*mut Ctx, u32, u32, u32, u32, *mut u32);
 /// A scan entry's: the context, the step's index, the carried words, and
 /// where the next carried words go.
 type ScanEntry = unsafe extern "C" fn(*mut Ctx, u32, *const u32, *mut u32);
@@ -280,6 +286,7 @@ fn shared(
         height: domain.height(),
         depth: domain.depth(),
         error: 0,
+        error_at: 0,
     };
     Ok(Shared {
         views,
@@ -298,11 +305,24 @@ fn compute(
     domain: Domain,
     stride: usize,
 ) -> Result<Vec<u32>, ExecutionError> {
+    let mut results = vec![0u32; domain.count() * stride];
+    compute_into(entry, shared, domain, stride, &mut results)?;
+    Ok(results)
+}
+
+/// The same, into words the caller owns: a Field it just created, so a
+/// map's output is written once instead of into a buffer that is then
+/// copied into the Field.
+fn compute_into(
+    entry: Entry,
+    shared: &Shared,
+    domain: Domain,
+    stride: usize,
+    results: &mut [u32],
+) -> Result<(), ExecutionError> {
     let width = domain.width() as usize;
     let height = domain.height();
     let rows = height as usize * domain.depth() as usize;
-    let row_words = width * stride;
-    let mut results = vec![0u32; rows * row_words];
     let element_count = width * rows;
     // Split by elements and not by rows: a `Rows` domain is one row of
     // a million, and splitting that by rows is one thread.
@@ -328,17 +348,33 @@ fn compute(
         height: t.height,
         depth: t.depth,
         error: 0,
+        error_at: 0,
     };
+    // One call a run of elements that share a row: a `Rows` domain is
+    // one run of a million, a grid one run a row.
     let run_elements = |first: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
         let mut ctx = fresh(&shared.template);
-        for (offset, slot) in chunk.chunks_exact_mut(stride.max(1)).enumerate() {
-            let element = first + offset;
+        let elements = chunk.len() / stride.max(1);
+        let mut done = 0usize;
+        while done < elements {
+            let element = first + done;
             let x = (element % width.max(1)) as u32;
             let row = (element / width.max(1)) as u32;
             let (y, z) = (row % height, row / height);
-            // The entry writes exactly `stride` words at `out`, reads the
-            // inputs through the views, and writes nothing else.
-            unsafe { entry(&mut ctx, x, y, z, slot.as_mut_ptr()) };
+            let run = (width.max(1) - x as usize).min(elements - done);
+            // The entry writes exactly `stride` words an element at
+            // `out`, element after element, reads the inputs through the
+            // views, and writes nothing else.
+            unsafe {
+                entry(
+                    &mut ctx,
+                    x,
+                    y,
+                    z,
+                    run as u32,
+                    chunk[done * stride.max(1)..].as_mut_ptr(),
+                )
+            };
             if ctx.error != 0 {
                 let error = if ctx.error == 1 {
                     ArithmeticError::DivisionByZero
@@ -346,16 +382,17 @@ fn compute(
                     ArithmeticError::Overflow
                 };
                 return Err(ExecutionError::Arithmetic {
-                    x,
+                    x: ctx.error_at,
                     y: z * height + y,
                     error,
                 });
             }
+            done += run;
         }
         Ok(())
     };
     if threads == 1 {
-        run_elements(0, &mut results)?;
+        run_elements(0, results)?;
     } else {
         let chunk_len = per_thread * stride.max(1);
         let outcomes: Vec<Result<(), ExecutionError>> = std::thread::scope(|s| {
@@ -376,7 +413,7 @@ fn compute(
             outcome?;
         }
     }
-    Ok(results)
+    Ok(())
 }
 
 /// A map: the entry over the invocation's domain, its words split into
@@ -397,8 +434,24 @@ fn run(
         .map(|port| port.ty.schema.words())
         .collect();
     let stride: usize = strides.iter().sum();
-    let results = compute(entry, &shared, domain, stride)?;
     let count = domain.count();
+    // One output is the common case, and then the entry writes straight
+    // into the Field: no buffer of our own and no copy into it.
+    if let [port] = &module.manifest.outputs[..] {
+        let handle = scope.create_for_fill(port.ty.schema.clone(), domain)?;
+        let outcome = scope
+            .words_mut(handle)
+            .map_err(ExecutionError::from)
+            .and_then(|words| compute_into(entry, &shared, domain, stride, words));
+        return match outcome {
+            Ok(()) => Ok(vec![handle]),
+            Err(error) => {
+                let _ = scope.release(handle);
+                Err(error)
+            }
+        };
+    }
+    let results = compute(entry, &shared, domain, stride)?;
     let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
     let mut offset = 0;
     for (port, words) in module.manifest.outputs.iter().zip(&strides) {
@@ -872,7 +925,10 @@ pub(crate) mod offsets {
     pub const HEIGHT: i32 = std::mem::offset_of!(Ctx, height) as i32;
     pub const DEPTH: i32 = std::mem::offset_of!(Ctx, depth) as i32;
     pub const ERROR: i32 = std::mem::offset_of!(Ctx, error) as i32;
+    pub const ERROR_AT: i32 = std::mem::offset_of!(Ctx, error_at) as i32;
     pub const VIEW_SIZE: i64 = std::mem::size_of::<View>() as i64;
+    pub const VIEW_WORDS: i32 = std::mem::offset_of!(View, words) as i32;
+    pub const VIEW_STRIDE: i32 = std::mem::offset_of!(View, stride) as i32;
     pub const VIEW_WIDTH: i32 = std::mem::offset_of!(View, width) as i32;
     pub const VIEW_HEIGHT: i32 = std::mem::offset_of!(View, height) as i32;
     pub const VIEW_DEPTH: i32 = std::mem::offset_of!(View, depth) as i32;
