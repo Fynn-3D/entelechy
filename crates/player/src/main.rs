@@ -147,7 +147,8 @@ struct Player {
     input: InputState,
     cursor: (f32, f32),
     status: String,
-    last_title: Instant,
+    /// How the last frame reached the window, for the F10 line.
+    path: &'static str,
     /// Protocol requests arriving from stdin or a socket, when serving.
     requests: Option<Receiver<orla::protocol::Incoming>>,
     /// The node whose image is shown instead of the graph output.
@@ -224,44 +225,10 @@ impl Player {
                     .unwrap_or(displayed);
                 self.panel = self.hud.then(|| self.panel_for(&report, target, &context));
                 let presenting = Instant::now();
-                let shown = self.show(target);
+                self.path = self.show(target);
                 self.stats.record(elapsed, presenting.elapsed());
                 self.play(&report);
-                if self.last_title.elapsed() > Duration::from_millis(250) {
-                    let executed = report
-                        .executed
-                        .iter()
-                        .map(|node| match report.fused.iter().find(|(c, _)| c == node) {
-                            Some((_, absorbed)) => format!(
-                                "{node}+{}",
-                                absorbed
-                                    .iter()
-                                    .map(ToString::to_string)
-                                    .collect::<Vec<_>>()
-                                    .join("+")
-                            ),
-                            None => node.to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let view = match &self.preview {
-                        Some(node) => format!("view {node}"),
-                        None => "view output".to_string(),
-                    };
-                    let sound = match &self.audio {
-                        Some(audio) => format!(" | {}", audio.describe()),
-                        None => String::new(),
-                    };
-                    self.status = format!(
-                        "{view} | {:.1} ms | ran [{executed}] reused {} | {}, {} downloads{sound}",
-                        elapsed.as_secs_f64() * 1000.0,
-                        report.reused.len(),
-                        shown,
-                        self.downloads
-                    );
-                    self.last_title = Instant::now();
-                    self.update_title();
-                }
+                self.status = "running".into();
                 Some(report)
             }
             Err(error) => {
@@ -269,7 +236,6 @@ impl Player {
                 if self.status != message {
                     eprintln!("{message}; last frame is kept");
                     self.status = message;
-                    self.update_title();
                 }
                 self.blit();
                 None
@@ -337,7 +303,6 @@ impl Player {
             .as_ref()
             .map_or("output".to_string(), ToString::to_string);
         eprintln!("previewing {view}");
-        self.last_title = Instant::now() - Duration::from_secs(1);
     }
 
     /// The F10 line for this frame: the smoothed times, then the backend,
@@ -359,15 +324,19 @@ impl Player {
             Some(node) => format!("view {node}"),
             None => "output".to_string(),
         };
+        let sound = match &self.audio {
+            Some(audio) => format!(" | sound {}", audio.describe()),
+            None => String::new(),
+        };
         let rest = format!(
-            "{} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | downloads {} | t {:.1} s",
+            "{} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | {} | downloads {}{sound} | t {:.1} s",
             self.session.runtime().backend_name(),
             context.window[0],
             context.window[1],
             context.scale,
             report.executed.len(),
             report.reused.len(),
-            report.pending.len(),
+            self.path,
             self.downloads,
             context.time,
         );
@@ -512,7 +481,7 @@ impl Player {
                 .graph()
                 .map(|graph| graph.name.clone())
                 .unwrap_or_else(|| "no scene".into());
-            window.set_title(&format!("Orla Player: {name} ({})", self.status));
+            window.set_title(&format!("Orla Player: {name}"));
         }
     }
 
@@ -764,7 +733,7 @@ fn main() -> ExitCode {
         input: InputState::default(),
         cursor: (0.0, 0.0),
         status: "starting".into(),
-        last_title: Instant::now(),
+        path: "",
         requests: None,
         preview: None,
         audio: None,

@@ -101,8 +101,8 @@ prints the flattened graph in canonical form, the published Kernels with
 their generations, and the plan: which groups execute, in order, with the
 producers each one absorbed. In the Player, Tab cycles the preview through
 the nodes (pinning each so fusion keeps it materialized) and back to the
-output; the title shows the node in view, the frame time, what ran and what
-was fused, and how the frame reached the window.
+output; the F10 line shows the node in view, the frame time, what ran and
+what was fused, and how the frame reached the window.
 
 ## Fusion
 
@@ -172,15 +172,15 @@ size in physical pixels and its scale factor are context: a node with
 follows a resize, and Kernels that declare `input.read` read `window()`
 and `scale()`, so a toolbar laid out in units of `scale()` keeps its
 size on screen. On the GPU the
-window is drawn from the resident output directly; the title shows the
+window is drawn from the resident output directly; the F10 line shows the
 presentation path and how many frames had to be downloaded. The pointer and
 keys reach Kernels that declare `input.read`; F5 resets Graph state; F10
 shows one line of frame data over the picture (the interval between
 frames and the frame rate, the evaluate and present times, each
 smoothed, present on the device including the wait for the display;
 the backend, the window and its scale, the shown image's size, what ran,
-was reused and was fused, `async` runs going, downloads, the session
-time), the interval being the true frame cost since the picture is
+was reused and was fused, how the frame reached the window, downloads,
+the sound device when open, the session time), the interval being the true frame cost since the picture is
 presented on the device without a readback; Escape
 closes the window.
 
@@ -198,7 +198,7 @@ name. The device's clock reaches Kernels as `rate()`, and while it plays
 the device paces evaluation: the next block is computed when the ring can
 take it, so nothing is dropped and evaluation neither races ahead of the
 sound nor waits on the display. `--no-audio` leaves the sound card closed.
-The title reports the device's rate, the block size, and how many
+The F10 line reports the device's rate, the block size, and how many
 callbacks ran dry.
 
 A saved edit to a running Kernel compiles on a worker thread: the terminal
