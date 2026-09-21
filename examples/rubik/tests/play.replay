@@ -1,0 +1,34 @@
+scene ../play.osn
+
+# The trained network on the cube: near zero when solved, about one
+# after a turn, more after a scramble. Its weights are a file the
+# scene reads; the CPU and the JIT agree bit for bit, the GPU within
+# rounding.
+window 320 240
+frame 0.0000
+expect guess.result[0] = 0.53 0.3                # solved: about half a turn
+expect thinks.result[12] = 48                    # "net thinks  0.5": the ones digit
+expect thinks.result[14] = 53                    # and the tenths
+key 85 down
+frame 0.0167
+key 85 up
+frame 0.0333
+frame 0.0500
+frame 0.0667
+frame 0.0833
+frame 0.1000
+frame 0.1167
+frame 0.1333
+frame 0.1500
+frame 0.1667
+frame 0.1833
+frame 0.2000
+frame 0.2167
+frame 0.2333
+frame 0.2500
+frame 0.2667
+frame 0.2833
+frame 0.3000
+expect game.result[0].count = 1
+expect did.result[10] = 49                       # "you made  1"
+expect guess.result[0] = 2.04 0.5                # one turn: the estimate is rough, about two

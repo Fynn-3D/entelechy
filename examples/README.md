@@ -123,7 +123,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   by the keys and orbited by the pointer, and a 54-32-1 network trained
   while you play on scrambles it makes itself, guessing how many turns
   from solved the cube on screen is: training and inference, all of it
-  Kernels.
+  Kernels; `play.osn` reads the weights `render --save` kept.
 - [clip](clip/README.md): an input read frame by frame from a directory,
   `frames "clip/" at 2`, the frame of the moment at each evaluation; with
   `render`, the video pipeline's input half.

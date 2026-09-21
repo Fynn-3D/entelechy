@@ -28,10 +28,18 @@ solved ─────────────────────┘       
 init ─ step <~ ─ act ─ delta ─ grads (scatter) ─ step; loss           (64 scrambles a frame)
 ```
 
+`play.osn` is the cube with the network already trained: `weights.field`
+is what `render --save step.result=weights.field` kept after 300 frames
+of `scene.osn`, read back as `input weights: Rows<Float> =
+"weights.field";`; `guess` runs over it, and two `text.label` rows say
+what it thinks and what you did. Training is one scene, inference
+another, the weights a file between them.
+
 ```sh
 cargo run --release -p orla-player -- examples/rubik/scene.osn
+cargo run --release -p orla-player -- examples/rubik/play.osn
 cargo run --release -- replay examples/rubik/tests/rubik.replay --backend jit
-cargo run --release -- render examples/rubik/scene.osn --frames 300 --backend gpu --window 640x480 --out /tmp/rubik
+cargo run --release -- render examples/rubik/scene.osn --frames 300 --backend jit --window 64x64 --out /tmp/rubik --save step.result=examples/rubik/weights.field
 ```
 
 What the round found: two libraries that need each other's
