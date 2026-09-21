@@ -962,3 +962,49 @@ fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An agent can measure what it changed: the same frames several times,
+/// the least of the runs, and what each node cost, as `orla bench`
+/// reports from a terminal. The clock advances while it measures, as
+/// `advance` advances it.
+#[test]
+fn an_agent_can_measure_the_scene_it_is_holding() {
+    let dir = scratch();
+    let responses = talk(
+        &dir.join("scene.osn"),
+        &[
+            json!({ "id": 1, "op": "bench", "frames": 4, "repeat": 2, "nodes": true }),
+            json!({ "id": 2, "op": "bench", "frames": 0 }),
+            json!({ "id": 3, "op": "bench", "frames": 100000, "repeat": 4 }),
+            json!({ "id": 4, "op": "quit" }),
+        ],
+    );
+    let measured = &responses[0]["ok"];
+    assert_eq!(measured["frames"], 4, "{}", responses[0]);
+    assert_eq!(measured["repeat"], 2);
+    assert_eq!(measured["ran"], true);
+    assert!(measured["best_ms"].as_f64().unwrap() > 0.0);
+    assert!(measured["median_ms"].as_f64().unwrap() >= measured["best_ms"].as_f64().unwrap());
+    // Life's two nodes, the costlier first.
+    let nodes = measured["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 2, "{measured}");
+    assert!(nodes[0]["ms"].as_f64().unwrap() >= nodes[1]["ms"].as_f64().unwrap());
+
+    assert!(
+        responses[1]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("whole number"),
+        "{}",
+        responses[1]
+    );
+    assert!(
+        responses[2]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at most"),
+        "{}",
+        responses[2]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

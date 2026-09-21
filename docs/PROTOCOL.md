@@ -109,6 +109,20 @@ training run does not draw the picture; with neither, the whole scene
 runs. A network trained over a thousand frames and kept as a file is
 one request, not a thousand.
 
+`bench` measures what a change cost: `frames` frames (30 by default) at
+`fps` (60), run `repeat` times (3), of which the least is reported, as
+`orla bench` reports it from a terminal. `frames` times `repeat` is at
+most 100000. The first frame of all is thrown away, since it compiles
+and allocates; with `nodes` true, one more run times every node with
+the device waited for after each, and a node placed several times is
+one line. The answer says `backend`, `frames`, `repeat`, `best_ms`,
+`median_ms`, `nodes` (each `{node, ms}`, the costliest first) and
+`ran`, which is false when the scene does not change with the clock and
+every node was reused after the first frame. The clock advances while
+it measures, as `advance` advances it, so a measurement is also a run:
+an agent that edits a Kernel can ask what the edit cost, and compare it
+with what it asked before.
+
 `help` answers with every builtin a Kernel may call (`builtins`, each
 `{name, kind, signatures, doc, requires, entry_only}`) and every form
 the language and the documents are written in (`forms`, each `{name,

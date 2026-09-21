@@ -721,6 +721,57 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             .map_err(|e| failure(e.to_string()))?;
             Ok(report_json(session, &report))
         }
+        // What a change cost: the same frames several times, the least
+        // of the runs, as `orla bench` measures from a terminal. The
+        // clock advances as `advance` advances it, so a measurement is
+        // also a run of the scene.
+        "bench" => {
+            let whole = |name: &str, default: u64| -> Result<u64, Json> {
+                match request.get(name) {
+                    None | Some(Json::Null) => Ok(default),
+                    Some(value) => value.as_u64().filter(|count| *count >= 1).ok_or_else(|| {
+                        failure(format!("`{name}` is a whole number of at least 1"))
+                    }),
+                }
+            };
+            let frames = whole("frames", 30)?;
+            let repeat = whole("repeat", 3)?;
+            if frames * repeat > MAX_ADVANCE {
+                return Err(failure(format!(
+                    "`frames` times `repeat` is at most {MAX_ADVANCE}; measure fewer frames or fewer runs"
+                )));
+            }
+            let fps = request.get("fps").and_then(Json::as_f64).unwrap_or(60.0);
+            if fps <= 0.0 {
+                return Err(failure(
+                    "`fps` is the frames a second of the clock; it is positive",
+                ));
+            }
+            let nodes = request
+                .get("nodes")
+                .and_then(Json::as_bool)
+                .unwrap_or(false);
+            let backend = session.runtime().backend_name();
+            let measured = crate::bench::measure(
+                session,
+                backend,
+                frames as u32,
+                repeat as u32,
+                fps as f32,
+                context_of(session, request),
+                nodes,
+            )
+            .map_err(failure)?;
+            Ok(json!({
+                "backend": measured.backend,
+                "frames": frames,
+                "repeat": repeat,
+                "best_ms": measured.best,
+                "median_ms": measured.median,
+                "ran": measured.ran,
+                "nodes": measured.nodes.iter().map(|(node, ms)| json!({ "node": node, "ms": ms })).collect::<Vec<_>>(),
+            }))
+        }
         "advance" => {
             let frames = request
                 .get("frames")

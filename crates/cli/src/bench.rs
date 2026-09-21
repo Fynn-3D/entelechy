@@ -100,16 +100,51 @@ pub fn bench(options: &Options) -> Result<Vec<Measured>, String> {
     Ok(measured)
 }
 
-/// Measures one backend: a warm-up frame, then `repeat` runs of
-/// `frames`, and, when asked, one more run that times every node.
+/// Measures one backend: a session of its own, then the measurement.
 fn one(options: &Options, backend: &str) -> Result<Measured, String> {
     let mut session = open(options, backend)?;
     let (size, scale) = options.window.unwrap_or(([0.0, 0.0], 1.0));
-    let context = |frame: u32| Context {
-        time: frame as f32 / options.rate,
+    let base = Context {
         window: size,
         scale,
         ..Context::default()
+    };
+    measure(
+        &mut session,
+        backend,
+        options.frames,
+        options.repeat,
+        options.rate,
+        base,
+        options.nodes,
+    )
+}
+
+/// Measures the session as it stands: a warm-up frame, then `repeat`
+/// runs of `frames` frames, and, when asked, one more run that times
+/// every node. The clock advances by the frame count over `rate` from
+/// the context given, as `advance` advances it, so what the session is
+/// left holding is the last frame's.
+pub fn measure(
+    session: &mut Session,
+    backend: &str,
+    frames: u32,
+    repeat: u32,
+    rate: f32,
+    base: Context,
+    nodes: bool,
+) -> Result<Measured, String> {
+    let options = Options {
+        frames,
+        repeat,
+        rate,
+        nodes,
+        ..Options::default()
+    };
+    let options = &options;
+    let context = |frame: u32| Context {
+        time: base.time + frame as f32 / rate,
+        ..base
     };
     // The warm-up frame compiles and allocates; its time is the
     // machine's morning, not the scene's.
@@ -138,7 +173,7 @@ fn one(options: &Options, backend: &str) -> Result<Measured, String> {
     }
     runs.sort_by(f64::total_cmp);
     let nodes = if options.nodes {
-        node_times(&mut session, options, &context, &mut frame, backend)?
+        node_times(session, options, &context, &mut frame, backend)?
     } else {
         Vec::new()
     };

@@ -543,6 +543,13 @@ them happened to write a loop over constants, and the JIT and the GPU
 are unchanged too. What it buys is that the clear way to write a table
 is now the cheap one.
 
+The protocol has the measurement too: `bench` takes `frames`, `repeat`,
+`fps` and `nodes` and answers with the least of the runs, the median,
+and what each node cost, the same numbers `orla bench` prints. The
+clock advances while it measures, as `advance` advances it, so an agent
+that edits a Kernel can ask what the edit cost and hold it against what
+it asked before.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

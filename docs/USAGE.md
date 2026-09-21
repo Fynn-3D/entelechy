@@ -204,6 +204,10 @@ A scene whose nodes do not change with the clock reuses all of them
 after the first frame; the table says so rather than reporting the time
 it took to find that out.
 
+The creation protocol has the same measurement as `bench`, so an agent
+holding a session can ask what its own edit cost. See
+[PROTOCOL.md](PROTOCOL.md).
+
 ## Fusion
 
 Chains of pointwise nodes run as one Kernel: a producer whose only reader
