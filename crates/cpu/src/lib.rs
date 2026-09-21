@@ -540,37 +540,38 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
     let row_words = width * stride;
     let mut results = vec![0u32; rows * row_words];
     let element_count = width * rows;
+    // Split by elements and not by rows: a `Rows` domain is one row of
+    // a million, and splitting that by rows is one thread.
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
-        .min(rows)
+        .min(element_count.max(1))
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
-    let rows_per_thread = rows.div_ceil(threads);
-    let run_rows = |first_row: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
+    let per_thread = element_count.div_ceil(threads).max(1);
+    let run_elements = |first: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
         let mut machine = eval::Machine::new(program);
-        for (offset, row) in chunk.chunks_exact_mut(row_words.max(1)).enumerate() {
-            let flat = (first_row + offset) as u32;
-            let (y, z) = (flat % height, flat / height);
-            for x in 0..domain.width() {
-                let slot = x as usize * stride;
-                machine.run_entry_words([x, y, z], &mut row[slot..slot + stride])?;
-            }
+        for (offset, slot) in chunk.chunks_exact_mut(stride.max(1)).enumerate() {
+            let element = first + offset;
+            let x = (element % width.max(1)) as u32;
+            let row = (element / width.max(1)) as u32;
+            let (y, z) = (row % height, row / height);
+            machine.run_entry_words([x, y, z], slot)?;
         }
         Ok(())
     };
     if threads == 1 {
-        run_rows(0, &mut results)?;
+        run_elements(0, &mut results)?;
         return Ok(results);
     }
-    let chunk_len = rows_per_thread * row_words.max(1);
+    let chunk_len = per_thread * stride.max(1);
     let outcomes: Vec<Result<(), ExecutionError>> = std::thread::scope(|s| {
         let handles: Vec<_> = results
             .chunks_mut(chunk_len)
             .enumerate()
             .map(|(index, chunk)| {
-                let run_rows = &run_rows;
-                s.spawn(move || run_rows(index * rows_per_thread, chunk))
+                let run_elements = &run_elements;
+                s.spawn(move || run_elements(index * per_thread, chunk))
             })
             .collect();
         handles

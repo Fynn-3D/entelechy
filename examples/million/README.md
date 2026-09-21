@@ -23,12 +23,12 @@ the least of the runs, on an M-series laptop:
 
 | bodies | interpreter | JIT | GPU |
 | --- | --- | --- | --- |
-| 100,000 | 30 ms | 4.4 ms | 0.84 ms |
-| 1,000,000 | 157 ms | 20.4 ms | 2.4 ms |
-| 4,000,000 | — | 73.1 ms | 9.3 ms |
+| 100,000 | 19.8 ms | 3.9 ms | 0.88 ms |
+| 1,000,000 | 52.9 ms | 12.7 ms | 2.5 ms |
+| 4,000,000 | 157 ms | 42.0 ms | 9.7 ms |
 
-A million bodies is 413 frames a second on the GPU and 49 on ten CPU
-cores through the JIT; four million is 108 and 14. Of the GPU's 2.4 ms,
+A million bodies is 400 frames a second on the GPU and 79 on ten CPU
+cores through the JIT; four million is 103 and 24. Of the GPU's 2.5 ms,
 the step is 1.5, the drawing 0.6 and the scatter the rest.
 
 ```sh

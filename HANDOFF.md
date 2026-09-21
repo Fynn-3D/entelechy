@@ -585,6 +585,28 @@ are, deliberately: the flat dispatch matches (`Machine::step`,
 `Builder::call`), each one arm per operation, which a split would
 only scatter.
 
+Holding that million against the old Orla (the one in
+the previous implementation, whose benchmark is a million rows of
+`vec2` moved by their own velocity, no picture) found something this
+project had been carrying since the beginning: a map over `Rows` ran on
+one thread. Both the interpreter and the JIT split their work by rows
+of the domain, and a `Rows` domain is one row of a million, so nine
+cores sat still. They split by elements now, which is the same work and
+the same words. Measured: that benchmark's million rows went from 6.35
+to 3.40 ms on the JIT and from 55.5 to 16.1 on the interpreter; the
+`million` example from 20.4 to 12.7 and from 157 to 52.9; `learn` from
+56.6 to 22.8; the interpreter's whole replay suite from 12.5 to 9.4
+seconds. A grid was already split across cores, so pictures did not
+move, and `particles`, which is mostly a scatter, did not either.
+
+What remains against the old one is the shape of the call: it hands
+Cranelift a loop over the rows and we call a compiled function once an
+element, so a million elements is a million calls. Its million rows
+take 0.270 ms on the CPU where ours take 3.40, and 0.275 ms on the GPU
+where ours take 0.64. The next step, if this is worth it, is an entry
+that takes a range and loops inside, which is also what would let
+Cranelift vectorize the body.
+
 A million of something, which is the number other engines are held to:
 `million`, a million bodies each with a place, a speed and a tint,
 carried frame to frame, pulled towards the middle by an inverse square
