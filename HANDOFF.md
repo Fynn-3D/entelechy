@@ -151,8 +151,45 @@ backends (fluid on the GPU: 5.8 ms of nodes in a 7.7 ms frame, the rest
 per-node dispatch), a map already uses every core on the CPU and the
 JIT, and the GPU queue is in order, so threads across nodes would gain
 nothing; an `async` node is the one case that pays, independent work
-that need not finish inside the frame. Phase 4 lacks WASM; phase 5's domains are touched ahead of order (audio,
-geometry, simulation, machines). The record showed one thing an agent
+that need not finish inside the frame. The Player's F10 line shows
+the frame's true cost (the interval between frames, since the picture
+is presented on the device without a readback), the evaluate and
+present times, and what ran; the title is the scene's name.
+
+Phase 4 is closed (2026-09-21) with WASM deferred until a browser use
+case asks for it, by this assessment: as a backend (the plan's IR to
+CPU/GPU/WASM diagram) it has no value here, since the JIT already
+generates machine code through the same Cranelift a wasm engine would
+use and the ABI is the sandbox (no pointers, clamped reads, granted
+capabilities); as a target (Orla itself in a page) the core crates and
+the interpreter would go in one round (a timer and a thread to guard by
+target, wasm-bindgen, the protocol as a function call, the web bridge
+then local), the JIT cannot (no executable memory in a page), and
+WebGPU would take one or two more rounds because the gpu crate blocks
+on device work at observation and a page cannot; without WebGPU a page
+runs life and snake, not showcase (418 ms a frame on the interpreter
+at 640x360 against 3.6 ms of GPU work).
+
+Phase 5 (section 42, the general dynamic compute runtime) by domain,
+what is there and what is open: image is the origin (blur, marching,
+pixelfx; PNG, PPM and PGM in and out); audio has device-paced sound
+outputs, `rate()`, WAV in and out (tone, slg); geometry has glTF in
+and out, the raster contract, and the Blender and Godot bridges (mesh,
+cube, model); simulation has fluid, particles, life, ant, and the
+games; machines, which the plan does not list, have CHIP-8 and the
+Thumb core; agents and automation have the creation protocol, its
+three bridges and the C ABI, and a scriptable `run` and `replay`. Open:
+video, which is frames over time as files, an offline render of N
+frames at a rate with the sound track written alongside (the Player is
+real time and `run` is one frame; PNG and WAV export exist, so this is
+a `render` command over the replay's stepping) and a frame-sequence
+input; AI, which is inference as Kernels, weights as Fields and a small
+network run on the three backends, the test of the general-compute
+claim and of the language's fixed loop counts; and automation past one
+frame, which the render command begins. Recommended first: the render
+command, then an inference example as a play round.
+
+The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar
 took that in: a node's name and a source reference accept any word,
 since the one follows `node` and precedes `:` and the other follows
