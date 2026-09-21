@@ -11,6 +11,7 @@ pub mod package;
 pub mod png;
 pub mod ppm;
 pub mod protocol;
+pub mod render;
 pub mod replay;
 pub mod session;
 pub mod wav;

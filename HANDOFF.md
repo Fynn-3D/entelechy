@@ -178,16 +178,14 @@ and out, the raster contract, and the Blender and Godot bridges (mesh,
 cube, model); simulation has fluid, particles, life, ant, and the
 games; machines, which the plan does not list, have CHIP-8 and the
 Thumb core; agents and automation have the creation protocol, its
-three bridges and the C ABI, and a scriptable `run` and `replay`. Open:
-video, which is frames over time as files, an offline render of N
-frames at a rate with the sound track written alongside (the Player is
-real time and `run` is one frame; PNG and WAV export exist, so this is
-a `render` command over the replay's stepping) and a frame-sequence
-input; AI, which is inference as Kernels, weights as Fields and a small
+three bridges and the C ABI, and a scriptable `run` and `replay`. Done
+since: video's output half, `orla render` (N frames at a rate, the
+clock the frame count over the rate, each picture a PNG in a directory
+and the sound output one WAV beside them, `async` nodes settled every
+frame; ffmpeg makes the video). Open: a frame-sequence input; AI, which is inference as Kernels, weights as Fields and a small
 network run on the three backends, the test of the general-compute
 claim and of the language's fixed loop counts; and automation past one
-frame, which the render command begins. Recommended first: the render
-command, then an inference example as a play round.
+frame, which the render command begins. Recommended next: an inference example as a play round.
 
 The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar

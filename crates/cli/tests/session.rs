@@ -1061,3 +1061,83 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         "{stdout}"
     );
 }
+
+#[test]
+fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = std::env::temp_dir().join(format!("orla-render-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    let output = Command::new(orla)
+        .args(["render", "--frames", "3", "--out"])
+        .arg(&out)
+        .arg(root.join("examples/audio/scene.osn"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("rendered 3 picture(s) of 320x240"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rendered 0.05 s of sound"), "{stderr}");
+    for index in 0..3 {
+        let bytes = std::fs::read(orla::render::picture_path(&out, index)).unwrap();
+        let picture = orla::png::decode(&bytes).unwrap();
+        assert_eq!((picture.width, picture.height), (320, 240));
+    }
+    assert!(!out.join("0003.png").exists());
+    let sound =
+        orla::wav::decode(&std::fs::read(out.join(orla::render::SOUND_NAME)).unwrap()).unwrap();
+    assert_eq!(sound.rate, 48_000);
+    assert_eq!(
+        sound.field.domain().count(),
+        3 * 800,
+        "three blocks of 800 frames"
+    );
+    // The same frames again are the same bytes: the clock is the count.
+    let first = std::fs::read(orla::render::picture_path(&out, 2)).unwrap();
+    let again = std::env::temp_dir().join(format!("orla-render-again-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&again);
+    assert!(
+        Command::new(orla)
+            .args(["render", "--frames", "3", "--out"])
+            .arg(&again)
+            .arg(root.join("examples/audio/scene.osn"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(
+        std::fs::read(orla::render::picture_path(&again, 2)).unwrap(),
+        first
+    );
+    // A scene with an async node is settled after every frame, so each
+    // frame's picture is of the step before it, none skipped.
+    let machine = std::env::temp_dir().join(format!("orla-render-async-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&machine);
+    let output = Command::new(orla)
+        .args([
+            "render",
+            "--frames",
+            "2",
+            "--window",
+            "32x32",
+            "--backend",
+            "jit",
+            "--out",
+        ])
+        .arg(&machine)
+        .arg(root.join("examples/async/scene.osn"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("rendered 2 picture(s) of 32x32"),
+        "{stderr}"
+    );
+    for dir in [&out, &again, &machine] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

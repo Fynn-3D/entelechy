@@ -21,6 +21,16 @@ usage:
       running version. --window is the window a scene sized by `window()`
       would fill, in pixels, with its scale factor.
       --profile prints how long each executed node took.
+  orla render <scene.osn> --frames <n> [--rate <fps>] [--sound-rate <hz>]
+                          [--out <dir>] [--library <dir|file>] [--input <name>=<file.ppm>]...
+                          [--param <name>=<literal>]... [--window <w>x<h>[@<scale>]]
+                          [--backend cpu|gpu|jit] [--no-fusion]
+      Step the scene for n frames at the rate (60 by default) and write each
+      frame's picture as <dir>/0000.png, 0001.png, ... and the sound output,
+      block after block, as <dir>/sound.wav at the sound rate (48000 by
+      default, what Kernels read as rate()). The clock is the frame count
+      over the rate, so a render is the same every time; async nodes are
+      waited for after every frame. ffmpeg makes a video of the directory.
   orla trace <scene.osn> --node <name> (--element <i> | --at <x> <y> [<z>])
                          [--time <seconds>] [--param <name>=<literal>]...
                          [--window <w>x<h>[@<scale>]] [--library <dir|file>]
@@ -61,6 +71,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("check") => check(&args[1..]),
         Some("run") => run(&args[1..]),
+        Some("render") => render(&args[1..]),
         Some("replay") => replay(&args[1..]),
         Some("serve") => serve(&args[1..]),
         Some("graph") => graph(&args[1..]),
@@ -286,6 +297,139 @@ struct RunOptions {
     window: Option<([f32; 2], f32)>,
     /// Whether to print each executed node's time.
     profile: bool,
+}
+
+/// `render`: the scene and its session flags, and how to render.
+struct RenderOptions {
+    scene: PathBuf,
+    kernels: Option<PathBuf>,
+    inputs: Vec<(String, PathBuf)>,
+    params: Vec<(String, orla_runtime::Value)>,
+    backend: String,
+    fusion: bool,
+    render: orla::render::Options,
+}
+
+fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
+    let mut options = RenderOptions {
+        scene: PathBuf::new(),
+        kernels: None,
+        inputs: Vec::new(),
+        params: Vec::new(),
+        backend: "cpu".into(),
+        fusion: true,
+        render: orla::render::Options {
+            frames: 0,
+            rate: 60.0,
+            sound_rate: 48_000,
+            out: PathBuf::from("frames"),
+            window: None,
+        },
+    };
+    let mut scene = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        let mut value = |flag: &str| {
+            iter.next()
+                .cloned()
+                .ok_or_else(|| format!("{flag} needs a value"))
+        };
+        let number = |flag: &str, text: String| -> Result<f32, String> {
+            text.parse::<f32>()
+                .ok()
+                .filter(|n| *n > 0.0)
+                .ok_or_else(|| format!("{flag} needs a positive number"))
+        };
+        match arg.as_str() {
+            "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
+            "--frames" => {
+                options.render.frames =
+                    value("--frames")?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| "--frames needs a whole number of at least 1".to_string())?;
+            }
+            "--rate" => options.render.rate = number("--rate", value("--rate")?)?,
+            "--sound-rate" => {
+                options.render.sound_rate = number("--sound-rate", value("--sound-rate")?)? as u32;
+            }
+            "--out" => options.render.out = PathBuf::from(value("--out")?),
+            "--window" => {
+                options.render.window = Some(orla::parse_window(&value("--window")?)?);
+            }
+            "--no-fusion" => options.fusion = false,
+            "--backend" => options.backend = value("--backend")?,
+            "--param" => {
+                let binding = value("--param")?;
+                let (name, text) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
+                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
+                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
+                options.params.push((name.to_owned(), literal));
+            }
+            "--input" => {
+                let binding = value("--input")?;
+                let (name, path) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
+                options.inputs.push((name.to_owned(), PathBuf::from(path)));
+            }
+            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
+            other => {
+                if scene.replace(PathBuf::from(other)).is_some() {
+                    return Err("render takes exactly one scene file".into());
+                }
+            }
+        }
+    }
+    options.scene = scene.ok_or_else(|| "render needs a scene file".to_string())?;
+    if options.render.frames == 0 {
+        return Err("render needs --frames <n>".into());
+    }
+    Ok(options)
+}
+
+fn render(args: &[String]) -> Result<(), String> {
+    let options = parse_render(args)?;
+    let runtime = Session::runtime_for(&options.backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
+    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
+    for (name, path) in &options.inputs {
+        session
+            .bind_external(name, path)
+            .map_err(|e| e.to_string())?;
+    }
+    for (name, value) in &options.params {
+        session.set_param(name, *value);
+    }
+    session.set_fusion(options.fusion);
+    report_events(&session.sync());
+    let started = Instant::now();
+    let total = options.render.frames;
+    let summary = orla::render::render(&mut session, &options.render, |index| {
+        if (index + 1) % 60 == 0 || index + 1 == total {
+            eprintln!("frame {}/{total}", index + 1);
+        }
+    })?;
+    let out = options.render.out.display();
+    if let Some((width, height)) = summary.size {
+        eprintln!(
+            "rendered {} picture(s) of {width}x{height} to {out}/0000.png ... in {:?}",
+            summary.pictures,
+            started.elapsed()
+        );
+    }
+    if summary.channels > 0 {
+        eprintln!(
+            "rendered {:.2} s of sound ({} channel(s) at {} Hz) to {out}/{}",
+            summary.sound_frames as f64 / options.render.sound_rate as f64,
+            summary.channels,
+            options.render.sound_rate,
+            orla::render::SOUND_NAME
+        );
+    }
+    Ok(())
 }
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {

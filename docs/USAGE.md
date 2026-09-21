@@ -53,6 +53,25 @@ prints how long each executed node's Kernel took.
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
 ```
 
+## Render frames
+
+`orla render <scene.osn> --frames <n>` steps the scene at a fixed rate
+(`--rate`, 60 by default) and writes each frame's picture as
+`<dir>/0000.png`, `0001.png`, ... (`--out`, `frames` by default) and
+the sound output, block after block, as `<dir>/sound.wav` at
+`--sound-rate` (48000 by default, what Kernels read as `rate()`). The
+picture is the first output that is a grid of pixels and the sound the
+first that is rows of one or two floats, as the Player chooses them.
+The clock is the frame count over the rate, so a render is the same
+every time, and an `async` node's run is waited for after every frame,
+so no step is skipped. The other flags are `run`'s. A video is one
+ffmpeg call over the directory:
+
+```sh
+cargo run --release -- render examples/audio/scene.osn --frames 300 --out /tmp/audio
+ffmpeg -framerate 60 -i /tmp/audio/%04d.png -i /tmp/audio/sound.wav -pix_fmt yuv420p /tmp/audio.mp4
+```
+
 ## Tracing one element
 
 ```sh

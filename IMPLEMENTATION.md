@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Render | [render](crates/cli/src/render.rs) | [session tests](crates/cli/tests/session.rs) |
 | Async nodes | [runs off the frame](crates/runtime/src/later.rs), [evaluator](crates/graph/src/evaluate.rs) | [runtime](crates/runtime/tests/later.rs), [graph](crates/graph/tests/composition.rs), [async example](examples/async/tests/async.replay) |
 | Packages and versions | [package](crates/cli/src/package.rs), [use expansion](crates/cli/src/session.rs), [manifest](crates/language/src/parser.rs) | [pack, unpack, describe, refusal](crates/cli/tests/session.rs), [package example](examples/package/tests/package.replay) |
 | IR optimizer | [optimize](crates/ir/src/optimize.rs) | [every matrix case word for word against the unoptimized IR](crates/cpu/tests/optimizer.rs) |
@@ -445,6 +446,13 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- Render (phase 5, video): `orla render` steps a scene at a fixed rate
+  for a count of frames, the clock being the frame count over the rate,
+  and writes each picture as a PNG in a directory and the sound output as
+  one WAV, block after block; `async` nodes are settled after every
+  frame. A video is ffmpeg's job over the directory; no codec is a
+  dependency.
 
 - Async nodes (the plan's "async Kernels"): `async = true;` on a node.
   `Runtime::execute_later` copies the invocation's inputs into a Host of
