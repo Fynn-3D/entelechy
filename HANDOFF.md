@@ -212,7 +212,13 @@ the weights it kept (300 frames of training) as an `input`, inference
 as its own scene; `text.label` in the shared text library is a caption
 and a number as one row of codes, so a readout is three nodes and no
 Kernel. Open: automation past one frame, which the render command
-begins.
+begins. The assessment of the experience (2026-09-21) listed what was
+awkward; taken in the same day: a scatter sets its own `domain` (no
+more `work` Fields), a reduction's output is written as its element,
+`[each N { body }]` builds an array element by element, and a missing
+function's message names the used documents. Left: loop counts are
+literals (`until index() >= n` is the pattern), and a scatter's target
+is a Field because it holds what the sums start from.
 
 The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar

@@ -323,7 +323,29 @@ pub(super) fn manifest(
             .collect::<Result<Vec<_>, CompileError>>()
     };
     let mut inputs = ports(&kernel.inputs)?;
-    let mut outputs = ports(&kernel.outputs)?;
+    // A reduction yields one element, so its output may be written as the
+    // element's type: `output result: Loss;` is `Rows<Loss>`.
+    let mut outputs = kernel
+        .outputs
+        .iter()
+        .map(|decl| {
+            let ty = match port_type(&decl.ty, structs, aliases) {
+                Ok(ty) => ty,
+                Err(error) if kernel.merge.is_some() && !decl.ty.value.contains('<') => {
+                    let rows = Spanned {
+                        value: format!("Rows<{}>", decl.ty.value),
+                        span: decl.ty.span,
+                    };
+                    port_type(&rows, structs, aliases).map_err(|_| error)?
+                }
+                Err(error) => return Err(error),
+            };
+            Ok(Port {
+                name: decl.name.value.clone(),
+                ty,
+            })
+        })
+        .collect::<Result<Vec<_>, CompileError>>()?;
     // A memory is bound like an input and read like an output: it joins
     // both lists, last, and its name says so.
     let memory_ports = ports(&kernel.memories)?;

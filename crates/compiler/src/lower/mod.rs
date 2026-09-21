@@ -439,6 +439,10 @@ struct Builder<'a> {
     types: Vec<Type>,
     /// Carried types of enclosing loops, innermost last.
     loops: Vec<Type>,
+    /// The `[each ...]` builders being lowered: each element's position,
+    /// and how many loops were open when the builder began, so `index()`
+    /// inside it is this position unless a loop opened since.
+    each: Vec<(u32, usize)>,
     /// Every `let`, in source order, with its value: what a trace shows.
     bindings: Vec<(ValueId, String)>,
 }
@@ -457,6 +461,7 @@ impl<'a> Builder<'a> {
             buffers: vec![Vec::new()],
             types: Vec::new(),
             loops: Vec::new(),
+            each: Vec::new(),
             bindings: Vec::new(),
         }
     }

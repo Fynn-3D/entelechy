@@ -133,7 +133,7 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "arrays",
-            "let lut = [3, 1, 4, 1, 5, 9, 2, 6]; let fl = [x, x * 2.0, 3.0]; let reps = [i; 4]; let grid = [[1, 2], [3, 4], [5, 6]]; let cells = [Cell { a: x, b: i, on: true }, Cell { a: 1.0, b: 2, on: false }]; let t = Table { rows: [i, i + 1, i + 2, i + 3], scale: 0.5 }; let rolled = roll(t.rows, i % 4); let vs = [v, vec3(x, 0.0, 1.0)]; let picked = lut[i % 8] + lut[2] + lut[-i] + lut[i + 100] + reps[i % 3] + grid[i % 3][(i + 1) % 2] + grid[2][0] + cells[i % 2].b + rolled[0] + rolled[i % 4] + t.rows[3];",
+            "let lut = [3, 1, 4, 1, 5, 9, 2, 6]; let fl = [x, x * 2.0, 3.0]; let reps = [i; 4]; let grid = [[1, 2], [3, 4], [5, 6]]; let cells = [Cell { a: x, b: i, on: true }, Cell { a: 1.0, b: 2, on: false }]; let t = Table { rows: [i, i + 1, i + 2, i + 3], scale: 0.5 }; let rolled = roll(t.rows, i % 4); let vs = [v, vec3(x, 0.0, 1.0)]; let built = [each 5 { let k = index() * 2; k + i }]; let squares = [each 3 { loop 4 with s = 0 { s + index() * built[index()] } }]; let picked = lut[i % 8] + lut[2] + lut[-i] + lut[i + 100] + reps[i % 3] + grid[i % 3][(i + 1) % 2] + grid[2][0] + cells[i % 2].b + rolled[0] + rolled[i % 4] + t.rows[3] + built[i % 5] + squares[i % 3];",
             "Out { f: fl[i % 3] + fl[1] * t.scale + cells[i % 2].a + vs[i % 2].y + vs[1].z, i: picked, b: cells[(i + 1) % 2].on, v: vs[i % 2] + mix(vs[0], vs[1], k) }",
         ),
         (

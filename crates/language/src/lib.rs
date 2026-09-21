@@ -492,6 +492,9 @@ pub enum ExprKind {
     Array(Vec<Expr>),
     /// `[value; n]`: an array of `n` copies of a value.
     Repeat(Box<Expr>, Spanned<u32>),
+    /// `[each n { body }]`: an array built element by element, the body
+    /// run once per element with `index()` its position.
+    Each(Spanned<u32>, Box<Block>),
     /// `array[index]`: the element at an `Int` index, clamped into the
     /// array; a literal index is checked when compiled.
     Subscript(Box<Expr>, Box<Expr>),

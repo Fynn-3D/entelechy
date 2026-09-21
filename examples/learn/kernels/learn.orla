@@ -6,7 +6,6 @@
 
 struct Point { position: Vec2; label: Float; }
 struct Loss { sum: Float; count: Int; }
-type Losses = Rows<Loss>;
 
 // Weights, laid out: hidden unit j has its two weights and bias at
 // 3j, 3j + 1, 3j + 2 (48 of them); the output's weight on unit j is at
@@ -102,7 +101,7 @@ kernel learn.loss@1 {
     requires { field.read; field.write; }
     input points: Rows<Point>;
     input weights: Rows<Float>;
-    output result: Losses;
+    output result: Loss;           // a reduction's output, written as its element
     compute {
         let point = sample(points);
         let o = clamp(sigmoid(logit(weights, point.position)), 0.0001, 0.9999);

@@ -448,6 +448,19 @@ capability claim.
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
 
+- The awkward list of the 2026-09-21 assessment, taken in: a scatter
+  node may set its own `domain` (its body runs once per element of it,
+  the first input's extent by default; the output is the target's
+  extent as before), so a step over a product of two counts needs no
+  Field of that size; a reduction's output may be written as its element
+  type (`output result: Loss;` is `Rows<Loss>`); `[each N { body }]`
+  builds an array element by element, unrolled, `index()` its position
+  (a loop inside has its own); and a function not found names the
+  documents a document uses as a place to look. Left as they are: loop
+  counts stay literals, since `loop MAX with ... until index() >= n`
+  is the pattern for a count from a param; and a scatter's target must
+  exist as a Field, since it holds what the sums start from.
+
 - Frames in (phase 5, video's input half): `input clip: Image = frames
   "dir/" at N;` lists a directory's frame files in name order on sync
   (`Sequence` in the session) and, at each evaluation, brings in frame

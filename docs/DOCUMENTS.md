@@ -84,7 +84,12 @@ result, a loop's carried value or a Field's element. `[a, b, c]` builds
 one from its elements, `[v; 8]` from eight copies of a value, and
 `a[i]` takes an element: with a literal index it is a field, checked
 when the Kernel compiles; with an `Int` computed at run time it is
-clamped into the array, as `at` clamps into a Field. An array has one
+clamped into the array, as `at` clamps into a Field. `[each N { body }]`
+builds an array element by element: the body runs once per element,
+unrolled, with `index()` its position (a loop inside the body has its
+own `index()`), so `[each 32 { unit(w, x, index()) }]` is a layer's
+activations and `[each 4 { if index() == k { v } else { a[index()] } }]`
+is `a` with element `k` replaced. An array has one
 to 4096 elements and is laid out as its elements in order, so a lookup
 table, a ROM or a register file is written as data (the CHIP-8's font
 and the Thumb core's program are). Parameters stay plain values: an

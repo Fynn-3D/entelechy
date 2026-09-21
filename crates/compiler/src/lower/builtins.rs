@@ -4,7 +4,8 @@
 //! document's own functions.
 
 use orla_ir::{
-    BinaryOp, Block as IrBlock, Capability, Intrinsic, Mode, Op, Shape, ShapeIndex, Type, ValueId,
+    BinaryOp, Block as IrBlock, Capability, Intrinsic, Mode, Op, Shape, ShapeIndex, Type, Value,
+    ValueId,
 };
 use orla_language::{Expr, Span};
 
@@ -366,11 +367,16 @@ impl Builder<'_> {
             }
             "index" => {
                 self.arity(name, args, 0, span)?;
+                if let Some((position, depth)) = self.each.last().copied()
+                    && depth == self.loops.len()
+                {
+                    return Ok(self.emit(Type::Int, Op::Const(Value::Int(position as i32))));
+                }
                 let scanning = self.is_entry && self.manifest.mode == Mode::Scan;
                 if self.loops.is_empty() && !scanning {
                     return Err(semantic(
                         span,
-                        "`index()` is only available inside a loop or a `scan`",
+                        "`index()` is only available inside a loop, an `[each ...]`, or a `scan`",
                     ));
                 }
                 Ok(self.emit(Type::Int, Op::Index))
@@ -606,7 +612,9 @@ impl Builder<'_> {
                 }
                 Err(semantic(
                     span,
-                    format!("`{name}` is not a builtin, intrinsic, or function defined above"),
+                    format!(
+                        "`{name}` is not a builtin, intrinsic, or function defined above or in a document this one uses"
+                    ),
                 ))
             }
         }

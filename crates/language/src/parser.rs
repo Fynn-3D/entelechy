@@ -1330,6 +1330,35 @@ impl Parser {
                 if self.is_punct("]") {
                     return Err(self.error("an array literal has at least one element"));
                 }
+                if self.is_keyword("each")
+                    && matches!(
+                        self.tokens.get(self.position + 1).map(|l| &l.token),
+                        Some(Token::Int(_))
+                    )
+                {
+                    self.next();
+                    let count = match self.next() {
+                        (Token::Int(count), count_span) if count > 0 => Spanned {
+                            value: count as u32,
+                            span: count_span,
+                        },
+                        (token, count_span) => {
+                            return Err(ParseError {
+                                span: count_span,
+                                message: format!(
+                                    "`[each count {{ ... }}]` needs a positive integer count, found {}",
+                                    token.describe()
+                                ),
+                            });
+                        }
+                    };
+                    let body = self.block()?;
+                    self.expect_punct("]")?;
+                    return Ok(Expr {
+                        kind: ExprKind::Each(count, Box::new(body)),
+                        span,
+                    });
+                }
                 let first = self.expr()?;
                 if self.eat_punct(";") {
                     let count = match self.next() {

@@ -171,6 +171,18 @@ impl Builder<'_> {
                 let ty = self.array_type(self.ty(id), count.value, count.span)?;
                 Ok(self.emit(ty, Op::Construct(vec![id; count.value as usize])))
             }
+            ExprKind::Each(count, body) => {
+                // Unrolled: the body once per element, `index()` a literal.
+                let mut ids = Vec::with_capacity(count.value as usize);
+                for position in 0..count.value {
+                    self.each.push((position, self.loops.len()));
+                    let id = self.block(body);
+                    self.each.pop();
+                    ids.push(id?);
+                }
+                let ty = self.array_type(self.ty(ids[0]), count.value, count.span)?;
+                Ok(self.emit(ty, Op::Construct(ids)))
+            }
             ExprKind::Subscript(array, index) => {
                 let array_id = self.value(array)?;
                 let array_ty = self.ty(array_id);
