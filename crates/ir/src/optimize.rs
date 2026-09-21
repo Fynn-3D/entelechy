@@ -796,6 +796,11 @@ fn defined(body: &[Instruction]) -> HashSet<u32> {
 /// Whether an operation can fail where it stands: integer arithmetic
 /// overflows and divides by zero, and a run says so of the element it
 /// happened in. Floats have no failures; a Field read is clamped.
+/// How many operations one compile may run while folding a function's
+/// loops. A table built in a loop is a hundred or so; this stops a
+/// Kernel whose loops are large from making a compile long.
+const LOOP_BUDGET: u32 = 20_000;
+
 fn can_fail(ty: Type, op: &Op) -> bool {
     let integer = matches!(ty, Type::Int | Type::IVec2 | Type::IVec3);
     integer && matches!(op, Op::Binary(..) | Op::Intrinsic(..))
@@ -925,13 +930,22 @@ impl Simplify<'_> {
                     init,
                     until,
                     body,
-                } => Op::Loop {
-                    count: *count,
-                    bound: bound.map(|bound| self.map(bound)),
-                    init: self.map(*init),
-                    until: until.as_ref().map(|block| self.nested(block)),
-                    body: self.nested(body),
-                },
+                } => {
+                    let loop_op = Op::Loop {
+                        count: *count,
+                        bound: bound.map(|bound| self.map(bound)),
+                        init: self.map(*init),
+                        until: until.as_ref().map(|block| self.nested(block)),
+                        body: self.nested(body),
+                    };
+                    // A loop that only computes, over a count and an
+                    // initial value known here, is run here: a Kernel
+                    // would run it again for every element.
+                    match self.run_loop(&loop_op) {
+                        Some(value) => Op::Const(value),
+                        None => loop_op,
+                    }
+                }
                 other => {
                     let mut op = other.clone();
                     rename(&mut op, &|id| self.map(id));
@@ -1019,6 +1033,140 @@ impl Simplify<'_> {
             matches!(self.defs.get(&part.0), Some((_, Op::Extract(source, at))) if source.0 == whole && *at as usize == k)
         });
         all.then_some(whole)
+    }
+
+    /// A loop with a known count and a literal initial value whose body
+    /// only computes: run here, so what it gives is a literal. Nothing
+    /// that reads a Field, writes a memory, calls a function or can
+    /// fail is run, and the budget bounds what a compile spends on it.
+    fn run_loop(&self, op: &Op) -> Option<Value> {
+        let Op::Loop {
+            count,
+            bound: None,
+            init,
+            until,
+            body,
+        } = op
+        else {
+            return None;
+        };
+        let mut env: HashMap<u32, Value> = HashMap::new();
+        let mut carried = self.known(*init, &env)?;
+        let mut budget = LOOP_BUDGET;
+        for index in 0..*count {
+            if let Some(until) = until
+                && self.run_block(until, carried, index, &mut env, &mut budget)?
+                    == Value::Bool(true)
+            {
+                return Some(carried);
+            }
+            carried = self.run_block(body, carried, index, &mut env, &mut budget)?;
+        }
+        Some(carried)
+    }
+
+    /// A block of the loop being run: every instruction in order, then
+    /// what it yields.
+    fn run_block(
+        &self,
+        block: &Block,
+        carried: Value,
+        index: u32,
+        env: &mut HashMap<u32, Value>,
+        budget: &mut u32,
+    ) -> Option<Value> {
+        for instruction in &block.body {
+            *budget = budget.checked_sub(1)?;
+            let value = self.run_op(&instruction.op, carried, index, env, budget)?;
+            env.insert(instruction.id.0, value);
+        }
+        self.known(block.result, env)
+    }
+
+    /// One operation of the loop being run.
+    fn run_op(
+        &self,
+        op: &Op,
+        carried: Value,
+        index: u32,
+        env: &mut HashMap<u32, Value>,
+        budget: &mut u32,
+    ) -> Option<Value> {
+        match op {
+            Op::Const(value) => Some(*value),
+            Op::Carried => Some(carried),
+            Op::Index => Some(Value::Int(index as i32)),
+            Op::Unary(unary, a) => fold_unary(*unary, self.known(*a, env)?),
+            Op::Binary(binary, a, b) => {
+                fold_binary(*binary, self.known(*a, env)?, self.known(*b, env)?)
+            }
+            Op::Intrinsic(intrinsic, args) => {
+                let values: Option<Vec<Value>> =
+                    args.iter().map(|arg| self.known(*arg, env)).collect();
+                fold_intrinsic(*intrinsic, &values?)
+            }
+            Op::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let taken = match self.known(*condition, env)? {
+                    Value::Bool(true) => then,
+                    Value::Bool(false) => otherwise,
+                    _ => return None,
+                };
+                self.run_block(taken, carried, index, env, budget)
+            }
+            Op::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } => {
+                let Value::Int(value) = self.known(*scrutinee, env)? else {
+                    return None;
+                };
+                let taken = arms
+                    .iter()
+                    .find(|(values, _)| values.contains(&value))
+                    .map(|(_, block)| block)
+                    .unwrap_or(otherwise);
+                self.run_block(taken, carried, index, env, budget)
+            }
+            // A loop inside carries its own value and counts its own
+            // iterations.
+            Op::Loop {
+                count,
+                bound: None,
+                init,
+                until,
+                body,
+            } => {
+                let mut inner = self.known(*init, env)?;
+                for step in 0..*count {
+                    *budget = budget.checked_sub(1)?;
+                    if let Some(until) = until
+                        && self.run_block(until, inner, step, env, budget)? == Value::Bool(true)
+                    {
+                        return Some(inner);
+                    }
+                    inner = self.run_block(body, inner, step, env, budget)?;
+                }
+                Some(inner)
+            }
+            _ => None,
+        }
+    }
+
+    /// What a value is where the loop is being run: one the run has
+    /// computed, or a literal from outside it.
+    fn known(&self, id: ValueId, env: &HashMap<u32, Value>) -> Option<Value> {
+        if let Some(value) = env.get(&id.0) {
+            return Some(*value);
+        }
+        match self.defs.get(&id.0) {
+            Some((_, Op::Const(value))) => Some(*value),
+            _ => None,
+        }
     }
 
     /// The literal an operation on literals is, when one and never a

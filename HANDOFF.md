@@ -527,6 +527,22 @@ the last node instead of making two a node: kept, `collapse` 7.64 to
 7.50 ms over four alternating runs, nothing else moved, and a node of
 a busy scene does two fewer allocations.
 
+The measuring found its own work to do. The `collapse` example asks
+what the sixteen tiles have on a side, and it asks with a loop over the
+tiles, twice a neighbour, four neighbours a cell: on the interpreter
+that was four fifths of a frame. The optimizer now runs a loop whose
+count and initial value it knows and whose body only computes, so what
+comes out is the literal it was always going to be (rewrite 8, in
+`Simplify::run_loop`, with a budget of twenty thousand operations a
+function). Nothing that reads a Field, writes a memory, calls a
+function or can fail is run there: a failure belongs to the element
+that has it. `collapse` on the interpreter went from 237 to 43
+milliseconds a frame and the whole replay suite on the interpreter from
+29.2 to 12.5 seconds; the other examples are unchanged, since none of
+them happened to write a loop over constants, and the JIT and the GPU
+are unchanged too. What it buys is that the clear way to write a table
+is now the cheap one.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

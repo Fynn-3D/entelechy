@@ -24,6 +24,7 @@ capability claim.
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | Short-circuit and guards | [lowering](crates/compiler/src/lower/expr.rs), [parser](crates/language/src/parser.rs) `block_body`, [optimizer](crates/ir/src/optimize.rs) `folded` | [interpreter](crates/cpu/tests/execute.rs), [feature matrix](crates/matrix/src/lib.rs) `short circuit`, [parser tests](crates/language/src/parser.rs) |
+| Loops over literals | [optimizer](crates/ir/src/optimize.rs) `Simplify::run_loop` | [optimizer tests](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Waiting for a device | [gpu](crates/gpu/src/lib.rs) `settle_device`, [runtime](crates/runtime/src/lib.rs) `Backend::settle_device`, [bench](crates/cli/src/bench.rs) | measured by `orla bench` on every example |
 | Measuring a scene | [bench](crates/cli/src/bench.rs), [cli](crates/cli/src/main.rs) `measure` | [session tests](crates/cli/tests/session.rs) |
 | Named manifests | [ir display](crates/ir/src/display.rs) `type_name`, `Manifest::named`, [protocol](crates/cli/src/protocol.rs) `manifest_json`, [schema](crates/host/src/lib.rs) `describe` | [compile tests](crates/compiler/tests/compile.rs), [protocol tests](crates/cli/tests/protocol.rs), [composition](crates/graph/tests/composition.rs) |
@@ -712,7 +713,22 @@ capability claim.
   interpreter's voxel frame from 2.2 s to 1.75 s and marching from 29 ms
   to 16 ms, the JIT's marching from 2.4 ms to 1.6 ms (fewer Field
   reads), the JIT's voxel unchanged, as Cranelift had done the rest.
-  `orla check --ir` shows the optimized IR.
+  `orla check --ir` shows the optimized IR. Since then: short functions
+  written out where they are called, work lifted out of a loop that
+  cannot fail, a short-circuit written back as one operation, and a
+  loop run here. That last one (`Simplify::run_loop`) takes a loop
+  whose count is a literal, whose initial value is a literal and whose
+  body only computes, runs it while the Kernel compiles, and leaves the
+  literal it gives. It walks the body's `if`s, `match`es and inner
+  loops, reads `Op::Carried` and `Op::Index` as the run has them, and
+  stops at anything else: a Field read, a memory write, a call, or an
+  operation that would fail, since a failure belongs to the element
+  that has it. Twenty thousand operations is the budget for a function,
+  which a table built in a loop spends a hundred of. The `collapse`
+  example asks what the sixteen tiles have on each side with such a
+  loop, four neighbours a cell: on the interpreter it went from 237 to
+  43 ms a frame, and the whole replay suite from 29.2 to 12.5 s, with
+  the other examples, the JIT and the GPU unchanged.
 
 - State migration (the plan's section 24): a `<~` binding may name a
   migration Kernel, `migrate id@v`, a map from the old element layout to
