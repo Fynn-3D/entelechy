@@ -1,0 +1,32 @@
+scene ../scene.osn
+
+# Eight gradient steps a frame at rate 2. The loss (a sum over the 256
+# points) falls as the network learns the circle; after twenty frames, 160
+# steps, the plane is warm inside it and cool outside. The CPU and the JIT
+# agree bit for bit; the GPU's sums land within the tolerances.
+frame 0.0
+expect loss.result[0].sum = 136.36 0.05
+frame 0.0167
+frame 0.0333
+frame 0.0500
+frame 0.0667
+frame 0.0833
+frame 0.1000
+frame 0.1167
+frame 0.1333
+frame 0.1500
+frame 0.1667
+frame 0.1833
+frame 0.2000
+frame 0.2167
+frame 0.2333
+frame 0.2500
+frame 0.2667
+frame 0.2833
+frame 0.3000
+frame 0.3167
+frame 0.3333
+expect loss.result[0].sum = 29.0 1.0
+expect 176 114 = 0.95 0.6 0.2 0.1        # inside the circle: warm
+expect 20 20 = 0.15 0.25 0.55 0.1        # a corner: cool
+expect 300 30 = 0.15 0.25 0.55 0.1       # the far corner: cool

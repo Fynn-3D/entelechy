@@ -1,0 +1,14 @@
+// One gradient step: the sum of every point's gradient, then the update.
+// The scene places this eight times a frame, carrying the weights on.
+use "kernels/";
+
+input weights: Rows<Float>;
+input points: Rows<Point>;
+input work: Rows<Int>;
+input zeros: Rows<Float>;
+param rate: Float = 2.0;
+
+node grads: learn.grads@1 { work <- work; points <- points; weights <- weights; zeros <- zeros; }
+node step: learn.step@1 { weights <- weights; grads <- grads.result; rate = rate; }
+
+output result <- step.result;

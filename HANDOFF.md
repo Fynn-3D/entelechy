@@ -182,10 +182,20 @@ three bridges and the C ABI, and a scriptable `run` and `replay`. Done
 since: video's output half, `orla render` (N frames at a rate, the
 clock the frame count over the rate, each picture a PNG in a directory
 and the sound output one WAV beside them, `async` nodes settled every
-frame; ffmpeg makes the video). Open: a frame-sequence input; AI, which is inference as Kernels, weights as Fields and a small
-network run on the three backends, the test of the general-compute
-claim and of the language's fixed loop counts; and automation past one
-frame, which the render command begins. Recommended next: an inference example as a play round.
+frame; ffmpeg makes the video). Also done: AI's first example,
+`learn`, a 2-16-1 network trained by gradient descent to tell the
+inside of a circle from the outside, all of it Kernels (the gradient a
+scatter, element `e` being weight `e % 65` of point `e / 65`, so no
+array is summed; the step placed eight times a frame with `times`, the
+weights carried on through `<~`; the loss a reduce; the CPU and the
+JIT bit for bit, the GPU's sums within two percent after 160 steps),
+which found that a reduce's output wants a declared `type`, that a
+scatter maps over its first input's elements so a product-sized step
+takes a `work` Field of that size, and that fixed loop counts were no
+obstacle. Open: a frame-sequence input; inference from weights trained
+elsewhere (a `.field` of weights read as an `input`, which the pieces
+allow and no example shows); and automation past one frame, which the
+render command begins.
 
 The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar

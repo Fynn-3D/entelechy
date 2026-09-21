@@ -1,0 +1,31 @@
+// points and init seed the set and the weights; train takes eight
+// gradient steps a frame, carrying the weights from one to the next and
+// from frame to frame; loss measures, view paints the answer, dots the set.
+use "kernels/";
+
+param rate: Float = 2.0;
+
+node points: learn.points@1 { domain = 256; }
+node init: learn.init@1 { domain = 65; }
+node zeros: learn.zeros@1 { domain = 65; }
+node work: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = 16640;                 // 256 points times 65 weights
+    compute { return 0; }
+}
+node train: graph "train.osn" {
+    times = 8;
+    carry weights <- result;
+    weights <~ train.result from init.result;
+    points <- points.result;
+    work <- work.result;
+    zeros <- zeros.result;
+    rate = rate;
+}
+node loss: learn.loss@1 { points <- points.result; weights <- train.result; }
+node view: learn.view@1 { weights <- train.result; domain = vec2(320, 240); }
+node dots: learn.dots@1 { points <- points.result; picture <- view.result; }
+
+output result <- dots.result;
+output loss <- loss.result;
