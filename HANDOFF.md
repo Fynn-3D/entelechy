@@ -613,17 +613,35 @@ on the old benchmark's million rows: the range 3.40 to 3.15, the loads
 0.58. The interpreter kept the copies it needs to stay safe but writes
 its one output whole rather than gathering it first.
 
+Then the addressing itself, which measurement said was worth three or
+four times what a thread pool would be. A map's entry reads each
+input's view once before its run rather than at every element, and
+because a run stays on one row it can work out where that row begins
+at the same time; then it carries every input's place from element to
+element, walking on by one and stopping at the end of the row, which
+is exactly what clamping an `x` past the edge comes to. A `sample` is
+then the loads and nothing else: no extent, no clamp, no multiply. The
+benchmark went 0.58 to 0.45 for reading the views once and 0.45 to
+0.42 for carrying the places.
+
 Where that leaves the comparison, the same work on the same machine: a
 million rows of `vec2`, each moved by its own velocity, fed back, no
 picture. The old Orla takes 0.270 ms on the CPU and 0.275 on the GPU;
-this one takes 0.58 on the JIT and 0.70 on the GPU, having started the
-round at 6.35 and 0.63. What is left of the difference is two things:
-ten threads are made and joined for every map of every node (a
-measurement of the same work on one thread says the ten cost about a
-quarter of a millisecond to make), and a frame here is a graph
-evaluation with a state commit rather than a tick of one kernel. A
-pool of threads that stay is the next thing worth doing, and it is
-worth about that quarter.
+this one takes 0.42 on the JIT and 0.70 on the GPU, having started at
+6.35 and 0.63. At 0.42 ms the frame moves 24 MB, which is 57 GB/s, so
+what is left is the memory system and the frame's own work (a graph
+evaluation with a state commit, against a tick of one kernel) rather
+than anything the code generator is still doing per element. Measured
+and declined for now: a pool of threads that stay. Making ten threads
+costs about 0.09 ms, which a scene pays once a big map; it is a
+sixteenth of this benchmark and about a twentieth of a `million`
+frame, against hand-written unsafe concurrency in crates that have no
+dependencies.
+
+What the whole chase did to the examples, a frame at 960x540 on the
+JIT: `learn` 56.6 to 7.7 ms, `million` 20.4 to 5.5, `fluid` 38.6 to
+23.6, `voxel` 83.1 to 78.9, `raymarch` 10.7 to 10.3. The interpreter's
+replay suite went from 12.5 to 9.1 seconds and the JIT's runs in 1.2.
 
 A million of something, which is the number other engines are held to:
 `million`, a million bodies each with a place, a speed and a tint,

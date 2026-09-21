@@ -332,6 +332,29 @@ fn result_type(function: &Function) -> Type {
     find(&function.body, function.results[0]).unwrap_or(Type::Float)
 }
 
+/// An input's view as the run sees it: the parts that do not change
+/// while the run walks its elements.
+#[derive(Clone, Copy)]
+struct ViewOnce {
+    /// The first word of the Field.
+    words: Value,
+    /// Bytes an element takes.
+    element: Value,
+    /// The largest `x` the Field has.
+    last_x: Value,
+    /// The first element of the row this run is on, clamped into the
+    /// Field as `sample` clamps.
+    row: Value,
+    /// The last element there is, for an address over rows.
+    last: Value,
+    /// Where this element's words are, carried from element to element
+    /// rather than worked out again: `sample` walks the row one element
+    /// at a time and stops at its end, which is the clamp.
+    at: Option<Value>,
+    /// The last element of the row, as an address: where `at` stops.
+    end: Value,
+}
+
 /// One function being translated.
 struct Fx<'a, 'b> {
     module: &'a Module,
@@ -373,6 +396,11 @@ struct Fx<'a, 'b> {
     powf: FuncRef,
     atan2f: FuncRef,
     fmodf: FuncRef,
+    /// What every input's view says, read once before a map's run
+    /// rather than at every element: the words, the bytes an element
+    /// takes, the last `x` there is, and where the run's own row
+    /// starts. A read is then one clamp, one multiply and one add.
+    settled_views: Vec<Option<ViewOnce>>,
     scratch: StackSlot,
     flags: MemFlags,
     /// What the context and the views hold, which nothing writes while
@@ -450,6 +478,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             powf,
             atan2f,
             fmodf,
+            settled_views: Vec::new(),
             scratch,
             flags: MemFlags::trusted(),
             settled: MemFlags::trusted().with_readonly(),
@@ -523,6 +552,7 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// of it and a million elements is one call rather than a million.
     fn map_run(mut self, function: &Function, params: &[Value]) {
         let (x0, y, z, count, out0) = (params[1], params[2], params[3], params[4], params[5]);
+        self.settle_views(y, z);
         let header = self.b.create_block();
         let body_block = self.b.create_block();
         let failed = self.b.create_block();
@@ -530,11 +560,31 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.append_block_param(header, types::I32);
         self.b.append_block_param(header, self.ptr);
         self.b.append_block_param(failed, types::I32);
-        let zero = self.i32c(0);
-        self.b.ins().jump(header, &[zero.into(), out0.into()]);
+        // Where each input's first element is, for the run's first `x`.
+        let mut first: Vec<BlockArg> = vec![self.i32c(0).into(), out0.into()];
+        let settled = self.settled_views.clone();
+        for view in settled.iter().flatten() {
+            self.b.append_block_param(header, self.ptr);
+            let cx = self.b.ins().umin(x0, view.last_x);
+            let index = self.b.ins().iadd(view.row, cx);
+            let bytes = self.b.ins().imul(index, view.element);
+            let offset = self.b.ins().uextend(self.ptr, bytes);
+            let at = self.b.ins().iadd(view.words, offset);
+            first.push(at.into());
+        }
+        self.b.ins().jump(header, &first);
         self.b.switch_to_block(header);
-        let taken = self.b.block_params(header)[0];
-        let out = self.b.block_params(header)[1];
+        let header_params = self.b.block_params(header).to_vec();
+        let taken = header_params[0];
+        let out = header_params[1];
+        for (slot, at) in self
+            .settled_views
+            .iter_mut()
+            .flatten()
+            .zip(header_params[2..].iter())
+        {
+            slot.at = Some(*at);
+        }
         let more = self.b.ins().icmp(IntCC::UnsignedLessThan, taken, count);
         self.b.ins().brif(more, body_block, &[], exit, &[]);
         self.b.switch_to_block(body_block);
@@ -559,13 +609,18 @@ impl<'a, 'b> Fx<'a, 'b> {
         let next = self.b.ins().iadd_imm(taken, 1);
         // What the stores just wrote is what one element takes.
         let step = self.b.ins().iadd_imm(out, i64::from(offset));
-        self.b.ins().brif(
-            stop,
-            failed,
-            &[x.into()],
-            header,
-            &[next.into(), step.into()],
-        );
+        // Every input walks on one element, and stops at the end of its
+        // row, which is what clamping an `x` past the edge comes to.
+        let views = self.settled_views.clone();
+        let mut again: Vec<BlockArg> = vec![next.into(), step.into()];
+        for view in views.iter().flatten() {
+            let at = view.at.expect("the run carries every input's place");
+            let element = self.b.ins().uextend(self.ptr, view.element);
+            let moved = self.b.ins().iadd(at, element);
+            let held = self.b.ins().umin(moved, view.end);
+            again.push(held.into());
+        }
+        self.b.ins().brif(stop, failed, &[x.into()], header, &again);
         self.b.seal_block(header);
         self.b.switch_to_block(failed);
         self.b.seal_block(failed);
@@ -782,6 +837,59 @@ impl<'a, 'b> Fx<'a, 'b> {
     }
 
     /// The view of an input: its address.
+    /// Reads what every input's view says before the run begins: the
+    /// words, the bytes an element takes, and the row this run is on.
+    /// A run stays on one row, so the row's first element is the same
+    /// for every element of it and is worked out here.
+    fn settle_views(&mut self, y: Value, z: Value) {
+        let inputs = self.module.manifest.inputs.len();
+        let mut settled = Vec::with_capacity(inputs);
+        for input in 0..inputs as u32 {
+            let view = self.view(input);
+            let field =
+                |fx: &mut Self, offset: i32| fx.b.ins().load(types::I32, fx.settled, view, offset);
+            let words = self
+                .b
+                .ins()
+                .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
+            let stride = field(self, offsets::VIEW_STRIDE);
+            let width = field(self, offsets::VIEW_WIDTH);
+            let height = field(self, offsets::VIEW_HEIGHT);
+            let depth = field(self, offsets::VIEW_DEPTH);
+            let element = self.b.ins().imul_imm(stride, 4);
+            let last_x = self.b.ins().iadd_imm(width, -1);
+            let last_y = self.b.ins().iadd_imm(height, -1);
+            let last_z = self.b.ins().iadd_imm(depth, -1);
+            let cy = self.b.ins().umin(y, last_y);
+            let cz = self.b.ins().umin(z, last_z);
+            let layer = self.b.ins().imul(cz, height);
+            let row = self.b.ins().iadd(layer, cy);
+            let row = self.b.ins().imul(row, width);
+            let rows = self.b.ins().imul(width, height);
+            let count = self.b.ins().imul(rows, depth);
+            let last = self.b.ins().iadd_imm(count, -1);
+            let end_index = self.b.ins().iadd(row, last_x);
+            let end_bytes = self.b.ins().imul(end_index, element);
+            let end_offset = self.b.ins().uextend(self.ptr, end_bytes);
+            let end = self.b.ins().iadd(words, end_offset);
+            settled.push(Some(ViewOnce {
+                words,
+                element,
+                last_x,
+                row,
+                last,
+                at: None,
+                end,
+            }));
+        }
+        self.settled_views = settled;
+    }
+
+    /// What the run read about an input before it began, if it did.
+    fn settled_view(&self, input: u32) -> Option<ViewOnce> {
+        self.settled_views.get(input as usize).copied().flatten()
+    }
+
     /// The words of one element of an input, loaded where the helper
     /// that copies them would have been called: the extent and the
     /// stride come from the view, and the element is clamped into the
@@ -789,17 +897,22 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// A read is a handful of loads, and the loop around it keeps the
     /// view's own loads in registers.
     fn element_words(&mut self, input: u32, index: Value, tys: &[types::Type]) -> Vec<Value> {
-        let view = self.view(input);
-        let words = self
-            .b
-            .ins()
-            .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
-        let stride = self
-            .b
-            .ins()
-            .load(types::I32, self.settled, view, offsets::VIEW_STRIDE);
-        let slot = self.b.ins().imul(index, stride);
-        let bytes = self.b.ins().imul_imm(slot, 4);
+        let (words, element) = match self.settled_view(input) {
+            Some(view) => (view.words, view.element),
+            None => {
+                let view = self.view(input);
+                let words = self
+                    .b
+                    .ins()
+                    .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
+                let stride =
+                    self.b
+                        .ins()
+                        .load(types::I32, self.settled, view, offsets::VIEW_STRIDE);
+                (words, self.b.ins().imul_imm(stride, 4))
+            }
+        };
+        let bytes = self.b.ins().imul(index, element);
         let offset = self.b.ins().uextend(self.ptr, bytes);
         let at = self.b.ins().iadd(words, offset);
         tys.iter()
@@ -811,6 +924,12 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// This element's own place in an input, clamped into it: what
     /// `sample` reads.
     fn sample_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
+        // The row is the same for every element of a run, so what is
+        // left here is one clamp and one add.
+        if let Some(view) = self.settled_view(input) {
+            let cx = self.b.ins().umin(x, view.last_x);
+            return self.b.ins().iadd(view.row, cx);
+        }
         let view = self.view(input);
         let extent =
             |fx: &mut Self, offset: i32| fx.b.ins().load(types::I32, fx.flags, view, offset);
@@ -833,6 +952,11 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// An `Int` address into a Field, clamped to its elements: what `at`
     /// reads over rows.
     fn rows_index(&mut self, input: u32, address: Value) -> Value {
+        if let Some(view) = self.settled_view(input) {
+            let zero = self.i32c(0);
+            let floored = self.b.ins().smax(address, zero);
+            return self.b.ins().smin(floored, view.last);
+        }
         let view = self.view(input);
         let width = self
             .b
@@ -1376,9 +1500,18 @@ impl<'a, 'b> Fx<'a, 'b> {
                 }
             }
             Op::Sample(input) => {
+                let tys = word_types(self.module, ty);
+                // The run carries where this element is in every input,
+                // so a `sample` is the loads and nothing else.
+                if let Some(at) = self.settled_view(*input).and_then(|view| view.at) {
+                    return tys
+                        .iter()
+                        .enumerate()
+                        .map(|(k, t)| self.b.ins().load(*t, self.flags, at, (k * 4) as i32))
+                        .collect();
+                }
                 let (x, y, z, _) = self.coords.expect("entry point");
                 let index = self.sample_index(*input, x, y, z);
-                let tys = word_types(self.module, ty);
                 self.element_words(*input, index, &tys)
             }
             Op::At(input, address) => {
