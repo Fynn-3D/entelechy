@@ -89,6 +89,23 @@ a state row pays for the state, not the picture. With `settle: true`, it
 first waits for every `async` node's run off the frame to land, so the
 evaluation reads it.
 
+`advance` runs many frames in one request, which is how a job that
+spans them is asked for: `frames` (1 to 100000) at `fps` frames a
+second of the clock (60 by default), from `time`, with the rest of
+`evaluate`'s context held for every frame and an `async` node settled
+after each. With `until`, `{target, below | above | equals}`, it stops
+as soon as the value says to: the target is `node.port[index].field`,
+the spelling a replay writes, and the value is a Float, an Int or a
+Bool. With `save`, an object of `node.port` to a file path (relative
+paths beside the scene), it writes those outputs when the run stops, by
+the rules `run --save` follows. The answer says `frames` (how many
+ran), `stopped` (`"frames"` or `"until"`), `target` and `value` (what
+the watched value last was), `saved`, `millis`, and `report`, the last
+frame's. Only what `until` and `save` name has to be materialized, so a
+training run does not draw the picture; with neither, the whole scene
+runs. A network trained over a thousand frames and kept as a file is
+one request, not a thousand.
+
 `help` answers with every builtin a Kernel may call (`builtins`, each
 `{name, kind, signatures, doc, requires, entry_only}`) and every form
 the language and the documents are written in (`forms`, each `{name,

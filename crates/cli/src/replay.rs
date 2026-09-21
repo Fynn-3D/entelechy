@@ -225,26 +225,11 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 });
             }
             ["expect", target, "=", values @ ..] if target.contains('[') && !values.is_empty() => {
-                let (head, rest) = target
-                    .split_once('[')
-                    .ok_or_else(|| error("expect an element as `node.port[index]`".into()))?;
-                let (index, tail) = rest
-                    .split_once(']')
-                    .ok_or_else(|| error("expect an element as `node.port[index]`".into()))?;
-                let (node, port) = head
-                    .rsplit_once('.')
-                    .ok_or_else(|| error("expect names `node.port`".into()))?;
-                let index = index
-                    .parse::<u32>()
-                    .map_err(|_| error(format!("element index `{index}` is not an integer")))?;
-                let path: Vec<String> = tail
-                    .split('.')
-                    .filter(|part| !part.is_empty())
-                    .map(str::to_owned)
-                    .collect();
+                let (node, port, index, path) =
+                    crate::session::parse_target(target).map_err(error)?;
                 steps.push(Step::ExpectElement {
-                    node: node.to_owned(),
-                    port: port.to_owned(),
+                    node,
+                    port,
                     index,
                     path,
                     values: values.iter().map(|v| (*v).to_owned()).collect(),
@@ -456,58 +441,8 @@ fn check_element(
 ) -> Result<Option<String>, String> {
     use orla_ir::Type;
     let node_id = orla_graph::NodeId(node.to_owned());
-    let kernel = session
-        .graph()
-        .and_then(|graph| graph.nodes.iter().find(|n| n.id == node_id))
-        .map(|n| n.kernel.clone())
-        .ok_or_else(|| format!("no node `{node}` in the scene"))?;
-    let version = session
-        .runtime()
-        .kernel(&kernel)
-        .ok_or_else(|| format!("`{kernel}` is not published"))?;
-    let output = version
-        .manifest()
-        .outputs
-        .iter()
-        .find(|o| o.name == port)
-        .ok_or_else(|| format!("`{kernel}` has no output `{port}`"))?;
-    let structs: Vec<orla_ir::StructDef> = version
-        .module()
-        .map(|m| m.structs.clone())
-        .unwrap_or_default();
-    // Follow the field path through the struct table to a word offset
-    // and a type.
-    let mut ty = output.element();
-    let mut offset = 0usize;
-    let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.words());
-    for field in path {
-        let Type::Struct(id) = ty else {
-            return Err(format!("`{field}` names a field, but the value is a {ty}"));
-        };
-        let def = &structs[id as usize];
-        let mut found = None;
-        for f in &def.fields {
-            if &f.name == field {
-                found = Some(f.ty);
-                break;
-            }
-            offset += words_of(f.ty);
-        }
-        ty = found.ok_or_else(|| format!("struct `{}` has no field `{field}`", def.name))?;
-    }
-    let handle = session
-        .cached(&node_id, port)
-        .ok_or_else(|| "the node has no materialized output; is it wired?".to_string())?;
-    session
-        .runtime_mut()
-        .materialize(handle)
-        .map_err(|e| e.to_string())?;
-    let element = session
-        .runtime()
-        .host()
-        .element(handle, index)
-        .map_err(|e| e.to_string())?;
-    let words = &element[offset..offset + words_of(ty)];
+    let (ty, words) = session.element_field(&node_id, port, index, path)?;
+    let words = &words[..];
     let components = match ty {
         Type::Float | Type::Int | Type::Bool => 1,
         Type::Vec2 => 2,

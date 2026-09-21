@@ -286,9 +286,26 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
     }
 }
 
-/// The context an `evaluate` or `trace` request describes: time, rate,
-/// the pointer, buttons, wheel and keys, and the window (the request's,
-/// else the session's, else none).
+/// The most frames one `advance` runs: past this, an agent asks again,
+/// which is where it can look at what it has.
+const MAX_ADVANCE: u64 = 100_000;
+
+/// One word of a scalar value as a number; anything wider has no single
+/// value to compare.
+fn scalar((ty, words): (orla_ir::Type, Vec<u32>)) -> Result<f64, String> {
+    match (ty, words.first()) {
+        (orla_ir::Type::Float, Some(word)) => Ok(f64::from(f32::from_bits(*word))),
+        (orla_ir::Type::Int, Some(word)) => Ok(f64::from(*word as i32)),
+        (orla_ir::Type::Bool, Some(word)) => Ok(f64::from(u8::from(*word != 0))),
+        (ty, _) => Err(format!(
+            "`until` compares one number; name a field that is a Float, an Int or a Bool, not a {ty}"
+        )),
+    }
+}
+
+/// The context an `evaluate`, `advance` or `trace` request describes:
+/// time, rate, the pointer, buttons, wheel and keys, and the window
+/// (the request's, else the session's, else none).
 pub fn context_of(session: &Session, request: &Json) -> Context {
     let number_at = |list: &Vec<Json>, index: usize| {
         list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
@@ -689,6 +706,167 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             }
             .map_err(|e| failure(e.to_string()))?;
             Ok(report_json(session, &report))
+        }
+        "advance" => {
+            let frames = request
+                .get("frames")
+                .and_then(Json::as_u64)
+                .ok_or_else(|| failure("`advance` takes `frames`, a whole number of at least 1"))?;
+            if frames == 0 || frames > MAX_ADVANCE {
+                return Err(failure(format!(
+                    "`frames` is 1 to {MAX_ADVANCE}; a longer run is several `advance` requests"
+                )));
+            }
+            let fps = request.get("fps").and_then(Json::as_f64).unwrap_or(60.0);
+            if fps <= 0.0 {
+                return Err(failure(
+                    "`fps` is the frames a second of the clock; it is positive",
+                ));
+            }
+            let base = context_of(session, request);
+            // `until` watches one value of one node: the agent's reason
+            // to stop before the count runs out.
+            let until = match request.get("until") {
+                None | Some(Json::Null) => None,
+                Some(Json::Object(test)) => {
+                    let target = test.get("target").and_then(Json::as_str).ok_or_else(|| {
+                        failure("`until` names a `target`, as `node.port[0].field`")
+                    })?;
+                    let (node, port, index, path) =
+                        crate::session::parse_target(target).map_err(failure)?;
+                    let (kind, bound) = ["below", "above", "equals"]
+                        .iter()
+                        .find_map(|kind| {
+                            test.get(*kind)
+                                .and_then(Json::as_f64)
+                                .map(|bound| (*kind, bound))
+                        })
+                        .ok_or_else(|| {
+                            failure("`until` takes `below`, `above` or `equals` and a number")
+                        })?;
+                    Some((
+                        target.to_owned(),
+                        orla_graph::NodeId(node),
+                        port,
+                        index,
+                        path,
+                        kind,
+                        bound,
+                    ))
+                }
+                Some(_) => return Err(failure("`until` is an object")),
+            };
+            // `save` writes node outputs when the run stops, by the
+            // rules `run --save` follows; a relative path is beside the
+            // scene.
+            let mut saves: Vec<(orla_graph::NodeId, String, std::path::PathBuf)> = Vec::new();
+            match request.get("save") {
+                None | Some(Json::Null) => {}
+                Some(Json::Object(items)) => {
+                    for (target, path) in items {
+                        let (node, port) = target
+                            .rsplit_once('.')
+                            .ok_or_else(|| failure("`save` names `node.port`"))?;
+                        let path = path
+                            .as_str()
+                            .ok_or_else(|| failure("`save` takes a file path"))?;
+                        let resolved = std::path::Path::new(path);
+                        let resolved = if resolved.is_absolute() {
+                            resolved.to_path_buf()
+                        } else {
+                            session
+                                .root()
+                                .parent()
+                                .unwrap_or_else(|| std::path::Path::new("."))
+                                .join(resolved)
+                        };
+                        saves.push((
+                            orla_graph::NodeId(node.to_owned()),
+                            port.to_owned(),
+                            resolved,
+                        ));
+                    }
+                }
+                Some(_) => return Err(failure("`save` is an object of `node.port` to a path")),
+            }
+            // What must stay materialized: what is watched and what is
+            // written. With nothing named, the whole scene runs.
+            let mut watched: Vec<orla_graph::NodeId> = Vec::new();
+            if let Some((_, node, ..)) = &until {
+                watched.push(node.clone());
+            }
+            watched.extend(saves.iter().map(|(node, _, _)| node.clone()));
+            let mut pinned = Vec::new();
+            for node in &watched {
+                session.pin(node.clone());
+                pinned.push(node.clone());
+            }
+            let demand: std::collections::BTreeSet<orla_graph::NodeId> =
+                watched.iter().cloned().collect();
+            let started = std::time::Instant::now();
+            let outcome = (|| -> Result<Json, Json> {
+                let mut ran = 0u64;
+                let mut stopped = "frames";
+                let mut value: Option<f64> = None;
+                let mut last = None;
+                for frame in 0..frames {
+                    let context = Context {
+                        time: base.time + frame as f32 / fps as f32,
+                        ..base
+                    };
+                    let report = if demand.is_empty() {
+                        session.evaluate(&context)
+                    } else {
+                        session.evaluate_for(&context, &demand)
+                    }
+                    .map_err(|e| failure(format!("frame {frame}: {e}")))?;
+                    session
+                        .settle()
+                        .map_err(|e| failure(format!("frame {frame}: {e}")))?;
+                    ran += 1;
+                    last = Some(report);
+                    if let Some((_, node, port, index, path, kind, bound)) = &until {
+                        let read = session
+                            .element_field(node, port, *index, path)
+                            .map_err(|e| failure(format!("frame {frame}: {e}")))?;
+                        let now = scalar(read).map_err(failure)?;
+                        value = Some(now);
+                        let holds = match *kind {
+                            "below" => now < *bound,
+                            "above" => now > *bound,
+                            _ => now == *bound,
+                        };
+                        if holds {
+                            stopped = "until";
+                            break;
+                        }
+                    }
+                }
+                let mut saved = Vec::new();
+                for (node, port, path) in &saves {
+                    session
+                        .save(node, port, path)
+                        .map_err(|e| failure(format!("cannot save {node}.{port}: {e}")))?;
+                    saved.push(path.display().to_string());
+                }
+                let report = last
+                    .as_ref()
+                    .map(|report| report_json(session, report))
+                    .unwrap_or(Json::Null);
+                Ok(json!({
+                    "frames": ran,
+                    "stopped": stopped,
+                    "target": until.as_ref().map(|(target, ..)| target.clone()),
+                    "value": value,
+                    "saved": saved,
+                    "millis": started.elapsed().as_secs_f64() * 1000.0,
+                    "report": report,
+                }))
+            })();
+            for node in pinned {
+                session.unpin(&node);
+            }
+            outcome
         }
         "help" => {
             let entry = |builtin: &orla_compiler::help::Builtin| {

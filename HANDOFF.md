@@ -228,8 +228,13 @@ for), a loop's count may be any `Int` expression read once before the
 loop and clamped to the bound, and a node may be a filled Field
 (`node zeros: Rows<Float> { domain = 65; }`, `value = ...` for anything
 but the element's zero), which took five zero-fill Kernels out of the
-examples. Open: automation past one frame, which the render command
-begins. The assessment of the experience (2026-09-21) listed what was
+examples. Done since: automation past one frame is the
+protocol's `advance`, a count of frames in one request that stops when
+a watched value says to and saves what it was asked for, demanding only
+what it watches; an agent's training loop is one request per
+checkpoint. Phase 5 has no open item of its own now: what is left is
+the plan's own leftovers, WASM, and whatever a round of play turns
+up. The assessment of the experience (2026-09-21) listed what was
 awkward; taken in the same day: a scatter sets its own `domain` (no
 more `work` Fields), a reduction's output is written as its element,
 `[each N { body }]` builds an array element by element, and a missing

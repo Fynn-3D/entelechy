@@ -605,6 +605,30 @@ fn relative_to(path: &Path, from: &Path) -> String {
     path.display().to_string()
 }
 
+/// `node.port[index].field.field` as a replay writes it and the
+/// protocol takes it: the node, the port, the element, and the path
+/// through the struct to a value.
+pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), String> {
+    let (head, rest) = text
+        .split_once('[')
+        .ok_or_else(|| "name an element as `node.port[index]`".to_string())?;
+    let (index, tail) = rest
+        .split_once(']')
+        .ok_or_else(|| "name an element as `node.port[index]`".to_string())?;
+    let (node, port) = head
+        .rsplit_once('.')
+        .ok_or_else(|| "name `node.port`".to_string())?;
+    let index = index
+        .parse::<u32>()
+        .map_err(|_| format!("element index `{index}` is not a whole number"))?;
+    let path: Vec<String> = tail
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Ok((node.to_owned(), port.to_owned(), index, path))
+}
+
 /// A key for a set of shared declarations.
 fn declarations_key(
     structs: &[orla_language::StructDecl],
@@ -1834,6 +1858,70 @@ impl Session {
             self.evaluator.unpin(&node);
         }
         traced.map(|trace| (trace, target.kernel.clone()))
+    }
+
+    /// One element field of a node's output: the value's type and its
+    /// words. `node.port[index].field.field` is how a replay and the
+    /// protocol both name it; [`parse_target`] reads that spelling.
+    pub fn element_field(
+        &mut self,
+        node: &orla_graph::NodeId,
+        port: &str,
+        index: u32,
+        path: &[String],
+    ) -> Result<(orla_ir::Type, Vec<u32>), String> {
+        use orla_ir::Type;
+        let kernel = self
+            .graph()
+            .and_then(|graph| graph.nodes.iter().find(|n| &n.id == node))
+            .map(|n| n.kernel.clone())
+            .ok_or_else(|| format!("no node `{node}` in the scene"))?;
+        let version = self
+            .runtime()
+            .kernel(&kernel)
+            .ok_or_else(|| format!("`{kernel}` is not published"))?;
+        let output = version
+            .manifest()
+            .outputs
+            .iter()
+            .find(|o| o.name == port)
+            .ok_or_else(|| format!("`{kernel}` has no output `{port}`"))?;
+        let structs: Vec<orla_ir::StructDef> = version
+            .module()
+            .map(|m| m.structs.clone())
+            .unwrap_or_default();
+        // Follow the field path through the struct table to a word
+        // offset and a type.
+        let mut ty = output.element();
+        let mut offset = 0usize;
+        let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.words());
+        for field in path {
+            let Type::Struct(id) = ty else {
+                return Err(format!("`{field}` names a field, but the value is a {ty}"));
+            };
+            let def = &structs[id as usize];
+            let mut found = None;
+            for f in &def.fields {
+                if &f.name == field {
+                    found = Some(f.ty);
+                    break;
+                }
+                offset += words_of(f.ty);
+            }
+            ty = found.ok_or_else(|| format!("struct `{}` has no field `{field}`", def.name))?;
+        }
+        let handle = self
+            .cached(node, port)
+            .ok_or_else(|| "the node has no materialized output; is it wired?".to_string())?;
+        self.runtime_mut()
+            .materialize(handle)
+            .map_err(|e| e.to_string())?;
+        let element = self
+            .runtime()
+            .host()
+            .element(handle, index)
+            .map_err(|e| e.to_string())?;
+        Ok((ty, element[offset..offset + words_of(ty)].to_vec()))
     }
 
     /// The Kernel as its document wrote it, compiled without the

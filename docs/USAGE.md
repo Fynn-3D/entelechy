@@ -375,7 +375,9 @@ Agents drive a session over stdin and stdout with JSON lines:
 cargo run -- serve examples/life/scene.osn
 ```
 
-See [the protocol](PROTOCOL.md) for the operations. `orla-player --serve`
+A job that spans many frames is one `advance` request: it runs the
+frames, stops when a value says to, and saves what was asked for. See
+[the protocol](PROTOCOL.md) for the operations. `orla-player --serve`
 runs the same protocol inside the window, so an agent edits what a person
 is watching.
 

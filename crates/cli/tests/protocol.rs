@@ -862,3 +862,95 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     assert_eq!(state(16), vec![1]);
     assert_eq!(ok(17)["bye"], true);
 }
+
+/// A run that spans many frames is one request: `advance` steps the
+/// scene, stops when a value says to, saves what the agent asked for,
+/// and reports what happened. An agent training a network asks once
+/// instead of once a frame.
+#[test]
+fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
+    let dir = std::env::temp_dir().join(format!("orla-protocol-advance-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node zero: Rows<Int> { domain = 1; }\n\
+         node tally: kernel {\n\
+             requires { field.read; field.write; }\n\
+             input previous: Rows<Int> <~ tally.result from zero.result;\n\
+             output result: Rows<Int>;\n\
+             domain = 1;\n\
+             compute { return at(previous, 0) + 1; }\n\
+         }\n\
+         node view: kernel {\n\
+             requires { field.read; field.write; }\n\
+             input count: Rows<Int> <- tally.result;\n\
+             output result: Image;\n\
+             domain = vec2(4, 4);\n\
+             compute { let c = float(at(count, 0)) / 255.0; return vec4(c, c, c, 1.0); }\n\
+         }\n\
+         output result <- view.result;\n\
+         output count <- tally.result;\n",
+    )
+    .unwrap();
+    let kept = dir.join("count.field");
+    let responses = talk(
+        &dir.join("scene.osn"),
+        &[
+            json!({ "id": 1, "op": "advance", "frames": 500,
+                    "until": { "target": "tally.result[0]", "above": 41.5 },
+                    "save": { "tally.result": "count.field" } }),
+            json!({ "id": 2, "op": "advance", "frames": 3 }),
+            json!({ "id": 3, "op": "advance", "frames": 0 }),
+            json!({ "id": 4, "op": "advance", "frames": 2,
+                    "until": { "target": "tally.result[0]", "over": 9 } }),
+        ],
+    );
+    let run = &responses[0]["ok"];
+    assert_eq!(run["stopped"], "until");
+    assert_eq!(run["frames"], 42, "one frame per count: {run}");
+    assert_eq!(run["value"], 42.0);
+    assert_eq!(run["target"], "tally.result[0]");
+    assert!(run["millis"].as_f64().unwrap() > 0.0);
+    // Only what the run watched had to be materialized: the picture was
+    // not asked for, so it did not run.
+    let executed = run["report"]["executed"].as_array().unwrap();
+    assert!(executed.iter().any(|node| node == "tally"), "{run}");
+    assert!(!executed.iter().any(|node| node == "view"), "{run}");
+    // What it saved is a Field of the Host's own format.
+    let saved = run["saved"].as_array().unwrap();
+    assert_eq!(saved.len(), 1);
+    assert!(kept.exists(), "{saved:?}");
+    assert!(std::fs::read(&kept).unwrap().len() > 8);
+    // Without an `until`, it runs the count it was given, and the whole
+    // scene runs because nothing was named.
+    let plain = &responses[1]["ok"];
+    assert_eq!(plain["stopped"], "frames");
+    assert_eq!(plain["frames"], 3);
+    assert!(plain["value"].is_null());
+    assert!(
+        plain["report"]["executed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node == "view")
+    );
+    // A count of zero and a test nobody wrote are refused by name.
+    assert!(
+        responses[2]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("frames"),
+        "{:?}",
+        responses[2]
+    );
+    assert!(
+        responses[3]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`below`, `above` or `equals`"),
+        "{:?}",
+        responses[3]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
