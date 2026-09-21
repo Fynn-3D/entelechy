@@ -23,13 +23,12 @@ the least of the runs, on an M-series laptop:
 
 | bodies | interpreter | JIT | GPU |
 | --- | --- | --- | --- |
-| 100,000 | 19.8 ms | 3.9 ms | 0.88 ms |
-| 1,000,000 | 52.9 ms | 12.7 ms | 2.5 ms |
-| 4,000,000 | 157 ms | 42.0 ms | 9.7 ms |
+| 100,000 | 19.9 ms | 1.5 ms | 0.97 ms |
+| 1,000,000 | 52.4 ms | 5.5 ms | 2.8 ms |
+| 4,000,000 | 150 ms | 20.7 ms | 10.4 ms |
 
-A million bodies is 400 frames a second on the GPU and 79 on ten CPU
-cores through the JIT; four million is 103 and 24. Of the GPU's 2.5 ms,
-the step is 1.5, the drawing 0.6 and the scatter the rest.
+A million bodies is 360 frames a second on the GPU and 180 on ten CPU
+cores through the JIT; four million is 96 and 48.
 
 ```sh
 cargo run --release -- bench examples/million/scene.osn --window 960x540 --backend all --nodes

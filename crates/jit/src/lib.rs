@@ -436,7 +436,12 @@ fn run(
     let stride: usize = strides.iter().sum();
     let count = domain.count();
     // One output is the common case, and then the entry writes straight
-    // into the Field: no buffer of our own and no copy into it.
+    // into the Field: no buffer of our own and no copy into it. The
+    // views were made before this Field was, and they hold pointers
+    // into the inputs' words: what keeps them good is that a Field's
+    // words are an allocation of their own, so making another Field
+    // moves nothing. A Host that ever put every Field's words in one
+    // place would have to give this its own reading of them.
     if let [port] = &module.manifest.outputs[..] {
         let handle = scope.create_for_fill(port.ty.schema.clone(), domain)?;
         let outcome = scope

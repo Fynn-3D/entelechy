@@ -593,6 +593,36 @@ node's commands are only recorded. Breaking it gave wrong pixels in
 every GPU replay and no error at all. A scene of many small nodes is
 better served by having fewer nodes.
 
+The same question was then put to the round before it: what did the
+CPU side take on that fails quietly? Two things, and both are answered.
+
+A Field made to be filled is given the words a released Field gave
+back, and the caller says it writes every one of them. A caller that
+left some would have shown another Field's contents and nothing would
+have said so, so in a build with debug assertions those words are
+filled with a value no Field ever holds: a partial fill is then a test
+that fails rather than one that passes on what was lying there. The
+whole suite runs in such a build.
+
+The pile of released buffers was bounded by how many there were and
+not by how large, so a scene of large Fields could leave the system
+holding a hundred megabytes of what nothing was using. It holds a
+handful of buffers and no more than an eighth of the Host's budget
+now, and a buffer larger than that goes straight back.
+
+One thing the JIT's fast path rests on is written down rather than
+changed: the views it reads inputs through are made before the output
+Field is, and they hold pointers into the inputs' words, which stay
+good because a Field's words are an allocation of its own. A Host that
+put every Field's words in one place would break that silently, so the
+comment says so where the code is.
+
+The rest of the CPU batch has nothing of that shape. The element split
+and the ranged entry are arithmetic the replays check word for word;
+the inlined reads clamp where the helpers clamped, which the matrix's
+`edges` row holds them to on every backend; and a failure still stops
+its run and names its own element.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

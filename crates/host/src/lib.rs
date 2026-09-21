@@ -573,6 +573,11 @@ impl Slot {
     }
 }
 
+/// What a buffer holds when it is handed to a caller that says it will
+/// write every word: nothing any Field ever had, so leaving some of
+/// them shows.
+const POISON: u32 = 0xDEAD_BEEF;
+
 /// The Host: a bounded store of primitive resources.
 pub struct Host {
     slots: Vec<Slot>,
@@ -640,7 +645,17 @@ impl Host {
     /// wants [`Host::create`].
     pub fn create_for_fill(&mut self, schema: Schema, domain: Domain) -> Result<Handle, HostError> {
         let data = match self.take_spare(&schema, domain)? {
-            Some(words) => FieldData::from_words(schema, domain, words)?,
+            Some(mut words) => {
+                // The caller says it writes every word. Where that is
+                // checked, the words it was given are nothing any Field
+                // ever held, so a caller that leaves some of them is a
+                // test that fails rather than one that passes on what
+                // another Field happened to leave there.
+                if cfg!(debug_assertions) {
+                    words.fill(POISON);
+                }
+                FieldData::from_words(schema, domain, words)?
+            }
             None => FieldData::new(schema, domain)?,
         };
         self.adopt(data)
@@ -877,23 +892,29 @@ impl Host {
     }
 
     /// Keeps a released buffer for the next Field of its size. The pile
-    /// holds a handful of the largest, which is what a frame reuses;
-    /// the rest goes back to the system.
+    /// holds a handful of them and no more words than an eighth of the
+    /// budget, so a scene of large Fields does not leave the system
+    /// holding what it is no longer using; the rest goes back.
     fn keep_spare(&mut self, words: Vec<u32>) {
         const KEPT: usize = 8;
-        if words.is_empty() {
+        let room = self.budget_words / 8;
+        if words.is_empty() || words.len() > room {
             return;
         }
         self.spare.push(words);
-        if self.spare.len() > KEPT {
+        let mut held: usize = self.spare.iter().map(Vec::len).sum();
+        while self.spare.len() > KEPT || held > room {
             // The smallest is the one worth least.
-            let smallest = self
+            let Some(smallest) = self
                 .spare
                 .iter()
                 .enumerate()
                 .min_by_key(|(_, buffer)| buffer.len())
                 .map(|(at, _)| at)
-                .unwrap_or(0);
+            else {
+                break;
+            };
+            held -= self.spare[smallest].len();
             self.spare.swap_remove(smallest);
         }
     }
@@ -991,6 +1012,38 @@ impl Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The words a released Field gave back are handed out again, and
+    /// what the pile holds is bounded: a handful of buffers and an
+    /// eighth of the budget, so a scene of large Fields does not leave
+    /// the system holding what nothing is using.
+    #[test]
+    fn released_words_come_back_and_the_pile_is_bounded() {
+        let mut host = Host::new(4096);
+        let schema = Schema::new(vec![Scalar::Int]);
+        let first = host.create(schema.clone(), Domain::Rows(256)).unwrap();
+        host.write_words(first, &[7; 256]).unwrap();
+        host.release(first).unwrap();
+        // A plain `create` is zeroed however the words come to it.
+        let again = host.create(schema.clone(), Domain::Rows(256)).unwrap();
+        assert!(host.data(again).unwrap().words().iter().all(|w| *w == 0));
+        host.release(again).unwrap();
+
+        // Nothing live, and the pile holds no more than an eighth of
+        // the budget however much is released.
+        for _ in 0..32 {
+            let big = host.create(schema.clone(), Domain::Rows(400)).unwrap();
+            host.release(big).unwrap();
+        }
+        let held: usize = host.spare.iter().map(Vec::len).sum();
+        assert!(held <= 4096 / 8, "the pile holds {held} words");
+        assert_eq!(host.live(), 0);
+
+        // A buffer larger than the pile takes is not kept at all.
+        let huge = host.create(schema, Domain::Rows(2048)).unwrap();
+        host.release(huge).unwrap();
+        assert!(host.spare.iter().all(|buffer| buffer.len() <= 4096 / 8));
+    }
 
     #[test]
     fn handles_become_invalid_after_release() {
