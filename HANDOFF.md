@@ -565,6 +565,34 @@ the GPU all agree on to a ten-thousandth. A frame is 22.9 ms on the
 interpreter, 2.3 on the JIT, 0.9 on the GPU at 640x400. Nothing had to
 be fixed to write it, which is the first time that has happened.
 
+Then the GPU's own side of a frame, which for a scene of many small
+nodes is mostly the CPU asking. A probe put a node's cost at about 90
+microseconds before any of its work: twenty to turn an encoder into a
+command buffer, thirteen to send it, twelve to write the two uniforms,
+two in the output buffer, one in the bind group.
+
+What was kept is the uniforms. A scene of many small nodes runs them
+under the same context with the same parameters, so the bytes are
+compared with what those buffers were last given and a node whose
+uniforms have not changed writes nothing: twelve microseconds a node
+became under four. A frame at 960x540, least of four runs of twenty
+frames: `fluid` 4.40 to 3.34 ms, `collapse` 8.99 to 7.99, and
+`voxel`, `million`, `showcase`, `raymarch`, `rubik` and `strings`
+within a few percent of where they were, which is this machine's
+noise. The memory copies a scan's ports need also go into the node's
+own encoder now rather than one of their own, which is one submission
+fewer for those.
+
+What was tried and taken back out was sharing a command encoder
+between small nodes. It was worth twenty percent on `collapse`, the
+one scene in the suite with sixty-five tiny nodes, and nothing anywhere
+else; and it asked for an invariant with a silent failure: a write
+through the queue lands before anything submitted after it, so a
+uniform buffer two nodes share cannot be written while the first
+node's commands are only recorded. Breaking it gave wrong pixels in
+every GPU replay and no error at all. A scene of many small nodes is
+better served by having fewer nodes.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.
@@ -631,12 +659,7 @@ this one takes 0.42 on the JIT and 0.70 on the GPU, having started at
 6.35 and 0.63. At 0.42 ms the frame moves 24 MB, which is 57 GB/s, so
 what is left is the memory system and the frame's own work (a graph
 evaluation with a state commit, against a tick of one kernel) rather
-than anything the code generator is still doing per element. Measured
-and declined for now: a pool of threads that stay. Making ten threads
-costs about 0.09 ms, which a scene pays once a big map; it is a
-sixteenth of this benchmark and about a twentieth of a `million`
-frame, against hand-written unsafe concurrency in crates that have no
-dependencies.
+than anything the code generator is still doing per element.
 
 What the whole chase did to the examples, a frame at 960x540 on the
 JIT: `learn` 56.6 to 7.7 ms, `million` 20.4 to 5.5, `fluid` 38.6 to

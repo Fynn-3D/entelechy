@@ -59,6 +59,12 @@ pub struct GpuBackend {
     /// than made again: creating two small buffers a node was a fifth
     /// of what a node of a busy scene costs.
     uniforms: Mutex<Option<(wgpu::Buffer, wgpu::Buffer)>>,
+    /// What those buffers were last given. A scene of many small nodes
+    /// runs them under the same context with the same parameters, and
+    /// writing a uniform costs about six microseconds however little
+    /// has changed; this is how the second node of a kind writes
+    /// nothing.
+    written: Mutex<(Vec<u8>, Vec<u8>)>,
     /// Whether an execution waits for the device before it returns, so
     /// that what times it is the work and not the submission. Off: a
     /// frame submits its nodes and only an observation waits.
@@ -149,6 +155,7 @@ impl GpuBackend {
             adapter_name,
             lock: Mutex::new(()),
             uniforms: Mutex::new(None),
+            written: Mutex::new((Vec::new(), Vec::new())),
             raster: OnceLock::new(),
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
@@ -296,9 +303,24 @@ impl GpuBackend {
             ));
         }
         let (context_buffer, params_buffer) = held.as_ref().expect("the buffers are held");
-        self.queue.write_buffer(context_buffer, 0, context);
-        if !params.is_empty() {
+        let mut written = self
+            .written
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // A new buffer holds nothing of what was written before it.
+        if !big_enough {
+            written.0.clear();
+            written.1.clear();
+        }
+        if written.0 != context {
+            self.queue.write_buffer(context_buffer, 0, context);
+            written.0.clear();
+            written.0.extend_from_slice(context);
+        }
+        if !params.is_empty() && written.1 != params {
             self.queue.write_buffer(params_buffer, 0, params);
+            written.1.clear();
+            written.1.extend_from_slice(params);
         }
         (context_buffer.clone(), params_buffer.clone())
     }
@@ -923,11 +945,7 @@ impl GpuBackend {
         // A memory's steps write it, so the bound buffer is a copy of the
         // input's, and that copy is the memory's output afterwards.
         let mut memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)> = Vec::new();
-        let mut copies = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("orla memories"),
-            });
+        let mut copies: Vec<(wgpu::Buffer, wgpu::Buffer, u64)> = Vec::new();
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let extent = scope.size(*handle)?;
             context.extend_from_slice(&[
@@ -948,19 +966,18 @@ impl GpuBackend {
                         | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                copies.copy_buffer_to_buffer(&bound, 0, &copy, 0, size);
+                // Recorded below, into the same encoder as the pass and
+                // before it, once the uniforms are settled.
+                copies.push((bound, copy.clone(), size));
                 memory_outputs.push((index, copy.clone(), extent));
                 input_buffers.push(copy);
             } else {
                 input_buffers.push(bound);
             }
         }
-        if !memory_outputs.is_empty() {
-            self.queue.submit(Some(copies.finish()));
-        }
         let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let (context_buffer, params_buffer) =
-            self.uniform_buffers(&context_bytes, &param_bytes(&invocation.params));
+        let params_bytes = param_bytes(&invocation.params);
+        let (context_buffer, params_buffer) = self.uniform_buffers(&context_bytes, &params_bytes);
         let output_words = module.manifest.outputs[0].ty.schema.words();
         // A scatter's map pass stores a pair per source element.
         let map_words = if matches!(module.manifest.mode, Mode::Scatter { .. }) {
@@ -1006,6 +1023,9 @@ impl GpuBackend {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("orla"),
             });
+        for (from, to, size) in &copies {
+            encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
+        }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("orla kernel"),
