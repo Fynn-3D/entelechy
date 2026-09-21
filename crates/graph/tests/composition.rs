@@ -1512,3 +1512,112 @@ fn a_filled_field_says_what_it_cannot_hold_and_what_it_needs() {
             .to_string();
     assert!(error.contains("through a session"), "{error}");
 }
+
+/// A node placed several times over its own output runs as one
+/// execution that repeats: the last one keeps its name and its output,
+/// nothing between them is made, and the words are what the times gave
+/// one at a time.
+#[test]
+fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
+    let mut runtime = runtime();
+    runtime
+        .load("kernel test.step@1 { requires { field.read; field.write; } input previous: Grid<Float>; param by: Float = 1.0; output result: Grid<Float>; compute { return at(previous, icoord()) + by; } }")
+        .unwrap();
+    runtime
+        .load("kernel test.seed@1 { requires { field.write; } output result: Grid<Float>; compute { return coord().x; } }")
+        .unwrap();
+    let source = "node seed: test.seed@1 { domain = vec2(4, 3); }
+         node step: test.step@1 { times = 5; carry previous <- result; previous <- seed.result; by = 2.0; }
+         output result <- step.result;";
+    let graph = Graph::parse(source).unwrap();
+
+    // Without fusion every time is its own execution, which is the
+    // reference this is held to.
+    let mut plain = Evaluator::new();
+    plain.set_fusion(false);
+    let reference = plain
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(reference.executed.len(), 6, "a seed and five times");
+    let expected: Vec<f32> = runtime
+        .host()
+        .data(reference.output)
+        .unwrap()
+        .words()
+        .iter()
+        .map(|word| f32::from_bits(*word))
+        .collect();
+    plain.clear(&mut runtime);
+
+    let mut joined = Evaluator::new();
+    let report = joined
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let words: Vec<f32> = runtime
+        .host()
+        .data(report.output)
+        .unwrap()
+        .words()
+        .iter()
+        .map(|word| f32::from_bits(*word))
+        .collect();
+    assert_eq!(words, expected, "the same words, however they were run");
+    assert_eq!(
+        report.executed,
+        ids(&["seed", "step/5"]),
+        "the last time executes and keeps its name"
+    );
+    assert_eq!(
+        report.fused,
+        vec![(
+            NodeId("step/5".into()),
+            ids(&["step/1", "step/2", "step/3", "step/4"])
+        )],
+        "the times before it are what it absorbed"
+    );
+    // The first column started at zero and five times added two.
+    assert_eq!(words[0], 10.0);
+    joined.clear(&mut runtime);
+
+    // The same run written out by hand joins in the same way, and a
+    // step something else reads is a step that has to be made, so the
+    // run stops there and starts again after it.
+    let watched = Graph::parse(
+        "node seed: test.seed@1 { domain = vec2(4, 3); }
+         node one: test.step@1 { previous <- seed.result; by = 2.0; }
+         node two: test.step@1 { previous <- one.result; by = 2.0; }
+         node three: test.step@1 { previous <- two.result; by = 2.0; }
+         output result <- three.result;
+         output middle <- one.result;",
+    )
+    .unwrap();
+    let mut split = Evaluator::new();
+    let report = split
+        .evaluate(
+            &watched,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(report.executed, ids(&["seed", "one", "three"]));
+    assert_eq!(
+        report.fused,
+        vec![(NodeId("three".into()), ids(&["two"]))],
+        "the run that is left joins the two after the watched one"
+    );
+    split.clear(&mut runtime);
+}

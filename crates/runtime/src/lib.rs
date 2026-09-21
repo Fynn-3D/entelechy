@@ -174,6 +174,25 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Runs a map `repeat` times, feeding input `chain.0` from output
+    /// `chain.1` each time: what a node placed several times over its
+    /// own output is. A backend that can do the whole run without
+    /// making a Field between the times answers with what the last time
+    /// gave; the default answers `None` and the caller runs the times
+    /// one by one.
+    fn execute_repeated(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        repeat: u32,
+        chain: (usize, usize),
+    ) -> Option<Result<Vec<Handle>, ExecutionError>> {
+        let _ = (prepared, module, invocation, scope, repeat, chain);
+        None
+    }
+
     /// Waits for everything this backend has submitted to finish. The
     /// default is for backends whose work is done when `execute`
     /// returns; a device queue's is not, so anything that measures a
@@ -882,6 +901,67 @@ impl Runtime {
     /// Removes a Kernel from the registry. Pinned versions stay executable.
     pub fn retire(&mut self, id: &KernelId) -> Option<Arc<KernelVersion>> {
         self.kernels.remove(id)
+    }
+
+    /// Executes the same Kernel `repeat` times, each time reading input
+    /// `input` from the output `output` the time before gave: what a
+    /// node placed several times over its own output is. The Fields
+    /// between the runs are made and released here and nothing else
+    /// ever sees them, which is the point of asking for the whole run
+    /// at once.
+    pub fn execute_repeated(
+        &mut self,
+        version: &KernelVersion,
+        invocation: &Invocation,
+        repeat: u32,
+        chain: (usize, usize),
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        // A backend that runs the whole thing itself keeps every Field
+        // between the times to itself, which is the point of asking.
+        if let Body::Kernel { module, prepared } = &version.body
+            && !(self.ordered.is_some() && module.manifest.mode == orla_ir::Mode::Scan)
+        {
+            let granted = version.manifest().requires.clone();
+            let backend = Arc::clone(&self.backend);
+            let answered = {
+                let mut scope = Scope::new(&mut self.host, granted);
+                backend.execute_repeated(
+                    prepared.as_ref(),
+                    module,
+                    invocation,
+                    &mut scope,
+                    repeat,
+                    chain,
+                )
+            };
+            if let Some(outputs) = answered {
+                self.last_measured = backend.last_device_time();
+                return outputs;
+            }
+        }
+        let (input, output) = chain;
+        let mut invocation = invocation.clone();
+        let mut held: Option<Vec<Handle>> = None;
+        for _ in 0..repeat.max(1) {
+            let outputs = match self.execute(version, &invocation) {
+                Ok(outputs) => outputs,
+                Err(error) => {
+                    for handle in held.into_iter().flatten() {
+                        let _ = self.host.release(handle);
+                    }
+                    return Err(error);
+                }
+            };
+            invocation.inputs[input] = outputs[output];
+            // What the time before gave is read by this one and by
+            // nothing else, so it goes now that it has been read.
+            if let Some(gone) = held.replace(outputs) {
+                for handle in gone {
+                    let _ = self.host.release(handle);
+                }
+            }
+        }
+        Ok(held.expect("a run of at least one"))
     }
 
     /// Executes a pinned version. The Host is scoped to exactly the

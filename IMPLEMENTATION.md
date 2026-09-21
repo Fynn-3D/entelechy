@@ -114,6 +114,22 @@ capability claim.
   ([IR test](crates/ir/tests/fusion.rs), [graph tests](crates/graph/tests/composition.rs));
   absorbed nodes are not materialized until pinned.
 
+- Iteration fusion is the same idea without inlining: a node placed several
+  times over its own output — the same Kernel of the same generation, the
+  same parameters and bindings, the same domain, Map, neither async nor
+  pinned, and nothing else reading what passes between — is one group that
+  repeats ([planner](crates/graph/src/evaluate.rs)). The last placement
+  keeps its name and its output, as a fused consumer does; the backend is
+  asked whether it can repeat itself
+  ([`Backend::execute_repeated`](crates/runtime/src/lib.rs)), which the GPU
+  does by recording the passes into one encoder with two buffers taking
+  turns ([gpu](crates/gpu/src/lib.rs)), and otherwise the runtime runs the
+  group N times and releases what is between
+  ([graph test](crates/graph/tests/composition.rs)). Where the Kernel only
+  `sample`s its input, ordinary fusion gets there first and inlines every
+  time into one Kernel; repetition is what a Kernel that reads its
+  neighbours gets instead.
+
 - Preparation leaves the frame thread: [`Runtime::prepare_later`](crates/runtime/src/lib.rs)
   hands a validated module to one worker and returns a ticket; `poll`
   collects the candidate, and publishing stays a pointer swap on the owning

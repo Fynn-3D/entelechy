@@ -627,6 +627,33 @@ Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.
 
+A scene of many small nodes was then answered at the root: a node
+placed several times over its own output is one execution that
+repeats. `times = N` with a `carry` writes N nodes, each taking the one
+before it on one port and alike in every other way, so when nothing
+else reads what passes between them the planner joins them into one
+group that keeps the last node's name and the first one's inputs. A
+backend that can repeat itself is asked first: the GPU records the
+passes into one command encoder with two buffers taking turns, so
+eight spreads are one submission and one set of uniforms rather than
+eight; a backend that cannot falls back to running the group N times
+and releasing what is between, which is what the interpreter and the
+JIT do. The gate is narrow on purpose — the same Kernel of the same
+generation, the same parameters and bindings, the same domain, Map
+only, neither node async nor pinned, nothing else reading the middle —
+and `orla graph` prints the run it made
+(`steps/8.spread/6 + ... : collapse.spread@1`). Measured at 960x540,
+least of three runs of sixty frames: `collapse` 7.35 to 6.47 ms on the
+GPU and `fluid` 3.01 to 2.18; `voxel`, `million` and the rest where
+they were, and the JIT within this machine's noise, since what a
+repeat saves there is a dispatch and not the work.
+
+Where the Kernel only `sample`s its input, ordinary fusion still gets
+there first and inlines all N times into one Kernel, which is better
+than repeating it. Repetition is what the ones fusion refuses get: a
+Kernel that reads its neighbours, which is what `collapse` and `fluid`
+are made of.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

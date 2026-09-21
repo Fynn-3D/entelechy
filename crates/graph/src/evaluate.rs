@@ -348,12 +348,21 @@ struct Running {
     output_names: Vec<String>,
 }
 
-/// One executing unit: a node, or a node with producers inlined.
+/// One executing unit: a node, a node with producers inlined, or a run
+/// of the same node placed several times over its own output.
 struct Group {
     node: Node,
     version: Arc<KernelVersion>,
     parts: Vec<(NodeId, Generation)>,
     absorbed: Vec<NodeId>,
+    /// How many times the Kernel runs, feeding `chain` from what the
+    /// time before gave. One for an ordinary node; `times = N` on a
+    /// node whose only changing input is its own output is N.
+    repeat: u32,
+    /// The input this run feeds from the last output, and which output
+    /// it takes: the `carry port <- output` of the node that was
+    /// placed several times.
+    chain: Option<(usize, usize)>,
 }
 
 /// One executing unit as the planner sees it, for inspection.
@@ -713,12 +722,16 @@ impl Evaluator {
                 runtime.discard_run(running.run);
             }
             let started = std::time::Instant::now();
-            let outputs = runtime
-                .execute(&group.version, &invocation)
-                .map_err(|error| EvaluateError::Execution {
-                    node: node.id.clone(),
-                    error,
-                })?;
+            let outputs = match group.chain {
+                Some(chain) => {
+                    runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
+                }
+                None => runtime.execute(&group.version, &invocation),
+            }
+            .map_err(|error| EvaluateError::Execution {
+                node: node.id.clone(),
+                error,
+            })?;
             // What the device says it took, when it measures; the call's
             // own time otherwise.
             let took = runtime.last_measured().unwrap_or_else(|| started.elapsed());
@@ -963,6 +976,8 @@ impl Evaluator {
                 version,
                 parts,
                 absorbed: Vec::new(),
+                repeat: 1,
+                chain: None,
             });
         }
         if !self.fusion {
@@ -1125,6 +1140,7 @@ impl Evaluator {
             .into_iter()
             .filter(|group| !absorbed_into.contains_key(&group.node.id))
             .collect();
+        let executing = self.repeated(executing, &readers);
         // Keep every group's version while its node is in the graph: a
         // chain is planned from its head each time, so the inner groups
         // (gray with source, under inv) are needed again next time.
@@ -1132,6 +1148,114 @@ impl Evaluator {
         self.fused.retain(|node, _| present.contains(node));
         self.forget_pending(runtime, |node| present.contains(node));
         Ok(executing)
+    }
+
+    /// A node placed several times over its own output is one execution
+    /// that repeats. `times = N` with a `carry` writes N nodes, each
+    /// taking the one before it on one port and alike in every other
+    /// way; nothing between them is read by anything else, so nothing
+    /// between them has to be made. The last node keeps its name and
+    /// its output, as a fused consumer does.
+    fn repeated(
+        &self,
+        groups: Vec<Group>,
+        readers: &BTreeMap<(NodeId, String), usize>,
+    ) -> Vec<Group> {
+        let mut out: Vec<Group> = Vec::with_capacity(groups.len());
+        for group in groups {
+            let joined = match out.last() {
+                Some(previous) => self.chained(previous, &group, readers),
+                None => None,
+            };
+            let Some((input, output)) = joined else {
+                out.push(group);
+                continue;
+            };
+            let previous = out.pop().expect("a group to join");
+            let mut absorbed = previous.absorbed.clone();
+            absorbed.push(previous.node.id.clone());
+            absorbed.extend(group.absorbed.iter().cloned());
+            let mut parts = previous.parts.clone();
+            parts.extend(group.parts.iter().cloned());
+            // The run takes the first node's inputs and the last node's
+            // name: what it gives is what the last one would have.
+            let mut node = group.node.clone();
+            node.inputs = previous.node.inputs.clone();
+            out.push(Group {
+                node,
+                version: group.version,
+                parts,
+                absorbed,
+                repeat: previous.repeat + 1,
+                chain: Some((input, output)),
+            });
+        }
+        out
+    }
+
+    /// Whether `next` is `previous` again, taking what it made: the same
+    /// Kernel of the same generation, one input bound to the one before
+    /// and every other binding and parameter the same, nothing else
+    /// reading what passes between them, and nothing pinned, fused or
+    /// off the frame. The ports it chains, as indices into the
+    /// manifest's inputs and outputs.
+    fn chained(
+        &self,
+        previous: &Group,
+        next: &Group,
+        readers: &BTreeMap<(NodeId, String), usize>,
+    ) -> Option<(usize, usize)> {
+        // The one before is either a node of its own or a run of this
+        // same chain already; what follows is always a plain node.
+        let joinable = match previous.chain {
+            None => previous.absorbed.is_empty(),
+            Some(_) => true,
+        };
+        if !joinable
+            || previous.node.kernel != next.node.kernel
+            || previous.version.generation() != next.version.generation()
+            || !next.absorbed.is_empty()
+            || next.repeat != 1
+            || next.chain.is_some()
+            || previous.node.is_async
+            || next.node.is_async
+            || previous.node.params != next.node.params
+            || previous.node.domain != next.node.domain
+            || self.pinned.contains(&previous.node.id)
+        {
+            return None;
+        }
+        let manifest = next.version.manifest();
+        // Only a map: a reduction, a scan and a scatter each mean
+        // something of their own about what they run over.
+        if manifest.mode != orla_ir::Mode::Map || next.version.module().is_none() {
+            return None;
+        }
+        // Exactly one port differs, and it is bound to what the one
+        // before it made.
+        let mut chained = None;
+        for (port, binding) in &next.node.inputs {
+            if previous.node.inputs.get(port) == Some(binding) {
+                continue;
+            }
+            let Binding::Now(Source::Node { node, port: from }) = binding else {
+                return None;
+            };
+            if node != &previous.node.id || chained.is_some() {
+                return None;
+            }
+            if readers.get(&(node.clone(), from.clone())).copied() != Some(1) {
+                return None;
+            }
+            let input = manifest.inputs.iter().position(|i| &i.name == port)?;
+            let output = manifest.outputs.iter().position(|o| &o.name == from)?;
+            chained = Some((input, output));
+        }
+        // Every port of the one before must be a port of this one too.
+        if previous.node.inputs.len() != next.node.inputs.len() {
+            return None;
+        }
+        chained
     }
 
     /// The fused version for `parts`, if it is ready: kept from an earlier

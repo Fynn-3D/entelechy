@@ -734,6 +734,45 @@ impl Backend for GpuBackend {
         adopt_outputs(scope, module, output_domain, final_buffer, memory_outputs)
     }
 
+    /// A map run several times over its own output, all of it in one
+    /// command buffer: the uniforms are written once, two buffers take
+    /// turns holding what a time gives to the next, and the times are
+    /// passes one after another, which the queue runs in order. What
+    /// this saves is a command buffer and a submission a time, which
+    /// for a small node is most of what it costs.
+    fn execute_repeated(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        repeat: u32,
+        chain: (usize, usize),
+    ) -> Option<Result<Vec<Handle>, ExecutionError>> {
+        let (input, output) = chain;
+        // Only the shape the planner makes: a map of one output whose
+        // own output comes back on one input. A measured run times each
+        // node, so it goes the ordinary way.
+        if repeat < 2
+            || output != 0
+            || module.manifest.mode != Mode::Map
+            || module.manifest.outputs.len() != 1
+            || !module.manifest.memories.is_empty()
+            || self.measured()
+        {
+            return None;
+        }
+        // Every time after the first reads what the one before wrote, so
+        // what it reads has the extent of the output. The context says
+        // the extents once; where that would not hold, the times go one
+        // by one as they did before.
+        let domain = execution_domain(module, invocation, scope).ok()?;
+        if scope.size(*invocation.inputs.get(input)?).ok()? != domain {
+            return None;
+        }
+        Some(self.repeated(prepared, module, invocation, scope, repeat, input))
+    }
+
     fn execute_native(
         &self,
         op: NativeOp,
@@ -910,6 +949,105 @@ impl GpuBackend {
     /// the context and the parameters, creates the output, and encodes
     /// the map pass over `domain`.
     #[allow(clippy::too_many_arguments)]
+    /// The whole of a repeated run: staged once, then a pass a time
+    /// into one command buffer, two buffers taking turns.
+    fn repeated(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        repeat: u32,
+        chain: usize,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        let Some(pipeline) = prepared.as_any().downcast_ref::<Pipeline>() else {
+            return Err(ExecutionError::Device(
+                "kernel was prepared by a different backend".into(),
+            ));
+        };
+        check_invocation(module, invocation)?;
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let domain = execution_domain(module, invocation, scope)?;
+        let staged = self.stage(pipeline, module, invocation, scope, domain, None)?;
+        let Staged {
+            mut encoder,
+            context_buffer,
+            params_buffer,
+            mut input_buffers,
+            memory_outputs: _,
+            output_buffer,
+            output_words,
+            element_count,
+        } = staged;
+        let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        // The first time reads the input it was given and writes the
+        // first of the two; every time after reads what the one before
+        // wrote and writes the other.
+        let spare = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("repeat"),
+            size: (element_count * output_words * 4).max(16) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (groups_x, groups_y, groups_z, _) = wgsl::dispatch(domain);
+        // Two buffers take turns: what a time wrote is what the next
+        // reads, and what it read is free for the time after. The Field
+        // the run was given is read once, by the pass already recorded,
+        // and never written.
+        let mut reads = output_buffer.clone();
+        let mut writes = spare;
+        for _ in 1..repeat {
+            input_buffers[chain] = reads.clone();
+            let written = writes.clone();
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: wgsl::CONTEXT_BINDING,
+                    resource: context_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::PARAMS_BINDING,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::OUTPUT_BINDING,
+                    resource: written.as_entire_binding(),
+                },
+            ];
+            for (index, buffer) in input_buffers.iter().enumerate() {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: wgsl::INPUT_BINDING + index as u32,
+                    resource: buffer.as_entire_binding(),
+                });
+            }
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("orla repeat"),
+                layout: &pipeline.layout,
+                entries: &entries,
+            });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("orla repeat"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline.pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(groups_x, groups_y, groups_z);
+            drop(pass);
+            std::mem::swap(&mut reads, &mut writes);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        if let Some(error) = pollster::block_on(scope_guard.pop()) {
+            return Err(ExecutionError::Device(error.to_string()));
+        }
+        // What the last time wrote is what the run gives.
+        adopt_outputs(scope, module, domain, reads, Vec::new())
+    }
+
     fn stage(
         &self,
         pipeline: &Pipeline,
