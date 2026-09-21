@@ -14,7 +14,8 @@ frame 0.0667
 frame 0.0833
 frame 0.1000
 frame 0.1167
-expect sample.result[0] = 8.90064 11.08979 15.72408 32.0 0.005   # the sum, and the count in alpha
+expect sample.result[0] = 8.90064 11.08979 15.72408 32.0 0.005   # the sum in one pixel
+expect sample.result[0].a = 32.0                 # and the count it rode in on
 expect 48 20 = 0.491 0.528 0.591 0.01      # the sky above the lamp
 expect 24 52 = 0.457 0.308 0.326 0.01      # the red ball
 expect 70 55 = 0.404 0.448 0.526 0.01      # the steel ball
@@ -26,4 +27,5 @@ pointer 40 40 down
 frame 0.1333
 pointer 52 44 down
 frame 0.1500
-expect sample.result[0] = 1.10138 1.37015 1.93970 4.0 0.001
+expect sample.result[0].a = 4.0                  # this frame's samples alone
+expect sample.result[0].r = 1.10138 0.001

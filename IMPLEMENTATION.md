@@ -23,6 +23,8 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Keywords as names | [parser](crates/language/src/parser.rs) `name_not_starting_an_expression` | [parser tests](crates/language/src/parser.rs) |
+| Components in a target | [session](crates/cli/src/session.rs) `component_of` | [path replay](examples/path/tests/path.replay) |
 | Loop hoisting | [optimize](crates/ir/src/optimize.rs) `hoisted` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Folded float pairs | [compile](crates/cpu/src/eval/compile.rs), [run](crates/cpu/src/eval/run.rs) `FBin2` | [feature matrix](crates/matrix/src/lib.rs) |
 | Advance | [protocol](crates/cli/src/protocol.rs) `advance`, [session](crates/cli/src/session.rs) `element_field` | [protocol test](crates/cli/tests/protocol.rs) |

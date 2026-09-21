@@ -228,7 +228,18 @@ for), a loop's count may be any `Int` expression read once before the
 loop and clamped to the bound, and a node may be a filled Field
 (`node zeros: Rows<Float> { domain = 65; }`, `value = ...` for anything
 but the element's zero), which took five zero-fill Kernels out of the
-examples. Done since: the interpreter is faster by the two things that were left
+examples. A play round (the `path` tracer and the `spectrum`) turned up two
+things and both are fixed: a function could not take a keyword's name
+(`fn scatter(...)` was refused, and the message did not say why), and
+now any word but the five that begin an expression names one, since a
+call is a word and a `(` wherever it stands; and a replay's expectation
+could name a struct's field but not a vector's component, which the
+language allows, so `expect sum.result[0].a = 32` reads the alpha now,
+and the protocol's `advance` watches the same spelling. The round also
+caught a fault in its own example, a vibrato written as a factor on the
+clock, which is a chirp: the replay found the pitch had moved.
+
+Done since: the interpreter is faster by the two things that were left
 to try. The optimizer lifts a loop's unchanging work out of it, which
 every backend reads and which took raymarch on the interpreter from 365
 to 246 ms and the replay suite from 12.4 to 11.3 s; and the interpreter

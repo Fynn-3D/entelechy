@@ -605,6 +605,24 @@ fn relative_to(path: &Path, from: &Path) -> String {
     path.display().to_string()
 }
 
+/// A vector's component by name, as a Kernel spells it (`x` or `r` and
+/// the rest): which word it is, and what type it holds.
+fn component_of(ty: orla_ir::Type, name: &str) -> Option<(usize, orla_ir::Type)> {
+    use orla_ir::Type;
+    let (lanes, element) = match ty {
+        Type::Vec2 => (2, Type::Float),
+        Type::Vec3 => (3, Type::Float),
+        Type::Vec4 => (4, Type::Float),
+        Type::IVec2 => (2, Type::Int),
+        Type::IVec3 => (3, Type::Int),
+        _ => return None,
+    };
+    let at = ["xyzw", "rgba"]
+        .iter()
+        .find_map(|alphabet| alphabet.find(name))?;
+    (name.len() == 1 && at < lanes).then_some((at, element))
+}
+
 /// `node.port[index].field.field` as a replay writes it and the
 /// protocol takes it: the node, the port, the element, and the path
 /// through the struct to a value.
@@ -1896,8 +1914,17 @@ impl Session {
         let mut offset = 0usize;
         let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.words());
         for field in path {
+            // A struct's field by name, or a vector's component by the
+            // letter the language spells it with.
+            if let Some((component, element)) = component_of(ty, field) {
+                offset += component;
+                ty = element;
+                continue;
+            }
             let Type::Struct(id) = ty else {
-                return Err(format!("`{field}` names a field, but the value is a {ty}"));
+                return Err(format!(
+                    "`{field}` names a field or a component, but the value is a {ty}"
+                ));
             };
             let def = &structs[id as usize];
             let mut found = None;

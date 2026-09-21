@@ -305,7 +305,8 @@ and expectations. No Rust is
 needed to test a scene. An expectation is a pixel of the output
 (`expect 11 10 = 1.0 1.0 1.0`, with an optional tolerance) or a field of an
 element of a node's output, named as the Kernel declared it
-(`expect step.result[0].score = 1`, `expect mix.result[0] = -0.125 -0.125 0.01`):
+(`expect step.result[0].score = 1`, `expect mix.result[0] = -0.125 -0.125 0.01`,
+and a vector's component by its letter, `expect sum.result[0].a = 32`):
 ints and bools compare exactly, floats and vectors within the trailing
 tolerance. The second kind states what the application's state is rather
 than what its picture looks like, and nodes it names are kept materialized.

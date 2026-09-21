@@ -94,7 +94,8 @@ spans them is asked for: `frames` (1 to 100000) at `fps` frames a
 second of the clock (60 by default), from `time`, with the rest of
 `evaluate`'s context held for every frame and an `async` node settled
 after each. With `until`, `{target, below | above | equals}`, it stops
-as soon as the value says to: the target is `node.port[index].field`,
+as soon as the value says to: the target is `node.port[index].field`
+(a struct's field by name, a vector's component by its letter),
 the spelling a replay writes, and the value is a Float, an Int or a
 Bool. With `save`, an object of `node.port` to a file path (relative
 paths beside the scene), it writes those outputs when the run stops, by
