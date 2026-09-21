@@ -50,6 +50,7 @@ capability claim.
 | Folded float pairs | [compile](crates/cpu/src/eval/compile.rs), [run](crates/cpu/src/eval/run.rs) `FBin2` | [feature matrix](crates/matrix/src/lib.rs) |
 | Advance | [protocol](crates/cli/src/protocol.rs) `advance`, [session](crates/cli/src/session.rs) `element_field` | [protocol test](crates/cli/tests/protocol.rs) |
 | Inlining | [optimize](crates/ir/src/optimize.rs) `inline_calls` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
+| Parts of an element | [ir](crates/ir/src/lib.rs) `Op::Part`, [optimize](crates/ir/src/optimize.rs) `narrowed`, [interpreter](crates/cpu/src/eval/run.rs), [jit](crates/jit/src/codegen.rs) `part_words`, [wgsl](crates/gpu/src/wgsl.rs) | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) `parts of an element` |
 | Measured profiles | [gpu](crates/gpu/src/lib.rs) `set_measured`, [runtime](crates/runtime/src/lib.rs) `last_measured` | [profile output](crates/cli/tests/session.rs) |
 | Diagnostics across files | [session](crates/cli/src/session.rs) `located`, `declarations_within` | [session tests](crates/cli/tests/session.rs) |
 | Run-time loop counts | [loop](crates/compiler/src/lower/expr.rs), [ir](crates/ir/src/lib.rs) `Op::Loop::bound` | [feature matrix](crates/matrix/src/lib.rs) `loops` |
@@ -632,6 +633,27 @@ capability claim.
   JIT and the GPU unchanged. A trace compiles the Kernel again without
   the optimizer (`compile_kernel_unoptimized` over the parsed Kernel the
   session keeps), so it still walks the source's own calls and `let`s.
+
+- A field or an element taken out of a whole element of an input is a
+  read of those words alone ([`Op::Part`](crates/ir/src/lib.rs),
+  [`narrowed`](crates/ir/src/optimize.rs)): the instruction holds the
+  way from the element to the part, field by field and index by index,
+  and each backend reads only the words the path names — the
+  interpreter one copy, the JIT a load at a worked-out offset, the GPU
+  an indexed read of the storage buffer. Without it a Kernel whose
+  input element is a record of arrays copies every word of an element
+  into every element of its own domain to reach three of them: a
+  Kernel reading two fields of a 481-word element at 960x540 took
+  9.25 ms on the GPU and 18.6 on the JIT, and takes 0.70 and 0.37. The
+  whole read stays where something wants the whole (a value chosen by
+  an `if`, say); a name is not such a want, so the `let` goes with the
+  read it named, and a trace of a Kernel a document owns walks the
+  unoptimized source where every `let` still is. Memories are left
+  alone: a `put` between the read and the part would be seen by the
+  part and not by the copy. A function taking a record or an array of
+  32 words or more is written out where it is called however long it
+  is (up to 1024 instructions), since the argument is copied at every
+  element and, written out, its reads narrow too.
 
 - A measured profile: `run --profile` puts the GPU backend in a
   measured mode, where an execution waits for its submission and asks

@@ -386,6 +386,19 @@ pub(super) enum Instr {
         kind: Address,
         n: usize,
     },
+    /// `dst` = the `n` words of the element of `input` at `address`
+    /// that a path through the element names: `base` words in, then
+    /// each index step, the index clamped into its count and taken as
+    /// that many words.
+    Part {
+        dst: usize,
+        input: usize,
+        address: usize,
+        kind: Address,
+        base: usize,
+        steps: Vec<(usize, usize, usize)>,
+        n: usize,
+    },
     AtLinear {
         dst: usize,
         input: usize,

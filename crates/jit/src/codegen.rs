@@ -921,6 +921,70 @@ impl<'a, 'b> Fx<'a, 'b> {
             .collect()
     }
 
+    /// A run of words inside an element of an input: the element's own
+    /// words, `within` bytes in. What a field or an array element of a
+    /// read comes to, without the rest of the element.
+    fn part_words(
+        &mut self,
+        input: u32,
+        index: Value,
+        within: Value,
+        tys: &[types::Type],
+    ) -> Vec<Value> {
+        let (words, element) = match self.settled_view(input) {
+            Some(view) => (view.words, view.element),
+            None => {
+                let view = self.view(input);
+                let words = self
+                    .b
+                    .ins()
+                    .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
+                let stride =
+                    self.b
+                        .ins()
+                        .load(types::I32, self.settled, view, offsets::VIEW_STRIDE);
+                (words, self.b.ins().imul_imm(stride, 4))
+            }
+        };
+        let bytes = self.b.ins().imul(index, element);
+        let total = self.b.ins().iadd(bytes, within);
+        let offset = self.b.ins().uextend(self.ptr, total);
+        let at = self.b.ins().iadd(words, offset);
+        tys.iter()
+            .enumerate()
+            .map(|(k, t)| self.b.ins().load(*t, self.flags, at, (k * 4) as i32))
+            .collect()
+    }
+
+    /// Where a path through an element leads, in bytes from its start:
+    /// the words known when the Kernel compiled, then each index
+    /// clamped into what it indexes and taken as its own width. The
+    /// last word is held inside the element, whatever the indices say.
+    fn part_offset(&mut self, input: u32, path: &[orla_ir::Step], words: usize) -> Value {
+        let element = self.module.manifest.inputs[input as usize].element();
+        let layout = orla_ir::part_layout(&self.module.structs, element, path)
+            .expect("a path validation walked");
+        let mut offset = self.i32c(layout.base as i64);
+        for (index, count, stride) in layout.steps {
+            let at = self.words(&index)[0];
+            let zero = self.i32c(0);
+            let last = self.i32c(count as i64 - 1);
+            let floored = self.b.ins().smax(at, zero);
+            let clamped = self.b.ins().smin(floored, last);
+            let scaled = self.b.ins().imul_imm(clamped, stride as i64);
+            offset = self.b.ins().iadd(offset, scaled);
+        }
+        let stride = self.module.manifest.inputs[input as usize]
+            .ty
+            .schema
+            .words();
+        let last = self.i32c(stride.saturating_sub(words) as i64);
+        let held = self.b.ins().smin(offset, last);
+        let zero = self.i32c(0);
+        let inside = self.b.ins().smax(held, zero);
+        self.b.ins().imul_imm(inside, 4)
+    }
+
     /// This element's own place in an input, clamped into it: what
     /// `sample` reads.
     fn sample_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
@@ -1539,6 +1603,41 @@ impl<'a, 'b> Fx<'a, 'b> {
                 }
                 let tys = word_types(self.module, ty);
                 self.load_scratch(&tys)
+            }
+            Op::Part { input, at, path } => {
+                let address = self.words(at);
+                let tys = word_types(self.module, ty);
+                let within = self.part_offset(*input, path, tys.len());
+                if matches!(self.ty(at), Type::Int) {
+                    let index = self.rows_index(*input, address[0]);
+                    return self.part_words(*input, index, within, &tys);
+                }
+                // Over a grid or a volume the element is read as it
+                // always was, and the part is taken out of what came
+                // back: the address is the Host's to work out.
+                let out = self.scratch_addr();
+                let index = self.i32c(*input as i64);
+                match self.ty(at) {
+                    Type::Vec2 => {
+                        let zero = self.f32c(0.0);
+                        self.b.ins().call(
+                            self.read,
+                            &[self.ctx, index, address[0], address[1], zero, out],
+                        );
+                    }
+                    _ => {
+                        self.b.ins().call(
+                            self.read,
+                            &[self.ctx, index, address[0], address[1], address[2], out],
+                        );
+                    }
+                }
+                let bytes = self.b.ins().uextend(self.ptr, within);
+                let base = self.b.ins().iadd(out, bytes);
+                tys.iter()
+                    .enumerate()
+                    .map(|(k, t)| self.b.ins().load(*t, self.flags, base, (k * 4) as i32))
+                    .collect()
             }
             Op::AtLinear(input, position) => {
                 let words = self.words(position);

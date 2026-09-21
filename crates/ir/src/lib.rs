@@ -888,6 +888,74 @@ pub struct StructDef {
 /// Largest element count an array type may declare.
 pub const MAX_ARRAY_COUNT: u32 = 4096;
 
+/// How many words a value of this type takes in the flat layout the
+/// Host, the backends and this IR share: a struct is its fields end to
+/// end with nothing between them, a matrix its columns.
+pub fn words(structs: &[StructDef], ty: Type) -> usize {
+    match ty {
+        Type::Struct(index) => structs[index as usize]
+            .fields
+            .iter()
+            .map(|field| words(structs, field.ty))
+            .sum(),
+        other => other
+            .order()
+            .map(|order| usize::from(order) * usize::from(order))
+            .or_else(|| other.lanes().map(|(n, _)| usize::from(n)))
+            .unwrap_or(1),
+    }
+}
+
+/// Where part `k` of a value of this type begins and what it is: a
+/// field of a struct, a column of a matrix, a component of a vector,
+/// which is what [`Op::Extract`] takes.
+pub fn part_at(structs: &[StructDef], ty: Type, k: usize) -> Option<(usize, Type)> {
+    match ty {
+        Type::Struct(index) => {
+            let def = structs.get(index as usize)?;
+            let field = def.fields.get(k)?;
+            let offset = def.fields[..k]
+                .iter()
+                .map(|field| words(structs, field.ty))
+                .sum();
+            Some((offset, field.ty))
+        }
+        other => {
+            let (count, part) = match (other.order(), other.column()) {
+                (Some(order), Some(column)) => (usize::from(order), column),
+                _ => {
+                    let (count, lane) = other.lanes()?;
+                    (usize::from(count), lane)
+                }
+            };
+            (k < count).then(|| (k * words(structs, part), part))
+        }
+    }
+}
+
+/// What a value of this type holds when it is indexed: the part's type,
+/// how many there are and how many words apart they lie, which is what
+/// [`Op::Subscript`] takes, clamping the index into `0..count`.
+pub fn elements_of(structs: &[StructDef], ty: Type) -> Option<(Type, usize, usize)> {
+    match ty {
+        Type::Struct(index) => {
+            let def = structs.get(index as usize)?;
+            let element = def.element?;
+            Some((element, def.fields.len(), words(structs, element)))
+        }
+        other => {
+            let part = other
+                .column()
+                .or_else(|| other.lanes().map(|(_, lane)| lane))?;
+            let count = other
+                .order()
+                .map(usize::from)
+                .or_else(|| other.lanes().map(|(n, _)| usize::from(n)))?;
+            Some((part, count, words(structs, part)))
+        }
+    }
+}
+
 impl StructDef {
     /// A named record.
     pub fn record(name: impl Into<String>, fields: Vec<Field>) -> Self {
@@ -1044,6 +1112,20 @@ pub enum Op {
     /// (`Int`, `Vec2`, or `Vec3`; clamped), as its element type. Host call:
     /// `field.read`.
     At(u32, ValueId),
+    /// Part of the element of an input at an address: what an `extract`
+    /// or a `subscript` of a whole element comes to when nothing needs
+    /// the whole. The path says which part, field by field and index by
+    /// index; a backend reads only the words it names, where reading
+    /// the element would have copied all of them. Host call:
+    /// `field.read`.
+    Part {
+        /// The input read, by manifest index.
+        input: u32,
+        /// The address, of the input's index type, as [`Op::At`] takes.
+        at: ValueId,
+        /// The way from the whole element to the part, outermost first.
+        path: Vec<Step>,
+    },
     /// The element of an input at an address of the input's index type,
     /// interpolated linearly between the neighbouring elements (bilinear
     /// over a grid, trilinear over a volume; clamped at the edges), as
@@ -1059,6 +1141,55 @@ pub enum Op {
     /// address outside the memory is dropped. Yields the value written.
     /// Host call: `field.write`. Entry point of an ordered Kernel only.
     Put(u32, ValueId, ValueId),
+}
+
+/// One step from a whole value towards a part of it, as [`Op::Part`]
+/// takes them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Step {
+    /// A field of a record, a column of a matrix or a component of a
+    /// vector, by index: what [`Op::Extract`] takes.
+    Field(u32),
+    /// The element of an array, the column of a matrix or the component
+    /// of a vector at an `Int`, clamped into range: what
+    /// [`Op::Subscript`] takes.
+    Index(ValueId),
+}
+
+/// Where a path through an element leads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartLayout {
+    /// The words before the part that are known without running.
+    pub base: usize,
+    /// The index steps left to work out as it runs: the value holding
+    /// each index, how many there are to choose from, and how many
+    /// words one takes.
+    pub steps: Vec<(ValueId, usize, usize)>,
+    /// What the path names.
+    pub ty: Type,
+}
+
+/// Where a path through an element of this type leads. `None` where the
+/// path does not fit the type, which validation refuses.
+pub fn part_layout(structs: &[StructDef], element: Type, path: &[Step]) -> Option<PartLayout> {
+    let mut ty = element;
+    let mut base = 0;
+    let mut steps = Vec::new();
+    for step in path {
+        match step {
+            Step::Field(k) => {
+                let (offset, field) = part_at(structs, ty, *k as usize)?;
+                base += offset;
+                ty = field;
+            }
+            Step::Index(index) => {
+                let (part, count, stride) = elements_of(structs, ty)?;
+                steps.push((*index, count, stride));
+                ty = part;
+            }
+        }
+    }
+    Some(PartLayout { base, steps, ty })
 }
 
 /// An instruction: a typed value defined by an operation.

@@ -1822,6 +1822,35 @@ impl Emitter<'_> {
                 format!("load_in{input}(index_in{input}({own}))")
             }
             Op::At(input, index) => format!("load_in{input}(index_in{input}({}))", v(index)),
+            Op::Part { input, at, path } => {
+                // The words this part is made of and nothing else:
+                // where the path leads, held inside the element.
+                let manifest = &self.module.manifest;
+                let stride = manifest.inputs[*input as usize].ty.schema.words();
+                let element = manifest.inputs[*input as usize].element();
+                let layout = orla_ir::part_layout(&self.module.structs, element, path)
+                    .expect("a path validation walked");
+                let mut offset = format!("{}i", layout.base);
+                for (index, count, part) in layout.steps {
+                    let _ = write!(
+                        offset,
+                        " + clamp({}, 0i, {}i) * {part}i",
+                        v(&index),
+                        count as i64 - 1
+                    );
+                }
+                let last = stride.saturating_sub(type_words(self.module, *ty));
+                let base = format!("b{}", id.0);
+                self.line(
+                    depth,
+                    &format!(
+                        "let {base} = index_in{input}({}) * {stride}u + u32(clamp({offset}, 0i, {last}i));",
+                        v(at)
+                    ),
+                );
+                let (expression, _) = load_expr(self.module, *ty, &format!("in{input}"), &base, 0);
+                expression
+            }
             Op::AtLinear(input, index) => format!("linear_in{input}({})", v(index)),
         };
         let _ = self.function;

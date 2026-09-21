@@ -654,6 +654,55 @@ than repeating it. Repetition is what the ones fusion refuses get: a
 Kernel that reads its neighbours, which is what `collapse` and `fluid`
 are made of.
 
+A scene someone else wrote found the largest single cost this project
+had: a mesh editor of three nodes, a `struct Studio` holding two
+`Mesh`es of `[Vec3; 96]` and `[[Int; 4]; 48]`, drawn by a ray-traced
+Kernel over the window. It ran at 44 frames a second and the Player's
+own numbers said the frame was mostly `present`, which is where a
+GPU's work is waited for. The frame was 16.7 ms of GPU work for six
+faces of ray tracing, and a probe of two fields of that element and
+nothing else took 14 ms of it: every pixel was copying 481 words to
+read six of them, a gigabyte a frame, which is the memory system and
+not the tracing.
+
+So a field, a column or an element taken out of a whole element of an
+input is now a read of those words alone (`Op::Part`). The instruction
+holds the way from the element to the part, field by field and index
+by index, and each backend walks it: the interpreter one copy at an
+offset it works out, the JIT a load, the GPU an indexed read of the
+storage buffer. The path is in the instruction rather than in
+arithmetic beside it because the interpreter dispatches instructions
+and six of them per read cost it more than the copy did; written this
+way it is one, and validation walks the path to the part's own type
+rather than trusting a width. The whole read stays where something
+wants the whole; a name is not such a want, so the `let` goes with the
+read it named, which the compiled backends were already dropping and
+the interpreter was not.
+
+Reading only what is used is worth nothing while the words are copied
+into a function's argument, which is what a `fn trace(m: Mesh)` does at
+every element, so a function taking a record or an array of 32 words or
+more is now written out where it is called however long it is, up to
+1024 instructions. Inlined, its reads narrow like any others.
+
+Measured on the same machine, one after the other, a frame of that
+scene: 16.7 to 1.5 ms on the GPU and 168 to 11.5 on the JIT. The probe
+of two fields: 9.25 to 0.70 on the GPU, 18.6 to 0.37 on the JIT, 13.3
+to 10.3 on the interpreter. The examples are where they were, within
+this machine's drift (which is a few percent over an hour of
+benchmarking, and was worth finding out: two readings taken an hour
+apart are not an A and a B). The scene's own interpreter frame is four
+percent slower, since a part is read where a copy was made once and
+read from the frame after: that is the trade, and the interpreter is
+the reference rather than the fast one.
+
+What the whole round also says about `run --profile`: it waits for the
+device after each node and runs one cold frame, so on the GPU it
+counts a submission and a round trip per node. It said the one-element
+state node of that scene cost 11 ms while the whole frame is 1.5.
+Read it for which node is heavy, not for what a frame costs; `bench`
+answers that.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

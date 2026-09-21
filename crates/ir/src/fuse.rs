@@ -12,7 +12,7 @@ use std::fmt;
 
 use crate::{
     Block, Capabilities, Function, Instruction, Manifest, Mode, Module, Op, Param, Port, PortType,
-    StructDef, Type, Validated, ValueId, validate,
+    Step, StructDef, Type, Validated, ValueId, validate,
 };
 
 /// Why two modules cannot fuse.
@@ -42,7 +42,13 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
         for instruction in instructions {
             match &instruction.op {
                 Op::Sample(i) if *i == input => use_.sampled = true,
-                Op::At(i, _) | Op::AtLinear(i, _) | Op::Count(i) | Op::Size(i) if *i == input => {
+                Op::At(i, _)
+                | Op::AtLinear(i, _)
+                | Op::Count(i)
+                | Op::Size(i)
+                | Op::Part { input: i, .. }
+                    if *i == input =>
+                {
                     use_.addressed = true
                 }
                 Op::If {
@@ -195,6 +201,11 @@ pub fn fuse(
             Op::AtLinear(i, c) => Op::AtLinear(index(*i), *c),
             Op::Count(i) => Op::Count(index(*i)),
             Op::Size(i) => Op::Size(index(*i)),
+            Op::Part { input: i, at, path } => Op::Part {
+                input: index(*i),
+                at: *at,
+                path: path.clone(),
+            },
             Op::Put(i, a, v) => Op::Put(index(*i), *a, *v),
             other => other.clone(),
         }
@@ -209,6 +220,11 @@ pub fn fuse(
             Op::AtLinear(i, c) => Op::AtLinear(index(*i), *c),
             Op::Count(i) => Op::Count(index(*i)),
             Op::Size(i) => Op::Size(index(*i)),
+            Op::Part { input: i, at, path } => Op::Part {
+                input: index(*i),
+                at: *at,
+                path: path.clone(),
+            },
             Op::Param(k) => Op::Param(k + consumer_params),
             Op::Call(f, args) => Op::Call(f + consumer_functions, args.clone()),
             other => other.clone(),
@@ -422,6 +438,14 @@ impl<'a> Renumber<'a> {
                 }
             }
             Op::At(_, coord) | Op::AtLinear(_, coord) => *coord = self.map(*coord),
+            Op::Part { at, path, .. } => {
+                *at = self.map(*at);
+                for step in path {
+                    if let Step::Index(index) = step {
+                        *index = self.map(*index);
+                    }
+                }
+            }
             Op::Put(_, address, value) => {
                 *address = self.map(*address);
                 *value = self.map(*value);

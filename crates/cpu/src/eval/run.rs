@@ -746,10 +746,31 @@ impl<'p, 's> Machine<'p, 's> {
                 n,
             } => {
                 let view = &program.inputs[*input];
-                let address = read_address(s, fp + address, *kind, 0.0);
-                let index = linear(view.domain, clamp_address(view.domain, address));
+                let index = address_index(s, fp + address, *kind, view.domain);
                 let start = index * view.stride;
                 let words = self.memories[*input].as_deref().unwrap_or(view.words);
+                s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
+            }
+            Instr::Part {
+                dst,
+                input,
+                address,
+                kind,
+                base,
+                steps,
+                n,
+            } => {
+                let view = &program.inputs[*input];
+                let index = address_index(s, fp + address, *kind, view.domain);
+                let words = self.memories[*input].as_deref().unwrap_or(view.words);
+                // Where the path leads: the words it is known to pass
+                // over, then each index clamped into what it indexes.
+                let mut offset = *base;
+                for (slot, count, stride) in steps {
+                    let k = (s[fp + slot] as i32).clamp(0, *count as i32 - 1) as usize;
+                    offset += k * stride;
+                }
+                let start = index * view.stride + offset.min(view.stride.saturating_sub(*n));
                 s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
             }
             Instr::Put {
@@ -854,6 +875,23 @@ pub(super) fn write_extent(stack: &mut [u32], at: usize, domain: Domain) {
 }
 
 /// Reads an address of the given kind; missing axes take `rest`.
+/// The element an address names, clamped into an input: a row's
+/// address is one `Int` and one clamp, which is what most reads are;
+/// the rest go by axis through floats.
+#[inline]
+pub(super) fn address_index(stack: &[u32], at: usize, kind: Address, domain: Domain) -> usize {
+    match kind {
+        Address::Int => {
+            let last = domain.count() as i32 - 1;
+            (stack[at] as i32).clamp(0, last) as usize
+        }
+        _ => linear(
+            domain,
+            clamp_address(domain, read_address(stack, at, kind, 0.0)),
+        ),
+    }
+}
+
 pub(super) fn read_address(stack: &[u32], at: usize, kind: Address, rest: f32) -> [f32; 3] {
     match kind {
         Address::Int => [stack[at] as i32 as f32, rest, rest],

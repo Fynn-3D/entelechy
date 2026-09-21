@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::{
-    Block, Function, Instruction, Manifest, Module, Op, StructDef, Type, UnaryOp, ValueId,
+    Block, Function, Instruction, Manifest, Module, Op, Step, StructDef, Type, UnaryOp, ValueId,
 };
 
 /// What a type is called where a Kernel's structs are known: the name
@@ -244,6 +244,16 @@ impl fmt::Display for Op {
             Self::Element => f.write_str("element"),
             Self::Sample(input) => write!(f, "host sample input{input}"),
             Self::At(input, index) => write!(f, "host at input{input} {index}"),
+            Self::Part { input, at, path } => {
+                write!(f, "host part input{input} {at}")?;
+                for step in path {
+                    match step {
+                        Step::Field(k) => write!(f, ".{k}")?,
+                        Step::Index(index) => write!(f, "[{index}]")?,
+                    }
+                }
+                Ok(())
+            }
             Self::AtLinear(input, index) => write!(f, "host at.linear input{input} {index}"),
             Self::Count(input) => write!(f, "host count input{input}"),
             Self::Size(input) => write!(f, "host size input{input}"),

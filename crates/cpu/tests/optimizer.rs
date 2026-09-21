@@ -131,3 +131,121 @@ fn a_loop_over_literals_is_run_when_the_kernel_is_compiled() {
     let counted = "kernel test.counted@1 { requires { field.write; } param n: Int = 4; output result: Rows<Int>; compute { return loop n with a = 1 { a * 2 } + element(); } }";
     assert_eq!(loops(&compile(counted).unwrap().entry.body), 1);
 }
+
+/// Every operation of a function, nested blocks included.
+fn ops(instructions: &[Instruction]) -> Vec<&Op> {
+    let mut out = Vec::new();
+    for instruction in instructions {
+        out.push(&instruction.op);
+        match &instruction.op {
+            Op::If {
+                then, otherwise, ..
+            } => {
+                out.extend(ops(&then.body));
+                out.extend(ops(&otherwise.body));
+            }
+            Op::Match {
+                arms, otherwise, ..
+            } => {
+                for (_, block) in arms {
+                    out.extend(ops(&block.body));
+                }
+                out.extend(ops(&otherwise.body));
+            }
+            Op::Loop { until, body, .. } => {
+                if let Some(until) = until {
+                    out.extend(ops(&until.body));
+                }
+                out.extend(ops(&body.body));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A field or an element taken out of a whole element of an input is a
+/// read of those words alone, and the whole read goes when nothing else
+/// wants it: a Kernel holding a record of arrays would otherwise copy
+/// every word of it to reach three.
+#[test]
+fn a_part_of_an_element_is_read_without_the_rest_of_it() {
+    let head = "kernel test.part@1 { requires { field.read; field.write; }
+        struct Patch { points: [Vec3; 8]; label: Int; }
+        input patches: Rows<Patch>;
+        output result: Rows<Float>;
+        compute { ";
+    let source = format!(
+        "{head} return at(patches, element()).points[element() % 8].y
+            + float(at(patches, element()).label); }} }}"
+    );
+    let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+    let entry = ops(&module.entry.body);
+    let paths: Vec<usize> = entry
+        .iter()
+        .filter_map(|op| match op {
+            Op::Part { path, .. } => Some(path.len()),
+            _ => None,
+        })
+        .collect();
+    // `.points[k].y` is three steps in, `.label` one.
+    assert_eq!(paths, vec![3, 1], "{module}");
+    assert!(
+        !entry.iter().any(|op| matches!(op, Op::At(..))),
+        "nothing wants the whole element: {module}"
+    );
+    // A name is not a want: the `let` the read was given goes with
+    // the read, since showing it would mean doing work the Kernel no
+    // longer does. A trace of a Kernel a document owns walks the
+    // source, where every `let` still is.
+    let named = format!("{head} let p = at(patches, element()); return p.points[0].y; }} }}");
+    let module = compile(&named).unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        !ops(&module.entry.body)
+            .iter()
+            .any(|op| matches!(op, Op::At(..))),
+        "the name does not keep it: {module}"
+    );
+    assert!(
+        !module.entry.bindings.iter().any(|(_, name)| name == "p"),
+        "and the name goes with it: {:?}",
+        module.entry.bindings
+    );
+    // What wants the whole element keeps it: here one of two elements
+    // is chosen before anything is taken out of it.
+    let whole = format!(
+        "{head} let p = at(patches, element());
+            let q = if element() > 2 {{ p }} else {{ at(patches, 0) }};
+            return q.points[0].y; }} }}"
+    );
+    let module = compile(&whole).unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        ops(&module.entry.body)
+            .iter()
+            .any(|op| matches!(op, Op::At(..))),
+        "{module}"
+    );
+}
+
+/// A memory the steps write keeps its whole read: a `put` between the
+/// read and the part would be seen by the part and not by the copy.
+#[test]
+fn a_memory_the_steps_write_is_read_whole() {
+    let source = "kernel test.memory@1 { requires { field.read; field.write; }
+        struct Patch { tally: Int; label: Int; }
+        input rows: Rows<Int>;
+        memory mem: Rows<Patch>;
+        output result: Rows<Int>;
+        scan with acc = 0 {
+            let seen = at(mem, index() % 4).label;
+            put(mem, index() % 4, Patch { tally: acc, label: index() });
+            return acc + seen + at(rows, index());
+        } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let entry = ops(&module.entry.body);
+    assert!(
+        !entry.iter().any(|op| matches!(op, Op::Part { .. })),
+        "a memory is read whole: {module}"
+    );
+    assert!(entry.iter().any(|op| matches!(op, Op::At(..))), "{module}");
+}

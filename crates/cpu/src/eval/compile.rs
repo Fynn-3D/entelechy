@@ -39,6 +39,11 @@ pub(super) struct Shared {
     pub(super) structs: Vec<StructLayout>,
     pub(super) functions: Vec<Code>,
     pub(super) param_at: Vec<usize>,
+    /// The module's own struct table, which a path through an element
+    /// is read against.
+    pub(super) records: Vec<orla_ir::StructDef>,
+    /// What one element of each input is.
+    pub(super) elements: Vec<Type>,
 }
 
 impl Shared {
@@ -108,6 +113,13 @@ impl<'s> Program<'s> {
             structs,
             functions: Vec::with_capacity(module.functions.len()),
             param_at,
+            records: module.structs.clone(),
+            elements: module
+                .manifest
+                .inputs
+                .iter()
+                .map(|port| port.element())
+                .collect(),
         };
         for function in &module.functions {
             let code = compile_function(&shared, function, None);
@@ -289,6 +301,14 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                     note(&body.result);
                 }
                 Op::At(_, a) | Op::AtLinear(_, a) | Op::Key(a) | Op::Button(a) => note(a),
+                Op::Part { at, path, .. } => {
+                    note(at);
+                    for step in path {
+                        if let orla_ir::Step::Index(index) = step {
+                            note(index);
+                        }
+                    }
+                }
                 Op::Put(_, a, v) => {
                     note(a);
                     note(v);
@@ -861,6 +881,27 @@ impl FunctionCompiler<'_> {
                     input: *input as usize,
                     address: self.loc(index).at,
                     kind: self.address(index),
+                    n: dst.n,
+                }
+            }
+            Op::Part { input, at, path } => {
+                let dst = define(self);
+                let element = self.shared.elements[*input as usize];
+                let layout = orla_ir::part_layout(&self.shared.records, element, path)
+                    .expect("a path validation walked");
+                let base = layout.base;
+                let steps = layout
+                    .steps
+                    .iter()
+                    .map(|(index, count, stride)| (self.loc(index).at, *count, *stride))
+                    .collect();
+                Instr::Part {
+                    dst: dst.at,
+                    input: *input as usize,
+                    address: self.loc(at).at,
+                    kind: self.address(at),
+                    base,
+                    steps,
                     n: dst.n,
                 }
             }

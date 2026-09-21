@@ -26,8 +26,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
-    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, StructDef, Type, UnaryOp, Value,
-    ValueId,
+    BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, Step, StructDef, Type, UnaryOp,
+    Value, ValueId,
 };
 
 /// A function of at most this many instructions, nested blocks counted,
@@ -36,6 +36,17 @@ use crate::{
 /// cheaper spelled out. Beyond it the code would grow faster than the
 /// calls it saves.
 const INLINE_LIMIT: usize = 96;
+
+/// A function taking a record or an array of at least this many words
+/// is written out where it is called even when it is longer: the
+/// argument is copied at every element, which costs more than the
+/// instructions do, and written out its reads narrow to the words they
+/// use. Beyond [`INLINE_BIG_LIMIT`] instructions the code would grow
+/// too far for what one copy is worth.
+const BIG_ARG_WORDS: usize = 32;
+/// How long a function taking a wide argument may be and still be
+/// written out where it is called.
+const INLINE_BIG_LIMIT: usize = 1024;
 
 /// Optimizes every function of a module. The result computes what the
 /// input did, word for word, and validates whenever the input does.
@@ -57,18 +68,18 @@ pub fn optimize(module: Module) -> Module {
     // written out is its short form, and depth costs nothing.
     let mut functions: Vec<Function> = Vec::with_capacity(module.functions.len());
     for function in &module.functions {
-        let flattened = inline_calls(function, &functions);
+        let flattened = inline_calls(function, &functions, &module.structs);
         functions.push(ctx.function(&flattened));
     }
-    let entry = ctx.function(&inline_calls(&module.entry, &functions));
+    let entry = ctx.function(&inline_calls(&module.entry, &functions, &module.structs));
     let merge = module
         .merge
         .as_ref()
-        .map(|f| ctx.function(&inline_calls(f, &functions)));
+        .map(|f| ctx.function(&inline_calls(f, &functions, &module.structs)));
     let init = module
         .init
         .as_ref()
-        .map(|f| ctx.function(&inline_calls(f, &functions)));
+        .map(|f| ctx.function(&inline_calls(f, &functions, &module.structs)));
     Module {
         manifest: module.manifest,
         structs: module.structs,
@@ -135,10 +146,22 @@ fn highest(body: &[Instruction]) -> u32 {
 /// `function` with its calls to short functions written out. The callee's
 /// values take fresh ids above the caller's, its `Arg(i)` reads become
 /// the call's own operands, and what it returns takes the call's place.
-fn inline_calls(function: &Function, functions: &[Function]) -> Function {
+fn inline_calls(function: &Function, functions: &[Function], structs: &[StructDef]) -> Function {
     let inlinable: Vec<bool> = functions
         .iter()
-        .map(|callee| callee.results.len() == 1 && size(&callee.body) <= INLINE_LIMIT)
+        .map(|callee| {
+            if callee.results.len() != 1 {
+                return false;
+            }
+            let size = size(&callee.body);
+            let widest = callee
+                .args
+                .iter()
+                .map(|ty| crate::words(structs, *ty))
+                .max()
+                .unwrap_or(0);
+            size <= INLINE_LIMIT || (widest >= BIG_ARG_WORDS && size <= INLINE_BIG_LIMIT)
+        })
         .collect();
     if !inlinable.iter().any(|yes| *yes) {
         return function.clone();
@@ -395,6 +418,19 @@ struct Ctx<'a> {
     memories: &'a [bool],
 }
 
+/// Where a value came from when it is part of one element of an input:
+/// which input, the address, the element's own type and the way from
+/// the whole to this part.
+#[derive(Clone)]
+struct Read {
+    input: u32,
+    at: ValueId,
+    element: Type,
+    /// The read of the whole element this part came out of.
+    whole: ValueId,
+    path: Vec<Step>,
+}
+
 impl Ctx<'_> {
     fn function(&self, function: &Function) -> Function {
         // The short-circuits whose other side is free come first, so
@@ -402,12 +438,24 @@ impl Ctx<'_> {
         // lift it out.
         let body = self.folded(&function.body);
         let body = self.hoisted(&body);
+        let (body, narrowed) = self.narrowed(&body);
+        // A read every part of which is now read on its own is not a
+        // read any more, so the name it was given goes with it: showing
+        // it would mean doing work the Kernel no longer does. A trace
+        // of a Kernel a document owns walks the source instead, where
+        // every `let` still is.
+        let bindings: Vec<(ValueId, String)> = function
+            .bindings
+            .iter()
+            .filter(|(id, _)| !narrowed.contains(&id.0))
+            .cloned()
+            .collect();
         let function = &Function {
             name: function.name.clone(),
             args: function.args.clone(),
             body,
             results: function.results.clone(),
-            bindings: function.bindings.clone(),
+            bindings,
         };
         let mut pass = Simplify {
             ctx: self,
@@ -444,6 +492,158 @@ impl Ctx<'_> {
                 .map(|(id, name)| (renumber.map(id), name))
                 .collect(),
         }
+    }
+
+    /// A body that reads only the words it uses: a field, a column or an
+    /// element taken out of a whole element of an input becomes a read
+    /// of that part alone. A Kernel whose input holds a `struct` of
+    /// arrays would otherwise copy every word of an element into every
+    /// element of its own domain to reach three of them, which is the
+    /// whole of such a frame.
+    ///
+    /// The whole read stays where anything still wants the whole; the
+    /// sweep takes it when nothing does. Memories are left alone: a
+    /// `put` between the read and the part would be seen by the part
+    /// and not by the copy that was there before.
+    /// The body, and the whole reads the parts taken out of them left
+    /// with nothing to do.
+    fn narrowed(&self, body: &[Instruction]) -> (Vec<Instruction>, HashSet<u32>) {
+        let mut reads: HashMap<u32, Read> = HashMap::new();
+        let mut narrowed: HashSet<u32> = HashSet::new();
+        let body = self.narrow_body(body, &mut reads, &mut narrowed);
+        (body, narrowed)
+    }
+
+    fn narrow_body(
+        &self,
+        body: &[Instruction],
+        reads: &mut HashMap<u32, Read>,
+        narrowed: &mut HashSet<u32>,
+    ) -> Vec<Instruction> {
+        let mut out: Vec<Instruction> = Vec::with_capacity(body.len());
+        for instruction in body {
+            // A part of something already known to be part of an element.
+            let step = match &instruction.op {
+                Op::Extract(source, k) => reads
+                    .get(&source.0)
+                    .map(|read| (read.clone(), Step::Field(*k))),
+                Op::Subscript(array, index) => reads
+                    .get(&array.0)
+                    .map(|read| (read.clone(), Step::Index(*index))),
+                _ => None,
+            };
+            if let Some((read, step)) = step {
+                let mut path = read.path;
+                path.push(step);
+                // The path names this very value, or the rewrite is
+                // not the one the parts made and is left alone.
+                let leads = crate::part_layout(self.structs, read.element, &path)
+                    .is_some_and(|layout| layout.ty == instruction.ty);
+                if leads {
+                    narrowed.insert(read.whole.0);
+                    reads.insert(
+                        instruction.id.0,
+                        Read {
+                            input: read.input,
+                            at: read.at,
+                            element: read.element,
+                            whole: read.whole,
+                            path: path.clone(),
+                        },
+                    );
+                    out.push(Instruction {
+                        id: instruction.id,
+                        ty: instruction.ty,
+                        op: Op::Part {
+                            input: read.input,
+                            at: read.at,
+                            path,
+                        },
+                    });
+                    continue;
+                }
+            }
+            let op = match &instruction.op {
+                Op::At(input, at) if self.narrowable(*input, instruction.ty) => {
+                    reads.insert(
+                        instruction.id.0,
+                        Read {
+                            input: *input,
+                            at: *at,
+                            element: instruction.ty,
+                            whole: instruction.id,
+                            path: Vec::new(),
+                        },
+                    );
+                    instruction.op.clone()
+                }
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => Op::If {
+                    condition: *condition,
+                    then: self.narrow_block(then, reads, narrowed),
+                    otherwise: self.narrow_block(otherwise, reads, narrowed),
+                },
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee: *scrutinee,
+                    arms: arms
+                        .iter()
+                        .map(|(values, block)| {
+                            (values.clone(), self.narrow_block(block, reads, narrowed))
+                        })
+                        .collect(),
+                    otherwise: self.narrow_block(otherwise, reads, narrowed),
+                },
+                Op::Loop {
+                    count,
+                    bound,
+                    init,
+                    until,
+                    body,
+                } => Op::Loop {
+                    count: *count,
+                    bound: *bound,
+                    init: *init,
+                    until: until
+                        .as_ref()
+                        .map(|block| self.narrow_block(block, reads, narrowed)),
+                    body: self.narrow_block(body, reads, narrowed),
+                },
+                other => other.clone(),
+            };
+            out.push(Instruction {
+                id: instruction.id,
+                ty: instruction.ty,
+                op,
+            });
+        }
+        out
+    }
+
+    fn narrow_block(
+        &self,
+        block: &Block,
+        reads: &mut HashMap<u32, Read>,
+        narrowed: &mut HashSet<u32>,
+    ) -> Block {
+        Block {
+            body: self.narrow_body(&block.body, reads, narrowed),
+            result: block.result,
+        }
+    }
+
+    /// Whether a read of this input is worth narrowing: an element that
+    /// is a record or an array, which is where the words add up, and
+    /// not a memory the steps write.
+    fn narrowable(&self, input: u32, element: Type) -> bool {
+        matches!(element, Type::Struct(_))
+            && !self.memories.get(input as usize).copied().unwrap_or(true)
     }
 
     /// A body with every short-circuit whose other side is free written
@@ -668,7 +868,10 @@ impl Ctx<'_> {
             Op::Put(..) | Op::Carried | Op::Index => false,
             Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => false,
             Op::Call(callee, _) => !self.writers[*callee as usize],
-            Op::Sample(input) | Op::At(input, _) | Op::AtLinear(input, _) => {
+            Op::Sample(input)
+            | Op::At(input, _)
+            | Op::AtLinear(input, _)
+            | Op::Part { input, .. } => {
                 !self.memories.get(*input as usize).copied().unwrap_or(true)
             }
             _ => true,
@@ -815,6 +1018,12 @@ fn operands(op: &Op) -> Vec<ValueId> {
         Op::Subscript(array, index) => vec![*array, *index],
         Op::Call(_, args) | Op::Intrinsic(_, args) => args.clone(),
         Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) => vec![*at],
+        Op::Part { at, path, .. } => std::iter::once(*at)
+            .chain(path.iter().filter_map(|step| match step {
+                Step::Index(index) => Some(*index),
+                Step::Field(_) => None,
+            }))
+            .collect(),
         Op::Put(_, address, value) => vec![*address, *value],
         _ => Vec::new(),
     }
@@ -1218,6 +1427,14 @@ fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
             }
         }
         Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) => *at = map(*at),
+        Op::Part { at, path, .. } => {
+            *at = map(*at);
+            for step in path {
+                if let Step::Index(index) = step {
+                    *index = map(*index);
+                }
+            }
+        }
         Op::Put(_, address, value) => {
             *address = map(*address);
             *value = map(*value);

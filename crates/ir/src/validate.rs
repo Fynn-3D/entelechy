@@ -968,6 +968,35 @@ impl<'a> Checker<'a> {
                 }
                 port.element()
             }
+            Op::Part { input, at, path } => {
+                self.require(Capability::FieldRead, position)?;
+                let port = self.input(*input, position)?;
+                let (name, element) = (port.name.clone(), port.element());
+                let (shape, index_type) = (port.shape(), port.ty.index_type());
+                let actual = self.operand(*at, position)?;
+                if actual != index_type {
+                    return Err(self.fail(format!(
+                        "{position} addresses input `{name}`, a {shape}, with {actual} instead of {index_type}"
+                    )));
+                }
+                for step in path {
+                    if let crate::Step::Index(index) = step {
+                        let index = self.operand(*index, position)?;
+                        if index != Type::Int {
+                            return Err(self.fail(format!(
+                                "{position} takes a part of input `{name}` at {index}, not an Int"
+                            )));
+                        }
+                    }
+                }
+                crate::part_layout(&self.module.structs, element, path)
+                    .ok_or_else(|| {
+                        self.fail(format!(
+                            "{position} takes a part input `{name}`'s element does not have"
+                        ))
+                    })?
+                    .ty
+            }
             Op::AtLinear(input, index) => {
                 self.require(Capability::FieldRead, position)?;
                 let port = self.input(*input, position)?;
