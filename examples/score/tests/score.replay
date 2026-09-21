@@ -1,0 +1,20 @@
+scene ../scene.osn
+
+# The song `orla-import` read from song.mid: twenty-one notes over 9.6
+# seconds, a melody on channel 0 and a bass on channel 1. A frame's
+# block is what sounds at that moment, and the roll draws the same
+# notes with a playhead across them.
+window 480 240
+frame 1.2
+expect voice.result[0] = -0.04129 0.0005      # the block's first sample
+expect voice.result[400] = -0.16662 0.0005    # and one half way through it
+expect 20 200 = 0.765 0.475 0.268 0.01        # the bass note, warm
+expect 15 63 = 0.496 0.746 0.890 0.01         # the melody's first note, cool
+expect 240 120 = 0.060 0.070 0.100 0.01       # between them, the ground
+expect 61 120 = 0.060 0.070 0.100 0.01        # beside the playhead at 1.2 s
+expect 60 120 = 1.0 1.0 0.9 0.01              # and the playhead itself
+
+# The song repeats: nine and a half seconds on, the roll is back where
+# it started and the same note sounds.
+frame 9.6
+expect voice.result[0] = 0.0 0.0001

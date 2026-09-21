@@ -23,3 +23,6 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+orla-export = { path = "../export" }

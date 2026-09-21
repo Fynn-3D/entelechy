@@ -119,6 +119,11 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   to tell the inside of a circle from the outside, all of it Kernels: the
   gradient as a scatter, the step placed eight times a frame, the
   weights carried on; the plane painted as the network answers.
+- [score](score/README.md): a MIDI file played and drawn: `orla-import`
+  reads it into rows of notes, a Kernel sums what sounds at each sample
+  into the block the sound card takes, and another paints the piano
+  roll. What a Kernel writes goes back out as MIDI through
+  `orla-export`.
 - [spectrum](spectrum/README.md): a sound and what it is made of: a
   voice writes a block of samples a frame, a map reads it back as
   frequencies (its loop counts the block's own length), and the bars

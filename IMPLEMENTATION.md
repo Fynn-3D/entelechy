@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| MIDI in and out | [importer](crates/import/src/midi.rs), [exporter](crates/export/src/midi.rs) | [midi tests](crates/import/tests/midi.rs), [score example](examples/score/tests/score.replay) |
 | Keywords as names | [parser](crates/language/src/parser.rs) `name_not_starting_an_expression` | [parser tests](crates/language/src/parser.rs) |
 | Components in a target | [session](crates/cli/src/session.rs) `component_of` | [path replay](examples/path/tests/path.replay) |
 | Loop hoisting | [optimize](crates/ir/src/optimize.rs) `hoisted` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
@@ -457,6 +458,15 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- A score in and out (phase 5, audio): `orla-import` reads a standard
+  MIDI file into rows of `{start, duration, pitch, velocity, channel}`
+  with the ticks and the tempo map already turned into seconds, and
+  `orla-export` writes those rows back as a file a music editor opens.
+  Both are written from the format's own definition and take no
+  dependency; the reader keeps a note's second at its strike, since the
+  tempo may change again while it sounds. A score read and written
+  again is the same rows.
 
 - Work a loop repeats without changing, done once before it (the
   optimizer's sixth rewrite): an instruction in a loop's body whose

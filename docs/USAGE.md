@@ -271,13 +271,19 @@ three indices, and the base colour texture as a PNG, into `--out <dir>`
 (the source's directory by default); skins, animations, sparse accessors
 and JPEG textures are reported and left out. It reads a compressed sound
 (MP3, OGG Vorbis, FLAC, AAC in MP4, Matroska audio) and writes a WAV at the
-file's own rate, one or two channels, which `input` reads. The runtime
+file's own rate, one or two channels, which `input` reads. It reads a
+standard MIDI file and writes `<stem>.notes.field`, a row a note: the
+second it starts, the seconds it lasts, the key (60 is middle C), how
+hard it was struck (0 to 1) and the channel, with the file's ticks and
+its tempo map already turned into seconds, so a Kernel plays a score
+against `time()` and knows nothing about MIDI. The runtime
 learns no format here; a model or sound in another format needs only
 another tool.
 
 ```sh
 cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
 cargo run -p orla-import -- song.ogg --out assets   # writes assets/song.wav
+cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
 ```
 
 ## Export a mesh, a sound, a picture
@@ -287,12 +293,16 @@ software opens. Vertex rows, triangle rows and a PNG become a GLB that
 Blender and three.js load as it is; rows of one or two floats become a WAV
 (`--rate` names the frames per second of a `.field`, 48000 by default; a
 compressed copy is ffmpeg's job on the WAV); a grid of pixels or floats
-becomes a PNG. What `orla-import` brought in leaves the same, bit for bit.
+becomes a PNG; rows of notes become a standard MIDI file (`--beats`
+names the quarter notes a minute, 120 by default), which a music editor
+opens. What `orla-import` brought in leaves the same, bit for bit: a
+score read and written again is the same rows.
 
 ```sh
 cargo run -p orla-export -- crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
 cargo run -p orla-export -- kick.field --out kick.wav --rate 48000
 cargo run -p orla-export -- atlas.field --out atlas.png
+cargo run -p orla-export -- song.notes.field --out song.mid --beats 100
 ```
 
 ## Replay tests

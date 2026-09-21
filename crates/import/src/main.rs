@@ -6,15 +6,17 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orla_import::{audio, gltf};
+use orla_import::{audio, gltf, midi};
 
 const USAGE: &str = "\
 usage:
   orla-import <file> [--out <dir>]
       A model (.gltf, .glb) becomes <stem>.vertices.field, <stem>.triangles.field
       and, when it has one in PNG, <stem>.albedo.png; a sound (.mp3, .ogg, .flac,
-      .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate. Files go to
-      --out, the source's directory by default.";
+      .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate; a score (.mid,
+      .midi) becomes <stem>.notes.field, a row a note with its seconds, its key,
+      how hard it was struck and its channel. Files go to --out, the source's
+      directory by default.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -83,6 +85,38 @@ fn import(args: &[String]) -> Result<(), String> {
                 }
             );
             for note in &imported.notes {
+                println!("note: {note}");
+            }
+        }
+        "mid" | "midi" => {
+            let imported = midi::import(&source, &out)?;
+            println!("wrote {}", imported.file.display());
+            let channels: std::collections::BTreeSet<i32> =
+                imported.notes.iter().map(|note| note.channel).collect();
+            let lowest = imported
+                .notes
+                .iter()
+                .map(|note| note.pitch)
+                .min()
+                .unwrap_or(0);
+            let highest = imported
+                .notes
+                .iter()
+                .map(|note| note.pitch)
+                .max()
+                .unwrap_or(0);
+            println!(
+                "{} note(s) over {:.2} s from {} track(s), keys {lowest} to {highest}, channel(s) {}",
+                imported.notes.len(),
+                imported.seconds,
+                imported.tracks,
+                channels
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            for note in &imported.left_out {
                 println!("note: {note}");
             }
         }

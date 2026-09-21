@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orla_export::{gltf, sound};
+use orla_export::{gltf, midi, sound};
 use orla_runtime::{FieldData, Shape};
 
 const USAGE: &str = "\
@@ -16,7 +16,10 @@ usage:
       .field (rows of three ints), and a .png for the base colour if you have
       one. To .wav: a .field of one or two floats per row; --rate says its
       frames per second, 48000 by default (ffmpeg makes an MP3 or OGG of the
-      WAV). To .png: a .field grid of pixels or floats, or a .ppm or .pgm.";
+      WAV). To .png: a .field grid of pixels or floats, or a .ppm or .pgm.
+      To .mid: a .field of notes as the importer reads them (start, duration,
+      pitch, velocity, channel); --beats says the quarter notes a minute, 120
+      by default.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -139,6 +142,42 @@ fn export(args: &[String]) -> Result<String, String> {
                 "wrote {}: {} frames, {channels} channel(s) at {rate} Hz",
                 out.display(),
                 data.domain().count()
+            ))
+        }
+        "mid" | "midi" => {
+            if inputs.len() != 1 {
+                return Err("a score comes from one file".into());
+            }
+            let data = read_field(&inputs[0])?;
+            let words = data.schema().words();
+            if data.domain().shape() != Shape::Rows || words != 5 {
+                return Err(format!(
+                    "{}: not rows of a note (start, duration, pitch, velocity, channel)",
+                    inputs[0].display()
+                ));
+            }
+            let notes: Vec<midi::Note> = data
+                .words()
+                .chunks_exact(words)
+                .map(|note| midi::Note {
+                    start: f32::from_bits(note[0]),
+                    duration: f32::from_bits(note[1]),
+                    pitch: note[2] as i32,
+                    velocity: f32::from_bits(note[3]),
+                    channel: note[4] as i32,
+                })
+                .collect();
+            let beats = rate.map(|beats| beats as f32).unwrap_or(120.0);
+            std::fs::write(&out, midi::midi(&notes, beats))
+                .map_err(|e| format!("{}: {e}", out.display()))?;
+            let seconds = notes
+                .iter()
+                .map(|note| note.start + note.duration)
+                .fold(0.0f32, f32::max);
+            Ok(format!(
+                "wrote {}: {} note(s) over {seconds:.2} s at {beats} beats a minute",
+                out.display(),
+                notes.len()
             ))
         }
         "png" => {

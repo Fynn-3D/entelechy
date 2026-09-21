@@ -228,7 +228,17 @@ for), a loop's count may be any `Int` expression read once before the
 loop and clamped to the bound, and a node may be a filled Field
 (`node zeros: Rows<Float> { domain = 65; }`, `value = ...` for anything
 but the element's zero), which took five zero-fill Kernels out of the
-examples. A play round (the `path` tracer and the `spectrum`) turned up two
+examples. A score goes in and out: `orla-import` reads a standard MIDI file into
+rows of `{start, duration, pitch, velocity, channel}` in seconds, and
+`orla-export` writes those rows back as a file a music editor opens,
+both from the format's own definition and with no dependency; the
+`score` example plays one and draws its piano roll. Writing the reader
+found two faults in it, both caught by tests built from the format
+rather than from the writer: a tempo change while a note sounds
+underflowed the tick arithmetic, and a note's second must be taken when
+it is struck.
+
+A play round (the `path` tracer and the `spectrum`) turned up two
 things and both are fixed: a function could not take a keyword's name
 (`fn scatter(...)` was refused, and the message did not say why), and
 now any word but the five that begin an expression names one, since a
