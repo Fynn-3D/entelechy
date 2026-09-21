@@ -631,7 +631,7 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
 }
 
 #[test]
-fn help_answers_the_builtins_as_json() {
+fn help_answers_the_builtins_and_the_forms_as_json() {
     let dir = scratch_in("-help");
     let responses = talk(
         &dir.join("scene.osn"),
@@ -639,6 +639,7 @@ fn help_answers_the_builtins_as_json() {
             json!({ "id": 1, "op": "help" }),
             json!({ "id": 2, "op": "help", "name": "mix" }),
             json!({ "id": 3, "op": "help", "name": "mixx" }),
+            json!({ "id": 4, "op": "help", "name": "each" }),
         ],
     );
     let all = responses[0]["ok"]["builtins"].as_array().unwrap();
@@ -663,6 +664,23 @@ fn help_answers_the_builtins_as_json() {
             .unwrap()
             .contains("mix")
     );
+    // The forms of the language answer the same way.
+    let forms = responses[0]["ok"]["forms"].as_array().unwrap();
+    assert!(forms.len() > 15);
+    assert!(
+        forms
+            .iter()
+            .any(|f| f["name"] == "scatter" && f["kind"] == "kernel")
+    );
+    assert!(
+        forms
+            .iter()
+            .any(|f| f["name"] == "fill" && f["kind"] == "graph")
+    );
+    let each = &responses[3]["ok"];
+    assert_eq!(each["kind"], "expression");
+    assert_eq!(each["shape"], "[each n { body }]");
+    assert!(each["doc"].as_str().unwrap().contains("element by element"));
 }
 
 /// The scanline example's `agent.jsonl` is the record of an agent

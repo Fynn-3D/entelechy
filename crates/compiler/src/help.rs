@@ -1,5 +1,6 @@
 //! What a Kernel may call, as `help` tells it: every builtin with its
-//! signatures, one sentence, and the capability it needs. The math
+//! signatures, one sentence, and the capability it needs, and every form
+//! the language and the graph documents are written in. The math
 //! intrinsics come from the IR's own table and typing rules, so what is
 //! listed is what compiles; the Field, context and construction builtins
 //! are the ones the lowering dispatches, described beside it.
@@ -166,17 +167,209 @@ pub fn builtins() -> Vec<Builtin> {
     out
 }
 
+/// One form of the language, as `help` shows it: what is written, where,
+/// and what it means.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Form {
+    /// The word to ask for: `loop`, `each`, `scatter`, `node`.
+    pub name: &'static str,
+    /// Where it is written: "expression", "kernel", "graph" or "document".
+    pub kind: &'static str,
+    /// The shape, as one writes it.
+    pub shape: &'static str,
+    /// One sentence.
+    pub doc: &'static str,
+}
+
+const fn form(
+    name: &'static str,
+    kind: &'static str,
+    shape: &'static str,
+    doc: &'static str,
+) -> Form {
+    Form {
+        name,
+        kind,
+        shape,
+        doc,
+    }
+}
+
+/// Every form, grouped by where it is written.
+pub fn forms() -> Vec<Form> {
+    vec![
+        form(
+            "let",
+            "expression",
+            "let name = expr;",
+            "A binding, immutable and scoped to its block; `let _ = put(...)` is a statement for its effect.",
+        ),
+        form(
+            "if",
+            "expression",
+            "if condition { a } else { b }",
+            "Both arms give one type; only the arm taken runs, which a trace shows.",
+        ),
+        form(
+            "match",
+            "expression",
+            "match i { 0 => a, 1 | 2 => b, _ => c }",
+            "On an Int: the arm whose values hold it, else the `_` arm, which comes last and is required; the GPU runs it as a switch.",
+        ),
+        form(
+            "loop",
+            "expression",
+            "loop n with x = init until done { next }",
+            "A bounded fold: `n` is a literal, which is its bound, or any Int expression read once and clamped to 0..=65536; `index()` is the iteration, and `until` stops it early.",
+        ),
+        form(
+            "each",
+            "expression",
+            "[each n { body }]",
+            "An array built element by element, unrolled, with `index()` its position; a loop inside the body has its own `index()`.",
+        ),
+        form(
+            "array",
+            "expression",
+            "[a, b, c]   [value; n]   a[i]",
+            "A fixed-size array of one element type, or `n` copies of a value; `a[i]` takes an element, clamped, and a literal index is checked when compiled.",
+        ),
+        form(
+            "struct",
+            "expression",
+            "Name { a: 1.0, b: 2 }   Name { ..base, a: 3.0 }",
+            "A value of a declared struct, or a copy of one with some fields replaced.",
+        ),
+        form(
+            "fn",
+            "kernel",
+            "fn name(a: Float) -> Float { ... }",
+            "A function of the document or the Kernel; it calls only what is declared above it, and may take a Field parameter.",
+        ),
+        form(
+            "kernel",
+            "kernel",
+            "kernel id@version { requires { ... } input ... output ... compute { ... } }",
+            "A Kernel: what it needs, its ports and parameters, and one of `compute`, `scan` or `scatter`.",
+        ),
+        form(
+            "compute",
+            "kernel",
+            "compute { return value; }",
+            "The map mode: the body runs once per element of the node's domain and gives that element.",
+        ),
+        form(
+            "merge",
+            "kernel",
+            "compute { ... } merge(a, b) { ... }",
+            "The reduce mode: `compute` runs per element of the first input and `merge` folds the results pairwise into one element; the output may be written as its element type.",
+        ),
+        form(
+            "scan",
+            "kernel",
+            "scan with y = init { return next; }",
+            "The ordered mode: one element per element of the first input, in order, carrying `y` from the step before; `memory` ports are read and written step by step.",
+        ),
+        form(
+            "scatter",
+            "kernel",
+            "scatter into target with sum { return Pair { at: address, value: v }; }",
+            "The scatter mode: the body runs once per element of the node's domain and combines its value into the target at its address with `sum`, `min`, `max` or `last`, in element order.",
+        ),
+        form(
+            "memory",
+            "kernel",
+            "memory ram: Rows<Int>;   put(ram, address, value)",
+            "A port an ordered Kernel both reads and writes, step by step; it comes out as an output.",
+        ),
+        form(
+            "node",
+            "graph",
+            "node name: kernel.id@1 { port <- source.result; param = 2; domain = vec2(w, h); }",
+            "A node runs a Kernel: its inputs wired at the consumer, its parameters set, its extent explicit or the first input's.",
+        ),
+        form(
+            "inline",
+            "graph",
+            "node name: kernel { ... input x: Image <- src; ... }",
+            "A Kernel written in place; its inputs carry their wiring, and the session publishes it under the document's name.",
+        ),
+        form(
+            "fill",
+            "graph",
+            "node zeros: Rows<Float> { domain = 65; value = 0.5; }",
+            "A node that is a Field rather than a Kernel: its element's zero, or the `value` given, over the domain; the type may be an alias a used document declares.",
+        ),
+        form(
+            "graph",
+            "graph",
+            "node name: graph \"other.osn\" { input <- src; param = 2; }",
+            "Another document placed as a node: its nodes join under `name.`, its inputs take the wiring, its outputs are read as `name.output`.",
+        ),
+        form(
+            "previous",
+            "graph",
+            "port <~ node.output from initial [migrate id@v];",
+            "State: the port reads what the last evaluation committed, the initial source before the first, and a migration carries it when a republished Kernel changes its layout.",
+        ),
+        form(
+            "times",
+            "graph",
+            "times = 5;   carry port <- output;",
+            "A node written once and placed N times, each wired as written, `carry` feeding a port from the previous time's output.",
+        ),
+        form(
+            "async",
+            "graph",
+            "async = true;",
+            "The node runs off the frame: the evaluation starts it on a thread and goes on, its readers taking the last output until the run lands.",
+        ),
+        form(
+            "use",
+            "document",
+            "use \"kernels/\";   use \"name.orlapkg\";",
+            "The documents whose Kernels and declarations this one brings in: a file, a directory, or a package.",
+        ),
+        form(
+            "input",
+            "document",
+            "input x: Image;   = \"atlas.png\";   = text \"ORLA\";   = frames \"clip/\" at 30;",
+            "A Field the caller supplies, or one the Host reads from a file, from text, or frame by frame from a directory.",
+        ),
+        form(
+            "package",
+            "document",
+            "package name@1 { language = 1; ir = 1; }",
+            "The manifest of a package directory: what it is called and the least language and IR it needs.",
+        ),
+    ]
+}
+
+/// The form named `name`, if any.
+pub fn form_named(name: &str) -> Option<Form> {
+    forms().into_iter().find(|f| f.name == name)
+}
+
 /// The builtin named `name`, if any.
 pub fn builtin(name: &str) -> Option<Builtin> {
     builtins().into_iter().find(|b| b.name == name)
 }
 
-/// Builtins whose names are close to `name`, for a miss.
+/// Builtins and forms whose names are close to `name`, for a miss.
 pub fn similar(name: &str) -> Vec<&'static str> {
+    let close = |candidate: &str| {
+        candidate.contains(name) || name.contains(candidate) || distance(candidate, name) <= 2
+    };
     builtins()
         .into_iter()
-        .filter(|b| b.name.contains(name) || name.contains(b.name) || distance(b.name, name) <= 2)
+        .filter(|b| close(b.name))
         .map(|b| b.name)
+        .chain(
+            forms()
+                .into_iter()
+                .filter(|f| close(f.name))
+                .map(|f| f.name),
+        )
         .collect()
 }
 
@@ -198,4 +391,33 @@ fn distance(a: &str, b: &str) -> usize {
         previous = current;
     }
     previous[b.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_builtin_and_form_has_one_name_and_one_sentence() {
+        let mut names: Vec<&str> = builtins().iter().map(|b| b.name).collect();
+        names.extend(forms().iter().map(|f| f.name));
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &names {
+            assert!(seen.insert(*name), "`{name}` is listed twice");
+        }
+        for form in forms() {
+            assert!(!form.shape.is_empty(), "{} has no shape", form.name);
+            assert!(form.doc.ends_with('.'), "{} reads oddly", form.name);
+            assert!(
+                ["expression", "kernel", "graph", "document"].contains(&form.kind),
+                "{} is written where?",
+                form.name
+            );
+            assert_eq!(form_named(form.name), Some(form));
+        }
+        // A form and a builtin are both found by name.
+        assert_eq!(form_named("loop").unwrap().kind, "expression");
+        assert!(builtin("mix").is_some());
+        assert!(similar("lopo").contains(&"loop"));
+    }
 }

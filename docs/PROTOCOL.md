@@ -90,9 +90,12 @@ first waits for every `async` node's run off the frame to land, so the
 evaluation reads it.
 
 `help` answers with every builtin a Kernel may call (`builtins`, each
-`{name, kind, signatures, doc, requires, entry_only}`), or, with `name`,
-that one; an unknown name is an error naming similar ones. It is what
-the compiler accepts, generated from its tables.
+`{name, kind, signatures, doc, requires, entry_only}`) and every form
+the language and the documents are written in (`forms`, each `{name,
+kind, shape, doc}`: `loop`, `each`, `scatter`, `node`, `fill`,
+`previous`, `async` and the rest), or, with `name`, whichever it is; an
+unknown name is an error naming similar ones. It is what the compiler
+accepts, generated from its tables.
 
 `trace` runs one element of a node on the interpreter and answers with
 every binding of it: `node`, and `at` (`[x, y, z]`, an element of a map)

@@ -105,6 +105,19 @@ evaluation after the one just run (the node's `<~` inputs are the state
 that evaluation committed), and commits nothing itself. Over the
 protocol, `trace` is the same as JSON.
 
+## What a Kernel may write
+
+`orla help` lists every builtin with one line each and every form of the
+language and of a graph document with its shape; `orla help <name>` is
+a builtin's signatures, what it does and the capability it needs, or a
+form's shape and meaning (`orla help loop`, `orla help each`, `orla help
+fill`). The protocol's `help` answers the same, so an agent reads it
+rather than guessing.
+
+```sh
+cargo run -- help each
+```
+
 ## Packages and versions
 
 `orla package <dir.orlapkg>` checks a package directory's manifest and

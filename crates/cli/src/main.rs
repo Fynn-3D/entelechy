@@ -804,19 +804,35 @@ fn help(args: &[String]) -> Result<(), String> {
                 }
                 println!("  {:<width$}  {}", builtin.name, builtin.doc);
             }
+            let forms = orla_compiler::help::forms();
+            let width = forms.iter().map(|f| f.name.len()).max().unwrap_or(0);
+            let mut kind = "";
+            for form in &forms {
+                if form.kind != kind {
+                    kind = form.kind;
+                    println!("{kind}");
+                }
+                println!("  {:<width$}  {}", form.name, form.shape);
+            }
             println!(
-                "orla help <name> shows a builtin's signatures; docs/DOCUMENTS.md the language."
+                "orla help <name> shows a builtin's signatures or a form's shape and meaning; docs/DOCUMENTS.md the language."
             );
             Ok(())
         }
         Some(name) => {
+            if let Some(form) = orla_compiler::help::form_named(name) {
+                println!("{} ({})", form.name, form.kind);
+                println!("  {}", form.shape);
+                println!("{}", form.doc);
+                return Ok(());
+            }
             let Some(builtin) = orla_compiler::help::builtin(name) else {
                 let similar = orla_compiler::help::similar(name);
                 return Err(if similar.is_empty() {
-                    format!("no builtin named `{name}`; `orla help` lists them")
+                    format!("nothing named `{name}`; `orla help` lists the builtins and the forms")
                 } else {
                     format!(
-                        "no builtin named `{name}`; did you mean {}?",
+                        "nothing named `{name}`; did you mean {}?",
                         similar.join(", ")
                     )
                 });

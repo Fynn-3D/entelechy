@@ -701,16 +701,28 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     "entry_only": builtin.entry_only,
                 })
             };
+            let shape = |form: &orla_compiler::help::Form| {
+                json!({
+                    "name": form.name,
+                    "kind": form.kind,
+                    "shape": form.shape,
+                    "doc": form.doc,
+                })
+            };
             match request.get("name").and_then(Json::as_str) {
                 Some(name) => match orla_compiler::help::builtin(name) {
                     Some(builtin) => Ok(entry(&builtin)),
-                    None => Err(failure(format!(
-                        "no builtin named `{name}`; similar: {}",
-                        orla_compiler::help::similar(name).join(", ")
-                    ))),
+                    None => match orla_compiler::help::form_named(name) {
+                        Some(form) => Ok(shape(&form)),
+                        None => Err(failure(format!(
+                            "nothing named `{name}`; similar: {}",
+                            orla_compiler::help::similar(name).join(", ")
+                        ))),
+                    },
                 },
                 None => Ok(json!({
-                    "builtins": orla_compiler::help::builtins().iter().map(entry).collect::<Vec<_>>()
+                    "builtins": orla_compiler::help::builtins().iter().map(entry).collect::<Vec<_>>(),
+                    "forms": orla_compiler::help::forms().iter().map(shape).collect::<Vec<_>>(),
                 })),
             }
         }

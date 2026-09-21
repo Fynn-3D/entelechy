@@ -911,11 +911,12 @@ output result <- tally.result;
 }
 
 #[test]
-fn help_lists_the_builtins_and_shows_one() {
+fn help_lists_the_builtins_and_the_forms_and_shows_one() {
     let orla = env!("CARGO_BIN_EXE_orla");
     let output = Command::new(orla).arg("help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
+    // Builtins by name, and the forms of the language beside them.
     for name in [
         "floor",
         "atan2",
@@ -925,13 +926,21 @@ fn help_lists_the_builtins_and_shows_one() {
         "vec4",
         "add_wrap",
         "match",
+        "loop",
+        "each",
+        "scatter",
+        "fill",
     ] {
-        assert_eq!(
+        assert!(
             stdout.contains(&format!("  {name} ")),
-            name != "match",
             "{name} in {stdout}"
         );
     }
+    // A form answers with its shape and what it means.
+    let output = Command::new(orla).args(["help", "each"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[each n { body }]"), "{stdout}");
+    assert!(stdout.contains("element by element"), "{stdout}");
     let output = Command::new(orla)
         .args(["help", "smoothstep"])
         .output()
