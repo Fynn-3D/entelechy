@@ -167,6 +167,13 @@ pub trait Backend: Send + Sync {
         )))
     }
 
+    /// What the device took over the last execution, by its own clock,
+    /// when the backend measures it; the default is for backends whose
+    /// work is done when `execute` returns, which the caller times.
+    fn last_device_time(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// Downloads the bytes of a resource this backend left resident:
     /// `byte_len` bytes of little-endian words. The default is for backends
     /// that never do.
@@ -481,6 +488,9 @@ pub struct Runtime {
     next_generation: u64,
     worker: Option<Worker>,
     next_ticket: u64,
+    /// What the device took over the last execution, when the backend
+    /// measured it; see [`Runtime::last_measured`].
+    last_measured: Option<std::time::Duration>,
     ready: BTreeMap<Ticket, Result<Candidate, PrepareError>>,
     discarded: BTreeSet<Ticket>,
     runs: later::Runs,
@@ -513,6 +523,7 @@ impl Runtime {
             next_generation: 1,
             worker: None,
             next_ticket: 1,
+            last_measured: None,
             ready: BTreeMap::new(),
             discarded: BTreeSet::new(),
             runs: later::Runs::new(),
@@ -753,6 +764,13 @@ impl Runtime {
         }
     }
 
+    /// What the device took over the last execution, by its own clock,
+    /// when the backend measured it (a GPU under a profile); `None`
+    /// otherwise, and the caller's own timing is the answer.
+    pub fn last_measured(&self) -> Option<std::time::Duration> {
+        self.last_measured
+    }
+
     /// The name of the backend a version executes on.
     pub fn executes_on(&self, version: &KernelVersion) -> &'static str {
         match version.module() {
@@ -868,8 +886,12 @@ impl Runtime {
                 } else {
                     Arc::clone(&self.backend)
                 };
-                let mut scope = Scope::new(&mut self.host, granted);
-                backend.execute(prepared.as_ref(), module, invocation, &mut scope)
+                let outputs = {
+                    let mut scope = Scope::new(&mut self.host, granted);
+                    backend.execute(prepared.as_ref(), module, invocation, &mut scope)
+                };
+                self.last_measured = backend.last_device_time();
+                outputs
             }
             Body::Native(op) => {
                 let mut scope = Scope::new(&mut self.host, granted);

@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Measured profiles | [gpu](crates/gpu/src/lib.rs) `set_measured`, [runtime](crates/runtime/src/lib.rs) `last_measured` | [profile output](crates/cli/tests/session.rs) |
 | Diagnostics across files | [session](crates/cli/src/session.rs) `located`, `declarations_within` | [session tests](crates/cli/tests/session.rs) |
 | Run-time loop counts | [loop](crates/compiler/src/lower/expr.rs), [ir](crates/ir/src/lib.rs) `Op::Loop::bound` | [feature matrix](crates/matrix/src/lib.rs) `loops` |
 | Filled Fields | [document](crates/graph/src/document.rs) `NodeKind::Fill` | [composition](crates/graph/tests/composition.rs) |
@@ -450,6 +451,16 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- A measured profile: `run --profile` puts the GPU backend in a
+  measured mode, where an execution waits for its submission and asks
+  the device for the time between a node's first pass and its last
+  (timestamp queries at the passes' edges, since writing one inside an
+  encoder is a feature Metal does not offer). `Backend::last_device_time`
+  carries it to the runtime and into the report's timings, so the
+  numbers are the device's own clock where the driver honours the
+  queries, and the work plus one round trip where it resolves zeros,
+  which is what Metal through wgpu does today.
 
 - Diagnostics that cross files: a `use` that comes back to the document
   it started from is reported as the cycle it is (`declarations_within`

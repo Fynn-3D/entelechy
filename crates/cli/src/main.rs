@@ -20,7 +20,9 @@ usage:
       republish Kernels as their files change; a rejected change keeps the
       running version. --window is the window a scene sized by `window()`
       would fill, in pixels, with its scale factor.
-      --profile prints how long each executed node took.
+      --profile prints how long each executed node took; it waits for the
+      device after each one, so a GPU's numbers are the work, not the
+      submission, and the frame is slower than it would be.
   orla render <scene.osn> --frames <n> [--rate <fps>] [--sound-rate <hz>]
                           [--out <dir>] [--library <dir|file>] [--input <name>=<file.ppm>]...
                           [--param <name>=<literal>]... [--window <w>x<h>[@<scale>]]
@@ -541,6 +543,9 @@ fn run(args: &[String]) -> Result<(), String> {
         session.set_param(name, *value);
     }
     session.set_fusion(options.fusion);
+    // A profile waits for the device after each node, so the times are
+    // the work rather than the submission.
+    session.set_measured(options.profile);
     for (node, _, _) in &options.saves {
         session.pin(orla_graph::NodeId(node.clone()));
     }

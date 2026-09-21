@@ -1880,6 +1880,21 @@ impl Session {
         self.window
     }
 
+    /// Makes the backend wait for its device after every node, so a
+    /// profile measures the work rather than the submission; on the GPU
+    /// that is the difference between a dispatch and a picture. The CPU
+    /// and the JIT are measured as they are.
+    pub fn set_measured(&mut self, on: bool) {
+        if let Some(gpu) = self
+            .runtime
+            .backend()
+            .as_any()
+            .downcast_ref::<orla_gpu::GpuBackend>()
+        {
+            gpu.set_measured(on);
+        }
+    }
+
     /// Enables or disables fusion of pointwise chains.
     pub fn set_fusion(&mut self, enabled: bool) {
         self.evaluator.set_fusion(enabled);

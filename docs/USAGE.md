@@ -49,7 +49,14 @@ gray), `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
 floats; the node is pinned so fusion keeps it. A Kernel that draws a
 sprite sheet or synthesizes a drum, and a `--save`, are how an asset is
 made; `--out` is written only when the output is a picture. `--profile`
-prints how long each executed node's Kernel took.
+prints how long each executed node's Kernel took. On the GPU it asks
+the device for the time between the first pass of a node and the last,
+by the device's own clock, and waits for the work before going on; so
+the numbers are the work rather than the submission, and the run is
+slower than it would be. Where a driver takes the timestamp queries and
+writes nothing (Metal through wgpu, at the time of writing), the number
+is the work plus one round trip to the device instead. The Player's F10
+line measures the frame, which costs nothing and is the honest total.
 
 ```sh
 cargo run -- run examples/grayscale/scene.osn --out output.ppm

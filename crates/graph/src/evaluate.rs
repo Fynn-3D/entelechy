@@ -260,7 +260,8 @@ pub struct Report {
     pub fused: Vec<(NodeId, Vec<NodeId>)>,
     /// How long each executed node's Kernel took, in evaluation order:
     /// the backend's execute call, a GPU dispatch not waited for counting
-    /// as its submission.
+    /// as its submission; under a measured profile, what the device's own
+    /// clock says the work took.
     pub timings: Vec<(NodeId, std::time::Duration)>,
     /// State ports whose committed value was carried into a new layout
     /// by the binding's migration Kernel before the nodes ran.
@@ -718,7 +719,10 @@ impl Evaluator {
                     node: node.id.clone(),
                     error,
                 })?;
-            timings.push((node.id.clone(), started.elapsed()));
+            // What the device says it took, when it measures; the call's
+            // own time otherwise.
+            let took = runtime.last_measured().unwrap_or_else(|| started.elapsed());
+            timings.push((node.id.clone(), took));
             self.store(&node.id, key, outputs, output_names, runtime);
             executed.push(node.id.clone());
         }

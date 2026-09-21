@@ -53,6 +53,18 @@ pub struct GpuBackend {
     lock: Mutex<()>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
+    /// Whether an execution waits for the device before it returns, so
+    /// that what times it is the work and not the submission. Off: a
+    /// frame submits its nodes and only an observation waits.
+    measured: std::sync::atomic::AtomicBool,
+    /// Whether the adapter offers timestamp queries at a pass's edges,
+    /// which measure the work itself rather than the wait around it.
+    /// Offering them is not writing them: a driver that takes the
+    /// queries and resolves zeros leaves the wait as the measurement.
+    timestamps: bool,
+    /// The nanoseconds the last measured execution took on the device,
+    /// or `u64::MAX` for none.
+    last_nanos: std::sync::atomic::AtomicU64,
 }
 
 impl fmt::Debug for GpuBackend {
@@ -106,9 +118,18 @@ impl GpuBackend {
             max_buffer_size: adapter_limits.max_buffer_size,
             ..wgpu::Limits::default()
         };
+        // Timestamps at a pass's edges, when the adapter has them: what
+        // a profile reads. Writing one inside an encoder is a feature
+        // Metal does not offer, so every pass carries its own.
+        let timing = wgpu::Features::TIMESTAMP_QUERY;
+        let timestamps = adapter.features().contains(timing);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("orla"),
-            required_features: wgpu::Features::empty(),
+            required_features: if timestamps {
+                timing
+            } else {
+                wgpu::Features::empty()
+            },
             required_limits,
             ..Default::default()
         }))
@@ -122,7 +143,33 @@ impl GpuBackend {
             adapter_name,
             lock: Mutex::new(()),
             raster: OnceLock::new(),
+            measured: std::sync::atomic::AtomicBool::new(false),
+            timestamps,
+            last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
         })
+    }
+
+    /// Makes every execution wait for the device before it returns, so a
+    /// profile measures the work rather than the submission. It costs a
+    /// stall per node, so it is for measuring, not for running.
+    pub fn set_measured(&self, on: bool) {
+        self.measured
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether executions wait for the device; see [`GpuBackend::set_measured`].
+    pub fn measured(&self) -> bool {
+        self.measured.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// What the device took over the last measured execution, by its own
+    /// clock; `None` when nothing was measured or the adapter has no
+    /// timestamps. Taken once.
+    pub fn last_device_time(&self) -> Option<std::time::Duration> {
+        let nanos = self
+            .last_nanos
+            .swap(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+        (nanos != u64::MAX).then(|| std::time::Duration::from_nanos(nanos))
     }
 
     /// The adapter's name, for diagnostics.
@@ -261,6 +308,10 @@ fn param_bytes(params: &[Value]) -> Vec<u8> {
 impl Backend for GpuBackend {
     fn name(&self) -> &'static str {
         "gpu"
+    }
+
+    fn last_device_time(&self) -> Option<std::time::Duration> {
+        self.last_device_time()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -478,7 +529,24 @@ impl Backend for GpuBackend {
             Mode::Scatter { base, .. } => scope.size(invocation.inputs[base as usize])?,
             _ => domain,
         };
-        let staged = self.stage(pipeline, module, invocation, scope, domain)?;
+        // Under a profile, the device's own clock around every pass of
+        // this node: the set is made first so the opening timestamp is
+        // the encoder's first command.
+        let timing_set = (self.measured() && self.timestamps).then(|| {
+            self.device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("orla timing"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 2,
+            })
+        });
+        let staged = self.stage(
+            pipeline,
+            module,
+            invocation,
+            scope,
+            domain,
+            timing_set.as_ref(),
+        )?;
         let Staged {
             mut encoder,
             context_buffer,
@@ -503,6 +571,7 @@ impl Backend for GpuBackend {
                 output_buffer,
                 element_count,
                 output_words,
+                timing_set.as_ref(),
             ),
             (Mode::Scatter { base, .. }, _, Some(scatter)) => self.combine(
                 &mut encoder,
@@ -513,14 +582,70 @@ impl Backend for GpuBackend {
                 output_domain.count(),
                 element_count,
                 output_words,
+                timing_set.as_ref(),
             ),
             _ => output_buffer,
         };
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        self.queue.submit(Some(encoder.finish()));
+        let timing = timing_set.as_ref().map(|set| {
+            let resolved = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("orla timing resolve"),
+                size: 16,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let read = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("orla timing read"),
+                size: 16,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.resolve_query_set(set, 0..2, &resolved, 0);
+            encoder.copy_buffer_to_buffer(&resolved, 0, &read, 0, 16);
+            read
+        });
+        let submission = self.queue.submit(Some(encoder.finish()));
         // Submissions on one queue run in order, so a later node reading
-        // this output needs no wait here; only observation does.
-        let _ = self.device.poll(wgpu::PollType::Poll);
+        // this output needs no wait here; only observation does. Under
+        // `set_measured`, this call waits, so what times it is the work.
+        if self.measured() {
+            let _ = self.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            });
+            if let Some(read) = timing {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                read.slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        let _ = sender.send(result);
+                    });
+                let _ = self.device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                });
+                if receiver.recv().is_ok_and(|result| result.is_ok())
+                    && let Ok(bytes) = read.slice(..).get_mapped_range()
+                {
+                    let ticks = |at: usize| {
+                        u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap_or([0; 8]))
+                    };
+                    let (begin, end) = (ticks(0), ticks(8));
+                    let period = self.queue.get_timestamp_period() as f64;
+                    drop(bytes);
+                    read.unmap();
+                    // Some drivers take the queries and write nothing
+                    // (Metal through wgpu, at the time of writing): then
+                    // there is no device time and the wait is the answer.
+                    if end > begin {
+                        let nanos = ((end - begin) as f64 * period) as u64;
+                        self.last_nanos
+                            .store(nanos, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        } else {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+        }
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(error.to_string()));
         }
@@ -702,6 +827,7 @@ impl GpuBackend {
     /// Binds the inputs (memories as copies the steps may write), writes
     /// the context and the parameters, creates the output, and encodes
     /// the map pass over `domain`.
+    #[allow(clippy::too_many_arguments)]
     fn stage(
         &self,
         pipeline: &Pipeline,
@@ -709,6 +835,7 @@ impl GpuBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
         domain: orla_abi::Domain,
+        timing: Option<&wgpu::QuerySet>,
     ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
         // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per input.
@@ -826,7 +953,11 @@ impl GpuBackend {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("orla kernel"),
-                timestamp_writes: None,
+                timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
             });
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -853,6 +984,7 @@ impl GpuBackend {
     /// alternating, in the same pairwise tree as the CPU reference.
     /// Returns the buffer holding the one element.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn fold(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -864,6 +996,7 @@ impl GpuBackend {
         mapped: wgpu::Buffer,
         element_count: usize,
         output_words: usize,
+        timing: Option<&wgpu::QuerySet>,
     ) -> wgpu::Buffer {
         let (reduce_pipeline, reduce_layout) = reduce;
         let params_buffer_for_reduce = params_buffer;
@@ -921,9 +1054,15 @@ impl GpuBackend {
                 layout: reduce_layout,
                 entries: &fold_entries,
             });
+            // Every level closes the window; the last one to write is
+            // the end of the node's work.
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("orla reduce"),
-                timestamp_writes: None,
+                timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: None,
+                    end_of_pass_write_index: Some(1),
+                }),
             });
             pass.set_pipeline(reduce_pipeline);
             pass.set_bind_group(0, &group, &[]);
@@ -947,6 +1086,7 @@ impl GpuBackend {
     /// between two key passes, `last` followed by a gather. Returns the
     /// target.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn combine(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -957,6 +1097,7 @@ impl GpuBackend {
         target_count: usize,
         element_count: usize,
         output_words: usize,
+        timing: Option<&wgpu::QuerySet>,
     ) -> wgpu::Buffer {
         let final_buffer = pairs;
         let size = (target_count * output_words * 4) as u64;
@@ -1007,7 +1148,11 @@ impl GpuBackend {
                         groups: u32| {
             let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("orla scatter"),
-                timestamp_writes: None,
+                timestamp_writes: timing.map(|query_set| wgpu::ComputePassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: None,
+                    end_of_pass_write_index: Some(1),
+                }),
             });
             compute.set_pipeline(&pass.0);
             compute.set_bind_group(0, group, offsets);
@@ -1089,7 +1234,13 @@ impl GpuBackend {
                 {
                     let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("orla scatter sort"),
-                        timestamp_writes: None,
+                        timestamp_writes: timing.map(|query_set| {
+                            wgpu::ComputePassTimestampWrites {
+                                query_set,
+                                beginning_of_pass_write_index: None,
+                                end_of_pass_write_index: Some(1),
+                            }
+                        }),
                     });
                     compute.set_pipeline(&step.0);
                     for index in 1..records.len() {

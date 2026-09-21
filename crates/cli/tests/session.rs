@@ -931,10 +931,7 @@ fn help_lists_the_builtins_and_the_forms_and_shows_one() {
         "scatter",
         "fill",
     ] {
-        assert!(
-            stdout.contains(&format!("  {name} ")),
-            "{name} in {stdout}"
-        );
+        assert!(stdout.contains(&format!("  {name} ")), "{name} in {stdout}");
     }
     // A form answers with its shape and what it means.
     let output = Command::new(orla).args(["help", "each"]).output().unwrap();
