@@ -1,0 +1,69 @@
+scene ../scene.osn
+
+# Solved at the start; U turned (fifteen frames at four turns a second),
+# the stickers permuted as the model says and the front's top row now
+# red; enter resets; by frame 40 the network's loss is well below its
+# start. Pixels are the picture, so they carry a tolerance.
+window 320 240
+frame 0.0000
+expect stickers.result[0] = 0
+expect stickers.result[53] = 5
+expect game.result[0].count = 0
+expect 129 138 = 0.055 0.357 0.11 0.06       # the front face's centre: green
+expect 129 91 = 0.055 0.357 0.11 0.06        # the front face's top row: green
+expect loss.result[0].sum = 653.0 40.0        # the untrained network
+key 85 down
+frame 0.0167
+key 85 up
+frame 0.0333
+frame 0.0500
+frame 0.0667
+frame 0.0833
+frame 0.1000
+frame 0.1167
+frame 0.1333
+frame 0.1500
+frame 0.1667
+frame 0.1833
+frame 0.2000
+frame 0.2167
+frame 0.2333
+frame 0.2500
+frame 0.2667
+frame 0.2833
+frame 0.3000
+expect stickers.result[11] = 5                 # right's top row from the back
+expect stickers.result[24] = 1                 # front's top row from the right
+expect stickers.result[38] = 2                 # left's top row from the front
+expect stickers.result[51] = 4                 # back's top row from the left
+expect stickers.result[0] = 0
+expect game.result[0].count = 1
+expect 129 91 = 0.47 0.055 0.055 0.08        # the front's top row: red now
+expect 129 138 = 0.055 0.357 0.11 0.06
+key 13 down
+frame 0.3167
+key 13 up
+expect stickers.result[24] = 2
+expect game.result[0].count = 0
+frame 0.3333
+frame 0.3500
+frame 0.3667
+frame 0.3833
+frame 0.4000
+frame 0.4167
+frame 0.4333
+frame 0.4500
+frame 0.4667
+frame 0.4833
+frame 0.5000
+frame 0.5167
+frame 0.5333
+frame 0.5500
+frame 0.5667
+frame 0.5833
+frame 0.6000
+frame 0.6167
+frame 0.6333
+frame 0.6500
+frame 0.6667
+expect loss.result[0].sum = 95.0 40.0          # forty steps in: a seventh of the start

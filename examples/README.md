@@ -119,6 +119,11 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   to tell the inside of a circle from the outside, all of it Kernels: the
   gradient as a scatter, the step placed eight times a frame, the
   weights carried on; the plane painted as the network answers.
+- [rubik](rubik/README.md): a Rubik's cube in three dimensions, turned
+  by the keys and orbited by the pointer, and a 54-32-1 network trained
+  while you play on scrambles it makes itself, guessing how many turns
+  from solved the cube on screen is: training and inference, all of it
+  Kernels.
 - [clip](clip/README.md): an input read frame by frame from a directory,
   `frames "clip/" at 2`, the frame of the moment at each evaluation; with
   `render`, the video pipeline's input half.
