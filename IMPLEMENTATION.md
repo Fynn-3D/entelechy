@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Diagnostics across files | [session](crates/cli/src/session.rs) `located`, `declarations_within` | [session tests](crates/cli/tests/session.rs) |
 | Run-time loop counts | [loop](crates/compiler/src/lower/expr.rs), [ir](crates/ir/src/lib.rs) `Op::Loop::bound` | [feature matrix](crates/matrix/src/lib.rs) `loops` |
 | Filled Fields | [document](crates/graph/src/document.rs) `NodeKind::Fill` | [composition](crates/graph/tests/composition.rs) |
 | Frames in | [session](crates/cli/src/session.rs) `Sequence`, [parser](crates/language/src/parser.rs) `frames` | [clip example](examples/clip/tests/clip.replay), [session tests](crates/cli/tests/session.rs) |
@@ -449,6 +450,15 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- Diagnostics that cross files: a `use` that comes back to the document
+  it started from is reported as the cycle it is (`declarations_within`
+  carries the origin and the open path, so `a.orla` and `b.orla` use
+  each other reads that way rather than as a name declared twice), and a
+  name a Kernel cannot find is looked for beside the document, beside
+  the scene and beside every library the session knows, so the
+  diagnostic ends with the file that declares it and the `use` that
+  would bring it in.
 
 - What the experience assessment asked for next: the JIT is the default
   backend everywhere but the Player (which takes the GPU, then the JIT,

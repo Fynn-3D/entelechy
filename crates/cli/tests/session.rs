@@ -1266,3 +1266,57 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
     assert_eq!(read(&mut session, report.output), vec![1.0; 4]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_name_a_kernel_cannot_find_names_the_file_that_declares_it() {
+    let dir = std::env::temp_dir().join(format!("orla-located-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("kernels")).unwrap();
+    std::fs::write(
+        dir.join("kernels/util.orla"),
+        "fn wobble(x: Float) -> Float { return x * 1.5; }\nkernel util.nothing@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("kernels/main.orla"),
+        "kernel main.k@1 { requires { field.write; } output result: Rows<Float>; compute { return wobble(2.0); } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"kernels/main.orla\";\nnode k: main.k@1 { domain = 2; }\noutput result <- k.result;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(
+        &dir.join("scene.osn"),
+        None,
+        orla::session::DEFAULT_BUDGET_PIXELS,
+    );
+    let events = session.sync();
+    let reported = rejected(&events).join("\n");
+    assert!(reported.contains("`wobble` is not a builtin"), "{reported}");
+    assert!(
+        reported.contains("fn `wobble` is declared in util.orla"),
+        "{reported}"
+    );
+    assert!(reported.contains("`use \"util.orla\";`"), "{reported}");
+    // Two documents that use each other are named, not reported as a
+    // declaration made twice.
+    std::fs::write(
+        dir.join("kernels/main.orla"),
+        "use \"util.orla\";\nstruct Tint { r: Float; }\nkernel main.k@1 { requires { field.write; } output result: Rows<Float>; compute { return wobble(2.0); } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("kernels/util.orla"),
+        "use \"main.orla\";\nfn wobble(x: Float) -> Float { return x * 1.5; }\nkernel util.nothing@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }\n",
+    )
+    .unwrap();
+    let events = session.sync();
+    let reported = rejected(&events).join("\n");
+    assert!(
+        reported.contains("use each other") && reported.contains("a third they both use"),
+        "{reported}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -196,7 +196,10 @@ name order (the same formats), one per frame at the rate, the frame
 in at each evaluation; the directory is listed again on sync. A struct, `type`, or `fn` declared at
 the top of a document is shared by every Kernel in it, and by every Kernel
 of a document that `use`s it; a function calls only what is declared above
-it. A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)
+it. A name a Kernel cannot find is looked for in the documents beside it
+and beside the scene, and the diagnostic says which one declares it and
+the `use` that would bring it in. Two documents that `use` each other are
+refused by name: what they share belongs in a third both use. A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)
 -> Hit` reads its parameter with `at`, `at_linear`, `size`, or `count`, and
 a call names an input port for it, `cast(world, eye)`; the function is
 instantiated once per port it is called with, checked by shape and

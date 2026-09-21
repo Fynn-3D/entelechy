@@ -224,7 +224,7 @@ fn check(args: &[String]) -> Result<(), String> {
                         continue; // reported by `used_documents`
                     };
                     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-                    match orla::session::declarations_for(dir, &used_document.uses) {
+                    match orla::session::declarations_within(Some(path), dir, &used_document.uses) {
                         Ok((structs, types, functions)) => {
                             used_document.inherit(&structs, &types, &functions)
                         }

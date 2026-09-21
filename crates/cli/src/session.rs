@@ -338,10 +338,23 @@ pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<Pa
 /// same declaration reached twice is one; two different declarations of
 /// one name are refused.
 pub fn declarations_for(base: &Path, uses: &[orla_language::Use]) -> Result<Declarations, String> {
+    declarations_within(None, base, uses)
+}
+
+/// The declarations a document at `origin` inherits from what it uses.
+/// Naming the origin is what lets a `use` that comes back to it be
+/// reported as the cycle it is rather than as a name declared twice.
+pub fn declarations_within(
+    origin: Option<&Path>,
+    base: &Path,
+    uses: &[orla_language::Use],
+) -> Result<Declarations, String> {
+    #[allow(clippy::too_many_arguments)]
     fn gather(
         base: &Path,
         uses: &[orla_language::Use],
         visited: &mut std::collections::BTreeSet<PathBuf>,
+        stack: &mut Vec<PathBuf>,
         structs: &mut Vec<(orla_language::StructDecl, PathBuf)>,
         types: &mut Vec<(orla_language::TypeAlias, PathBuf)>,
         functions: &mut Vec<(orla_language::FnDecl, PathBuf)>,
@@ -350,9 +363,29 @@ pub fn declarations_for(base: &Path, uses: &[orla_language::Use]) -> Result<Decl
             let path = base.join(&item.path.value);
             for file in expand_use(&path, item.path.value.ends_with('/'))? {
                 let key = file.canonicalize().unwrap_or_else(|_| file.clone());
-                if !visited.insert(key) {
+                if let Some(at) = stack.iter().position(|open| *open == key) {
+                    let names: Vec<String> = stack[at..]
+                        .iter()
+                        .chain(std::iter::once(&key))
+                        .map(|path| {
+                            path.file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.display().to_string())
+                        })
+                        .collect();
+                    let cycle = if names.len() == 3 && names[0] == names[2] {
+                        format!("`{}` and `{}` use each other", names[0], names[1])
+                    } else {
+                        format!("`{}` use one another in a ring", names.join("` -> `"))
+                    };
+                    return Err(format!(
+                        "{cycle}; what two documents share belongs in a third they both use"
+                    ));
+                }
+                if !visited.insert(key.clone()) {
                     continue;
                 }
+                stack.push(key);
                 let text = std::fs::read_to_string(&file)
                     .map_err(|e| format!("{}: {e}", file.display()))?;
                 let document = orla_language::parse_document(&text)
@@ -361,7 +394,17 @@ pub fn declarations_for(base: &Path, uses: &[orla_language::Use]) -> Result<Decl
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
-                gather(&dir, &document.uses, visited, structs, types, functions)?;
+                let nested = gather(
+                    &dir,
+                    &document.uses,
+                    visited,
+                    stack,
+                    structs,
+                    types,
+                    functions,
+                );
+                stack.pop();
+                nested?;
                 for decl in &document.functions {
                     // A function has no layout to compare; one name, one file.
                     if let Some((_, other)) = functions
@@ -413,11 +456,15 @@ pub fn declarations_for(base: &Path, uses: &[orla_language::Use]) -> Result<Decl
         Ok(())
     }
     let mut visited = std::collections::BTreeSet::new();
+    let mut stack: Vec<PathBuf> = origin
+        .map(|path| vec![path.canonicalize().unwrap_or_else(|_| path.to_path_buf())])
+        .unwrap_or_default();
     let (mut structs, mut types, mut functions) = (Vec::new(), Vec::new(), Vec::new());
     gather(
         base,
         uses,
         &mut visited,
+        &mut stack,
         &mut structs,
         &mut types,
         &mut functions,
@@ -491,6 +538,68 @@ struct DocumentState {
     /// with; when they change, every Kernel republishes even though its
     /// own text did not.
     declarations: String,
+}
+
+/// The name a diagnostic says it could not find: the first backticked
+/// word of a message that says something is not a function, a struct or
+/// a type.
+fn missing_name(message: &str) -> Option<String> {
+    let rest = message.rsplit(": ").next().unwrap_or(message);
+    let name = rest.strip_prefix('`')?.split('`').next()?;
+    let says = rest.contains("is not a builtin")
+        || rest.contains("is not a struct")
+        || rest.contains("is not a type")
+        || rest.contains("is not a port type");
+    (says && !name.is_empty()).then(|| name.to_owned())
+}
+
+/// Where a name is declared, among the documents `search` names: the
+/// file, and whether it declares it as a function, a struct or a type.
+fn declared_in(name: &str, search: &[PathBuf]) -> Option<(PathBuf, &'static str)> {
+    for path in search {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(document) = orla_language::parse_document(&text) else {
+            continue;
+        };
+        let kinds = [
+            (
+                "fn",
+                document.functions.iter().any(|d| d.name.value == name),
+            ),
+            (
+                "struct",
+                document.structs.iter().any(|d| d.name.value == name),
+            ),
+            ("type", document.types.iter().any(|d| d.name.value == name)),
+        ];
+        if let Some((kind, _)) = kinds.into_iter().find(|(_, found)| *found) {
+            return Some((path.clone(), kind));
+        }
+    }
+    None
+}
+
+/// `path` as a `use` would spell it from `from`, when they share a root.
+fn relative_to(path: &Path, from: &Path) -> String {
+    let (path, from) = (
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        from.canonicalize().unwrap_or_else(|_| from.to_path_buf()),
+    );
+    if let Ok(rest) = path.strip_prefix(&from) {
+        return rest.display().to_string();
+    }
+    let mut up = PathBuf::new();
+    let mut base = from.as_path();
+    while let Some(parent) = base.parent() {
+        up.push("..");
+        if let Ok(rest) = path.strip_prefix(parent) {
+            return up.join(rest).display().to_string();
+        }
+        base = parent;
+    }
+    path.display().to_string()
 }
 
 /// A key for a set of shared declarations.
@@ -1282,7 +1391,7 @@ impl Session {
                 .unwrap_or_else(|| Path::new("."))
                 .to_path_buf();
             let mut document = document;
-            let declarations = match declarations_for(&dir, &document.uses) {
+            let declarations = match declarations_within(Some(&path), &dir, &document.uses) {
                 Ok((structs, types, functions)) => {
                     document.inherit(&structs, &types, &functions);
                     declarations_key(&structs, &types, &functions)
@@ -1313,6 +1422,69 @@ impl Session {
             self.publish_document(&path, current, defined, &declarations, events);
         }
         changed
+    }
+
+    /// A diagnostic with the file that declares the name it could not
+    /// find, when the session knows one: a `use` away is the usual
+    /// reason, and saying which file says what to write.
+    fn located(&self, message: String, document: &Path) -> String {
+        let Some(name) = missing_name(&message) else {
+            return message;
+        };
+        // What this document already uses is not the answer; every other
+        // document the session knows, and every `.orla` beside this one
+        // and beside the scene, is where to look.
+        let used: Vec<PathBuf> = std::fs::read_to_string(document)
+            .ok()
+            .and_then(|text| orla_language::parse_document(&text).ok())
+            .map(|parsed| {
+                used_documents(
+                    document.parent().unwrap_or_else(|| Path::new(".")),
+                    &parsed.uses,
+                )
+                .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        let mut search: Vec<PathBuf> = Vec::new();
+        let siblings = |dir: &Path, search: &mut Vec<PathBuf>| {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                let mut files: Vec<PathBuf> = entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "orla"))
+                    .collect();
+                files.sort();
+                search.append(&mut files);
+            }
+        };
+        siblings(
+            document.parent().unwrap_or_else(|| Path::new(".")),
+            &mut search,
+        );
+        siblings(
+            self.root.parent().unwrap_or_else(|| Path::new(".")),
+            &mut search,
+        );
+        // The libraries the session knows, and what sits beside them: a
+        // shared directory usually holds more than one.
+        let known: Vec<PathBuf> = self.documents.keys().cloned().collect();
+        for path in &known {
+            siblings(path.parent().unwrap_or_else(|| Path::new(".")), &mut search);
+        }
+        search.extend(known);
+        search.retain(|path| {
+            path != document
+                && !used.iter().any(|seen| seen == path)
+                && path.extension().is_some_and(|ext| ext == "orla")
+        });
+        search.dedup();
+        let Some((file, kind)) = declared_in(&name, &search) else {
+            return message;
+        };
+        let spelling = relative_to(&file, document.parent().unwrap_or_else(|| Path::new(".")));
+        format!(
+            "{message}; {kind} `{name}` is declared in {spelling}, which this document does not use: `use \"{spelling}\";`"
+        )
     }
 
     /// Publishes the Kernels a document now defines: retires the ones that
@@ -1382,7 +1554,7 @@ impl Session {
                     }
                     Err(error) => events.push(Event::Rejected {
                         path: path.to_path_buf(),
-                        error: error.to_string(),
+                        error: self.located(error.to_string(), path),
                     }),
                 }
                 kernels.insert(id, text);
@@ -1414,7 +1586,7 @@ impl Session {
                 }
                 Err(error) => events.push(Event::Rejected {
                     path: path.to_path_buf(),
-                    error: error.to_string(),
+                    error: self.located(error.to_string(), path),
                 }),
             }
             kernels.insert(id, text);
@@ -1485,6 +1657,7 @@ impl Session {
         } else {
             declarations_for(base, &document.uses).map_err(|e| e.to_string())?
         };
+        let root = self.root.clone();
         // The scene's shared declarations come after the source's own,
         // and a name the source declares, at its top or inside its
         // Kernel, is the source's: a Kernel may redefine a shared struct,
@@ -1517,8 +1690,8 @@ impl Session {
             }
         }
         document.inherit(&structs, &types, &functions);
-        let module =
-            orla_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| e.to_string())?;
+        let module = orla_compiler::compile_kernel(&document.kernels[0], None)
+            .map_err(|e| self.located(e.to_string(), &root))?;
         self.runtime
             .prepare_module(module, source)
             .map_err(|e| e.to_string())
