@@ -57,6 +57,11 @@ usage:
       Read an archive back into a directory, its manifest checked.
   orla replay <file.replay>... [--backend cpu|gpu|jit]
       Drive scenes through scripted frames and inputs and check pixels.
+  orla new <dir> [--kind picture|sound|game]
+      Write a scene that runs: a Kernel, the scene that places it, a replay
+      that checks what it draws, and a README saying what to change first.
+      `picture` is one Kernel over the window, `sound` a voice with a
+      drawing of it, `game` a grid of state the arrow keys move.
   orla bench <scene.osn> [--frames <n>] [--repeat <n>] [--rate <fps>]
                          [--backend cpu|gpu|jit|all]... [--nodes]
                          [--window <w>x<h>[@<scale>]] [--library <dir|file>]
@@ -90,6 +95,7 @@ fn main() -> ExitCode {
         Some("render") => render(&args[1..]),
         Some("replay") => replay(&args[1..]),
         Some("serve") => serve(&args[1..]),
+        Some("new") => new_scene(&args[1..]),
         Some("bench") => measure(&args[1..]),
         Some("graph") => graph(&args[1..]),
         Some("trace") => trace(&args[1..]),
@@ -620,6 +626,60 @@ fn run(args: &[String]) -> Result<(), String> {
             );
         }
     }
+}
+
+/// `orla new`: a directory that runs.
+fn new_scene(args: &[String]) -> Result<(), String> {
+    let mut kind = orla::scaffold::Kind::Picture;
+    let mut dir: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        match arg {
+            "--kind" => {
+                let name = args
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| "--kind needs a value".to_string())?;
+                index += 1;
+                kind = orla::scaffold::Kind::from_name(&name).ok_or_else(|| {
+                    format!(
+                        "`{name}` is not a kind; they are {}",
+                        orla::scaffold::Kind::NAMES.join(", ")
+                    )
+                })?;
+            }
+            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
+            other => {
+                if dir.replace(PathBuf::from(other)).is_some() {
+                    return Err("new takes exactly one directory".into());
+                }
+            }
+        }
+    }
+    let dir = dir.ok_or_else(|| "new needs a directory".to_string())?;
+    let name = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "scene".to_owned());
+    let written = orla::scaffold::new_scene(&dir, kind, &name)?;
+    for path in &written {
+        println!("{}", dir.join(path).display());
+    }
+    let scene = dir.join("scene.osn");
+    let replay = written
+        .iter()
+        .find(|path| path.ends_with(".replay"))
+        .map(|path| dir.join(path))
+        .unwrap_or_else(|| dir.join("tests"));
+    eprintln!(
+        "play it:  orla-player {}\nrun it:   orla run {} --window 640x400 --out frame.ppm\ntest it:  orla replay {}",
+        scene.display(),
+        scene.display(),
+        replay.display()
+    );
+    Ok(())
 }
 
 /// `orla bench`: the same frames, several times, on one backend or all

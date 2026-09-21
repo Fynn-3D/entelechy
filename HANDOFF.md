@@ -585,6 +585,15 @@ are, deliberately: the flat dispatch matches (`Machine::step`,
 `Builder::call`), each one arm per operation, which a split would
 only scatter.
 
+`orla new <dir>` writes a directory that runs: a Kernel, the scene, a
+replay of what it draws, and a README saying what to change first.
+Three kinds, because the three things people start with want different
+shapes: `picture` is one Kernel over the window, `sound` a voice with a
+drawing of it, `game` a walker the arrow keys move with two `<~`
+bindings and a fading trail. The test makes each one, checks it and
+replays it, so a change to the language that would break a template
+breaks the suite instead of someone's first fifteen minutes.
+
 Measured, not fixed, because there was nothing to fix: a session that
 evaluates for a long time holds steady. Four thousand frames of
 `collapse` at 640x400 left the resident size where it started on the

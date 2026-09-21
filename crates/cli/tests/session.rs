@@ -1541,3 +1541,74 @@ fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// What `orla new` writes has to run, or the first fifteen minutes are
+/// spent on a broken scene. Each kind is made, checked and replayed
+/// here, so a change to the language that would break a template breaks
+/// this instead.
+#[test]
+fn what_new_writes_checks_and_replays() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let root = scratch("new");
+    for kind in ["picture", "sound", "game"] {
+        let dir = root.join(kind);
+        let made = Command::new(orla)
+            .args(["new", dir.to_str().unwrap(), "--kind", kind])
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        // Four files, the scene among them.
+        let listed = String::from_utf8_lossy(&made.stdout);
+        assert_eq!(listed.lines().count(), 4, "{listed}");
+        assert!(dir.join("scene.osn").exists(), "{listed}");
+
+        let checked = Command::new(orla)
+            .arg("check")
+            .arg(dir.join("scene.osn"))
+            .output()
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "{kind}: {}{}",
+            String::from_utf8_lossy(&checked.stdout),
+            String::from_utf8_lossy(&checked.stderr)
+        );
+
+        let replay = std::fs::read_dir(dir.join("tests"))
+            .unwrap()
+            .flatten()
+            .next()
+            .expect("a replay")
+            .path();
+        let tested = Command::new(orla)
+            .arg("replay")
+            .arg(&replay)
+            .args(["--backend", "cpu"])
+            .output()
+            .unwrap();
+        assert!(
+            tested.status.success(),
+            "{kind}: {}{}",
+            String::from_utf8_lossy(&tested.stdout),
+            String::from_utf8_lossy(&tested.stderr)
+        );
+
+        // A second `new` over the same directory is refused rather than
+        //写 over what is there.
+        let again = Command::new(orla)
+            .args(["new", dir.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(!again.status.success());
+        assert!(
+            String::from_utf8_lossy(&again.stderr).contains("already holds a scene"),
+            "{}",
+            String::from_utf8_lossy(&again.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

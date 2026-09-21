@@ -14,6 +14,7 @@ pub mod ppm;
 pub mod protocol;
 pub mod render;
 pub mod replay;
+pub mod scaffold;
 pub mod session;
 pub mod wav;
 pub mod websocket;

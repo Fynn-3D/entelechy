@@ -9,6 +9,25 @@ cargo build --workspace
 cargo test --workspace
 ```
 
+## Start here
+
+```sh
+cargo run --release -- new hello
+cargo run --release -p orla-player -- hello/scene.osn
+```
+
+`orla new <dir>` writes a directory that runs: a Kernel, the scene that
+places it, a replay that checks what it draws, and a README saying what
+to change first. Edit the Kernel while the Player is open and the
+picture changes as the file is saved; a Kernel that does not compile
+leaves the running one alone and says why.
+
+`--kind` picks what to start from: `picture` (the default) is one
+Kernel over the window, `sound` is a voice with a drawing of it, and
+`game` is a grid of state the arrow keys move, two feedback bindings
+and a fading trail. Each one passes its own replay on all three
+backends, which the workspace's tests check by making one.
+
 ## What a Kernel may call
 
 ```sh
