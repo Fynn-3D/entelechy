@@ -506,6 +506,27 @@ said and how far it is from it. A scene that does not change with the
 clock reuses everything after the first frame, and the table says that
 rather than reporting the time it took to find out.
 
+The first thing `bench` measured was itself, and it was wrong: a GPU
+dispatch is submitted and not waited for, so a frame timed around
+`evaluate` was the asking and not the work (showcase read 0.36 ms a
+frame at 960x540). A frame now ends by waiting for the device
+(`Backend::settle_device`, the GPU's poll), which is what a Player's
+frame does by presenting, and `run`'s own "evaluated in" waits too.
+The numbers that came out are the ones to keep: showcase 5.9 ms a frame
+on the GPU against 569 on the JIT, voxel 1.8 against 83, fluid 3.4
+against 39, raymarch 0.6 against 11.
+
+Then two ways to make the GPU's many small nodes cheaper, one declined
+by measurement and one kept. A frame's dispatches in one submission
+instead of one each: tried, and worse, since submitting each as it is
+recorded lets the device work while the CPU records the next
+(`collapse` 7.7 to 9.9 ms a frame, `fluid` 3.7 to 4.5, the others
+unchanged); the per-submit cost is 60 microseconds and it buys that
+overlap. Writing the context and the parameters into buffers kept from
+the last node instead of making two a node: kept, `collapse` 7.64 to
+7.50 ms over four alternating runs, nothing else moved, and a node of
+a busy scene does two fewer allocations.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

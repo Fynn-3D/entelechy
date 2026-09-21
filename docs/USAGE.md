@@ -177,7 +177,10 @@ gpu           6.63      6.73     44.49x
 ```
 
 The first frame of all is thrown away: it compiles the Kernels,
-allocates the Fields and warms the caches. The clock advances by the
+allocates the Fields and warms the caches. Every frame ends by waiting
+for the device to run dry, as a Player's frame ends by presenting,
+since a dispatch is submitted and not waited for and the asking is not
+the work. The clock advances by the
 frame count over `--rate`, as `render`'s does, so the work measured is
 the same work every time, and the least of the runs is the measurement
 least disturbed by everything else on the machine; the median beside it

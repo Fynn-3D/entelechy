@@ -127,6 +127,11 @@ fn one(options: &Options, backend: &str) -> Result<Measured, String> {
                 .map_err(|e| format!("{backend}: {e}"))?;
             ran |= !report.executed.is_empty();
             frame += 1;
+            // The device is asked to run dry inside the measurement, as
+            // a Player's frame ends by presenting: a dispatch is
+            // submitted and not waited for, so without this a GPU's
+            // frame would be the time it took to ask for one.
+            session.runtime().settle_device();
         }
         let took = started.elapsed().as_secs_f64() * 1000.0;
         runs.push(took / f64::from(options.frames.max(1)));

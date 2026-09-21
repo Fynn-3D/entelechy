@@ -53,6 +53,12 @@ pub struct GpuBackend {
     lock: Mutex<()>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
+    /// The context and the parameters of the execution being staged.
+    /// One execution runs at a time and a queue's writes are ordered
+    /// with its submissions, so these are written again per node rather
+    /// than made again: creating two small buffers a node was a fifth
+    /// of what a node of a busy scene costs.
+    uniforms: Mutex<Option<(wgpu::Buffer, wgpu::Buffer)>>,
     /// Whether an execution waits for the device before it returns, so
     /// that what times it is the work and not the submission. Off: a
     /// frame submits its nodes and only an observation waits.
@@ -142,6 +148,7 @@ impl GpuBackend {
             queue,
             adapter_name,
             lock: Mutex::new(()),
+            uniforms: Mutex::new(None),
             raster: OnceLock::new(),
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
@@ -264,6 +271,48 @@ impl GpuBackend {
         Ok(buffer)
     }
 
+    /// The context and parameter buffers for the execution being
+    /// staged: kept from the last one where they are big enough, and
+    /// written rather than made. A bigger one takes their place.
+    fn uniform_buffers(&self, context: &[u8], params: &[u8]) -> (wgpu::Buffer, wgpu::Buffer) {
+        let mut held = self
+            .uniforms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let big_enough = held
+            .as_ref()
+            .is_some_and(|(context_buffer, params_buffer)| {
+                context_buffer.size() >= context.len() as u64
+                    && params_buffer.size() >= params.len().max(16) as u64
+            });
+        if !big_enough {
+            *held = Some((
+                self.empty(
+                    "context",
+                    context.len().max(16),
+                    wgpu::BufferUsages::UNIFORM,
+                ),
+                self.empty("params", params.len().max(16), wgpu::BufferUsages::UNIFORM),
+            ));
+        }
+        let (context_buffer, params_buffer) = held.as_ref().expect("the buffers are held");
+        self.queue.write_buffer(context_buffer, 0, context);
+        if !params.is_empty() {
+            self.queue.write_buffer(params_buffer, 0, params);
+        }
+        (context_buffer.clone(), params_buffer.clone())
+    }
+
+    /// A buffer of this many bytes, rounded up, with nothing in it.
+    fn empty(&self, label: &str, len: usize, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (len.max(16) as u64).div_ceil(16) * 16,
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
     pub(crate) fn buffer(
         &self,
         label: &str,
@@ -312,6 +361,17 @@ impl Backend for GpuBackend {
 
     fn last_device_time(&self) -> Option<std::time::Duration> {
         self.last_device_time()
+    }
+
+    /// Waits for the queue to run dry. A dispatch is submitted and not
+    /// waited for, so a frame a caller times is otherwise the asking; a
+    /// measurement wants this, a Player gets it from presenting, and an
+    /// ordinary evaluation needs neither.
+    fn settle_device(&self) {
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -899,12 +959,8 @@ impl GpuBackend {
             self.queue.submit(Some(copies.finish()));
         }
         let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let context_buffer = self.buffer("context", &context_bytes, wgpu::BufferUsages::UNIFORM);
-        let params_buffer = self.buffer(
-            "params",
-            &param_bytes(&invocation.params),
-            wgpu::BufferUsages::UNIFORM,
-        );
+        let (context_buffer, params_buffer) =
+            self.uniform_buffers(&context_bytes, &param_bytes(&invocation.params));
         let output_words = module.manifest.outputs[0].ty.schema.words();
         // A scatter's map pass stores a pair per source element.
         let map_words = if matches!(module.manifest.mode, Mode::Scatter { .. }) {

@@ -1123,6 +1123,9 @@ fn evaluate_and_export(
     };
     match session.evaluate(&context) {
         Ok(report) => {
+            // A device's work is submitted and not waited for, so the
+            // time below would be the asking rather than the doing.
+            session.runtime().settle_device();
             let executed = report
                 .executed
                 .iter()

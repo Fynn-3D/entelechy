@@ -174,6 +174,12 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Waits for everything this backend has submitted to finish. The
+    /// default is for backends whose work is done when `execute`
+    /// returns; a device queue's is not, so anything that measures a
+    /// frame, or hands the machine to something else, has to ask.
+    fn settle_device(&self) {}
+
     /// Downloads the bytes of a resource this backend left resident:
     /// `byte_len` bytes of little-endian words. The default is for backends
     /// that never do.
@@ -677,6 +683,12 @@ impl Runtime {
     /// Name of the backend executing Kernels.
     pub fn backend_name(&self) -> &'static str {
         self.backend.name()
+    }
+
+    /// Waits for the backend's device to finish what it was given. See
+    /// [`Backend::settle_device`].
+    pub fn settle_device(&self) {
+        self.backend().settle_device();
     }
 
     /// The backend executing Kernels.
