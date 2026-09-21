@@ -119,6 +119,15 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   to tell the inside of a circle from the outside, all of it Kernels: the
   gradient as a scatter, the step placed eight times a frame, the
   weights carried on; the plane painted as the network answers.
+- [spectrum](spectrum/README.md): a sound and what it is made of: a
+  voice writes a block of samples a frame, a map reads it back as
+  frequencies (its loop counts the block's own length), and the bars
+  name the loudest. The Player plays what the bars describe.
+- [path](path/README.md): a path tracer that gets better while you
+  watch: the samples a frame traces and the bounces each one takes are
+  graph parameters the loops take as their counts, and the sum of every
+  sample so far is an Image carried frame to frame. Drag to move the
+  camera and it starts over.
 - [rubik](rubik/README.md): a Rubik's cube in three dimensions, turned
   by the keys and orbited by the pointer, and a 54-32-1 network trained
   while you play on scrambles it makes itself, guessing how many turns

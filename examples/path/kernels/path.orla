@@ -1,0 +1,172 @@
+// A path tracer that gets better while you watch: every frame traces one
+// path per pixel and adds it to what the frames before it traced, so the
+// picture is the mean of every sample so far. The bounces are a graph
+// parameter, which a `loop` takes as its count; the sum and the count
+// live in one Image through `<~`; and dragging the pointer moves the
+// camera, which starts the sum over.
+
+struct Ray { origin: Vec3; direction: Vec3; }
+struct Hit { t: Float; normal: Vec3; albedo: Vec3; light: Vec3; }
+struct Bounce { ray: Ray; weight: Vec3; sum: Vec3; seed: Float; }
+struct Path { sum: Vec3; seed: Float; }
+struct Eye { yaw: Float; pitch: Float; drag: Vec2; held: Bool; moved: Bool; }
+type Eyes = Rows<Eye>;
+
+// Hashes without a trigonometric function, so every backend agrees on
+// every sample.
+fn hash(n: Float) -> Float {
+    let q = fract(n * 0.1031);
+    let r = q * (q + 33.33);
+    return fract((r + r) * q);
+}
+
+fn next(seed: Float) -> Float { return hash(seed * 1.61803 + 0.7182818); }
+
+// A direction in the hemisphere around `n`, cosine weighted: an angle, a
+// radius, and the height that makes the lobe a cosine.
+fn bounce_dir(n: Vec3, seed: Float) -> Vec3 {
+    let u = next(seed);
+    let v = next(u);
+    let angle = u * 6.2831853;
+    let r = sqrt(v);
+    let up = if abs(n.y) < 0.9 { vec3(0.0, 1.0, 0.0) } else { vec3(1.0, 0.0, 0.0) };
+    let tangent = normalize(cross(up, n));
+    let bitangent = cross(n, tangent);
+    return normalize(tangent * (cos(angle) * r) + bitangent * (sin(angle) * r) + n * sqrt(max(1.0 - v, 0.0)));
+}
+
+// A ray against a sphere: the nearer root ahead of it, or nothing.
+fn sphere(ray: Ray, centre: Vec3, radius: Float, albedo: Vec3, light: Vec3) -> Hit {
+    let to = ray.origin - centre;
+    let b = dot(to, ray.direction);
+    let c = dot(to, to) - radius * radius;
+    let discriminant = b * b - c;
+    let root = if discriminant > 0.0 { -b - sqrt(discriminant) } else { -1.0 };
+    let t = if root > 0.001 { root } else { -1.0 };
+    let point = ray.origin + ray.direction * t;
+    return Hit { t: t, normal: (point - centre) / radius, albedo: albedo, light: light };
+}
+
+fn nearer(a: Hit, b: Hit) -> Hit {
+    return if b.t > 0.0 && (a.t < 0.0 || b.t < a.t) { b } else { a };
+}
+
+// The room: a chequered floor, two balls, and a third that is the lamp.
+fn world(ray: Ray) -> Hit {
+    let falling = ray.direction.y < -0.0001;
+    let floor_t = if falling { (-1.0 - ray.origin.y) / ray.direction.y } else { -1.0 };
+    let floor_at = ray.origin + ray.direction * floor_t;
+    let dark = (floor(floor_at.x) + floor(floor_at.z)) % 2.0 == 0.0;
+    let ground = Hit {
+        t: if floor_t > 0.001 && length(vec2(floor_at.x, floor_at.z)) < 14.0 { floor_t } else { -1.0 },
+        normal: vec3(0.0, 1.0, 0.0),
+        albedo: if dark { vec3(0.32, 0.33, 0.36) } else { vec3(0.74, 0.73, 0.68) },
+        light: vec3(0.0, 0.0, 0.0),
+    };
+    let red = sphere(ray, vec3(-1.1, -0.2, 0.2), 0.8, vec3(0.85, 0.25, 0.2), vec3(0.0, 0.0, 0.0));
+    let steel = sphere(ray, vec3(1.0, -0.35, -0.6), 0.65, vec3(0.7, 0.72, 0.78), vec3(0.0, 0.0, 0.0));
+    let lamp = sphere(ray, vec3(0.6, 1.9, 1.2), 0.7, vec3(0.0, 0.0, 0.0), vec3(9.0, 8.2, 6.4));
+    return nearer(nearer(nearer(ground, red), steel), lamp);
+}
+
+// The sky, the other light in the room.
+fn sky(direction: Vec3) -> Vec3 {
+    let t = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(vec3(0.22, 0.25, 0.32), vec3(0.45, 0.58, 0.85), t) * 0.8;
+}
+
+// Where the camera is: dragged by the pointer, and it says when it moved
+// so the sum can start over.
+kernel path.eye@1 {
+    requires { field.read; field.write; input.read; }
+    input previous: Eyes;
+    param speed: Float = 0.008;
+    output result: Eyes;
+    compute {
+        let e = at(previous, 0);
+        let p = pointer();
+        let held = pointer_down();
+        let delta = if held && e.held { p - e.drag } else { vec2(0.0, 0.0) };
+        return Eye {
+            yaw: e.yaw + delta.x * speed,
+            pitch: clamp(e.pitch - delta.y * speed, -1.1, 1.1),
+            drag: p,
+            held: held,
+            moved: delta.x != 0.0 || delta.y != 0.0,
+        };
+    }
+}
+
+kernel path.begin@1 {
+    requires { field.write; }
+    output result: Eyes;
+    compute { return Eye { yaw: 0.35, pitch: -0.18, drag: vec2(0.0, 0.0), held: false, moved: false }; }
+}
+
+// One path per pixel, added to what the frames before it traced. The
+// count rides in the alpha channel, which is also the seed's frame.
+kernel path.sample@1 {
+    requires { field.read; field.write; }
+    input history: Image;
+    input eye: Eyes;
+    param bounces: Int = 3;
+    param samples: Int = 1;
+    output result: Image;
+    compute {
+        let e = at(eye, 0);
+        let taken = sample(history).a;
+        let before = if e.moved { 0.0 } else { taken };
+        let res = domain();
+        let px = coord() + vec2(0.5, 0.5);
+        let seed = hash(px.x * 1.7 + px.y * 311.7 + before * 0.61 + 1.3);
+        let forward = vec3(sin(e.yaw) * cos(e.pitch), sin(e.pitch), cos(e.yaw) * cos(e.pitch));
+        let right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
+        let up = cross(forward, right);
+        let origin = forward * -6.0 + vec3(0.0, 0.4, 0.0);
+        // `samples` paths this frame, each through `bounces` bounces:
+        // two counts a parameter sets, and the loops take them.
+        let paths = loop samples with s = Path { sum: vec3(0.0, 0.0, 0.0), seed: next(seed) } {
+            // The pixel's own place, jittered, so the edges smooth out.
+            let jitter = vec2(next(s.seed), next(next(s.seed))) - vec2(0.5, 0.5);
+            let uv = (px + jitter - res * 0.5) / res.y;
+            let direction = normalize(forward * 1.6 + right * uv.x + up * -uv.y);
+            let walked = loop bounces with b = Bounce {
+                ray: Ray { origin: origin, direction: direction },
+                weight: vec3(1.0, 1.0, 1.0),
+                sum: vec3(0.0, 0.0, 0.0),
+                seed: next(next(s.seed)),
+            } {
+                let hit = world(b.ray);
+                if hit.t < 0.0 {
+                    Bounce { ray: b.ray, weight: vec3(0.0, 0.0, 0.0), sum: b.sum + b.weight * sky(b.ray.direction), seed: b.seed }
+                } else {
+                    let point = b.ray.origin + b.ray.direction * hit.t;
+                    Bounce {
+                        ray: Ray { origin: point + hit.normal * 0.002, direction: bounce_dir(hit.normal, b.seed) },
+                        weight: b.weight * hit.albedo,
+                        sum: b.sum + b.weight * hit.light,
+                        seed: next(b.seed),
+                    }
+                }
+            };
+            Path { sum: s.sum + walked.sum, seed: walked.seed }
+        };
+        let kept = if e.moved { vec3(0.0, 0.0, 0.0) } else { sample(history).rgb };
+        return vec4(kept + paths.sum, before + float(samples));
+    }
+}
+
+// The mean of every sample so far, tone mapped.
+kernel path.view@1 {
+    requires { field.read; field.write; }
+    input sum: Image;
+    param exposure: Float = 1.0;
+    output result: Image;
+    compute {
+        let c = sample(sum);
+        let mean = c.rgb / max(c.a, 1.0) * exposure;
+        let mapped = mean / (mean + vec3(1.0, 1.0, 1.0));
+        let gamma = vec3(pow(mapped.x, 0.4545), pow(mapped.y, 0.4545), pow(mapped.z, 0.4545));
+        return vec4(gamma, 1.0);
+    }
+}

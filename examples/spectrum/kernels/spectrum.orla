@@ -1,0 +1,106 @@
+// A sound and what it is made of: a Kernel writes a block of samples
+// every frame, another reads the block back into frequencies, and a
+// third draws them as bars. The transform loops over the block, and its
+// count is the block's own length, which a `loop` takes as an Int: the
+// same Kernel reads a block of any size.
+
+type Block = Rows<Float>;
+type Bins = Rows<Float>;
+struct Peak { bin: Int; power: Float; }
+type Peaks = Rows<Peak>;
+
+// The voice: two partials and a slow wobble, at a pitch the scene sets.
+// The phase comes from the sample's own place in time, so a block joins
+// the one before it without a click.
+kernel spectrum.voice@1 {
+    requires { field.write; time.read; }
+    param pitch: Float = 220.0;
+    param wobble: Float = 3.0;
+    output result: Block;
+    compute {
+        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
+        let at = time() + float(element()) / hz;
+        // The wobble moves the phase, not the clock: a vibrato that
+        // stays where it is rather than a pitch that runs away.
+        let phase = at * pitch + 0.03 * sin(at * wobble * 6.2831853);
+        let first = sin(phase * 6.2831853);
+        let second = sin(phase * 2.0 * 6.2831853) * 0.45;
+        let third = sin(phase * 3.0 * 6.2831853) * 0.2;
+        return (first + second + third) * 0.3;
+    }
+}
+
+// One bin per element: how much of the block turns at this bin's
+// frequency. The loop's count is the block's length, so the Kernel does
+// not know it when it is written.
+kernel spectrum.bins@1 {
+    requires { field.read; field.write; time.read; }
+    input block: Block;
+    param lowest: Float = 110.0;      // the first bin's frequency
+    param spacing: Float = 55.0;      // and how far apart they stand
+    output result: Bins;
+    struct Turn { re: Float; im: Float; }
+    compute {
+        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
+        let frequency = lowest + float(element()) * spacing;
+        let step = frequency * 6.2831853 / hz;
+        let n = count(block);
+        let turned = loop n with t = Turn { re: 0.0, im: 0.0 } {
+            let s = at(block, index());
+            let angle = step * float(index());
+            Turn { re: t.re + s * cos(angle), im: t.im + s * sin(angle) }
+        };
+        let power = sqrt(turned.re * turned.re + turned.im * turned.im) / float(n);
+        return power;
+    }
+}
+
+// The loudest bin, which the readout names.
+kernel spectrum.peak@1 {
+    requires { field.read; field.write; }
+    input bins: Bins;
+    output result: Peak;
+    compute { return Peak { bin: element(), power: sample(bins) }; }
+    merge(a, b) { return if b.power > a.power { b } else { a }; }
+}
+
+// The bars: one per bin, tallest in the middle of the picture, with the
+// loudest one lit.
+kernel spectrum.draw@1 {
+    requires { field.read; field.write; }
+    input bins: Bins;
+    input peak: Peaks;
+    param gain: Float = 9.0;
+    output result: Image;
+    compute {
+        let res = domain();
+        let uv = (coord() + vec2(0.5, 0.5)) / res;
+        let n = count(bins);
+        let which = int(uv.x * float(n));
+        let power = at(bins, which) * gain;
+        // The bars stop short of the top, where the readout is.
+        let height = clamp(power, 0.0, 1.0) * 0.78;
+        let inside = uv.y > 1.0 - height;
+        let gap = fract(uv.x * float(n)) < 0.12;
+        let loudest = which == at(peak, 0).bin;
+        let bar = if loudest { vec3(1.0, 0.82, 0.35) } else { mix(vec3(0.2, 0.5, 0.9), vec3(0.55, 0.85, 1.0), height) };
+        let band = uv.y < 0.14;
+        let back = if band {
+            vec3(0.02, 0.02, 0.04)
+        } else {
+            mix(vec3(0.05, 0.06, 0.09), vec3(0.09, 0.11, 0.16), uv.y)
+        };
+        let colour = if inside && !gap { bar } else { back };
+        return vec4(colour.x, colour.y, colour.z, 1.0);
+    }
+}
+
+// The loudest bin's frequency, as a number the label prints.
+kernel spectrum.hertz@1 {
+    requires { field.read; field.write; }
+    input peak: Peaks;
+    param lowest: Float = 110.0;
+    param spacing: Float = 55.0;
+    output result: Rows<Float>;
+    compute { return lowest + float(at(peak, 0).bin) * spacing; }
+}

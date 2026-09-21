@@ -1,0 +1,26 @@
+// voice writes a block of samples every frame; bins reads it back as
+// frequencies (its loop's count is the block's own length); peak finds
+// the loudest; draw paints the bars and the label names the frequency.
+// The block is the scene's sound output, so the Player plays it.
+use "kernels/";
+use "../shared/text.orla";
+
+input font: Grid<Float> = "../shared/font.png";
+input caption: Rows<Int> = text "loudest";
+
+param pitch: Float = 220.0;
+param bins: Int = 48;
+param lowest: Float = 110.0;
+param spacing: Float = 55.0;
+
+node voice: spectrum.voice@1 { pitch = pitch; domain = 800; }
+node bins: spectrum.bins@1 { block <- voice.result; lowest = lowest; spacing = spacing; domain = bins; }
+node peak: spectrum.peak@1 { bins <- bins.result; }
+node hertz: spectrum.hertz@1 { peak <- peak.result; lowest = lowest; spacing = spacing; domain = 1; }
+node view: spectrum.draw@1 { bins <- bins.result; peak <- peak.result; domain = window(); }
+node label: text.label@1 { caption <- caption; values <- hertz.result; places = 4; domain = size(caption) + 6; }
+node glyphs: text.layout@1 { codes <- label.result; origin = vec2(12.0, 12.0); scale = 2.0; }
+node shown: text.draw@1 { under <- view.result; glyphs <- glyphs.result; font <- font; }
+
+output result <- shown.result;
+output sound <- voice.result;

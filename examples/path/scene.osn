@@ -1,0 +1,22 @@
+// begin seeds the camera, which the pointer drags; sample traces one
+// path per pixel and adds it to the sum it kept last frame; view is the
+// mean of every sample so far. Drag to move, and the sum starts over.
+use "kernels/";
+
+param bounces: Int = 3;
+param samples: Int = 1;              // paths per pixel per frame
+param exposure: Float = 1.0;
+
+node begin: path.begin@1 { domain = 1; }
+node black: Image { domain = window(); }
+node eye: path.eye@1 { previous <~ eye.result from begin.result; }
+node sample: path.sample@1 {
+    history <~ sample.result from black.result;
+    eye <- eye.result;
+    bounces = bounces;
+    samples = samples;
+    domain = window();
+}
+node view: path.view@1 { sum <- sample.result; exposure = exposure; domain = window(); }
+
+output result <- view.result;
