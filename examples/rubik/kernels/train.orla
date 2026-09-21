@@ -97,11 +97,11 @@ kernel train.delta@1 {
 }
 
 // The gradient, summed over the batch, weight by weight: element e is
-// weight e % 1793 of cube e / 1793, one term of the chain rule from the
-// hidden units and the deltas already computed.
+// weight e % 1793 of cube e / 1793 (the node's domain is the product),
+// one term of the chain rule from the hidden units and the deltas
+// already computed.
 kernel train.grads@1 {
     requires { field.read; field.write; }
-    input work: Rows<Int>;
     input samples: Batch;
     input act: Batch;
     input delta: Batch;

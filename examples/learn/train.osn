@@ -4,11 +4,10 @@ use "kernels/";
 
 input weights: Rows<Float>;
 input points: Rows<Point>;
-input work: Rows<Int>;
 input zeros: Rows<Float>;
 param rate: Float = 2.0;
 
-node grads: learn.grads@1 { work <- work; points <- points; weights <- weights; zeros <- zeros; }
+node grads: learn.grads@1 { points <- points; weights <- weights; zeros <- zeros; domain = 16640; }   // 256 points times 65 weights
 node step: learn.step@1 { weights <- weights; grads <- grads.result; rate = rate; }
 
 output result <- step.result;

@@ -15,19 +15,14 @@ node stickers: cube.stickers@1 { previous <~ stickers.result from solved.result;
 
 node init: train.init@1 { domain = 1793; }
 node zeros: train.zeros@1 { domain = 1793; }
-node work: kernel {
-    requires { field.write; }
-    output result: Rows<Int>;
-    domain = 114752;                 // 64 cubes times 1793 weights
-    compute { return 0; }
-}
 node samples: train.samples@1 { domain = 3456; }    // 64 cubes times 54 stickers
 node labels: train.labels@1 { domain = 64; }
 node act: train.act@1 { samples <- samples.result; weights <~ step.result from init.result; domain = 2048; }
 node delta: train.delta@1 { act <- act.result; labels <- labels.result; weights <~ step.result from init.result; domain = 64; }
 node grads: train.grads@1 {
-    work <- work.result; samples <- samples.result; act <- act.result; delta <- delta.result;
+    samples <- samples.result; act <- act.result; delta <- delta.result;
     weights <~ step.result from init.result; zeros <- zeros.result;
+    domain = 114752;                 // 64 cubes times 1793 weights
 }
 node step: train.step@1 { weights <~ step.result from init.result; grads <- grads.result; rate = rate; }
 node loss: train.loss@1 { delta <- delta.result; }

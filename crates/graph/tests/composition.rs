@@ -1456,3 +1456,34 @@ fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
     evaluator.clear(&mut runtime);
     assert_eq!(runtime.host().live(), 0);
 }
+
+const ZEROS: &str = "kernel test.zeros@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }";
+const SPREAD: &str = "kernel test.spread@1 { requires { field.read; field.write; } input target: Rows<Int>; output result: Rows<Int>; struct Put { at: Int; value: Int; } scatter into target with sum { return Put { at: element() % 4, value: 1 }; } }";
+
+#[test]
+fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
+    let graph = Graph::parse(
+        "node zeros: test.zeros@1 { domain = 4; }\nnode spread: test.spread@1 { target <- zeros.result; domain = 10; }\nnode plain: test.spread@1 { target <- zeros.result; }\noutput result <- spread.result;\noutput plain <- plain.result;\n",
+    )
+    .unwrap();
+    let mut runtime = Runtime::new(1024);
+    runtime.load(ZEROS).unwrap();
+    runtime.load(SPREAD).unwrap();
+    let mut evaluator = Evaluator::new();
+    let none = BTreeMap::new();
+    let defaults = BTreeMap::new();
+    let report = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(0.0), &defaults)
+        .unwrap();
+    let words = |handle| runtime.host().data(handle).unwrap().words().to_vec();
+    // Ten elements over a target of four: 3, 3, 2, 2.
+    assert_eq!(words(report.output), vec![3, 3, 2, 2]);
+    // Without a domain, once per element of the first input, the target.
+    let plain = report
+        .outputs
+        .iter()
+        .find(|(name, _)| name == "plain")
+        .unwrap()
+        .1;
+    assert_eq!(words(plain), vec![1, 1, 1, 1]);
+}

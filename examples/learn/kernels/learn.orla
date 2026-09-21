@@ -55,11 +55,11 @@ kernel learn.zeros@1 {
 }
 
 // The gradient of the loss over every point, summed weight by weight:
-// element e is weight e % 65 of point e / 65, so the sum needs no array
-// and every element is one forward pass and one term of the chain rule.
+// element e is weight e % 65 of point e / 65 (the node's domain is the
+// product), so the sum needs no array and every element is one forward
+// pass and one term of the chain rule.
 kernel learn.grads@1 {
     requires { field.read; field.write; }
-    input work: Rows<Int>;
     input points: Rows<Point>;
     input weights: Rows<Float>;
     input zeros: Rows<Float>;

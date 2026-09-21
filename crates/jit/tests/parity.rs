@@ -362,7 +362,7 @@ fn scatters_apply_in_element_order_with_the_same_rule() {
             (drop_schema, Domain::Rows(count), drops),
             (cell, Domain::Grid(8, 4), vec![0; 64]),
         ],
-        Domain::Grid(8, 4),
+        Domain::Rows(count),
     );
     assert_eq!(cpu, jit);
     let mass: f32 = cpu[0].chunks_exact(2).map(|c| f32::from_bits(c[0])).sum();
@@ -379,7 +379,7 @@ fn scatters_apply_in_element_order_with_the_same_rule() {
                 (ints.clone(), Domain::Rows(100), (0..100).collect()),
                 (ints, Domain::Rows(8), vec![0; 8]),
             ],
-            Domain::Rows(8),
+            Domain::Rows(100),
         );
         assert_eq!(cpu, jit, "{rule}");
     }
@@ -440,7 +440,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     let invocation = Invocation {
         inputs: vec![rows, slots],
         params: vec![],
-        domain: Domain::Rows(2),
+        domain: Domain::Rows(4),
         context: Context::default(),
     };
     let prepared = jit.prepare(&module).unwrap();

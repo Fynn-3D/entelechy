@@ -297,8 +297,10 @@ kernel particles.splat@1 {
 }
 ```
 
-The body runs once per element of the first input and yields a struct of
-two fields: an address into the target named after `into` (an `Int` for
+The body runs once per element of the first input, or of the node's
+`domain` when it sets one (a step over every point and every weight sets
+`domain = points * weights;` and needs no Field of that size), and
+yields a struct of two fields: an address into the target named after `into` (an `Int` for
 rows, a `Vec2` for a grid, a `Vec3` for a volume, floored like `at`) and a
 value of the target's element type. The output is the target with every
 value combined into the element at its address by the rule after `with`:

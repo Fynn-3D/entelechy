@@ -471,6 +471,13 @@ impl Backend for GpuBackend {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mode = module.manifest.mode;
         let domain = execution_domain(module, invocation, scope)?;
+        // What comes out: one element for a reduction, the target's extent
+        // for a scatter, the domain otherwise.
+        let output_domain = match mode {
+            Mode::Reduce => orla_abi::Domain::Rows(1),
+            Mode::Scatter { base, .. } => scope.size(invocation.inputs[base as usize])?,
+            _ => domain,
+        };
         let staged = self.stage(pipeline, module, invocation, scope, domain)?;
         let Staged {
             mut encoder,
@@ -503,7 +510,7 @@ impl Backend for GpuBackend {
                 &input_buffers[base as usize],
                 &context_buffer,
                 output_buffer,
-                invocation.domain.count(),
+                output_domain.count(),
                 element_count,
                 output_words,
             ),
@@ -517,11 +524,6 @@ impl Backend for GpuBackend {
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(error.to_string()));
         }
-        let output_domain = match mode {
-            Mode::Reduce => orla_abi::Domain::Rows(1),
-            Mode::Scatter { .. } => invocation.domain,
-            _ => domain,
-        };
         adopt_outputs(scope, module, output_domain, final_buffer, memory_outputs)
     }
 
@@ -655,7 +657,7 @@ fn execution_domain(
         Mode::Scan => orla_rules::check_scan(invocation, scope)?,
         Mode::Scatter { base, .. } => {
             orla_rules::check_scatter(invocation, scope, base as usize)?;
-            scope.size(invocation.inputs[0])?
+            invocation.domain
         }
         Mode::Map => invocation.domain,
     })

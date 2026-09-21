@@ -327,7 +327,7 @@ pub fn trace(
         Mode::Scan => check_scan(invocation, scope)?,
         Mode::Scatter { base, .. } => {
             check_scatter(invocation, scope, base as usize)?;
-            scope.size(invocation.inputs[0])?
+            invocation.domain
         }
     };
     let inside = if mode == Mode::Scan {
@@ -482,10 +482,10 @@ fn scan(
     Ok(outputs)
 }
 
-/// A scatter: the entry over the first input, then every address and
-/// value applied to a copy of the target, one after another in element
-/// order. The order is the rule, so the result is the same on every
-/// backend, floats included.
+/// A scatter: the entry over the domain, then every address and value
+/// applied to a copy of the target, one after another in element order.
+/// The order is the rule, so the result is the same on every backend,
+/// floats included.
 fn scatter(
     module: &Validated,
     invocation: &Invocation,
@@ -495,7 +495,7 @@ fn scatter(
     combine: Combine,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let target = check_scatter(invocation, scope, base)?;
-    let sources = scope.size(invocation.inputs[0])?;
+    let sources = invocation.domain;
     let address = address_words(target);
     let program = eval::Program::new(module, invocation, scope, sources)?;
     let pairs = compute(&program, &[address + stride])?;

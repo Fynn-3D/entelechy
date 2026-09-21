@@ -762,7 +762,7 @@ fn scatters_combine_into_the_target_in_element_order() {
     let invocation = Invocation {
         inputs: vec![rows, canvas],
         params: vec![],
-        domain: Domain::Grid(3, 2),
+        domain: Domain::Rows(drops.len() as u32),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
@@ -784,16 +784,16 @@ fn scatters_combine_into_the_target_in_element_order() {
         "the base input is copied, not written"
     );
 
-    // The domain must be the target's.
+    // The domain must have elements.
     let bad = Invocation {
         inputs: vec![rows, canvas],
         params: vec![],
-        domain: Domain::Grid(2, 2),
+        domain: Domain::Rows(0),
         context: Context::default(),
     };
     let mut scope = Scope::new(&mut host, granted());
     let error = CpuBackend.execute(&module, &bad, &mut scope).unwrap_err();
-    assert!(error.to_string().contains("scatters into"), "{error}");
+    assert!(error.to_string().contains("no elements"), "{error}");
 
     // `last` by element order, `max` fieldwise over a struct with ints,
     // into rows addressed by Int.

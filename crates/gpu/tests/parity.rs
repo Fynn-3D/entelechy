@@ -863,7 +863,7 @@ fn scatters_match_between_backends() {
         let invocation = orla_abi::Invocation {
             inputs: vec![drops, canvas],
             params: vec![],
-            domain: Domain::Grid(6, 4),
+            domain: Domain::Rows(count),
             context: orla_abi::Context::default(),
         };
         let mut scope = Scope::new(&mut host, all());
@@ -942,7 +942,7 @@ fn scatters_match_between_backends() {
         let invocation = orla_abi::Invocation {
             inputs: vec![drops, grid],
             params: vec![],
-            domain: Domain::Grid(6, 4),
+            domain: Domain::Rows(count),
             context: orla_abi::Context::default(),
         };
         let mut scope = Scope::new(&mut host, all());
@@ -1004,7 +1004,7 @@ fn scatters_match_between_backends() {
     let invocation = orla_abi::Invocation {
         inputs: vec![drops, canvas],
         params: vec![],
-        domain: Domain::Grid(6, 4),
+        domain: Domain::Rows(many),
         context: orla_abi::Context::default(),
     };
     let mut scope = Scope::new(&mut host, all());
@@ -1057,7 +1057,7 @@ fn scatters_match_between_backends() {
         let invocation = orla_abi::Invocation {
             inputs: vec![drops, grid],
             params: vec![],
-            domain: Domain::Grid(6, 4),
+            domain: Domain::Rows(count),
             context: orla_abi::Context::default(),
         };
         let mut scope = Scope::new(&mut host, all());

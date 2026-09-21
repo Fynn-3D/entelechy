@@ -487,7 +487,7 @@ fn run_scatter(
 ) -> Result<Vec<Handle>, ExecutionError> {
     let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
     let target = orla_rules::check_scatter(invocation, scope, base)?;
-    let sources = scope.size(invocation.inputs[0])?;
+    let sources = invocation.domain;
     let address = orla_rules::address_words(target);
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.words();

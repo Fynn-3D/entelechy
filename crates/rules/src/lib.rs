@@ -135,21 +135,19 @@ pub fn check_scan(invocation: &Invocation, scope: &Scope<'_>) -> Result<Domain, 
     Ok(domain)
 }
 
-/// Checks a scatter's invocation: it writes the extent of the input it
-/// scatters into; the domain says so. Every backend applies this.
+/// Checks a scatter's invocation: its body runs once per element of the
+/// domain (the first input's extent unless the node says otherwise), and
+/// it writes the extent of the input it scatters into, which is what this
+/// returns. Every backend applies this.
 pub fn check_scatter(
     invocation: &Invocation,
     scope: &Scope<'_>,
     base: usize,
 ) -> Result<Domain, ExecutionError> {
-    let domain = scope.size(invocation.inputs[base])?;
-    if domain != invocation.domain {
-        return Err(ExecutionError::Device(format!(
-            "a scatter writes the extent of the input it scatters into ({domain}); its domain cannot be {}",
-            invocation.domain
-        )));
+    if invocation.domain.is_empty() {
+        return Err(ExecutionError::EmptyDomain);
     }
-    Ok(domain)
+    Ok(scope.size(invocation.inputs[base])?)
 }
 
 /// Words an address into a domain takes in a scatter's pair.
@@ -262,7 +260,9 @@ pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(
         }
         return Ok(());
     }
+    // A scatter's output has the target's shape, whatever its domain.
     if let Some(output) = manifest.outputs.first()
+        && !matches!(manifest.mode, Mode::Scatter { .. })
         && output.ty.shape != invocation.domain.shape()
     {
         return Err(ExecutionError::DomainShape {

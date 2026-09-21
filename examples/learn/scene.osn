@@ -8,18 +8,11 @@ param rate: Float = 2.0;
 node points: learn.points@1 { domain = 256; }
 node init: learn.init@1 { domain = 65; }
 node zeros: learn.zeros@1 { domain = 65; }
-node work: kernel {
-    requires { field.write; }
-    output result: Rows<Int>;
-    domain = 16640;                 // 256 points times 65 weights
-    compute { return 0; }
-}
 node train: graph "train.osn" {
     times = 8;
     carry weights <- result;
     weights <~ train.result from init.result;
     points <- points.result;
-    work <- work.result;
     zeros <- zeros.result;
     rate = rate;
 }
