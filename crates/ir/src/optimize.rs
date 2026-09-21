@@ -15,12 +15,15 @@
 //!   call that writes, a block holding one, or a name a trace shows;
 //! - a call to a short function is what the function does, written out
 //!   where it was called, which costs the interpreter no frame and the
-//!   JIT no call.
+//!   JIT no call;
+//! - work inside a loop that does not change while the loop runs is
+//!   done once, before it, when it cannot fail (so a run that fails
+//!   still reports the failure it did, of the element it did).
 //!
 //! Values are then numbered again in pre-order, as the IR requires.
 //! Nothing here reorders floats or changes which failure a run reports.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
     BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, StructDef, Type, UnaryOp, Value,
@@ -394,6 +397,14 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn function(&self, function: &Function) -> Function {
+        let body = self.hoisted(&function.body);
+        let function = &Function {
+            name: function.name.clone(),
+            args: function.args.clone(),
+            body,
+            results: function.results.clone(),
+            bindings: function.bindings.clone(),
+        };
         let mut pass = Simplify {
             ctx: self,
             alias: HashMap::new(),
@@ -428,6 +439,100 @@ impl Ctx<'_> {
                 .into_iter()
                 .map(|(id, name)| (renumber.map(id), name))
                 .collect(),
+        }
+    }
+
+    /// A body with every loop's unchanging work lifted out of it: an
+    /// instruction whose operands all come from outside the loop gives
+    /// the same value every iteration, so the loop computes it once.
+    /// Only operations that cannot fail move, so a run that fails still
+    /// reports the failure it did, of the element it did.
+    fn hoisted(&self, body: &[Instruction]) -> Vec<Instruction> {
+        let mut out: Vec<Instruction> = Vec::with_capacity(body.len());
+        for instruction in body {
+            let op = match &instruction.op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => Op::If {
+                    condition: *condition,
+                    then: self.hoisted_block(then),
+                    otherwise: self.hoisted_block(otherwise),
+                },
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee: *scrutinee,
+                    arms: arms
+                        .iter()
+                        .map(|(values, block)| (values.clone(), self.hoisted_block(block)))
+                        .collect(),
+                    otherwise: self.hoisted_block(otherwise),
+                },
+                Op::Loop {
+                    count,
+                    bound,
+                    init,
+                    until,
+                    body,
+                } => {
+                    // Innermost first, so what an inner loop lifts can
+                    // leave the outer one too.
+                    let inner = self.hoisted_block(body);
+                    let mut kept = Vec::with_capacity(inner.body.len());
+                    // Everything the loop defines is inside it, until an
+                    // instruction leaves: then its value is outside.
+                    let mut within: HashSet<u32> = defined(&inner.body);
+                    if let Some(until) = until {
+                        within.extend(defined(&until.body));
+                    }
+                    for instruction in inner.body {
+                        let liftable = !self.has_effects(&instruction.op)
+                            && self.cse_safe(&instruction.op)
+                            && !can_fail(instruction.ty, &instruction.op)
+                            && !matches!(
+                                instruction.op,
+                                Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Call(..)
+                            )
+                            && operands(&instruction.op)
+                                .iter()
+                                .all(|operand| !within.contains(&operand.0));
+                        if liftable {
+                            within.remove(&instruction.id.0);
+                            out.push(instruction);
+                        } else {
+                            kept.push(instruction);
+                        }
+                    }
+                    Op::Loop {
+                        count: *count,
+                        bound: *bound,
+                        init: *init,
+                        until: until.as_ref().map(|block| self.hoisted_block(block)),
+                        body: Block {
+                            body: kept,
+                            result: inner.result,
+                        },
+                    }
+                }
+                other => other.clone(),
+            };
+            out.push(Instruction {
+                id: instruction.id,
+                ty: instruction.ty,
+                op,
+            });
+        }
+        out
+    }
+
+    fn hoisted_block(&self, block: &Block) -> Block {
+        Block {
+            body: self.hoisted(&block.body),
+            result: block.result,
         }
     }
 
@@ -555,6 +660,49 @@ impl Ctx<'_> {
 }
 
 /// The values an operation reads, blocks aside.
+/// Every value id a body defines, nested blocks counted.
+fn defined(body: &[Instruction]) -> HashSet<u32> {
+    let mut ids = HashSet::new();
+    fn walk(body: &[Instruction], ids: &mut HashSet<u32>) {
+        for instruction in body {
+            ids.insert(instruction.id.0);
+            match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => {
+                    walk(&then.body, ids);
+                    walk(&otherwise.body, ids);
+                }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    for (_, block) in arms {
+                        walk(&block.body, ids);
+                    }
+                    walk(&otherwise.body, ids);
+                }
+                Op::Loop { until, body, .. } => {
+                    if let Some(until) = until {
+                        walk(&until.body, ids);
+                    }
+                    walk(&body.body, ids);
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(body, &mut ids);
+    ids
+}
+
+/// Whether an operation can fail where it stands: integer arithmetic
+/// overflows and divides by zero, and a run says so of the element it
+/// happened in. Floats have no failures; a Field read is clamped.
+fn can_fail(ty: Type, op: &Op) -> bool {
+    let integer = matches!(ty, Type::Int | Type::IVec2 | Type::IVec3);
+    integer && matches!(op, Op::Binary(..) | Op::Intrinsic(..))
+}
+
 fn operands(op: &Op) -> Vec<ValueId> {
     match op {
         Op::Unary(_, a) => vec![*a],

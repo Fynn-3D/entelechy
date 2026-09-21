@@ -172,6 +172,7 @@ pub(super) fn compile_function(shared: &Shared, function: &Function, carry: Opti
         carry: None,
         uses: use_counts(function, slots),
         constants: std::collections::HashMap::new(),
+        pending_float: None,
         blocks: Vec::new(),
     };
     if let Some(ty) = carry {
@@ -189,6 +190,10 @@ pub(super) fn compile_function(shared: &Shared, function: &Function, carry: Opti
     }
 }
 
+/// A float operation as the compiler holds it for folding: what it
+/// does, and where its two operands are with their strides and width.
+pub(super) type FloatParts = (F2, usize, usize, usize, usize, usize);
+
 pub(super) struct FunctionCompiler<'c> {
     pub(super) shared: &'c Shared,
     pub(super) locs: Vec<Loc>,
@@ -205,6 +210,9 @@ pub(super) struct FunctionCompiler<'c> {
     /// The words of every value known when the function is compiled:
     /// literals and the structs, arrays and matrices built from them.
     pub(super) constants: std::collections::HashMap<u32, Vec<u32>>,
+    /// The float operation the instruction being compiled emitted, which
+    /// the next one may fold into itself.
+    pub(super) pending_float: Option<(u32, FloatParts)>,
     /// The open blocks, innermost last: where each value's instruction
     /// sits in the block's code, and which of them a fold made dead.
     pub(super) blocks: Vec<BlockState>,
@@ -215,6 +223,11 @@ pub(super) struct FunctionCompiler<'c> {
 pub(super) struct BlockState {
     pub(super) positions: std::collections::HashMap<u32, usize>,
     pub(super) dead: Vec<usize>,
+    /// The float operation this block emitted last, if the last
+    /// instruction was one: the value it gives, its position, and its
+    /// parts. Only the one just emitted folds into the next, since
+    /// anything in between may write the slots it reads.
+    pub(super) last_float: Option<(u32, usize, FloatParts)>,
 }
 
 /// How many operands name each value, nested blocks included.
@@ -353,11 +366,18 @@ impl FunctionCompiler<'_> {
         for instruction in instructions {
             let slot = instruction.id.0 as usize;
             self.types[slot] = instruction.ty;
+            self.pending_float = None;
             if let Some(instr) = self.instruction(instruction) {
                 code.push(instr);
+                let pending = self.pending_float.take();
                 if let Some(block) = self.blocks.last_mut() {
                     block.positions.insert(instruction.id.0, code.len() - 1);
+                    // Only an operation the next instruction follows
+                    // directly may fold into it.
+                    block.last_float = pending.map(|(id, parts)| (id, code.len() - 1, parts));
                 }
+            } else if let Some(block) = self.blocks.last_mut() {
+                block.last_float = None;
             }
             self.note_constant(instruction);
         }
@@ -483,7 +503,7 @@ impl FunctionCompiler<'_> {
                                 n: dst.n,
                             }
                         } else {
-                            let f: F2 = match op {
+                            let g: F2 = match op {
                                 BinaryOp::Add => |a, b| a + b,
                                 BinaryOp::Sub => |a, b| a - b,
                                 BinaryOp::Mul => |a, b| a * b,
@@ -491,14 +511,57 @@ impl FunctionCompiler<'_> {
                                 // Truncated, like `/`, and like WGSL's `%` on floats.
                                 _ => |a, b| a % b,
                             };
-                            Instr::FBin {
-                                f,
-                                dst: dst.at,
-                                a: la.at,
-                                sa: self.stride(a, dst.n),
-                                b: lb.at,
-                                sb: self.stride(b, dst.n),
-                                n: dst.n,
+                            let (sa, sb) = (self.stride(a, dst.n), self.stride(b, dst.n));
+                            // An operand this block computed and nothing
+                            // else reads folds in: two operations, one
+                            // instruction, and no word through the frame.
+                            let folded =
+                                [(a, false), (b, true)]
+                                    .into_iter()
+                                    .find_map(|(operand, flip)| {
+                                        let id = operand.0;
+                                        if self.uses[id as usize] != 1 {
+                                            return None;
+                                        }
+                                        let (last, position, parts) =
+                                            self.blocks.last()?.last_float?;
+                                        (last == id && parts.5 == dst.n)
+                                            .then_some((flip, position, parts))
+                                    });
+                            match folded {
+                                Some((flip, position, (f, ia, isa, ib, isb, _))) => {
+                                    if let Some(block) = self.blocks.last_mut() {
+                                        block.dead.push(position);
+                                        block.last_float = None;
+                                    }
+                                    let (c, sc) = if flip { (la.at, sa) } else { (lb.at, sb) };
+                                    Instr::FBin2 {
+                                        f,
+                                        g,
+                                        flip,
+                                        dst: dst.at,
+                                        a: ia,
+                                        sa: isa,
+                                        b: ib,
+                                        sb: isb,
+                                        c,
+                                        sc,
+                                        n: dst.n,
+                                    }
+                                }
+                                None => {
+                                    self.pending_float =
+                                        Some((instruction.id.0, (g, la.at, sa, lb.at, sb, dst.n)));
+                                    Instr::FBin {
+                                        f: g,
+                                        dst: dst.at,
+                                        a: la.at,
+                                        sa,
+                                        b: lb.at,
+                                        sb,
+                                        n: dst.n,
+                                    }
+                                }
                             }
                         }
                     }

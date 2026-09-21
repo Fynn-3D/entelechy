@@ -345,6 +345,31 @@ impl<'p, 's> Machine<'p, 's> {
                     s[fp + dst + i] = op(f(s[fp + a + i * sa]), f(s[fp + b + i * sb])).to_bits();
                 }
             }
+            Instr::FBin2 {
+                f: inner,
+                g: outer,
+                flip,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                c,
+                sc,
+                n,
+            } => {
+                if *flip {
+                    for i in 0..*n {
+                        let x = inner(f(s[fp + a + i * sa]), f(s[fp + b + i * sb]));
+                        s[fp + dst + i] = outer(f(s[fp + c + i * sc]), x).to_bits();
+                    }
+                } else {
+                    for i in 0..*n {
+                        let x = inner(f(s[fp + a + i * sa]), f(s[fp + b + i * sb]));
+                        s[fp + dst + i] = outer(x, f(s[fp + c + i * sc])).to_bits();
+                    }
+                }
+            }
             Instr::IBin {
                 op,
                 dst,

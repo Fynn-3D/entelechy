@@ -128,6 +128,22 @@ pub(super) enum Instr {
         sb: usize,
         n: usize,
     },
+    /// Two float operations as one: `g(f(a, b), c)`, or `g(c, f(a, b))`
+    /// with `flip`. A value a single operation reads once never reaches
+    /// the frame, and one dispatch does the work of two.
+    FBin2 {
+        f: F2,
+        g: F2,
+        flip: bool,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        c: usize,
+        sc: usize,
+        n: usize,
+    },
     IBin {
         op: BinaryOp,
         dst: usize,

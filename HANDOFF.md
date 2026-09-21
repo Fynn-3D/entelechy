@@ -228,7 +228,18 @@ for), a loop's count may be any `Int` expression read once before the
 loop and clamped to the bound, and a node may be a filled Field
 (`node zeros: Rows<Float> { domain = 65; }`, `value = ...` for anything
 but the element's zero), which took five zero-fill Kernels out of the
-examples. Done since: automation past one frame is the
+examples. Done since: the interpreter is faster by the two things that were left
+to try. The optimizer lifts a loop's unchanging work out of it, which
+every backend reads and which took raymarch on the interpreter from 365
+to 246 ms and the replay suite from 12.4 to 11.3 s; and the interpreter
+folds a pair of float operations into one instruction, worth another 3
+to 9 percent (11.3 to 10.8 s). What is left of the gap to the JIT is
+structural: every value goes through a frame slot, and the JIT keeps it
+in a register. Wide interpretation, several elements through one
+instruction stream, is the only thing that would close it, and it is a
+second execution path, declined twice now.
+
+Automation past one frame is the
 protocol's `advance`, a count of frames in one request that stops when
 a watched value says to and saves what it was asked for, demanding only
 what it watches; an agent's training loop is one request per
