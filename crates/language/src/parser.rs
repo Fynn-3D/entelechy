@@ -972,8 +972,40 @@ impl Parser {
 
     fn block(&mut self) -> Result<Block, ParseError> {
         self.expect_punct("{")?;
+        self.block_body()
+    }
+
+    /// A block's statements, to its closing brace. An `if` with no
+    /// `else` among them guards what follows: what it gives is the
+    /// block's value, and the statements after it are the other arm.
+    fn block_body(&mut self) -> Result<Block, ParseError> {
         let mut lets = Vec::new();
         loop {
+            if self.is_keyword("if") {
+                let saved = self.position;
+                let span = self.span();
+                self.next();
+                let condition = self.expr()?;
+                let then = self.block()?;
+                if self.is_keyword("else") {
+                    // An `if` with both arms is an expression; read it
+                    // again as one.
+                    self.position = saved;
+                } else {
+                    let otherwise = self.block_body()?;
+                    return Ok(Block {
+                        lets,
+                        result: Expr {
+                            kind: ExprKind::If {
+                                condition: Box::new(condition),
+                                then: Box::new(then),
+                                otherwise: Box::new(otherwise),
+                            },
+                            span,
+                        },
+                    });
+                }
+            }
             if self.is_keyword("let") {
                 self.next();
                 let name = self.ident("a binding name")?;
@@ -1648,6 +1680,27 @@ kernel image.grayscale@1 {
         let error =
             parse("kernel t.k@1 { compute { return loop 0 with x = 1.0 { x }; } }").unwrap_err();
         assert!(error.message.contains("positive integer bound"), "{error}");
+        // An `if` with no `else` among a block's statements guards what
+        // follows it: what it gives is the block's value.
+        let kernel = parse(
+            "kernel t.k@1 { fn classify(x: Int) -> Int { if x < 0 { return -1; } let doubled = x * 2; if doubled > 9 { return 9; } return doubled; } compute { return classify(element()); } }",
+        )
+        .unwrap();
+        let ExprKind::If { otherwise, .. } = &kernel.functions[0].body.result.kind else {
+            panic!("a guard is an `if` over the rest of the block");
+        };
+        assert_eq!(
+            otherwise.lets.len(),
+            1,
+            "the rest of the block is its other arm"
+        );
+        assert!(matches!(otherwise.result.kind, ExprKind::If { .. }));
+        // An `if` with both arms is still an expression.
+        let kernel = parse(
+            "kernel t.k@1 { compute { let a = if element() > 0 { 1 } else { 2 }; return a; } }",
+        )
+        .unwrap();
+        assert!(matches!(kernel.compute.lets[0].1.kind, ExprKind::If { .. }));
         // A keyword names a function, as long as it does not begin an
         // expression: a call is a word and a `(`.
         let kernel = parse(

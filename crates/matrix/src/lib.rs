@@ -86,6 +86,13 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: if g == 1 { x } else { -x }, i: g, b: g == 3, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
+            // `&&` and `||` ask the other side only where the first
+            // settles nothing, which is why the division here is safe.
+            "short circuit",
+            "let guarded = i != 0 && 100 / i > 3; let either = i == 0 || 100 / max(i, 1) < 2; let mixed = (x > 0.5 || i > 2) && !(i == 1 && x < 0.1); let chain = i > 0 && i < 9 && x > 0.0 && guarded;",
+            "Out { f: if chain { x } else { -x }, i: int(guarded) * 2 + int(either) * 3 + int(mixed) * 5, b: guarded || mixed, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
             "match",
             "let dense = match i % 7 { 0 => 1, 1 | 2 => { let two = i * 2; two }, 3 => 30, 5 => 50, _ => -1 }; let sparse = match i * 1000 { 0 => 7, 3000 => 8, 9000 => 9, -1 => 10, _ => 11 };",
             "Out { f: float(dense), i: dense * 3 + sparse, b: sparse == 11, v: vec3(0.0, 0.0, 0.0) }",

@@ -1056,3 +1056,31 @@ fn a_match_takes_the_arm_holding_the_value_or_the_last() {
     let picked = [-7, 42, -7, 100, 2, 4, 42, 42, 5, 42];
     assert_eq!(words, picked.map(|p| p * 1000 + 22).to_vec(), "{words:?}");
 }
+
+/// `&&` and `||` answer without asking the other side when the first
+/// settles it: a guard guards, and what it guards never runs.
+#[test]
+fn logical_operators_do_not_ask_the_other_side_when_the_first_settles_it() {
+    let source = "kernel test.guard@1 { requires { field.write; } param n: Int = 0; output result: Rows<Int>; compute { let safe = n != 0 && 100 / n > 3; let either = n == 0 || 100 / n > 3; return int(safe) + int(either) * 2; } }";
+    let module = compile(source).unwrap();
+    let run = |n: i32| {
+        let mut host = Host::new(64);
+        let mut scope = Scope::new(&mut host, granted());
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(n)],
+            domain: Domain::Rows(1),
+            context: Context::default(),
+        };
+        let outputs = CpuBackend.execute(&module, &invocation, &mut scope)?;
+        let word = scope.element(outputs[0], 0).unwrap()[0] as i32;
+        Ok::<i32, ExecutionError>(word)
+    };
+    // With n zero neither division happens: the guard is false and the
+    // other side is true without asking.
+    assert_eq!(run(0).unwrap(), 2);
+    // With n small both sides run and both hold.
+    assert_eq!(run(4).unwrap(), 3);
+    // With n large the quotient is small: neither holds.
+    assert_eq!(run(100).unwrap(), 0);
+}

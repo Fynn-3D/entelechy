@@ -207,8 +207,14 @@ pub fn forms() -> Vec<Form> {
         form(
             "if",
             "expression",
-            "if condition { a } else { b }",
-            "Both arms give one type; only the arm taken runs, which a trace shows.",
+            "if condition { a } else { b }   if condition { return a; }",
+            "Both arms give one type and only the arm taken runs, which a trace shows; with no `else`, among a block's statements, it guards, and the rest of the block is its other arm.",
+        ),
+        form(
+            "and",
+            "expression",
+            "a && b   a || b   !a",
+            "Truth: `&&` and `||` ask the other side only where the first settles nothing, so a guard guards and what it guards does not run.",
         ),
         form(
             "match",

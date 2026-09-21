@@ -65,9 +65,13 @@ components in that order from one alphabet, and `v.x` one component;
 `& | ^`
 and `<< >> >>>` work on `Int`s (the shift count modulo 32, `>>`
 arithmetic, `>>>` logical),
-binding between comparison and arithmetic as in Rust; `==` and
+binding between comparison and arithmetic as in Rust; `&&` and `||`
+answer without asking the other side when the first settles it, so
+`n != 0 && x / n > 1` does not divide when `n` is zero; `==` and
 `!=` compare scalars and whole vectors; `<` and the rest compare scalars;
-`if c { a } else { b }`, `match i { 0 => a, 1 | 2 => { let x = ..; x },
+`if c { a } else { b }` (and, among a block's statements, `if c {
+return a; }` with no `else`, which guards what follows: the rest of the
+block is its other arm), `match i { 0 => a, 1 | 2 => { let x = ..; x },
 _ => b }` (on an `Int`; the arm whose values hold it runs, else the `_`
 arm, which comes last and is required; no value in two arms; every arm
 the same type; the GPU runs it as a `switch`, the JIT as a jump table

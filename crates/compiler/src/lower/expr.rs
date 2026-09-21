@@ -1,7 +1,7 @@
 //! Expressions to instructions: every form of the language, typed as
 //! it is lowered, with the diagnostics a mistake in one gets.
 
-use orla_ir::{BinaryOp, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId};
+use orla_ir::{BinaryOp, Block as IrBlock, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId};
 use orla_language::{Expr, ExprKind, Span};
 
 use crate::CompileError;
@@ -19,6 +19,60 @@ impl Builder<'_> {
             ExprKind::Name(name) => self.name(name, expr.span),
             ExprKind::Neg(inner) => self.unary(UnaryOp::Neg, "-", inner, expr.span),
             ExprKind::Not(inner) => self.unary(UnaryOp::Not, "!", inner, expr.span),
+            // `&&` and `||` answer without asking the other side when
+            // the first settles it, so a guard guards: `n != 0 && x / n
+            // > 1` does not divide when `n` is zero. They are an `if`,
+            // which every backend runs one arm of.
+            ExprKind::Binary(
+                op @ (orla_language::BinaryOp::And | orla_language::BinaryOp::Or),
+                left,
+                right,
+            ) => {
+                let and = matches!(op, orla_language::BinaryOp::And);
+                let symbol = if and { "&&" } else { "||" };
+                let condition = self.value(left)?;
+                if self.ty(condition) != Type::Bool {
+                    return Err(semantic(
+                        left.span,
+                        format!(
+                            "`{symbol}` takes Bool on the left, found {}",
+                            self.describe(self.ty(condition))
+                        ),
+                    ));
+                }
+                // The value is numbered before the blocks it holds, and
+                // the blocks in the order they are written, as the IR's
+                // order asks.
+                let id = self.reserve(Type::Bool);
+                let (then, otherwise) = if and {
+                    let other = self.nested_expr(right)?;
+                    let settled = self.constant_block(false);
+                    (other, settled)
+                } else {
+                    let settled = self.constant_block(true);
+                    let other = self.nested_expr(right)?;
+                    (settled, other)
+                };
+                let other = if and { &then } else { &otherwise };
+                if self.ty(other.result) != Type::Bool {
+                    return Err(semantic(
+                        right.span,
+                        format!(
+                            "`{symbol}` takes Bool on the right, found {}",
+                            self.describe(self.ty(other.result))
+                        ),
+                    ));
+                }
+                Ok(self.place(
+                    id,
+                    Type::Bool,
+                    Op::If {
+                        condition,
+                        then,
+                        otherwise,
+                    },
+                ))
+            }
             ExprKind::Binary(op, left, right) => {
                 let op = match op {
                     orla_language::BinaryOp::Add => BinaryOp::Add,
@@ -543,6 +597,15 @@ impl Builder<'_> {
                 ))
             }
         }
+    }
+
+    /// A block that is one truth value, for the side of `&&` or `||`
+    /// that a settled condition answers with.
+    fn constant_block(&mut self, value: bool) -> IrBlock {
+        self.buffers.push(Vec::new());
+        let result = self.emit(Type::Bool, Op::Const(orla_ir::Value::Bool(value)));
+        let body = self.buffers.pop().expect("the nested buffer is open");
+        IrBlock { body, result }
     }
 
     /// A float constant.

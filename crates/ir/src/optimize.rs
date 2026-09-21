@@ -397,7 +397,11 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn function(&self, function: &Function) -> Function {
-        let body = self.hoisted(&function.body);
+        // The short-circuits whose other side is free come first, so
+        // what they compute is one instruction again and a loop may
+        // lift it out.
+        let body = self.folded(&function.body);
+        let body = self.hoisted(&body);
         let function = &Function {
             name: function.name.clone(),
             args: function.args.clone(),
@@ -439,6 +443,100 @@ impl Ctx<'_> {
                 .into_iter()
                 .map(|(id, name)| (renumber.map(id), name))
                 .collect(),
+        }
+    }
+
+    /// A body with every short-circuit whose other side is free written
+    /// as one operation: `a && b` asks `b` either way when asking costs
+    /// nothing and cannot fail, which leaves a value a loop can lift
+    /// out and a backend need not branch for.
+    fn folded(&self, body: &[Instruction]) -> Vec<Instruction> {
+        let settled = |block: &Block| match (block.body.len(), block.body.first()) {
+            (1, Some(instruction)) if instruction.id == block.result => match instruction.op {
+                Op::Const(Value::Bool(value)) => Some(value),
+                _ => None,
+            },
+            _ => None,
+        };
+        let cheap = |block: &Block| {
+            block.body.len() <= 4
+                && block.body.iter().all(|instruction| {
+                    !matches!(
+                        instruction.op,
+                        Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Call(..)
+                    ) && !self.has_effects(&instruction.op)
+                        && self.cse_safe(&instruction.op)
+                        && !can_fail(instruction.ty, &instruction.op)
+                })
+        };
+        let mut out: Vec<Instruction> = Vec::with_capacity(body.len());
+        for instruction in body {
+            let op = match &instruction.op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => {
+                    let then = self.folded_block(then);
+                    let otherwise = self.folded_block(otherwise);
+                    match (settled(&then), settled(&otherwise)) {
+                        (Some(true), None) if cheap(&otherwise) => {
+                            let result = otherwise.result;
+                            out.extend(otherwise.body);
+                            Op::Binary(BinaryOp::Or, *condition, result)
+                        }
+                        (None, Some(false)) if cheap(&then) => {
+                            let result = then.result;
+                            out.extend(then.body);
+                            Op::Binary(BinaryOp::And, *condition, result)
+                        }
+                        _ => Op::If {
+                            condition: *condition,
+                            then,
+                            otherwise,
+                        },
+                    }
+                }
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee: *scrutinee,
+                    arms: arms
+                        .iter()
+                        .map(|(values, block)| (values.clone(), self.folded_block(block)))
+                        .collect(),
+                    otherwise: self.folded_block(otherwise),
+                },
+                Op::Loop {
+                    count,
+                    bound,
+                    init,
+                    until,
+                    body,
+                } => Op::Loop {
+                    count: *count,
+                    bound: *bound,
+                    init: *init,
+                    until: until.as_ref().map(|block| self.folded_block(block)),
+                    body: self.folded_block(body),
+                },
+                other => other.clone(),
+            };
+            out.push(Instruction {
+                id: instruction.id,
+                ty: instruction.ty,
+                op,
+            });
+        }
+        out
+    }
+
+    fn folded_block(&self, block: &Block) -> Block {
+        Block {
+            body: self.folded(&block.body),
+            result: block.result,
         }
     }
 
@@ -734,21 +832,81 @@ impl Simplify<'_> {
         ValueId(*self.alias.get(&id.0).unwrap_or(&id.0))
     }
 
+    /// An `if`, simplified, and as one `and` or `or` where it is a
+    /// short-circuit whose other side is cheap: that side's
+    /// instructions are emitted before it, so they must be pure and
+    /// unable to fail. `a && b` asks `b` either way when asking is free.
+    fn folded_if(
+        &mut self,
+        condition: ValueId,
+        then: &Block,
+        otherwise: &Block,
+        out: &mut Vec<Instruction>,
+    ) -> Op {
+        let condition = self.map(condition);
+        let then = self.nested(then);
+        let otherwise = self.nested(otherwise);
+        let settled = |block: &Block| match (block.body.len(), block.body.first()) {
+            (1, Some(instruction)) if instruction.id == block.result => match instruction.op {
+                Op::Const(Value::Bool(value)) => Some(value),
+                _ => None,
+            },
+            _ => None,
+        };
+        let ctx = self.ctx;
+        let cheap = |block: &Block| {
+            block.body.len() <= 4
+                && block.body.iter().all(|instruction| {
+                    !matches!(
+                        instruction.op,
+                        Op::If { .. } | Op::Match { .. } | Op::Loop { .. } | Op::Call(..)
+                    ) && !ctx.has_effects(&instruction.op)
+                        && ctx.cse_safe(&instruction.op)
+                        && !can_fail(instruction.ty, &instruction.op)
+                })
+        };
+        match (settled(&then), settled(&otherwise)) {
+            // `a || b`: true where `a` holds, else what `b` says.
+            (Some(true), None) if cheap(&otherwise) => {
+                let result = otherwise.result;
+                out.extend(otherwise.body);
+                Op::Binary(BinaryOp::Or, condition, result)
+            }
+            // `a && b`: what `b` says where `a` holds, else false.
+            (None, Some(false)) if cheap(&then) => {
+                let result = then.result;
+                out.extend(then.body);
+                Op::Binary(BinaryOp::And, condition, result)
+            }
+            _ => Op::If {
+                condition,
+                then,
+                otherwise,
+            },
+        }
+    }
+
     fn block(&mut self, instructions: &[Instruction]) -> Vec<Instruction> {
         self.scopes.push(HashMap::new());
         let mut out = Vec::with_capacity(instructions.len());
         for instruction in instructions {
             let ty = instruction.ty;
+            if let Op::If {
+                condition,
+                then,
+                otherwise,
+            } = &instruction.op
+            {
+                let op = self.folded_if(*condition, then, otherwise, &mut out);
+                self.defs.insert(instruction.id.0, (ty, op.clone()));
+                out.push(Instruction {
+                    id: instruction.id,
+                    ty,
+                    op,
+                });
+                continue;
+            }
             let op = match &instruction.op {
-                Op::If {
-                    condition,
-                    then,
-                    otherwise,
-                } => Op::If {
-                    condition: self.map(*condition),
-                    then: self.nested(then),
-                    otherwise: self.nested(otherwise),
-                },
                 Op::Match {
                     scrutinee,
                     arms,
