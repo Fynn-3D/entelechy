@@ -211,7 +211,17 @@ keeps a node's output after the last frame, and `rubik/play.osn` reads
 the weights it kept (300 frames of training) as an `input`, inference
 as its own scene; `text.label` in the shared text library is a caption
 and a number as one row of codes, so a readout is three nodes and no
-Kernel. The assessment's three next things are done:
+Kernel. The assessment's odds and ends are done too: diagnostics name the file
+that declares a name a Kernel cannot find and the `use` that would
+bring it in, and two documents that use each other are refused by name;
+`orla help` and the protocol's `help` carry every form of the language
+beside the builtins; `run --profile` measures the device rather than
+the submission; and the optimizer writes short functions out where they
+are called, which took the interpreter's replay suite from 14.5 to
+12.4 seconds and raymarch from 496 to 365 ms, while a trace compiles
+the Kernel again without the optimizer so it still follows the calls.
+
+The assessment's three next things are done:
 the JIT is the default backend (the Player takes the GPU, then the JIT,
 then the interpreter; `--backend cpu` is how the reference is asked
 for), a loop's count may be any `Int` expression read once before the

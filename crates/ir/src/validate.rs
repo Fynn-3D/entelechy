@@ -891,7 +891,9 @@ impl<'a> Checker<'a> {
                 // The entry and the functions it calls write; `init`
                 // (validated after the functions) does not.
                 if !self.is_entry && self.index >= self.module.functions.len() {
-                    return Err(self.fail(format!("{position} writes a memory outside the steps")));
+                    return Err(self.fail(format!(
+                        "{position} writes a memory outside the steps; the initial carried value is before the first step"
+                    )));
                 }
                 self.require(Capability::FieldWrite, position)?;
                 let manifest = &self.module.manifest;

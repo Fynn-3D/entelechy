@@ -12,7 +12,10 @@
 //!   the Field is a memory the steps write; a call is pure unless the
 //!   function writes);
 //! - a value nothing reads is not computed, unless it is a `put`, a
-//!   call that writes, a block holding one, or a name a trace shows.
+//!   call that writes, a block holding one, or a name a trace shows;
+//! - a call to a short function is what the function does, written out
+//!   where it was called, which costs the interpreter no frame and the
+//!   JIT no call.
 //!
 //! Values are then numbered again in pre-order, as the IR requires.
 //! Nothing here reorders floats or changes which failure a run reports.
@@ -23,6 +26,13 @@ use crate::{
     BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, StructDef, Type, UnaryOp, Value,
     ValueId,
 };
+
+/// A function of at most this many instructions, nested blocks counted,
+/// is written out where it is called instead: a call costs a frame on
+/// the interpreter and a real call on the JIT, and a short function is
+/// cheaper spelled out. Beyond it the code would grow faster than the
+/// calls it saves.
+const INLINE_LIMIT: usize = 96;
 
 /// Optimizes every function of a module. The result computes what the
 /// input did, word for word, and validates whenever the input does.
@@ -39,10 +49,23 @@ pub fn optimize(module: Module) -> Module {
         writers: &writers,
         memories: &memories,
     };
-    let functions = module.functions.iter().map(|f| ctx.function(f)).collect();
-    let entry = ctx.function(&module.entry);
-    let merge = module.merge.as_ref().map(|f| ctx.function(f));
-    let init = module.init.as_ref().map(|f| ctx.function(f));
+    // Functions are defined before they are called, so taking them in
+    // order means a call is always to one already optimized: what is
+    // written out is its short form, and depth costs nothing.
+    let mut functions: Vec<Function> = Vec::with_capacity(module.functions.len());
+    for function in &module.functions {
+        let flattened = inline_calls(function, &functions);
+        functions.push(ctx.function(&flattened));
+    }
+    let entry = ctx.function(&inline_calls(&module.entry, &functions));
+    let merge = module
+        .merge
+        .as_ref()
+        .map(|f| ctx.function(&inline_calls(f, &functions)));
+    let init = module
+        .init
+        .as_ref()
+        .map(|f| ctx.function(&inline_calls(f, &functions)));
     Module {
         manifest: module.manifest,
         structs: module.structs,
@@ -51,6 +74,316 @@ pub fn optimize(module: Module) -> Module {
         merge,
         init,
     }
+}
+
+/// How many instructions a body holds, nested blocks counted.
+fn size(body: &[Instruction]) -> usize {
+    body.iter()
+        .map(|instruction| {
+            1 + match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => size(&then.body) + size(&otherwise.body),
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    arms.iter()
+                        .map(|(_, block)| size(&block.body))
+                        .sum::<usize>()
+                        + size(&otherwise.body)
+                }
+                Op::Loop { until, body, .. } => {
+                    until.as_ref().map_or(0, |block| size(&block.body)) + size(&body.body)
+                }
+                _ => 0,
+            }
+        })
+        .sum()
+}
+
+/// The greatest value id a body defines, nested blocks counted.
+fn highest(body: &[Instruction]) -> u32 {
+    body.iter()
+        .map(|instruction| {
+            let nested = match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => highest(&then.body).max(highest(&otherwise.body)),
+                Op::Match {
+                    arms, otherwise, ..
+                } => arms
+                    .iter()
+                    .map(|(_, block)| highest(&block.body))
+                    .max()
+                    .unwrap_or(0)
+                    .max(highest(&otherwise.body)),
+                Op::Loop { until, body, .. } => until
+                    .as_ref()
+                    .map_or(0, |block| highest(&block.body))
+                    .max(highest(&body.body)),
+                _ => 0,
+            };
+            instruction.id.0.max(nested)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// `function` with its calls to short functions written out. The callee's
+/// values take fresh ids above the caller's, its `Arg(i)` reads become
+/// the call's own operands, and what it returns takes the call's place.
+fn inline_calls(function: &Function, functions: &[Function]) -> Function {
+    let inlinable: Vec<bool> = functions
+        .iter()
+        .map(|callee| callee.results.len() == 1 && size(&callee.body) <= INLINE_LIMIT)
+        .collect();
+    if !inlinable.iter().any(|yes| *yes) {
+        return function.clone();
+    }
+    let mut pass = Inline {
+        functions,
+        inlinable: &inlinable,
+        alias: HashMap::new(),
+        next: highest(&function.body) + 1,
+    };
+    let body = pass.block(&function.body);
+    Function {
+        name: function.name.clone(),
+        args: function.args.clone(),
+        body,
+        results: function.results.iter().map(|id| pass.map(*id)).collect(),
+        bindings: function
+            .bindings
+            .iter()
+            .map(|(id, name)| (pass.map(*id), name.clone()))
+            .collect(),
+    }
+}
+
+/// Writing short functions out where they are called.
+struct Inline<'a> {
+    functions: &'a [Function],
+    inlinable: &'a [bool],
+    /// A value that stands for another: a call's value is what the
+    /// written-out body returned, and an argument read is the operand.
+    alias: HashMap<u32, ValueId>,
+    /// The next free value id; the numbering is made dense again later.
+    next: u32,
+}
+
+impl Inline<'_> {
+    fn map(&self, id: ValueId) -> ValueId {
+        match self.alias.get(&id.0) {
+            Some(other) if *other != id => self.map(*other),
+            _ => id,
+        }
+    }
+
+    fn fresh(&mut self) -> ValueId {
+        let id = ValueId(self.next);
+        self.next += 1;
+        id
+    }
+
+    fn nested(&mut self, block: &Block) -> Block {
+        let body = self.block(&block.body);
+        Block {
+            body,
+            result: self.map(block.result),
+        }
+    }
+
+    fn block(&mut self, instructions: &[Instruction]) -> Vec<Instruction> {
+        let mut out = Vec::with_capacity(instructions.len());
+        for instruction in instructions {
+            if let Op::Call(callee, args) = &instruction.op
+                && self
+                    .inlinable
+                    .get(*callee as usize)
+                    .copied()
+                    .unwrap_or(false)
+            {
+                let operands: Vec<ValueId> = args.iter().map(|id| self.map(*id)).collect();
+                let body = self.functions[*callee as usize].clone();
+                let mut ids: HashMap<u32, ValueId> = HashMap::new();
+                self.written(&body.body, &operands, &mut ids, &mut out);
+                let result = Self::renamed(body.results[0], &ids, &operands, &body);
+                self.alias.insert(instruction.id.0, result);
+                continue;
+            }
+            let op = match &instruction.op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => Op::If {
+                    condition: self.map(*condition),
+                    then: self.nested(then),
+                    otherwise: self.nested(otherwise),
+                },
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee: self.map(*scrutinee),
+                    arms: arms
+                        .iter()
+                        .map(|(values, block)| (values.clone(), self.nested(block)))
+                        .collect(),
+                    otherwise: self.nested(otherwise),
+                },
+                Op::Loop {
+                    count,
+                    bound,
+                    init,
+                    until,
+                    body,
+                } => Op::Loop {
+                    count: *count,
+                    bound: bound.map(|id| self.map(id)),
+                    init: self.map(*init),
+                    until: until.as_ref().map(|block| self.nested(block)),
+                    body: self.nested(body),
+                },
+                other => {
+                    let mut op = other.clone();
+                    rename(&mut op, &|id| self.map(id));
+                    op
+                }
+            };
+            out.push(Instruction {
+                id: instruction.id,
+                ty: instruction.ty,
+                op,
+            });
+        }
+        out
+    }
+
+    /// A value of the callee as the caller names it: an argument read is
+    /// the operand it was called with, anything else its fresh id.
+    fn renamed(
+        id: ValueId,
+        ids: &HashMap<u32, ValueId>,
+        operands: &[ValueId],
+        callee: &Function,
+    ) -> ValueId {
+        if let Some(fresh) = ids.get(&id.0) {
+            return *fresh;
+        }
+        if let Some(Op::Arg(index)) = find_op(&callee.body, id) {
+            return operands[*index as usize];
+        }
+        id
+    }
+
+    /// The callee's body written into `out` with fresh ids.
+    fn written(
+        &mut self,
+        body: &[Instruction],
+        operands: &[ValueId],
+        ids: &mut HashMap<u32, ValueId>,
+        out: &mut Vec<Instruction>,
+    ) {
+        for instruction in body {
+            if let Op::Arg(index) = &instruction.op {
+                ids.insert(instruction.id.0, operands[*index as usize]);
+                continue;
+            }
+            let id = self.fresh();
+            let mut op = instruction.op.clone();
+            let take = |value: ValueId, ids: &HashMap<u32, ValueId>| -> ValueId {
+                ids.get(&value.0).copied().unwrap_or(value)
+            };
+            match &mut op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => {
+                    *condition = take(*condition, ids);
+                    *then = self.written_block(then, operands, ids);
+                    *otherwise = self.written_block(otherwise, operands, ids);
+                }
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => {
+                    *scrutinee = take(*scrutinee, ids);
+                    for (_, block) in arms.iter_mut() {
+                        *block = self.written_block(block, operands, ids);
+                    }
+                    *otherwise = self.written_block(otherwise, operands, ids);
+                }
+                Op::Loop {
+                    bound,
+                    init,
+                    until,
+                    body,
+                    ..
+                } => {
+                    *bound = bound.map(|value| take(value, ids));
+                    *init = take(*init, ids);
+                    *until = until
+                        .as_ref()
+                        .map(|block| self.written_block(block, operands, ids));
+                    *body = self.written_block(body, operands, ids);
+                }
+                other => rename(other, &|value| take(value, ids)),
+            }
+            ids.insert(instruction.id.0, id);
+            out.push(Instruction {
+                id,
+                ty: instruction.ty,
+                op,
+            });
+        }
+    }
+
+    fn written_block(
+        &mut self,
+        block: &Block,
+        operands: &[ValueId],
+        ids: &mut HashMap<u32, ValueId>,
+    ) -> Block {
+        let mut body = Vec::with_capacity(block.body.len());
+        self.written(&block.body, operands, ids, &mut body);
+        Block {
+            body,
+            result: ids.get(&block.result.0).copied().unwrap_or(block.result),
+        }
+    }
+}
+
+/// The operation a body gives an id, nested blocks included.
+fn find_op(body: &[Instruction], id: ValueId) -> Option<&Op> {
+    for instruction in body {
+        if instruction.id == id {
+            return Some(&instruction.op);
+        }
+        let nested = match &instruction.op {
+            Op::If {
+                then, otherwise, ..
+            } => find_op(&then.body, id).or_else(|| find_op(&otherwise.body, id)),
+            Op::Match {
+                arms, otherwise, ..
+            } => arms
+                .iter()
+                .find_map(|(_, block)| find_op(&block.body, id))
+                .or_else(|| find_op(&otherwise.body, id)),
+            Op::Loop { until, body, .. } => until
+                .as_ref()
+                .and_then(|block| find_op(&block.body, id))
+                .or_else(|| find_op(&body.body, id)),
+            _ => None,
+        };
+        if nested.is_some() {
+            return nested;
+        }
+    }
+    None
 }
 
 struct Ctx<'a> {

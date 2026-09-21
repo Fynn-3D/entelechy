@@ -193,7 +193,9 @@ string in the scene rather than a Kernel of cases. `input clip: Image =
 frames "clip/" at 30;` reads a directory frame by frame: its files in
 name order (the same formats), one per frame at the rate, the frame
 `floor(time * rate)` of the session's time wrapping at the end, brought
-in at each evaluation; the directory is listed again on sync. A struct, `type`, or `fn` declared at
+in at each evaluation; the directory is listed again on sync. A short function is written out where it is called when the Kernel is
+compiled, so calling one costs nothing a run can measure; a trace still
+shows the call. A struct, `type`, or `fn` declared at
 the top of a document is shared by every Kernel in it, and by every Kernel
 of a document that `use`s it; a function calls only what is declared above
 it. A name a Kernel cannot find is looked for in the documents beside it

@@ -107,7 +107,10 @@ in the branch of an `if` the element did not take reads `- (not run)`; a
 `let` in a loop shows its last iteration's value. Every call the element
 made follows, in the order the calls returned, each with its own `let`s
 and result (the first 256; a template instance is named with its Field,
-`store<ram>`). The trace is of the
+`store<ram>`). What it walks is the Kernel as the document wrote it,
+compiled again without the optimizer, so every call and every `let` is
+there even though the run itself has the short functions written out.
+The trace is of the
 evaluation after the one just run (the node's `<~` inputs are the state
 that evaluation committed), and commits nothing itself. Over the
 protocol, `trace` is the same as JSON.

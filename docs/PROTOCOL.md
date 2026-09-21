@@ -97,7 +97,9 @@ kind, shape, doc}`: `loop`, `each`, `scatter`, `node`, `fill`,
 unknown name is an error naming similar ones. It is what the compiler
 accepts, generated from its tables.
 
-`trace` runs one element of a node on the interpreter and answers with
+`trace` runs one element of a node on the interpreter, over the Kernel
+as its document wrote it (compiled again without the optimizer, so the
+calls and the `let`s are the source's), and answers with
 every binding of it: `node`, and `at` (`[x, y, z]`, an element of a map)
 or `element` (a step of a scan), with the fields `evaluate` takes for the
 context; the scene is evaluated first under that context, with the

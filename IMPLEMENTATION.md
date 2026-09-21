@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Inlining | [optimize](crates/ir/src/optimize.rs) `inline_calls` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Measured profiles | [gpu](crates/gpu/src/lib.rs) `set_measured`, [runtime](crates/runtime/src/lib.rs) `last_measured` | [profile output](crates/cli/tests/session.rs) |
 | Diagnostics across files | [session](crates/cli/src/session.rs) `located`, `declarations_within` | [session tests](crates/cli/tests/session.rs) |
 | Run-time loop counts | [loop](crates/compiler/src/lower/expr.rs), [ir](crates/ir/src/lib.rs) `Op::Loop::bound` | [feature matrix](crates/matrix/src/lib.rs) `loops` |
@@ -451,6 +452,19 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- Short functions written out where they are called (the optimizer's
+  fifth rewrite): a call costs the interpreter a frame and the JIT a
+  real call, and a function of at most 96 instructions is cheaper
+  spelled out. Functions are taken in order, so a call is always to one
+  already optimized and depth costs nothing; the callee's values take
+  fresh ids, its `Arg(i)` reads become the call's operands, and what it
+  returns takes the call's place. Measured: a loop calling a
+  three-instruction function, 162 to 89 ms; raymarch on the interpreter
+  496 to 365 ms; the replay suite on the interpreter 14.5 to 12.4 s; the
+  JIT and the GPU unchanged. A trace compiles the Kernel again without
+  the optimizer (`compile_kernel_unoptimized` over the parsed Kernel the
+  session keeps), so it still walks the source's own calls and `let`s.
 
 - A measured profile: `run --profile` puts the GPU backend in a
   measured mode, where an execution waits for its submission and asks

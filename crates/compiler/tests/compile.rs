@@ -38,12 +38,22 @@ fn grayscale_compiles_to_validated_ir() {
     assert_eq!(module.functions.len(), 1);
     assert_eq!(module.functions[0].args, vec![Type::Vec4]);
     assert!(module.entry.body.iter().any(|i| i.op == Op::Sample(0)));
+    // The optimizer writes a short function out where it was called, so
+    // the call is in the lowering and the arithmetic is in the entry.
+    let written = orla_compiler::compile_unoptimized(GRAYSCALE).unwrap();
     assert!(
-        module
+        written
             .entry
             .body
             .iter()
             .any(|i| matches!(i.op, Op::Call(0, _)))
+    );
+    assert!(
+        !module
+            .entry
+            .body
+            .iter()
+            .any(|i| matches!(i.op, Op::Call(..)))
     );
     let text = module.to_string();
     assert!(text.contains("host sample input0"), "{text}");
@@ -818,8 +828,7 @@ fn integer_vectors_address_fields_without_conversions_in_the_source() {
 
 #[test]
 fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_name() {
-    let module = compile(
-        "kernel t.k@1 { requires { field.write; }
+    const SHADOWING: &str = "kernel t.k@1 { requires { field.write; }
             output r: Rows<Vec4>;
             fn step(a: Vec2, b: Vec2) -> Vec2 { return a + b * 2.0; }
             fn mix(a: Int) -> Int { return a * 3; }
@@ -833,13 +842,17 @@ fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_nam
                 let iv = ivec3(ivec2(i, 2), 3).zx;
                 let m = step(v.xy, s.yx) + vec2(float(mix(i)), float(iv.y));
                 return w + vec4(m, m.yx);
-            } }",
-    )
-    .unwrap();
+            } }";
+    let module = compile(SHADOWING).unwrap();
     let text = module.to_string();
-    // The document's `step` and `mix` are called; the builtins are not.
-    assert!(text.contains("call fn0("), "{text}");
-    assert!(text.contains("call fn1("), "{text}");
+    // The document's `step` and `mix` are what the calls named; the
+    // builtins are not. The optimizer writes both functions out where
+    // they were called, so the lowering is where the calls are.
+    let written = orla_compiler::compile_unoptimized(SHADOWING)
+        .unwrap()
+        .to_string();
+    assert!(written.contains("call fn0("), "{written}");
+    assert!(written.contains("call fn1("), "{written}");
     let body = &text[text.find("fn compute()").unwrap_or(0)..];
     assert!(!body.contains("step("), "{body}");
     assert!(!body.contains("mix("), "{body}");

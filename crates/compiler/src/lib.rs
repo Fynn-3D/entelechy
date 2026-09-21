@@ -80,6 +80,17 @@ pub fn compile_kernel(
     Ok(orla_ir::validate(orla_ir::optimize(module))?)
 }
 
+/// Compiles one parsed Kernel as [`compile_kernel`] does, but leaves the
+/// IR as the lowering made it: what a trace walks, where the functions
+/// are still called and every `let` is the source's own.
+pub fn compile_kernel_unoptimized(
+    kernel: &orla_language::Kernel,
+    id: Option<&orla_ir::KernelId>,
+) -> Result<Validated, CompileError> {
+    let module = lower::lower(kernel, id)?;
+    Ok(orla_ir::validate(module)?)
+}
+
 /// Compiles one Kernel source as [`compile`] does, but leaves the IR as
 /// the lowering made it: what the optimizer is held to.
 pub fn compile_unoptimized(source: &str) -> Result<Validated, CompileError> {

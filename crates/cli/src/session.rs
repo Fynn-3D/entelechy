@@ -534,6 +534,9 @@ struct PendingPublish {
 struct DocumentState {
     stamp: Option<Stamp>,
     kernels: BTreeMap<KernelId, String>,
+    /// The Kernels as they were parsed, which a trace compiles again
+    /// without the optimizer so that it walks what the source says.
+    asts: BTreeMap<KernelId, Kernel>,
     /// The shared declarations the document's Kernels were compiled
     /// with; when they change, every Kernel republishes even though its
     /// own text did not.
@@ -1506,12 +1509,14 @@ impl Session {
             BTreeMap::new()
         };
         let mut kernels = BTreeMap::new();
+        let mut asts = BTreeMap::new();
         for id in previous.keys() {
             if !defined.iter().any(|d| &d.id == id) {
                 self.retire(path, id, events);
             }
         }
         for Defined { id, text, kernel } in defined {
+            asts.insert(id.clone(), kernel.clone());
             if let Some(owner) = self.owners.get(&id)
                 && owner != path
             {
@@ -1596,6 +1601,7 @@ impl Session {
             DocumentState {
                 stamp: current,
                 kernels,
+                asts,
                 declarations: declarations.to_owned(),
             },
         );
@@ -1812,7 +1818,14 @@ impl Session {
                     .materialize(*handle)
                     .map_err(|error| error.to_string())?;
             }
-            let module = version.module().expect("checked above");
+            // A trace walks the Kernel as written: the same source
+            // without the optimizer, so its functions are still called
+            // and its `let`s are all there. The running module answers
+            // for a Kernel no document owns.
+            let written = self.unoptimized(&target.kernel);
+            let module = written
+                .as_ref()
+                .unwrap_or_else(|| version.module().expect("checked above"));
             let granted = module.manifest.requires.clone();
             let mut scope = orla_runtime::Scope::new(self.runtime.host_mut(), granted);
             orla_cpu::trace(module, &invocation, &mut scope, at).map_err(|error| error.to_string())
@@ -1821,6 +1834,17 @@ impl Session {
             self.evaluator.unpin(&node);
         }
         traced.map(|trace| (trace, target.kernel.clone()))
+    }
+
+    /// The Kernel as its document wrote it, compiled without the
+    /// optimizer; `None` for one no document owns, or one whose source
+    /// no longer compiles on its own.
+    fn unoptimized(&self, id: &KernelId) -> Option<orla_runtime::Validated> {
+        let kernel = self
+            .documents
+            .values()
+            .find_map(|state| state.asts.get(id))?;
+        orla_compiler::compile_kernel_unoptimized(kernel, Some(id)).ok()
     }
 
     /// Evaluates only what `demand` needs; see
