@@ -23,6 +23,7 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Frames in | [session](crates/cli/src/session.rs) `Sequence`, [parser](crates/language/src/parser.rs) `frames` | [clip example](examples/clip/tests/clip.replay), [session tests](crates/cli/tests/session.rs) |
 | Render | [render](crates/cli/src/render.rs) | [session tests](crates/cli/tests/session.rs) |
 | Async nodes | [runs off the frame](crates/runtime/src/later.rs), [evaluator](crates/graph/src/evaluate.rs) | [runtime](crates/runtime/tests/later.rs), [graph](crates/graph/tests/composition.rs), [async example](examples/async/tests/async.replay) |
 | Packages and versions | [package](crates/cli/src/package.rs), [use expansion](crates/cli/src/session.rs), [manifest](crates/language/src/parser.rs) | [pack, unpack, describe, refusal](crates/cli/tests/session.rs), [package example](examples/package/tests/package.replay) |
@@ -446,6 +447,12 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- Frames in (phase 5, video's input half): `input clip: Image = frames
+  "dir/" at N;` lists a directory's frame files in name order on sync
+  (`Sequence` in the session) and, at each evaluation, brings in frame
+  `floor(time * N)` wrapping, as the external; a frame that cannot be
+  read is reported by the next sync and the input keeps its frame.
 
 - Render (phase 5, video): `orla render` steps a scene at a fixed rate
   for a count of frames, the clock being the frame count over the rate,

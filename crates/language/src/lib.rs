@@ -365,9 +365,22 @@ pub struct PortDecl {
     /// Text the input holds as its characters' codes, only on a
     /// document's inputs: `input title: Rows<Int> = text "ORLA";`.
     pub text: Option<Spanned<String>>,
+    /// A directory of files the input reads frame by frame, only on a
+    /// document's inputs: `input clip: Image = frames "clip/" at 30;`.
+    pub frames: Option<FramesDecl>,
     /// Byte range of the wiring (`<- source`, `<~ source from initial`)
     /// in the document, so a Kernel's text can be given without it.
     pub binding_range: Option<Range<usize>>,
+}
+
+/// `frames "dir/" at N`: the files of a directory, in name order, one
+/// per frame at `rate` frames a second of the session's time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FramesDecl {
+    /// The directory, as written.
+    pub dir: Spanned<String>,
+    /// Frames a second.
+    pub rate: u32,
 }
 
 /// `param name: Type = default;`

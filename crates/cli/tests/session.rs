@@ -1141,3 +1141,64 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
+    let dir = std::env::temp_dir().join(format!("orla-frames-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("clip")).unwrap();
+    for (index, colour) in [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]]
+        .iter()
+        .enumerate()
+    {
+        let pixels = vec![*colour; 4];
+        std::fs::write(
+            dir.join(format!("clip/{index}.png")),
+            orla::png::encode(2, 2, &pixels),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.join("scene.osn"),
+        "input clip: Image = frames \"clip/\" at 1;\nnode view: kernel { requires { field.read; field.write; } input clip: Image <- clip; output result: Image; compute { return sample(clip); } }\noutput result <- view.result;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(
+        &dir.join("scene.osn"),
+        None,
+        orla::session::DEFAULT_BUDGET_PIXELS,
+    );
+    let events = session.sync();
+    assert!(
+        events.iter().any(|event| matches!(event, Event::Loaded { name, detail, .. } if name == "clip" && detail == "2 frame(s) at 1 a second")),
+        "{events:?}"
+    );
+    let red = |session: &mut Session, time: f32| {
+        let report = session
+            .evaluate(&Context {
+                time,
+                ..Context::default()
+            })
+            .unwrap();
+        session.read_pixel(report.output, 0, 0).unwrap()[0]
+    };
+    assert_eq!(red(&mut session, 0.0), 1.0);
+    assert_eq!(red(&mut session, 0.9), 1.0);
+    assert_eq!(red(&mut session, 1.0), 0.0);
+    assert_eq!(red(&mut session, 2.0), 1.0, "wraps after the last frame");
+    // A frame dropped in is seen at the next sync and takes its turn.
+    std::fs::write(
+        dir.join("clip/2.png"),
+        orla::png::encode(2, 2, &[[0.0, 0.0, 1.0, 1.0]; 4]),
+    )
+    .unwrap();
+    let events = session.sync();
+    assert!(events.iter().any(|event| matches!(event, Event::Loaded { detail, .. } if detail == "3 frame(s) at 1 a second")), "{events:?}");
+    assert_eq!(red(&mut session, 2.0), 0.0);
+    // An empty directory is reported and evaluation says what is missing.
+    std::fs::remove_dir_all(dir.join("clip")).unwrap();
+    std::fs::create_dir_all(dir.join("clip")).unwrap();
+    let events = session.sync();
+    assert!(events.iter().any(|event| matches!(event, Event::Rejected { error, .. } if error.contains("holds no frame"))), "{events:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

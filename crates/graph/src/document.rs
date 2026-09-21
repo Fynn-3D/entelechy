@@ -231,6 +231,7 @@ pub(crate) fn lower(
                 externals: Vec::new(),
                 assets: Vec::new(),
                 texts: Vec::new(),
+                sequences: Vec::new(),
                 params: Vec::new(),
                 times_params: Vec::new(),
                 nodes: Vec::new(),
@@ -246,6 +247,7 @@ pub(crate) fn lower(
     lowering.out.graph.externals = level.externals;
     lowering.out.graph.assets = level.assets;
     lowering.out.graph.texts = level.texts;
+    lowering.out.graph.sequences = level.sequences;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     Ok(lowering.out)
@@ -256,6 +258,7 @@ struct Level {
     externals: Vec<String>,
     assets: Vec<(String, PathBuf, String)>,
     texts: Vec<(String, String)>,
+    sequences: Vec<(String, PathBuf, String, u32)>,
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
@@ -475,6 +478,7 @@ impl Lowering<'_, '_> {
         let mut externals = Vec::new();
         let mut assets = Vec::new();
         let mut texts = Vec::new();
+        let mut sequences = Vec::new();
         for input in &document.inputs {
             // The type is documentation for the reader and the placing
             // graph; what arrives is checked by shape and layout where it
@@ -513,6 +517,20 @@ impl Lowering<'_, '_> {
                     ));
                 }
                 texts.push((input.name.value.clone(), text.value.clone()));
+            }
+            if let Some(frames) = &input.frames {
+                if placement.is_some() {
+                    return Err(error(
+                        frames.dir.span,
+                        "a placed graph's input is wired by the placing graph; it cannot read frames",
+                    ));
+                }
+                sequences.push((
+                    input.name.value.clone(),
+                    base.join(&frames.dir.value),
+                    input.ty.value.clone(),
+                    frames.rate,
+                ));
             }
             externals.push(input.name.value.clone());
         }
@@ -903,6 +921,7 @@ impl Lowering<'_, '_> {
             externals,
             assets,
             texts,
+            sequences,
             params,
             outputs,
         })

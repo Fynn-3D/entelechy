@@ -192,7 +192,10 @@ JIT bit for bit, the GPU's sums within two percent after 160 steps),
 which found that a reduce's output wants a declared `type`, that a
 scatter maps over its first input's elements so a product-sized step
 takes a `work` Field of that size, and that fixed loop counts were no
-obstacle. Open: a frame-sequence input; inference from weights trained
+obstacle. Also done: video's input half, `input clip: Image = frames "dir/" at
+N;`, a directory's files in name order as frames, the frame of the
+moment brought in at each evaluation (the `clip` example), so a clip
+goes ffmpeg, `frames`, `render`, ffmpeg. Open: inference from weights trained
 elsewhere (a `.field` of weights read as an `input`, which the pieces
 allow and no example shows); and automation past one frame, which the
 render command begins.

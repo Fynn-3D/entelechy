@@ -138,6 +138,34 @@ struct Asset {
     stamp: Option<Stamp>,
 }
 
+/// An input read frame by frame from a directory: its files in name
+/// order, and which of them the Host holds now.
+struct Sequence {
+    dir: PathBuf,
+    ty: String,
+    rate: u32,
+    files: Vec<PathBuf>,
+    current: Option<usize>,
+}
+
+/// The file extensions a frame may have.
+const FRAME_EXTENSIONS: [&str; 5] = ["png", "ppm", "pgm", "field", "wav"];
+
+/// The files of `dir` that can be frames, in name order.
+fn frame_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| FRAME_EXTENSIONS.contains(&e))
+        })
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stamp {
     modified: Option<SystemTime>,
@@ -436,6 +464,10 @@ pub struct Session {
     externals: BTreeMap<String, Handle>,
     /// Inputs read from files, with the stamp each was last read at.
     assets: BTreeMap<String, Asset>,
+    /// Inputs read frame by frame from directories.
+    sequences: BTreeMap<String, Sequence>,
+    /// What went wrong selecting a frame, reported by the next sync.
+    frame_events: Vec<Event>,
     /// Inputs written as text, with the text each holds.
     texts: BTreeMap<String, String>,
     /// The window a headless session reports when an evaluation names
@@ -498,6 +530,8 @@ impl Session {
             pending: BTreeMap::new(),
             externals: BTreeMap::new(),
             assets: BTreeMap::new(),
+            sequences: BTreeMap::new(),
+            frame_events: Vec::new(),
             texts: BTreeMap::new(),
             window: None,
         }
@@ -574,6 +608,7 @@ impl Session {
             .keys()
             .cloned()
             .chain(self.assets.values().map(|asset| asset.path.clone()))
+            .chain(self.sequences.values().map(|sequence| sequence.dir.clone()))
             .collect()
     }
 
@@ -812,8 +847,123 @@ impl Session {
             self.sync_root(&mut events);
         }
         self.sync_assets(&mut events);
+        self.sync_sequences(&mut events);
         self.sync_texts(&mut events);
+        events.append(&mut self.frame_events);
         events
+    }
+
+    /// Lists every `frames` input's directory anew, and forgets sequences
+    /// the scene no longer declares. A listing that changed starts over:
+    /// the frame whose turn it is comes in at the next evaluation.
+    fn sync_sequences(&mut self, events: &mut Vec<Event>) {
+        let wanted: Vec<(String, PathBuf, String, u32)> = self
+            .graph
+            .as_ref()
+            .map(|graph| graph.sequences.clone())
+            .unwrap_or_default();
+        let stale: Vec<String> = self
+            .sequences
+            .keys()
+            .filter(|name| !wanted.iter().any(|(wanted, ..)| wanted == *name))
+            .cloned()
+            .collect();
+        for name in stale {
+            self.sequences.remove(&name);
+            if let Some(handle) = self.externals.remove(&name) {
+                let _ = self.runtime.host_mut().release(handle);
+            }
+        }
+        for (name, dir, ty, rate) in wanted {
+            let files = match frame_files(&dir) {
+                Ok(files) => files,
+                Err(error) => {
+                    if self.sequences.remove(&name).is_some()
+                        && let Some(handle) = self.externals.remove(&name)
+                    {
+                        let _ = self.runtime.host_mut().release(handle);
+                    }
+                    events.push(Event::Rejected {
+                        path: dir,
+                        error: format!(" {error}"),
+                    });
+                    continue;
+                }
+            };
+            if self.sequences.get(&name).is_some_and(|sequence| {
+                sequence.dir == dir
+                    && sequence.ty == ty
+                    && sequence.rate == rate
+                    && sequence.files == files
+            }) {
+                continue;
+            }
+            if files.is_empty() {
+                events.push(Event::Rejected {
+                    path: dir.clone(),
+                    error: " holds no frame: a .png, .ppm, .pgm, .field or .wav file".into(),
+                });
+            } else {
+                events.push(Event::Loaded {
+                    name: name.clone(),
+                    path: dir.clone(),
+                    detail: format!("{} frame(s) at {rate} a second", files.len()),
+                });
+            }
+            self.sequences.insert(
+                name,
+                Sequence {
+                    dir,
+                    ty,
+                    rate,
+                    files,
+                    current: None,
+                },
+            );
+        }
+    }
+
+    /// Brings in the frame whose turn it is at `time` for every `frames`
+    /// input: frame `floor(time * rate)`, wrapping at the end. A frame
+    /// that cannot be read is reported by the next sync and the input
+    /// keeps the frame it had.
+    fn select_frames(&mut self, time: f32) {
+        let names: Vec<String> = self.sequences.keys().cloned().collect();
+        for name in names {
+            let Some(sequence) = self.sequences.get(&name) else {
+                continue;
+            };
+            if sequence.files.is_empty() {
+                continue;
+            }
+            let count = sequence.files.len() as i64;
+            let index = ((time * sequence.rate as f32).floor() as i64).rem_euclid(count) as usize;
+            if sequence.current == Some(index) {
+                continue;
+            }
+            let path = sequence.files[index].clone();
+            let ty = sequence.ty.clone();
+            let loaded = Self::load_field(&path, Some(&ty)).and_then(|(data, _)| {
+                self.runtime
+                    .host_mut()
+                    .adopt(data)
+                    .map_err(|e| e.to_string())
+            });
+            match loaded {
+                Ok(handle) => {
+                    if let Some(previous) = self.externals.insert(name.clone(), handle) {
+                        let _ = self.runtime.host_mut().release(previous);
+                    }
+                    if let Some(sequence) = self.sequences.get_mut(&name) {
+                        sequence.current = Some(index);
+                    }
+                }
+                Err(error) => self.frame_events.push(Event::Rejected {
+                    path,
+                    error: format!(" {error}"),
+                }),
+            }
+        }
     }
 
     /// Writes every input's text that is new or changed into the Host as
@@ -1406,6 +1556,7 @@ impl Session {
 
     /// reused; state commits only when the whole evaluation succeeds.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
+        self.select_frames(context.time);
         let graph = self.graph.as_ref().ok_or_else(|| {
             EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(
                 orla_graph::Source::External("<no scene>".into()),
@@ -1506,6 +1657,7 @@ impl Session {
         context: &Context,
         demand: &std::collections::BTreeSet<orla_graph::NodeId>,
     ) -> Result<Report, EvaluateError> {
+        self.select_frames(context.time);
         let graph = self.graph.as_ref().ok_or_else(|| {
             EvaluateError::Graph(orla_graph::GraphError::UnknownOutput(
                 orla_graph::Source::External("<no scene>".into()),

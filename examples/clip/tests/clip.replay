@@ -1,0 +1,16 @@
+scene ../scene.osn
+
+# Four frames, red, green, blue, yellow, at two a second: the frame is
+# floor(time * 2), wrapping after the fourth.
+frame 0.0
+expect 32 32 = 1.0 0.0 0.0
+frame 0.5
+expect 32 32 = 0.0 1.0 0.0
+frame 1.0
+expect 32 32 = 0.0 0.0 1.0
+frame 1.75
+expect 32 32 = 1.0 1.0 0.0
+frame 2.0
+expect 32 32 = 1.0 0.0 0.0
+frame 2.25
+expect 32 32 = 1.0 0.0 0.0

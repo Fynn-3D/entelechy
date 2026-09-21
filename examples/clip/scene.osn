@@ -1,0 +1,18 @@
+// A clip read frame by frame: `frames "clip/" at 2` is the files of the
+// directory in name order, two a second of the session's time, wrapping
+// at the end; the picture scales the frame of the moment up.
+input clip: Image = frames "clip/" at 2;
+
+node view: kernel {
+    requires { field.read; field.write; }
+    input clip: Image <- clip;
+    output result: Image;
+    domain = vec2(64, 64);
+    compute {
+        let uv = (coord() + vec2(0.5, 0.5)) / domain();
+        let c = at(clip, floor(uv * size(clip)));
+        return vec4(c.r, c.g, c.b, 1.0);
+    }
+}
+
+output result <- view.result;

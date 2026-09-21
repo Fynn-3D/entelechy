@@ -180,7 +180,11 @@ any Field as `.field`, the Host's own format. `run --save` and the
 protocol's `read` write all of them. `input title: Rows<Int> = text
 "ORLA";` holds text: the session supplies the characters' codes as rows
 and writes them again when the document's text changes, so a label is a
-string in the scene rather than a Kernel of cases. A struct, `type`, or `fn` declared at
+string in the scene rather than a Kernel of cases. `input clip: Image =
+frames "clip/" at 30;` reads a directory frame by frame: its files in
+name order (the same formats), one per frame at the rate, the frame
+`floor(time * rate)` of the session's time wrapping at the end, brought
+in at each evaluation; the directory is listed again on sync. A struct, `type`, or `fn` declared at
 the top of a document is shared by every Kernel in it, and by every Kernel
 of a document that `use`s it; a function calls only what is declared above
 it. A function may take a Field: `fn cast(voxels: Volume<Int>, eye: Vec3)

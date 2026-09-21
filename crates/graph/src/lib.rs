@@ -159,6 +159,11 @@ pub struct Graph {
     /// Externals the document writes as text: the name and the text,
     /// which the session supplies as `Rows<Int>` of the characters' codes.
     pub texts: Vec<(String, String)>,
+    /// Externals the document reads frame by frame from a directory: the
+    /// name, the directory resolved against the document, the type as
+    /// written, and the frames a second of the session's time; the
+    /// session supplies the file whose turn it is at each evaluation.
+    pub sequences: Vec<(String, PathBuf, String, u32)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
     /// Parameters that size the graph (a node's `times`): a change to one

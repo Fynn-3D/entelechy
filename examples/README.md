@@ -119,6 +119,9 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   to tell the inside of a circle from the outside, all of it Kernels: the
   gradient as a scatter, the step placed eight times a frame, the
   weights carried on; the plane painted as the network answers.
+- [clip](clip/README.md): an input read frame by frame from a directory,
+  `frames "clip/" at 2`, the frame of the moment at each evaluation; with
+  `render`, the video pipeline's input half.
 - [async](async/README.md): the Thumb machine off the frame, `async =
   true;` on its node: each step runs on a thread while the picture keeps
   its pace, and the replay's `settle` waits for a step to land.

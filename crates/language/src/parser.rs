@@ -2,9 +2,9 @@
 
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
-    BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, Kernel, MatchArm,
-    MergeDecl, NodeDecl, NodeKind, NodeMember, PackageDecl, ParamDecl, ParseError, PortDecl,
-    ScatterDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
+    BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl, Kernel,
+    MatchArm, MergeDecl, NodeDecl, NodeKind, NodeMember, PackageDecl, ParamDecl, ParseError,
+    PortDecl, ScatterDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -816,9 +816,11 @@ impl Parser {
             .then(|| binding_start..self.previous_end());
         let mut file = None;
         let mut text = None;
+        let mut frames = None;
         if !wired && self.eat_punct("=") {
             let as_text = self.is_keyword("text");
-            if as_text {
+            let as_frames = self.is_keyword("frames");
+            if as_text || as_frames {
                 self.next();
             }
             let (token, span) = self.next();
@@ -826,12 +828,30 @@ impl Parser {
                 return Err(ParseError {
                     span,
                     message: format!(
-                        "an input's value is a quoted path, or `text` and a quoted string, found {}",
+                        "an input's value is a quoted path, `text` and a quoted string, or `frames`, a quoted directory and `at` a rate, found {}",
                         token.describe()
                     ),
                 });
             };
-            if as_text {
+            if as_frames {
+                self.keyword("at")?;
+                let rate = match self.next() {
+                    (Token::Int(rate), _) if rate > 0 => rate as u32,
+                    (token, span) => {
+                        return Err(ParseError {
+                            span,
+                            message: format!(
+                                "`frames` are read `at` a whole number of frames a second, found {}",
+                                token.describe()
+                            ),
+                        });
+                    }
+                };
+                frames = Some(FramesDecl {
+                    dir: Spanned { value, span },
+                    rate,
+                });
+            } else if as_text {
                 text = Some(Spanned { value, span });
             } else {
                 file = Some(Spanned { value, span });
@@ -844,6 +864,7 @@ impl Parser {
             binding,
             file,
             text,
+            frames,
             binding_range,
         })
     }

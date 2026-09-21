@@ -37,7 +37,9 @@ Evaluate a `.osn` graph and write the output image as a binary PPM. The
 document names its Kernel sources with `use`; `--library <dir|file>` adds
 more. External Fields declared with `input <name>: Image;` in the scene are
 bound with `--input <name>=<file.ppm>`, or read from the file the input
-names (`input atlas: Image = "atlas.ppm";`), which the Host watches; graph
+names (`input atlas: Image = "atlas.ppm";`), which the Host watches, or
+read frame by frame from a directory (`input clip: Image = frames
+"clip/" at 30;`, the frame of the moment at each evaluation); graph
 parameters are overridden with `--param <name>=<literal>`; a scene sized
 by the window (`domain = window();`) takes `--window <w>x<h>` in pixels,
 with `@<scale>` for a scale factor other than one. `--save
@@ -64,8 +66,9 @@ picture is the first output that is a grid of pixels and the sound the
 first that is rows of one or two floats, as the Player chooses them.
 The clock is the frame count over the rate, so a render is the same
 every time, and an `async` node's run is waited for after every frame,
-so no step is skipped. The other flags are `run`'s. A video is one
-ffmpeg call over the directory:
+so no step is skipped. The other flags are `run`'s. A clip comes in the same way, as a
+directory of frames a scene reads with `frames "clip/" at <rate>`. A
+video is one ffmpeg call over the directory:
 
 ```sh
 cargo run --release -- render examples/audio/scene.osn --frames 300 --out /tmp/audio
