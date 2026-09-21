@@ -1,0 +1,19 @@
+// A million bodies: spawned once, stepped every frame through `<~`,
+// and splatted onto a canvas the size of the window. `--param
+// count=200000` runs fewer; the picture is the same shape.
+use "kernels/";
+
+param count: Int = 1000000;
+param pull: Float = 0.06;
+
+node seeded: million.spawn@1 { pull = pull; domain = count; }
+node blank: Grid<Int> { domain = window(); }
+node bodies: million.step@1 {
+    previous <~ bodies.result from seeded.result;
+    pull = pull;
+    domain = count;
+}
+node heat: million.splat@1 { bodies <- bodies.result; canvas <- blank.result; }
+node view: million.draw@1 { heat <- heat.result; domain = window(); }
+
+output result <- view.result;

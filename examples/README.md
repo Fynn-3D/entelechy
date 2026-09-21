@@ -119,6 +119,10 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   to tell the inside of a circle from the outside, all of it Kernels: the
   gradient as a scatter, the step placed eight times a frame, the
   weights carried on; the plane painted as the network answers.
+- [million](million/README.md): a million bodies stepped as a map and drawn
+  by a scatter of a million writes, at 2.4 ms a frame on the GPU and 20 on the
+  JIT; the example where making the count an `Int` instead of a `Float` took
+  24 ms out of the frame.
 - [strings](strings/README.md): six plucked strings, `1` to `6`, each a delay
   line in a `memory` carried from frame to frame; a scan walks the block of
   samples, a key fills a line with noise, and what comes out is the scene's

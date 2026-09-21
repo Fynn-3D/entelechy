@@ -585,6 +585,26 @@ are, deliberately: the flat dispatch matches (`Machine::step`,
 `Builder::call`), each one arm per operation, which a split would
 only scatter.
 
+A million of something, which is the number other engines are held to:
+`million`, a million bodies each with a place, a speed and a tint,
+carried frame to frame, pulled towards the middle by an inverse square
+so a disc winds into rings, and drawn by a scatter of a million writes
+into the cell each lands on. At 960x540 a frame is 2.4 ms on the GPU
+and 20.4 on the JIT; four million is 9.3 and 73.1; a hundred thousand
+is 0.84 and 4.4. Of the GPU's 2.4 ms the step is 1.5 and the picture
+0.6.
+
+Writing it turned up the sharpest measurement of the session. The
+scatter summed a `Float`, and floats do not add the same way in every
+order, so the GPU sorted a million pairs by their cell and added them
+up in element order to give the interpreter's words: 24 ms of a 28 ms
+frame, which made the GPU slower than the JIT. A count is an `Int`, and
+integers do add the same way in every order, so the same scatter became
+one atomic each and the frame became 2.4 ms. The picture is identical.
+The rule a Kernel writes decides whether a million writers need an
+order between them, and nothing else in the language says so as
+plainly.
+
 The two bridges with runners of their own are run by the suite now,
 when the tools they need are on the machine: `bridges/web/test.mjs`
 through node and a headless Chrome, and `bridges/godot/test.gd` through
