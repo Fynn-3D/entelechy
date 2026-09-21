@@ -9,22 +9,11 @@ type Hand = Rows<Touch>;
 type Flow = Grid<Vec2>;
 type Amount = Grid<Float>;
 
+// The pointer at rest, before the first frame.
 kernel fluid.rest@1 {
     requires { field.write; }
     output result: Hand;
     compute { return Touch { x: 0.0, y: 0.0, down: false, vx: 0.0, vy: 0.0 }; }
-}
-
-kernel fluid.still@1 {
-    requires { field.write; }
-    output result: Flow;
-    compute { return vec2(0.0, 0.0); }
-}
-
-kernel fluid.clear@1 {
-    requires { field.write; }
-    output result: Amount;
-    compute { return 0.0; }
 }
 
 // The pointer as a row: where it is, whether it is down, and how far it

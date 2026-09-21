@@ -94,12 +94,6 @@ kernel chip8.start@1 {
     }
 }
 
-kernel chip8.blank@1 {
-    requires { field.write; }
-    output result: Screen;
-    compute { return 0; }
-}
-
 // One step of the machine per element of `ticks`; the opcode it ran is
 // the output, for the record.
 kernel chip8.step@1 {

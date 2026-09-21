@@ -4,8 +4,8 @@
 // rides it, and view paints it. Drag the pointer to stir.
 use "../kernels/";
 
-node still: fluid.still@1 { domain = vec2(64, 64); }
-node clear: fluid.clear@1 { domain = vec2(64, 64); }
+node still: Flow { domain = vec2(64, 64); }
+node clear: Amount { domain = vec2(64, 64); }
 node rest: fluid.rest@1 { domain = 1; }
 
 node hand: fluid.hand@1 { previous <~ hand.result from rest.result; }

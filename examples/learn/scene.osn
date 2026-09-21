@@ -7,7 +7,7 @@ param rate: Float = 2.0;
 
 node points: learn.points@1 { domain = 256; }
 node init: learn.init@1 { domain = 65; }
-node zeros: learn.zeros@1 { domain = 65; }
+node zeros: Rows<Float> { domain = 65; }
 node train: graph "train.osn" {
     times = 8;
     carry weights <- result;

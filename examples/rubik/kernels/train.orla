@@ -29,12 +29,6 @@ kernel train.init@1 {
     compute { return (noise(float(element()) + 0.37) - 0.5) * 0.3; }
 }
 
-kernel train.zeros@1 {
-    requires { field.write; }
-    output result: Batch;
-    compute { return 0.0; }
-}
-
 // This frame's scrambles: element e is sticker e % 54 of cube e / 54,
 // which is solved, then turned k random times; the colour is the one
 // that ends up there, found by following the permutations back.

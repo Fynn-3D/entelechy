@@ -14,7 +14,7 @@ node game: cube.game@1 { previous <~ game.result from begin.result; }
 node stickers: cube.stickers@1 { previous <~ stickers.result from solved.result; game <- game.result; }
 
 node init: train.init@1 { domain = 1793; }
-node zeros: train.zeros@1 { domain = 1793; }
+node zeros: Rows<Float> { domain = 1793; }
 node samples: train.samples@1 { domain = 3456; }    // 64 cubes times 54 stickers
 node labels: train.labels@1 { domain = 64; }
 node act: train.act@1 { samples <- samples.result; weights <~ step.result from init.result; domain = 2048; }

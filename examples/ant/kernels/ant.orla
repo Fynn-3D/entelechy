@@ -4,12 +4,6 @@
 struct Ant { at: IVec2; dir: Int; }
 type Cells = Grid<Int>;
 
-kernel ant.blank@1 {
-    requires { field.write; }
-    output result: Cells;
-    compute { return 0; }
-}
-
 // The ant's memory: x, y, and the way it faces (0 up, 1 right, 2 down, 3 left).
 kernel ant.start@1 {
     requires { field.write; }

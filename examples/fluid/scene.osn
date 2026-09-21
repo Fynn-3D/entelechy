@@ -1,11 +1,12 @@
-// still, clear, rest seed the fields; hand tracks the pointer; advect
+// still, clear and rest are the fields' starting values, the first two
+// filled Fields written in the scene; hand tracks the pointer; advect
 // carries last frame's projected velocity, the solve relaxes pressure
 // from last frame's, project makes the velocity divergence-free, smoke
 // rides it, and view paints it. Drag the pointer to stir.
 use "kernels/";
 
-node still: fluid.still@1 { domain = vec2(384, 216); }
-node clear: fluid.clear@1 { domain = vec2(384, 216); }
+node still: Flow { domain = vec2(384, 216); }
+node clear: Amount { domain = vec2(384, 216); }
 node rest: fluid.rest@1 { domain = 1; }
 
 node hand: fluid.hand@1 { previous <~ hand.result from rest.result; }

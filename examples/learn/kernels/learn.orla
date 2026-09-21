@@ -46,13 +46,6 @@ kernel learn.init@1 {
     compute { return hash(float(element()) + 3.75) - 0.5; }
 }
 
-// Nothing, the size of the weights: what the gradients are summed into.
-kernel learn.zeros@1 {
-    requires { field.write; }
-    output result: Rows<Float>;
-    compute { return 0.0; }
-}
-
 // The gradient of the loss over every point, summed weight by weight:
 // element e is weight e % 65 of point e / 65 (the node's domain is the
 // product), so the sum needs no array and every element is one forward

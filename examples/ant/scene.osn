@@ -5,7 +5,7 @@ use "kernels/";
 param speed: Int = 250;            // steps per frame
 param zoom: Int = 4;
 
-node blank: ant.blank@1 { domain = vec2(96, 64); }
+node blank: Cells { domain = vec2(96, 64); }
 node start: ant.start@1 { domain = 3; }
 node ticks: kernel {
     requires { field.write; }

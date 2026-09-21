@@ -7,7 +7,7 @@ param speed: Int = 40;             // steps per frame
 node rom: chip8.rom@1 { domain = 55; }
 node boot: chip8.boot@1 { rom <- rom.result; domain = 4096; }
 node start: chip8.start@1 { domain = 64; }
-node blank: chip8.blank@1 { domain = vec2(64, 32); }
+node blank: Screen { domain = vec2(64, 32); }
 node ticks: kernel {
     requires { field.write; }
     output result: Rows<Int>;

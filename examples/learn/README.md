@@ -14,7 +14,7 @@ zero, with the circle drawn faintly; `dots` scatters the points onto it.
 ```text
 points ─┬─ train (x8: grads, a scatter summing gradients; step) ─┬─ loss
 init ───┤            weights carried frame to frame               ├─ view ─ dots
-work, zeros                                                       ┘
+zeros ──┘  (a filled Field, written in the scene)                 ┘
 ```
 
 Watch it learn in the Player; `render` writes the frames. The replay
@@ -27,9 +27,9 @@ cargo run --release -- replay examples/learn/tests/learn.replay --backend jit
 cargo run --release -- render examples/learn/scene.osn --frames 120 --backend gpu --out /tmp/learn
 ```
 
-What the round found: a reduce's output port wants a declared `type`
-(`type Losses = Rows<Loss>;`), a struct name alone is refused; a
-scatter's element count is its first input's size, so a step over
-`points x weights` elements takes a Field of that size (`work`) to map
-over; and the learning rate is the whole story, 0.5 barely moves in 480
-steps, 5 diverges, 2 learns.
+What the round found, and what came of it: a reduction's output port
+wanted a declared `type`, and now takes its element (`output result:
+Loss;`); a scatter mapped over its first input, so a step over `points
+x weights` elements needed a Field of that size, and now sets `domain =
+16640;` instead; and the learning rate is the whole story, 0.5 barely
+moves in 480 steps, 5 diverges, 2 learns.
