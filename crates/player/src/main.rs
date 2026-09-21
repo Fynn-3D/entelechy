@@ -265,11 +265,11 @@ impl Player {
                 }
                 _ => orla::protocol::respond_line(&mut self.session, &incoming.line),
             };
-            let _ = incoming.reply.send(response);
+            incoming.reply.send(response);
             // A quit on standard input closes the window; on a socket it
             // closes that connection, which an empty line tells its writer.
             if quit && !incoming.local {
-                let _ = incoming.reply.send(String::new());
+                incoming.reply.send(String::new());
             }
             if quit && incoming.local {
                 event_loop.exit();

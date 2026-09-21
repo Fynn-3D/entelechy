@@ -71,24 +71,44 @@ pub struct Incoming {
     /// The request line.
     pub line: String,
     /// Where the response line goes.
-    pub reply: std::sync::mpsc::Sender<String>,
+    pub reply: Reply,
     /// Whether it came on standard input, where `quit` ends the process;
     /// on a socket, `quit` ends that connection.
     pub local: bool,
 }
 
-/// Feeds standard input's lines to `sink` and answers on standard
-/// output, from threads of its own.
-pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) {
-    let (reply, answers) = std::sync::mpsc::channel::<String>();
-    std::thread::spawn(move || {
-        let stdout = std::io::stdout();
-        for line in answers {
-            let mut out = stdout.lock();
-            let _ = writeln!(out, "{line}");
-            let _ = out.flush();
+/// Where an answer goes.
+#[derive(Clone)]
+pub enum Reply {
+    /// A connection's own writer, which outlives the answer.
+    Connection(std::sync::mpsc::Sender<String>),
+    /// The process's standard output, written where the answer is made.
+    /// A `quit` on standard input ends the process, and a writer of its
+    /// own might not have written the answer to it by then: this is why
+    /// the last answer used to go missing about once in a hundred runs.
+    Stdout,
+}
+
+impl Reply {
+    /// Sends one answer line.
+    pub fn send(&self, line: String) {
+        match self {
+            Self::Connection(sender) => {
+                let _ = sender.send(line);
+            }
+            Self::Stdout => {
+                let stdout = std::io::stdout();
+                let mut out = stdout.lock();
+                let _ = writeln!(out, "{line}");
+                let _ = out.flush();
+            }
         }
-    });
+    }
+}
+
+/// Feeds standard input's lines to `sink`; the answers are written on
+/// standard output where they are made.
+pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) {
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         for line in stdin.lock().lines().map_while(Result::ok) {
@@ -97,7 +117,7 @@ pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) {
             }
             let incoming = Incoming {
                 line,
-                reply: reply.clone(),
+                reply: Reply::Stdout,
                 local: true,
             };
             if sink.send(incoming).is_err() {
@@ -165,7 +185,7 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
         }
         let incoming = Incoming {
             line,
-            reply: reply.clone(),
+            reply: Reply::Connection(reply.clone()),
             local: false,
         };
         if sink.send(incoming).is_err() {
@@ -223,7 +243,7 @@ fn serve_websocket(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<In
                 }
                 let incoming = Incoming {
                     line,
-                    reply: reply.clone(),
+                    reply: Reply::Connection(reply.clone()),
                     local: false,
                 };
                 if sink.send(incoming).is_err() {
@@ -251,9 +271,9 @@ fn serve_websocket(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<In
 /// closes that connection.
 pub fn answer(session: &mut Session, incoming: Incoming) -> bool {
     let (response, quit) = respond_line(session, &incoming.line);
-    let _ = incoming.reply.send(response);
+    incoming.reply.send(response);
     if quit && !incoming.local {
-        let _ = incoming.reply.send(String::new());
+        incoming.reply.send(String::new());
     }
     quit && incoming.local
 }

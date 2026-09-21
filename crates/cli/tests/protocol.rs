@@ -4,10 +4,6 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value as Json, json};
 
-fn scratch() -> PathBuf {
-    scratch_in("")
-}
-
 /// A copy of the Life example in a directory of its own: tests in this
 /// binary run in parallel, so each takes a different `name`.
 fn scratch_in(name: &str) -> PathBuf {
@@ -73,7 +69,7 @@ const BRIGHT_SHOW: &str = "kernel life.show@1 { requires { field.read; field.wri
 
 #[test]
 fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
-    let dir = scratch();
+    let dir = scratch_in("-inspect");
     let scene = dir.join("scene.osn");
     let responses = talk(
         &scene,
@@ -969,7 +965,7 @@ fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
 /// `advance` advances it.
 #[test]
 fn an_agent_can_measure_the_scene_it_is_holding() {
-    let dir = scratch();
+    let dir = scratch_in("-measure");
     let responses = talk(
         &dir.join("scene.osn"),
         &[
