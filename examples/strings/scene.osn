@@ -1,0 +1,22 @@
+// Six strings, six keys: `1` to `6` pluck them. The delay lines and the
+// heads are carried from frame to frame, so a note rings on across the
+// blocks of samples; the picture is the lines themselves.
+use "kernels/";
+
+param gain: Float = 0.22;
+param decay: Float = 0.996;
+
+node block: Rows<Int> { domain = 800; }     // a block of samples to walk
+node quiet: Rows<Float> { domain = 3072; }
+node ready: strings.ready@1 { domain = 12; }
+node play: strings.play@1 {
+    block <- block.result;
+    line <~ play.line from quiet.result;
+    state <~ play.state from ready.result;
+    gain = gain;
+    decay = decay;
+}
+node view: strings.draw@1 { line <- play.line; domain = window(); }
+
+output result <- view.result;
+output sound <- play.result;

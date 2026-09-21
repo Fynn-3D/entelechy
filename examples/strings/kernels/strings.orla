@@ -1,0 +1,129 @@
+// Six plucked strings. A string is a delay line: a burst of noise goes
+// in, and every time round, each sample is averaged with the next one
+// and written back a little quieter. What comes out is a note whose
+// pitch is the line's length and whose high partials fade first, which
+// is what a plucked string does. The line lives in a memory carried
+// from frame to frame, so a note rings across the blocks of samples the
+// scene plays.
+
+type Line = Rows<Float>;          // every string's delay line, end to end
+type State = Rows<Int>;           // a head and a held key per string
+
+// The longest line, which is the lowest note; every string keeps this
+// much room whatever its own length.
+fn longest() -> Int { return 512; }
+fn strings() -> Int { return 6; }
+
+// The keys, `1` to `6`, and the note each one plays: a minor pentatonic
+// scale in semitones from the lowest string.
+fn key_of(s: Int) -> Int { return 49 + s; }
+fn semitones(s: Int) -> Int { return match s { 0 => 0, 1 => 3, 2 => 5, 3 => 7, 4 => 10, _ => 12 }; }
+
+// The line's length in samples: the sample rate over the note.
+fn line_length(s: Int, hz: Float) -> Int {
+    let note = 110.0 * pow(2.0, float(semitones(s)) / 12.0);
+    return clamp(int(hz / note), 8, longest());
+}
+
+fn mix32(n: Int) -> Int {
+    let a = mul_wrap(n ^ 0x27D4EB2D, 0x85EBCA6B);
+    let b = a ^ (a >>> 13);
+    let c = mul_wrap(b, 0xC2B2AE35);
+    return c ^ (c >>> 16);
+}
+
+// A number between -1 and 1 from a whole one.
+fn noise(n: Int) -> Float {
+    return float(mix32(n) >>> 8) / 8388608.0 - 1.0;
+}
+
+// The lines start quiet and the heads at nothing.
+kernel strings.ready@1 {
+    requires { field.write; }
+    output result: State;
+    compute { return 0; }
+}
+
+// A block of samples, and the strings as they are left. The scan walks
+// the block sample by sample; every sample moves each string's head on
+// one place, and the first sample of a block is where a key that has
+// just gone down fills its string with noise.
+kernel strings.play@1 {
+    requires { field.read; field.write; input.read; time.read; }
+    input block: Rows<Int>;           // one element a sample: what the scan walks
+    memory line: Line;
+    memory state: State;
+    param gain: Float = 0.22;
+    param decay: Float = 0.996;
+    output result: Rows<Float>;
+    scan with out = 0.0 {
+        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
+        let sample = index();
+        // A key down that was not down before plucks: the line takes a
+        // burst of noise, and the key is remembered so that holding it
+        // does not pluck again.
+        // The pluck writes and nothing reads what it gives; a write is
+        // kept all the same.
+        let _ = if sample == 0 {
+            loop 6 with hits = 0 {
+                let s = index();
+                let held = key(key_of(s));
+                let was = at(state, strings() + s) == 1;
+                put(state, strings() + s, int(held));
+                if !held || was { hits } else {
+                    let length = line_length(s, hz);
+                    loop 512 with k = 0 {
+                        if index() < length {
+                            put(line, s * longest() + index(), noise(mix32(s * 7919) + index()));
+                            k + 1
+                        } else { k }
+                    };
+                    hits + 1
+                }
+            }
+        } else { 0 };
+        // Every string moves on one sample: what the head holds comes
+        // out, and the average of it and the next one goes back in.
+        let sound = loop 6 with acc = 0.0 {
+            let s = index();
+            let length = line_length(s, hz);
+            let base = s * longest();
+            let head = at(state, s) % length;
+            let here = at(line, base + head);
+            let next = at(line, base + (head + 1) % length);
+            put(line, base + head, (here + next) * 0.5 * decay);
+            put(state, s, (head + 1) % length);
+            acc + here
+        };
+        return sound * gain;
+    }
+}
+
+// The strings as they stand: six bands, each a line drawn from its own
+// delay line, brighter where it is loud.
+kernel strings.draw@1 {
+    requires { field.read; field.write; time.read; }
+    input line: Line;
+    output result: Image;
+    fn colour(s: Int) -> Vec3 {
+        return mix(vec3(0.40, 0.88, 0.78), vec3(0.98, 0.66, 0.32), float(s) / 5.0);
+    }
+    compute {
+        let uv = coord() / domain();
+        let hz = if rate() > 0.0 { rate() } else { 48000.0 };
+        let band = clamp(int(uv.y * float(strings())), 0, strings() - 1);
+        let middle = (float(band) + 0.5) / float(strings());
+        // Each string drawn across the picture at its own length, so a
+        // short line and a long one both fill the width.
+        let length = line_length(band, hz);
+        let place = clamp(int(uv.x * float(length)), 0, length - 1);
+        let value = at_linear(line, float(band * longest() + place) + fract(uv.x * float(length)));
+        let string = middle + value * 0.055;
+        let away = abs(uv.y - string) * domain().y;
+        let near = clamp(1.6 - away, 0.0, 1.0);
+        let glow = clamp(0.35 - away * 0.03, 0.0, 1.0) * abs(value) * 3.0;
+        let ground = vec3(0.05, 0.06, 0.09) + vec3(0.01, 0.01, 0.02) * float(band % 2);
+        let lit = ground + colour(band) * (near * (0.45 + abs(value) * 2.5) + glow);
+        return vec4(lit.x, lit.y, lit.z, 1.0);
+    }
+}

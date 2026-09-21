@@ -119,6 +119,10 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   to tell the inside of a circle from the outside, all of it Kernels: the
   gradient as a scatter, the step placed eight times a frame, the
   weights carried on; the plane painted as the network answers.
+- [strings](strings/README.md): six plucked strings, `1` to `6`, each a delay
+  line in a `memory` carried from frame to frame; a scan walks the block of
+  samples, a key fills a line with noise, and what comes out is the scene's
+  sound.
 - [collapse](collapse/README.md): wave function collapse on a grid of pipe
   tiles, a `Grid<Int>` of bitmasks: a reduce picks the cell with the fewest
   tiles left, a map settles it, and six placements of a map spread what that

@@ -550,6 +550,21 @@ clock advances while it measures, as `advance` advances it, so an agent
 that edits a Kernel can ask what the edit cost and hold it against what
 it asked before.
 
+A round of play in the domain that was thinnest: `strings`, six plucked
+strings on the keys `1` to `6`. A string is a delay line, a `memory`
+carried frame to frame with `<~`, and a scan walks the block of 800
+samples writing each slot back as the average of itself and the next,
+a little quieter: Karplus-Strong, four lines of Kernel. A key that has
+just gone down fills its line with noise at the block's first sample,
+and nothing reads what that loop gives, which the optimizer keeps
+because it holds writes. The picture is the lines themselves, each
+drawn at its own length. The rendered sound measures 110.3 and 131.1 Hz
+for the first two strings, which are the notes asked for, and the
+replay pins samples and line slots that the interpreter, the JIT and
+the GPU all agree on to a ten-thousandth. A frame is 22.9 ms on the
+interpreter, 2.3 on the JIT, 0.9 on the GPU at 640x400. Nothing had to
+be fixed to write it, which is the first time that has happened.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.
