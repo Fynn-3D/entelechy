@@ -1494,3 +1494,50 @@ fn bench_measures_frames_and_compares_with_what_it_wrote() {
     assert!(!output.status.success());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// What a long session must not do: keep what it replaced. A thousand
+/// republishes of one Kernel, evaluated in step, leave one version of
+/// it, nothing waiting to be collected, and the Host holding only the
+/// Fields the frame needs. Memory measured outside this test stays
+/// flat over thousands of frames on all three backends; what is pinned
+/// here is the bookkeeping that would otherwise grow without bound.
+#[test]
+fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
+    let dir = scratch("long");
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    session.sync();
+    let kernels = session.runtime().kernels().count();
+    assert!(kernels >= 3, "the scene publishes its Kernels: {kernels}");
+    let context = Context::default();
+    // What one frame leaves live is what a thousand of them must.
+    session.evaluate(&context).unwrap();
+    let live = session.runtime().host().live();
+    for step in 0..1000 {
+        let source = format!(
+            "kernel image.grayscale@1 {{ requires {{ field.read; field.write; }} input source: Image; param amount: Float = 1.0; output result: Image; fn luma(c: Vec4) -> Float {{ return c.r * {} + c.g * 0.7152 + c.b * 0.0722; }} compute {{ let c = sample(source); let g = luma(c); return mix(c, vec4(g, g, g, c.a), amount); }} }}",
+            0.2126 + f64::from(step) * 0.000_001
+        );
+        session
+            .publish_source(&source, orla_runtime::Expect::Any)
+            .unwrap_or_else(|error| panic!("{error}"));
+        if step % 4 == 0 {
+            session.evaluate(&context).unwrap();
+        }
+    }
+    assert_eq!(
+        session.runtime().kernels().count(),
+        kernels,
+        "one version of each Kernel, whatever was published over it"
+    );
+    assert_eq!(
+        session.runtime().uncollected(),
+        0,
+        "nothing prepared and left uncollected"
+    );
+    assert_eq!(
+        session.runtime().host().live(),
+        live,
+        "the Host holds what the frame needs and no more"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

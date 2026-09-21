@@ -654,6 +654,15 @@ impl Runtime {
         self.ready.remove(&ticket)
     }
 
+    /// Preparations the worker has finished or been told to forget that
+    /// nothing has collected. A session that publishes and evaluates in
+    /// step leaves none; a growing number is work started and never
+    /// asked for, which would hold a module and a backend's prepared
+    /// state with it.
+    pub fn uncollected(&self) -> usize {
+        self.ready.len() + self.discarded.len()
+    }
+
     /// Forgets a preparation whose result is no longer wanted.
     pub fn discard(&mut self, ticket: Ticket) {
         self.collect();

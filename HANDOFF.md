@@ -585,6 +585,20 @@ are, deliberately: the flat dispatch matches (`Machine::step`,
 `Builder::call`), each one arm per operation, which a split would
 only scatter.
 
+Measured, not fixed, because there was nothing to fix: a session that
+evaluates for a long time holds steady. Four thousand frames of
+`collapse` at 640x400 left the resident size where it started on the
+JIT (30 MB) and on the GPU (121 MB), and a session that publishes a
+Kernel again and again, evaluating in step, keeps one version of it
+(the test below pins that, and that nothing prepared is left
+uncollected, and that the Host holds what one frame holds). What
+republishing does cost is under a kilobyte a version that the allocator
+keeps rather than returns: twenty thousand republishes grew the
+resident size by 16 MB on the JIT and stopped growing when they
+stopped. An agent that republishes once a second would carry a few
+megabytes an hour of that, which is the allocator's business and not a
+version's.
+
 Seen once, not again: `crates/cli/tests/protocol.rs`
 `fields_come_in_through_write_and_buttons_reach_kernels` failed in a
 full `cargo test --workspace` that ran beside a release replay loop:
