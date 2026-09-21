@@ -29,7 +29,10 @@ probe ─ digits ─ layout ─┘        (font.png feeds every draw)
   through the shared function `ink`, which any Kernel may call with its
   own rows and font. `text.layout@1` spaces a row of codes from an origin,
   optionally wrapping every `wrap` glyphs; `text.digits@1` writes a
-  number as digit codes. A string is an input of the document, `input
+  number as digit codes; `text.label@1` writes a caption, a space and a
+  number with `places` digits and `decimals` as one row of codes, so a
+  readout is a label, a layout and a draw (the rubik example's
+  `play.osn`). A string is an input of the document, `input
   title: Rows<Int> = text "ORLA";`, the characters' codes as rows the
   session writes and rewrites as the document changes; a Kernel may also
   compute codes, as `codes` does for the specimen.

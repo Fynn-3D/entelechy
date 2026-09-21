@@ -81,3 +81,44 @@ kernel text.draw@1 {
         return mix(c, vec4(colour.x, colour.y, colour.z, c.a), a);
     }
 }
+
+// A caption and a number as one row of codes for `text.layout`: the
+// caption's codes, a space, and value `index` of `values` with `places`
+// digits before the point and `decimals` after (none, and no point, at
+// zero), leading zeros blank; a node sets `domain = size(caption) +
+// places + decimals + 2;` (one less with no decimals).
+kernel text.label@1 {
+    requires { field.read; field.write; }
+    input caption: Codes;
+    input values: Rows<Float>;
+    param index: Int = 0;
+    param places: Int = 2;
+    param decimals: Int = 0;
+    output result: Codes;
+    struct Power { k: Int; p: Int; }
+    fn tenth(n: Int) -> Int {
+        return (loop 9 with q = Power { k: 0, p: 1 } until q.k >= n { Power { k: q.k + 1, p: q.p * 10 } }).p;
+    }
+    compute {
+        let i = element();
+        let n = count(caption);
+        let v = at(values, index);
+        let scaled = int(round(abs(v) * float(tenth(decimals))));
+        let whole = scaled / tenth(decimals);
+        let fraction = scaled % tenth(decimals);
+        let point = n + 1 + places;
+        let code = if i < n { at(caption, i) }
+            else if i == n { 32 }
+            else if i < point {
+                let want = places - 1 - (i - n - 1);
+                let lead = whole / tenth(want);
+                if lead == 0 && want > 0 { 32 } else { 48 + lead % 10 }
+            }
+            else if i == point { if decimals > 0 { 46 } else { 32 } }
+            else {
+                let want = decimals - 1 - (i - point - 1);
+                48 + (fraction / tenth(want)) % 10
+            };
+        return code;
+    }
+}

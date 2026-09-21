@@ -206,10 +206,13 @@ over cubes times weights with one chain-rule term per element, the
 update a map, the weights carried through `<~`), its guess of the turns
 from solved shown over the picture: training and inference live, the
 CPU and the JIT bit for bit, the GPU within rounding, the replay at
-1.5 s on the interpreter. Open: inference from weights trained
-elsewhere (a `.field` of weights read as an `input`, which the pieces
-allow and no example shows); and automation past one frame, which the
-render command begins.
+1.5 s on the interpreter. Done since: `render --save`
+keeps a node's output after the last frame, and `rubik/play.osn` reads
+the weights it kept (300 frames of training) as an `input`, inference
+as its own scene; `text.label` in the shared text library is a caption
+and a number as one row of codes, so a readout is three nodes and no
+Kernel. Open: automation past one frame, which the render command
+begins.
 
 The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar

@@ -458,8 +458,10 @@ capability claim.
   for a count of frames, the clock being the frame count over the rate,
   and writes each picture as a PNG in a directory and the sound output as
   one WAV, block after block; `async` nodes are settled after every
-  frame. A video is ffmpeg's job over the directory; no codec is a
-  dependency.
+  frame; `--save` writes a node's output after the last frame, how a
+  state reached over many frames (a network's weights) is kept for a
+  scene to read back. A video is ffmpeg's job over the directory; no
+  codec is a dependency.
 
 - Async nodes (the plan's "async Kernels"): `async = true;` on a node.
   `Runtime::execute_later` copies the invocation's inputs into a Host of

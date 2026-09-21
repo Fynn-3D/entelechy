@@ -25,12 +25,15 @@ usage:
                           [--out <dir>] [--library <dir|file>] [--input <name>=<file.ppm>]...
                           [--param <name>=<literal>]... [--window <w>x<h>[@<scale>]]
                           [--backend cpu|gpu|jit] [--no-fusion]
+                          [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
       Step the scene for n frames at the rate (60 by default) and write each
       frame's picture as <dir>/0000.png, 0001.png, ... and the sound output,
       block after block, as <dir>/sound.wav at the sound rate (48000 by
       default, what Kernels read as rate()). The clock is the frame count
       over the rate, so a render is the same every time; async nodes are
       waited for after every frame. ffmpeg makes a video of the directory.
+      --save writes a node's output after the last frame, as run's does:
+      how a state trained or settled over many frames is kept.
   orla trace <scene.osn> --node <name> (--element <i> | --at <x> <y> [<z>])
                          [--time <seconds>] [--param <name>=<literal>]...
                          [--window <w>x<h>[@<scale>]] [--library <dir|file>]
@@ -308,6 +311,8 @@ struct RenderOptions {
     backend: String,
     fusion: bool,
     render: orla::render::Options,
+    /// Node outputs written after the last frame, as `run --save`.
+    saves: Vec<(String, String, PathBuf)>,
 }
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
@@ -318,6 +323,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
         params: Vec::new(),
         backend: "cpu".into(),
         fusion: true,
+        saves: Vec::new(),
         render: orla::render::Options {
             frames: 0,
             rate: 60.0,
@@ -376,6 +382,16 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
                     .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
                 options.inputs.push((name.to_owned(), PathBuf::from(path)));
             }
+            "--save" => {
+                let binding = value("--save")?;
+                let (target, path) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
+                let (node, port) = target.split_once('.').unwrap_or((target, "result"));
+                options
+                    .saves
+                    .push((node.to_owned(), port.to_owned(), PathBuf::from(path)));
+            }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => {
                 if scene.replace(PathBuf::from(other)).is_some() {
@@ -404,6 +420,9 @@ fn render(args: &[String]) -> Result<(), String> {
         session.set_param(name, *value);
     }
     session.set_fusion(options.fusion);
+    for (node, _, _) in &options.saves {
+        session.pin(orla_graph::NodeId(node.clone()));
+    }
     report_events(&session.sync());
     let started = Instant::now();
     let total = options.render.frames;
@@ -427,6 +446,15 @@ fn render(args: &[String]) -> Result<(), String> {
             summary.channels,
             options.render.sound_rate,
             orla::render::SOUND_NAME
+        );
+    }
+    for (node, port, path) in &options.saves {
+        session
+            .save(&orla_graph::NodeId(node.clone()), port, path)
+            .map_err(|error| format!("cannot save {node}.{port}: {error}"))?;
+        eprintln!(
+            "saved {node}.{port} after the last frame -> {}",
+            path.display()
         );
     }
     Ok(())

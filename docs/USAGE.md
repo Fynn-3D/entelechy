@@ -66,8 +66,13 @@ picture is the first output that is a grid of pixels and the sound the
 first that is rows of one or two floats, as the Player chooses them.
 The clock is the frame count over the rate, so a render is the same
 every time, and an `async` node's run is waited for after every frame,
-so no step is skipped. The other flags are `run`'s. A clip comes in the same way, as a
-directory of frames a scene reads with `frames "clip/" at <rate>`. A
+so no step is skipped. The other flags are `run`'s; `--save
+<node.port>=<file>` writes a node's output after the last frame, so a
+state that took many frames to reach, a network's weights trained over
+a run or a simulation settled, is kept as a file a scene reads back
+with `input weights: Rows<Float> = "weights.field";`. A clip comes in
+the same way, as a directory of frames a scene reads with `frames
+"clip/" at <rate>`. A
 video is one ffmpeg call over the directory:
 
 ```sh
