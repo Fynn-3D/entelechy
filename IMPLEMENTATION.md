@@ -26,6 +26,7 @@ capability claim.
 | Short-circuit and guards | [lowering](crates/compiler/src/lower/expr.rs), [parser](crates/language/src/parser.rs) `block_body`, [optimizer](crates/ir/src/optimize.rs) `folded` | [interpreter](crates/cpu/tests/execute.rs), [feature matrix](crates/matrix/src/lib.rs) `short circuit`, [parser tests](crates/language/src/parser.rs) |
 | Loops over literals | [optimizer](crates/ir/src/optimize.rs) `Simplify::run_loop` | [optimizer tests](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Waiting for a device | [gpu](crates/gpu/src/lib.rs) `settle_device`, [runtime](crates/runtime/src/lib.rs) `Backend::settle_device`, [bench](crates/cli/src/bench.rs) | measured by `orla bench` on every example |
+| Bridges checked | [bridge tests](crates/cli/tests/bridges.rs), [web runner](bridges/web/test.mjs), [godot test](bridges/godot/test.gd) | run when node, Chrome and Godot are present; skipped with a word otherwise |
 | A scene to start from | [scaffold](crates/cli/src/scaffold.rs), [cli](crates/cli/src/main.rs) `new_scene` | [session tests](crates/cli/tests/session.rs) (made, checked, replayed) |
 | A long session | [runtime](crates/runtime/src/lib.rs) `uncollected`, [session tests](crates/cli/tests/session.rs) | a thousand republishes evaluated in step |
 | Measuring a scene | [bench](crates/cli/src/bench.rs) `measure`, [cli](crates/cli/src/main.rs), [protocol](crates/cli/src/protocol.rs) `bench` | [session tests](crates/cli/tests/session.rs), [protocol tests](crates/cli/tests/protocol.rs) |

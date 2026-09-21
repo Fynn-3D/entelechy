@@ -411,6 +411,12 @@ graphs: one grammar, wiring written at the consumer, inline Kernels, and
 
 ## Bridges
 
+The bridges with runners of their own are checked by the workspace's
+tests when the tools are present: `cargo test -p orla --test bridges`
+runs the web page headless through node and Chrome and the Godot
+project through `godot -s`, and says which it skipped when a tool is
+missing.
+
 A running window is open to other programs over the protocol's socket
 transport: `orla-player --serve --listen 127.0.0.1:7788 scene.osn`, or
 `orla serve --listen ...` without a window. `bridges/blender` is an add-on

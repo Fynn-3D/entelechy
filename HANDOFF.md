@@ -585,6 +585,16 @@ are, deliberately: the flat dispatch matches (`Machine::step`,
 `Builder::call`), each one arm per operation, which a split would
 only scatter.
 
+The two bridges with runners of their own are run by the suite now,
+when the tools they need are on the machine: `bridges/web/test.mjs`
+through node and a headless Chrome, and `bridges/godot/test.gd` through
+Godot with `-s`, each given the test binary's own `orla`. Both pass
+against everything this session changed (the protocol's new ops, the
+named manifests, the device wait), which is what the round was for;
+what is new is that the next change to break one breaks `cargo test`
+rather than waiting for someone to open a bridge. A machine without
+node, Chrome or Godot skips them and says so.
+
 `orla new <dir>` writes a directory that runs: a Kernel, the scene, a
 replay of what it draws, and a README saying what to change first.
 Three kinds, because the three things people start with want different
