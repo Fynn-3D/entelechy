@@ -1438,3 +1438,59 @@ fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `bench` measures the same frames several times and says the least of
+/// the runs; what it writes with `--json` it reads back with
+/// `--compare`, which is how a change is shown to cost nothing.
+#[test]
+fn bench_measures_frames_and_compares_with_what_it_wrote() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let dir = scratch("bench");
+    let json = dir.join("before.json");
+    // A scene that changes with the clock: one whose nodes are all
+    // reused would measure only the finding of that out, which the
+    // table says in place of the numbers.
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/collapse/scene.osn");
+    let measure = |extra: &[&str]| {
+        Command::new(orla)
+            .arg("bench")
+            .arg(&scene)
+            .args([
+                "--frames",
+                "2",
+                "--repeat",
+                "2",
+                "--backend",
+                "cpu",
+                "--window",
+                "80x60",
+            ])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let output = measure(&["--nodes", "--json", json.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}{stdout}");
+    assert!(stdout.contains("2 frame(s) a run, 2 run(s)"), "{stdout}");
+    assert!(stdout.contains("vs cpu"), "{stdout}");
+    assert!(stdout.contains("ms a frame a node"), "{stdout}");
+    // The scene's own nodes are named, fused groups as the graph runs
+    // them.
+    assert!(stdout.contains("steps/*.spread/*"), "{stdout}");
+
+    let output = measure(&["--compare", json.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    // The comparison column carries what the earlier run said and by
+    // how much this one differs.
+    assert!(
+        stdout.contains("ms +") || stdout.contains("ms -"),
+        "{stdout}"
+    );
+
+    let output = measure(&["--compare", dir.join("nothing.json").to_str().unwrap()]);
+    assert!(!output.status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}

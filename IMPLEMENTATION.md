@@ -24,6 +24,7 @@ capability claim.
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | Short-circuit and guards | [lowering](crates/compiler/src/lower/expr.rs), [parser](crates/language/src/parser.rs) `block_body`, [optimizer](crates/ir/src/optimize.rs) `folded` | [interpreter](crates/cpu/tests/execute.rs), [feature matrix](crates/matrix/src/lib.rs) `short circuit`, [parser tests](crates/language/src/parser.rs) |
+| Measuring a scene | [bench](crates/cli/src/bench.rs), [cli](crates/cli/src/main.rs) `measure` | [session tests](crates/cli/tests/session.rs) |
 | Named manifests | [ir display](crates/ir/src/display.rs) `type_name`, `Manifest::named`, [protocol](crates/cli/src/protocol.rs) `manifest_json`, [schema](crates/host/src/lib.rs) `describe` | [compile tests](crates/compiler/tests/compile.rs), [protocol tests](crates/cli/tests/protocol.rs), [composition](crates/graph/tests/composition.rs) |
 | Save targets | [session](crates/cli/src/session.rs) `save`, `output_source`, `why_not_saved`, [cli](crates/cli/src/main.rs) | [session tests](crates/cli/tests/session.rs) |
 | WGSL naming | [wgsl](crates/gpu/src/wgsl.rs) `Op::Loop`, `Op::Index` | [gpu tests](crates/gpu/tests/parity.rs) |

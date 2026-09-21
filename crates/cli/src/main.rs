@@ -57,6 +57,17 @@ usage:
       Read an archive back into a directory, its manifest checked.
   orla replay <file.replay>... [--backend cpu|gpu|jit]
       Drive scenes through scripted frames and inputs and check pixels.
+  orla bench <scene.osn> [--frames <n>] [--repeat <n>] [--rate <fps>]
+                         [--backend cpu|gpu|jit|all]... [--nodes]
+                         [--window <w>x<h>[@<scale>]] [--library <dir|file>]
+                         [--param <name>=<literal>]... [--input <name>=<file>]...
+                         [--no-fusion] [--json <file>] [--compare <file>]
+      Step the scene for --frames frames --repeat times on each backend and
+      print the least of the runs, a millisecond a frame. The first frame
+      of all is thrown away: it compiles and allocates. --nodes measures
+      every node as well, waiting for the device after each one. --json
+      writes the measurement, and --compare reads one back and prints what
+      changed since, which is how a change is shown to cost nothing.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
       Print the flattened graph and what would execute, fused groups marked.
   orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu|jit]
@@ -79,6 +90,7 @@ fn main() -> ExitCode {
         Some("render") => render(&args[1..]),
         Some("replay") => replay(&args[1..]),
         Some("serve") => serve(&args[1..]),
+        Some("bench") => measure(&args[1..]),
         Some("graph") => graph(&args[1..]),
         Some("trace") => trace(&args[1..]),
         Some("help") => help(&args[1..]),
@@ -608,6 +620,101 @@ fn run(args: &[String]) -> Result<(), String> {
             );
         }
     }
+}
+
+/// `orla bench`: the same frames, several times, on one backend or all
+/// of them.
+fn measure(args: &[String]) -> Result<(), String> {
+    let mut options = orla::bench::Options::default();
+    let mut backends: Vec<String> = Vec::new();
+    let mut scene: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        let mut value = |flag: &str| -> Result<String, String> {
+            let value = args
+                .get(index)
+                .cloned()
+                .ok_or_else(|| format!("{flag} needs a value"))?;
+            index += 1;
+            Ok(value)
+        };
+        match arg {
+            "--frames" => {
+                options.frames = value("--frames")?
+                    .parse()
+                    .map_err(|_| "--frames needs a count".to_string())?;
+            }
+            "--repeat" => {
+                options.repeat = value("--repeat")?
+                    .parse()
+                    .map_err(|_| "--repeat needs a count".to_string())?;
+            }
+            "--rate" => {
+                options.rate = value("--rate")?
+                    .parse()
+                    .map_err(|_| "--rate needs frames a second".to_string())?;
+            }
+            "--backend" => backends.push(value("--backend")?),
+            "--nodes" => options.nodes = true,
+            "--no-fusion" => options.fusion = false,
+            "--library" => options.kernels = Some(PathBuf::from(value("--library")?)),
+            "--json" => options.json = Some(PathBuf::from(value("--json")?)),
+            "--compare" => options.compare = Some(PathBuf::from(value("--compare")?)),
+            "--window" => options.window = Some(orla::parse_window(&value("--window")?)?),
+            "--param" => {
+                let binding = value("--param")?;
+                let (name, text) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
+                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
+                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
+                options.params.push((name.to_owned(), literal));
+            }
+            "--input" => {
+                let binding = value("--input")?;
+                let (name, path) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--input needs <name>=<file>".to_string())?;
+                options.inputs.push((name.to_owned(), PathBuf::from(path)));
+            }
+            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
+            other => {
+                if scene.replace(PathBuf::from(other)).is_some() {
+                    return Err("bench takes exactly one scene file".into());
+                }
+            }
+        }
+    }
+    options.scene = scene.ok_or_else(|| "bench needs a scene file".to_string())?;
+    // `--backend all` is every backend this build has, fastest last so
+    // the table reads from the reference down to it.
+    if backends.iter().any(|name| name == "all") {
+        backends = ["cpu", "jit", "gpu"]
+            .iter()
+            .filter(|name| Session::runtime_for(name, orla::session::DEFAULT_BUDGET_PIXELS).is_ok())
+            .map(|name| (*name).to_owned())
+            .collect();
+    }
+    if !backends.is_empty() {
+        options.backends = backends;
+    }
+    let before = match &options.compare {
+        Some(path) => Some(orla::bench::read(path)?),
+        None => None,
+    };
+    let measured = orla::bench::bench(&options)?;
+    print!(
+        "{}",
+        orla::bench::table(&options, &measured, before.as_deref())
+    );
+    if let Some(path) = &options.json {
+        std::fs::write(path, orla::bench::json(&options, &measured))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        eprintln!("wrote {}", path.display());
+    }
+    Ok(())
 }
 
 fn graph(args: &[String]) -> Result<(), String> {

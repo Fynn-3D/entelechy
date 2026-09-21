@@ -159,6 +159,48 @@ the nodes (pinning each so fusion keeps it materialized) and back to the
 output; the F10 line shows the node in view, the frame time, what ran and
 what was fused, and how the frame reached the window.
 
+## Measuring a scene
+
+```sh
+cargo run --release -- bench examples/collapse/scene.osn \
+    --window 640x400 --backend all --frames 20 --repeat 3 --nodes
+```
+
+steps the scene for twenty frames three times on each backend and prints
+the least of the runs, a millisecond a frame:
+
+```text
+backend   frame ms    median   vs cpu        was
+cpu         295.20    305.36      1.00x
+jit          10.66     10.70     27.68x
+gpu           6.63      6.73     44.49x
+```
+
+The first frame of all is thrown away: it compiles the Kernels,
+allocates the Fields and warms the caches. The clock advances by the
+frame count over `--rate`, as `render`'s does, so the work measured is
+the same work every time, and the least of the runs is the measurement
+least disturbed by everything else on the machine; the median beside it
+says how much the machine wandered while measuring.
+
+`--nodes` measures every node as well, waiting for the device after each
+one, so those numbers are the work rather than the submission and add up
+to more than the frame. A node placed several times is one line,
+`steps/*.spread/* (48)`, with its total.
+
+`--json <file>` writes the measurement and `--compare <file>` reads one
+back, adding what the earlier run said and how far this one is from it,
+which is how a change is shown to cost nothing:
+
+```text
+backend   frame ms    median   vs jit        was
+jit          10.78     10.82      1.00x       10.69 ms +0.9%
+```
+
+A scene whose nodes do not change with the clock reuses all of them
+after the first frame; the table says so rather than reporting the time
+it took to find that out.
+
 ## Fusion
 
 Chains of pointwise nodes run as one Kernel: a producer whose only reader

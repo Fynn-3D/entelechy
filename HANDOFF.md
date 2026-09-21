@@ -494,6 +494,18 @@ A layout that does not match is described in words too: "expects an
 element of one float (f) but is bound to a Field of one integer (i)"
 rather than "laid out as f ... i".
 
+`orla bench` measures a scene the way this project has been measuring
+one all along, and by hand every time: a warm-up frame thrown away, a
+count of frames run several times, the least of the runs reported, and
+the clock advanced by the frame count so the work is the same work
+every time. `--backend all` puts the three in one table against the
+first of them, `--nodes` adds what each node cost with the device
+waited for (a node placed several times as one line), and `--json` and
+`--compare` are the A and the B: the second run prints what the first
+said and how far it is from it. A scene that does not change with the
+clock reuses everything after the first frame, and the table says that
+rather than reporting the time it took to find out.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.
