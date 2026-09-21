@@ -359,6 +359,8 @@ pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
         "timings": report.timings.iter().map(|(node, took)| json!({ "node": node.to_string(), "millis": took.as_secs_f64() * 1000.0 })).collect::<Vec<_>>(),
         "migrated": report.migrated.iter().map(|(node, port, kernel)| json!({ "node": node.to_string(), "port": port, "kernel": kernel.to_string() })).collect::<Vec<_>>(),
         "reset": report.reset.iter().map(|(node, port, reason)| json!({ "node": node.to_string(), "port": port, "reason": reason })).collect::<Vec<_>>(),
+        "pending": report.pending.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "landed": report.landed.iter().map(ToString::to_string).collect::<Vec<_>>(),
     })
 }
 
@@ -671,6 +673,9 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         }
         "evaluate" => {
             let context = context_of(session, request);
+            if request.get("settle").and_then(Json::as_bool) == Some(true) {
+                session.settle().map_err(|e| failure(e.to_string()))?;
+            }
             let report = match request.get("nodes").and_then(Json::as_array) {
                 Some(nodes) => {
                     let demand = nodes
@@ -988,6 +993,7 @@ fn graph_json(
                 orla_graph::DomainSpec::Literal(orla_runtime::Domain::Volume(w, h, d)) => json!([w, h, d]),
                 orla_graph::DomainSpec::Expr(expr) => json!(expr.to_string()),
             }),
+            "async": node.is_async,
         })).collect::<Vec<_>>(),
         "outputs": graph.outputs.iter().map(|(name, s)| json!({ "name": name, "source": source(s) })).collect::<Vec<_>>(),
     })

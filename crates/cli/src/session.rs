@@ -1392,6 +1392,18 @@ impl Session {
     }
 
     /// Evaluates the current graph under `context`. Unchanged nodes are
+    /// Waits for every `async` node's run off the frame and takes it in;
+    /// the next evaluation reads what landed. See
+    /// [`orla_graph::Evaluator::settle`].
+    pub fn settle(&mut self) -> Result<Vec<orla_graph::NodeId>, EvaluateError> {
+        self.evaluator.settle(&mut self.runtime)
+    }
+
+    /// Whether any `async` node's run is still going.
+    pub fn has_running(&self) -> bool {
+        self.evaluator.has_running()
+    }
+
     /// reused; state commits only when the whole evaluation succeeds.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
         let graph = self.graph.as_ref().ok_or_else(|| {

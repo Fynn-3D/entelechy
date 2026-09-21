@@ -21,7 +21,8 @@ use std::sync::Arc;
 
 use orla_abi::{Capability, Context, Domain, FieldData, Handle, Invocation, Type, Value};
 use orla_runtime::{
-    ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Runtime, Ticket,
+    ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Run, Runtime,
+    Ticket,
 };
 
 use crate::{Binding, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue, Source};
@@ -273,6 +274,13 @@ pub struct Report {
     /// and, with no migration named, restarted from the initial source;
     /// with why.
     pub reset: Reset,
+    /// `async` nodes whose run off the frame was going on, started by this
+    /// evaluation or an earlier one; their readers took their last
+    /// output.
+    pub pending: Vec<NodeId>,
+    /// `async` nodes whose run landed before this evaluation's nodes ran,
+    /// so their readers saw the new output.
+    pub landed: Vec<NodeId>,
 }
 
 /// State ports carried into a new layout: the reading node, its port,
@@ -336,6 +344,14 @@ struct Pending {
     ticket: Ticket,
 }
 
+/// An `async` node's run off the frame: the key it was started under,
+/// which the landed outputs are cached with.
+struct Running {
+    run: Run,
+    key: CacheKey,
+    output_names: Vec<String>,
+}
+
 /// One executing unit: a node, or a node with producers inlined.
 struct Group {
     node: Node,
@@ -373,6 +389,7 @@ pub struct Evaluator {
     pinned: BTreeSet<NodeId>,
     fused: BTreeMap<NodeId, Fused>,
     pending: BTreeMap<NodeId, Pending>,
+    running: BTreeMap<NodeId, Running>,
 }
 
 impl fmt::Debug for Evaluator {
@@ -426,6 +443,9 @@ impl Evaluator {
         self.fused.clear();
         for (_, pending) in std::mem::take(&mut self.pending) {
             runtime.discard(pending.ticket);
+        }
+        for (_, running) in std::mem::take(&mut self.running) {
+            runtime.discard_run(running.run);
         }
         let mut released = BTreeSet::new();
         for cached in cache.into_values() {
@@ -613,6 +633,7 @@ impl Evaluator {
     ) -> Result<Report, EvaluateError> {
         let order = graph.order()?;
         self.prune(graph, runtime);
+        let landed = self.land(runtime)?;
         let needed = demand.map(|demand| self.needed(graph, demand));
         let groups = self.plan(graph, &order, runtime, externals, params, context)?;
         let (migrated, reset) = self.reconcile_state(&groups, runtime, context)?;
@@ -631,6 +652,7 @@ impl Evaluator {
         let mut reused = Vec::new();
         let mut fused = Vec::new();
         let mut timings = Vec::new();
+        let mut pending = Vec::new();
         for group in &groups {
             let node = &group.node;
             if needed
@@ -659,6 +681,41 @@ impl Evaluator {
                 reused.push(node.id.clone());
                 continue;
             }
+            let output_names: Vec<String> = group
+                .version
+                .manifest()
+                .outputs
+                .iter()
+                .map(|port| port.name.clone())
+                .collect();
+            if node.is_async && self.cache.contains_key(&node.id) {
+                // One run at a time; while it goes, the frame carries the
+                // last output and the state this node feeds stays.
+                if !self.running.contains_key(&node.id) {
+                    let run =
+                        runtime
+                            .execute_later(&group.version, &invocation)
+                            .map_err(|error| EvaluateError::Execution {
+                                node: node.id.clone(),
+                                error,
+                            })?;
+                    self.running.insert(
+                        node.id.clone(),
+                        Running {
+                            run,
+                            key,
+                            output_names,
+                        },
+                    );
+                }
+                pending.push(node.id.clone());
+                continue;
+            }
+            // A first run, or one with nothing cached to carry, is on the
+            // frame; a run still going for it is no longer wanted.
+            if let Some(running) = self.running.remove(&node.id) {
+                runtime.discard_run(running.run);
+            }
             let started = std::time::Instant::now();
             let outputs = runtime
                 .execute(&group.version, &invocation)
@@ -667,26 +724,7 @@ impl Evaluator {
                     error,
                 })?;
             timings.push((node.id.clone(), started.elapsed()));
-            self.epoch += 1;
-            let fresh = Cached {
-                key,
-                outputs,
-                output_names: group
-                    .version
-                    .manifest()
-                    .outputs
-                    .iter()
-                    .map(|port| port.name.clone())
-                    .collect(),
-                epoch: self.epoch,
-            };
-            if let Some(previous) = self.cache.insert(node.id.clone(), fresh) {
-                for output in previous.outputs {
-                    if !self.is_committed(output) {
-                        release(runtime, output);
-                    }
-                }
-            }
+            self.store(&node.id, key, outputs, output_names, runtime);
             executed.push(node.id.clone());
         }
         let mut outputs = Vec::with_capacity(graph.outputs.len());
@@ -725,7 +763,86 @@ impl Evaluator {
             fused,
             migrated,
             reset,
+            pending,
+            landed,
         })
+    }
+
+    /// Caches a node's fresh outputs and lets go of the ones they replace,
+    /// unless they are committed state.
+    fn store(
+        &mut self,
+        id: &NodeId,
+        key: CacheKey,
+        outputs: Vec<Handle>,
+        output_names: Vec<String>,
+        runtime: &mut Runtime,
+    ) {
+        self.epoch += 1;
+        let fresh = Cached {
+            key,
+            outputs,
+            output_names,
+            epoch: self.epoch,
+        };
+        if let Some(previous) = self.cache.insert(id.clone(), fresh) {
+            for output in previous.outputs {
+                if !self.is_committed(output) {
+                    release(runtime, output);
+                }
+            }
+        }
+    }
+
+    /// Takes every run that has landed into the cache, as an execution on
+    /// the frame would have gone in. A run that failed fails the
+    /// evaluation the way a failure on the frame does.
+    fn land(&mut self, runtime: &mut Runtime) -> Result<Vec<NodeId>, EvaluateError> {
+        let mut landed = Vec::new();
+        let ids: Vec<NodeId> = self.running.keys().cloned().collect();
+        for id in ids {
+            let Some(outcome) = runtime.poll_run(self.running[&id].run) else {
+                continue;
+            };
+            let running = self.running.remove(&id).expect("listed");
+            self.take_landed(&id, running, outcome, runtime)?;
+            landed.push(id);
+        }
+        Ok(landed)
+    }
+
+    /// Waits for every run off the frame and takes each into the cache;
+    /// the next evaluation reads them, and commits the state they feed.
+    /// Returns the nodes that landed.
+    pub fn settle(&mut self, runtime: &mut Runtime) -> Result<Vec<NodeId>, EvaluateError> {
+        let mut landed = Vec::new();
+        while let Some(id) = self.running.keys().next().cloned() {
+            let running = self.running.remove(&id).expect("listed");
+            let outcome = runtime.wait_run(running.run);
+            self.take_landed(&id, running, outcome, runtime)?;
+            landed.push(id);
+        }
+        Ok(landed)
+    }
+
+    /// Whether any node's run is still going.
+    pub fn has_running(&self) -> bool {
+        !self.running.is_empty()
+    }
+
+    fn take_landed(
+        &mut self,
+        id: &NodeId,
+        running: Running,
+        outcome: Result<Vec<Handle>, ExecutionError>,
+        runtime: &mut Runtime,
+    ) -> Result<(), EvaluateError> {
+        let outputs = outcome.map_err(|error| EvaluateError::Execution {
+            node: id.clone(),
+            error,
+        })?;
+        self.store(id, running.key, outputs, running.output_names, runtime);
+        Ok(())
     }
 
     /// Before the nodes run: every `<~` port whose committed state no
@@ -910,6 +1027,8 @@ impl Evaluator {
                     != Some(1)
                     || self.pinned.contains(&producer_id)
                     || absorbed_into.contains_key(&producer_id)
+                    || groups[position].node.is_async
+                    || graph.node(&producer_id).is_some_and(|node| node.is_async)
                 {
                     continue;
                 }
@@ -1192,6 +1311,17 @@ impl Evaluator {
         for id in stale {
             self.drop_cache(&id, runtime);
         }
+        let gone: Vec<NodeId> = self
+            .running
+            .keys()
+            .filter(|id| graph.node(id).is_none())
+            .cloned()
+            .collect();
+        for id in gone {
+            if let Some(running) = self.running.remove(&id) {
+                runtime.discard_run(running.run);
+            }
+        }
         let stale_state: Vec<(NodeId, String)> = self
             .committed
             .keys()
@@ -1283,7 +1413,9 @@ impl Evaluator {
                     continue;
                 };
                 let key = (node.clone(), port.clone());
-                if advanced.contains(&key) {
+                // A run off the frame has not given this evaluation its
+                // value: the state stays until it lands.
+                if advanced.contains(&key) || self.running.contains_key(node) {
                     continue;
                 }
                 let current =

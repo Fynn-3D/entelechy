@@ -85,7 +85,9 @@ as `[w, h]`, `scale`; `size` null for none) or `orla serve --window
 the person's and these two are ignored. With `nodes`, it evaluates only
 those nodes, what they read, the state (which must advance), and any
 output never produced; the rest keeps its last value. An agent watching
-a state row pays for the state, not the picture.
+a state row pays for the state, not the picture. With `settle: true`, it
+first waits for every `async` node's run off the frame to land, so the
+evaluation reads it.
 
 `help` answers with every builtin a Kernel may call (`builtins`, each
 `{name, kind, signatures, doc, requires, entry_only}`), or, with `name`,
@@ -108,8 +110,11 @@ when more than 256 were made). An evaluation's report carries
 `migrated`, `{node, port, kernel}` for every `<~` port whose state was
 carried into a new layout by its `migrate` Kernel before the nodes ran;
 and `reset`, `{node, port, reason}` for every such port that had no
-migration and restarted from its initial source. A `graph` answer shows
-a `<~` binding's migration as `migrate`.
+migration and restarted from its initial source; `pending`, the `async`
+nodes whose run off the frame was going on, their readers taking the
+last output; and `landed`, those whose run landed before this
+evaluation's nodes ran. A `graph` answer shows a `<~` binding's
+migration as `migrate` and a node's `async`.
 
 `read` with `format: "field"` returns any Field as the Host's file format
 (what `run --save` writes and an `input` reads), and `write` with the same

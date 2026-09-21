@@ -855,6 +855,19 @@ fn evaluate_and_export(
             for (node, port, reason) in &report.reset {
                 eprintln!("state of `{node}.{port}` restarted from its initial value: {reason}");
             }
+            let names = |nodes: &[orla_graph::NodeId]| {
+                nodes
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            if !report.landed.is_empty() {
+                eprintln!("landed from off the frame: [{}]", names(&report.landed));
+            }
+            if !report.pending.is_empty() {
+                eprintln!("still running off the frame: [{}]", names(&report.pending));
+            }
             // volume are reached with `--save`.
             let is_picture = {
                 let host = session.runtime().host();

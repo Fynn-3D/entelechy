@@ -1372,3 +1372,87 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
         "seed and the committed state only"
     );
 }
+
+const COUNT: &str = "kernel test.count@1 { requires { field.read; field.write; } input previous: Image; output result: Image; compute { let c = sample(previous); return vec4(c.r + 1.0, c.g, c.b, c.a); } }";
+const OFF_FRAME: &str = "
+node source: image.gradient@1 { domain = vec2(2, 2); }
+node count: test.count@1 { previous <~ count.result from source.result; async = true; }
+node final: image.invert@1 { source <- count.result; }
+output result <- final.result;
+";
+
+#[test]
+fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
+    let graph = Graph::parse(OFF_FRAME).unwrap();
+    assert!(graph.to_string().contains("async = true;"));
+    let mut runtime = runtime();
+    runtime.load(COUNT).unwrap();
+    let mut evaluator = Evaluator::new();
+    let none = BTreeMap::new();
+    let defaults = BTreeMap::new();
+    let red = |runtime: &Runtime, handle| runtime.host().read_pixel(handle, 0, 0).unwrap()[0];
+    // The first run is on the frame, so `final` has something to read.
+    let first = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(0.0), &defaults)
+        .unwrap();
+    assert_eq!(first.executed, ids(&["source", "count", "final"]));
+    assert!(first.pending.is_empty());
+    assert_eq!(
+        first.committed,
+        vec![(NodeId("count".into()), "result".into())]
+    );
+    assert_eq!(red(&runtime, first.output), 1.0 - 1.0);
+    // The state advanced, so the count runs again: off the frame now.
+    // Its reader keeps the last output, and the state stays as it was.
+    let second = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(1.0), &defaults)
+        .unwrap();
+    assert_eq!(second.pending, ids(&["count"]));
+    assert!(second.executed.is_empty());
+    assert_eq!(second.reused, ids(&["source", "final"]));
+    assert!(second.committed.is_empty());
+    assert!(evaluator.has_running());
+    assert_eq!(red(&runtime, second.output), 0.0);
+    // Settling waits for the run; the next evaluation reads it, re-runs
+    // the reader, and commits the state it feeds.
+    assert_eq!(evaluator.settle(&mut runtime).unwrap(), ids(&["count"]));
+    assert!(!evaluator.has_running());
+    let third = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(2.0), &defaults)
+        .unwrap();
+    assert!(third.pending.is_empty());
+    assert_eq!(third.executed, ids(&["final"]));
+    assert_eq!(
+        third.committed,
+        vec![(NodeId("count".into()), "result".into())]
+    );
+    assert_eq!(red(&runtime, third.output), 1.0 - 2.0);
+    // A landed run is reported by the evaluation that took it in.
+    let fourth = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(3.0), &defaults)
+        .unwrap();
+    assert_eq!(fourth.pending, ids(&["count"]));
+    evaluator.settle(&mut runtime).unwrap();
+    let fifth = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(4.0), &defaults)
+        .unwrap();
+    assert!(
+        fifth.landed.is_empty(),
+        "settled runs landed before the evaluation"
+    );
+    let sixth = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(5.0), &defaults)
+        .unwrap();
+    assert_eq!(sixth.pending, ids(&["count"]));
+    while runtime.runs_in_flight() > 0 {
+        std::thread::yield_now();
+    }
+    let seventh = evaluator
+        .evaluate(&graph, &mut runtime, &none, &at(6.0), &defaults)
+        .unwrap();
+    assert_eq!(seventh.landed, ids(&["count"]));
+    assert_eq!(seventh.executed, ids(&["final"]));
+    assert_eq!(red(&runtime, seventh.output), 1.0 - 4.0);
+    evaluator.clear(&mut runtime);
+    assert_eq!(runtime.host().live(), 0);
+}

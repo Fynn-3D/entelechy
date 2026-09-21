@@ -429,6 +429,17 @@ output result <- display.result;      // named graph output; sub-graph outputs
    anywhere means the last time's. `N` is a literal or a graph param; a
    param that sizes the graph lowers the document again when it changes,
    so `param level 3` over the protocol resizes a running scene.
+11. A node with `async = true;` runs off the frame: an evaluation starts
+   its execution on a thread of its own and goes on. Until the run
+   lands, the node's readers take its last output and the state it
+   feeds through `<~` stays as it was; the evaluation that finds the run
+   landed reads the new output, re-runs the readers, and commits. Its
+   first run is on the frame, so its readers have something to read; one
+   run goes at a time. The inputs are copied when the run starts, so it
+   is for work that takes longer than its inputs take to copy: a machine
+   stepping a million instructions, a solve, a long reduction. Such a
+   node is never fused. A replay's `settle`, and `evaluate` with
+   `settle: true` over the protocol, wait for every run to land.
 
 ### Packages
 

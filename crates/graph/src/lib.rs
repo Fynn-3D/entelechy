@@ -136,6 +136,12 @@ pub struct Node {
     /// Explicit output extent, literal or computed from the node's inputs
     /// and parameters; defaults to the first input's extent.
     pub domain: Option<DomainSpec>,
+    /// Written `async = true;`: the node runs off the frame. An
+    /// evaluation starts its execution on a thread and goes on; until
+    /// the run lands, the node's readers take its last output, and the
+    /// state it feeds stays as it was. Its first run is on the frame, so
+    /// its readers have something to read.
+    pub is_async: bool,
 }
 
 /// A graph document.
@@ -514,6 +520,9 @@ impl fmt::Display for Graph {
             }
             if let Some(domain) = &node.domain {
                 writeln!(f, "    domain = {domain};")?;
+            }
+            if node.is_async {
+                writeln!(f, "    async = true;")?;
             }
             writeln!(f, "}}")?;
         }

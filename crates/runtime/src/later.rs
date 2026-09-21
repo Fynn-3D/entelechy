@@ -1,0 +1,265 @@
+//! Execution off the frame: a version run on its own thread over copies
+//! of its inputs, redeemed by a poll.
+//!
+//! [`Runtime::execute_later`] brings the invocation's inputs into Host
+//! memory, copies them into a Host of the thread's own, and starts the
+//! backend's execute there; the frame goes on. [`Runtime::poll_run`]
+//! takes what landed, as Fields of the runtime's Host; [`Runtime::wait_run`]
+//! blocks for one run. The copies cost a pass over the inputs, and on a
+//! backend that keeps Fields resident a download before and an upload
+//! after, the same price the ordered-scan path pays, so a run off the
+//! frame is for work that takes longer than its inputs take to copy.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
+
+use orla_abi::{FieldData, Handle, Host, Invocation, Scope};
+use orla_ir::Validated;
+use orla_rules::ExecutionError;
+
+use crate::{Backend, Body, KernelVersion, Runtime};
+
+/// An execution handed to a thread; redeemed with [`Runtime::poll_run`]
+/// or [`Runtime::wait_run`], once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Run(u64);
+
+impl fmt::Display for Run {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "r{}", self.0)
+    }
+}
+
+/// What a run gives back: one Field per manifest output, as words.
+type Outcome = Result<Vec<FieldData>, ExecutionError>;
+
+struct Landed {
+    run: Run,
+    outcome: Outcome,
+}
+
+/// The runs in flight, and the ones back and waiting to be redeemed.
+pub(crate) struct Runs {
+    next: u64,
+    landed: Sender<Landed>,
+    arrivals: Receiver<Landed>,
+    in_flight: BTreeSet<Run>,
+    ready: BTreeMap<Run, Outcome>,
+    discarded: BTreeSet<Run>,
+}
+
+impl Runs {
+    pub(crate) fn new() -> Self {
+        let (landed, arrivals) = channel();
+        Self {
+            next: 1,
+            landed,
+            arrivals,
+            in_flight: BTreeSet::new(),
+            ready: BTreeMap::new(),
+            discarded: BTreeSet::new(),
+        }
+    }
+
+    fn issue(&mut self) -> Run {
+        let run = Run(self.next);
+        self.next += 1;
+        run
+    }
+
+    fn file(&mut self, landed: Landed) {
+        self.in_flight.remove(&landed.run);
+        if !self.discarded.remove(&landed.run) {
+            self.ready.insert(landed.run, landed.outcome);
+        }
+    }
+
+    fn collect(&mut self) {
+        let arrived: Vec<Landed> = self.arrivals.try_iter().collect();
+        for landed in arrived {
+            self.file(landed);
+        }
+    }
+}
+
+impl Runtime {
+    /// Starts executing a pinned version on a thread of its own and
+    /// returns at once. The inputs are copied first, so the caller may
+    /// release or overwrite them while the run goes on. A native
+    /// operation is device work and runs now; its run is redeemed like
+    /// any other.
+    pub fn execute_later(
+        &mut self,
+        version: &Arc<KernelVersion>,
+        invocation: &Invocation,
+    ) -> Result<Run, ExecutionError> {
+        let run = self.runs.issue();
+        let Body::Kernel { module, .. } = &version.body else {
+            let outcome = self
+                .execute(version, invocation)
+                .and_then(|outputs| self.take_words(outputs));
+            self.runs.ready.insert(run, outcome);
+            return Ok(run);
+        };
+        let mut scratch = Host::new(self.host.budget_words());
+        let mut inputs = Vec::with_capacity(invocation.inputs.len());
+        for handle in &invocation.inputs {
+            self.materialize(*handle)?;
+            let data = self.host.data(*handle).map_err(abi)?.clone();
+            inputs.push(scratch.adopt(data).map_err(abi)?);
+        }
+        let invocation = Invocation {
+            inputs,
+            ..invocation.clone()
+        };
+        let backend = self.shared_backend_for(module);
+        let version = Arc::clone(version);
+        let landed = self.runs.landed.clone();
+        std::thread::Builder::new()
+            .name(format!("orla run {run}"))
+            .spawn(move || {
+                let outcome = run_on(backend.as_ref(), &version, &invocation, &mut scratch);
+                let _ = landed.send(Landed { run, outcome });
+            })
+            .map_err(|error| ExecutionError::Device(format!("cannot start a thread: {error}")))?;
+        self.runs.in_flight.insert(run);
+        Ok(run)
+    }
+
+    /// Takes a landed run's outputs as Fields of this Host, or `None`
+    /// while it is still going. A run is redeemed once.
+    pub fn poll_run(&mut self, run: Run) -> Option<Result<Vec<Handle>, ExecutionError>> {
+        self.runs.collect();
+        let outcome = self.runs.ready.remove(&run)?;
+        Some(outcome.and_then(|fields| self.adopt_all(fields)))
+    }
+
+    /// Blocks until `run` lands and takes its outputs; other runs that
+    /// land meanwhile wait for their own poll.
+    pub fn wait_run(&mut self, run: Run) -> Result<Vec<Handle>, ExecutionError> {
+        loop {
+            self.runs.collect();
+            if let Some(outcome) = self.runs.ready.remove(&run) {
+                return outcome.and_then(|fields| self.adopt_all(fields));
+            }
+            if !self.runs.in_flight.contains(&run) {
+                return Err(ExecutionError::Device(format!(
+                    "run {run} is not in flight"
+                )));
+            }
+            match self.runs.arrivals.recv() {
+                Ok(landed) => self.runs.file(landed),
+                Err(_) => {
+                    return Err(ExecutionError::Device(format!("run {run} was lost")));
+                }
+            }
+        }
+    }
+
+    /// Forgets a run whose outputs are no longer wanted; what it lands is
+    /// dropped.
+    pub fn discard_run(&mut self, run: Run) {
+        self.runs.collect();
+        if self.runs.ready.remove(&run).is_none() && self.runs.in_flight.contains(&run) {
+            self.runs.discarded.insert(run);
+        }
+    }
+
+    /// How many runs are still going.
+    pub fn runs_in_flight(&mut self) -> usize {
+        self.runs.collect();
+        self.runs.in_flight.len()
+    }
+
+    /// The backend a module executes on, shared with a thread.
+    fn shared_backend_for(&self, module: &Validated) -> Arc<dyn Backend> {
+        match &self.ordered {
+            Some(ordered) if module.manifest.mode == orla_ir::Mode::Scan => Arc::clone(ordered),
+            _ => Arc::clone(&self.backend),
+        }
+    }
+
+    /// The words of Fields of this Host, which are released.
+    fn take_words(&mut self, outputs: Vec<Handle>) -> Outcome {
+        let mut fields = Vec::with_capacity(outputs.len());
+        let mut failed = None;
+        for handle in &outputs {
+            if failed.is_none() {
+                match self
+                    .materialize(*handle)
+                    .and_then(|()| self.host.data(*handle).cloned().map_err(abi))
+                {
+                    Ok(data) => fields.push(data),
+                    Err(error) => failed = Some(error),
+                }
+            }
+            let _ = self.host.release(*handle);
+        }
+        match failed {
+            Some(error) => Err(error),
+            None => Ok(fields),
+        }
+    }
+
+    /// Fields of this Host from landed words; nothing is kept on failure.
+    fn adopt_all(&mut self, fields: Vec<FieldData>) -> Result<Vec<Handle>, ExecutionError> {
+        let mut handles = Vec::with_capacity(fields.len());
+        for data in fields {
+            match self.host.adopt(data) {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    for handle in handles {
+                        let _ = self.host.release(handle);
+                    }
+                    return Err(abi(error));
+                }
+            }
+        }
+        Ok(handles)
+    }
+}
+
+/// On the run's thread: executes over the scratch Host and brings every
+/// output to words, downloading what the backend left resident.
+fn run_on(
+    backend: &dyn Backend,
+    version: &KernelVersion,
+    invocation: &Invocation,
+    host: &mut Host,
+) -> Outcome {
+    let Body::Kernel { module, prepared } = &version.body else {
+        return Err(ExecutionError::Device(
+            "a native operation runs on the frame".into(),
+        ));
+    };
+    let granted = version.manifest().requires.clone();
+    let outputs = {
+        let mut scope = Scope::new(host, granted);
+        backend.execute(prepared.as_ref(), module, invocation, &mut scope)?
+    };
+    outputs
+        .into_iter()
+        .map(|handle| {
+            if let Some(device) = host.resident(handle).map_err(abi)? {
+                let byte_len = host.domain(handle).map_err(abi)?.count()
+                    * host.schema(handle).map_err(abi)?.words()
+                    * 4;
+                let bytes = backend
+                    .download(device, byte_len)
+                    .map_err(ExecutionError::Device)?;
+                let words = bytes
+                    .chunks_exact(4)
+                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                host.materialize(handle, words).map_err(abi)?;
+            }
+            host.data(handle).cloned().map_err(abi)
+        })
+        .collect()
+}
+
+fn abi(error: orla_abi::HostError) -> ExecutionError {
+    ExecutionError::Abi(error.into())
+}

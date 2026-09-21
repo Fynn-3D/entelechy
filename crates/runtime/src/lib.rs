@@ -35,6 +35,9 @@ use orla_ir::{Capabilities, Capability, Port, PortType, Type};
 pub use orla_ir::{KernelId, Manifest, Validated};
 pub use orla_rules::ExecutionError;
 
+mod later;
+pub use later::Run;
+
 /// An operation a backend performs natively: device access, not a Kernel.
 /// Native operations are published by the runtime itself, under
 /// [`Generation`] zero, and cannot be replaced.
@@ -480,6 +483,7 @@ pub struct Runtime {
     next_ticket: u64,
     ready: BTreeMap<Ticket, Result<Candidate, PrepareError>>,
     discarded: BTreeSet<Ticket>,
+    runs: later::Runs,
 }
 
 impl Runtime {
@@ -511,6 +515,7 @@ impl Runtime {
             next_ticket: 1,
             ready: BTreeMap::new(),
             discarded: BTreeSet::new(),
+            runs: later::Runs::new(),
         };
         // Native operations are published from the start, at generation
         // zero, so graphs bind to them like any Kernel.

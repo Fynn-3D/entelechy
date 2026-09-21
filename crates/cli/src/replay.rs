@@ -45,6 +45,9 @@ use crate::session::Session;
 pub enum Step {
     /// Evaluate at a session time.
     Frame(f32),
+    /// Wait for every `async` node's run off the frame to land, so the
+    /// next frame reads it.
+    Settle,
     /// Move the pointer and set the button.
     Pointer {
         /// New position, or keep the current one.
@@ -164,6 +167,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             ["scene", path] => scene = Some(base.join(path)),
             ["library" | "kernels", path] => kernels = Some(base.join(path)),
             ["frame", time] => steps.push(Step::Frame(number(time, "time")?)),
+            ["settle"] => steps.push(Step::Settle),
             ["pointer", state @ ("down" | "up")] => steps.push(Step::Pointer {
                 position: None,
                 down: *state == "down",
@@ -360,6 +364,11 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                 outcome.frames += 1;
                 last = Some(report);
                 input.wheel = [0.0, 0.0];
+            }
+            Step::Settle => {
+                session
+                    .settle()
+                    .map_err(|error| format!("settle: {error}"))?;
             }
             Step::Pointer { position, down } => {
                 if let Some(position) = position {

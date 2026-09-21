@@ -141,7 +141,17 @@ repeated), and packages (section 43: a directory with a `package.osn` manifest
 naming the package and the least language and IR it needs, used by a
 scene like any library, carried as one `.orlapkg` file by `orla
 pack`/`unpack`; with section 44's four versions, `orla version`), and
-lacks a scheduler beyond one worker thread, WASM, and async Kernels; phase 5's domains are touched ahead of order (audio,
+async Kernels (`async = true;` on a node: its run goes on a thread of
+its own over copies of its inputs, the frame carries its last output and
+holds its state until the run lands, `settle` waits; the `async`
+example steps the Thumb machine half a million instructions a step
+while the picture keeps its pace). The plan's parallel scheduler was
+measured and declined: a frame is the sum of its nodes on all three
+backends (fluid on the GPU: 5.8 ms of nodes in a 7.7 ms frame, the rest
+per-node dispatch), a map already uses every core on the CPU and the
+JIT, and the GPU queue is in order, so threads across nodes would gain
+nothing; an `async` node is the one case that pays, independent work
+that need not finish inside the frame. Phase 4 lacks WASM; phase 5's domains are touched ahead of order (audio,
 geometry, simulation, machines). The record showed one thing an agent
 had to know, a keyword (`scan`) could not name a node, and the grammar
 took that in: a node's name and a source reference accept any word,

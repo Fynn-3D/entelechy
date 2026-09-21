@@ -662,6 +662,7 @@ impl Lowering<'_, '_> {
             let mut inputs = BTreeMap::new();
             let mut node_params = BTreeMap::new();
             let mut domain = None;
+            let mut is_async = false;
             let mut bind = |port: &orla_language::Spanned<String>, binding: Binding| {
                 if inputs.insert(port.value.clone(), binding).is_some() {
                     return Err(error(
@@ -677,6 +678,12 @@ impl Lowering<'_, '_> {
                         if domain.replace(domain_spec(expr)?).is_some() {
                             return Err(error(name.span, "`domain` is set twice"));
                         }
+                    }
+                    NodeMember::Set(name, expr) if name.value == "async" => {
+                        let ExprKind::Bool(value) = &expr.kind else {
+                            return Err(error(expr.span, "`async` is `true` or `false`"));
+                        };
+                        is_async = *value;
                     }
                     NodeMember::Set(name, expr) => {
                         if node_params
@@ -713,6 +720,7 @@ impl Lowering<'_, '_> {
                         inputs,
                         params: node_params,
                         domain,
+                        is_async,
                     });
                 }
                 NodeKind::Inline(kernel) => {
@@ -779,6 +787,7 @@ impl Lowering<'_, '_> {
                         inputs,
                         params: node_params,
                         domain,
+                        is_async,
                     });
                 }
                 NodeKind::SubGraph(sub_path) => {
@@ -786,6 +795,12 @@ impl Lowering<'_, '_> {
                         return Err(error(
                             sub_path.span,
                             "a sub-graph takes no `domain`; its nodes set their own",
+                        ));
+                    }
+                    if is_async {
+                        return Err(error(
+                            sub_path.span,
+                            "a sub-graph takes no `async`; its nodes say which of them run off the frame",
                         ));
                     }
                     let resolved = base.join(&sub_path.value);

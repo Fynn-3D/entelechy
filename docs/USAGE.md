@@ -114,6 +114,9 @@ through the protocol to observe its image.
 
 ## Backends
 
+`run` also says which `async` nodes were still running off the frame and
+which landed before the nodes ran.
+
 `run`, `replay`, `serve` and the Player take `--backend cpu|gpu|jit`. The
 CPU interpreter is the reference and reports per-pixel integer failures;
 the GPU backend runs the same IR as WGSL compute through wgpu, keeps
@@ -236,7 +239,9 @@ cargo run -p orla-export -- atlas.field --out atlas.png
 
 An application's tests are `.replay` files next to its scene: scripted frames,
 pointer and key input, the window (`window 240 135 0.25`: its size in
-pixels and its scale factor), state resets, and expectations. No Rust is
+pixels and its scale factor), state resets, `settle` (waits for every
+`async` node's run off the frame to land, so the next frame reads it),
+and expectations. No Rust is
 needed to test a scene. An expectation is a pixel of the output
 (`expect 11 10 = 1.0 1.0 1.0`, with an optional tolerance) or a field of an
 element of a node's output, named as the Kernel declared it
