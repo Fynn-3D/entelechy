@@ -464,6 +464,27 @@ ray march measured about one percent slower with it at 960x540, so the
 hot loops keep their `until`; the chip8 key wait, which is a search,
 reads as one now.
 
+A round of play against the new language: `collapse`, wave function
+collapse on a grid of the sixteen pipe tiles, every cell a bitmask of
+what it could still be in a `Grid<Int>`. A reduce picks the cell with
+the fewest left, a map settles it on one of them, and a map placed six
+times spreads what that rules out; eight of those a frame, the grid
+carried through `<~`, and the pointer melts what is under it. Every
+step is integer work, so the replay pins its counts with no tolerance
+at all on the three backends.
+
+Writing it turned up three faults, all fixed. The GPU named a loop's
+counter `i` and the loop's value number, which at thirty-two spells
+`i32`: every `i32(...)` in that loop's body then parsed as a call of a
+variable and the shader was rejected, so only a Kernel whose loop
+landed on that number ever showed it (`nothing_the_shader_declares_
+spells_a_type` writes the Kernel at every length so one of them does).
+A `--save` split `node.port` at the first dot, so no node of a placed
+graph could be named at all, and it now splits at the last. And a
+`--save` may name one of the scene's outputs, which stands for what it
+is wired to, while a name that is a placed graph says so rather than
+saying it has no value.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

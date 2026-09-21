@@ -389,7 +389,9 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
                 let (target, path) = binding
                     .split_once('=')
                     .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
-                let (node, port) = target.split_once('.').unwrap_or((target, "result"));
+                // A node of a placed graph carries dots in its name, so
+                // the port is what follows the last one.
+                let (node, port) = target.rsplit_once('.').unwrap_or((target, "result"));
                 options
                     .saves
                     .push((node.to_owned(), port.to_owned(), PathBuf::from(path)));
@@ -513,7 +515,9 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
                 let (target, path) = binding
                     .split_once('=')
                     .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
-                let (node, port) = target.split_once('.').unwrap_or((target, "result"));
+                // A node of a placed graph carries dots in its name, so
+                // the port is what follows the last one.
+                let (node, port) = target.rsplit_once('.').unwrap_or((target, "result"));
                 options
                     .saves
                     .push((node.to_owned(), port.to_owned(), PathBuf::from(path)));

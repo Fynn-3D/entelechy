@@ -1752,10 +1752,12 @@ impl Emitter<'_> {
                     Some(bound) => format!("clamp({}, 0i, {count}i)", v(bound)),
                     None => format!("{count}i"),
                 };
+                // `it` and the value's number: a plain `i` would spell
+                // `i32` at value 32, which WGSL reads as the type.
                 self.line(
                     depth,
                     &format!(
-                        "for (var i{0}: i32 = 0; i{0} < {limit}; i{0} = i{0} + 1) {{",
+                        "for (var it{0}: i32 = 0; it{0} < {limit}; it{0} = it{0} + 1) {{",
                         id.0
                     ),
                 );
@@ -1775,7 +1777,7 @@ impl Emitter<'_> {
                 None => "carried".to_owned(),
             },
             Op::Index => match self.loops.last() {
-                Some(id) => format!("i{}", id.0),
+                Some(id) => format!("it{}", id.0),
                 None => "i32(element)".to_owned(),
             },
             Op::Coord => match self.output_shape() {

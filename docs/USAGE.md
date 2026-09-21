@@ -48,7 +48,10 @@ with `@<scale>` for a scale factor other than one. `--save
 <node.port>=<file>` writes any node's output after the evaluation: `.field`
 for any Field, `.png` or `.ppm` for a grid of pixels (a `Grid<Float>` as
 gray), `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
-floats; the node is pinned so fusion keeps it. A Kernel that draws a
+floats; the node is pinned so fusion keeps it. What may be named is a
+node, a node of a placed graph (whose own name carries dots and slashes,
+`steps/8.spread/6.result`, so the port is what follows the last dot), or
+one of the scene's own outputs, which stands for what it is wired to. A Kernel that draws a
 sprite sheet or synthesizes a drum, and a `--save`, are how an asset is
 made; `--out` is written only when the output is a picture. `--profile`
 prints how long each executed node's Kernel took. On the GPU it asks

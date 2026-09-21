@@ -1390,3 +1390,51 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// What a `--save` may name: a node, a node of a placed graph (whose
+/// own name carries dots, so the port is what follows the last one), or
+/// one of the scene's outputs. A name that is none of those says what
+/// it is instead of that it has no value.
+#[test]
+fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/collapse/scene.osn");
+    let dir = scratch("saves");
+    let run = |target: &str, file: &str| {
+        Command::new(orla)
+            .arg("run")
+            .arg(&scene)
+            .args(["--window", "160x100", "--backend", "cpu"])
+            .arg("--save")
+            .arg(format!("{target}={}", dir.join(file).display()))
+            .arg("--out")
+            .arg(dir.join("picture.ppm"))
+            .output()
+            .unwrap()
+    };
+    let output = run("grid", "by-output.field");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = run("steps/8.spread/6.result", "by-node.field");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The same Field either way: the output is the node it is wired to.
+    assert_eq!(
+        std::fs::read(dir.join("by-output.field")).unwrap(),
+        std::fs::read(dir.join("by-node.field")).unwrap()
+    );
+    let output = run("steps.result", "nothing.field");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("is not a node: it is placed as 64 of them"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

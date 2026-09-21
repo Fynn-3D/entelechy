@@ -1,0 +1,12 @@
+// One step of the collapse: pick the cell with the least left, settle
+// it, and let the news travel six cells before the next step.
+use "kernels/";
+
+input cells: Grid<Int>;
+param melt: Float = 2.5;
+
+node pick: collapse.pick@1 { cells <- cells; }
+node settled: collapse.step@1 { cells <- cells; pick <- pick.result; melt = melt; }
+node spread: collapse.spread@1 { times = 6; carry cells <- result; cells <- settled.result; }
+
+output result <- spread.result;

@@ -1388,3 +1388,39 @@ fn a_merge_may_read_inputs_params_and_the_context() {
         "{cpu_value}"
     );
 }
+
+/// Nothing the emitter names may spell a WGSL type. A loop's counter
+/// was `i` and the loop's own value number, which at 32 reads as the
+/// type `i32`, and every `i32(...)` in that loop's body then parsed as
+/// a call of a variable: the shader was rejected, and only a Kernel
+/// whose loop happened to land on that number showed it. The Kernel
+/// here is written at every length, so one of them lands there.
+#[test]
+fn nothing_the_shader_declares_spells_a_type() {
+    for length in 0..48 {
+        let padding: String = (0..length)
+            .map(|k| format!("let p{k} = element() * {k} + {k};"))
+            .collect();
+        let sum: String = (0..length)
+            .map(|k| format!(" + p{k}"))
+            .collect::<Vec<_>>()
+            .join("");
+        let source = format!(
+            "kernel test.names@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ {padding} let counted = loop 16 with a = 0 {{ a + int(float(index()) * 0.5) }}; return counted{sum}; }} }}"
+        );
+        let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+        let shader = orla_gpu::wgsl::emit(&module);
+        for declared in ["i32", "u32", "f32", "bool", "vec2", "mat2x2", "array"] {
+            for form in [
+                format!("var {declared}:"),
+                format!("let {declared}:"),
+                format!("var {declared} ="),
+            ] {
+                assert!(
+                    !shader.contains(&form),
+                    "with {length} bindings the shader declares `{form}`:\n{shader}"
+                );
+            }
+        }
+    }
+}

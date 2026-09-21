@@ -24,6 +24,8 @@ capability claim.
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | Short-circuit and guards | [lowering](crates/compiler/src/lower/expr.rs), [parser](crates/language/src/parser.rs) `block_body`, [optimizer](crates/ir/src/optimize.rs) `folded` | [interpreter](crates/cpu/tests/execute.rs), [feature matrix](crates/matrix/src/lib.rs) `short circuit`, [parser tests](crates/language/src/parser.rs) |
+| Save targets | [session](crates/cli/src/session.rs) `save`, `output_source`, `why_not_saved`, [cli](crates/cli/src/main.rs) | [session tests](crates/cli/tests/session.rs) |
+| WGSL naming | [wgsl](crates/gpu/src/wgsl.rs) `Op::Loop`, `Op::Index` | [gpu tests](crates/gpu/tests/parity.rs) |
 | Type parameters | [lowering](crates/compiler/src/lower/mod.rs) `instantiate`, `lower_function`, [parser](crates/language/src/parser.rs) `function` | [compile tests](crates/compiler/tests/compile.rs), [feature matrix](crates/matrix/src/lib.rs) `type parameters` |
 | Break with a value | [lowering](crates/compiler/src/lower/expr.rs) `result_with_break`, `until_or_stopped` | [interpreter](crates/cpu/tests/execute.rs), [feature matrix](crates/matrix/src/lib.rs) `break`, [compile tests](crates/compiler/tests/compile.rs) |
 | Ranges and field bindings | [parser](crates/language/src/parser.rs) `arm_values`, `destructure`, [lexer](crates/language/src/lexer.rs) | [parser tests](crates/language/src/parser.rs), [feature matrix](crates/matrix/src/lib.rs) `match`, `structs` |

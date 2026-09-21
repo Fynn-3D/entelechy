@@ -1,0 +1,181 @@
+// Wave function collapse, as Fields: a grid where every cell holds the
+// set of tiles it could still be, one bit a tile. A step picks the cell
+// with the fewest possibilities left, collapses it to one of them, and
+// spreads what that rules out to its neighbours; a frame takes several
+// steps, and the picture is whatever the grid has settled into so far.
+//
+// A tile is four bits, one a side: 1 the side towards -y, 2 towards +x,
+// 4 towards +y, 8 towards -x, each saying the pipe leaves that way. Two
+// cells fit when the sides they share agree, so a run of tiles is one
+// connected plumbing, and the sixteen tiles are every combination.
+
+struct Pick { rank: Int; at: Int; }
+
+// The tiles whose `side` is open (1) or closed (0).
+fn side_mask(side: Int, value: Int) -> Int {
+    return loop 16 with m = 0 {
+        if ((index() >>> side) & 1) == value { m | (1 << index()) } else { m }
+    };
+}
+
+// What a neighbour leaves possible here: whichever of open and closed
+// it can still be on the side we share.
+fn allowed(neighbour: Int, theirs: Int, mine: Int) -> Int {
+    let open = (neighbour & side_mask(theirs, 1)) != 0;
+    let closed = (neighbour & side_mask(theirs, 0)) != 0;
+    return (if open { side_mask(mine, 1) } else { 0 })
+         | (if closed { side_mask(mine, 0) } else { 0 });
+}
+
+fn mix32(n: Int) -> Int {
+    let a = mul_wrap(n ^ 0x27D4EB2D, 0x85EBCA6B);
+    let b = a ^ (a >>> 13);
+    let c = mul_wrap(b, 0xC2B2AE35);
+    return c ^ (c >>> 16);
+}
+
+// Every tile possible, everywhere, but the blank one: every cell leads
+// somewhere, which is what makes the picture plumbing rather than dust.
+kernel collapse.start@1 {
+    requires { field.write; }
+    output result: Grid<Int>;
+    compute { return 0xFFFE; }
+}
+
+// The cell to collapse next: the fewest tiles left, ties broken by a
+// hash of the cell so the picture does not comb one way. A cell that is
+// already one tile ranks last and is never picked.
+kernel collapse.pick@1 {
+    requires { field.read; field.write; }
+    input cells: Grid<Int>;
+    output result: Pick;
+    compute {
+        let { x, y } = icoord();
+        let here = y * isize(cells).x + x;
+        let left = popcount(sample(cells));
+        let rank = if left < 2 { 0x7FFFFFF } else { left * 64 + (mix32(here) & 63) };
+        return Pick { rank: rank, at: here };
+    }
+    merge(a, b) {
+        return if a.rank < b.rank || (a.rank == b.rank && a.at < b.at) { a } else { b };
+    }
+}
+
+// One step: the picked cell becomes one of the tiles it had left, and
+// wherever the pointer is held the cells around it forget again, so a
+// drag melts the picture and it grows back.
+kernel collapse.step@1 {
+    requires { field.read; field.write; time.read; input.read; }
+    input cells: Grid<Int>;
+    input pick: Rows<Pick>;
+    param melt: Float = 2.5;             // cells, around the pointer
+    param erode: Int = 4;                // cells, where it has finished
+    output result: Grid<Int>;
+    compute {
+        let { x, y } = icoord();
+        let extent = isize(cells);
+        let here = y * extent.x + x;
+        let mask = sample(cells);
+        let chosen = at(pick, 0);
+        let middle = vec2(float(x) + 0.5, float(y) + 0.5);
+        let window = max(window(), vec2(1.0, 1.0));
+        let under = pointer() / window * float(extent);
+        let melting = pointer_down() && distance(under, middle) < melt;
+        // With nothing left to decide the grid would stand still, so a
+        // spot of it forgets a few times a second and grows back: the
+        // picture is never finished, and never the same twice.
+        let idle = chosen.rank > 0xFFFFFF;
+        let spot = mix32(int(time() * 3.0));
+        let ax = x - urem(spot >>> 17, extent.x);
+        let ay = y - urem(spot >>> 5, extent.y);
+        let eroding = idle && ax * ax + ay * ay < erode * erode;
+        if melting || eroding { return 0xFFFE; }
+        if here != chosen.at || popcount(mask) < 2 { return mask; }
+        // The kth tile still possible, k drawn from the cell and the
+        // moment: the loop walks the bits and stops at it.
+        let k = mix32(here ^ mix32(int(time() * 61.0))) >>> 28 & 15;
+        let want = k % popcount(mask);
+        let tile = loop 16 with seen = 0 {
+            if ((mask >>> index()) & 1) == 1 {
+                if seen == want { break index(); }
+                seen + 1
+            } else { seen }
+        };
+        return 1 << clamp(tile, 0, 15);
+    }
+}
+
+// What the neighbours rule out, one cell at a time: placed several
+// times, the news travels that many cells. The grid's edge is a closed
+// side, so no pipe runs off it, and a cell left with nothing melts
+// rather than sticking, which is this collapse's whole backtracking.
+kernel collapse.spread@1 {
+    requires { field.read; field.write; }
+    input cells: Grid<Int>;
+    output result: Grid<Int>;
+    compute {
+        let c = icoord();
+        let { x: w, y: h } = isize(cells);
+        let mask = at(cells, c);
+        let up = if c.y > 0 { allowed(at(cells, c + ivec2(0, -1)), 2, 0) } else { side_mask(0, 0) };
+        let right = if c.x < w - 1 { allowed(at(cells, c + ivec2(1, 0)), 3, 1) } else { side_mask(1, 0) };
+        let down = if c.y < h - 1 { allowed(at(cells, c + ivec2(0, 1)), 0, 2) } else { side_mask(2, 0) };
+        let left = if c.x > 0 { allowed(at(cells, c + ivec2(-1, 0)), 1, 3) } else { side_mask(3, 0) };
+        let next = mask & up & right & down & left;
+        return if next == 0 { 0xFFFE } else { next };
+    }
+}
+
+// How much of the grid has settled, for the readout.
+kernel collapse.tally@1 {
+    requires { field.read; field.write; }
+    input cells: Grid<Int>;
+    output result: Rows<Float>;          // a float: the readout draws it
+    compute { return float(popcount(sample(cells)) == 1); }
+    merge(a, b) { return a + b; }
+}
+
+// The picture: a settled cell is its pipe, an unsettled one a shade of
+// how much it has still to decide, so the frontier shows as it moves.
+kernel collapse.view@1 {
+    requires { field.read; field.write; }
+    input cells: Grid<Int>;
+    output result: Image;
+    // How far a point in the cell is from the tile's pipe: a hub in the
+    // middle and a stub to each side the tile is open on, which meets
+    // the neighbour's stub exactly at the edge.
+    fn pipe(tile: Int, p: Vec2) -> Float {
+        return loop 4 with d = length(p - vec2(0.5, 0.5)) - 0.17 {
+            if ((tile >>> index()) & 1) == 0 { d } else {
+                let arm = match index() {
+                    0 => length(p - vec2(0.5, clamp(p.y, 0.0, 0.5))),
+                    1 => length(p - vec2(clamp(p.x, 0.5, 1.0), 0.5)),
+                    2 => length(p - vec2(0.5, clamp(p.y, 0.5, 1.0))),
+                    _ => length(p - vec2(clamp(p.x, 0.0, 0.5), 0.5)),
+                };
+                min(d, arm - 0.12)
+            }
+        };
+    }
+    compute {
+        let extent = size(cells);
+        let uv = coord() / domain() * extent;
+        let cell = int(uv);
+        let mask = at(cells, cell);
+        let left = popcount(mask);
+        let local = uv - float(cell);
+        // One pixel, in the cell's own units, so an edge is one pixel
+        // wide whatever the window is.
+        let edge = (domain() / extent).x;
+        let ground = vec3(0.07, 0.08, 0.11);
+        let ink = mix(vec3(0.42, 0.85, 0.78), vec3(0.96, 0.72, 0.32), (uv.x + uv.y) / (extent.x + extent.y));
+        let waiting = mix(vec3(0.24, 0.20, 0.13), vec3(0.11, 0.13, 0.19), float(left) / 15.0);
+        let colour = if left == 1 {
+            mix(ink, ground, clamp(pipe(ctz(mask), local) * edge, 0.0, 1.0))
+        } else {
+            let dot = length(local - vec2(0.5, 0.5)) - 0.1 - float(left) * 0.012;
+            mix(waiting, ground, clamp(dot * edge, 0.0, 1.0))
+        };
+        return vec4(colour.x, colour.y, colour.z, 1.0);
+    }
+}

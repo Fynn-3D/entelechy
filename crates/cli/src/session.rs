@@ -917,6 +917,56 @@ impl Session {
         }
     }
 
+    /// What a scene output of this name is wired to, when the name is
+    /// an output rather than a node.
+    fn output_source(
+        &self,
+        node: &orla_graph::NodeId,
+        port: &str,
+    ) -> Option<(orla_graph::NodeId, String)> {
+        let graph = self.graph.as_ref()?;
+        if graph.nodes.iter().any(|n| n.id == *node) {
+            return None;
+        }
+        let (name, _) = graph
+            .outputs
+            .iter()
+            .find(|(name, _)| name == &node.0 && port == "result")?;
+        match &graph.outputs.iter().find(|(o, _)| o == name)?.1 {
+            orla_graph::Source::Node { node, port } => Some((node.clone(), port.clone())),
+            orla_graph::Source::External(_) => None,
+        }
+    }
+
+    /// Why a node's output is not there to be saved: the name may be a
+    /// placed graph, which is its nodes by the time the graph runs, or
+    /// a node of one written without its repetition, or no node at all.
+    fn why_not_saved(&self, node: &orla_graph::NodeId, port: &str) -> String {
+        let Some(graph) = self.graph.as_ref() else {
+            return format!("`{node}.{port}` has no value; no scene is loaded");
+        };
+        let named: Vec<&str> = graph
+            .nodes
+            .iter()
+            .map(|n| n.id.0.as_str())
+            .filter(|id| {
+                id.starts_with(&format!("{node}."))
+                    || id.starts_with(&format!("{node}/"))
+                    || id.split('/').next() == Some(node.0.as_str())
+            })
+            .collect();
+        if !graph.nodes.iter().any(|n| n.id == *node) {
+            if let Some(last) = named.last() {
+                return format!(
+                    "`{node}` is not a node: it is placed as {} of them, the last `{last}`, which is what a `--save` names (or give the scene an `output`)",
+                    named.len()
+                );
+            }
+            return format!("`{node}` is not a node of this scene");
+        }
+        format!("`{node}.{port}` has no value; pin it and evaluate")
+    }
+
     /// Writes a node's output as a file: `.field` for any Field, `.png` or
     /// `.ppm` for a grid of pixels (a `Grid<Float>` as gray), `.pgm` for a
     /// `Grid<Float>`, `.wav` at 48 kHz for rows of one or two floats. The
@@ -927,9 +977,17 @@ impl Session {
         port: &str,
         path: &Path,
     ) -> Result<(), String> {
-        let handle = self
-            .cached(node, port)
-            .ok_or_else(|| format!("`{node}.{port}` has no value; pin it and evaluate"))?;
+        // A scene's own output name stands for what it is wired to, so
+        // `--save settled=...` works with the names the scene reads by.
+        let (node, port) = match self.output_source(node, port) {
+            Some((node, port)) => (node, port),
+            None => (node.clone(), port.to_owned()),
+        };
+        let (node, port) = (&node, port.as_str());
+        let handle = match self.cached(node, port) {
+            Some(handle) => handle,
+            None => return Err(self.why_not_saved(node, port)),
+        };
         self.runtime
             .materialize(handle)
             .map_err(|e| e.to_string())?;
