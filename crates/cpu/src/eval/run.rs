@@ -596,6 +596,7 @@ impl<'p, 's> Machine<'p, 's> {
             }
             Instr::Loop {
                 count,
+                bound,
                 init,
                 carried,
                 n,
@@ -604,8 +605,12 @@ impl<'p, 's> Machine<'p, 's> {
                 body_result,
             } => {
                 s.copy_within(fp + init..fp + init + n, fp + carried);
+                let times = match bound {
+                    Some(bound) => (s[fp + bound] as i32).clamp(0, *count as i32) as u32,
+                    None => *count,
+                };
                 self.loops.push(0);
-                for index in 0..*count {
+                for index in 0..times {
                     *self.loops.last_mut().expect("loop is open") = index as i32;
                     if let Some((until, done)) = until {
                         self.run(until, fp)?;

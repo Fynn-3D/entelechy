@@ -786,6 +786,7 @@ impl<'a> Checker<'a> {
             }
             Op::Loop {
                 count,
+                bound,
                 init,
                 until,
                 body,
@@ -794,6 +795,13 @@ impl<'a> Checker<'a> {
                     return Err(self.fail(format!(
                         "{position} loops {count} times; the bound must be 1..={MAX_LOOP_COUNT}"
                     )));
+                }
+                if let Some(bound) = bound
+                    && self.operand(*bound, position)? != Type::Int
+                {
+                    return Err(
+                        self.fail(format!("{position} has a run-time count that is not Int"))
+                    );
                 }
                 let carried = self.operand(*init, position)?;
                 self.loops.push(carried);
@@ -1270,6 +1278,7 @@ mod tests {
                 1,
                 Type::Float,
                 Op::Loop {
+                    bound: None,
                     count: 0,
                     init: ValueId(0),
                     until: None,
@@ -1286,6 +1295,7 @@ mod tests {
             1,
             Type::Float,
             Op::Loop {
+                bound: None,
                 count: 4,
                 init: ValueId(0),
                 until: None,
@@ -1304,6 +1314,7 @@ mod tests {
             1,
             Type::Float,
             Op::Loop {
+                bound: None,
                 count: 4,
                 init: ValueId(0),
                 until: None,

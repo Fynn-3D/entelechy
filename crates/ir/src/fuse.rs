@@ -373,11 +373,13 @@ impl<'a> Renumber<'a> {
                 },
                 Op::Loop {
                     count,
+                    bound,
                     init,
                     until,
                     body,
                 } => Op::Loop {
                     count: *count,
+                    bound: bound.map(|bound| self.map(bound)),
                     init: self.map(*init),
                     until: until.as_ref().map(|block| self.nested(block)),
                     body: self.nested(body),

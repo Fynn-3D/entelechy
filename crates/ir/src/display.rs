@@ -97,11 +97,18 @@ fn write_instruction(
         }
         Op::Loop {
             count,
+            bound,
             init,
             until,
             body,
         } => {
-            writeln!(f, "{indent}{id}: {ty} = loop {count} carrying {init} {{")?;
+            match bound {
+                Some(bound) => writeln!(
+                    f,
+                    "{indent}{id}: {ty} = loop {bound} times (at most {count}) carrying {init} {{"
+                )?,
+                None => writeln!(f, "{indent}{id}: {ty} = loop {count} carrying {init} {{")?,
+            }
             if let Some(until) = until {
                 writeln!(f, "{indent}  until {{")?;
                 write_block(f, until, depth + 2)?;

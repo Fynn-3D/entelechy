@@ -540,7 +540,7 @@ impl fmt::Display for Graph {
 }
 
 /// Renders a value in the literal grammar shared with `.orla`.
-fn literal_text(value: &Value) -> String {
+pub(crate) fn literal_text(value: &Value) -> String {
     match value {
         Value::Float(v) => format!("{v:?}"),
         Value::Int(v) => v.to_string(),

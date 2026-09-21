@@ -430,12 +430,34 @@ impl Builder<'_> {
                 until,
                 body,
             } => {
-                if count.value > MAX_LOOP_COUNT {
-                    return Err(semantic(
-                        count.span,
-                        format!("`loop` bound {} exceeds {MAX_LOOP_COUNT}", count.value),
-                    ));
-                }
+                // A literal count is the bound; any other `Int` is read
+                // once and the loop runs that many times, at most the
+                // largest bound.
+                let (bound, run_time) = match &count.kind {
+                    ExprKind::Int(literal) => {
+                        let literal = *literal as u32;
+                        if literal > MAX_LOOP_COUNT {
+                            return Err(semantic(
+                                count.span,
+                                format!("`loop` bound {literal} exceeds {MAX_LOOP_COUNT}"),
+                            ));
+                        }
+                        (literal, None)
+                    }
+                    _ => {
+                        let id = self.value(count)?;
+                        if self.ty(id) != Type::Int {
+                            return Err(semantic(
+                                count.span,
+                                format!(
+                                    "`loop` takes an Int count, found {}",
+                                    self.describe(self.ty(id))
+                                ),
+                            ));
+                        }
+                        (MAX_LOOP_COUNT, Some(id))
+                    }
+                };
                 let init_id = self.value(init)?;
                 let carried = self.ty(init_id);
                 // The values the enclosing loop (or the scan) carries are
@@ -512,7 +534,8 @@ impl Builder<'_> {
                     id,
                     carried,
                     Op::Loop {
-                        count: count.value,
+                        count: bound,
+                        bound: run_time,
                         init: init_id,
                         until: until_block,
                         body: body_block,

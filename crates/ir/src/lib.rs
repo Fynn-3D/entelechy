@@ -986,6 +986,10 @@ pub enum Op {
     Loop {
         /// Compile-time iteration bound, at most [`MAX_LOOP_COUNT`].
         count: u32,
+        /// A run-time count as `Int`, read once before the loop, when the
+        /// source gave one: the loop then runs `bound` times clamped to
+        /// `0..=count`.
+        bound: Option<ValueId>,
         /// Initial carried value.
         init: ValueId,
         /// Optional exit test, yielding `Bool`.

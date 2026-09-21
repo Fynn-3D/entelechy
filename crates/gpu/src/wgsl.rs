@@ -1742,15 +1742,20 @@ impl Emitter<'_> {
             }
             Op::Loop {
                 count,
+                bound,
                 init,
                 until,
                 body,
             } => {
                 self.line(depth, &format!("var v{}: {ty_name} = {};", id.0, v(init)));
+                let limit = match bound {
+                    Some(bound) => format!("clamp({}, 0i, {count}i)", v(bound)),
+                    None => format!("{count}i"),
+                };
                 self.line(
                     depth,
                     &format!(
-                        "for (var i{0}: i32 = 0; i{0} < {count}i; i{0} = i{0} + 1) {{",
+                        "for (var i{0}: i32 = 0; i{0} < {limit}; i{0} = i{0} + 1) {{",
                         id.0
                     ),
                 );

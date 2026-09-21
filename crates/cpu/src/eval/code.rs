@@ -293,6 +293,8 @@ pub(super) enum Instr {
     },
     Loop {
         count: u32,
+        /// The slot of a run-time count, clamped to `0..=count`.
+        bound: Option<usize>,
         init: usize,
         carried: usize,
         n: usize,

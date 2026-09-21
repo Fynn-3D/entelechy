@@ -92,8 +92,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "loops",
-            "let walked = loop 12 with acc = Cell { a: 0.0, b: 0, on: false } until acc.b > n { Cell { a: acc.a + sin(acc.a + x) * 0.5 + float(index()), b: acc.b + 1, on: !acc.on } }; let nested = loop 3 with outer = i { loop 2 with inner = outer { inner + outer + index() } };",
-            "Out { f: walked.a, i: walked.b + nested, b: walked.on, v: vec3(0.0, 0.0, 0.0) }",
+            "let walked = loop 12 with acc = Cell { a: 0.0, b: 0, on: false } until acc.b > n { Cell { a: acc.a + sin(acc.a + x) * 0.5 + float(index()), b: acc.b + 1, on: !acc.on } }; let nested = loop 3 with outer = i { loop 2 with inner = outer { inner + outer + index() } }; let counted = loop n with s = 0 { s + index() }; let clamped = loop i % 5 - 1 with s = 1 { s * 2 }; let deep = loop n + 1 with outer = 0 { outer + loop i % 3 with inner = 1 { inner + index() } };",
+            "Out { f: walked.a, i: walked.b + nested + counted + clamped + deep, b: walked.on, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
             "calls",

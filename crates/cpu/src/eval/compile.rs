@@ -260,8 +260,15 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                     note(&otherwise.result);
                 }
                 Op::Loop {
-                    init, until, body, ..
+                    bound,
+                    init,
+                    until,
+                    body,
+                    ..
                 } => {
+                    if let Some(bound) = bound {
+                        note(bound);
+                    }
                     note(init);
                     if let Some(until) = until {
                         note(&until.result);
@@ -693,6 +700,7 @@ impl FunctionCompiler<'_> {
             }
             Op::Loop {
                 count,
+                bound,
                 init,
                 until,
                 body,
@@ -704,6 +712,7 @@ impl FunctionCompiler<'_> {
                 self.loops.pop();
                 Instr::Loop {
                     count: *count,
+                    bound: bound.as_ref().map(|bound| self.loc(bound).at),
                     init: self.loc(init).at,
                     carried: dst.at,
                     n: dst.n,

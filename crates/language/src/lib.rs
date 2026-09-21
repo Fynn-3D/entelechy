@@ -167,6 +167,10 @@ pub enum NodeKind {
     /// Another `.osn` document placed as a node: `node fx: graph "path";`.
     /// Its inputs are wired and its params set like a Kernel's.
     SubGraph(Spanned<String>),
+    /// A Field of a type, filled: `node zeros: Rows<Float> { domain = 65; }`
+    /// is zeros, `value = 0.5;` fills with a literal; a type written as
+    /// an alias or a struct element needs the `value`.
+    Fill(Spanned<String>),
 }
 
 /// One line inside a reference node's block.
@@ -535,8 +539,9 @@ pub enum ExprKind {
     },
     /// `loop count with name = init until done { body }`.
     Loop {
-        /// Compile-time iteration bound.
-        count: Spanned<u32>,
+        /// The iteration count: a literal, or any `Int` expression, read
+        /// once before the loop.
+        count: Box<Expr>,
         /// Name of the carried value inside `until` and `body`.
         name: Spanned<String>,
         /// Initial carried value.

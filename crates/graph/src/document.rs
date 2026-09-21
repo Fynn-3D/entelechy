@@ -14,7 +14,44 @@ use orla_language::{
     Span, Spanned,
 };
 
-use crate::{Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source};
+use crate::{
+    Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
+    literal_text,
+};
+
+/// The port type an alias stands for, following aliases as far as they
+/// go; a name that is not one is itself.
+fn resolved(ty: &str, aliases: &[orla_language::TypeAlias]) -> String {
+    let mut ty = ty.to_owned();
+    for _ in 0..8 {
+        match aliases.iter().find(|alias| alias.name.value == ty) {
+            Some(alias) => ty = alias.target.value.clone(),
+            None => break,
+        }
+    }
+    ty
+}
+
+/// The value a Field of this port type is filled with when the node names
+/// none: the zero of its element. A struct or an integer vector is not a
+/// parameter's type, so a Field of one is a Kernel's work, not a fill.
+fn zero_of(ty: &str) -> Option<Value> {
+    if ty == "Image" {
+        return Some(Value::Vec4([0.0; 4]));
+    }
+    let element = ty
+        .split_once('<')
+        .and_then(|(_, rest)| rest.strip_suffix('>'))?;
+    match element {
+        "Float" => Some(Value::Float(0.0)),
+        "Int" => Some(Value::Int(0)),
+        "Bool" => Some(Value::Bool(false)),
+        "Vec2" => Some(Value::Vec2([0.0; 2])),
+        "Vec3" => Some(Value::Vec3([0.0; 3])),
+        "Vec4" => Some(Value::Vec4([0.0; 4])),
+        _ => None,
+    }
+}
 
 /// A document does not parse or does not describe a valid graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -205,6 +242,13 @@ struct Lowering<'a, 'b> {
     out: Lowered,
     /// Documents on the current placement path, to refuse recursion.
     stack: Vec<PathBuf>,
+    /// The declarations of the document being lowered, its own and the
+    /// ones it inherits: a filled Field's element is resolved through the
+    /// aliases, and a synthesized Kernel inherits all of them as the
+    /// document's own Kernels do.
+    aliases: Vec<orla_language::TypeAlias>,
+    structs: Vec<orla_language::StructDecl>,
+    functions: Vec<orla_language::FnDecl>,
 }
 
 pub(crate) fn lower(
@@ -241,6 +285,13 @@ pub(crate) fn lower(
             uses: Vec::new(),
             documents: Vec::new(),
         },
+        aliases: types.iter().chain(&document.types).cloned().collect(),
+        structs: structs.iter().chain(&document.structs).cloned().collect(),
+        functions: functions
+            .iter()
+            .chain(&document.functions)
+            .cloned()
+            .collect(),
         stack: Vec::new(),
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
@@ -808,6 +859,60 @@ impl Lowering<'_, '_> {
                         is_async,
                     });
                 }
+                NodeKind::Fill(ty) => {
+                    if domain.is_none() {
+                        return Err(error(
+                            ty.span,
+                            "a filled Field needs a `domain`: `domain = 65;`, `domain = vec2(96, 64);`",
+                        ));
+                    }
+                    let kernel_id = anonymous_id(name, &decl.name.value);
+                    // The fill is the node's `value` parameter: its
+                    // literal is the Kernel's default, so the node with
+                    // no `value` is the zero of the element.
+                    let spelled = resolved(&ty.value, &self.aliases);
+                    let value = match node_params.get("value") {
+                        Some(given) => default_of(given),
+                        None => zero_of(&spelled).ok_or_else(|| {
+                            error(
+                                ty.span,
+                                format!(
+                                    "a filled Field holds Float, Int, Bool, Vec2, Vec3 or Vec4 (and `Image` holds a pixel); `{}` holds something else, so a Kernel fills it",
+                                    ty.value
+                                ),
+                            )
+                        })?,
+                    };
+                    let text = format!(
+                        "kernel {kernel_id} {{\n    requires {{ field.write; }}\n    param value: {} = {};\n    output result: {};\n    compute {{ return value; }}\n}}\n",
+                        value.ty(),
+                        literal_text(&value),
+                        ty.value
+                    );
+                    let mut kernel = orla_language::parse(&text).map_err(|e| {
+                        error(ty.span, format!("a filled Field of `{}`: {e}", ty.value))
+                    })?;
+                    // It inherits what the document's own Kernels do, so
+                    // its port type may be an alias from a used document.
+                    kernel.structs = self.structs.clone();
+                    kernel.types = self.aliases.clone();
+                    kernel.functions = self.functions.clone();
+                    self.out.inline.push(InlineKernel {
+                        node: id.clone(),
+                        id: kernel_id.clone(),
+                        kernel,
+                        text,
+                        document: path.to_path_buf(),
+                    });
+                    self.out.graph.nodes.push(Node {
+                        id,
+                        kernel: kernel_id,
+                        inputs,
+                        params: node_params,
+                        domain,
+                        is_async,
+                    });
+                }
                 NodeKind::SubGraph(sub_path) => {
                     if domain.is_some() {
                         return Err(error(
@@ -840,6 +945,32 @@ impl Lowering<'_, '_> {
                     let (structs, types, functions) = (self.declare)(sub_base, &sub_document.uses)
                         .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
                     sub_document.inherit(&structs, &types, &functions);
+                    let outer = (
+                        std::mem::replace(
+                            &mut self.aliases,
+                            types
+                                .iter()
+                                .chain(&sub_document.types)
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        ),
+                        std::mem::replace(
+                            &mut self.structs,
+                            structs
+                                .iter()
+                                .chain(&sub_document.structs)
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        ),
+                        std::mem::replace(
+                            &mut self.functions,
+                            functions
+                                .iter()
+                                .chain(&sub_document.functions)
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        ),
+                    );
                     let sub_name = resolved
                         .file_stem()
                         .and_then(|stem| stem.to_str())
@@ -864,6 +995,7 @@ impl Lowering<'_, '_> {
                         )
                         .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)));
                     self.stack.pop();
+                    (self.aliases, self.structs, self.functions) = outer;
                     let level = level?;
                     aliases.insert(id.0.clone(), level.outputs);
                 }

@@ -23,6 +23,8 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Run-time loop counts | [loop](crates/compiler/src/lower/expr.rs), [ir](crates/ir/src/lib.rs) `Op::Loop::bound` | [feature matrix](crates/matrix/src/lib.rs) `loops` |
+| Filled Fields | [document](crates/graph/src/document.rs) `NodeKind::Fill` | [composition](crates/graph/tests/composition.rs) |
 | Frames in | [session](crates/cli/src/session.rs) `Sequence`, [parser](crates/language/src/parser.rs) `frames` | [clip example](examples/clip/tests/clip.replay), [session tests](crates/cli/tests/session.rs) |
 | Render | [render](crates/cli/src/render.rs) | [session tests](crates/cli/tests/session.rs) |
 | Async nodes | [runs off the frame](crates/runtime/src/later.rs), [evaluator](crates/graph/src/evaluate.rs) | [runtime](crates/runtime/tests/later.rs), [graph](crates/graph/tests/composition.rs), [async example](examples/async/tests/async.replay) |
@@ -447,6 +449,19 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- What the experience assessment asked for next: the JIT is the default
+  backend everywhere but the Player (which takes the GPU, then the JIT,
+  then the interpreter), so the interpreter is what `--backend cpu` and
+  `trace` ask for rather than what a command falls into; a loop's count
+  may be any `Int` expression (`Op::Loop::bound`, read once before the
+  loop and clamped to `0..=MAX_LOOP_COUNT`: a `smin`/`smax` on the JIT,
+  a `clamp` in the WGSL bound, a clamp on the interpreter's counter),
+  so a network's width or a solve's depth is a parameter; and a node may
+  be a filled Field, `node zeros: Rows<Float> { domain = 65; }`, which
+  the document lowering turns into a one-parameter Kernel (`value`,
+  defaulting to the element's zero, resolved through the used documents'
+  aliases), so a scene's starting values are lines rather than Kernels.
 
 - The awkward list of the 2026-09-21 assessment, taken in: a scatter
   node may set its own `domain` (its body runs once per element of it,

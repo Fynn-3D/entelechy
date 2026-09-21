@@ -1202,3 +1202,67 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     assert!(events.iter().any(|event| matches!(event, Event::Rejected { error, .. } if error.contains("holds no frame"))), "{events:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param() {
+    let dir = std::env::temp_dir().join(format!("orla-fill-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "param level: Float = 0.25;\n\
+         param depth: Int = 3;\n\
+         node zeros: Rows<Float> { domain = 4; }\n\
+         node set: Rows<Float> { domain = 4; value = level; }\n\
+         node counted: kernel {\n\
+             requires { field.read; field.write; }\n\
+             input base: Rows<Float> <- set.result;\n\
+             param depth: Int = depth;\n\
+             output result: Rows<Float>;\n\
+             domain = 4;\n\
+             compute { return loop depth with acc = at(base, element()) { acc + 1.0 }; }\n\
+         }\n\
+         output result <- counted.result;\n\
+         output zeros <- zeros.result;\n",
+    )
+    .unwrap();
+    let mut session = Session::open(
+        &dir.join("scene.osn"),
+        None,
+        orla::session::DEFAULT_BUDGET_PIXELS,
+    );
+    session.sync();
+    let read = |session: &mut Session, handle| {
+        session.runtime_mut().materialize(handle).unwrap();
+        session
+            .runtime()
+            .host()
+            .data(handle)
+            .unwrap()
+            .words()
+            .iter()
+            .map(|w| f32::from_bits(*w))
+            .collect::<Vec<_>>()
+    };
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(read(&mut session, report.output), vec![3.25; 4]);
+    let zeros = report
+        .outputs
+        .iter()
+        .find(|(name, _)| name == "zeros")
+        .unwrap()
+        .1;
+    assert_eq!(read(&mut session, zeros), vec![0.0; 4]);
+    // Both the fill and the loop's count follow their graph params.
+    session.set_param("level", orla_runtime::Value::Float(1.0));
+    session.set_param("depth", orla_runtime::Value::Int(10));
+    session.sync();
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(read(&mut session, report.output), vec![11.0; 4]);
+    // A count of zero yields what the loop carries.
+    session.set_param("depth", orla_runtime::Value::Int(0));
+    session.sync();
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(read(&mut session, report.output), vec![1.0; 4]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

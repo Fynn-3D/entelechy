@@ -178,13 +178,18 @@ impl Ctx<'_> {
                 }
                 Op::Loop {
                     count,
+                    bound,
                     init,
                     until,
                     body,
                 } => {
                     used.insert(init.0, ());
+                    if let Some(bound) = bound {
+                        used.insert(bound.0, ());
+                    }
                     Op::Loop {
                         count,
+                        bound,
                         init,
                         until: until.map(|block| self.sweep_block(block, used)),
                         body: self.sweep_block(body, used),
@@ -277,11 +282,13 @@ impl Simplify<'_> {
                 },
                 Op::Loop {
                     count,
+                    bound,
                     init,
                     until,
                     body,
                 } => Op::Loop {
                     count: *count,
+                    bound: bound.map(|bound| self.map(bound)),
                     init: self.map(*init),
                     until: until.as_ref().map(|block| self.nested(block)),
                     body: self.nested(body),
@@ -626,11 +633,13 @@ impl Renumber {
                 },
                 Op::Loop {
                     count,
+                    bound,
                     init,
                     until,
                     body,
                 } => Op::Loop {
                     count: *count,
+                    bound: bound.map(|bound| self.map(bound)),
                     init: self.map(*init),
                     until: until.as_ref().map(|block| self.nested(block)),
                     body: self.nested(body),

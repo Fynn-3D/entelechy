@@ -73,7 +73,11 @@ arm, which comes last and is required; no value in two arms; every arm
 the same type; the GPU runs it as a `switch`, the JIT as a jump table
 when the values are close) and `loop n with x = init until done { next }`
 are expressions; a nested loop reads the values the loops around it
-carry, and a scan's step its own, by name; `Name { a: .., b: .. }` builds
+carry, and a scan's step its own, by name. A loop's count is a literal,
+which is its bound, or any `Int` expression, read once before the loop
+and clamped to `0..=65536`: `loop depth with ...` takes a parameter's
+value, so the same Kernel runs a solve to a depth the scene sets. A
+loop with a count of zero yields what it carries; `Name { a: .., b: .. }` builds
 a struct and `Name { ..base, a: .. }` copies one with some fields
 replaced.
 
@@ -440,7 +444,16 @@ output result <- display.result;      // named graph output; sub-graph outputs
    anywhere means the last time's. `N` is a literal or a graph param; a
    param that sizes the graph lowers the document again when it changes,
    so `param level 3` over the protocol resizes a running scene.
-11. A node with `async = true;` runs off the frame: an evaluation starts
+11. A node may be a Field rather than a Kernel: `node zeros: Rows<Float>
+   { domain = 65; }` is a Field of that type and extent, filled with its
+   element's zero, and `value = 0.5;` fills it with something else (a
+   literal or a graph param, so a scene's starting value is one line and
+   no Kernel). The type may be an alias a used document declares
+   (`node blank: Cells { domain = vec2(96, 64); }`); its element must be
+   what a parameter can hold, `Float`, `Int`, `Bool`, `Vec2`, `Vec3`,
+   `Vec4`, or `Image`'s pixel, and anything else is a Kernel's work.
+   The node has a `domain` and no inputs.
+12. A node with `async = true;` runs off the frame: an evaluation starts
    its execution on a thread of its own and goes on. Until the run
    lands, the node's readers take its last output and the state it
    feeds through `<~` stays as it was; the evaluation that finds the run

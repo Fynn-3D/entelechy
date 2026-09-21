@@ -211,7 +211,14 @@ keeps a node's output after the last frame, and `rubik/play.osn` reads
 the weights it kept (300 frames of training) as an `input`, inference
 as its own scene; `text.label` in the shared text library is a caption
 and a number as one row of codes, so a readout is three nodes and no
-Kernel. Open: automation past one frame, which the render command
+Kernel. The assessment's three next things are done:
+the JIT is the default backend (the Player takes the GPU, then the JIT,
+then the interpreter; `--backend cpu` is how the reference is asked
+for), a loop's count may be any `Int` expression read once before the
+loop and clamped to the bound, and a node may be a filled Field
+(`node zeros: Rows<Float> { domain = 65; }`, `value = ...` for anything
+but the element's zero), which took five zero-fill Kernels out of the
+examples. Open: automation past one frame, which the render command
 begins. The assessment of the experience (2026-09-21) listed what was
 awkward; taken in the same day: a scatter sets its own `domain` (no
 more `work` Fields), a reduction's output is written as its element,

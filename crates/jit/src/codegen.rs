@@ -1014,10 +1014,23 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Loop {
                 count,
+                bound,
                 init,
                 until,
                 body,
             } => {
+                // The run-time count, clamped to 0..=count, read before
+                // the loop; the literal bound otherwise.
+                let limit = match bound {
+                    Some(bound) => {
+                        let given = self.words(bound)[0];
+                        let zero = self.i32c(0);
+                        let most = self.i32c(*count as i64);
+                        let floored = self.b.ins().smax(given, zero);
+                        self.b.ins().smin(floored, most)
+                    }
+                    None => self.i32c(*count as i64),
+                };
                 let carried_types = word_types(self.module, ty);
                 let header = self.b.create_block();
                 let body_block = self.b.create_block();
@@ -1030,8 +1043,21 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let init_words = self.words(init);
                 let zero = self.i32c(0);
                 let mut init_args: Vec<_> = init_words.iter().map(|v| (*v).into()).collect();
+                let carried_args_from_init: Vec<_> = init_args.clone();
                 init_args.push(zero.into());
-                self.b.ins().jump(header, &init_args);
+                match bound {
+                    // A run-time count may be zero: then the loop yields
+                    // what it carries, as the interpreter's does.
+                    Some(_) => {
+                        let runs = self.b.ins().icmp(IntCC::SignedGreaterThan, limit, zero);
+                        self.b
+                            .ins()
+                            .brif(runs, header, &init_args, exit, &carried_args_from_init);
+                    }
+                    None => {
+                        self.b.ins().jump(header, &init_args);
+                    }
+                }
                 self.b.switch_to_block(header);
                 let header_params = self.b.block_params(header).to_vec();
                 let carried = header_params[..carried_types.len()].to_vec();
@@ -1053,7 +1079,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.block(&body.body);
                 let next = self.words(&body.result);
                 let next_index = self.b.ins().iadd_imm(index, 1);
-                let limit = self.i32c(*count as i64);
                 let exhausted =
                     self.b
                         .ins()

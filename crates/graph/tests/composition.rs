@@ -1487,3 +1487,25 @@ fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
         .1;
     assert_eq!(words(plain), vec![1, 1, 1, 1]);
 }
+
+#[test]
+fn a_filled_field_says_what_it_cannot_hold_and_what_it_needs() {
+    // A Field of something a parameter cannot hold is a Kernel's work.
+    let error = Graph::parse(
+        "node cells: Grid<Cell> { domain = vec2(2, 2); }\noutput result <- cells.result;\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("a Kernel fills it"), "{error}");
+    // And one without an extent says so.
+    let error = Graph::parse("node zeros: Rows<Float> { }\noutput result <- zeros.result;\n")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("needs a `domain`"), "{error}");
+    // A filled Field is a Kernel of the document, so it takes a session.
+    let error =
+        Graph::parse("node zeros: Rows<Float> { domain = 3; }\noutput result <- zeros.result;\n")
+            .unwrap_err()
+            .to_string();
+    assert!(error.contains("through a session"), "{error}");
+}

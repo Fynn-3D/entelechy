@@ -604,6 +604,23 @@ impl Parser {
                 members: Vec::new(),
             });
         }
+        // A Field of a type, filled: the type name is a capital word, and
+        // a kernel id is not.
+        if let Token::Ident(word) = self.peek()
+            && word.starts_with(|c: char| c.is_ascii_uppercase())
+            && matches!(
+                self.tokens.get(self.position + 1).map(|l| &l.token),
+                Some(Token::Punct("{") | Token::Punct("<"))
+            )
+        {
+            let ty = self.port_type()?;
+            let members = self.node_members()?;
+            return Ok(NodeDecl {
+                name,
+                kind: NodeKind::Fill(ty),
+                members,
+            });
+        }
         if self.is_keyword("graph") {
             self.next();
             let (token, span) = self.next();
@@ -1247,21 +1264,15 @@ impl Parser {
             }
             Token::Ident(name) if name == "loop" => {
                 self.next();
-                let count = match self.next() {
-                    (Token::Int(count), span) if count > 0 => Spanned {
-                        value: count as u32,
-                        span,
-                    },
-                    (token, span) => {
-                        return Err(ParseError {
-                            span,
-                            message: format!(
-                                "`loop` needs a positive integer bound, found {}",
-                                token.describe()
-                            ),
-                        });
-                    }
-                };
+                let count = self.expr()?;
+                if let ExprKind::Int(literal) = &count.kind
+                    && *literal <= 0
+                {
+                    return Err(ParseError {
+                        span: count.span,
+                        message: format!("`loop` needs a positive integer bound, found {literal}"),
+                    });
+                }
                 self.keyword("with")?;
                 let name = self.ident("a carried value name")?;
                 self.expect_punct("=")?;
@@ -1275,7 +1286,7 @@ impl Parser {
                 let body = self.block()?;
                 Ok(Expr {
                     kind: ExprKind::Loop {
-                        count,
+                        count: Box::new(count),
                         name,
                         init: Box::new(init),
                         until,
@@ -1562,7 +1573,7 @@ kernel image.grayscale@1 {
         else {
             panic!("expected a loop");
         };
-        assert_eq!(count.value, 64);
+        assert!(matches!(count.kind, ExprKind::Int(64)));
         assert_eq!(name.value, "s");
         assert!(until.is_some());
         assert_eq!(body.lets.len(), 1);
@@ -1578,6 +1589,14 @@ kernel image.grayscale@1 {
         let error =
             parse("kernel t.k@1 { compute { return loop 0 with x = 1.0 { x }; } }").unwrap_err();
         assert!(error.message.contains("positive integer bound"), "{error}");
+        // A count that is not a literal is an expression, read once.
+        let kernel =
+            parse("kernel t.k@1 { param n: Int = 4; compute { return loop n * 2 with x = 1.0 { x + 1.0 }; } }")
+                .unwrap();
+        let ExprKind::Loop { count, .. } = &kernel.compute.result.kind else {
+            panic!("expected a loop");
+        };
+        assert!(matches!(count.kind, ExprKind::Binary(..)));
     }
 
     #[test]
