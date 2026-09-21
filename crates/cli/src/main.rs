@@ -197,7 +197,11 @@ fn check(args: &[String]) -> Result<(), String> {
         for (id, kernel) in kernels {
             match orla_compiler::compile_kernel(kernel, id.as_ref()) {
                 Ok(module) => {
-                    print!("{file}: {}\n{}", module.manifest.id, module.manifest);
+                    print!(
+                        "{file}: {}\n{}",
+                        module.manifest.id,
+                        module.manifest.named(&module.structs)
+                    );
                     if show_ir {
                         println!("{module}");
                     }

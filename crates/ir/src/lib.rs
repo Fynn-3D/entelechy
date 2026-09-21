@@ -10,6 +10,7 @@
 //! which capabilities a Kernel needs before it ever runs.
 
 mod display;
+pub use display::{NamedManifest, port_type_name, type_name};
 mod fuse;
 mod optimize;
 mod validate;

@@ -107,6 +107,10 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
     let kernels = ok(1)["kernels"].as_array().unwrap();
     let step = kernels.iter().find(|k| k["id"] == "life.step@1").unwrap();
     assert_eq!(step["inputs"][0]["name"], "previous");
+    // A port says what it holds by the name the Kernel gave it, not by
+    // the struct's number in the module.
+    assert_eq!(step["inputs"][0]["type"], "Grid<Cell>");
+    assert_eq!(step["outputs"][0]["type"], "Grid<Cell>");
     assert_eq!(step["params"][0]["name"], "brush");
     assert_eq!(step["params"][0]["default"], 2.0);
     assert!(
@@ -858,7 +862,11 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     let reset = ok(15)["reset"].as_array().unwrap();
     assert_eq!(reset.len(), 1, "{}", responses[15]);
     assert_eq!(reset[0]["node"], "count");
-    assert!(reset[0]["reason"].as_str().unwrap().contains("laid out as"));
+    let reason = reset[0]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("an element of") && reason.contains("integer"),
+        "{reason}"
+    );
     assert_eq!(state(16), vec![1]);
     assert_eq!(ok(17)["bye"], true);
 }

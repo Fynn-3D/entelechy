@@ -485,6 +485,15 @@ graph could be named at all, and it now splits at the last. And a
 is wired to, while a name that is a placed graph says so rather than
 saying it has no value.
 
+A manifest says what its ports hold by name. A `Manifest` alone is
+structural, as the ABI is, and prints a struct as its number; printed
+beside a module's struct table (`manifest.named(&module.structs)`,
+`orla_ir::type_name`) it says `Rows<Note>`, which is what `orla check`
+and the protocol's `kernels`, `kernel` and `prepare` now answer with.
+A layout that does not match is described in words too: "expects an
+element of one float (f) but is bound to a Field of one integer (i)"
+rather than "laid out as f ... i".
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.
@@ -536,5 +545,4 @@ word-addressed code and runs the raymarch scene at 400x260 in about 0.35 s
 and a voxel frame at 960x540 in about 1.3 s on ten cores, so it is still
 not interactive for those; the JIT runs the same frames in 22 ms and
 92 ms. The worker is one FIFO thread.
-Audio pacing is one block behind the ring. Native manifests print element
-types as anonymous structs.
+Audio pacing is one block behind the ring.

@@ -890,8 +890,10 @@ impl Evaluator {
                     format!("expects {} but the state is a {shape}", input.ty.shape)
                 } else {
                     format!(
-                        "expects elements laid out as {} but the state is {schema}",
-                        input.ty.schema
+                        "expects an element of {} ({}) but the state is a Field of {} ({schema})",
+                        input.ty.schema.describe(),
+                        input.ty.schema,
+                        schema.describe()
                     )
                 };
                 let carried = match migration {
@@ -1505,8 +1507,10 @@ impl Evaluator {
                 ))
             } else if input.ty.schema != *bound_schema {
                 Some(format!(
-                    "expects elements laid out as {} but is bound to {bound_schema}",
-                    input.ty.schema
+                    "expects an element of {} ({}) but is bound to a Field of {} ({bound_schema})",
+                    input.ty.schema.describe(),
+                    input.ty.schema,
+                    bound_schema.describe()
                 ))
             } else {
                 None
@@ -1707,10 +1711,12 @@ fn migrate(
     let takes = &manifest.inputs[0].ty;
     if takes.shape != domain.shape() || takes.schema != *schema {
         return Err(format!(
-            "takes {} laid out as {}, but the state is a {} laid out as {schema}",
+            "takes {} of {} ({}), but the state is a {} of {} ({schema})",
             takes.shape,
+            takes.schema.describe(),
             takes.schema,
-            domain.shape()
+            domain.shape(),
+            schema.describe()
         ));
     }
     let invocation = Invocation {

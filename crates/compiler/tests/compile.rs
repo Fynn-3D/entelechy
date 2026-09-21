@@ -897,6 +897,27 @@ fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_nam
 }
 
 #[test]
+fn a_manifest_says_what_its_ports_hold_by_name() {
+    let module = compile(
+        "kernel t.k@1 { requires { field.read; field.write; } struct Note { at: Float; pitch: Int; } input song: Rows<Note>; memory desk: Rows<Note>; output result: Rows<Note>; scan with n = Note { at: 0.0, pitch: 0 } { let here = at(song, index()); put(desk, index(), here); return here; } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let named = module.manifest.named(&module.structs).to_string();
+    assert!(named.contains("input song: Rows<Note>"), "{named}");
+    assert!(named.contains("output result: Rows<Note>"), "{named}");
+    assert!(named.contains("memory desk: Rows<Note>"), "{named}");
+    // Without the table there are no names to print: a manifest that
+    // crossed the ABI on its own is structural, and says so.
+    let bare = module.manifest.to_string();
+    assert!(bare.contains("input song: Rows<S0>"), "{bare}");
+    // A module prints its own manifest with its own names.
+    assert!(
+        module.to_string().contains("input song: Rows<Note>"),
+        "{module}"
+    );
+}
+
+#[test]
 fn a_function_calls_only_what_is_defined_above_it() {
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; fn fact(n: Int) -> Int { return if n <= 1 { 1 } else { n * fact(n - 1) }; } compute { return fact(element()); } }",

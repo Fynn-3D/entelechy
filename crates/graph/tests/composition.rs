@@ -1362,7 +1362,10 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     assert_eq!(report.reset.len(), 1);
     assert_eq!(report.reset[0].0, NodeId("count".into()));
     assert!(
-        report.reset[0].2.contains("laid out as"),
+        report.reset[0]
+            .2
+            .contains("expects an element of one integer (i)")
+            && report.reset[0].2.contains("two integers"),
         "{}",
         report.reset[0].2
     );

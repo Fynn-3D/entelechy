@@ -2,10 +2,65 @@
 
 use std::fmt;
 
-use crate::{Block, Function, Instruction, Manifest, Module, Op, UnaryOp, ValueId};
+use crate::{
+    Block, Function, Instruction, Manifest, Module, Op, StructDef, Type, UnaryOp, ValueId,
+};
+
+/// What a type is called where a Kernel's structs are known: the name
+/// the source gave it, or `[T; N]` for an array. Without the table a
+/// struct can only be its number, which is what a bare `Manifest`
+/// prints and what no reader of a manifest wants to see.
+pub fn type_name(ty: Type, structs: &[StructDef]) -> String {
+    match ty {
+        Type::Struct(index) => structs
+            .get(index as usize)
+            .map(|def| def.name.clone())
+            .unwrap_or_else(|| ty.to_string()),
+        other => other.to_string(),
+    }
+}
+
+/// A port type with a Kernel's struct names in it: `Rows<Note>` rather
+/// than `Rows<S0>`.
+pub fn port_type_name(ty: &orla_abi::PortType, structs: &[StructDef]) -> String {
+    if ty.is_image() {
+        return "Image".to_owned();
+    }
+    format!("{}<{}>", ty.shape, type_name(ty.element, structs))
+}
+
+impl Manifest {
+    /// The manifest as it reads with a module's struct names, for
+    /// anything a person or an agent looks at.
+    pub fn named<'a>(&'a self, structs: &'a [StructDef]) -> NamedManifest<'a> {
+        NamedManifest {
+            manifest: self,
+            structs,
+        }
+    }
+}
+
+/// A manifest and the structs whose names it prints. See
+/// [`Manifest::named`].
+pub struct NamedManifest<'a> {
+    manifest: &'a Manifest,
+    structs: &'a [StructDef],
+}
+
+impl fmt::Display for NamedManifest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.manifest.write(f, self.structs)
+    }
+}
 
 impl fmt::Display for Manifest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write(f, &[])
+    }
+}
+
+impl Manifest {
+    fn write(&self, f: &mut fmt::Formatter<'_>, structs: &[StructDef]) -> fmt::Result {
         writeln!(f, "kernel {}", self.id)?;
         if self.mode != crate::Mode::Map {
             writeln!(f, "  mode {}", self.mode)?;
@@ -13,7 +68,12 @@ impl fmt::Display for Manifest {
         writeln!(f, "  requires {}", self.requires)?;
         for input in &self.inputs {
             if !self.memories.contains(&input.name) {
-                writeln!(f, "  input {}: {}", input.name, input.ty)?;
+                writeln!(
+                    f,
+                    "  input {}: {}",
+                    input.name,
+                    port_type_name(&input.ty, structs)
+                )?;
             }
         }
         for param in &self.params {
@@ -27,7 +87,12 @@ impl fmt::Display for Manifest {
         }
         for output in &self.outputs {
             if !self.memories.contains(&output.name) {
-                writeln!(f, "  output {}: {}", output.name, output.ty)?;
+                writeln!(
+                    f,
+                    "  output {}: {}",
+                    output.name,
+                    port_type_name(&output.ty, structs)
+                )?;
             }
         }
         for memory in self
@@ -35,7 +100,12 @@ impl fmt::Display for Manifest {
             .iter()
             .filter(|p| self.memories.contains(&p.name))
         {
-            writeln!(f, "  memory {}: {}", memory.name, memory.ty)?;
+            writeln!(
+                f,
+                "  memory {}: {}",
+                memory.name,
+                port_type_name(&memory.ty, structs)
+            )?;
         }
         Ok(())
     }
@@ -184,7 +254,7 @@ impl fmt::Display for Op {
 
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.manifest)?;
+        write!(f, "{}", self.manifest.named(&self.structs))?;
         for (index, def) in self.structs.iter().enumerate() {
             let fields = def
                 .fields

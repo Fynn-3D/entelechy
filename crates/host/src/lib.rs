@@ -81,6 +81,56 @@ impl Schema {
     pub fn is_pixel(&self) -> bool {
         self.0.len() == 4 && self.0.iter().all(|s| *s == Scalar::Float)
     }
+
+    /// The layout in words, for a message a person reads: "four floats
+    /// (a pixel)", "two floats and an integer". The spelling `Display`
+    /// writes is what a file and a wire carry; this is what a
+    /// diagnostic says.
+    pub fn describe(&self) -> String {
+        if self.is_pixel() {
+            return "four floats (a pixel)".to_owned();
+        }
+        if self.0.is_empty() {
+            return "nothing".to_owned();
+        }
+        let mut runs: Vec<(Scalar, usize)> = Vec::new();
+        for scalar in &self.0 {
+            match runs.last_mut() {
+                Some((last, count)) if last == scalar => *count += 1,
+                _ => runs.push((*scalar, 1)),
+            }
+        }
+        let counted = |scalar: Scalar, count: usize| {
+            let name = match (scalar, count) {
+                (Scalar::Float, 1) => "float",
+                (Scalar::Float, _) => "floats",
+                (Scalar::Int, 1) => "integer",
+                (Scalar::Int, _) => "integers",
+                (Scalar::Bool, 1) => "boolean",
+                (Scalar::Bool, _) => "booleans",
+            };
+            let how_many = match count {
+                1 => "one".to_owned(),
+                2 => "two".to_owned(),
+                3 => "three".to_owned(),
+                4 => "four".to_owned(),
+                other => other.to_string(),
+            };
+            format!("{how_many} {name}")
+        };
+        let parts: Vec<String> = runs
+            .into_iter()
+            .map(|(scalar, count)| counted(scalar, count))
+            .collect();
+        match parts.len() {
+            1 => parts[0].clone(),
+            _ => format!(
+                "{} and {}",
+                parts[..parts.len() - 1].join(", "),
+                parts[parts.len() - 1]
+            ),
+        }
+    }
 }
 
 impl std::str::FromStr for Schema {

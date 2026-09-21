@@ -612,7 +612,13 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             "kernels": session
                 .runtime()
                 .kernels()
-                .map(|version| manifest_json(version.manifest(), version.generation()))
+                .map(|version| {
+                    manifest_json(
+                        version.manifest(),
+                        version.generation(),
+                        version.module().map_or(&[][..], |m| &m.structs),
+                    )
+                })
                 .collect::<Vec<_>>()
         })),
         "kernel" => {
@@ -621,7 +627,11 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 .runtime()
                 .kernel(&id)
                 .ok_or_else(|| failure(format!("{id} is not published")))?;
-            let mut json = manifest_json(version.manifest(), version.generation());
+            let mut json = manifest_json(
+                version.manifest(),
+                version.generation(),
+                version.module().map_or(&[][..], |m| &m.structs),
+            );
             json["source"] = Json::String(version.source().to_owned());
             Ok(json)
         }
@@ -650,7 +660,11 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 .runtime()
                 .kernel(candidate.id())
                 .map(|version| version.generation().0);
-            let mut json = manifest_json(candidate.manifest(), Generation(0));
+            let mut json = manifest_json(
+                candidate.manifest(),
+                Generation(0),
+                &candidate.module().structs,
+            );
             json["generation"] = Json::Null;
             json["current"] = current.map_or(Json::Null, Json::from);
             Ok(json)
@@ -1139,15 +1153,20 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     }
 }
 
-fn manifest_json(manifest: &Manifest, generation: Generation) -> Json {
+fn manifest_json(
+    manifest: &Manifest,
+    generation: Generation,
+    structs: &[orla_ir::StructDef],
+) -> Json {
+    let port = |ty: &orla_ir::PortType| orla_ir::port_type_name(ty, structs);
     json!({
         "id": manifest.id.to_string(),
         "generation": generation.0,
         "mode": manifest.mode.to_string(),
         "requires": manifest.requires.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
-        "inputs": manifest.inputs.iter().map(|p| json!({ "name": p.name, "type": p.ty.to_string() })).collect::<Vec<_>>(),
+        "inputs": manifest.inputs.iter().map(|p| json!({ "name": p.name, "type": port(&p.ty) })).collect::<Vec<_>>(),
         "params": manifest.params.iter().map(|p| json!({ "name": p.name, "type": p.default.ty().to_string(), "default": value_json(&p.default) })).collect::<Vec<_>>(),
-        "outputs": manifest.outputs.iter().map(|p| json!({ "name": p.name, "type": p.ty.to_string() })).collect::<Vec<_>>(),
+        "outputs": manifest.outputs.iter().map(|p| json!({ "name": p.name, "type": port(&p.ty) })).collect::<Vec<_>>(),
         "memories": manifest.memories,
     })
 }

@@ -122,13 +122,7 @@ fn subscript_element(ty: Type, structs: &[StructDef]) -> Option<(Type, usize)> {
 
 /// Human-readable type for diagnostics, naming structs.
 fn describe(ty: Type, structs: &[StructDef]) -> String {
-    match ty {
-        Type::Struct(index) => structs
-            .get(index as usize)
-            .map(|def| def.name.clone())
-            .unwrap_or_else(|| ty.to_string()),
-        other => other.to_string(),
-    }
+    orla_ir::type_name(ty, structs)
 }
 
 pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, CompileError> {
@@ -789,7 +783,10 @@ impl<'a> Builder<'a> {
                             arg.span,
                             format!(
                                 "`{name}` expects {} for `{}`, but `{}` is {}",
-                                ty.value, param.value, port.name, port.ty
+                                ty.value,
+                                param.value,
+                                port.name,
+                                orla_ir::port_type_name(&port.ty, &self.structs())
                             ),
                         ));
                     }
