@@ -179,7 +179,7 @@ pub unsafe extern "C" fn orla_open(
         let Some(scene) = (unsafe { text(scene) }) else {
             return Err("orla_open needs a scene path".to_owned());
         };
-        let backend = unsafe { text(backend) }.unwrap_or("cpu");
+        let backend = unsafe { text(backend) }.unwrap_or("jit");
         let library = unsafe { text(library) }.map(Path::new);
         let runtime = Session::runtime_for(backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
         let mut session = Session::open_with(Path::new(scene), library, runtime);

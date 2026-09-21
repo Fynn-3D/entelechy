@@ -101,7 +101,7 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
         &response["ok"]
     };
     assert_eq!(responses[0]["id"], 1);
-    assert_eq!(ok(0)["backend"], "cpu");
+    assert_eq!(ok(0)["backend"], "jit");
     assert_eq!(ok(0)["nodes"], 3);
 
     let kernels = ok(1)["kernels"].as_array().unwrap();

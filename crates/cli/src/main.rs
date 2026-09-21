@@ -321,7 +321,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
         kernels: None,
         inputs: Vec::new(),
         params: Vec::new(),
-        backend: "cpu".into(),
+        backend: "jit".into(),
         fusion: true,
         saves: Vec::new(),
         render: orla::render::Options {
@@ -468,7 +468,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         saves: Vec::new(),
         out: PathBuf::from("output.ppm"),
         watch: false,
-        backend: "cpu".into(),
+        backend: "jit".into(),
         params: Vec::new(),
         fusion: true,
         window: None,
@@ -669,7 +669,7 @@ fn graph(args: &[String]) -> Result<(), String> {
 }
 
 fn serve(args: &[String]) -> Result<(), String> {
-    let mut backend = "cpu".to_string();
+    let mut backend = "jit".to_string();
     let mut library = None;
     let mut scene = None;
     let mut listen = None;
@@ -731,7 +731,7 @@ fn serve(args: &[String]) -> Result<(), String> {
 }
 
 fn replay(args: &[String]) -> Result<(), String> {
-    let mut backend = "cpu".to_string();
+    let mut backend = "jit".to_string();
     let mut files = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {

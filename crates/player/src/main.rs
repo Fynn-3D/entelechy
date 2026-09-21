@@ -686,8 +686,11 @@ fn main() -> ExitCode {
     let runtime = match options.backend.as_deref() {
         Some(name) => Session::runtime_for(name, budget),
         None => Session::runtime_for("gpu", budget).or_else(|error| {
-            eprintln!("gpu backend unavailable ({error}); using cpu");
-            Session::runtime_for("cpu", budget)
+            eprintln!("gpu backend unavailable ({error}); using the jit");
+            Session::runtime_for("jit", budget).or_else(|error| {
+                eprintln!("jit backend unavailable ({error}); using the interpreter");
+                Session::runtime_for("cpu", budget)
+            })
         }),
     };
     let runtime = match runtime {

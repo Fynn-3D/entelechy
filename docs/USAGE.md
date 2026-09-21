@@ -144,8 +144,11 @@ through the protocol to observe its image.
 `run` also says which `async` nodes were still running off the frame and
 which landed before the nodes ran.
 
-`run`, `replay`, `serve` and the Player take `--backend cpu|gpu|jit`. The
-CPU interpreter is the reference and reports per-pixel integer failures;
+`run`, `render`, `replay`, `serve`, `trace` and the Player take
+`--backend cpu|gpu|jit`; the JIT is the default everywhere but the
+Player, which takes the GPU when there is one and the JIT otherwise.
+The CPU interpreter, `--backend cpu`, is the reference, reports
+per-pixel integer failures, and is what `trace` walks;
 the GPU backend runs the same IR as WGSL compute through wgpu, keeps
 images resident on the device between nodes and frames, and reads pixels
 back only when something observes them, and is the one to use for
