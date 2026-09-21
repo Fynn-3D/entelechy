@@ -63,9 +63,7 @@ kernel snake.step@1 {
 
     compute {
         let g = sample(previous);
-        let extent = isize(board);
-        let width = extent.x;
-        let height = extent.y;
+        let { x: width, y: height } = isize(board);
         // Steering: the last arrow held wins; reversing into the body is ignored.
         let horizontal = key(37) || key(39);
         let vertical = key(38) || key(40);

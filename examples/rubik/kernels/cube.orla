@@ -149,8 +149,7 @@ kernel cube.draw@1 {
     // What a hit on a box of the cube shows: the sticker under it, and
     // a dark border around every cubelet face.
     fn colour_at(hit: Hit, stickers: Stickers, shade: Vec3) -> Vec3 {
-        let p = hit.p;
-        let n = hit.n;
+        let { p, n } = hit;
         let c = vec3(clamp(floor(p.x + 1.5), 0.0, 2.0) - 1.0, clamp(floor(p.y + 1.5), 0.0, 2.0) - 1.0, clamp(floor(p.z + 1.5), 0.0, 2.0) - 1.0);
         let centre = vec3(if abs(n.x) > 0.5 { n.x } else { c.x }, if abs(n.y) > 0.5 { n.y } else { c.y }, if abs(n.z) > 0.5 { n.z } else { c.z });
         let local = abs(p - centre) * (vec3(1.0, 1.0, 1.0) - abs(n));

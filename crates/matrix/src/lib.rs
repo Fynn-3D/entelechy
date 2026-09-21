@@ -87,8 +87,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "structs",
-            "let c = Cell { a: x, b: i, on: i % 2 == 0 }; let c2 = Cell { ..c, b: c.b + 1 };",
-            "Out { f: c2.a * 2.0, i: c2.b, b: c2.on, v: vec3(c.a, float(c.b), 0.0) }",
+            "let c = Cell { a: x, b: i, on: i % 2 == 0 }; let c2 = Cell { ..c, b: c.b + 1 }; let { a, b: tally, on } = c2; let { x: vx, y: vy } = v * 2.0;",
+            "Out { f: a * 2.0 + vx + vy, i: tally, b: on, v: vec3(c.a, float(c.b), 0.0) }",
         ),
         (
             "if chain",
@@ -142,8 +142,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "match",
-            "let dense = match i % 7 { 0 => 1, 1 | 2 => { let two = i * 2; two }, 3 => 30, 5 => 50, _ => -1 }; let sparse = match i * 1000 { 0 => 7, 3000 => 8, 9000 => 9, -1 => 10, _ => 11 };",
-            "Out { f: float(dense), i: dense * 3 + sparse, b: sparse == 11, v: vec3(0.0, 0.0, 0.0) }",
+            "let dense = match i % 7 { 0 => 1, 1 | 2 => { let two = i * 2; two }, 3 => 30, 5 => 50, _ => -1 }; let sparse = match i * 1000 { 0 => 7, 3000 => 8, 9000 => 9, -1 => 10, _ => 11 }; let ranged = match i % 11 { 0..4 => 1, 4..=6 => 2, -3..0 | 9 => 3, 8 => 4, _ => 5 };",
+            "Out { f: float(dense), i: dense * 3 + sparse + ranged * 7, b: sparse == 11, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
             "loops",

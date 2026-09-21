@@ -24,6 +24,7 @@ capability claim.
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
 | Short-circuit and guards | [lowering](crates/compiler/src/lower/expr.rs), [parser](crates/language/src/parser.rs) `block_body`, [optimizer](crates/ir/src/optimize.rs) `folded` | [interpreter](crates/cpu/tests/execute.rs), [feature matrix](crates/matrix/src/lib.rs) `short circuit`, [parser tests](crates/language/src/parser.rs) |
+| Ranges and field bindings | [parser](crates/language/src/parser.rs) `arm_values`, `destructure`, [lexer](crates/language/src/lexer.rs) | [parser tests](crates/language/src/parser.rs), [feature matrix](crates/matrix/src/lib.rs) `match`, `structs` |
 | Semantics rows | [matrix](crates/matrix/src/lib.rs) `not taken`, `edges`, `signs`, `float edges` | [jit](crates/jit/tests/matrix.rs), [gpu](crates/gpu/tests/matrix.rs), [failure attribution](crates/jit/tests/parity.rs) |
 | Bytes in | [session](crates/cli/src/session.rs) `load_bytes`, [parser](crates/language/src/parser.rs) | [session tests](crates/cli/tests/session.rs), [level example](examples/level/tests/level.replay) |
 | MIDI in and out | [importer](crates/import/src/midi.rs), [exporter](crates/export/src/midi.rs) | [midi tests](crates/import/tests/midi.rs), [score example](examples/score/tests/score.replay) |
@@ -494,6 +495,17 @@ capability claim.
   documents now say. A failure keeps naming its element through an
   inlined call and a loop, and work that can fail is still never lifted
   out of a loop that may not run.
+
+- A `match` arm takes a range of values, `0..8` stopping before its
+  end and `0..=7` taking it, and a `let` takes the fields of one value,
+  `let { x, y: top } = window();`. Both are the parser's work and
+  nothing else's: a range is the values it holds, written out, so the
+  arms stay a table and a value in two arms is still refused by name;
+  a pattern binds the value once (under a name no one can write, unless
+  it is already a name) and reads a field for each binding, so a trace
+  shows what one would have written by hand. A range holds at most 256
+  values, which is a byte of opcodes; beyond that the message says an
+  `if` on the bounds is the form.
 
 - A file as its bytes: `input level: Rows<Int> = bytes "level.bin";`
   reads any file as rows of one integer an element, 0 to 255, watched

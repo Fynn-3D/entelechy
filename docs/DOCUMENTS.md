@@ -54,7 +54,11 @@ Rows<Vec2>;` port and any mismatch is reported by structure, never by name.
 
 The element may be a scalar, a vector, or a struct; its layout is the
 struct's scalars in order, integers and booleans exact. Inside `compute`,
-Expressions are `let` bindings and a result; `+ - * /` and `%` (the
+Expressions are `let` bindings and a result; a binding takes a name,
+`let n = ..;`, or the fields of one value, `let { x, y } = window();`,
+each under its own name or the one written after it, `let { x: width,
+y: height } = window();`, which is the same as reading them one at a
+time; `+ - * /` and `%` (the
 remainder, truncated like `/`, on `Int` and `Float` alike, and
 componentwise on vectors) with `Int` and `Float` kept apart except that
 `vec2`, `vec3`, and `vec4` take `Int` components and widen them, and
@@ -72,9 +76,12 @@ answer without asking the other side when the first settles it, so
 `if c { a } else { b }` (and, among a block's statements, `if c {
 return a; }` with no `else`, which guards what follows: the rest of the
 block is its other arm), `match i { 0 => a, 1 | 2 => { let x = ..; x },
-_ => b }` (on an `Int`; the arm whose values hold it runs, else the `_`
-arm, which comes last and is required; no value in two arms; every arm
-the same type; the GPU runs it as a `switch`, the JIT as a jump table
+8..16 => c, 16..=31 => d, _ => b }` (on an `Int`; the arm whose values
+hold it runs, else the `_`
+arm, which comes last and is required; an arm's values may be written
+as a range, `..` stopping before its end and `..=` taking it, which is
+the values it holds and so at most 256 of them; no value in two arms;
+every arm the same type; the GPU runs it as a `switch`, the JIT as a jump table
 when the values are close) and `loop n with x = init until done { next }`
 are expressions; a nested loop reads the values the loops around it
 carry, and a scan's step its own, by name. A loop's count is a literal,

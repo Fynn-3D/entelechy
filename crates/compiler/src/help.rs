@@ -201,8 +201,8 @@ pub fn forms() -> Vec<Form> {
         form(
             "let",
             "expression",
-            "let name = expr;",
-            "A binding, immutable and scoped to its block; `let _ = put(...)` is a statement for its effect.",
+            "let name = expr;   let { x, y: top } = value;",
+            "A binding, immutable and scoped to its block; `let _ = put(...)` is a statement for its effect. A `{ ... }` names fields of one value instead, each under its own name or the one written after `:`.",
         ),
         form(
             "if",
@@ -219,8 +219,8 @@ pub fn forms() -> Vec<Form> {
         form(
             "match",
             "expression",
-            "match i { 0 => a, 1 | 2 => b, _ => c }",
-            "On an Int: the arm whose values hold it, else the `_` arm, which comes last and is required; the GPU runs it as a switch.",
+            "match i { 0 => a, 1 | 2 => b, 8..16 => c, 16..=31 => d, _ => e }",
+            "On an Int: the arm whose values hold it, else the `_` arm, which comes last and is required; the GPU runs it as a switch. A range is the values it holds, `..` stopping before its end and `..=` taking it, at most 256 to an arm.",
         ),
         form(
             "loop",

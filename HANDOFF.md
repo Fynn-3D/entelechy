@@ -414,6 +414,41 @@ verification. Declined this round with reasons recorded: a wide-lane
 interpreter (the JIT covers it), the GDExtension (small gain, heavy
 dependency), a Linux run.
 
+Control flow was asked what it was missing, and two answers were
+fixed. `&&` and `||` did not short-circuit: `n != 0 && 100 / n > 3`
+divided, which the interpreter and the JIT called a failure and the GPU
+did not, so they lower to an `if` and the optimizer writes the cheap
+ones back to one operation before it hoists (the other side at most
+four instructions, pure, unable to fail); alternating two binaries over
+the replay suite showed no cost. And an `if` with no `else`, among a
+block's statements, now guards what follows, desugared in the parser,
+so a Kernel reads like the check it is. Left undone deliberately:
+break with a value, which `until` covers, and a `match` on anything
+but an `Int`.
+
+The feature matrix then grew a second part. The features are what the
+language can write; the semantics are what it promises. `not taken`
+puts a division by zero on every side that must not run (an `if`'s
+other arm, a `match`'s other arm, a short-circuit's other side, a loop
+stopped by its `until`, a loop of no iterations), so a run that
+finishes is the proof, and breaking one makes all five modes report
+it. `edges` reads past every edge there is and holds the backends to
+the same clamp; `signs` pins truncation toward zero and the
+dividend's sign; `float edges` pins infinity, not-a-number and that
+nothing orders against one. Writing them found a second float
+divergence to document beside `inf * 0`: `sqrt` of a negative need not
+be a not-a-number on a GPU under fast math.
+
+Two forms the language was missing are in: a `match` arm takes a range
+of values, `0..8` up to but not including its end and `0..=7`
+including it, written out at parse time so the arms stay a table and a
+value in two arms is still refused; and a `let` takes the fields of one
+value, `let { x, y: top } = window();`, the value read once and each
+field bound, also in the parser. Neither is known to the IR or to a
+backend. The examples use both (the snake and voxel window and board
+extents, the rubik hit, the shared text library's printable range) and
+their replays are bit for bit what they were.
+
 Left as is: the interpreter reports an arithmetic failure in a scan at
 `(index, 0)` and so does the JIT; the JIT's parity is against the CPU's
 words, so a change to the interpreter's rounding needs a change here.

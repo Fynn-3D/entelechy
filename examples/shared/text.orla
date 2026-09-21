@@ -19,7 +19,8 @@ fn ink(glyphs: Text, font: Atlas, px: Vec2) -> Float {
     let n = count(glyphs);
     let end = loop 256 with k = Ink { next: 0, cover: 0.0 } until k.next >= n || k.cover > 0.5 {
         let g = at(glyphs, k.next);
-        let code = if g.code < 32 || g.code > 126 { 63 } else { g.code };
+        // The font holds the printable codes; anything else is a `?`.
+        let code = match g.code { 32..=126 => g.code, _ => 63 };
         let cell = code - 32;
         let local = (px - g.origin) / g.scale;
         let inside = local.x >= 0.0 && local.x < 6.0 && local.y >= 0.0 && local.y < 8.0;

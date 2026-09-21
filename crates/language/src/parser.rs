@@ -13,6 +13,7 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
     let mut parser = Parser {
         tokens,
         position: 0,
+        temporaries: 0,
     };
     let mut document = Document {
         package: None,
@@ -131,6 +132,7 @@ pub fn parse_literal(source: &str) -> Result<Expr, ParseError> {
     let mut parser = Parser {
         tokens,
         position: 0,
+        temporaries: 0,
     };
     let expr = parser.expr()?;
     if parser.peek() != &Token::Eof {
@@ -168,9 +170,15 @@ pub fn parse(source: &str) -> Result<Kernel, ParseError> {
 struct Parser {
     tokens: Vec<Lexeme>,
     position: usize,
+    /// How many values a `let { ... }` has had to name for itself.
+    temporaries: usize,
 }
 
 impl Parser {
+    /// How many values one `match` range may hold: enough for a byte's
+    /// worth of opcodes, few enough that the arms stay a table.
+    const RANGE_LIMIT: i64 = 256;
+
     fn peek(&self) -> &Token {
         &self.tokens[self.position].token
     }
@@ -584,9 +592,8 @@ impl Parser {
         let span = name.span;
         self.expect_punct("{")?;
         let mut base = None;
-        if self.is_punct(".") {
+        if self.is_punct("..") {
             self.next();
-            self.expect_punct(".")?;
             base = Some(Box::new(self.expr()?));
             if !self.eat_punct(",") && !self.is_punct("}") {
                 return Err(self.unexpected("`,` or `}` after `..base`"));
@@ -978,6 +985,129 @@ impl Parser {
     /// A block's statements, to its closing brace. An `if` with no
     /// `else` among them guards what follows: what it gives is the
     /// block's value, and the statements after it are the other arm.
+    /// One `match` arm value, or a range of them: `3`, `-1`, `0..8`
+    /// (up to but not including the last), `0..=7` (including it). A
+    /// range is the values it holds, written out, so the arms stay a
+    /// table and a value listed twice is still caught.
+    fn arm_values(&mut self, values: &mut Vec<Spanned<i32>>) -> Result<(), ParseError> {
+        let (first, span) = self.arm_value()?;
+        let inclusive = self.is_punct("..=");
+        if !inclusive && !self.is_punct("..") {
+            values.push(Spanned { value: first, span });
+            return Ok(());
+        }
+        self.next();
+        let (end, end_span) = self.arm_value()?;
+        let last = if inclusive { end } else { end - 1 };
+        let count = i64::from(last) - i64::from(first) + 1;
+        if count < 1 {
+            return Err(ParseError {
+                span,
+                message: format!(
+                    "`{first}..{}{end}` holds no values; a range runs upwards",
+                    if inclusive { "=" } else { "" }
+                ),
+            });
+        }
+        if count > Self::RANGE_LIMIT {
+            return Err(ParseError {
+                span: end_span,
+                message: format!(
+                    "a `match` range holds at most {} values, this one holds {count}; \
+                     an `if` on the bounds is the form for a wider one",
+                    Self::RANGE_LIMIT
+                ),
+            });
+        }
+        for value in first..=last {
+            values.push(Spanned { value, span });
+        }
+        Ok(())
+    }
+
+    /// An integer as a `match` arm writes it, `7` or `-1`.
+    fn arm_value(&mut self) -> Result<(i32, Span), ParseError> {
+        let negative = self.eat_punct("-");
+        match self.next() {
+            (Token::Int(value), span) => Ok((
+                if negative {
+                    value.wrapping_neg()
+                } else {
+                    value
+                },
+                span,
+            )),
+            (token, span) => Err(ParseError {
+                span,
+                message: format!(
+                    "a `match` arm takes integer values, a range of them, or `_`, found {}",
+                    token.describe()
+                ),
+            }),
+        }
+    }
+
+    /// `let { x, y } = value;`, and `let { x: left, y: top } = value;`
+    /// where the binding is to have another name: the value read once,
+    /// then one binding a field, which is what one writes by hand.
+    fn destructure(&mut self, lets: &mut Vec<(Spanned<String>, Expr)>) -> Result<(), ParseError> {
+        let span = self.expect_punct("{")?;
+        let mut fields: Vec<(Spanned<String>, Spanned<String>)> = Vec::new();
+        while !self.is_punct("}") {
+            let field = self.ident("a field name")?;
+            let binding = if self.eat_punct(":") {
+                self.ident("a binding name")?
+            } else {
+                field.clone()
+            };
+            fields.push((field, binding));
+            if !self.eat_punct(",") {
+                break;
+            }
+        }
+        self.expect_punct("}")?;
+        if fields.is_empty() {
+            return Err(ParseError {
+                span,
+                message: "a `let { }` names at least one field".into(),
+            });
+        }
+        self.expect_punct("=")?;
+        let value = self.expr()?;
+        self.expect_punct(";")?;
+        // A name is already read once; anything else is bound first, so
+        // the fields come from one value.
+        let source = match &value.kind {
+            ExprKind::Name(name) => Spanned {
+                value: name.clone(),
+                span: value.span,
+            },
+            _ => {
+                let name = Spanned {
+                    value: format!("${}", self.temporaries),
+                    span: value.span,
+                };
+                self.temporaries += 1;
+                lets.push((name.clone(), value));
+                name
+            }
+        };
+        for (field, binding) in fields {
+            let read = Expr {
+                kind: ExprKind::Member(
+                    Box::new(Expr {
+                        kind: ExprKind::Name(source.value.clone()),
+                        span: source.span,
+                    }),
+                    field.value,
+                ),
+                span: field.span,
+            };
+            lets.push((binding, read));
+        }
+        Ok(())
+    }
+
     fn block_body(&mut self) -> Result<Block, ParseError> {
         let mut lets = Vec::new();
         loop {
@@ -1008,11 +1138,15 @@ impl Parser {
             }
             if self.is_keyword("let") {
                 self.next();
-                let name = self.ident("a binding name")?;
-                self.expect_punct("=")?;
-                let value = self.expr()?;
-                self.expect_punct(";")?;
-                lets.push((name, value));
+                if self.is_punct("{") {
+                    self.destructure(&mut lets)?;
+                } else {
+                    let name = self.ident("a binding name")?;
+                    self.expect_punct("=")?;
+                    let value = self.expr()?;
+                    self.expect_punct(";")?;
+                    lets.push((name, value));
+                }
             } else if self.is_keyword("return") {
                 self.next();
                 let result = self.expr()?;
@@ -1278,27 +1412,7 @@ impl Parser {
                     }
                     let mut values = Vec::new();
                     loop {
-                        let negative = self.eat_punct("-");
-                        let (value, value_span) = match self.next() {
-                            (Token::Int(value), value_span) => (value, value_span),
-                            (token, token_span) => {
-                                return Err(ParseError {
-                                    span: token_span,
-                                    message: format!(
-                                        "a `match` arm takes integer values or `_`, found {}",
-                                        token.describe()
-                                    ),
-                                });
-                            }
-                        };
-                        values.push(Spanned {
-                            value: if negative {
-                                value.wrapping_neg()
-                            } else {
-                                value
-                            },
-                            span: value_span,
-                        });
+                        self.arm_values(&mut values)?;
                         if !self.eat_punct("|") {
                             break;
                         }
@@ -1638,6 +1752,71 @@ kernel image.grayscale@1 {
             error.message.contains("integer values"),
             "{}",
             error.message
+        );
+    }
+
+    #[test]
+    fn a_match_arm_takes_a_range_of_values() {
+        let kernel = parse(
+            "kernel t.k@1 { compute { return match element() { 0..4 => 1, 4..=6 | 9 => 2, -2..0 => 3, _ => 0 }; } }",
+        )
+        .unwrap();
+        let ExprKind::Match { arms, .. } = &kernel.compute.result.kind else {
+            panic!("expected a match");
+        };
+        let values = |arm: &MatchArm| arm.values.iter().map(|v| v.value).collect::<Vec<_>>();
+        assert_eq!(values(&arms[0]), [0, 1, 2, 3], "`..` stops before its end");
+        assert_eq!(values(&arms[1]), [4, 5, 6, 9], "`..=` takes its end");
+        assert_eq!(values(&arms[2]), [-2, -1], "a range may be negative");
+
+        let error = parse("kernel t.k@1 { compute { return match 1 { 4..2 => 1, _ => 0 }; } }")
+            .unwrap_err();
+        assert!(error.message.contains("holds no values"), "{error}");
+        let error = parse("kernel t.k@1 { compute { return match 1 { 0..1000 => 1, _ => 0 }; } }")
+            .unwrap_err();
+        assert!(error.message.contains("at most 256 values"), "{error}");
+        // The arms stay a table, so a value written twice is still one
+        // the compiler refuses; here the parser has already spread it.
+        let kernel =
+            parse("kernel t.k@1 { compute { return match 1 { 0..4 => 1, 3 => 2, _ => 0 }; } }")
+                .unwrap();
+        let ExprKind::Match { arms, .. } = &kernel.compute.result.kind else {
+            panic!("expected a match");
+        };
+        assert_eq!(values(&arms[1]), [3]);
+    }
+
+    #[test]
+    fn a_let_may_name_the_fields_it_takes() {
+        let kernel = parse(
+            "kernel t.k@1 { compute { let { x, y: top } = at(rows, 0); let { r, g, b } = colour; return vec4(r, g, b, x + top); } }",
+        )
+        .unwrap();
+        let lets = &kernel.compute.lets;
+        // The read is bound once, under a name no one can write, and
+        // each field comes off it; a name is read again as it stands.
+        assert_eq!(lets[0].0.value, "$0");
+        assert!(matches!(lets[0].1.kind, ExprKind::Call(ref name, _) if name == "at"));
+        let member = |index: usize| match &lets[index].1.kind {
+            ExprKind::Member(value, field) => {
+                let ExprKind::Name(name) = &value.kind else {
+                    panic!("expected a name");
+                };
+                (name.clone(), field.clone())
+            }
+            other => panic!("expected a member, found {other:?}"),
+        };
+        assert_eq!(lets[1].0.value, "x");
+        assert_eq!(member(1), ("$0".to_owned(), "x".to_owned()));
+        assert_eq!(lets[2].0.value, "top");
+        assert_eq!(member(2), ("$0".to_owned(), "y".to_owned()));
+        assert_eq!(member(3), ("colour".to_owned(), "r".to_owned()));
+        assert_eq!(lets.len(), 6, "three fields and one value, then three");
+
+        let error = parse("kernel t.k@1 { compute { let { } = c; return 1.0; } }").unwrap_err();
+        assert!(
+            error.message.contains("names at least one field"),
+            "{error}"
         );
     }
 

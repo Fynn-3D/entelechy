@@ -161,9 +161,7 @@ kernel voxel.state@1 {
         let shift = key(16);
         // The picture fills the window; the bar and the compass are laid
         // out in logical pixels.
-        let win = window();
-        let width = win.x;
-        let height = win.y;
+        let { x: width, y: height } = window();
         let unit = scale();
         let hover = item_at(p.x, p.y, width, height, unit);
         let on_compass = length(p / unit - vec2(width / unit - 52.0, 52.0)) < 44.0;
@@ -353,9 +351,7 @@ kernel voxel.draw@1 {
     compute {
         let s = at(state, 0);
         let px = coord();
-        let extent = domain();
-        let width = extent.x;
-        let height = extent.y;
+        let { x: width, y: height } = domain();
         let n = size(voxels).x;
         let eye = eye_at(s.yaw, s.pitch, s.zoom, n, s.pan);
         let fwd = forward(s.yaw, s.pitch);
