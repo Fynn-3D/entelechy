@@ -4,6 +4,16 @@
 //! context, so a backend can be held to the interpreter across the
 //! whole cross product rather than where an example happens to look.
 //!
+//! The rows fall in two parts. The features are what the language can
+//! write, one row a form, which holds a backend to the interpreter on
+//! the words it computes. The semantics are what the language promises
+//! about what it computes: what is not taken is not computed, a read
+//! past an edge is the edge, a quotient truncates toward zero, and a
+//! float says what it says where no number answers. Those rows carry
+//! work that would fail if it ran, so a run that finishes is the proof;
+//! the interpreter and the JIT report such a failure, which is what
+//! makes the row bite, and the GPU agrees on the words either way.
+//!
 //! A feature is a snippet that computes an `Out` from an environment
 //! every mode's wrapper provides: `i: Int`, `x: Float`, the inputs
 //! `rows`, `ints` and `cells`, `sampled` (the element's own sample of an
@@ -84,6 +94,44 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "if chain",
             "let g = if x < 1.0 { 1 } else if x < 3.0 { let mid = i * 2; mid } else { 3 };",
             "Out { f: if g == 1 { x } else { -x }, i: g, b: g == 3, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
+            // What is not taken is not computed: every division here
+            // would fail if the side holding it ran, so a run that
+            // finishes is the proof. The GPU reports no failure, but
+            // the interpreter and the JIT do, and all three must agree
+            // on the words.
+            "not taken",
+            "let zero = i - i; let branch = if i == 0 { -1 } else { 100 / i }; let arm = match i % 4 { 0 => -1, _ => 100 / (i % 4) }; let guarded = i != 0 && 100 / i > 3; let either = i == 0 || 100 / i > 3; let early = loop 8 with a = 1 until a > 0 { 100 / zero }; let never = loop i % 1 with a = 2 { 100 / zero };",
+            "Out { f: float(branch + arm), i: branch + arm + early + never + int(guarded) + int(either) * 2, b: guarded != either, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
+            // Every read past an edge is the edge: a Field clamps, an
+            // array clamps, a matrix's column clamps.
+            "edges",
+            "let far = at(rows, i - 60) + at(rows, i + 60); let corner = at(cells, vec2(float(i) - 20.0, float(i) + 20.0)).a; let lin = at_linear(rows, float(i) - 8.5) + at_linear(rows, float(i) + 44.5); let table = [3, 1, 4, 1]; let picked = table[i - 20] + table[i + 20]; let frame = mat3(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0), vec3(7.0, 8.0, 9.0)); let column = frame[i - 20].x + frame[i + 20].z;",
+            "Out { f: far + corner + lin + column, i: picked, b: far > lin, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
+            // What a float does where no number answers: an infinity
+            // where a positive is divided by nothing, a not-a-number
+            // where nothing is, and nothing equals or orders against a
+            // not-a-number. The words themselves are not compared,
+            // since a payload is a backend's own business; what it says
+            // about them is. `sqrt` of a negative is left out: the CPU
+            // and the JIT have NaN there and a driver's fast math need
+            // not, which the caveat in the documents names.
+            "float edges",
+            "let zero = x - x; let up = 1.0 / zero; let down = (0.0 - 1.0) / zero; let undefined = zero / zero; let same = undefined == undefined; let ordered = undefined < 1.0 || undefined > 1.0; let big = up > 1000000000.0;",
+            "Out { f: 0.0, i: int(isinf(up)) + int(isinf(down)) * 2 + int(isnan(undefined)) * 4 + int(same) * 8 + int(ordered) * 16 + int(big) * 32 + int(up > down) * 64, b: isnan(undefined), v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
+            // A quotient truncates toward zero and a remainder takes the
+            // dividend's sign, floats included; the unsigned pair reads
+            // the same bits as a number without one.
+            "signs",
+            "let a = i - 24; let q = a / 5; let r = a % 5; let fq = (x - 7.5) / 2.0; let fr = (x - 7.5) % 2.0; let u = udiv(a, 5) >>> 26; let ur = urem(a, 5); let neg = (0 - a) / 5;",
+            "Out { f: fq + fr, i: q + r * 3 + u + ur * 5 + neg * 7, b: r < 0, v: vec3(float(q), fr, float(ur)) }",
         ),
         (
             // `&&` and `||` ask the other side only where the first

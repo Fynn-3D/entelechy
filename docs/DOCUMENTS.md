@@ -149,9 +149,13 @@ and `mul_wrap` are the arithmetic modulo 2^32 (a machine's ALU), where
 `rotl`, `rotr`, `ult`, `udiv`, `urem`, `mulhi` and `umulhi` are the bit
 counts, rotations, unsigned compare and division, and the high half of a
 64-bit product. `orla help <name>` shows any builtin's signatures. One
-caveat: a NaN made by arithmetic on the GPU (`inf * 0`, say) may come
-out a number under a driver's fast math; a NaN read from a Field is
-seen alike on every backend. An `Int` literal may be hexadecimal, `0xFF`, its 32 bits as
+caveat: a NaN made by arithmetic on the GPU (`inf * 0`, or `sqrt` of a
+negative) may come out a number under a driver's fast math, where the
+interpreter and the JIT have NaN; a NaN read from a Field is
+seen alike on every backend. What every backend does agree on, and what
+the feature matrix holds them to: a positive divided by zero is an
+infinity, zero divided by zero is not a number, and nothing equals or
+orders against a not-a-number. An `Int` literal may be hexadecimal, `0xFF`, its 32 bits as
 written.
 The componentwise ones take a `Float` or any vector; where two operands
 meet, a `Float` beside a vector broadcasts, so `clamp(v, 0.0, 1.0)` and

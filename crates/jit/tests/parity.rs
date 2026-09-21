@@ -494,3 +494,44 @@ fn a_merge_may_read_inputs_params_and_the_context() {
         .sum();
     assert!((f32::from_bits(cpu[0]) - (plain + 36.0 * 3.5)).abs() < 1e-2);
 }
+
+/// Where a failure is blamed does not move when the compiler writes a
+/// short function out where it was called or lifts a loop's unchanging
+/// work out of it: the same element, on both backends. And what a loop
+/// that never runs would have failed at does not fail, since work that
+/// can fail is never lifted out of one.
+#[test]
+fn a_failure_names_its_element_through_a_call_and_a_loop() {
+    let source = "kernel test.deep@1 { requires { field.write; } param d: Int = 1; output result: Rows<Int>; fn risky(a: Int, b: Int) -> Int { return a / b; } compute { let i = element(); let times = if i % 2 == 0 { 3 } else { 0 }; return loop times with acc = 0 { acc + risky(100, d - i) }; } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let jit = JitBackend::new().unwrap();
+    let run = |backend: &dyn Backend, d: i32| {
+        let mut host = Host::new(1 << 16);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![Value::Int(d)],
+            domain: Domain::Rows(8),
+            context: Context::default(),
+        };
+        let prepared = backend.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let outcome = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope);
+        outcome.map(|outputs| scope.words(outputs[0]).unwrap().to_vec())
+    };
+    // Element 4 divides by zero, three times over, inside a function
+    // that is written out inside a loop: both backends blame element 4.
+    let expected = ExecutionError::Arithmetic {
+        x: 4,
+        y: 0,
+        error: ArithmeticError::DivisionByZero,
+    };
+    assert_eq!(run(&CpuBackend, 4).unwrap_err(), expected);
+    assert_eq!(run(&jit, 4).unwrap_err(), expected);
+    // Element 5 would divide by zero too, but its loop runs no times:
+    // the division cannot be lifted out of it, so nothing fails.
+    let cpu = run(&CpuBackend, 5).unwrap();
+    let jitted = run(&jit, 5).unwrap();
+    assert_eq!(cpu, jitted);
+    assert_eq!(cpu[5], 0, "the loop that never ran carries its initial");
+    assert_eq!(cpu[4], 300, "three times a hundred over one");
+}

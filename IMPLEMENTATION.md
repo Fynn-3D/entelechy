@@ -23,6 +23,8 @@ capability claim.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs) | Unit tests: typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel Language | [language](crates/language/src/lib.rs) | Parser tests: syntax, precedence, positioned errors |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/mod.rs) | [compile tests](crates/compiler/tests/compile.rs) |
+| Short-circuit and guards | [lowering](crates/compiler/src/lower/expr.rs), [parser](crates/language/src/parser.rs) `block_body`, [optimizer](crates/ir/src/optimize.rs) `folded` | [interpreter](crates/cpu/tests/execute.rs), [feature matrix](crates/matrix/src/lib.rs) `short circuit`, [parser tests](crates/language/src/parser.rs) |
+| Semantics rows | [matrix](crates/matrix/src/lib.rs) `not taken`, `edges`, `signs`, `float edges` | [jit](crates/jit/tests/matrix.rs), [gpu](crates/gpu/tests/matrix.rs), [failure attribution](crates/jit/tests/parity.rs) |
 | Bytes in | [session](crates/cli/src/session.rs) `load_bytes`, [parser](crates/language/src/parser.rs) | [session tests](crates/cli/tests/session.rs), [level example](examples/level/tests/level.replay) |
 | MIDI in and out | [importer](crates/import/src/midi.rs), [exporter](crates/export/src/midi.rs) | [midi tests](crates/import/tests/midi.rs), [score example](examples/score/tests/score.replay) |
 | Keywords as names | [parser](crates/language/src/parser.rs) `name_not_starting_an_expression` | [parser tests](crates/language/src/parser.rs) |
@@ -459,6 +461,39 @@ capability claim.
   [diagnostics](crates/compiler/tests/compile.rs), and the
   [snake example](examples/snake/kernels/snake.orla), whose cells are
   integer vectors end to end.
+
+- `&&` and `||` ask the other side only where the first settles
+  nothing. They lower to an `if`, which every backend runs one arm of,
+  so `n != 0 && x / n > 1` does not divide when `n` is zero (it did,
+  and the interpreter and the JIT called it a failure while the GPU
+  computed something). The optimizer writes the cheap ones back as one
+  operation before it hoists (`folded`: the other side at most four
+  instructions, pure, and unable to fail), so nothing branches for a
+  comparison and a loop can still lift one out; measured by alternating
+  the two binaries over the replay suite, the change costs nothing.
+
+- An `if` with no `else`, among a block's statements, guards what
+  follows: `if x < 0 { return -1; }` is the `if` whose other arm is the
+  rest of the block, desugared in the parser (`block_body`), so a
+  Kernel reads like the check it is. Nothing in the IR knows.
+
+- The feature matrix grew a second part: not what the language can
+  write but what it promises. `not taken` puts a division by zero on
+  every side that must not run (an `if`'s other arm, a `match`'s other
+  arm, a short-circuit's other side, a loop stopped by its `until` and
+  a loop of no iterations), so a run that finishes is the proof; break
+  one and the interpreter says "integer division by zero" in all five
+  modes. `edges` reads past every edge there is (a Field by `at` and
+  `at_linear`, an array, a matrix's column) and holds the three
+  backends to the same clamp. `signs` pins a quotient truncating toward
+  zero and a remainder taking the dividend's sign, floats and the
+  unsigned pair included. `float edges` pins an infinity where a
+  positive is divided by zero, a not-a-number where zero is, and that
+  nothing equals or orders against one; `sqrt` of a negative is left
+  out, since a driver's fast math need not have NaN there, which the
+  documents now say. A failure keeps naming its element through an
+  inlined call and a loop, and work that can fail is still never lifted
+  out of a loop that may not run.
 
 - A file as its bytes: `input level: Rows<Int> = bytes "level.bin";`
   reads any file as rows of one integer an element, 0 to 255, watched
