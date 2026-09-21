@@ -1,0 +1,45 @@
+// The Thumb machine off the frame: `async = true;` on `machine` starts
+// each step, half a million instructions, on a thread of its own and the
+// frame goes on. `view` shows the RAM the last landed step left; `clock`
+// sweeps a hand over it by the frame's time, so the picture moves while
+// the machine runs. The first step is on the frame, so `view` has RAM
+// to show.
+use "../thumb/kernels/";
+
+param speed: Int = 500000;         // instructions per step, on the thread
+
+node rom: thumb.rom@1 { domain = 38; }
+node boot: thumb.boot@1 { rom <- rom.result; domain = 2048; }
+node start: thumb.start@1 { domain = 17; }
+node ticks: kernel {
+    requires { field.write; }
+    output result: Rows<Int>;
+    domain = speed;
+    compute { return 0; }
+}
+node machine: thumb.step@1 {
+    ticks <- ticks.result;
+    ram <~ machine.ram from boot.result;
+    regs <~ machine.regs from start.result;
+    async = true;
+}
+node view: thumb.view@1 { ram <- machine.ram; domain = window(); }
+node clock: kernel {
+    requires { field.read; field.write; time.read; }
+    input picture: Image <- view.result;
+    output result: Image;
+    compute {
+        let centre = domain() * 0.5;
+        let p = coord() + vec2(0.5, 0.5) - centre;
+        let angle = time() * 6.2831853;
+        let hand = vec2(sin(angle), -cos(angle));
+        let along = dot(p, hand);
+        let across = abs(p.x * hand.y - p.y * hand.x);
+        let radius = min(centre.x, centre.y) * 0.9;
+        let on_hand = along > 0.0 && along < radius && across < 1.5;
+        let c = sample(picture);
+        return if on_hand { vec4(1.0, 1.0, 1.0, 1.0) } else { c };
+    }
+}
+
+output result <- clock.result;

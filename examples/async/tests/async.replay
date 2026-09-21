@@ -1,0 +1,29 @@
+scene ../scene.osn
+
+# The machine's step is half a million instructions of the Thumb program,
+# which counts its passes into RAM at 0x0FF0 (word 1020). The first step
+# runs on the frame; every later one runs on a thread, so a frame that
+# starts one shows the RAM of the last landed step, and `settle` waits
+# for the running one before the next frame reads it.
+window 64 64
+frame 0.0
+expect machine.ram[1020] = 53
+
+# The second step starts off the frame: the picture still shows the first
+# step's RAM, and the clock's hand has moved (a quarter turn: pointing right).
+frame 0.25
+expect machine.ram[1020] = 53
+expect 48 32 = 1.0 1.0 1.0 1.0
+
+# Landed and read: the count doubled, the hand points down.
+settle
+frame 0.5
+expect machine.ram[1020] = 106
+expect 32 48 = 1.0 1.0 1.0 1.0
+
+# The third step; a pass boundary falls differently, so it counts 54.
+frame 0.75
+expect machine.ram[1020] = 106
+settle
+frame 1.0
+expect machine.ram[1020] = 160

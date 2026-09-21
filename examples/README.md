@@ -115,3 +115,6 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [package](package/README.md): a scene using the `pixelfx.orlapkg`
   package beside it for its Kernels and placing its NES preset by path;
   the package is what `orla pack` carries as one file.
+- [async](async/README.md): the Thumb machine off the frame, `async =
+  true;` on its node: each step runs on a thread while the picture keeps
+  its pace, and the replay's `settle` waits for a step to land.
