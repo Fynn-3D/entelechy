@@ -4,7 +4,7 @@ use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
     BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl, Kernel,
     MatchArm, MergeDecl, NodeDecl, NodeKind, NodeMember, PackageDecl, ParamDecl, ParseError,
-    PortDecl, ScatterDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
+    PortDecl, PrefixDecl, ScatterDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -359,6 +359,7 @@ impl Parser {
         let mut merge = None;
         let mut carry = None;
         let mut scatter = None;
+        let mut prefix = None;
         while !self.is_punct("}") {
             let span = self.span();
             let Token::Ident(keyword) = self.peek().clone() else {
@@ -413,20 +414,22 @@ impl Parser {
                 }
                 "compute" => {
                     if compute.is_some() {
-                        return Err(self.error(if carry.is_some() || scatter.is_some() {
-                            "a kernel has one of `compute`, `scan`, or `scatter`"
-                        } else {
-                            "`compute` is declared twice"
-                        }));
+                        return Err(self.error(
+                            if carry.is_some() || scatter.is_some() || prefix.is_some() {
+                                "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`"
+                            } else {
+                                "`compute` is declared twice"
+                            },
+                        ));
                     }
                     self.next();
                     compute = Some(self.block()?);
                 }
                 "scatter" => {
                     if compute.is_some() {
-                        return Err(
-                            self.error("a kernel has one of `compute`, `scan`, or `scatter`")
-                        );
+                        return Err(self.error(
+                            "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`",
+                        ));
                     }
                     self.next();
                     self.keyword("into")?;
@@ -440,11 +443,23 @@ impl Parser {
                         span,
                     });
                 }
+                "prefix" => {
+                    if compute.is_some() {
+                        return Err(self.error(
+                            "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`",
+                        ));
+                    }
+                    self.next();
+                    self.keyword("with")?;
+                    let combine = self.ident("`sum`, `min`, or `max`")?;
+                    compute = Some(self.block()?);
+                    prefix = Some(PrefixDecl { combine, span });
+                }
                 "scan" => {
                     if compute.is_some() {
-                        return Err(
-                            self.error("a kernel has one of `compute`, `scan`, or `scatter`")
-                        );
+                        return Err(self.error(
+                            "a kernel has one of `compute`, `scan`, `scatter`, or `prefix`",
+                        ));
                     }
                     self.next();
                     self.keyword("with")?;
@@ -471,14 +486,15 @@ impl Parser {
                     return Err(ParseError {
                         span,
                         message: format!(
-                            "expected `requires`, `input`, `param`, `output`, `memory`, `struct`, `type`, `fn`, `compute`, `scan`, `scatter`, or `merge`, found `{keyword}`"
+                            "expected `requires`, `input`, `param`, `output`, `memory`, `struct`, `type`, `fn`, `compute`, `scan`, `scatter`, `prefix`, or `merge`, found `{keyword}`"
                         ),
                     });
                 }
             }
         }
-        let compute = compute
-            .ok_or_else(|| self.error("kernel has no `compute`, `scan`, or `scatter` block"))?;
+        let compute = compute.ok_or_else(|| {
+            self.error("kernel has no `compute`, `scan`, `scatter`, or `prefix` block")
+        })?;
         self.expect_punct("}")?;
         let end = self.previous_end();
         Ok(Kernel {
@@ -498,6 +514,7 @@ impl Parser {
             merge,
             carry,
             scatter,
+            prefix,
         })
     }
 
@@ -1648,10 +1665,10 @@ impl Parser {
 /// function, since a call would not be told from one of these.
 const STARTS_AN_EXPRESSION: [&str; 5] = ["let", "return", "if", "match", "loop"];
 
-const RESERVED: [&str; 24] = [
+const RESERVED: [&str; 25] = [
     "let", "return", "if", "else", "match", "loop", "with", "until", "break", "kernel", "struct",
     "type", "node", "use", "from", "input", "output", "memory", "graph", "merge", "scan",
-    "scatter", "migrate", "package",
+    "scatter", "prefix", "migrate", "package",
 ];
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

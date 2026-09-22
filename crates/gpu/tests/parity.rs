@@ -648,6 +648,103 @@ fn reductions_match_between_backends() {
     );
 }
 
+/// A prefix's blocked fold on the device must give the reference's words
+/// exactly — the whole promise the mode rests on. Sums of integers, and
+/// `max` over a struct carrying a float, a not-a-number and both zeros,
+/// at counts that straddle a block's edge.
+#[test]
+fn prefixes_match_between_backends() {
+    let Some(gpu) = gpu() else { return };
+    let sum = compile(
+        "kernel test.prefix_sum@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(rows); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let worst = compile(
+        "kernel test.prefix_max@1 { requires { field.read; field.write; } input rows: Rows<Run>; output result: Rows<Run>; struct Run { i: Int; f: Float; } prefix with max { return sample(rows); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    // 1 and 10 are one block; 5000 is seventy-one of them with a ragged
+    // last; 70000 is past what one invocation would walk in a frame.
+    for count in [1u32, 10, 5000, 70000] {
+        let ints: Vec<u32> = (0..count).map(|i| ((i as i32 % 11) - 5) as u32).collect();
+        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let mut host = Host::new(1 << 24);
+        let rows = host
+            .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(count), ints).unwrap())
+            .unwrap();
+        let (cpu_words, gpu_words) = on_both(&gpu, &mut host, &sum, rows, count);
+        let mut running = 0i32;
+        for (index, (a, b)) in cpu_words.iter().zip(&gpu_words).enumerate() {
+            running += (index as i32 % 11) - 5;
+            assert_eq!(*a as i32, running, "the reference's own sum at {index}");
+            assert_eq!(a, b, "sum at {index} of {count}");
+        }
+
+        // A float that is not a number, a negative zero beside a
+        // positive one, and an infinity: `max` orders them by their bits
+        // on both backends or it orders them differently.
+        let odd = [
+            f32::NAN,
+            -0.0,
+            0.0,
+            f32::INFINITY,
+            -f32::INFINITY,
+            3.5,
+            -2.0,
+        ];
+        let words: Vec<u32> = (0..count)
+            .flat_map(|i| {
+                [
+                    ((i as i32 % 11) - 5) as u32,
+                    odd[i as usize % odd.len()].to_bits(),
+                ]
+            })
+            .collect();
+        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
+        let mut host = Host::new(1 << 24);
+        let rows = host
+            .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(count), words).unwrap())
+            .unwrap();
+        let (cpu_words, gpu_words) = on_both(&gpu, &mut host, &worst, rows, count);
+        assert_eq!(cpu_words, gpu_words, "max over {count}");
+    }
+}
+
+/// Runs a module over one input on both backends and gives back the two
+/// outputs' words.
+fn on_both(
+    gpu: &GpuBackend,
+    host: &mut Host,
+    module: &orla_compiler::Validated,
+    input: orla_abi::Handle,
+    count: u32,
+) -> (Vec<u32>, Vec<u32>) {
+    let invocation = orla_abi::Invocation {
+        inputs: vec![input],
+        params: Vec::new(),
+        domain: Domain::Rows(count),
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(host, all());
+    let cpu_out = orla_cpu::CpuBackend
+        .execute(module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let prepared = Backend::prepare(gpu, module).unwrap();
+    let mut scope = Scope::new(host, all());
+    let gpu_out =
+        Backend::execute(gpu, prepared.as_ref(), module, &invocation, &mut scope).unwrap()[0];
+    let byte_len =
+        host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+    let device = host.resident(gpu_out).unwrap().expect("resident");
+    let bytes = Backend::download(gpu, device, byte_len).unwrap();
+    let gpu_words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    (cpu_words, gpu_words)
+}
+
 #[test]
 fn scans_match_between_backends() {
     let Some(gpu) = gpu() else { return };

@@ -83,7 +83,7 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
     }
     match (module.manifest.mode, &module.merge) {
         (Mode::Map, None) => {}
-        (Mode::Map | Mode::Scan | Mode::Scatter { .. }, Some(_)) => {
+        (Mode::Map | Mode::Scan | Mode::Scatter { .. } | Mode::Prefix { .. }, Some(_)) => {
             return Err(error("manifest", "only a reduce Kernel has a `merge`"));
         }
         (Mode::Scatter { base, combine }, None) => {
@@ -137,6 +137,56 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
                     format!(
                         "a scatter's entry returns a struct of two fields, an address ({address}) into `{}` and a value ({element})",
                         target.name
+                    ),
+                ));
+            }
+        }
+        (Mode::Prefix { combine }, None) => {
+            let first = module.manifest.inputs.first().ok_or_else(|| {
+                error(
+                    "manifest",
+                    "a prefix runs over its first input, so it needs one",
+                )
+            })?;
+            let output = outputs
+                .first()
+                .ok_or_else(|| error("manifest", "a prefix produces one `Rows` output"))?;
+            if outputs.len() != 1 || output.shape() != Shape::Rows || first.shape() != Shape::Rows {
+                return Err(error(
+                    "manifest",
+                    "a prefix runs over a `Rows` input and produces a `Rows` output of the same count",
+                ));
+            }
+            let element = output.element();
+            // The whole of what makes a prefix safe to group: the rule
+            // gives the same words in any grouping, so a backend may
+            // block the fold and the reference may walk it.
+            let floats = output
+                .ty
+                .schema
+                .scalars()
+                .iter()
+                .any(|scalar| matches!(scalar, orla_abi::Scalar::Float));
+            if combine == Combine::Last {
+                return Err(error(
+                    "manifest",
+                    "a prefix with `last` is every element's own value; write a map",
+                ));
+            }
+            if combine == Combine::Sum && floats {
+                return Err(error(
+                    "manifest",
+                    format!(
+                        "a prefix folds in whatever grouping a backend likes, and a float `sum` does not give one answer that way; `{element}` holds a float, so walk it with a `scan`"
+                    ),
+                ));
+            }
+            if !numeric(&module.structs, element) {
+                return Err(error(
+                    "manifest",
+                    format!(
+                        "`{}` combines numbers; `{element}` holds a Bool",
+                        combine.name()
                     ),
                 ));
             }
@@ -492,7 +542,7 @@ impl<'a> Checker<'a> {
     fn output_shape(&self) -> Shape {
         let manifest = &self.module.manifest;
         match manifest.mode {
-            Mode::Reduce | Mode::Scan | Mode::Scatter { .. } => {
+            Mode::Reduce | Mode::Scan | Mode::Scatter { .. } | Mode::Prefix { .. } => {
                 manifest.inputs.first().map_or(Shape::Rows, Port::shape)
             }
             Mode::Map => manifest.outputs.first().map_or(Shape::Grid, Port::shape),

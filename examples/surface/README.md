@@ -33,23 +33,26 @@ surface misses put their eight corners on one point, and a triangle of
 no area is not drawn — so the same picture comes out of thirty times the
 geometry, which is the other half of the replay.
 
-## What it costs, and what it asks for
+## What it costs
 
-At 1280x720 on the GPU, the least of five runs of thirty frames: 28.3 ms
-a frame, of which the rank over the two million cells is 12.2 — the most
-expensive node in the scene, more than the rasterizer's 4.3. A prefix
-sum is ordered work and walks its row on one thread, and a GPU session
-hands its scans to the JIT, so the same node costs 11.2 ms on the JIT,
-where the whole frame is 122.9.
+At 1280x720 on the GPU, the least of five runs of thirty frames: 5.9 ms
+a frame, of which the rank over the two million cells is 1.2 — about
+what the rasterizer costs.
 
-That is this scene's point. It is the first one here that wants a rank
-over a million things rather than over the few thousand chunks `culled`
-decides about, and what it pays for it is nearly half its frame. A
-blocked prefix sum on the device would be about a quarter of a
-millisecond of that 12.2 (HANDOFF's Open section has the measurement),
-which would take this frame to about 16 ms and leave the scatter that
-gathers the kept indices, at 7.1 ms, as the next thing to look at.
+This scene is why the language has `prefix with sum`. It was written
+first against `scan`, the ordered form, and the same frame was 18.7 ms:
+the rank alone was 10.0 of it, and the scatter that reads the ranks was
+another 4.0 because a scan on a GPU session runs on the JIT, so the row
+went to Host memory and had to be uploaded again. Saying the rule
+instead of carrying a running total lets the device fold the row in
+blocks and keep it where it lies:
 
-Placing every cell instead costs 115.9 ms a frame for the same picture,
-so the compaction is worth 4.1 times even while the rank is this
-expensive.
+| node | `scan` | `prefix with sum` |
+| --- | --- | --- |
+| kept.offsets | 10.007 ms | 1.194 ms |
+| kept.gathered | 4.016 ms | 1.188 ms |
+| the frame | 18.68 ms | 5.89 ms |
+
+Placing every cell instead of the ones the surface touches is 63.5 ms a
+frame for the same picture, so the compaction is worth eleven times over
+— and the rank is what makes the compaction affordable at this size.

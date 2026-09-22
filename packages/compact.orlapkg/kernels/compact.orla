@@ -16,17 +16,20 @@ kernel compact.blank@1 {
 }
 
 // The rank of each kept element: an inclusive prefix sum, so a kept
-// element at `i` belongs at `offsets[i] - 1`. Ordered work, one thread
-// on every backend, which is what a prefix sum is; it costs about a
-// quarter of a millisecond for four thousand flags on a device and
-// grows slowly, so it is a rank over the things a scene decides about
-// (chunks, bodies, lights), not over the elements they expand into.
+// element at `i` belongs at `offsets[i] - 1`.
+//
+// `prefix with sum` and not `scan`: a scan is ordered work — each step
+// reads what the step before it left, so one thread walks the row — and
+// a sum of integers does not need that order. Saying the rule instead of
+// writing the carry lets a backend fold the row in whatever grouping it
+// likes, which is how a device does this in three passes over blocks
+// rather than in one invocation walking every element.
 kernel compact.offsets@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
     output result: Rows<Int>;
-    scan with total = 0 {
-        return total + (if sample(flags) != 0 { 1 } else { 0 });
+    prefix with sum {
+        return if sample(flags) != 0 { 1 } else { 0 };
     }
 }
 

@@ -342,7 +342,7 @@ followed by `;` is a statement for its effect, `put(ram, a, v);`, the
 same as `let _ = put(ram, a, v);`; a binding named `_` binds nothing.
 
 A Kernel with `scatter` in place of `compute` writes where it computes,
-the fourth and last execution mode:
+the fourth execution mode:
 
 ```text
 kernel particles.splat@1 {
@@ -380,6 +380,44 @@ numbers (a Bool takes `last`). The output has the target's shape, layout,
 and extent, so a scatter node takes no `domain`, and a scatter is never
 fused. The exact language is defined by [the frontend](../crates/language/src/lib.rs)
 and its tests.
+
+A Kernel with `prefix` in place of `compute` is a prefix fold, the fifth
+mode: every element of the output is its own value combined with every
+value before it.
+
+```text
+kernel compact.offsets@1 {
+    requires { field.read; field.write; }
+    input flags: Rows<Int>;
+    output result: Rows<Int>;          // one element per input element
+    prefix with sum {                  // the rank of each kept element
+        return if sample(flags) != 0 { 1 } else { 0 };
+    }
+}
+```
+
+The body runs once per element of the first input, a `Rows`, exactly as a
+map's does — `sample`, `element()`, `at`, the params and the context all
+read what they read in a map — and the output is a `Rows` of the same
+count whose element `i` is the body's values at `0..=i` combined by the
+rule after `with`: `sum` adds fieldwise, `min` and `max` take the
+fieldwise extreme, ordering floats by the same total order a scatter
+uses.
+
+The rule is declared rather than written as a carried value because a
+prefix is free to fold in any grouping: it must give one answer whatever
+grouping that is. So `sum` over an element holding a float is refused —
+a float sum depends on the order it is added in, and `scan` is the form
+that walks a row in element order — and so is `last`, which as a prefix
+is every element's own value, a map. What the freedom buys is that a
+device folds a row in three passes over blocks rather than walking every
+element in one invocation: a rank over two million elements is
+sub-millisecond work on a GPU and about six milliseconds as a scan. The
+interpreter and the JIT walk it, which is one grouping of many and the
+one the reference is held to. An integer `sum` that overflows is a
+failure where the reference walks it, as any integer overflow is, and
+(like every arithmetic failure) is not reported on a device; the words
+that come out are the same either way.
 
 ## Graph
 

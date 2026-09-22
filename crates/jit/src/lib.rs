@@ -183,6 +183,9 @@ impl Backend for JitBackend {
                 let merge = compiled.merge.expect("a reduction compiles its merge");
                 run_reduce(compiled.entry, merge, module, invocation, scope)
             }
+            Mode::Prefix { combine } => {
+                run_prefix(compiled.entry, module, invocation, scope, combine)
+            }
             Mode::Scatter { base, combine } => run_scatter(
                 compiled.entry,
                 module,
@@ -532,6 +535,47 @@ fn run_reduce(
     }
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
     if let Err(error) = scope.write_all(output, &level) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// A prefix: the entry over every element of the first input, then each
+/// element folded with everything before it in element order, by the
+/// rule the CPU applies. The rule is order-free, so walking it is one
+/// grouping of many and gives the reference's words.
+fn run_prefix(
+    entry: usize,
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+    combine: Combine,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
+    let domain = scope.size(invocation.inputs[0])?;
+    let port = &module.manifest.outputs[0];
+    let stride = port.ty.schema.words();
+    let shared = shared(module, invocation, scope, domain)?;
+    let mut values = compute(entry, &shared, domain, stride)?;
+    drop(shared);
+    let scalars = port.ty.schema.scalars();
+    let count = domain.count();
+    if count > 1 {
+        let mut running = values[..stride].to_vec();
+        for element in 1..count {
+            let at = element * stride;
+            orla_rules::combine_words(combine, scalars, &mut running, &values[at..at + stride])
+                .map_err(|error| ExecutionError::Arithmetic {
+                    x: element as u32,
+                    y: 0,
+                    error,
+                })?;
+            values[at..at + stride].copy_from_slice(&running);
+        }
+    }
+    let output = scope.create(port.ty.schema.clone(), domain)?;
+    if let Err(error) = scope.write_all(output, &values) {
         let _ = scope.release(output);
         return Err(error.into());
     }

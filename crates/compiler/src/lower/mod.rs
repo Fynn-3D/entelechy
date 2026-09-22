@@ -939,7 +939,7 @@ impl<'a> Builder<'a> {
     /// input's for a reduction.
     fn output_shape(&self) -> Shape {
         match self.manifest.mode {
-            Mode::Reduce | Mode::Scan | Mode::Scatter { .. } => self
+            Mode::Reduce | Mode::Scan | Mode::Scatter { .. } | Mode::Prefix { .. } => self
                 .manifest
                 .inputs
                 .first()

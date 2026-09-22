@@ -176,6 +176,25 @@ pub(super) fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
     }
 }
 
+/// Whether a type holds a float anywhere: what decides that a `sum`
+/// depends on the order it is folded in.
+pub(super) fn holds_float(ty: &Type, structs: &[StructDef]) -> bool {
+    match ty {
+        Type::Float
+        | Type::Vec2
+        | Type::Vec3
+        | Type::Vec4
+        | Type::Mat2
+        | Type::Mat3
+        | Type::Mat4 => true,
+        Type::Int | Type::IVec2 | Type::IVec3 | Type::Bool => false,
+        Type::Struct(index) => structs[*index as usize]
+            .fields
+            .iter()
+            .any(|field| holds_float(&field.ty, structs)),
+    }
+}
+
 /// The port type a written name stands for. `Image` and the declared
 /// aliases are spellings of a shape and an element; the structure is what
 /// gets checked.
@@ -426,6 +445,55 @@ pub(super) fn manifest(
             base: base as u32,
             combine,
         }
+    } else if let Some(prefix) = &kernel.prefix {
+        let Some(combine) = Combine::parse(&prefix.combine.value) else {
+            return Err(semantic(
+                prefix.combine.span,
+                format!(
+                    "`{}` is not a combine rule; a prefix folds with `sum`, `min`, or `max`",
+                    prefix.combine.value
+                ),
+            ));
+        };
+        if combine == Combine::Last {
+            return Err(semantic(
+                prefix.combine.span,
+                "a prefix with `last` is every element's own value; write a `compute` block",
+            ));
+        }
+        match (inputs.first(), outputs.first()) {
+            (Some(first), Some(port))
+                if outputs.len() == 1
+                    && first.shape() == Shape::Rows
+                    && port.shape() == Shape::Rows => {}
+            _ => {
+                return Err(semantic(
+                    prefix.span,
+                    "a prefix runs over a `Rows<T>` input, its first, and produces one `Rows` output of the same count",
+                ));
+            }
+        }
+        let element = outputs[0].element();
+        let structs = structs.borrow();
+        if !numeric(&element, &structs) {
+            return Err(semantic(
+                prefix.combine.span,
+                format!(
+                    "`{}` combines numbers, and the element holds a Bool",
+                    combine.name()
+                ),
+            ));
+        }
+        // What lets every backend group the fold its own way and still
+        // answer with the reference's words.
+        if combine == Combine::Sum && holds_float(&element, &structs) {
+            return Err(semantic(
+                prefix.combine.span,
+                "a prefix folds in whatever grouping a backend finds cheapest, and a float `sum` does not give one answer that way; walk it with `scan` instead",
+            ));
+        }
+        drop(structs);
+        Mode::Prefix { combine }
     } else if let Some(carry) = &kernel.carry {
         match (inputs.first(), outputs.first()) {
             (Some(first), Some(port))

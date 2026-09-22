@@ -76,6 +76,9 @@ impl CpuBackend {
         if module.manifest.mode == Mode::Scan {
             return scan(&code, module, invocation, scope, strides[0]);
         }
+        if let Mode::Prefix { combine } = module.manifest.mode {
+            return prefix(&code, module, invocation, scope, strides[0], combine);
+        }
         if let Mode::Scatter { base, combine } = module.manifest.mode {
             return scatter(
                 &code,
@@ -177,6 +180,48 @@ fn reduce(
     let port = &module.manifest.outputs[0];
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
     if let Err(error) = scope.write_all(output, &level) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
+/// A prefix: the entry over every element of the first input, then each
+/// element folded with everything before it, in element order. The rule
+/// is order-free, so this walk is one grouping of many and every
+/// backend's answer is this one.
+fn prefix(
+    code: &std::sync::Arc<eval::Compiled>,
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+    stride: usize,
+    combine: Combine,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let domain = scope.size(invocation.inputs[0])?;
+    let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
+    let mut values = compute(&program, &[stride])?;
+    drop(program);
+    let port = &module.manifest.outputs[0];
+    let scalars = port.ty.schema.scalars();
+    let count = domain.count();
+    if count > 1 {
+        let mut running = values[..stride].to_vec();
+        for element in 1..count {
+            let at = element * stride;
+            orla_rules::combine_words(combine, scalars, &mut running, &values[at..at + stride])
+                .map_err(|error| ExecutionError::Arithmetic {
+                    x: element as u32,
+                    y: 0,
+                    error,
+                })?;
+            values[at..at + stride].copy_from_slice(&running);
+        }
+    }
+    // The output is the input's own count, which is what the walk just
+    // wrote, element for element.
+    let output = scope.create(port.ty.schema.clone(), domain)?;
+    if let Err(error) = scope.write_all(output, &values) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -367,7 +412,7 @@ pub fn trace(
     let mode = module.manifest.mode;
     let domain = match mode {
         Mode::Map => invocation.domain,
-        Mode::Reduce => scope.size(invocation.inputs[0])?,
+        Mode::Reduce | Mode::Prefix { .. } => scope.size(invocation.inputs[0])?,
         Mode::Scan => check_scan(invocation, scope)?,
         Mode::Scatter { base, .. } => {
             check_scatter(invocation, scope, base as usize)?;

@@ -280,6 +280,7 @@ pub fn modes() -> Vec<(&'static str, Wrapper)> {
         ("reduce", reduce),
         ("scan", scan),
         ("scatter", scatter),
+        ("prefix", prefix),
     ]
 }
 
@@ -352,6 +353,20 @@ fn scan(lets: &str, out: &str) -> String {
         {lets} let out = {out};
         return Out {{ f: out.f + acc.f * 0.5, i: add_wrap(out.i, acc.i), b: out.b != acc.b, v: out.v + acc.v * 0.5 }};
     }} }}"
+    )
+}
+
+/// A prefix folds with a named rule instead of a carried value, so the
+/// mode's row is the rule's: `max` over a float, an int and a vector,
+/// which every backend must order the same way whatever grouping it
+/// folds in.
+fn prefix(lets: &str, out: &str) -> String {
+    format!(
+        "kernel matrix.prefix@1 {{ {HEAD}
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
+    struct Run {{ f: Float; i: Int; v: Vec3; }}
+    output result: Rows<Run>;
+    prefix with max {{ let i = element(); {ENV} {lets} let out = {out}; return Run {{ f: out.f, i: out.i, v: out.v }}; }} }}"
     )
 }
 
@@ -495,6 +510,12 @@ pub fn cases() -> Vec<Case> {
                 "reduce" => (
                     vec![rows(), ints(), cells(), parts_input(), patches_input()],
                     Domain::Rows(1),
+                ),
+                // A prefix maps over its first input and gives a row of
+                // the same count, as a scan does.
+                "prefix" => (
+                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
+                    Domain::Rows(COUNT),
                 ),
                 "scan" => (
                     vec![

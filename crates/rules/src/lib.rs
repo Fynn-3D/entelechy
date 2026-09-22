@@ -273,3 +273,22 @@ pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(
     }
     Ok(())
 }
+
+/// The grouping a prefix fold takes on a backend that blocks it.
+///
+/// The rule a prefix declares is order-free, so where the fold is
+/// grouped changes no word; what it changes is how long the two walks
+/// are. A block of about the square root of the count makes them the
+/// same length: as many blocks as there are elements in one, so the
+/// walk over the blocks' totals is no longer than a block's own.
+pub mod prefix {
+    /// The fewest elements a block holds, below which the blocks
+    /// outnumber what a walk over them should cost.
+    pub const LEAST: usize = 64;
+
+    /// How many elements a block holds, for `count` of them.
+    pub fn block(count: usize) -> usize {
+        let root = (count as f64).sqrt().ceil() as usize;
+        root.max(LEAST).min(count.max(1))
+    }
+}

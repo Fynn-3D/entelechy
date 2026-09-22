@@ -214,6 +214,16 @@ pub enum Mode {
         /// How a value meets the element already there.
         combine: Combine,
     },
+    /// The entry runs once per element of the first input's rows and
+    /// each element of the `Rows` output is its own value combined with
+    /// every value before it, by [`Combine`] — an inclusive prefix fold.
+    /// The rule must be order-free (integer `sum`, `min`, `max`), so a
+    /// backend may group the fold as it likes and still give the words
+    /// the reference gives.
+    Prefix {
+        /// How a value meets everything before it.
+        combine: Combine,
+    },
 }
 
 impl Mode {
@@ -224,6 +234,7 @@ impl Mode {
             Self::Reduce => "reduce",
             Self::Scan => "scan",
             Self::Scatter { .. } => "scatter",
+            Self::Prefix { .. } => "prefix",
         }
     }
 
@@ -275,6 +286,7 @@ impl fmt::Display for Mode {
             Self::Scatter { base, combine } => {
                 write!(f, "scatter into input {base} with {}", combine.name())
             }
+            Self::Prefix { combine } => write!(f, "prefix with {}", combine.name()),
             _ => f.write_str(self.name()),
         }
     }

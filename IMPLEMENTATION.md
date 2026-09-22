@@ -289,6 +289,29 @@ capability claim.
   ([evaluator](crates/graph/src/evaluate.rs)). The
   [particles example](examples/particles/README.md) splats its rows onto
   a canvas this way.
+- A prefix fold is the fifth execution mode, declared by `prefix with
+  rule` in place of `compute`: the entry maps over the first input, a
+  `Rows`, and element `i` of the `Rows` output is the entry's values at
+  `0..=i` combined by the rule ([IR](crates/ir/src/lib.rs),
+  [validator](crates/ir/src/validate.rs),
+  [compiler](crates/compiler/src/lower/declare.rs)). The rule is named
+  rather than carried because a prefix folds in whatever grouping a
+  backend likes, so it must be one that gives the same words in any of
+  them: an integer `sum`, `min` and `max` on the scatter's one total
+  order of floats. A float `sum` is refused — it rounds in the order it
+  is added, which is what `scan` is for — and so is `last`, which as a
+  prefix is a map. The CPU and the JIT map and then walk the values in
+  element order ([CPU](crates/cpu/src/lib.rs), [JIT](crates/jit/src/lib.rs));
+  the GPU folds in three passes over blocks of about the square root of
+  the count ([block](crates/rules/src/lib.rs),
+  [WGSL](crates/gpu/src/wgsl.rs)) — one invocation walks each block and
+  leaves its total, one walks the totals, one hands every element its
+  block's offset — which needs no shared memory and no barrier, and is
+  held to the reference's words by
+  [the parity test](crates/gpu/tests/parity.rs) (NaN, both zeros and the
+  infinities under `max`) and by a
+  [matrix row](crates/matrix/src/lib.rs) under every feature.
+
 - A node's `domain` may be an expression over its inputs and parameters
   ([domain](crates/graph/src/domain.rs)): a small arithmetic language with
   `size(port)` and `count(port)`, accepted at document lowering, resolved
@@ -750,16 +773,16 @@ capability claim.
 
 - Stream compaction is a package, not an engine feature
   ([compact](packages/compact.orlapkg/kernels/compact.orla)): a rank is
-  a prefix sum over the flags, which `scan` is; the count is a reduce;
+  a prefix sum over the flags, which `prefix with sum` is; the count is
+  a reduce;
   and putting each kept index where its rank says is a scatter, whose
   addresses outside the target are dropped, which is what a flag of zero
   sends. With `value(count)` sizing what runs next, that is culling: a
-  chunk nobody can see is never placed, not skipped. The prefix sum is
-  ordered work, one thread on every backend — 0.26 ms for four thousand
-  flags on the device, 0.54 for sixty-five thousand — so it ranks the
-  things a scene decides about, not the elements they expand into. A
-  parallel scan is log N passes of dispatch overhead and loses at these
-  sizes. Measured in [culled](examples/culled/README.md) at 1920x1080: a
+  chunk nobody can see is never placed, not skipped. The rank was ordered
+  work until the prefix mode; a device folds it in blocks now, which is
+  what lets a scene rank the elements and not only the things they expand
+  into — see [surface](examples/surface/README.md), whose rank is over
+  two million cells. Measured in [culled](examples/culled/README.md) at 1920x1080: a
   world of ten million triangles is 12.0 ms a frame against 26.1 for
   placing all of it, and a hundred and sixty million is 13.6.
 

@@ -263,7 +263,7 @@ pub fn forms() -> Vec<Form> {
             "kernel",
             "kernel",
             "kernel id@version { requires { ... } input ... output ... compute { ... } }",
-            "A Kernel: what it needs, its ports and parameters, and one of `compute`, `scan` or `scatter`.",
+            "A Kernel: what it needs, its ports and parameters, and one of `compute`, `scan`, `scatter` or `prefix`.",
         ),
         form(
             "compute",
@@ -282,6 +282,12 @@ pub fn forms() -> Vec<Form> {
             "kernel",
             "scan with y = init { return next; }",
             "The ordered mode: one element per element of the first input, in order, carrying `y` from the step before; `memory` ports are read and written step by step.",
+        ),
+        form(
+            "prefix",
+            "kernel",
+            "prefix with sum { return value; }",
+            "The prefix mode: the body runs once per element of the first input, a `Rows`, and that element of the output is its value combined with every value before it by `sum`, `min` or `max`. The rule must give one answer whatever order it is folded in, so a float `sum` is refused (a `scan` walks that in element order) and a device folds the row in blocks rather than walking it.",
         ),
         form(
             "scatter",

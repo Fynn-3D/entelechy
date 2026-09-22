@@ -386,6 +386,20 @@ pub struct Kernel {
     /// whose body is `compute` and yields an address and a value per
     /// element of the first input.
     pub scatter: Option<ScatterDecl>,
+    /// `prefix with combine { ... }`: present for a prefix fold, whose
+    /// body is `compute` and whose每 element's value meets everything
+    /// before it by the rule.
+    pub prefix: Option<PrefixDecl>,
+}
+
+/// `prefix with combine { ... }`: the rule an element's value meets
+/// everything before it with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrefixDecl {
+    /// `sum`, `min`, or `max`.
+    pub combine: Spanned<String>,
+    /// Where `prefix` was written.
+    pub span: Span,
 }
 
 /// `scatter into base with combine { ... }`: the target input the output

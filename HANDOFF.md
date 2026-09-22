@@ -287,7 +287,7 @@ took that in: a node's name and a source reference accept any word,
 since the one follows `node` and precedes `:` and the other follows
 `<-`, `<~` or `from`.
 
-Where the platform stands: four modes on three backends, bit for bit
+Where the platform stands: five modes on three backends, bit for bit
 between the CPU and the JIT and to rounding on the GPU, held by the
 feature matrix (`crates/matrix`, 19 features x 5 modes on both); a GPU
 session runs its scans on the JIT; `orla trace` (calls followed),
@@ -1684,6 +1684,70 @@ Everything the field decides is integer work, so the three backends flag
 exactly the same cells and the replay pins the counts with no tolerance
 at all: 458 of 13,824 at `size=24`, 528 two frames later, and 13,824
 with the compaction off.
+
+So it was built, and the scene that asked for it is what it was measured
+on. `prefix with rule` is the fifth execution mode: the body runs once
+per element of the first input, a `Rows`, exactly as a map's does, and
+element `i` of the output is the body's values at `0..=i` combined by
+the rule — `sum`, `min` or `max`, the scatter's own `Combine` and the
+scatter's total order over floats.
+
+The rule is named rather than written as a carried value, and that is
+the whole design. A scan says *how* — each step reads what the step
+before it left — so one thread walks the row. A prefix says *what*, and
+because the rule must give the same words in any grouping, a backend may
+fold the row however it likes. That is also what the compiler checks: a
+float `sum` is refused, since it rounds in the order it is added and
+`scan` is the form for that; `last` is refused, since as a prefix it is
+every element's own value, a map; and both messages say which form to
+write instead. Nothing is recognized or guessed, so no edit quietly
+costs twenty times what it did before.
+
+The device folds in three passes over the map's own output, in place:
+one invocation walks each block and leaves its total, one walks the
+totals, one hands every element its block's offset. A block holds about
+the square root of the count (`orla_rules::prefix`), which makes the two
+walks the same length. It wants no shared memory and no barrier — the
+round that measured the tile is why this shape was tried first, and it
+came within a third of what a shared-memory scan reaches on a probe.
+The interpreter and the JIT map and then walk, which is one grouping of
+many and the one the reference is held to.
+
+What it is worth, all measured in one sitting on a cool machine. The
+rank alone on the GPU, as a frame with it against the same frame with a
+map in its place: four thousand 0.18 ms to 0.06, sixty-five thousand
+0.49 to 0.13, a million 6.68 to 0.33 — three times, four, and twenty.
+`examples/surface`, whose rank is over 2,097,152 cells, at 1280x720:
+18.68 ms a frame to 5.89, three and a fifth times. Two nodes moved, not
+one: `kept.offsets` 10.007 to 1.194, and `kept.gathered` 4.016 to 1.188,
+because a scan on a GPU session runs on the JIT — the row went to Host
+memory and the scatter that read it had to upload it again. A prefix
+keeps it on the device, and the hand-off goes with it. `culled`, whose
+rank is over four thousand chunks, is 6.26 to 6.10 ms at 1920x1080 and
+9.70 to 9.18 with sixty-five thousand: a few per cent, which is what the
+measurement before this one said it would be.
+
+The reference and the JIT are within noise of where they were (surface
+on the JIT 104.09 to 103.16 ms), since both walked the row before and
+walk it now. This is a device's win, and the honest summary is that the
+mode removes a ceiling rather than speeding up what was already fast: a
+scene may now rank a million things a frame, which is what `compact`'s
+own source used to warn against.
+
+Held by: the parity test over sums and `max` at counts of 1, 10, 5,000
+and 70,000, with a not-a-number, both zeros and the infinities, bit for
+bit against the reference; a `prefix` row in the feature matrix under
+every one of the nineteen features on the JIT and the GPU; the compiler
+test that pins all four refusals; and the 126 replays, `compact` being
+written in the new form.
+
+It also answers the question the round before it left: a scatter whose
+target is as long as its sources looked like a second wall at 7.1 ms for
+two million, and it was not the scatter. Most of that was the upload of
+the offsets row a scan had left in Host memory; the same node is 1.188
+ms now. `surface`'s frame is the rasterizer's again (2.04 ms of 5.89),
+which is where a renderer's frame belongs, and nothing in the
+compaction path stands out any more.
 
 A structure round against the Code Rules (no behaviour change; the
 matrix and every replay bit for bit): the rules every backend shares

@@ -351,7 +351,7 @@ fn scan_carries_a_value_and_is_checked() {
     assert!(
         error
             .to_string()
-            .contains("one of `compute`, `scan`, or `scatter`"),
+            .contains("one of `compute`, `scan`, `scatter`, or `prefix`"),
         "{error}"
     );
 }
@@ -471,6 +471,47 @@ fn remainder_widening_and_vector_equality_type_check() {
         message.contains("must be Float, Int or a shorter vector"),
         "{message}"
     );
+}
+
+#[test]
+fn a_prefix_names_a_rule_that_folds_in_any_order() {
+    let module = compile(
+        "kernel test.rank@1 { requires { field.read; field.write; } input flags: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(flags); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        module.manifest.mode,
+        orla_ir::Mode::Prefix {
+            combine: orla_ir::Combine::Sum
+        }
+    );
+    let text = module.to_string();
+    assert!(text.contains("mode prefix with sum"), "{text}");
+
+    // The refusals are the point of declaring the rule: each says what
+    // to write instead.
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix with sum { return sample(rows); } }",
+    );
+    assert!(message.contains("walk it with `scan`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with last { return sample(rows); } }",
+    );
+    assert!(message.contains("write a `compute` block"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with average { return sample(rows); } }",
+    );
+    assert!(message.contains("`sum`, `min`, or `max`"), "{message}");
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.read; field.write; } input cells: Grid<Int>; output result: Grid<Int>; prefix with sum { return sample(cells); } }",
+    );
+    assert!(message.contains("`Rows<T>` input"), "{message}");
+    // A float that only `min` or `max` touches is fine: those order
+    // floats the same way everywhere.
+    compile(
+        "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix with max { return sample(rows); } }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]

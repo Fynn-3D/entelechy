@@ -264,6 +264,16 @@ struct Pipeline {
     reduce: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
     /// The combine of a scatter module, run after the map.
     scatter: Option<Scatter>,
+    /// The fold of a prefix module, run over the map's output in place.
+    prefix: Option<Prefix>,
+}
+
+/// A prefix fold's three passes: a block a walk, the blocks' totals
+/// scanned, then every element given its block's offset.
+struct Prefix {
+    blocks: Pass,
+    tops: Pass,
+    offsets: Pass,
 }
 
 /// One compute pipeline with its bind group layout.
@@ -847,6 +857,32 @@ impl Backend for GpuBackend {
         } else {
             None
         };
+        let prefix = if matches!(module.manifest.mode, orla_ir::Mode::Prefix { .. }) {
+            let entries = [
+                uniform_entry(wgsl::PREFIX_PLAN_BINDING),
+                storage_entry(wgsl::PREFIX_OUT_BINDING, false),
+                storage_entry(wgsl::PREFIX_SUMS_BINDING, false),
+            ];
+            Some(Prefix {
+                blocks: self.pass(
+                    "prefix blocks",
+                    &wgsl::emit_prefix(module, wgsl::PrefixPass::Blocks),
+                    &entries,
+                )?,
+                tops: self.pass(
+                    "prefix tops",
+                    &wgsl::emit_prefix(module, wgsl::PrefixPass::Tops),
+                    &entries,
+                )?,
+                offsets: self.pass(
+                    "prefix offsets",
+                    &wgsl::emit_prefix(module, wgsl::PrefixPass::Offsets),
+                    &entries,
+                )?,
+            })
+        } else {
+            None
+        };
         let scatter = if matches!(module.manifest.mode, orla_ir::Mode::Scatter { .. }) {
             let scatter = match wgsl::scatter_plan(module) {
                 wgsl::ScatterPlan::Sorted => Scatter::Sorted {
@@ -932,6 +968,7 @@ impl Backend for GpuBackend {
             layout,
             reduce,
             scatter,
+            prefix,
         }))
     }
 
@@ -999,6 +1036,20 @@ impl Backend for GpuBackend {
                 output_words,
                 timing_set.as_ref(),
             ),
+            (Mode::Prefix { .. }, _, _) => {
+                let prefix = pipeline
+                    .prefix
+                    .as_ref()
+                    .expect("a prefix prepares its passes");
+                self.run_prefix(
+                    &mut encoder,
+                    prefix,
+                    output_buffer,
+                    element_count,
+                    output_words,
+                    timing_set.as_ref(),
+                )
+            }
             (Mode::Scatter { base, .. }, _, Some(scatter)) => self.combine(
                 &mut encoder,
                 scatter,
@@ -1200,7 +1251,7 @@ fn execution_domain(
     scope: &Scope<'_>,
 ) -> Result<orla_abi::Domain, ExecutionError> {
     Ok(match module.manifest.mode {
-        Mode::Reduce => scope.size(invocation.inputs[0])?,
+        Mode::Reduce | Mode::Prefix { .. } => scope.size(invocation.inputs[0])?,
         Mode::Scan => orla_rules::check_scan(invocation, scope)?,
         Mode::Scatter { base, .. } => {
             orla_rules::check_scatter(invocation, scope, base as usize)?;
@@ -1508,6 +1559,82 @@ impl GpuBackend {
             output_words,
             element_count,
         })
+    }
+
+    /// A prefix fold on the device: three passes over the map's output,
+    /// in place. One invocation walks each block of `elements a block`
+    /// and leaves its total; one invocation scans the blocks' totals;
+    /// one invocation an element takes its block's offset. The rule is
+    /// order-free, so this grouping answers with the reference's words,
+    /// and nothing here needs shared memory or a barrier — a block is a
+    /// walk, and the passes are ordered by being passes.
+    ///
+    /// A block holds about the square root of the count, which is what
+    /// makes the two walks the same length: the blocks' own walk is as
+    /// long as one block.
+    fn run_prefix(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        prefix: &Prefix,
+        output: wgpu::Buffer,
+        element_count: usize,
+        output_words: usize,
+        timing: Option<&wgpu::QuerySet>,
+    ) -> wgpu::Buffer {
+        let count = element_count.max(1);
+        let per_block = orla_rules::prefix::block(count);
+        let blocks = count.div_ceil(per_block);
+        let plan: [u32; 4] = [count as u32, per_block as u32, blocks as u32, 0];
+        let plan_bytes: Vec<u8> = plan.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let plan_buffer = self.buffer("prefix plan", &plan_bytes, wgpu::BufferUsages::UNIFORM);
+        let sums = self.spare.take(
+            &self.device,
+            ((blocks * output_words * 4) as u64).max(16).div_ceil(16) * 16,
+            wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        );
+        let passes = [
+            (&prefix.blocks, blocks as u32),
+            (&prefix.tops, 1),
+            (&prefix.offsets, count as u32),
+        ];
+        for (index, ((pipeline, layout), threads)) in passes.iter().enumerate() {
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("orla prefix"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::PREFIX_PLAN_BINDING,
+                        resource: plan_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::PREFIX_OUT_BINDING,
+                        resource: output.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::PREFIX_SUMS_BINDING,
+                        resource: sums.as_entire_binding(),
+                    },
+                ],
+            });
+            let last = index + 1 == passes.len();
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("orla prefix"),
+                timestamp_writes: timing.and_then(|query_set| {
+                    last.then_some(wgpu::ComputePassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: None,
+                        end_of_pass_write_index: Some(1),
+                    })
+                }),
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(threads.div_ceil(wgsl::PREFIX_WORKGROUP), 1, 1);
+        }
+        self.spare.keep(sums);
+        output
     }
 
     /// A reduction's fold: level by level into a second buffer,
