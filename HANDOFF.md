@@ -1110,6 +1110,29 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+Then the same question along the other axes, since one square was
+unlikely to be alone. Nothing drifts over a long run — `fluid` is 1.95
+ms a frame over a hundred frames and 1.85 over four thousand, `rubik`
+5.34 and 5.26 — so nothing accumulates. The Host's own pile of released
+word buffers matches by exact length, which is the disease the GPU's
+pile had, and matching by capacity instead changed nothing measurable
+at any size (a `Vec` of forty megabytes costs what touching it costs,
+which the Kernel pays anyway), so it was left as it is.
+
+State was the other square. A chain of nodes each carrying its own
+`<~`, on the JIT: 64 of them 2.5 microseconds a node, 256 3.5, 1024
+8.0. Two walks: asking whether a handle is still cached walked every
+cached entry's outputs, and a scene of state asks that once a binding a
+frame; and `commit` tested whether a port had already advanced by
+walking the list of those that had. The first is two counts of how many
+cached entries and committed ports hold each handle, kept by the four
+methods that touch the two maps so that nothing else has to remember,
+with a `debug_assert` that they still agree with the walk — a count
+that drifted would leak a Field or release one twice, and now every
+test run checks. The second is a set beside the list. A thousand states
+went 8.12 to 3.12 ms, and the cost a node is 2.5 at sixty-four and 3.0
+at a thousand.
+
 "Does a node cost more when there are more of them?" It did, and it
 should not have. A chain of tiny nodes, the frame against the count, on
 the JIT: 128 nodes 0.31 ms, 512 2.02, 1024 7.05, 2048 19.19 — 2.4

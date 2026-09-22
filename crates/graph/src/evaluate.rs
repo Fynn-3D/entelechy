@@ -386,10 +386,19 @@ pub struct PlanEntry {
 #[derive(Default)]
 pub struct Evaluator {
     cache: BTreeMap<NodeId, Cached>,
+    /// How many cached entries hold each handle. Asking whether a
+    /// handle is still cached used to walk every entry's outputs, and a
+    /// scene of state asks once a binding a frame, which for a graph of
+    /// a thousand is a walk of a thousand a thousand times. The two
+    /// counts below are kept by the four methods that touch the maps,
+    /// so nothing else has to remember.
+    cached_handles: BTreeMap<Handle, usize>,
     /// State as of the last successful evaluation, by producing node and
     /// port. A committed handle may also be a node's current cached output;
     /// it is released only when neither refers to it any more.
     committed: BTreeMap<(NodeId, String), Handle>,
+    /// How many committed ports hold each handle; see `cached_handles`.
+    committed_handles: BTreeMap<Handle, usize>,
     epoch: u64,
     fusion: bool,
     pinned: BTreeSet<NodeId>,
@@ -446,6 +455,8 @@ impl Evaluator {
     pub fn clear(&mut self, runtime: &mut Runtime) {
         let cache = std::mem::take(&mut self.cache);
         let committed = std::mem::take(&mut self.committed);
+        self.cached_handles.clear();
+        self.committed_handles.clear();
         self.fused.clear();
         for (_, pending) in std::mem::take(&mut self.pending) {
             runtime.discard(pending.ticket);
@@ -471,7 +482,9 @@ impl Evaluator {
     /// Forgets committed state so `<~` bindings read their initial sources
     /// again on the next evaluation. Cached outputs stay.
     pub fn reset_state(&mut self, runtime: &mut Runtime) {
-        for (_, handle) in std::mem::take(&mut self.committed) {
+        let committed = std::mem::take(&mut self.committed);
+        self.committed_handles.clear();
+        for (_, handle) in committed {
             if !self.is_cached(handle) {
                 release(runtime, handle);
             }
@@ -491,16 +504,85 @@ impl Evaluator {
         Some(cached.outputs[index])
     }
 
+    /// Puts a node's outputs in the cache, keeping the count of what
+    /// the cache holds; answers what was there.
+    fn cache_put(&mut self, id: NodeId, fresh: Cached) -> Option<Cached> {
+        for output in &fresh.outputs {
+            *self.cached_handles.entry(*output).or_default() += 1;
+        }
+        let gone = self.cache.insert(id, fresh);
+        if let Some(gone) = &gone {
+            Self::forget(&mut self.cached_handles, gone.outputs.iter().copied());
+        }
+        gone
+    }
+
+    /// Takes a node's entry out of the cache, keeping the count.
+    fn cache_take(&mut self, id: &NodeId) -> Option<Cached> {
+        let gone = self.cache.remove(id);
+        if let Some(gone) = &gone {
+            Self::forget(&mut self.cached_handles, gone.outputs.iter().copied());
+        }
+        gone
+    }
+
+    /// Commits a port's state, keeping the count; answers what was there.
+    fn commit_put(&mut self, key: (NodeId, String), handle: Handle) -> Option<Handle> {
+        *self.committed_handles.entry(handle).or_default() += 1;
+        let gone = self.committed.insert(key, handle);
+        if let Some(gone) = gone {
+            Self::forget(&mut self.committed_handles, std::iter::once(gone));
+        }
+        gone
+    }
+
+    /// Takes a port's committed state, keeping the count.
+    fn commit_take(&mut self, key: &(NodeId, String)) -> Option<Handle> {
+        let gone = self.committed.remove(key);
+        if let Some(gone) = gone {
+            Self::forget(&mut self.committed_handles, std::iter::once(gone));
+        }
+        gone
+    }
+
+    /// Drops a count for every handle given, and the entry when it
+    /// reaches nothing.
+    fn forget(counts: &mut BTreeMap<Handle, usize>, handles: impl Iterator<Item = Handle>) {
+        for handle in handles {
+            if let std::collections::btree_map::Entry::Occupied(mut at) = counts.entry(handle) {
+                *at.get_mut() -= 1;
+                if *at.get() == 0 {
+                    at.remove();
+                }
+            }
+        }
+    }
+
     fn is_cached(&self, handle: Handle) -> bool {
-        self.cache
-            .values()
-            .any(|cached| cached.outputs.contains(&handle))
+        let held = self.cached_handles.contains_key(&handle);
+        // The count is the answer; the walk is what it stands for. A
+        // count that drifted would leak a Field or release one twice,
+        // so every test run checks the two agree.
+        debug_assert_eq!(
+            held,
+            self.cache
+                .values()
+                .any(|cached| cached.outputs.contains(&handle)),
+            "the cached-handle count disagrees with the cache"
+        );
+        held
     }
 
     fn is_committed(&self, handle: Handle) -> bool {
-        self.committed
-            .values()
-            .any(|committed| *committed == handle)
+        let held = self.committed_handles.contains_key(&handle);
+        debug_assert_eq!(
+            held,
+            self.committed
+                .values()
+                .any(|committed| *committed == handle),
+            "the committed-handle count disagrees with the committed state"
+        );
+        held
     }
 
     /// What would execute for `graph` right now: the groups in evaluation
@@ -798,7 +880,7 @@ impl Evaluator {
             output_names,
             epoch: self.epoch,
         };
-        if let Some(previous) = self.cache.insert(id.clone(), fresh) {
+        if let Some(previous) = self.cache_put(id.clone(), fresh) {
             for output in previous.outputs {
                 if !self.is_committed(output) {
                     release(runtime, output);
@@ -938,12 +1020,12 @@ impl Evaluator {
                         None
                     }
                 };
-                self.committed.remove(&key);
+                self.commit_take(&key);
                 if !self.is_cached(current) && !self.is_committed(current) {
                     release(runtime, current);
                 }
                 if let Some(carried) = carried {
-                    self.committed.insert(key, carried);
+                    self.commit_put(key, carried);
                 }
             }
         }
@@ -1472,7 +1554,7 @@ impl Evaluator {
     }
 
     fn drop_cache(&mut self, id: &NodeId, runtime: &mut Runtime) {
-        if let Some(cached) = self.cache.remove(id) {
+        if let Some(cached) = self.cache_take(id) {
             for output in cached.outputs {
                 if !self.is_committed(output) {
                     release(runtime, output);
@@ -1514,7 +1596,7 @@ impl Evaluator {
             .cloned()
             .collect();
         for key in stale_state {
-            if let Some(handle) = self.committed.remove(&key)
+            if let Some(handle) = self.commit_take(&key)
                 && !self.is_cached(handle)
             {
                 release(runtime, handle);
@@ -1572,7 +1654,7 @@ impl Evaluator {
         }
         let data = FieldData::from_words(schema, domain, words)?;
         let handle = runtime.host_mut().adopt(data)?;
-        if let Some(previous) = self.committed.insert(key, handle)
+        if let Some(previous) = self.commit_put(key, handle)
             && !self.is_cached(previous)
             && !self.is_committed(previous)
         {
@@ -1588,6 +1670,12 @@ impl Evaluator {
         runtime: &mut Runtime,
     ) -> Result<Vec<(NodeId, String)>, EvaluateError> {
         let mut advanced = Vec::new();
+        // What has advanced, for the test below: a list of them is a
+        // walk of every one already advanced, once a binding, which a
+        // graph of a thousand states pays a thousand times over. The
+        // list stays for the answer, which is in the order the bindings
+        // came.
+        let mut already: BTreeSet<(NodeId, String)> = BTreeSet::new();
         for node in &graph.nodes {
             for binding in node.inputs.values() {
                 let Binding::Previous {
@@ -1600,7 +1688,7 @@ impl Evaluator {
                 let key = (node.clone(), port.clone());
                 // A run off the frame has not given this evaluation its
                 // value: the state stays until it lands.
-                if advanced.contains(&key) || self.running.contains_key(node) {
+                if already.contains(&key) || self.running.contains_key(node) {
                     continue;
                 }
                 let current =
@@ -1609,8 +1697,9 @@ impl Evaluator {
                             node: node.clone(),
                             port: port.clone(),
                         })?;
-                let previous = self.committed.insert(key.clone(), current);
+                let previous = self.commit_put(key.clone(), current);
                 if previous != Some(current) {
+                    already.insert(key.clone());
                     advanced.push(key);
                     if let Some(previous) = previous
                         && !self.is_cached(previous)

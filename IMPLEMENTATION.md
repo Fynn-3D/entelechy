@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| A graph of a thousand states | [evaluate](crates/graph/src/evaluate.rs) `cached_handles`, `committed_handles`, `cache_put`, `commit_put`, `commit` | a `debug_assert` that the counts agree with the walk, on every test run; every replay bit for bit |
 | A graph of a thousand nodes | [graph](crates/graph/src/lib.rs) `Graph::index`, `order`, [evaluate](crates/graph/src/evaluate.rs) `prune`, `plan`, `planned_domain` | every replay bit for bit; measured by `orla bench` on chains of 128 to 2048 nodes |
 | A buffer big enough, not exact | [gpu](crates/gpu/src/lib.rs) `Spare::take` | every replay bit for bit; measured by `orla bench` on a scene whose Fields change size |
 | Four levels of a fold in one pass | [rules](crates/rules/src/reduce.rs), [wgsl](crates/gpu/src/wgsl.rs) `emit_reduce`, [gpu](crates/gpu/src/lib.rs) `fold` | [rules test](crates/rules/src/reduce.rs) (a run folds to the same expressions as the levels), every replay bit for bit |
@@ -637,6 +638,19 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- Whether a handle is still held is a count, not a walk
+  ([`cached_handles`](crates/graph/src/evaluate.rs)): a scene of state
+  asks once a binding a frame, and the answer walked every cached
+  entry's outputs, so a graph of a thousand states was squared — 2.5
+  microseconds a node at sixty-four and 8.0 at a thousand. Two counts
+  of how many cached entries and committed ports hold each handle,
+  kept by the four methods that touch the two maps so nothing else has
+  to remember, and a `debug_assert` that they still agree with the
+  walk, since a count that drifted would leak a Field or release one
+  twice. `commit` also tested "has this port advanced" against a list;
+  it is a set beside the list now. A thousand states went 8.12 to 3.12
+  ms on the JIT.
 
 - Finding a node by name is an index, not a walk
   ([`Graph::index`](crates/graph/src/lib.rs)): `Graph::node(id)` walks
