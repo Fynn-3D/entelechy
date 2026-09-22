@@ -51,6 +51,7 @@ capability claim.
 | Advance | [protocol](crates/cli/src/protocol.rs) `advance`, [session](crates/cli/src/session.rs) `element_field` | [protocol test](crates/cli/tests/protocol.rs) |
 | Inlining | [optimize](crates/ir/src/optimize.rs) `inline_calls` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Parts of an element | [ir](crates/ir/src/lib.rs) `Op::Part`, [optimize](crates/ir/src/optimize.rs) `narrowed`, [interpreter](crates/cpu/src/eval/run.rs), [jit](crates/jit/src/codegen.rs) `part_words`, [wgsl](crates/gpu/src/wgsl.rs) | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) `parts of an element` |
+| Mip levels | [shared library](examples/shared/mip.orla), [strip sub-graph](examples/shared/mip.osn) | [mipmap example](examples/mipmap/tests/ground.replay) on three backends |
 | Cutout rasterizing | [rules](crates/rules/src/raster.rs) `check_rasterize_cutout`, `mask_alpha`, [reference](crates/cpu/src/raster.rs) `rasterize_masked`, [gpu](crates/gpu/src/raster.rs), [runtime](crates/runtime/src/lib.rs) `NativeOp::RasterizeCutout` | [parity test](crates/gpu/tests/parity.rs) (the device against the reference, through a mask's holes) |
 | A session's memory | [session](crates/cli/src/session.rs) `DEFAULT_BUDGET_WORDS`, `budget_of_megabytes`, [cli](crates/cli/src/main.rs) `--memory`, [player](crates/player/src/main.rs) | [session tests](crates/cli/tests/session.rs) (refused, then held) |
 | Measured profiles | [gpu](crates/gpu/src/lib.rs) `set_measured`, [runtime](crates/runtime/src/lib.rs) `last_measured` | [profile output](crates/cli/tests/session.rs) |
@@ -677,6 +678,20 @@ capability claim.
   32 words or more is written out where it is called however long it
   is (up to 1024 instructions), since the argument is copied at every
   element and, written out, its reads narrow too.
+
+- Mip levels are a library, not a language feature: the strip of
+  halvings is a sub-graph placed `levels` times with `carry`
+  ([`shared/mip.osn`](examples/shared/mip.osn)), and the level a pixel
+  asks for is read off the surface beside it — a rasterized surface
+  carries `uv` at every pixel, so the neighbour's `uv` is what a
+  derivative would say, and its triangle `id` says whether the
+  neighbour is the same surface
+  ([`shared/mip.orla`](examples/shared/mip.orla),
+  [mipmap example](examples/mipmap/README.md)). What it does not give is
+  anisotropy, which is more taps in the same library rather than
+  anything the language lacks. A placement does not know which
+  repetition it is, so the level being written is carried beside the
+  strip as a row of one `Int`.
 
 - A cutout is the rasterizer's second form, `native.rasterize@2`: one
   more input, an `Image` whose alpha says what the surface covers, and a

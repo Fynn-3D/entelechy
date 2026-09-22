@@ -1,0 +1,28 @@
+scene ../scene.osn
+
+# A small window and a small texture: the same picture at a coarser
+# grain, which is enough to say what the levels are for.
+param side 128
+param levels 6
+window 200 120 1
+
+# With the levels, two pixels a little apart in the distance are the
+# same grey: the checker has averaged into it, which is what a texture
+# too fine to see should look like.
+param mip true
+frame 0.0
+expect 100 66 = 0.541 0.498 0.502 0.01
+expect 60 70 = 0.541 0.498 0.502 0.01
+
+# Without them, the same two pixels land on whatever texel the blend
+# reached: one nearly black, the other nearly white. That is the crawl.
+param mip false
+frame 0.0
+expect 100 66 = 0.122 0.141 0.200 0.01
+expect 60 70 = 0.922 0.902 0.859 0.01
+
+# Near the eye there is nothing to average: the red line is a red line
+# either way.
+param mip true
+frame 0.0
+expect 100 110 = 0.478 0.224 0.231 0.02

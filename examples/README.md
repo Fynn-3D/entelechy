@@ -60,6 +60,11 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   staggered velocity grid carried by itself, a pressure solve as one
   Jacobi Kernel placed forty times, the projection, the smoke it carries;
   the pointer stirs, a replay reads the divergence before and after.
+- [mipmap](mipmap/README.md): a ground running to the horizon, read at
+  the level each pixel asks for. The strip of halvings is a shared
+  sub-graph placed `levels` times with `carry`, and the level comes from
+  the neighbouring pixel's `uv` in the rasterized surface, which is what
+  a derivative would have said.
 - [voxel](voxel/README.md): a voxel editor, the first tool: a
   `Volume<Int>` edited a voxel per click under a minimal bar with a label
   from the text library, the pointer's voxel found by a grid walk in a

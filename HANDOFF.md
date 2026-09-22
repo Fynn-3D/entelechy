@@ -802,6 +802,29 @@ which a Kernel can do (a triangle whose vertices go behind the eye is
 skipped by the contract), would carry several times the geometry at the
 same cost.
 
+The third thing the renderer wanted turned out not to be a change to
+Orla at all. A texture running away from the eye crawls because
+`at_linear` blends four texels of one Field and a distant pixel covers
+many; the old answer is a mip chain, and the question was whether it
+needed the Host to carry levels or `at_linear` to take one. It needs
+neither. The strip of halvings is a sub-graph placed `levels` times with
+`carry`, and the level a pixel asks for is the neighbouring pixel's
+`uv`: a surface the rasterizer left carries `uv` everywhere, so the
+difference between neighbours is exactly what a fragment shader's
+derivative would say, and the triangle's `id` says whether the
+neighbour is the same surface. It is a library —
+`shared/mip.orla` and `shared/mip.osn` — and the `mipmap` example
+holds it: two pixels a little apart in the distance are the same grey
+with the levels and are nearly black and nearly white without them, on
+all three backends, which is the crawl written down as a replay.
+
+One thing that cost an hour and is worth writing down: a node placed
+`times` over does not know which repetition it is. A chain that has to
+know (each pass writing the next level) carries the number beside the
+data as a row of one `Int`, which the two-`carry` form allows. Without
+it every pass rebuilt level one, which looked exactly like a chain that
+was not being built at all.
+
 The rasterizer has a second form: `native.rasterize@2`, which takes a
 mask and a cutout. A fragment whose alpha in that mask is below the
 cutout is not drawn — no surface, no depth — so what is behind a leaf's
