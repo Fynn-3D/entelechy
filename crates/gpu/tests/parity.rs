@@ -1424,3 +1424,139 @@ fn nothing_the_shader_declares_spells_a_type() {
         }
     }
 }
+
+/// A cutout: the same two triangles under a mask whose alpha is a
+/// checkerboard. A fragment the mask does not cover is not drawn at all
+/// — it settles no depth either, so the farther triangle shows through
+/// the nearer one's holes — and the device agrees with the reference on
+/// which pixels those are.
+#[test]
+fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
+    use orla_cpu::raster::{
+        Cutout, SURFACE_WORDS, mask_schema, rasterize_masked, triangle_schema, vertex_schema,
+    };
+    let Some(gpu) = gpu() else { return };
+    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, Box::new(gpu));
+    let vertex = |clip: [f32; 4], normal: [f32; 3], uv: [f32; 2]| -> Vec<u32> {
+        clip.iter()
+            .chain(normal.iter())
+            .chain(uv.iter())
+            .map(|v| v.to_bits())
+            .collect()
+    };
+    // A far quad and a near one over it, both with uv across the whole
+    // of the mask.
+    let mut vertices = Vec::new();
+    // The far quad sits on one texel the mask covers, so it is drawn
+    // whole; the near one is stretched across the whole checkerboard.
+    let solid = [0.0625f32, 0.0625];
+    vertices.extend(vertex([-1.0, -1.0, 0.8, 1.0], [0.0, 0.0, 1.0], solid));
+    vertices.extend(vertex([1.0, -1.0, 0.8, 1.0], [0.0, 0.0, 1.0], solid));
+    vertices.extend(vertex([1.0, 1.0, 0.8, 1.0], [0.0, 0.0, 1.0], solid));
+    vertices.extend(vertex([-1.0, 1.0, 0.8, 1.0], [0.0, 0.0, 1.0], solid));
+    vertices.extend(vertex([-1.0, -1.0, 0.3, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0]));
+    vertices.extend(vertex([1.0, -1.0, 0.3, 1.0], [0.0, 0.0, 1.0], [1.0, 1.0]));
+    vertices.extend(vertex([1.0, 1.0, 0.3, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0]));
+    vertices.extend(vertex([-1.0, 1.0, 0.3, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0]));
+    let triangles: Vec<u32> = [0u32, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]
+        .into_iter()
+        .collect();
+    // The mask covers the near quad in eight-by-eight squares.
+    let (mask_w, mask_h) = (8u32, 8u32);
+    let mut mask = Vec::new();
+    for y in 0..mask_h {
+        for x in 0..mask_w {
+            let on = (x + y) % 2 == 0;
+            for k in 0..4 {
+                let value: f32 = if k == 3 && !on { 0.0 } else { 1.0 };
+                mask.push(value.to_bits());
+            }
+        }
+    }
+    let (width, height) = (64, 64);
+    let host = runtime.host_mut();
+    let vertex_rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(vertex_schema(), Domain::Rows(8), vertices.clone())
+                .unwrap(),
+        )
+        .unwrap();
+    let triangle_rows = host
+        .adopt(
+            orla_abi::FieldData::from_words(triangle_schema(), Domain::Rows(4), triangles.clone())
+                .unwrap(),
+        )
+        .unwrap();
+    let mask_grid = host
+        .adopt(
+            orla_abi::FieldData::from_words(
+                mask_schema(),
+                Domain::Grid(mask_w, mask_h),
+                mask.clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let raster = runtime
+        .kernel(&"native.rasterize@2".parse().unwrap())
+        .expect("the cutout rasterizer is published from the start");
+    let invocation = orla_abi::Invocation {
+        inputs: vec![vertex_rows, triangle_rows, mask_grid],
+        params: vec![orla_abi::Value::Float(0.5)],
+        domain: Domain::Grid(width, height),
+        context: orla_abi::Context::default(),
+    };
+    let surface = runtime.execute(&raster, &invocation).unwrap()[0];
+    runtime.materialize(surface).unwrap();
+    let device = runtime.host().data(surface).unwrap().words().to_vec();
+    let reference = rasterize_masked(
+        &vertices,
+        &triangles,
+        width,
+        height,
+        Some(Cutout {
+            words: &mask,
+            width: mask_w,
+            height: mask_h,
+            alpha: 0.5,
+        }),
+    );
+    let id_at =
+        |words: &[u32], x: u32, y: u32| words[(y * width + x) as usize * SURFACE_WORDS + 6] as i32;
+    let depth_at = |words: &[u32], x: u32, y: u32| {
+        f32::from_bits(words[(y * width + x) as usize * SURFACE_WORDS])
+    };
+    // The reference drew both quads: the near one where the mask covers,
+    // the far one through its holes.
+    let ids: std::collections::BTreeSet<i32> = (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .map(|(x, y)| id_at(&reference, x, y))
+        .collect();
+    assert!(
+        ids.contains(&0) || ids.contains(&1),
+        "the far quad shows through: {ids:?}"
+    );
+    assert!(
+        ids.contains(&2) || ids.contains(&3),
+        "and the near quad is drawn: {ids:?}"
+    );
+    // Away from the squares' edges, the device and the reference agree.
+    let mut compared = 0;
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let id = id_at(&reference, x, y);
+            let interior =
+                (0..3).all(|dy| (0..3).all(|dx| id_at(&reference, x + dx - 1, y + dy - 1) == id));
+            if !interior {
+                continue;
+            }
+            assert_eq!(id_at(&device, x, y), id, "triangle at ({x}, {y})");
+            assert!(
+                (depth_at(&device, x, y) - depth_at(&reference, x, y)).abs() < 0.002,
+                "depth at ({x}, {y})"
+            );
+            compared += 1;
+        }
+    }
+    assert!(compared > 1500, "only {compared} pixels compared");
+}

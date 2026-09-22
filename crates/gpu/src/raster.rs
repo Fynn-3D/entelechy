@@ -14,10 +14,47 @@ use orla_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
 use crate::{DeviceImage, GpuBackend};
 
 const RASTER_WGSL: &str = "
-struct Frame { size: vec2<f32>, vertex_count: u32, pad: u32 };
+struct Frame {
+    size: vec2<f32>,
+    vertex_count: u32,
+    mask_width: u32,
+    mask_height: u32,
+    cutout: f32,
+    masked: u32,
+    pad: u32,
+};
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> vertices: array<u32>;
 @group(0) @binding(2) var<storage, read> triangles: array<u32>;
+@group(0) @binding(3) var<storage, read> mask: array<u32>;
+
+// The mask's alpha where `at_linear` would read it: the four texels
+// around the place, blended, clamped at the edges. The reference
+// rasterizer reads it the same way, so a cutout's edge is the same
+// pixel on either.
+fn mask_alpha(uv: vec2<f32>) -> f32 {
+    let w = i32(frame.mask_width);
+    let h = i32(frame.mask_height);
+    let sx = uv.x * f32(w) - 0.5;
+    let sy = uv.y * f32(h) - 0.5;
+    let x0 = i32(floor(sx));
+    let y0 = i32(floor(sy));
+    let fx = sx - floor(sx);
+    let fy = sy - floor(sy);
+    let at = fn_at(x0, y0, w, h);
+    let bx = fn_at(x0 + 1, y0, w, h);
+    let ay = fn_at(x0, y0 + 1, w, h);
+    let by = fn_at(x0 + 1, y0 + 1, w, h);
+    let top = at + (bx - at) * fx;
+    let bottom = ay + (by - ay) * fx;
+    return top + (bottom - top) * fy;
+}
+
+fn fn_at(x: i32, y: i32, w: i32, h: i32) -> f32 {
+    let cx = clamp(x, 0, max(w - 1, 0));
+    let cy = clamp(y, 0, max(h - 1, 0));
+    return bitcast<f32>(mask[u32(cy * w + cx) * 4u + 3u]);
+}
 
 struct Varyings {
     @builtin(position) clip: vec4<f32>,
@@ -54,6 +91,9 @@ struct Targets {
 
 @fragment
 fn fs(in: Varyings) -> Targets {
+    if (frame.masked != 0u && mask_alpha(in.uv) < frame.cutout) {
+        discard;
+    }
     var out: Targets;
     out.a = vec4<f32>(in.clip.z, in.normal);
     // The id is kept one above its value so a cleared zero reads as -1.
@@ -128,9 +168,10 @@ fn build(device: &wgpu::Device) -> Result<RasterPipelines, String> {
     let render_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("orla rasterize"),
         entries: &[
-            uniform(0, wgpu::ShaderStages::VERTEX),
+            uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
             storage(1, wgpu::ShaderStages::VERTEX, true),
             storage(2, wgpu::ShaderStages::VERTEX, true),
+            storage(3, wgpu::ShaderStages::FRAGMENT, true),
         ],
     });
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -244,8 +285,16 @@ pub(crate) fn rasterize(
     pipelines: &OnceLock<Result<RasterPipelines, String>>,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
+    cutout: bool,
 ) -> Result<Vec<Handle>, ExecutionError> {
-    let (vertices, triangles) = check_rasterize(invocation, scope)?;
+    let (vertices, triangles, mask, alpha) = if cutout {
+        let (vertices, triangles, mask, alpha) =
+            orla_rules::raster::check_rasterize_cutout(invocation, scope)?;
+        (vertices, triangles, Some(mask), alpha)
+    } else {
+        let (vertices, triangles) = check_rasterize(invocation, scope)?;
+        (vertices, triangles, None, 0.0)
+    };
     let pipelines = match pipelines.get_or_init(|| build(&gpu.device)) {
         Ok(pipelines) => pipelines,
         Err(error) => return Err(ExecutionError::Device(error.clone())),
@@ -261,10 +310,28 @@ pub(crate) fn rasterize(
     let vertex_buffer = gpu.bind_input(scope, vertices, 0)?;
     let triangle_buffer = gpu.bind_input(scope, triangles, 1)?;
 
-    let frame: [u32; 4] = [
+    // The mask is always bound: without one it is a single white texel
+    // the shader is told not to read.
+    let mask_size = match mask {
+        Some(mask) => scope.size(mask)?,
+        None => orla_abi::Domain::Grid(1, 1),
+    };
+    let mask_buffer = match mask {
+        Some(mask) => gpu.bind_input(scope, mask, 2)?,
+        None => gpu.buffer(
+            "rasterize mask",
+            &[0u8; 16],
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        ),
+    };
+    let frame: [u32; 8] = [
         (width as f32).to_bits(),
         (height as f32).to_bits(),
         vertex_count,
+        mask_size.width(),
+        mask_size.height(),
+        alpha.to_bits(),
+        u32::from(mask.is_some()),
         0,
     ];
     let frame_bytes: Vec<u8> = frame.iter().flat_map(|v| v.to_le_bytes()).collect();
@@ -284,6 +351,10 @@ pub(crate) fn rasterize(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: triangle_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: mask_buffer.as_entire_binding(),
             },
         ],
     });

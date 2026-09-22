@@ -802,6 +802,23 @@ which a Kernel can do (a triangle whose vertices go behind the eye is
 skipped by the contract), would carry several times the geometry at the
 same cost.
 
+The rasterizer has a second form: `native.rasterize@2`, which takes a
+mask and a cutout. A fragment whose alpha in that mask is below the
+cutout is not drawn — no surface, no depth — so what is behind a leaf's
+edge is seen through it. Without it, foliage has to be geometry: every
+needle a triangle, which is how the procedural tree of the round before
+ended up costing 154 nanoseconds a pixel for one tree. With it a leaf
+is two triangles and a texture, which is what every engine does.
+
+The mask is an `Image` and its alpha is read where `at_linear` would
+read it, by one formula both backends call
+(`orla_rules::raster::mask_alpha`), so the cutout's edge is the same
+pixel on the device and on the reference. The GPU discards in the
+fragment shader; the reference tests before it settles depth, which is
+the part that matters — a fragment that is not drawn must not hide what
+is behind it. The parity test puts a checkerboard's holes over a near
+quad and finds the far one through them on both.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

@@ -369,7 +369,9 @@ fn the_protocol_serves_sockets_and_a_quit_ends_only_its_connection() {
         json!({ "id": 4, "op": "status" }),
         json!({ "id": 5, "op": "quit" }),
     ]);
-    assert_eq!(second[0]["ok"]["kernels"], 4, "{}", second[0]);
+    // Three of the scene's own and the two the runtime publishes itself,
+    // the rasterizer and its cutout.
+    assert_eq!(second[0]["ok"]["kernels"], 5, "{}", second[0]);
     // A quit on standard input ends the process.
     let mut stdin = child.stdin.take().unwrap();
     writeln!(stdin, "{}", json!({ "id": 6, "op": "quit" })).unwrap();

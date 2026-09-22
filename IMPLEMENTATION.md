@@ -51,6 +51,7 @@ capability claim.
 | Advance | [protocol](crates/cli/src/protocol.rs) `advance`, [session](crates/cli/src/session.rs) `element_field` | [protocol test](crates/cli/tests/protocol.rs) |
 | Inlining | [optimize](crates/ir/src/optimize.rs) `inline_calls` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Parts of an element | [ir](crates/ir/src/lib.rs) `Op::Part`, [optimize](crates/ir/src/optimize.rs) `narrowed`, [interpreter](crates/cpu/src/eval/run.rs), [jit](crates/jit/src/codegen.rs) `part_words`, [wgsl](crates/gpu/src/wgsl.rs) | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) `parts of an element` |
+| Cutout rasterizing | [rules](crates/rules/src/raster.rs) `check_rasterize_cutout`, `mask_alpha`, [reference](crates/cpu/src/raster.rs) `rasterize_masked`, [gpu](crates/gpu/src/raster.rs), [runtime](crates/runtime/src/lib.rs) `NativeOp::RasterizeCutout` | [parity test](crates/gpu/tests/parity.rs) (the device against the reference, through a mask's holes) |
 | A session's memory | [session](crates/cli/src/session.rs) `DEFAULT_BUDGET_WORDS`, `budget_of_megabytes`, [cli](crates/cli/src/main.rs) `--memory`, [player](crates/player/src/main.rs) | [session tests](crates/cli/tests/session.rs) (refused, then held) |
 | Measured profiles | [gpu](crates/gpu/src/lib.rs) `set_measured`, [runtime](crates/runtime/src/lib.rs) `last_measured` | [profile output](crates/cli/tests/session.rs) |
 | Diagnostics across files | [session](crates/cli/src/session.rs) `located`, `declarations_within` | [session tests](crates/cli/tests/session.rs) |
@@ -676,6 +677,19 @@ capability claim.
   32 words or more is written out where it is called however long it
   is (up to 1024 instructions), since the argument is copied at every
   element and, written out, its reads narrow too.
+
+- A cutout is the rasterizer's second form, `native.rasterize@2`: one
+  more input, an `Image` whose alpha says what the surface covers, and a
+  `cutout` parameter. A fragment whose alpha there — read at its own uv,
+  as `at_linear(mask, uv * size(mask))` reads it — is below the cutout is
+  not drawn at all: it writes no surface and settles no depth, so what
+  stands behind a leaf's edge is seen through it. Both backends read the
+  mask by the same formula
+  ([`mask_alpha`](crates/rules/src/raster.rs)), so the edge is the same
+  pixel on either; the device is held to the reference through a
+  checkerboard's holes ([parity test](crates/gpu/tests/parity.rs)). It is
+  what foliage is made of: a leaf is two triangles and a texture, not a
+  thousand triangles of leaf.
 
 - A measured profile: `run --profile` puts the GPU backend in a
   measured mode, where an execution waits for its submission and asks

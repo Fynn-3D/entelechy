@@ -202,6 +202,7 @@ impl Backend for JitBackend {
     ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
             NativeOp::Rasterize => orla_cpu::raster::rasterize(invocation, scope),
+            NativeOp::RasterizeCutout => orla_cpu::raster::rasterize_cutout(invocation, scope),
         }
     }
 }

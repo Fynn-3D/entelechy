@@ -11,9 +11,22 @@ use orla_abi::{Handle, Invocation, Scope};
 use crate::ExecutionError;
 
 pub use orla_rules::raster::{
-    SURFACE_WORDS, TRIANGLE_WORDS, VERTEX_WORDS, check_rasterize, surface_schema, triangle_schema,
-    vertex_schema,
+    SURFACE_WORDS, TRIANGLE_WORDS, VERTEX_WORDS, check_rasterize, check_rasterize_cutout,
+    mask_alpha, mask_schema, surface_schema, triangle_schema, vertex_schema,
 };
+
+/// What a cutout tests a fragment against: the mask's words, its extent,
+/// and the alpha a fragment must reach to be drawn.
+pub struct Cutout<'m> {
+    /// The mask's words, four per pixel.
+    pub words: &'m [u32],
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
+    /// The alpha a fragment must reach.
+    pub alpha: f32,
+}
 
 /// Rasterizes on the CPU into a new surface grid owned by the scope's Host.
 pub fn rasterize(
@@ -49,9 +62,52 @@ struct Screen {
     uv: [f32; 2],
 }
 
+/// Rasterizes with a cutout: a fragment whose alpha in the mask is
+/// below the parameter is not drawn at all.
+pub fn rasterize_cutout(
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let (vertices, triangles, mask, alpha) = check_rasterize_cutout(invocation, scope)?;
+    let vertex_words = scope.words(vertices)?.to_vec();
+    let triangle_words = scope.words(triangles)?.to_vec();
+    let mask_words = scope.words(mask)?.to_vec();
+    let mask_size = scope.size(mask)?;
+    let domain = invocation.domain;
+    let words = rasterize_masked(
+        &vertex_words,
+        &triangle_words,
+        domain.width(),
+        domain.height(),
+        Some(Cutout {
+            words: &mask_words,
+            width: mask_size.width(),
+            height: mask_size.height(),
+            alpha,
+        }),
+    );
+    let output = scope.create(surface_schema(), domain)?;
+    if let Err(error) = scope.write_all(output, &words) {
+        let _ = scope.release(output);
+        return Err(error.into());
+    }
+    Ok(vec![output])
+}
+
 /// The pure rasterization: the surface words for the given vertices and
 /// triangles over a `width` by `height` grid.
 pub fn rasterize_words(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<u32> {
+    rasterize_masked(vertices, triangles, width, height, None)
+}
+
+/// The same, with a cutout when one is given.
+pub fn rasterize_masked(
+    vertices: &[u32],
+    triangles: &[u32],
+    width: u32,
+    height: u32,
+    cutout: Option<Cutout<'_>>,
+) -> Vec<u32> {
     let vertex_count = vertices.len() / VERTEX_WORDS;
     let pixel_count = width as usize * height as usize;
     let mut out = vec![0u32; pixel_count * SURFACE_WORDS];
@@ -124,11 +180,22 @@ pub fn rasterize_words(vertices: &[u32], triangles: &[u32], width: u32, height: 
                 if !(0.0..=1.0).contains(&z) || z >= depth[pixel] {
                     continue;
                 }
-                depth[pixel] = z;
                 let inv_w = l0 * a.inv_w + l1 * b.inv_w + l2 * c.inv_w;
                 let lerp = |va: f32, vb: f32, vc: f32| {
                     (l0 * va * a.inv_w + l1 * vb * b.inv_w + l2 * vc * c.inv_w) / inv_w
                 };
+                // A fragment the mask does not cover is not drawn: it
+                // settles no depth either, so what is behind it is seen.
+                if let Some(cutout) = &cutout {
+                    let uv = [
+                        lerp(a.uv[0], b.uv[0], c.uv[0]),
+                        lerp(a.uv[1], b.uv[1], c.uv[1]),
+                    ];
+                    if mask_alpha(cutout.words, cutout.width, cutout.height, uv) < cutout.alpha {
+                        continue;
+                    }
+                }
+                depth[pixel] = z;
                 let base = pixel * SURFACE_WORDS;
                 out[base] = z.to_bits();
                 for k in 0..3 {

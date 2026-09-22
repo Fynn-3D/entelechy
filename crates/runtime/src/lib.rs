@@ -47,23 +47,46 @@ pub enum NativeOp {
     /// Rasterizes `vertices` and `triangles` into a `surface` grid; see
     /// [`orla_rules::raster`] for the contract.
     Rasterize,
+    /// The same, testing each fragment against the alpha of a `mask`: a
+    /// fragment below `cutout` is not drawn at all, which is what a
+    /// leaf's edge or a fence's holes need.
+    RasterizeCutout,
 }
 
 impl NativeOp {
     /// Every native operation.
-    pub const ALL: [NativeOp; 1] = [NativeOp::Rasterize];
+    pub const ALL: [NativeOp; 2] = [NativeOp::Rasterize, NativeOp::RasterizeCutout];
 
     /// The id a graph binds to.
     pub fn id(self) -> KernelId {
         match self {
             Self::Rasterize => KernelId::new("native.rasterize", 1).expect("valid id"),
+            Self::RasterizeCutout => KernelId::new("native.rasterize", 2).expect("valid id"),
         }
     }
 
     /// The manifest: ports by layout and shape, capabilities as a Kernel
     /// would declare them. Element types are anonymous structs.
     pub fn manifest(self) -> Manifest {
+        if self == Self::RasterizeCutout {
+            let mut manifest = Self::Rasterize.manifest();
+            manifest.id = self.id();
+            manifest.inputs.push(Port {
+                name: "mask".into(),
+                ty: PortType {
+                    element: Type::Struct(3),
+                    shape: Shape::Grid,
+                    schema: orla_rules::raster::mask_schema(),
+                },
+            });
+            manifest.params.push(orla_ir::Param {
+                name: "cutout".into(),
+                default: orla_abi::Value::Float(0.5),
+            });
+            return manifest;
+        }
         match self {
+            Self::RasterizeCutout => unreachable!("answered above"),
             Self::Rasterize => Manifest {
                 id: self.id(),
                 mode: orla_ir::Mode::Map,
@@ -106,6 +129,20 @@ impl NativeOp {
     /// source.
     pub fn source(self) -> &'static str {
         match self {
+            Self::RasterizeCutout => {
+                "\
+// native.rasterize@2: the backend's rasterizer, with a cutout.
+//   input vertices: Rows<{ clip: Vec4; normal: Vec3; uv: Vec2; }>
+//   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
+//   input mask: Image
+//   param cutout: Float = 0.5
+//   output surface: Grid<{ depth: Float; normal: Vec3; uv: Vec2; id: Int; }>
+// As `native.rasterize@1`, except that a fragment whose alpha in `mask`,
+// read at its own uv as `at_linear(mask, uv * size(mask))` reads it, is
+// below `cutout` is not drawn: it writes no surface and settles no
+// depth, so what is behind a leaf's edge is seen through it.
+"
+            }
             Self::Rasterize => {
                 "\
 // native.rasterize@1: the backend's rasterizer.
@@ -259,6 +296,7 @@ impl Backend for orla_cpu::CpuBackend {
     ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
             NativeOp::Rasterize => orla_cpu::raster::rasterize(invocation, scope),
+            NativeOp::RasterizeCutout => orla_cpu::raster::rasterize_cutout(invocation, scope),
         }
     }
 }
