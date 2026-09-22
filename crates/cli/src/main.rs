@@ -179,9 +179,7 @@ fn check(args: &[String]) -> Result<(), String> {
             .and_then(|stem| stem.to_str())
             .unwrap_or("scene");
         let base = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
-        let mut loader = |path: &Path| -> Result<String, String> {
-            std::fs::read_to_string(path).map_err(|error| error.to_string())
-        };
+        let mut loader = |path: &Path| orla::session::read_document(path);
         let mut declare =
             |base: &Path, uses: &[orla_language::Use]| orla::session::declarations_for(base, uses);
         let lowered = match orla_graph::Graph::load_with(

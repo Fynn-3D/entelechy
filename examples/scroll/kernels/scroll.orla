@@ -2,7 +2,7 @@
 // through `mod`, `at_linear` through `mod` (which seams at the tile's
 // edge, since the blend cannot reach across it), and the shared
 // library's `at_linear_wrapped`, four `at` reads blended, which wraps.
-use "../../shared/wrap.orla";
+use "../../../packages/picture.orlapkg/kernels/wrap.orla";
 
 type Tile = Grid<Vec4>;
 

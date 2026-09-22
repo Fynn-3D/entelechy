@@ -8,7 +8,7 @@ node scene: scene.march@1 {
     steps = 96;
 }
 
-node display: graph "../shared/display.osn" {
+node display: graph "../../packages/picture.orlapkg/graphs/display.osn" {
     source <- scene.result;
     exposure = exposure;
 }

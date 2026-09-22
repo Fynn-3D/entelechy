@@ -1,7 +1,7 @@
 // A checkered ground running to the horizon, drawn through the shared
 // mip library: the same plane, the same texture, read once at the top
 // level always and once at the level each pixel asks for.
-use "../../shared/mip.orla";
+use "../../../packages/picture.orlapkg/kernels/mip.orla";
 
 struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Tri { a: Int; b: Int; c: Int; }

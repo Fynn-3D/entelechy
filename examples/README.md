@@ -3,8 +3,14 @@
 Each example is a directory with a `scene.osn` entry, usually a `kernels/`
 directory of `.orla` libraries it uses, and, once it has behavior worth
 pinning down, a `tests/` directory of `.replay` scripts with their fixture
-scenes. `shared/` holds libraries several examples use. Documentation for an
-example belongs in its own `README.md`.
+scenes. Documentation for an example belongs in its own `README.md`.
+
+What several scenes share is not an example: it is a package, and those
+live in [`packages/`](../packages/README.md) beside this directory —
+`picture` (wrapped reads, tone mapping, mip levels), `text` (a font and
+the Kernels that draw with it), `pixelfx` (a look). An example uses one
+the way anyone's scene would, by path or, with `ORLA_PACKAGES` set, by
+name.
 
 ```sh
 cargo run -- run examples/<example>/scene.osn --out output.ppm --watch

@@ -4,7 +4,7 @@ A scene through a package. `../pixelfx.orlapkg` is a package directory:
 its `package.osn` names it, `pixelfx@1`, and the least language and IR
 it needs, and uses its `kernels/`; `graphs/nes.osn` is a preset, a graph
 that pixelates a picture and holds it to four colours. The scene says
-`use "../pixelfx.orlapkg";` for the Kernels and places the preset by
+`use "../../packages/pixelfx.orlapkg";` for the Kernels and places the preset by
 path as a node; the two reach the same Kernel file by different paths,
 which is one file and one owner.
 

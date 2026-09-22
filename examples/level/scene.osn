@@ -2,10 +2,10 @@
 // `bytes` hands the file to the scene as rows of one integer a byte,
 // and level.draw walks the header, the tiles and the entity list.
 use "kernels/";
-use "../shared/text.orla";
+use "../../packages/text.orlapkg";
 
 input level: Rows<Int> = bytes "level.bin";
-input font: Grid<Float> = "../shared/font.png";
+input font: Grid<Float> = "../../packages/text.orlapkg/font.png";
 input caption: Rows<Int> = text "entities";
 
 param zoom: Float = 0.92;

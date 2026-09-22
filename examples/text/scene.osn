@@ -2,9 +2,9 @@
 // whole font as a specimen, and the pointer's x as digits that follow it;
 // each is a row of glyphs painted over the picture through the font
 // atlas, a file the Host watches.
-use "../shared/text.orla";
+use "../../packages/text.orlapkg";
 
-input font: Grid<Float> = "../shared/font.png";
+input font: Grid<Float> = "../../packages/text.orlapkg/font.png";
 // A string is an input of the document: the characters' codes as rows.
 input title: Rows<Int> = text "ORLA";
 

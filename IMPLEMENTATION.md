@@ -51,7 +51,7 @@ capability claim.
 | Advance | [protocol](crates/cli/src/protocol.rs) `advance`, [session](crates/cli/src/session.rs) `element_field` | [protocol test](crates/cli/tests/protocol.rs) |
 | Inlining | [optimize](crates/ir/src/optimize.rs) `inline_calls` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Parts of an element | [ir](crates/ir/src/lib.rs) `Op::Part`, [optimize](crates/ir/src/optimize.rs) `narrowed`, [interpreter](crates/cpu/src/eval/run.rs), [jit](crates/jit/src/codegen.rs) `part_words`, [wgsl](crates/gpu/src/wgsl.rs) | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) `parts of an element` |
-| Mip levels | [shared library](examples/shared/mip.orla), [strip sub-graph](examples/shared/mip.osn) | [mipmap example](examples/mipmap/tests/ground.replay) on three backends |
+| Mip levels | [picture package](packages/picture.orlapkg/kernels/mip.orla), [strip sub-graph](packages/picture.orlapkg/graphs/mip.osn) | [mipmap example](examples/mipmap/tests/ground.replay) on three backends |
 | Cutout rasterizing | [rules](crates/rules/src/raster.rs) `check_rasterize_cutout`, `mask_alpha`, [reference](crates/cpu/src/raster.rs) `rasterize_masked`, [gpu](crates/gpu/src/raster.rs), [runtime](crates/runtime/src/lib.rs) `NativeOp::RasterizeCutout` | [parity test](crates/gpu/tests/parity.rs) (the device against the reference, through a mask's holes) |
 | A session's memory | [session](crates/cli/src/session.rs) `DEFAULT_BUDGET_WORDS`, `budget_of_megabytes`, [cli](crates/cli/src/main.rs) `--memory`, [player](crates/player/src/main.rs) | [session tests](crates/cli/tests/session.rs) (refused, then held) |
 | Measured profiles | [gpu](crates/gpu/src/lib.rs) `set_measured`, [runtime](crates/runtime/src/lib.rs) `last_measured` | [profile output](crates/cli/tests/session.rs) |
@@ -61,7 +61,7 @@ capability claim.
 | Frames in | [session](crates/cli/src/session.rs) `Sequence`, [parser](crates/language/src/parser.rs) `frames` | [clip example](examples/clip/tests/clip.replay), [session tests](crates/cli/tests/session.rs) |
 | Render | [render](crates/cli/src/render.rs) | [session tests](crates/cli/tests/session.rs) |
 | Async nodes | [runs off the frame](crates/runtime/src/later.rs), [evaluator](crates/graph/src/evaluate.rs) | [runtime](crates/runtime/tests/later.rs), [graph](crates/graph/tests/composition.rs), [async example](examples/async/tests/async.replay) |
-| Packages and versions | [package](crates/cli/src/package.rs), [use expansion](crates/cli/src/session.rs), [manifest](crates/language/src/parser.rs) | [pack, unpack, describe, refusal](crates/cli/tests/session.rs), [package example](examples/package/tests/package.replay) |
+| Packages and versions | [the packages](packages/README.md), [package](crates/cli/src/package.rs), [by name](crates/cli/src/session.rs) `in_package`, [use expansion](crates/cli/src/session.rs), [manifest](crates/language/src/parser.rs) | [pack, unpack, describe, refusal](crates/cli/tests/session.rs), [package example](examples/package/tests/package.replay) |
 | IR optimizer | [optimize](crates/ir/src/optimize.rs) | [every matrix case word for word against the unoptimized IR](crates/cpu/tests/optimizer.rs) |
 | Kernel rules | [rules](crates/rules/src/lib.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | Every backend's parity test runs by them |
 | CPU backend | [cpu](crates/cpu/src/lib.rs), [word code](crates/cpu/src/eval/code.rs), [compiler](crates/cpu/src/eval/compile.rs), [machine](crates/cpu/src/eval/run.rs) | [execution tests](crates/cpu/tests/execute.rs) |
@@ -367,7 +367,7 @@ capability claim.
   scale), a font is a `Grid<Float>` atlas the Host reads from a file, and
   `text.draw@1` paints one over a picture through a shared function any
   Kernel may call; `text.layout@1` and `text.digits@1` make the rows
-  ([library](examples/shared/text.orla), [font](examples/shared/font.orla),
+  ([library](packages/text.orlapkg/kernels/text.orla), [font](packages/text.orlapkg/kernels/font.orla),
   [text example](examples/text/README.md)). The atlas is baked by a
   Kernel through `run --save` and both backends draw it bit for bit
   ([replay](examples/text/tests/text.replay)).
@@ -681,12 +681,12 @@ capability claim.
 
 - Mip levels are a library, not a language feature: the strip of
   halvings is a sub-graph placed `levels` times with `carry`
-  ([`shared/mip.osn`](examples/shared/mip.osn)), and the level a pixel
+  ([`picture.orlapkg`](packages/picture.orlapkg/graphs/mip.osn)), and the level a pixel
   asks for is read off the surface beside it — a rasterized surface
   carries `uv` at every pixel, so the neighbour's `uv` is what a
   derivative would say, and its triangle `id` says whether the
   neighbour is the same surface
-  ([`shared/mip.orla`](examples/shared/mip.orla),
+  ([`picture.orlapkg`](packages/picture.orlapkg/kernels/mip.orla),
   [mipmap example](examples/mipmap/README.md)). What it does not give is
   anisotropy, which is more taps in the same library rather than
   anything the language lacks. A placement does not know which

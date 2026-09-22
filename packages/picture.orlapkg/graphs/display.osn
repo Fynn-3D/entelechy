@@ -1,6 +1,8 @@
 // Tone mapping as a sub-graph. Place it with
-//   node display: graph "../shared/display.osn" { source <- x.result; exposure = 1.2; }
-use "tonemap.orla";
+//   node display: graph "../../packages/picture.orlapkg/graphs/display.osn" {
+//       source <- x.result; exposure = 1.2;
+//   }
+use "../kernels/tonemap.orla";
 
 input source: Image;
 param exposure: Float = 1.0;

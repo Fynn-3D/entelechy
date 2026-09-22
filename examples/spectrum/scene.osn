@@ -3,9 +3,9 @@
 // the loudest; draw paints the bars and the label names the frequency.
 // The block is the scene's sound output, so the Player plays it.
 use "kernels/";
-use "../shared/text.orla";
+use "../../packages/text.orlapkg";
 
-input font: Grid<Float> = "../shared/font.png";
+input font: Grid<Float> = "../../packages/text.orlapkg/font.png";
 input caption: Rows<Int> = text "loudest";
 
 param pitch: Float = 220.0;

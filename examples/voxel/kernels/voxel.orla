@@ -7,7 +7,7 @@
 // bar at the bottom holds the tools; a compass at the top right shows
 // the axes; a label at the top left names the tool and the voxel under
 // the pointer, drawn through the text library.
-use "../../shared/text.orla";
+use "../../../packages/text.orlapkg";
 
 struct Edit {
     yaw: Float; pitch: Float; zoom: Float; pan: Vec3;

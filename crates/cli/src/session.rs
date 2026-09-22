@@ -203,6 +203,12 @@ fn expand_use(path: &Path, trailing_slash: bool) -> Result<Vec<PathBuf>, String>
     // owned by one document, not published twice.
     let canonical = |file: PathBuf| file.canonicalize().unwrap_or(file);
     let path = resolve_package(path);
+    // A `use` written inside a package, reached by the package's name:
+    // the way through it is the same, wherever the package itself is.
+    let path = match path.exists() {
+        true => path,
+        false => in_package(&path).unwrap_or(path),
+    };
     if path.join("package.osn").is_file() {
         return package_files(&path).map(|files| files.into_iter().map(canonical).collect());
     }
@@ -224,6 +230,44 @@ fn expand_use(path: &Path, trailing_slash: bool) -> Result<Vec<PathBuf>, String>
 }
 
 /// A `use` that names nothing beside the document is looked for by its
+/// A document a scene reaches: the file at that path, or, where there
+/// is none and the path runs through a package's name, the file inside
+/// the package `ORLA_PACKAGES` finds. A preset is reached the way the
+/// package that holds it is.
+pub fn read_document(path: &Path) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(missing) => match in_package(path) {
+            Some(inside) => std::fs::read_to_string(inside).map_err(|error| error.to_string()),
+            None => Err(missing.to_string()),
+        },
+    }
+}
+
+/// A path whose first part names a package: `picture.orlapkg/graphs/x.osn`
+/// where the package is one `ORLA_PACKAGES` lists. `None` when no part of
+/// it names a package that is there.
+fn in_package(path: &Path) -> Option<PathBuf> {
+    let mut parts = path.components();
+    let mut rest = PathBuf::new();
+    // The package's name is the last part that ends in `.orlapkg`; what
+    // follows it is the way to the file inside.
+    let mut name: Option<PathBuf> = None;
+    for part in parts.by_ref() {
+        let piece = Path::new(part.as_os_str());
+        if piece.extension().is_some_and(|ext| ext == "orlapkg") {
+            name = Some(piece.to_path_buf());
+            rest = PathBuf::new();
+        } else if name.is_some() {
+            rest.push(piece);
+        }
+    }
+    let name = name?;
+    let root = resolve_package(&name);
+    let inside = root.join(rest);
+    inside.exists().then_some(inside)
+}
+
 /// name in each directory of `ORLA_PACKAGES`, `:`-separated.
 fn resolve_package(path: &Path) -> PathBuf {
     if path.exists() {
@@ -1349,9 +1393,7 @@ impl Session {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let mut loader = |path: &Path| -> Result<String, String> {
-            std::fs::read_to_string(path).map_err(|error| error.to_string())
-        };
+        let mut loader = |path: &Path| read_document(path);
         let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
         let lowered = match Graph::load_with_params(
             &document,

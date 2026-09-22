@@ -21,7 +21,7 @@ subset of them and the picture crawls. The old answer is to keep the
 texture at several scales and read the scale the pixel asks for, and it
 needs nothing the language does not have:
 
-- **The strip** is built by [`shared/mip.osn`](../shared/mip.osn), a
+- **The strip** is built by [`picture.orlapkg`](../../packages/picture.orlapkg/graphs/mip.osn), a
   sub-graph placed `levels` times with `carry`: each placement averages
   four texels of the level above into one of the level below, into one
   Field `side` wide and `2 * side` tall. A placement does not know which
@@ -32,7 +32,7 @@ needs nothing the language does not have:
   is moving across the screen — the difference between them is what a
   derivative would tell a fragment shader, and the triangle's `id` says
   whether the neighbour is on the same surface at all. That is
-  [`mip_wanted`](../shared/mip.orla); [`mip_at`](../shared/mip.orla)
+  [`mip_wanted`](../../packages/picture.orlapkg/kernels/mip.orla); [`mip_at`](../../packages/picture.orlapkg/kernels/mip.orla)
   reads the two levels either side of it and blends.
 
 The same replay checks both on all three backends: two pixels a little

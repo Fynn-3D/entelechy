@@ -29,7 +29,7 @@ never encoded (WAV is the way out; ffmpeg compresses); JPEG is not decoded
 `times` is structural, so a param it names lowers the document again; `sample`
 stays in `compute` while functions with Field parameters use `at`/`at_linear`;
 text is a convention of the shared library, not a contract of the runtime:
-`examples/shared/text.orla` declares the glyph row and the drawing, and the
+`packages/text.orlapkg` declares the glyph row and the drawing, and the
 font atlas beside it is baked from rows of bits in `font.orla` (a face is
 replaced by re-baking or by another PNG in the same 6x8 cells); a scatter's
 order is its determinism rule (sources applied one after another in element
@@ -369,7 +369,7 @@ are the ones below.
    lines of integer arithmetic on the cell (`blur.orla` `fold`,
    `mirror`) and wrap for `at` is `mod`; the one read that cannot be
    composed through `at_linear`, a wrapped linear read, is ten lines
-   of four `at`s blended, now `examples/shared/wrap.orla`
+   of four `at`s blended, now the picture package's `wrap.orla`
    `at_linear_wrapped`, which the scroll example uses and whose seam
    the replay pins against the clamped read. A mode would touch the
    IR and three backends' linear paths to save those ten lines; not
@@ -813,7 +813,7 @@ neither. The strip of halvings is a sub-graph placed `levels` times with
 difference between neighbours is exactly what a fragment shader's
 derivative would say, and the triangle's `id` says whether the
 neighbour is the same surface. It is a library —
-`shared/mip.orla` and `shared/mip.osn` — and the `mipmap` example
+the picture package's `mip.orla` and `mip.osn` — and the `mipmap` example
 holds it: two pixels a little apart in the distance are the same grey
 with the levels and are nearly black and nearly white without them, on
 all three backends, which is the crawl written down as a replay.
@@ -841,6 +841,38 @@ fragment shader; the reference tests before it settles depth, which is
 the part that matters — a fragment that is not drawn must not hide what
 is behind it. The parity test puts a checkerboard's holes over a near
 quad and finds the far one through them on both.
+
+What several scenes share stopped being an example. `examples/shared/`
+had become a library with no way to be one: a scene of anyone's own
+that wanted the mip levels would have written
+`use ".../orla/examples/shared/mip.orla"`, with the word `examples` in
+the path of the thing it depends on. The mechanism for this already
+existed and was being used by exactly one directory, which was itself
+inside `examples/`.
+
+So there are packages now, in `packages/` beside the examples:
+`picture` (wrapped reads, tone mapping and the display graph, mip
+levels and the strip), `text` (the font, its baking, and the Kernels
+that draw with it), and `pixelfx`, moved. Each has the manifest a
+package has, and `orla package` describes all three. An example reaches
+one the way anyone's scene would — by path, or by name where
+`ORLA_PACKAGES` lists the directory — which also means the examples now
+demonstrate the same thing twice: what they are for, and how a package
+is used.
+
+Moving them found a hole in the mechanism. A package could be reached
+by name for its Kernels and only by path for its presets, so a package
+used by name could not have its graphs placed — and a preset that was
+found by name then looked for its own `use` beside where the scene said
+it was rather than where the package is. One rule answers both: a path
+that is not there and runs through a `<name>.orlapkg` is looked up
+under `ORLA_PACKAGES` from that name on (`in_package`), and both the
+document loader and the `use` expansion take it. A scene outside the
+repository now places `picture.orlapkg/graphs/display.osn` with nothing
+but the environment variable set, which is what the packaging was for.
+
+Nothing else moved and nothing changed inside the files: the 114
+replays pass unchanged, which is what a rename of this size is for.
 
 ## Open
 

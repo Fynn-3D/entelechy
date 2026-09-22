@@ -3,9 +3,9 @@
 // batch of scrambles is made, run, and stepped every frame; view draws
 // the cube, readout the numbers, shown the text over the picture.
 use "kernels/";
-use "../shared/text.orla";
+use "../../packages/text.orlapkg";
 
-input font: Grid<Float> = "../shared/font.png";
+input font: Grid<Float> = "../../packages/text.orlapkg/font.png";
 param rate: Float = 0.05;
 
 node begin: cube.begin@1 { domain = 1; }

@@ -4,9 +4,9 @@
 // labels say what it thinks and what you did. Everything else is the
 // scene's cube.
 use "kernels/";
-use "../shared/text.orla";
+use "../../packages/text.orlapkg";
 
-input font: Grid<Float> = "../shared/font.png";
+input font: Grid<Float> = "../../packages/text.orlapkg/font.png";
 input weights: Rows<Float> = "weights.field";
 input net: Rows<Int> = text "net thinks";
 input you: Rows<Int> = text "you made";

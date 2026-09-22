@@ -975,7 +975,7 @@ fn help_lists_the_builtins_and_the_forms_and_shows_one() {
 #[test]
 fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let orla = env!("CARGO_BIN_EXE_orla");
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/pixelfx.orlapkg");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/pixelfx.orlapkg");
     let dir = std::env::temp_dir().join(format!("orla-packages-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1043,6 +1043,24 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         stdout.contains("graph `scene` with 2 node(s), 1 use(s)"),
         "{stdout}"
     );
+    // A preset inside it is placed by the package's name too, and the
+    // `use` the preset itself writes is followed from where the package
+    // really is, not from where the scene said it was.
+    std::fs::write(
+        elsewhere.join("preset.osn"),
+        "use \"unpacked.orlapkg\";\nnode source: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\nnode look: graph \"unpacked.orlapkg/graphs/nes.osn\" { source <- source.result; cell = 4.0; }\noutput result <- look.result;\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(elsewhere.join("preset.osn"))
+        .env("ORLA_PACKAGES", &dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("graph `preset` with 3 node(s)"), "{stdout}");
+
     // A package needing a newer language is refused, with the two versions.
     let manifest = unpacked.join("package.osn");
     let text = std::fs::read_to_string(&manifest).unwrap();
