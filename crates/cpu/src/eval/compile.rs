@@ -1161,7 +1161,12 @@ impl FunctionCompiler<'_> {
             Intrinsic::Pow => map2(f32::powf),
             Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
             Intrinsic::Smoothstep => map3(|low, high, x| {
-                let t = ((x - low) / (high - low)).clamp(0.0, 1.0);
+                // The same clamp `clamp` is: `f32::clamp` carries a NaN
+                // through and `max` then `min` does not, and a Kernel
+                // that writes `clamp` and one that writes `smoothstep`
+                // must not disagree about that. The device's does not.
+                #[allow(clippy::manual_clamp)]
+                let t = ((x - low) / (high - low)).max(0.0).min(1.0);
                 t * t * (3.0 - 2.0 * t)
             }),
             Intrinsic::Reflect => Instr::Reflect {

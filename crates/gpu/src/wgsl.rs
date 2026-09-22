@@ -236,6 +236,48 @@ fn stick_at(which: i32) -> vec2<f32> {{
 fn button_down(code: i32) -> bool {{
     if (code < 0 || code > 23) {{ return false; }}
     return ((u32(ctx[0].w) >> u32(code)) & 1u) == 1u;
+}}
+// A Float to an Int the way the reference converts it: truncated
+// toward zero, saturating at the ends of the range, and zero for what
+// is not a number. WGSL's own `i32(x)` clamps the float and not the
+// integer, so two to the thirty-first comes out as 2147483520, and it
+// leaves not-a-number to the driver — which answered the other end of
+// the range.
+fn to_int(x: f32) -> i32 {{
+    // Not a number is the ones exponent with something in the
+    // mantissa, tested on the word: `x != x` is what a compiler told
+    // there are no NaNs folds to false, and this one is told that.
+    if (is_nan(x)) {{ return 0; }}
+    if (x >= 2147483648.0) {{ return 2147483647; }}
+    if (x <= -2147483648.0) {{ return -2147483648; }}
+    return i32(x);
+}}
+// The angle of (x, y) from the x axis, as the reference gives it where
+// y is a zero: a device's own answers not-a-number when both are zero —
+// which is the middle pixel of anything drawn in polar coordinates —
+// and loses the sign of a zero y beside a negative x. Everything else
+// is the device's.
+// Whether x is not a number, on the words.
+fn is_nan(x: f32) -> bool {{
+    let b = bitcast<u32>(x);
+    return (b & 0x7F800000u) == 0x7F800000u && (b & 0x007FFFFFu) != 0u;
+}}
+fn atan2_ref(y: f32, x: f32) -> f32 {{
+    let yb = bitcast<u32>(y);
+    let xb = bitcast<u32>(x);
+    if ((yb & 0x7FFFFFFFu) == 0u && !is_nan(x)) {{
+        // Zero where x is positive, pi where it is negative or a
+        // negative zero, and the sign of y carried onto it.
+        let turn = select(0u, 0x40490FDBu, (xb >> 31u) == 1u);
+        return bitcast<f32>((yb & 0x80000000u) | turn);
+    }}
+    return atan2(y, x);
+}}
+fn to_int2(v: vec2<f32>) -> vec2<i32> {{
+    return vec2<i32>(to_int(v.x), to_int(v.y));
+}}
+fn to_int3(v: vec3<f32>) -> vec3<i32> {{
+    return vec3<i32>(to_int(v.x), to_int(v.y), to_int(v.z));
 }}"
     );
     for (index, port) in manifest.inputs.iter().enumerate() {
@@ -1654,6 +1696,17 @@ impl Emitter<'_> {
                             widen(b)
                         )
                     }
+                    // `isnan(x)` is `x != x`, which a compiler told
+                    // there are no NaNs folds to false — and this one is
+                    // told that. On the words it is the ones exponent
+                    // with something in the mantissa, which nothing can
+                    // fold away.
+                    BinaryOp::NotEqual if a == b && self.type_of(*a) == Type::Float => {
+                        format!("is_nan({})", v(a))
+                    }
+                    BinaryOp::Equal if a == b && self.type_of(*a) == Type::Float => {
+                        format!("!is_nan({})", v(a))
+                    }
                     BinaryOp::Equal if vector => format!("all({} == {})", v(a), v(b)),
                     BinaryOp::NotEqual if vector => format!("any({} != {})", v(a), v(b)),
                     BinaryOp::Shl | BinaryOp::Shr => {
@@ -1907,11 +1960,22 @@ impl Emitter<'_> {
             }
         };
         match intrinsic {
-            Intrinsic::ToFloat | Intrinsic::ToInt => format!("{}({list})", wgsl_type(ty)),
+            Intrinsic::ToFloat => format!("{}({list})", wgsl_type(ty)),
+            // Saturating, as the reference converts; see `to_int` in
+            // the preamble. A Bool is a 0 or a 1 and needs none of it.
+            Intrinsic::ToInt => match (self.type_of(args[0]), ty) {
+                (Type::Bool, _) => format!("{}({list})", wgsl_type(ty)),
+                (_, Type::IVec2) => format!("to_int2({list})"),
+                (_, Type::IVec3) => format!("to_int3({list})"),
+                _ => format!("to_int({list})"),
+            },
             Intrinsic::Normalize => {
                 format!("safe_normalize_{}({list})", ty.components().unwrap_or(0))
             }
             Intrinsic::Pow => format!("pow({}, {})", v(&args[0]), splat(&args[1], ty)),
+            // The angle at the origin, which a device's own does not
+            // give; see `atan2_ref` in the preamble.
+            Intrinsic::Atan2 => format!("atan2_ref({}, {})", v(&args[0]), v(&args[1])),
             // WGSL wants every operand the result's type; a Float broadcasts.
             Intrinsic::Min | Intrinsic::Max | Intrinsic::Clamp | Intrinsic::Mix => format!(
                 "{}({})",

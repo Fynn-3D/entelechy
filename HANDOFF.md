@@ -1110,6 +1110,53 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+The same sweep, turned on the promise the reference exists for: that
+the three backends give one answer. The feature matrix covers the
+middle of every operation thoroughly — NaNs, infinities, division by
+zero, reads off the end of a Field, an index past an array — so the
+sweep went to the corners it does not reach, and found four.
+
+`int(x)` out of range and at what is not a number. The interpreter and
+the JIT saturate to the ends of the integer range and answer zero for a
+NaN, which is what Rust's cast and Cranelift's do; WGSL's `i32(x)`
+clamps the *float* and not the integer, so two to the thirty-first came
+out as 2147483520, and it leaves a NaN to the driver, which answered
+the other end of the range. Five of sixteen values disagreed. The
+shader converts through a `to_int` that saturates as the reference
+does.
+
+`atan2` where y is a zero. A device's own answers what is not a number
+when both arguments are zero — the middle pixel of anything drawn in
+polar coordinates — and loses the sign of a zero y beside a negative x,
+so -pi came back as +pi. Six of eight cases disagreed. The shader
+answers those from the signs, as the reference does, and hands
+everything else to the device.
+
+`isnan` was false where it should have been true. It lowers to `x != x`,
+which is the one thing a compiler told there are no NaNs folds away:
+`isnan(NaN)` was true and `isnan(abs(NaN))` was false, on the same
+shader. It is a test of the word's exponent and mantissa now, which
+nothing can fold, and the same words make `to_int` and `atan2_ref`
+answer for a NaN.
+
+And the reference disagreed with itself: `clamp` lets no NaN through
+(`max` then `min` answers the other side) while the clamp inside
+`smoothstep` did (`f32::clamp` carries one), so a Kernel that wrote
+`clamp` and one that wrote `smoothstep` meant different things. Both
+clamp the same way now, on all three.
+
+What was found and left: `min` of a positive and a negative zero is the
+negative one on the interpreter and the positive one on the JIT and the
+device. The two compare equal, and making them agree costs a NaN test
+in a hot intrinsic; the contract is that the backends agree on every
+value, and which zero comes out of `min` is the backend's.
+
+Three rows went into the feature matrix so none of this comes back:
+`conversion edges`, `angles at the origin`, and `not a number through`,
+each run under all five modes on all three backends, which is how the
+four were found in the first place. None of it costs anything: every
+example is within noise of where it was.
+
 Compiling had never been measured against size, and an agent pays it on
 every edit. A Kernel of `n` statements in one block: 6.2 microseconds a
 statement at sixteen hundred, 7.8 at sixty-four hundred, 10.2 at twelve

@@ -135,6 +135,30 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: 0.0, i: int(isinf(up)) + int(isinf(down)) * 2 + int(isnan(undefined)) * 4 + int(same) * 8 + int(ordered) * 16 + int(big) * 32 + int(up > down) * 64, b: isnan(undefined), v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
+            // The ends of the range, which a device clamps as a float
+            // and the reference clamps as an integer, and what is not a
+            // number, which a device left to its driver.
+            "conversion edges",
+            "let zero = x - x; let up = 1.0 / zero; let undefined = zero / zero; let huge = 1000000000000000.0 * 1000000000000000.0; let top = int(huge) / 1000 + int(up) / 2000 + int(2147483647.0) / 4000 + int(2147483648.0) / 8000; let bottom = int(0.0 - huge) / 1000 + int(0.0 - up) / 2000 + int(0.0 - 2147483648.0) / 4000; let none = int(undefined); let closest = int(1.9999999) + int(0.0 - 1.9999999) * 3 + int(16777217.0) / 16;",
+            "Out { f: float(none), i: top + bottom + none * 3 + closest, b: none == 0, v: vec3(0.0, 0.0, 0.0) }",
+        ),
+        (
+            // The middle of anything drawn in polar coordinates, where a
+            // device's own `atan2` answers what is not a number, and the
+            // axis below it, where the sign of a zero decides the side.
+            "angles at the origin",
+            "let zero = x - x; let minus = zero * (0.0 - 1.0); let one = 1.0 + zero; let a = atan2(zero, zero) + atan2(zero, minus) * 2.0 + atan2(minus, zero) * 4.0; let b = atan2(minus, minus) * 8.0 + atan2(minus, one) * 16.0 + atan2(minus, 0.0 - one) * 32.0; let c = atan2(zero, one) + atan2(one, zero) * 2.0;",
+            "Out { f: a + b + c, i: int(isnan(a)) + int(isnan(b)) * 2, b: a + b < 0.0, v: vec3(a, b, c) }",
+        ),
+        (
+            // What is not a number, through the functions that choose:
+            // `clamp` and `smoothstep` must agree about it, and once did
+            // not.
+            "not a number through",
+            "let zero = x - x; let undefined = zero / zero; let one = 1.0 + zero; let chosen = min(undefined, one) + min(one, undefined) * 2.0 + max(undefined, one) * 4.0 + max(one, undefined) * 8.0; let held = clamp(undefined, zero, one) + saturate(undefined) * 2.0 + smoothstep(zero, one, undefined) * 4.0; let stepped = step(undefined, one) + step(one, undefined) * 2.0; let through = mix(zero, one, undefined) + abs(undefined) + floor(undefined);",
+            "Out { f: chosen + held + stepped, i: int(isnan(through)) + int(isnan(held)) * 2 + int(isnan(chosen)) * 4, b: isnan(through), v: vec3(chosen, held, stepped) }",
+        ),
+        (
             // A quotient truncates toward zero and a remainder takes the
             // dividend's sign, floats included; the unsigned pair reads
             // the same bits as a number without one.

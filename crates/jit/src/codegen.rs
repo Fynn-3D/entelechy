@@ -2056,10 +2056,12 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let t = fx.b.ins().fdiv(num, den);
                 let zero = fx.f32c(0.0);
                 let one = fx.f32c(1.0);
-                let below = fx.b.ins().fcmp(FloatCC::LessThan, t, zero);
-                let t = fx.b.ins().select(below, zero, t);
-                let above = fx.b.ins().fcmp(FloatCC::GreaterThan, t, one);
-                let t = fx.b.ins().select(above, one, t);
+                // The same clamp `clamp` is: a comparison lets a NaN
+                // through and these do not, and a Kernel that writes
+                // `clamp` and one that writes `smoothstep` must not
+                // disagree about that.
+                let t = fx.fmax(t, zero);
+                let t = fx.fmin(t, one);
                 let two = fx.f32c(2.0);
                 let three = fx.f32c(3.0);
                 let tt = fx.b.ins().fmul(t, t);
