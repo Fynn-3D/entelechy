@@ -1,5 +1,7 @@
 # Creation protocol
 
+**Answers:** what an agent sends over the wire, and what comes back.
+
 `orla serve <scene.osn>` drives a live session over standard input and
 output: one JSON object per line in, one per line out. Any agent in any
 language can create through it, with the same authority rules as the CLI

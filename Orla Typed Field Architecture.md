@@ -1,5 +1,7 @@
 # Typed Field Resource Architecture
 
+**Answers:** why there is one resource, and what that binds.
+
 ## Decision and authority
 
 Orla adopts the previous implementation's typed Field model for numerical
@@ -117,9 +119,9 @@ domain, typed CPU columns, and GPU storage; `gpu.rs` reuses resident Fields and
 explicit readback. Its native device exposure and process-wide context are not
 part of this decision. Its audio tone adapter is not a general Kernel DSP model.
 
-In this repository, start with [resource ABI](crates/abi/src/lib.rs),
-[Field context](crates/abi/src/field.rs),
-[GPU service](crates/gpu/src/lib.rs), and
-[resident lifecycle tests](crates/gpu/tests/resident.rs).
-Preserve the failure and authority contracts described in
-[the resident Image contract](docs/GPU_RESIDENT_IMAGE_CONTRACT.md).
+In this repository, start with the [resource ABI](crates/abi/src/lib.rs),
+the [Host that owns every Field](crates/host/src/lib.rs), the
+[GPU backend](crates/gpu/src/lib.rs), and the
+[residency and parity tests](crates/gpu/tests/parity.rs). The failure and
+authority contracts are kept in
+[IMPLEMENTATION](IMPLEMENTATION.md) under *Resource and residency*.

@@ -1,5 +1,7 @@
 # Orla documents
 
+**Answers:** how a Kernel and a scene are written.
+
 Two file roles share one grammar, one lexer, and one literal syntax.
 
 - **`.orla` is a Kernel library.** It holds `kernel` items and nothing else.

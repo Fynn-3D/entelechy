@@ -1,5 +1,7 @@
 # Orla
 
+**Answers:** the vision, and the shortest path to running something.
+
 **An open runtime for AI-created applications and games.**
 
 Orla's vision is to let any AI agent create, run, and continuously evolve

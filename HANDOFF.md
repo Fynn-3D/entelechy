@@ -1,5 +1,7 @@
 # Handoff
 
+**Answers:** what this repository holds that nothing else records, and the next action.
+
 ## Context
 
 | Fact | What follows from it |

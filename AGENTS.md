@@ -1,18 +1,28 @@
 # AGENTS.md
 
+**Answers:** what Orla is, what the rules are, and which document answers what.
 
-Read in this order:
+Read in this order; each document answers one question.
 
-1. `AGENTS.md` — principles and engineering rules
-2. `README.md` — public portal, vision, and architecture
-3. `Orla Architecture Plan.md` — phased architecture roadmap
-4. `Orla — Minimal Core Architecture.md` — core model and boundaries
-5. `Orla Typed Field Architecture.md` — binding resource convergence decision
-6. `IMPLEMENTATION.md` — code and test entry points
-7. `Orla Cross-Session Handoff.md` — handoff procedure
-8. `HANDOFF.md` — session context and next action
-9. `Orla Git Workflow.md` — repository workflow
-10. `Orla Code Rules.md` — code rules
+| # | Document | Answers |
+| --- | --- | --- |
+| 1 | `AGENTS.md` | What Orla is and what the rules are |
+| 2 | `README.md` | What it looks like from outside |
+| 3 | `Orla Architecture Plan.md` | Which phase the work is in, and what accepts it |
+| 4 | `Orla — Minimal Core Architecture.md` | Where the boundaries are |
+| 5 | `Orla Typed Field Architecture.md` | Why there is one resource |
+| 6 | `IMPLEMENTATION.md` | Where the code and its evidence are |
+| 7 | `PROCESS.md` | How to write, verify, commit and hand over |
+| 8 | `HANDOFF.md` | What this repository holds, and the next action |
+
+Then, by the question:
+
+| Question | Document |
+| --- | --- |
+| How is a Kernel or a scene written? | `docs/DOCUMENTS.md` |
+| What command does this? | `docs/USAGE.md` |
+| What does an agent send over the wire? | `docs/PROTOCOL.md` |
+| What may a Kernel call? | `orla help`, `orla help <name>` |
 
 Then inspect:
 
