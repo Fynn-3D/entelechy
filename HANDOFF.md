@@ -753,46 +753,6 @@ for nothing. A function that builds a wide value pays for building it,
 not for handing it over, and the argument rule is what it is because a
 copy at every element is the whole of that call.
 
-A scene was asked for that a game engine would be asked for: a valley
-with a lake, forest on the hills, mountains behind, the far shore
-standing in the water, holding sixty frames a second. `landscape` is
-it, and nothing in it is a model: the ground is a function of where you
-are, the trees are that function raised where they stand, and what the
-lake shows is the same function marched again along the reflected ray.
-
-The first version marched the noise directly and cost 43 nanoseconds a
-pixel, which is 24 ms at 960x540 and four times that at a window worth
-having. The noise was the whole of it: eight octaves, four integer
-hashes each, asked again at every step of every ray. So the ground is
-baked once into a `Grid<Float>` of 2048 by 2048 over 2600 units, and
-the frame marches the Field: four words and a blend per step instead of
-forty multiplies. The bake does not change with the clock, so the graph
-runs it at load and reuses it, and a frame went from 16.7 to 4.2 ms at
-1280x720 — four times, for a node that runs once. It is the same trade
-an engine makes when it builds an acceleration structure: pay for the
-world once, and let the frame cost the pixels.
-
-What it now costs on the GPU, least of three runs of a dozen frames:
-2.8 ms at 960x540, 5.5 at 1920x1080, 10.1 at 2560x1440 and 16.5 at
-3024x1964, which is a Retina display's own pixels at sixty frames a
-second. The bake is 8.3 ms, once. Past that the frame is flat in the
-pixels (2.8 ns each) and nothing in it is a hotspot: halving the march,
-the shadow, the reflection or the Field's size each move it by a
-percent. On a Retina display `domain = window() / scale()` is a quarter
-of the work and what a game would do.
-
-Three things it took to get there, each of which had looked like
-something else. The scalloped shells on every slope were not the
-octaves and not the noise: the march reported the step it had taken
-rather than the sample it had tested, so every shaded point sat one
-step past the ground. The seams at fixed distances were the octave
-count stepping, which a Float count and a last octave that fades in
-took out. And the reflection showed only sky because a grazing ray ran
-out of steps before it reached the far shore, which is a stride and a
-reach, not a shading question. The replay pins five pixels of it on all
-three backends; its `detail` parameter bakes a small Field, which is
-what makes the interpreter able to answer at all.
-
 A pad's analog values are in the context now, which the gamepad file
 had said for months they belonged: `stick(0)` the left stick, `stick(1)`
 the right, `stick(2)` the two triggers, and the pad's buttons as
