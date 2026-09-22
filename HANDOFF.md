@@ -1110,6 +1110,25 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+`showcase` is the slowest example, at 22.4 ms a frame at 1920x1080, and
+it was measured so that nobody measures it again. It is one node: the
+render is 22.2 ms and the state 0.28, so the engine's share is about
+0.4 of 22.4, under two per cent. Ten point seven nanoseconds a pixel is
+what it costs to march an SDF and shade it: a primary march of up to
+128 steps, six more for the normal, a soft shadow of up to 64, five for
+the occlusion, and the reflection doing most of it again — around four
+hundred evaluations of `scene` at a pixel. Cutting the shadow to eight
+steps takes 1280x720 from 10.24 to 6.58 ms, the march to twenty-four
+takes it to 7.28, the occlusion to one takes it to 9.79; the rest is
+the pad's own march, the reflection and the materials. Three things
+were ruled out on the way: it scales with the pixels and not with
+anything fixed (1.21, 2.86, 10.21, 22.31 ms over four resolutions), the
+GPU is 53 times the JIT a pixel, which is what a heavy float shader
+should be, and `until` really does leave a loop early on the device —
+raising the march's bound from 128 to 256 moves the frame by 0.02 ms.
+What showcase costs is what showcase draws, and by the standing
+direction that is its author's to choose.
+
 The other half of the round was narrow and is worth stating as a rule
 rather than as a change. A scatter's `last` cannot be one pass: an
 invocation that has done its atomic does not know whether a later
