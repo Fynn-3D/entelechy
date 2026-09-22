@@ -17,7 +17,7 @@ pub mod wgsl;
 
 use std::any::Any;
 use std::fmt;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use orla_abi::{Handle, Invocation, Scope, Value};
 use orla_ir::{Mode, Validated};
@@ -27,6 +27,71 @@ use orla_runtime::{Backend, NativeOp, Prepared};
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
 pub(crate) struct DeviceImage {
     pub(crate) buffer: wgpu::Buffer,
+    /// Where the buffer goes when the Field that held it is released,
+    /// so the next output of its size takes it rather than asking the
+    /// driver for another. `None` for a buffer that is not the
+    /// backend's to keep.
+    pub(crate) spare: Option<Spare>,
+}
+
+/// Buffers released Fields left behind, by size. Asking the driver for
+/// tens of megabytes is most of what a full-screen pass costs, and a
+/// scene asks for the same sizes every frame.
+#[derive(Clone, Default)]
+pub(crate) struct Spare {
+    held: Arc<Mutex<Vec<wgpu::Buffer>>>,
+}
+
+/// How many buffers the pile holds, and how much of it. A frame wants
+/// a handful of sizes; beyond that they are the driver's again.
+const SPARE_BUFFERS: usize = 12;
+const SPARE_BYTES: u64 = 512 * 1024 * 1024;
+
+impl Spare {
+    /// A buffer of exactly this size, from the pile or from the device.
+    pub(crate) fn take(
+        &self,
+        device: &wgpu::Device,
+        size: u64,
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(index) = held
+            .iter()
+            .position(|buffer| buffer.size() == size && buffer.usage() == usage)
+        {
+            return held.swap_remove(index);
+        }
+        drop(held);
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("output"),
+            size,
+            usage,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Keeps a buffer a Field no longer holds, while the pile is small
+    /// enough to be worth keeping.
+    pub(crate) fn keep(&self, buffer: wgpu::Buffer) {
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let bytes: u64 = held.iter().map(wgpu::Buffer::size).sum();
+        if held.len() < SPARE_BUFFERS && bytes + buffer.size() <= SPARE_BYTES {
+            held.push(buffer);
+        }
+    }
+}
+
+impl Drop for DeviceImage {
+    fn drop(&mut self) {
+        // The Field that held this is gone, so nothing in the scene
+        // refers to the buffer; a command that reads it was submitted
+        // before whatever writes it next, and one queue runs its
+        // submissions in order.
+        if let Some(spare) = self.spare.take() {
+            spare.keep(self.buffer.clone());
+        }
+    }
 }
 
 /// The GPU could not be opened.
@@ -53,6 +118,8 @@ pub struct GpuBackend {
     lock: Mutex<()>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
+    /// Buffers released Fields left behind; see [`Spare`].
+    spare: Spare,
     /// The context and the parameters of the execution being staged.
     /// One execution runs at a time and a queue's writes are ordered
     /// with its submissions, so these are written again per node rather
@@ -157,6 +224,7 @@ impl GpuBackend {
             uniforms: Mutex::new(None),
             written: Mutex::new((Vec::new(), Vec::new())),
             raster: OnceLock::new(),
+            spare: Spare::default(),
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -273,9 +341,16 @@ impl GpuBackend {
             handle,
             Box::new(DeviceImage {
                 buffer: buffer.clone(),
+                spare: None,
             }),
         )?;
         Ok(buffer)
+    }
+
+    /// The pile of buffers released Fields left behind, for the parts
+    /// of the backend that make outputs of their own.
+    pub(crate) fn spare(&self) -> Spare {
+        self.spare.clone()
     }
 
     /// The context and parameter buffers for the execution being
@@ -735,7 +810,14 @@ impl Backend for GpuBackend {
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(error.to_string()));
         }
-        adopt_outputs(scope, module, output_domain, final_buffer, memory_outputs)
+        adopt_outputs(
+            scope,
+            module,
+            output_domain,
+            final_buffer,
+            memory_outputs,
+            Some(self.spare.clone()),
+        )
     }
 
     /// A map run several times over its own output, all of it in one
@@ -924,10 +1006,12 @@ fn adopt_outputs(
     output_domain: orla_abi::Domain,
     final_buffer: wgpu::Buffer,
     memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
+    spare: Option<Spare>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let output_port = &module.manifest.outputs[0];
     let device = Box::new(DeviceImage {
         buffer: final_buffer,
+        spare: spare.clone(),
     });
     let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
     let mut outputs = vec![output];
@@ -936,7 +1020,10 @@ fn adopt_outputs(
         let adopted = scope.adopt_resident(
             port.ty.schema.clone(),
             extent,
-            Box::new(DeviceImage { buffer }),
+            Box::new(DeviceImage {
+                buffer,
+                spare: spare.clone(),
+            }),
         );
         match adopted {
             Ok(handle) => outputs.push(handle),
@@ -1052,7 +1139,14 @@ impl GpuBackend {
             return Err(ExecutionError::Device(error.to_string()));
         }
         // What the last time wrote is what the run gives.
-        adopt_outputs(scope, module, domain, reads, Vec::new())
+        adopt_outputs(
+            scope,
+            module,
+            domain,
+            reads,
+            Vec::new(),
+            Some(self.spare.clone()),
+        )
     }
 
     fn stage(
@@ -1134,14 +1228,13 @@ impl GpuBackend {
         } else {
             output_words
         };
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("output"),
-            size: (element_count * map_words * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE
+        let output_buffer = self.spare.take(
+            &self.device,
+            (element_count * map_words * 4) as u64,
+            wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        );
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: wgsl::CONTEXT_BINDING,

@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| Buffers a Field left behind | [gpu](crates/gpu/src/lib.rs) `Spare`, `DeviceImage::drop`, [raster](crates/gpu/src/raster.rs) | every replay bit for bit on the GPU; measured by `orla bench` |
 | Uniforms that have not changed | [gpu](crates/gpu/src/lib.rs) `uniform_buffers` | every replay bit for bit on the GPU; measured by `orla bench` |
 | A long session | [runtime](crates/runtime/src/lib.rs) `uncollected`, [session tests](crates/cli/tests/session.rs) | a thousand republishes evaluated in step |
 | Measuring a scene | [bench](crates/cli/src/bench.rs) `measure`, [cli](crates/cli/src/main.rs), [protocol](crates/cli/src/protocol.rs) `bench` | [session tests](crates/cli/tests/session.rs), [protocol tests](crates/cli/tests/protocol.rs) |

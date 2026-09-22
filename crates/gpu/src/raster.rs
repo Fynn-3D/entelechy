@@ -368,25 +368,23 @@ pub(crate) fn rasterize(
     // Copies of a texture need rows padded to 256 bytes.
     let row_bytes = (width as u64 * 16).div_ceil(256) * 256;
     let padded_size = row_bytes * height as u64;
-    let padded = |label: &str| {
-        gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: padded_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        })
+    // The copies the targets are read through are the same size every
+    // frame, so they come from the pile rather than the driver.
+    let padded = || {
+        gpu.spare().take(
+            &gpu.device,
+            padded_size,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        )
     };
-    let a_copy = padded("surface a copy");
-    let b_copy = padded("surface b copy");
+    let a_copy = padded();
+    let b_copy = padded();
     let output_size = width as u64 * height as u64 * SURFACE_WORDS as u64 * 4;
-    let output_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("surface"),
-        size: output_size,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let output_buffer = gpu.spare().take(
+        &gpu.device,
+        output_size,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    );
     let compact_frame: [u32; 4] = [width, height, (row_bytes / 4) as u32, 0];
     let compact_bytes: Vec<u8> = compact_frame.iter().flat_map(|v| v.to_le_bytes()).collect();
     let compact_uniform = gpu.buffer("compact frame", &compact_bytes, wgpu::BufferUsages::UNIFORM);
@@ -501,7 +499,11 @@ pub(crate) fn rasterize(
         domain,
         Box::new(DeviceImage {
             buffer: output_buffer,
+            spare: Some(gpu.spare()),
         }),
     )?;
+    // The copies were this call's own; the pile takes them back.
+    gpu.spare().keep(a_copy);
+    gpu.spare().keep(b_copy);
     Ok(vec![output])
 }

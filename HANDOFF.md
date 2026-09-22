@@ -874,6 +874,36 @@ but the environment variable set, which is what the packaging was for.
 Nothing else moved and nothing changed inside the files: the 114
 replays pass unchanged, which is what a rename of this size is for.
 
+What a full-screen pass costs on the GPU turned out to be mostly the
+asking. A map node writing one image at 1920x1080 took 1.58 ms, which
+is 0.65 nanoseconds a pixel for sixteen bytes — a twentieth of what the
+memory can do — and the output buffer was made fresh every execution
+and dropped with the Field that held it. A pile of released buffers,
+taken by size and given back when the Field is released, puts that at
+0.62 ms: 0.17 nanoseconds a pixel, which is the bandwidth. Two passes
+went 3.20 to 1.37. The rasterizer's own copies, the same size every
+frame, come from the same pile, and two million triangles at 1920x1080
+went 13.0 to 9.2 ms.
+
+Every example is faster for it, at 1920x1080, least of three runs of
+twenty frames: `strings` 1.80 to 0.93, `model` 1.55 to 1.16, `million`
+3.69 to 2.87, `raymarch` 0.50 to 0.39, `mesh` 0.71 to 0.59, `collapse`
+7.29 to 6.10, `voxel` 7.61 to 6.65, `fluid` 2.17 to 1.94, and nothing
+slower. It is the widest kind of win there is: every renderer anyone
+writes over this backend pays that cost on every pass, and nothing
+about the optimization has an opinion on what is being drawn.
+
+What makes it safe is the queue's order. A buffer goes back to the pile
+when the Field that held it is released, so nothing in the scene refers
+to it, and whatever read it was submitted before whatever writes it
+next; one queue runs its submissions in order. The pile holds twelve
+buffers and half a gibibyte, which is what a few full-screen targets at
+4K come to; past that they are the driver's again.
+
+This is also a correction: the ten milliseconds that looked like a
+shading pass in a `run --profile` was the per-node device wait, not the
+pass. The measurement that matters is a frame.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the
