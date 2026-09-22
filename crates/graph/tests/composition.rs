@@ -1621,3 +1621,106 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
     );
     split.clear(&mut runtime);
 }
+
+const TALLY: &str = "kernel test.tally@1 { requires { field.write; time.read; } output result: Rows<Int>; compute { return 2 + int(time()); } }";
+const RUN: &str = "kernel test.run@1 { requires { field.read; field.write; } input live: Rows<Int>; output result: Rows<Float>; compute { return float(element()) + float(at(live, 0)) * 100.0; } }";
+const DECIDED: &str = "
+node live: test.tally@1 { domain = 1; }
+node rows: test.run@1 { live <- live.result; domain = value(live); }
+output result <- rows.result;
+";
+
+#[test]
+fn a_kernel_decides_how_many_elements_the_next_node_runs() {
+    // The one domain term that reads data: `rows` is as long as the
+    // number `live` put in a Field this frame, so the graph places less
+    // work when a Kernel says there is less to do.
+    let graph = Graph::parse(DECIDED).unwrap();
+    let mut runtime = Runtime::new(1 << 16);
+    for source in [TALLY, RUN] {
+        runtime.load(source).unwrap();
+    }
+    let mut evaluator = Evaluator::new();
+    let count = |runtime: &Runtime, handle| runtime.host().domain(handle).unwrap().count();
+    let first =
+        |runtime: &Runtime, handle| f32::from_bits(runtime.host().element(handle, 0).unwrap()[0]);
+
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(count(&runtime, report.output), 2);
+    assert_eq!(first(&runtime, report.output), 200.0);
+
+    // The count changes, so the Field's length changes with it.
+    let later = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(5.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(later.executed, ids(&["live", "rows"]));
+    assert_eq!(count(&runtime, later.output), 7);
+    assert_eq!(first(&runtime, later.output), 700.0);
+
+    // Nothing moved, so nothing runs: the count is part of what the
+    // cache is keyed on, through the domain it resolved to.
+    let again = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(5.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(again.executed.is_empty(), "{:?}", again.executed);
+}
+
+#[test]
+fn a_domain_that_reads_a_field_still_fuses_with_its_producer() {
+    let graph = Graph::parse(
+        "
+node live: test.tally@1 { domain = 1; }
+node rows: test.run@1 { live <- live.result; domain = value(live) * 3; }
+node twice: test.twice@1 { source <- rows.result; }
+output result <- twice.result;
+",
+    )
+    .unwrap();
+    let mut runtime = Runtime::new(1 << 16);
+    for source in [
+        TALLY,
+        RUN,
+        "kernel test.twice@1 { requires { field.read; field.write; } input source: Rows<Float>; output result: Rows<Float>; compute { return sample(source) * 2.0; } }",
+    ] {
+        runtime.load(source).unwrap();
+    }
+    let mut evaluator = Evaluator::new();
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &at(0.0),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    // `twice` has no domain of its own, so it runs over what `rows`
+    // made whatever that is, and absorbs it.
+    assert_eq!(report.executed, ids(&["live", "twice"]));
+    assert_eq!(report.fused, vec![(NodeId("twice".into()), ids(&["rows"]))]);
+    assert_eq!(runtime.host().domain(report.output).unwrap().count(), 6);
+    assert_eq!(
+        f32::from_bits(runtime.host().element(report.output, 5).unwrap()[0]),
+        (5.0 + 200.0) * 2.0
+    );
+}

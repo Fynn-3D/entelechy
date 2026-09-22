@@ -853,6 +853,63 @@ refused by the device at publish ("Divide operation overflowed"), and
 `0.0 * x` where `x` is not a number is zero on the device and not a
 number on the reference.
 
+So the question became whether a graph can place less geometry at all,
+and the answer was no: `domain` resolved before anything ran — numbers,
+`count(port)`, `size(port)`, `window()`, `scale()`, arithmetic and
+parameters — a side had to be positive so a node could not shrink to
+nothing, `times` was at least one, and a parameter was a literal or a
+parent graph's, so nothing a Kernel computed could size anything. The
+only lever was a parameter from outside, which is cheap (swinging a
+node between 1.18 million and 294 thousand triangles every frame costs
+the average of the two and a tenth of a millisecond more, because the
+Fields come from the pools) but puts the decision in the host.
+
+Before building the closed loop, what the loop would be worth. A Kernel
+can already read a count out of a Field and return early, which needs
+no engine at all. On two million triangles at 1920x1080 that took the
+frame from 5.50 ms to 4.81 with everything culled — it saves the
+arithmetic and nothing else, because the element is still written. The
+cost of geometry here is the Field: a million vertices of nine words is
+thirty-eight megabytes a frame, and what is written is what is paid
+for. That ruled out the mechanism this round was going to be — an
+indirect dispatch, where the domain stays at its maximum and the
+backend runs fewer elements — because the tail then has to be cleared
+to stay deterministic, and a clear is still a write of the whole Field.
+Only a shorter Field is shorter.
+
+So `domain` may now read a number a Kernel wrote: `value(port)`, or
+`value(port, i)` for element `i`. It is the one term that is data
+rather than shape. `examples/decided` flies a camera over a sheet whose
+`domain = value(detail) * value(detail)`, where `detail` is a Kernel
+turning the camera's height into a resolution: 24 by 24 vertices high
+up, 263 by 263 on the deck, a hundred times the geometry, with nothing
+in the scene rewritten and no parameter carrying the number. On the
+two-million-triangle sheet: 5.50 ms static, 5.69 with everything live,
+4.30 at a half, 2.99 at a tenth, 2.68 at a hundredth — against the 4.81
+floor a Kernel's own early return could reach.
+
+No backend was touched. The number is read on the Host, when the node
+binds, after its producer has run, so it is this frame's; on a device
+that is a wait, about two tenths of a millisecond, once a frame however
+many nodes read the same Field. That is what holds the port to a row of
+scalars and to a thousand of them: it carries counts, not data, and the
+wait can never turn into a hidden download of a scene's geometry. A
+count that can reach zero wants `max(value(port), 1)`, since a domain's
+sides must be positive, and the message says so where it happens.
+
+One thing had to be taught: a node whose size a Kernel decides is not
+knowable before its producer runs, so it fell out of fusion, which is
+worth 0.28 ms on that sheet. A consumer with no `domain` of its own
+runs over its first input's extent, so when that input is the producer
+the two are the same extent whatever it turns out to be; the producer's
+expression moves onto the fused node under the names fusion gives its
+ports (`value(mesh/detail) * value(mesh/detail)`), and the chain folds
+as far as it used to.
+
+A replay can say how long a Field came out: `expect count
+ground.result = 576`. Without it the capability could be measured and
+not written down.
+
 The third thing the renderer wanted turned out not to be a change to
 Orla at all. A texture running away from the eye crawls because
 `at_linear` blends four texels of one Field and a distant pixel covers

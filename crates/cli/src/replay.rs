@@ -20,12 +20,16 @@
 //! expect step.result[0].score = 1   # a field of an element of a node's output:
 //!                                   # ints and bools exact, floats and vectors
 //!                                   # with an optional trailing tolerance
+//! expect count ground.result = 6889 # how many elements a node's output holds,
+//!                                   # which is what a `domain` came out as
 //! ```
 //!
 //! An element expectation names the node's output as the Kernel declared
 //! it, so it reads as a statement about the application's state rather
-//! than about the picture. Nodes named that way are pinned before the
-//! first frame, so fusion never hides them.
+//! than about the picture. A count expectation names the output alone:
+//! it is how a node whose size a Kernel decided is written down. Nodes
+//! named either way are pinned before the first frame, so fusion never
+//! hides them.
 //!
 //! A frame evaluates only what its expectations need: the named nodes,
 //! the state, and the picture only when a pixel expectation follows the
@@ -108,6 +112,18 @@ pub enum Step {
         path: Vec<String>,
         /// Expected components as written.
         values: Vec<String>,
+        /// Line number, for messages.
+        line: u32,
+    },
+    /// Check how many elements a node's output holds after the last
+    /// frame: what a node whose `domain` a Kernel decided came out as.
+    ExpectCount {
+        /// The node.
+        node: String,
+        /// Its output port.
+        port: String,
+        /// Expected element count.
+        count: usize,
         /// Line number, for messages.
         line: u32,
     },
@@ -257,6 +273,19 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     value,
                 });
             }
+            ["expect", "count", target, "=", count] => {
+                let (node, port) = target
+                    .split_once('.')
+                    .ok_or_else(|| error("`expect count` takes `node.port`".to_owned()))?;
+                steps.push(Step::ExpectCount {
+                    node: node.to_owned(),
+                    port: port.to_owned(),
+                    count: count.parse::<usize>().map_err(|_| {
+                        error(format!("`{count}` is not a whole number of elements"))
+                    })?,
+                    line,
+                });
+            }
             ["expect", target, "=", values @ ..] if target.contains('[') && !values.is_empty() => {
                 let (node, port, index, path) =
                     crate::session::parse_target(target).map_err(error)?;
@@ -326,7 +355,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
         return Err(rejected.join("\n"));
     }
     for step in &replay.steps {
-        if let Step::ExpectElement { node, .. } = step {
+        if let Step::ExpectElement { node, .. } | Step::ExpectCount { node, .. } = step {
             session.pin(orla_graph::NodeId(node.clone()));
         }
     }
@@ -334,7 +363,9 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
         .steps
         .iter()
         .filter_map(|step| match step {
-            Step::ExpectElement { node, .. } => Some(orla_graph::NodeId(node.clone())),
+            Step::ExpectElement { node, .. } | Step::ExpectCount { node, .. } => {
+                Some(orla_graph::NodeId(node.clone()))
+            }
             _ => None,
         })
         .collect();
@@ -429,6 +460,26 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                         .failures
                         .push(format!("line {line}: {target} {mismatch}")),
                     Err(message) => return Err(format!("line {line}: {target}: {message}")),
+                }
+            }
+            Step::ExpectCount {
+                node,
+                port,
+                count,
+                line,
+            } => {
+                if last.is_none() {
+                    return Err(format!("line {line}: expect before any frame"));
+                }
+                outcome.checks += 1;
+                match session.element_count(&orla_graph::NodeId(node.clone()), port) {
+                    Ok(actual) if actual == *count => {}
+                    Ok(actual) => outcome.failures.push(format!(
+                        "line {line}: {node}.{port} holds {actual} element(s), expected {count}"
+                    )),
+                    Err(message) => {
+                        return Err(format!("line {line}: count {node}.{port}: {message}"));
+                    }
                 }
             }
             Step::Expect {

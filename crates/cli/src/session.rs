@@ -1902,6 +1902,19 @@ impl Session {
         self.evaluator.cached(node, port)
     }
 
+    /// How many elements a node's output holds: what a node whose
+    /// `domain` a Kernel decided came out as.
+    pub fn element_count(&self, node: &orla_graph::NodeId, port: &str) -> Result<usize, String> {
+        let handle = self
+            .cached(node, port)
+            .ok_or_else(|| "the node has no materialized output; is it wired?".to_string())?;
+        self.runtime()
+            .host()
+            .domain(handle)
+            .map(|domain| domain.count())
+            .map_err(|e| e.to_string())
+    }
+
     /// Evaluates the current graph under `context`. Unchanged nodes are
     /// Waits for every `async` node's run off the frame and takes it in;
     /// the next evaluation reads what landed. See
@@ -1982,19 +1995,24 @@ impl Session {
         }
         let traced = (|| {
             self.evaluate(context).map_err(|error| error.to_string())?;
-            let graph = self.graph.as_ref().ok_or("no scene is loaded")?;
+            // The graph is read while the runtime is written to (a
+            // `value(port)` domain brings a Field to the Host), so the
+            // scene is taken out for the call and put back.
+            let graph = self.graph.take().ok_or("no scene is loaded")?;
             let invocation = self
                 .evaluator
                 .invocation(
-                    graph,
+                    &graph,
                     &target,
                     &version,
-                    &self.runtime,
+                    &mut self.runtime,
                     &self.externals,
                     context,
                     &self.params,
                 )
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| error.to_string());
+            self.graph = Some(graph);
+            let invocation = invocation?;
             for handle in &invocation.inputs {
                 self.runtime
                     .materialize(*handle)

@@ -435,7 +435,8 @@ output result <- display.result;      // named graph output; sub-graph outputs
    its output's shape; nodes with an input default to the extent of their
    first declared input. The extent may also be an expression over what
    comes in: `size(port)` (the extent a port is bound to, as a count, a
-   pair, or a triple), `count(port)`, the node's parameters and the
+   pair, or a triple), `count(port)`, `value(port)` and `value(port, i)`
+   (a number a Kernel put in a Field), the node's parameters and the
    graph's by name, numbers, `vec2`/`vec3`, `+ - * /`, `max`, `min`,
    `floor`, `ceil`, and the window as context: `window()` (its size in
    pixels) and `scale()` (its scale factor); it resolves when the node
@@ -443,7 +444,10 @@ output result <- display.result;      // named graph output; sub-graph outputs
    size(map) * tile;` draws a map at its tile size; `domain = 4 *
    count(faces);` sizes a subdivision; `domain = window();` fills the
    window at the window's resolution, and the node runs again at the new
-   extent when the window is resized. The Player provides the window;
+   extent when the window is resized. `domain = value(detail) *
+   value(detail);` places as much as a Kernel decided there is this
+   frame — the one term that reads data rather than shape, and so the
+   only way a scene does less work when there is less to do. The Player provides the window;
    `run` takes `--window <w>x<h>[@<scale>]` and a replay says `window w h
    [scale]`, so the same scene runs and replays without one.
    A binding must match the port's shape and element layout, whatever
@@ -538,8 +542,21 @@ of what the port is bound to; bound to a memory port of a `scan`, it
 is the memory's extent (its initial value's, before the first frame),
 not the scan's domain.
 
+`value(port)` is the one term that reads what is *in* a Field rather
+than how big it is: element `i` (0 unless given) of the Field the port
+is bound to, as the `Int` or `Float` it holds. The producer has run by
+the time the node binds, so the number is this frame's; reading it
+brings that Field to the Host, which on a device is a wait, so the port
+must be a row of scalars and hold at most 1024 of them — it carries
+counts, not data. Several nodes reading the same Field wait once. A
+count that can reach zero wants `max(value(port), 1)`, since a domain's
+sides must be positive.
+
 ## Replay
 
 Application tests are `.replay` files: `scene <path>`, optional
 `library <path>`, then `frame`, `pointer`, `key`, `reset`, and `expect`
-lines. See [the replay module](../crates/cli/src/replay.rs).
+lines — a pixel, a field of an element (`expect step.result[0].score =
+1`), or how many elements an output holds (`expect count ground.result
+= 576`, which is what a `domain` came out as). See [the replay
+module](../crates/cli/src/replay.rs).

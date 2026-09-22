@@ -71,6 +71,12 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   sub-graph placed `levels` times with `carry`, and the level comes from
   the neighbouring pixel's `uv` in the rasterized surface, which is what
   a derivative would have said.
+- [decided](decided/README.md): how much geometry a frame places, decided
+  inside the frame that places it. A Kernel turns where the camera is
+  into one number in a Field, and `domain = value(detail) *
+  value(detail)` makes the ground exactly that big: 24 by 24 vertices
+  high up, 263 by 263 on the deck, no parameter carrying the number. The
+  replay pins the counts with `expect count`.
 - [voxel](voxel/README.md): a voxel editor, the first tool: a
   `Volume<Int>` edited a voxel per click under a minimal bar with a label
   from the text library, the pointer's voxel found by a grid walk in a

@@ -32,6 +32,8 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| A domain a Kernel decides | [domain](crates/graph/src/domain.rs) `DomainExpr::Value`, `values_read`, `renamed`, [evaluate](crates/graph/src/evaluate.rs) `domain_values` | [graph tests](crates/graph/tests/composition.rs), [domain tests](crates/graph/src/domain.rs), [decided replay](examples/decided/tests/decided.replay) |
+| How long a Field came out | [replay](crates/cli/src/replay.rs) `ExpectCount`, [session](crates/cli/src/session.rs) `element_count` | [decided replay](examples/decided/tests/decided.replay) |
 | The near plane on the device | [gpu](crates/gpu/src/raster.rs) `usable`, `corner_at`, [contract](crates/rules/src/raster.rs) | [near-plane replay](examples/mesh/tests/near.replay) on all three backends |
 | One struct, not two, after fusion | [fuse](crates/ir/src/fuse.rs) `moved` | [fusion tests](crates/ir/tests/fusion.rs) |
 | Targets a rasterize left behind | [gpu](crates/gpu/src/lib.rs) `SpareTextures`, [raster](crates/gpu/src/raster.rs) `target` | every replay bit for bit on the GPU; measured by `orla bench` |
@@ -630,6 +632,27 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- A node's `domain` may read a number a Kernel wrote
+  ([`value(port)`](crates/graph/src/domain.rs),
+  [`domain_values`](crates/graph/src/evaluate.rs)): element `i` (0 unless
+  given) of the Field a port is bound to, as the `Int` or `Float` it
+  holds. It is the one domain term that is data rather than shape, and
+  so the only way a scene does less work when a Kernel finds there is
+  less to do — a Kernel that reads a count and returns early still
+  writes an element for every one of them, and the Field is what costs.
+  The producer has run by the time the node binds, so the number is this
+  frame's; reading it brings that Field to the Host, which on a device
+  is a wait, so the port is held to a row of scalars and to
+  `VALUE_MAX_ELEMENTS` of them and several nodes reading one Field wait
+  once. No backend knows about any of it. A node sized this way is not
+  knowable before its producer runs, so it would fall out of fusion; a
+  consumer with no `domain` of its own runs over its first input's
+  extent, which is the producer's whatever it turns out to be, so the
+  producer's expression moves onto the fused node under the names fusion
+  gives its ports (`renamed`). Measured on two million triangles at
+  1920x1080: 5.50 ms with everything live, 2.68 at a hundredth, against
+  4.81 for an early return inside the Kernel.
 
 - Structs that are the same are one entry in a fused module's table
   ([`fuse`](crates/ir/src/fuse.rs)): the consumer's sample of the fused

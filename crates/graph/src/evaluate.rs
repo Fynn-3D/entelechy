@@ -25,7 +25,8 @@ use orla_runtime::{
     Ticket,
 };
 
-use crate::{Binding, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue, Source};
+use crate::domain::VALUE_MAX_ELEMENTS;
+use crate::{Binding, DomainExpr, DomainSpec, Graph, GraphError, Node, NodeId, ParamValue, Source};
 
 /// Why evaluation stopped. Nodes evaluated before the failure keep their new
 /// results; the failing node keeps its last successful result, if any; no
@@ -575,7 +576,7 @@ impl Evaluator {
         graph: &Graph,
         node: &Node,
         version: &Arc<KernelVersion>,
-        runtime: &Runtime,
+        runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
         params: &BTreeMap<String, Value>,
@@ -1053,9 +1054,6 @@ impl Evaluator {
                     continue;
                 };
                 let producer_domain = domains.get(&producer_id).copied();
-                if producer_domain.is_none() || producer_domain != planned {
-                    continue;
-                }
                 let consumer = &groups[position];
                 let Some(input_index) = consumer
                     .version
@@ -1065,6 +1063,31 @@ impl Evaluator {
                     .position(|input| input.name == port)
                 else {
                     continue;
+                };
+                // A consumer with no `domain` of its own runs over its
+                // first input's extent, so when that input is the
+                // producer the two are the same extent whatever it
+                // turns out to be. That is how a node whose size a
+                // Kernel decides this frame is still fused into: the
+                // producer's expression moves onto the fused node,
+                // under the names fusion gives its ports.
+                let carried = match (producer_domain, planned) {
+                    (Some(a), Some(b)) if a == b => None,
+                    (None, None)
+                        if consumer.node.domain.is_none()
+                            && input_index == 0
+                            && matches!(
+                                groups[producer_position].node.domain,
+                                Some(DomainSpec::Expr(_))
+                            ) =>
+                    {
+                        let Some(DomainSpec::Expr(expr)) = &groups[producer_position].node.domain
+                        else {
+                            unreachable!("just matched")
+                        };
+                        Some(expr.clone())
+                    }
+                    _ => continue,
                 };
                 // Native operations have no IR to inline or be inlined into,
                 // and a reduction neither maps over its output nor yields
@@ -1114,6 +1137,13 @@ impl Evaluator {
                 for (name, value) in &producer.node.params {
                     params.insert(format!("{prefix}/{name}"), value.clone());
                 }
+                let producer_params: Vec<String> = producer
+                    .version
+                    .manifest()
+                    .params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect();
                 let mut absorbed = consumer.absorbed.clone();
                 absorbed.push(producer_id.clone());
                 absorbed.extend(producer.absorbed.iter().cloned());
@@ -1124,7 +1154,13 @@ impl Evaluator {
                 group.node.inputs = inputs;
                 group.node.params = params;
                 if group.node.domain.is_none() {
-                    group.node.domain = planned.map(DomainSpec::Literal);
+                    group.node.domain = match (planned, carried) {
+                        (Some(domain), _) => Some(DomainSpec::Literal(domain)),
+                        (None, Some(expr)) => {
+                            Some(DomainSpec::Expr(expr.renamed(&prefix, &producer_params)))
+                        }
+                        (None, None) => None,
+                    };
                 }
                 absorbed_into.insert(producer_id, position);
             }
@@ -1406,7 +1442,12 @@ impl Evaluator {
                         None => manifest_default.or_else(|| graph_param(graph, name, overrides)),
                     }
                 };
-                expr.resolve(&port, &param, &window_context(context)).ok()
+                // A domain that reads a number out of a Field is not
+                // knowable before that Field exists, so a group whose
+                // domain does is planned as unknown, and nothing fuses
+                // into it.
+                expr.resolve(&port, &param, &window_context(context), &|_, _| None)
+                    .ok()
             }
             None => {
                 let first = manifest.inputs.first()?;
@@ -1570,7 +1611,7 @@ impl Evaluator {
         graph: &Graph,
         node: &Node,
         version: &Arc<KernelVersion>,
-        runtime: &Runtime,
+        runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
         context: &Context,
         overrides: &BTreeMap<String, Value>,
@@ -1695,6 +1736,9 @@ impl Evaluator {
             match (&node.domain, inputs.first()) {
                 (Some(DomainSpec::Literal(domain)), _) => *domain,
                 (Some(DomainSpec::Expr(expr)), _) => {
+                    let read = Self::domain_values(node, manifest, expr, runtime, &inputs)?;
+                    let element =
+                        |name: &str, index: u32| read.get(&(name.to_owned(), index)).copied();
                     let port = |name: &str| {
                         manifest
                             .inputs
@@ -1710,7 +1754,7 @@ impl Evaluator {
                             .map(|index| params[index])
                             .or_else(|| graph_param(graph, name, overrides))
                     };
-                    expr.resolve(&port, &param, &window_context(context))
+                    expr.resolve(&port, &param, &window_context(context), &element)
                         .map_err(|e| EvaluateError::Domain {
                             node: node.id.clone(),
                             message: e.message,
@@ -1740,6 +1784,70 @@ impl Evaluator {
             },
             key,
         ))
+    }
+
+    /// Reads every number a node's `domain` asks a Field for.
+    ///
+    /// This is the one domain term that is data rather than shape, so it
+    /// is the one that brings a Field to the Host — a wait, where the
+    /// Field is a device's. The port is held to a row of scalars and to
+    /// [`VALUE_MAX_ELEMENTS`] of them so that the wait is for a count and
+    /// never for a hidden download of a scene's geometry.
+    fn domain_values(
+        node: &Node,
+        manifest: &orla_runtime::Manifest,
+        expr: &DomainExpr,
+        runtime: &mut Runtime,
+        inputs: &[Handle],
+    ) -> Result<BTreeMap<(String, u32), Value>, EvaluateError> {
+        let mut read = BTreeMap::new();
+        for (port, index) in expr.values_read() {
+            let fail = |message: String| EvaluateError::Domain {
+                node: node.id.clone(),
+                message,
+            };
+            let slot = manifest
+                .inputs
+                .iter()
+                .position(|input| input.name == port)
+                .ok_or_else(|| {
+                    fail(format!(
+                        "`value({port})`: `{port}` is not an input of this Kernel"
+                    ))
+                })?;
+            let handle = *inputs
+                .get(slot)
+                .ok_or_else(|| fail(format!("`value({port})`: `{port}` is not a bound input")))?;
+            let element = manifest.inputs[slot].ty.element;
+            if !matches!(element, Type::Int | Type::Float) {
+                return Err(fail(format!(
+                    "`value({port})` reads a number, but `{port}` is a Field of {element}; give it a row of `Int` or `Float`"
+                )));
+            }
+            let count = runtime.host().domain(handle)?.count();
+            if count > VALUE_MAX_ELEMENTS {
+                return Err(fail(format!(
+                    "`value({port})` brings `{port}` to the Host to read one number, so it holds counts, not data; this one has {count} elements and the most is {VALUE_MAX_ELEMENTS}"
+                )));
+            }
+            if index as usize >= count {
+                return Err(fail(format!(
+                    "`value({port}, {index})`: `{port}` has {count} element(s)"
+                )));
+            }
+            runtime
+                .materialize(handle)
+                .map_err(|e| fail(format!("`value({port})`: {e}")))?;
+            let word = runtime.host().element(handle, index)?[0];
+            read.insert(
+                (port, index),
+                match element {
+                    Type::Int => Value::Int(word as i32),
+                    _ => Value::Float(f32::from_bits(word)),
+                },
+            );
+        }
+        Ok(read)
     }
 
     /// Resolves a `Now` source to a handle and its cache key.

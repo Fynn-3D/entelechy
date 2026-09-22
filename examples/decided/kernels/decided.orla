@@ -1,0 +1,134 @@
+// How much geometry a frame places, decided inside the frame that places
+// it. A camera flies over a sheet; a Kernel turns where it is into a
+// resolution, and `domain = value(detail) * value(detail)` makes the
+// mesh exactly that big. The number never passes through the Host as a
+// parameter: it is a Field one Kernel wrote and the graph read.
+struct Flight { height: Float; along: Float; }
+struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
+struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
+struct Tri { a: Int; b: Int; c: Int; }
+struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
+
+// Where the camera is, carried from frame to frame: it climbs and dives
+// on a slow cycle and drifts forward.
+kernel decided.fly@1 {
+    requires { field.read; field.write; time.read; }
+    input previous: Rows<Flight>;
+    output result: Rows<Flight>;
+
+    compute {
+        let was = at(previous, 0);
+        return Flight {
+            height: 0.55 + 0.45 * sin(time() * 0.9),
+            along: was.along + 0.004,
+        };
+    }
+}
+
+kernel decided.start@1 {
+    requires { field.write; }
+    output result: Rows<Flight>;
+    compute { return Flight { height: 1.0, along: 0.0 }; }
+}
+
+// The one number the whole frame is sized by: near the ground the sheet
+// is fine, far above it is coarse. A side, so the mesh is its square.
+kernel decided.detail@1 {
+    requires { field.read; field.write; }
+    input camera: Rows<Flight>;
+    param coarsest: Int = 24;
+    param finest: Int = 320;
+    output result: Rows<Int>;
+
+    compute {
+        let near = clamp(1.0 - at(camera, 0).height, 0.0, 1.0);
+        let side = float(coarsest) + (float(finest) - float(coarsest)) * near * near;
+        return clamp(int(side), 2, finest);
+    }
+}
+
+// The sheet, `side` by `side`, where `side` is what `detail` decided.
+kernel decided.ground@1 {
+    requires { field.read; field.write; }
+    input detail: Rows<Int>;
+    output result: Rows<Point>;
+
+    compute {
+        let side = at(detail, 0);
+        let i = element();
+        let u = float(i % side) / float(side - 1);
+        let v = float(i / side) / float(side - 1);
+        let x = u - 0.5;
+        let z = v - 0.5;
+        let h = sin(x * 11.0) * cos(z * 9.0) * 0.05 + sin(x * 27.0 + z * 19.0) * 0.012;
+        let dx = cos(x * 11.0) * 11.0 * 0.05 + cos(x * 27.0 + z * 19.0) * 27.0 * 0.012;
+        let dz = 0.0 - sin(z * 9.0) * 9.0 * 0.05 + cos(x * 27.0 + z * 19.0) * 19.0 * 0.012;
+        return Point {
+            position: vec3(x, h, z),
+            normal: normalize(vec3(0.0 - dx, 1.0, 0.0 - dz)),
+            uv: vec2(u, v),
+        };
+    }
+}
+
+// Two triangles per cell of the same lattice.
+kernel decided.faces@1 {
+    requires { field.read; field.write; }
+    input detail: Rows<Int>;
+    output result: Rows<Tri>;
+
+    compute {
+        let side = at(detail, 0);
+        let t = element();
+        let cell = t / 2;
+        let x = cell % (side - 1);
+        let z = cell / (side - 1);
+        let a = z * side + x;
+        return if t % 2 == 0 { Tri { a: a, b: a + side, c: a + 1 } }
+            else { Tri { a: a + 1, b: a + side, c: a + side + 1 } };
+    }
+}
+
+kernel decided.project@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    input camera: Rows<Flight>;
+    param aspect: Float = 1.7778;
+    output result: Rows<Vertex>;
+
+    compute {
+        let cam = at(camera, 0);
+        let v = sample(mesh);
+        let p = vec3(v.position.x, v.position.y, v.position.z + fract(cam.along) - 0.5);
+        let view = vec3(p.x, p.y - cam.height * 0.4, p.z + 0.85);
+        let f = 2.0;
+        let near = 0.05;
+        let far = 10.0;
+        return Vertex {
+            clip: vec4(view.x * f / aspect, view.y * f,
+                       view.z * far / (far - near) - near * far / (far - near), view.z),
+            normal: v.normal,
+            uv: v.uv,
+        };
+    }
+}
+
+// The surface lit, with the lattice drawn on it so the resolution the
+// frame chose is visible rather than merely claimed.
+kernel decided.shade@1 {
+    requires { field.read; field.write; }
+    input surface: Grid<Surface>;
+    input detail: Rows<Int>;
+    output result: Image;
+
+    compute {
+        let s = sample(surface);
+        let side = float(at(detail, 0));
+        let sky = mix(vec3(0.42, 0.55, 0.72), vec3(0.10, 0.14, 0.24), coord().y / domain().y);
+        let lit = max(dot(normalize(s.normal), normalize(vec3(0.35, 0.8, 0.45))), 0.0);
+        let grid = min(fract(s.uv.x * (side - 1.0)), fract(s.uv.y * (side - 1.0)));
+        let wire = if grid < 0.06 { 0.55 } else { 1.0 };
+        let ground = vec3(0.34, 0.46, 0.28) * (0.2 + 0.8 * lit) * wire;
+        return vec4(if s.id < 0 { sky } else { ground }, 1.0);
+    }
+}
