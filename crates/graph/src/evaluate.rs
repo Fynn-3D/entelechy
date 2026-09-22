@@ -670,6 +670,11 @@ impl Evaluator {
     /// The nodes an evaluation under `demand` must run: see
     /// [`Evaluator::evaluate_for`].
     fn needed(&self, graph: &Graph, demand: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+        // The walk below reaches every node the demand depends on, and
+        // finding each by name was a walk of the whole list — which a
+        // replay and the protocol pay every frame, since they are the
+        // two that evaluate for a demand.
+        let at = graph.index();
         let mut needed: BTreeSet<NodeId> = demand.clone();
         // State: its producer must run, and its initial source is read
         // until the first commit.
@@ -696,7 +701,7 @@ impl Evaluator {
         }
         let mut frontier: Vec<NodeId> = needed.iter().cloned().collect();
         while let Some(id) = frontier.pop() {
-            let Some(node) = graph.node(&id) else {
+            let Some(node) = at.get(&id).map(|at| &graph.nodes[*at]) else {
                 continue;
             };
             for binding in node.inputs.values() {

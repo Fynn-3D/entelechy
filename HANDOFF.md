@@ -1110,6 +1110,21 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+Two more walks, on the path a replay and the protocol take. The demand
+walk — what an evaluation must run when only some outputs are asked for
+— found each node by name in the node list, and that path is the one a
+test and an agent take every frame: a graph of a thousand nodes cost
+3.37 ms a frame under a demand against 2.25 without one, and it is 2.63
+with the index.
+
+And a pixel was the picture. `expect 11 10 = ...` went through
+`Runtime::image`, which copies the whole Field into an `Image` — at
+1920x1080 that is thirty-three megabytes for four floats, and a frame
+that checks sixty-four pixels copied it sixty-four times. Measured at
+0.86 ms a pixel, which is exactly the copy. It reads the four words out
+of the Field now: sixty-four checks a frame cost what one does, and the
+whole replay suite over three backends went 16.12 to 13.60 seconds.
+
 The hunt went on along the axes a Kernel can be wide in, and the ports
 turned up something that was not a square but a wall. The cost of a
 port is flat — thirty-two nodes of two, eight, thirty-two and

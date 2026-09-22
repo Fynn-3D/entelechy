@@ -2258,11 +2258,22 @@ impl Session {
         x: u32,
         y: u32,
     ) -> Result<orla_runtime::Pixel, SessionError> {
-        let image = self
-            .runtime
-            .image(image)
+        // Four words out of the Field, not a copy of the picture: a
+        // replay checks a handful of pixels a frame, and the picture it
+        // checks them in is thirty-three megabytes at 1920x1080. The
+        // Field comes to the Host once; every pixel after that is an
+        // index.
+        self.runtime
+            .materialize(image)
             .map_err(|e| SessionError::Observe(e.to_string()))?;
-        let (width, height) = (image.width(), image.height());
+        let host = self.runtime.host();
+        let domain = host.domain(image).map_err(SessionError::Host)?;
+        if !host.schema(image).map_err(SessionError::Host)?.is_pixel() {
+            return Err(SessionError::Observe(
+                "the output is not a picture".to_owned(),
+            ));
+        }
+        let (width, height) = (domain.width(), domain.height() * domain.depth());
         if x >= width || y >= height {
             return Err(SessionError::Host(orla_runtime::HostError::OutOfBounds {
                 x,
@@ -2271,7 +2282,15 @@ impl Session {
                 height,
             }));
         }
-        Ok(image.pixels()[y as usize * width as usize + x as usize])
+        let words = host
+            .element(image, y * width + x)
+            .map_err(SessionError::Host)?;
+        Ok([
+            f32::from_bits(words[0]),
+            f32::from_bits(words[1]),
+            f32::from_bits(words[2]),
+            f32::from_bits(words[3]),
+        ])
     }
 }
 
