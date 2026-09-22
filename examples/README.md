@@ -60,6 +60,11 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   staggered velocity grid carried by itself, a pressure solve as one
   Jacobi Kernel placed forty times, the projection, the smoke it carries;
   the pointer stirs, a replay reads the divergence before and after.
+- [landscape](landscape/README.md): a valley with a lake, forested hills
+  and mountains, none of it modelled: the ground is a function baked
+  once into a `Grid<Float>` and marched per pixel, and the lake shows the
+  far shore because the reflected ray marches it again. 60 frames a
+  second at 3024x1964 on the GPU; the bake is the reason.
 - [voxel](voxel/README.md): a voxel editor, the first tool: a
   `Volume<Int>` edited a voxel per click under a minimal bar with a label
   from the text library, the pointer's voxel found by a grid walk in a
