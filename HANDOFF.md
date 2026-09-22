@@ -1110,6 +1110,37 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+The third sweep went at the diagnostics, since an agent's loop is
+reading one and trying again, and a message that names the fix saves a
+whole turn of it. Thirty-odd programs were written wrong on purpose —
+types, capabilities, modes, limits, typos, and every structural mistake
+a scene can make — and most of what came back was already good:
+`sample` needs `field.read`; add it to `requires`, `Point` needs field
+`y`; set it or start from `..base`, a memory is written step by step,
+which needs ordered work: use `scan`, an array has 1 to 4096 elements,
+not 99999. Those say what to do.
+
+Two things did not. A name one letter out got "is not defined" and
+stopped there, in nine diagnostics: a local, a builtin, an input port,
+a struct, a type, a node's port or parameter, a node's output, a source
+naming a node, and a node binding a Kernel id. `orla_language::nearest`
+is the near miss where there is one — an edit distance of at most a
+third of the name, counting two letters the wrong way round as one
+edit, since `resutl` and `Flaot` are how names are actually mistyped,
+and nothing under three characters is near anything. All nine say "did
+you mean `source`?" now, and the compiler and the graph tests pin it.
+
+And a binding whose Field the port cannot take was reported as a
+*fusion* failing: "fused group at `c` was rejected: producer writes
+Rows<Float> but the consumer reads Rows<Int>", where `--no-fusion` gave
+"node `c` port `source`: expects an element of one integer (i) but is
+bound to a Field of one float (f)". The good message was there and
+fusion's ran first. A mismatch is the scene's mistake and not fusion's,
+so the planner declines to fuse and lets the binding check explain it;
+everything else a fusion refuses is this engine's own fault and is
+still reported, which is how the struct-table bug was found two rounds
+ago.
+
 The same sweep, turned on the promise the reference exists for: that
 the three backends give one answer. The feature matrix covers the
 middle of every operation thoroughly — NaNs, infinities, division by

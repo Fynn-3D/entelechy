@@ -282,6 +282,45 @@ fn structural_errors_are_reported_before_execution() {
         dangling.order(),
         Err(GraphError::UnknownSource { .. })
     ));
+    // A name one letter out is named rather than searched for.
+    let near = Graph::parse(
+        "node source: image.gradient@1 { domain = vec2(1, 1); }\nnode a: image.invert@1 { source <- sorce.result; }\noutput r <- a.result;",
+    )
+    .unwrap();
+    let message = near.order().unwrap_err().to_string();
+    assert!(message.ends_with("did you mean `source`?"), "{message}");
+    let typo_port = Graph::parse(
+        "node a: image.gradient@1 { domain = vec2(1, 1); }\nnode b: image.grayscale@1 { sorce <- a.result; }\noutput r <- b.result;",
+    )
+    .unwrap();
+    let message = Evaluator::new()
+        .evaluate(
+            &typo_port,
+            &mut runtime(),
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(message.ends_with("did you mean `source`?"), "{message}");
+    let typo_kernel =
+        Graph::parse("node a: image.gradiant@1 { domain = vec2(1, 1); }\noutput r <- a.result;")
+            .unwrap();
+    let message = Evaluator::new()
+        .evaluate(
+            &typo_kernel,
+            &mut runtime(),
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.ends_with("did you mean `image.gradient@1`?"),
+        "{message}"
+    );
     let no_output = Graph::parse("node a: image.gradient@1 { domain = vec2(1, 1); }").unwrap();
     assert!(matches!(no_output.order(), Err(GraphError::NoOutput)));
     let no_domain = Graph::parse("node a: image.gradient@1 { }\noutput r <- a.result;").unwrap();

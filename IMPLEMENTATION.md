@@ -32,6 +32,8 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| A near miss is named | [language](crates/language/src/lib.rs) `nearest`, `did_you_mean`, and the nine diagnostics in [compiler](crates/compiler/src/lower/) and [graph](crates/graph/src/) | [compile tests](crates/compiler/tests/compile.rs), [composition](crates/graph/tests/composition.rs) |
+| A mismatch is a binding, not a fusion | [fuse](crates/ir/src/fuse.rs) `FuseError::mismatch`, [evaluate](crates/graph/src/evaluate.rs) `fused_version` | the same message with fusion on and off |
 | One answer at the edges | [wgsl](crates/gpu/src/wgsl.rs) `to_int`, `atan2_ref`, `is_nan`, [interpreter](crates/cpu/src/eval/compile.rs) and [jit](crates/jit/src/codegen.rs) `Smoothstep` | [feature matrix](crates/matrix/src/lib.rs) `conversion edges`, `angles at the origin`, `not a number through` |
 | Lowering a block of a thousand `let`s | [lower](crates/compiler/src/lower/mod.rs) `bound`, `scoped` | [compile tests](crates/compiler/tests/compile.rs); a Kernel of 25600 statements, 0.44 to 0.08 s |
 | A pixel is a pixel, not a picture | [session](crates/cli/src/session.rs) `read_pixel`, [evaluate](crates/graph/src/evaluate.rs) `needed` | the whole replay suite over three backends, 16.12 to 13.60 s |

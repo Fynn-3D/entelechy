@@ -27,7 +27,13 @@ fn semantic(span: Span, message: impl Into<String>) -> CompileError {
 }
 
 fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
-    Type::from_str(&name.value).map_err(|error| semantic(name.span, error.to_string()))
+    Type::from_str(&name.value).map_err(|error| {
+        let known: Vec<&str> = Type::NAMED.iter().map(|ty| ty.name()).collect();
+        semantic(
+            name.span,
+            format!("{error}{}", orla_language::did_you_mean(&name.value, known)),
+        )
+    })
 }
 
 /// The struct table while a Kernel lowers: the declared structs first,
@@ -725,7 +731,23 @@ impl<'a> Builder<'a> {
                 format!("`{name}` is the output; produce it with `return`"),
             ));
         }
-        Err(semantic(span, format!("`{name}` is not defined")))
+        // Everything a name here could have been, so a near miss is
+        // named rather than left to be found.
+        let known: Vec<&str> = self
+            .locals
+            .iter()
+            .map(|(local, _)| local.as_str())
+            .chain(self.args.iter().map(|(arg, _)| arg.as_str()))
+            .chain(self.manifest.params.iter().map(|p| p.name.as_str()))
+            .chain(self.manifest.inputs.iter().map(|port| port.name.as_str()))
+            .collect();
+        Err(semantic(
+            span,
+            format!(
+                "`{name}` is not defined{}",
+                orla_language::did_you_mean(name, known)
+            ),
+        ))
     }
 
     /// Resolves an input port by name.
@@ -895,7 +917,21 @@ impl<'a> Builder<'a> {
             .inputs
             .iter()
             .position(|input| &input.name == name)
-            .ok_or_else(|| semantic(expr.span, format!("`{name}` is not an input")))?;
+            .ok_or_else(|| {
+                let known: Vec<&str> = self
+                    .manifest
+                    .inputs
+                    .iter()
+                    .map(|port| port.name.as_str())
+                    .collect();
+                semantic(
+                    expr.span,
+                    format!(
+                        "`{name}` is not an input{}",
+                        orla_language::did_you_mean(name, known)
+                    ),
+                )
+            })?;
         Ok((index as u32, &self.manifest.inputs[index]))
     }
 

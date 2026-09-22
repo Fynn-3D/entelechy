@@ -17,11 +17,29 @@ use crate::{
 
 /// Why two modules cannot fuse.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FuseError(pub String);
+pub struct FuseError {
+    /// What went wrong.
+    pub message: String,
+    /// Whether the two simply do not fit: the producer writes a Field
+    /// the consumer's port cannot take. That is the scene's mistake and
+    /// not fusion's, and the binding check says it far better, so a
+    /// planner declines to fuse and lets that happen. Everything else a
+    /// fusion refuses is this crate's own fault and is reported.
+    pub mismatch: bool,
+}
+
+impl FuseError {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            mismatch: false,
+        }
+    }
+}
 
 impl fmt::Display for FuseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -108,19 +126,21 @@ pub fn fuse(
     let consumer_manifest = &consumer.manifest;
     let producer_manifest = &producer.manifest;
     if input as usize >= consumer_manifest.inputs.len() {
-        return Err(FuseError(format!("consumer has no input {input}")));
+        return Err(FuseError::new(format!("consumer has no input {input}")));
     }
     if !samples_only(consumer, input) {
-        return Err(FuseError(format!(
+        return Err(FuseError::new(format!(
             "consumer reads input `{}` by address or size, not only by sample",
             consumer_manifest.inputs[input as usize].name
         )));
     }
     if producer_manifest.outputs.len() != 1 {
-        return Err(FuseError("producer must have exactly one output".into()));
+        return Err(FuseError::new(
+            "producer must have exactly one output".into(),
+        ));
     }
     if consumer.manifest.mode != Mode::Map || producer.manifest.mode != Mode::Map {
-        return Err(FuseError(
+        return Err(FuseError::new(
             "only map Kernels fuse; reductions and scans run on their own".into(),
         ));
     }
@@ -131,9 +151,10 @@ pub fn fuse(
         &consumer_manifest.inputs[input as usize].ty,
     );
     if written.shape != read.shape || written.schema != read.schema {
-        return Err(FuseError(format!(
-            "producer writes {written} but the consumer reads {read}"
-        )));
+        return Err(FuseError {
+            message: format!("producer writes {written} but the consumer reads {read}"),
+            mismatch: true,
+        });
     }
     let consumer_inputs = consumer_manifest.inputs.len() as u32;
     let consumer_params = consumer_manifest.params.len() as u32;
@@ -328,7 +349,7 @@ pub fn fuse(
         merge: None,
         init: None,
     })
-    .map_err(|error| FuseError(format!("fused module is invalid: {error}")))
+    .map_err(|error| FuseError::new(format!("fused module is invalid: {error}")))
 }
 
 /// Rewrites a function body with fresh pre-order ids, applying `ops` to

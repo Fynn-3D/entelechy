@@ -282,6 +282,24 @@ impl fmt::Display for UnknownType {
 
 impl std::error::Error for UnknownType {}
 
+impl Type {
+    /// Every type a name may spell, for a diagnostic that wants to
+    /// suggest the one that was meant.
+    pub const NAMED: [Self; 11] = [
+        Self::Float,
+        Self::Int,
+        Self::Bool,
+        Self::Vec2,
+        Self::Vec3,
+        Self::Vec4,
+        Self::IVec2,
+        Self::IVec3,
+        Self::Mat2,
+        Self::Mat3,
+        Self::Mat4,
+    ];
+}
+
 impl FromStr for Type {
     type Err = UnknownType;
 

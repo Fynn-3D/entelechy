@@ -41,6 +41,8 @@ pub enum EvaluateError {
         node: NodeId,
         /// The missing Kernel.
         kernel: KernelId,
+        /// The published id it was probably meant to be.
+        near: Option<String>,
     },
     /// The caller did not supply a declared external image.
     MissingExternal {
@@ -62,6 +64,9 @@ pub enum EvaluateError {
         node: NodeId,
         /// The port or parameter.
         port: String,
+        /// The port or parameter it was probably meant to be; see
+        /// [`orla_language::nearest`].
+        near: Option<String>,
     },
     /// A parameter override has the wrong type.
     ParamType {
@@ -80,6 +85,8 @@ pub enum EvaluateError {
         node: NodeId,
         /// The port.
         port: String,
+        /// The output it was probably meant to be.
+        near: Option<String>,
     },
     /// A node has no image inputs and no explicit domain.
     NoDomain(NodeId),
@@ -158,9 +165,11 @@ impl fmt::Display for EvaluateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Graph(error) => write!(f, "{error}"),
-            Self::UnknownKernel { node, kernel } => {
-                write!(f, "node `{node}` binds `{kernel}`, which is not published")
-            }
+            Self::UnknownKernel { node, kernel, near } => write!(
+                f,
+                "node `{node}` binds `{kernel}`, which is not published{}",
+                suggest(near)
+            ),
             Self::MissingExternal { node, name } => write!(
                 f,
                 "node `{node}` needs external image `{name}`, which was not supplied"
@@ -168,9 +177,10 @@ impl fmt::Display for EvaluateError {
             Self::UnboundInput { node, port } => {
                 write!(f, "node `{node}` does not bind input `{port}`")
             }
-            Self::UnknownPort { node, port } => write!(
+            Self::UnknownPort { node, port, near } => write!(
                 f,
-                "node `{node}` refers to `{port}`, which its kernel does not declare"
+                "node `{node}` refers to `{port}`, which its kernel does not declare{}",
+                suggest(near)
             ),
             Self::ParamType {
                 node,
@@ -181,8 +191,8 @@ impl fmt::Display for EvaluateError {
                 f,
                 "node `{node}` sets `{name}` to {actual}, but the kernel expects {expected}"
             ),
-            Self::UnknownOutput { node, port } => {
-                write!(f, "node `{node}` has no output `{port}`")
+            Self::UnknownOutput { node, port, near } => {
+                write!(f, "node `{node}` has no output `{port}`{}", suggest(near))
             }
             Self::NoDomain(node) => write!(
                 f,
@@ -380,6 +390,15 @@ pub struct PlanEntry {
     pub inputs: BTreeMap<String, Binding>,
     /// The explicit or planned domain, when known before execution.
     pub domain: Option<Domain>,
+}
+
+/// `; did you mean `x`?` where there is one; see
+/// [`orla_language::nearest`], which found it.
+fn suggest(near: &Option<String>) -> String {
+    match near {
+        Some(name) => format!("; did you mean `{name}`?"),
+        None => String::new(),
+    }
 }
 
 /// Evaluates graphs and owns the cached node outputs and committed state.
@@ -839,11 +858,22 @@ impl Evaluator {
                         })?
                 }
                 Source::Node { node, port } => {
-                    self.cached(node, port)
-                        .ok_or_else(|| EvaluateError::UnknownOutput {
+                    self.cached(node, port).ok_or_else(|| {
+                        // What that node does write, so a port named
+                        // slightly wrong is named.
+                        let near = self.cache.get(node).and_then(|cached| {
+                            orla_language::nearest(
+                                port,
+                                cached.output_names.iter().map(String::as_str),
+                            )
+                            .map(str::to_owned)
+                        });
+                        EvaluateError::UnknownOutput {
                             node: node.clone(),
                             port: port.clone(),
-                        })?
+                            near,
+                        }
+                    })?
                 }
             };
             outputs.push((name.clone(), handle));
@@ -1051,13 +1081,23 @@ impl Evaluator {
         let mut groups: Vec<Group> = Vec::with_capacity(order.len());
         for index in order {
             let node = &graph.nodes[*index];
-            let version =
-                runtime
-                    .kernel(&node.kernel)
-                    .ok_or_else(|| EvaluateError::UnknownKernel {
-                        node: node.id.clone(),
-                        kernel: node.kernel.clone(),
-                    })?;
+            let version = runtime.kernel(&node.kernel).ok_or_else(|| {
+                // Everything published, so a Kernel named
+                // slightly wrong is named rather than searched
+                // for.
+                let wanted = node.kernel.to_string();
+                let published: Vec<String> = runtime
+                    .kernels()
+                    .map(|version| version.id().to_string())
+                    .collect();
+                let near = orla_language::nearest(&wanted, published.iter().map(String::as_str))
+                    .map(str::to_owned);
+                EvaluateError::UnknownKernel {
+                    node: node.id.clone(),
+                    kernel: node.kernel.clone(),
+                    near,
+                }
+            })?;
             let parts = vec![(node.id.clone(), version.generation())];
             groups.push(Group {
                 node: node.clone(),
@@ -1418,7 +1458,18 @@ impl Evaluator {
                 if let Some(superseded) = other {
                     runtime.discard(superseded.ticket);
                 }
-                let module = fuse().map_err(|error| fusion(error.to_string()))?;
+                // A producer whose Field the consumer's port cannot
+                // take is the scene's mistake, and the binding check
+                // names the port and the two layouts; fusion says only
+                // that it would not fit. So that one declines rather
+                // than fails, and the evaluation goes on to the check
+                // that explains it. Anything else a fusion refuses is
+                // this engine's own fault and is reported.
+                let module = match fuse() {
+                    Ok(module) => module,
+                    Err(error) if error.mismatch => return Ok(None),
+                    Err(error) => return Err(fusion(error.to_string())),
+                };
                 let source = format!(
                     "// fused: {}\n",
                     parts
@@ -1645,6 +1696,7 @@ impl Evaluator {
             .ok_or_else(|| EvaluateError::UnknownOutput {
                 node: node.clone(),
                 port: port.to_owned(),
+                near: None,
             })?;
         let domain = runtime.host().domain(current)?;
         let schema = runtime.host().schema(current)?.clone();
@@ -1701,6 +1753,7 @@ impl Evaluator {
                         .ok_or_else(|| EvaluateError::UnknownOutput {
                             node: node.clone(),
                             port: port.clone(),
+                            near: None,
                         })?;
                 let previous = self.commit_put(key.clone(), current);
                 if previous != Some(current) {
@@ -1734,9 +1787,16 @@ impl Evaluator {
             let declared = manifest.inputs.iter().any(|input| &input.name == port)
                 || manifest.params.iter().any(|param| &param.name == port);
             if !declared {
+                let known: Vec<&str> = manifest
+                    .inputs
+                    .iter()
+                    .map(|input| input.name.as_str())
+                    .chain(manifest.params.iter().map(|param| param.name.as_str()))
+                    .collect();
                 return Err(EvaluateError::UnknownPort {
                     node: node.id.clone(),
                     port: port.clone(),
+                    near: orla_language::nearest(port, known).map(str::to_owned),
                 });
             }
         }
@@ -1819,9 +1879,14 @@ impl Evaluator {
                                 .find(|p| &p.name == name)
                                 .map(|p| p.default)
                         })
-                        .ok_or_else(|| EvaluateError::UnknownPort {
-                            node: node.id.clone(),
-                            port: name.clone(),
+                        .ok_or_else(|| {
+                            let known: Vec<&str> =
+                                graph.params.iter().map(|p| p.name.as_str()).collect();
+                            EvaluateError::UnknownPort {
+                                node: node.id.clone(),
+                                port: name.clone(),
+                                near: orla_language::nearest(name, known).map(str::to_owned),
+                            }
                         })?,
                 ),
             };
@@ -1993,6 +2058,7 @@ impl Evaluator {
                         .ok_or_else(|| EvaluateError::UnknownOutput {
                             node: producer.clone(),
                             port: port.clone(),
+                            near: None,
                         })?;
                 let index = cached
                     .output_names
@@ -2001,6 +2067,7 @@ impl Evaluator {
                     .ok_or_else(|| EvaluateError::UnknownOutput {
                         node: producer.clone(),
                         port: port.clone(),
+                        near: None,
                     })?;
                 Ok((
                     cached.outputs[index],

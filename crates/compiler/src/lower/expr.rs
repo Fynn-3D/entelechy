@@ -290,7 +290,17 @@ impl Builder<'_> {
                     .iter()
                     .position(|def| def.name == name.value)
                     .ok_or_else(|| {
-                        semantic(name.span, format!("`{}` is not a struct", name.value))
+                        let structs = self.structs();
+                        let known: Vec<&str> =
+                            structs.iter().map(|def| def.name.as_str()).collect();
+                        semantic(
+                            name.span,
+                            format!(
+                                "`{}` is not a struct{}",
+                                name.value,
+                                orla_language::did_you_mean(&name.value, known)
+                            ),
+                        )
                     })?;
                 let ty = Type::Struct(index as u32);
                 let base_id = match base {

@@ -201,6 +201,8 @@ pub enum GraphError {
         port: String,
         /// The missing name.
         source: Source,
+        /// The node it was probably meant to be.
+        near: Option<String>,
     },
     /// Nodes depend on each other in a cycle.
     Cycle(Vec<NodeId>),
@@ -222,10 +224,19 @@ impl fmt::Display for GraphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateName(name) => write!(f, "`{name}` is declared twice"),
-            Self::UnknownSource { node, port, source } => {
+            Self::UnknownSource {
+                node,
+                port,
+                source,
+                near,
+            } => {
+                let hint = match near {
+                    Some(name) => format!("; did you mean `{name}`?"),
+                    None => String::new(),
+                };
                 write!(
                     f,
-                    "node `{node}` port `{port}` refers to unknown source `{source}`"
+                    "node `{node}` port `{port}` refers to unknown source `{source}`{hint}"
                 )
             }
             Self::Cycle(nodes) => {
@@ -432,10 +443,24 @@ impl Graph {
                         Source::Node { node, .. } => index_of(node).is_some(),
                     };
                     if !known {
+                        // Every node and external there is, so a name
+                        // one letter out is named.
+                        let near = match source {
+                            Source::Node { node, .. } => orla_language::nearest(
+                                &node.0,
+                                self.nodes.iter().map(|n| n.id.0.as_str()),
+                            ),
+                            Source::External(name) => orla_language::nearest(
+                                name,
+                                self.externals.iter().map(String::as_str),
+                            ),
+                        }
+                        .map(str::to_owned);
                         return Err(GraphError::UnknownSource {
                             node: node.id.clone(),
                             port: port.clone(),
                             source: source.clone(),
+                            near,
                         });
                     }
                 }

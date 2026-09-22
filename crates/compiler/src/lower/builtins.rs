@@ -645,10 +645,22 @@ impl Builder<'_> {
                         ),
                     ));
                 }
+                // The functions this Kernel can see, and then every
+                // builtin there is; `help` already knows which are near.
+                let declared: Vec<&str> = self.shared.declared.iter().map(String::as_str).collect();
+                let near = orla_language::nearest(name, declared)
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        orla_language::nearest(name, crate::help::similar(name)).map(str::to_owned)
+                    });
+                let suggestion = match near {
+                    Some(near) => format!("; did you mean `{near}`?"),
+                    None => String::new(),
+                };
                 Err(semantic(
                     span,
                     format!(
-                        "`{name}` is not a builtin, intrinsic, or function defined above or in a document this one uses"
+                        "`{name}` is not a builtin, intrinsic, or function defined above or in a document this one uses{suggestion}"
                     ),
                 ))
             }

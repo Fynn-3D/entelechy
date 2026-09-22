@@ -175,6 +175,38 @@ fn control_flow_is_scoped_and_typed() {
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = if true { let z = 1.0; z } else { 2.0 }; return vec4(z, 0.0, 0.0, 1.0); } }",
     );
     assert_eq!(message, "`z` is not defined");
+    // A name one letter out is named rather than searched for, in every
+    // diagnostic that says a name is not known.
+    for (source, expected) in [
+        (
+            "kernel t.k@1 { requires { field.write; } output r: Image; compute { let value = 1.0; return vec4(valeu, 0.0, 0.0, 1.0); } }",
+            "`valeu` is not defined; did you mean `value`?",
+        ),
+        (
+            "kernel t.k@1 { requires { field.read; field.write; } input source: Image; output r: Image; compute { return sample(sorce); } }",
+            "`sorce` is not an input; did you mean `source`?",
+        ),
+        (
+            "kernel t.k@1 { requires { field.write; } output r: Image; struct Point { x: Float; } compute { let p = Ponit { x: 1.0 }; return vec4(p.x, 0.0, 0.0, 1.0); } }",
+            "`Ponit` is not a struct; did you mean `Point`?",
+        ),
+        (
+            "kernel t.k@1 { requires { field.write; } output r: Image; param k: Flaot = 1.0; compute { return vec4(k, 0.0, 0.0, 1.0); } }",
+            "unknown type `Flaot`; did you mean `Float`?",
+        ),
+    ] {
+        let (_, message) = semantic(source);
+        assert_eq!(message, expected);
+    }
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(lenght(vec2(1.0, 2.0)), 0.0, 0.0, 1.0); } }",
+    );
+    assert!(message.ends_with("did you mean `length`?"), "{message}");
+    // And a name that is not near anything is left alone.
+    let (_, message) = semantic(
+        "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(nope, 0.0, 0.0, 1.0); } }",
+    );
+    assert_eq!(message, "`nope` is not defined");
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = loop 4 with x = 1.0 { 2 }; return vec4(a, 0.0, 0.0, 1.0); } }",
     );
