@@ -1110,6 +1110,36 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+"Does a node cost more when there are more of them?" It did, and it
+should not have. A chain of tiny nodes, the frame against the count, on
+the JIT: 128 nodes 0.31 ms, 512 2.02, 1024 7.05, 2048 19.19 — 2.4
+microseconds a node at 128 and 9.4 at 2048. Something in the graph was
+squared.
+
+Three things were, and the ruler said which. At two thousand nodes, of
+an eighteen millisecond frame: the topological sort 7.10 ms, the plan
+6.98, the pruning of what left the graph 2.18, and the execution
+itself 2.18 — the only one that was linear. Even at two hundred and
+fifty-six nodes the bookkeeping was seventy per cent of the frame.
+
+All three were the same thing: `Graph::node(id)` walks the node list,
+and everything that wanted a node by name did it once a node. The sort
+did it for every source of every node and then again on every step of
+its own walk, where it also gathered each node's dependencies afresh;
+the pruner did it once a cached entry; the planner did it once a
+binding, and looked a producer's group up by walking the groups.
+`Graph::index` is the node positions by name, built once and passed to
+the phase that needs it, the dependencies are worked out once per node,
+and the planner keeps a map of where its groups are.
+
+The frame against the node count now, on the JIT: 128 nodes 0.26 ms,
+512 1.06, 1024 2.25, 2048 5.05 — 2.0 microseconds a node at 128 and 2.5
+at 2048, which is flat enough to call linear. The interpreter's 2048
+went 23.62 to 9.36 ms and the GPU's 69.03 to 55.09, where the rest is
+the device's own pass launches and not ours. Every example is
+unchanged, because no example has enough nodes for a square to show:
+this is for the graph somebody builds with a thousand.
+
 A `times` that reads a number — a solve that stops when it has
 converged — was the next thing to build, and measuring first killed it.
 `fluid` relaxes its pressure with forty Jacobi steps, and the premise

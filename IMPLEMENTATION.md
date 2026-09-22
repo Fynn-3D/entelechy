@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| A graph of a thousand nodes | [graph](crates/graph/src/lib.rs) `Graph::index`, `order`, [evaluate](crates/graph/src/evaluate.rs) `prune`, `plan`, `planned_domain` | every replay bit for bit; measured by `orla bench` on chains of 128 to 2048 nodes |
 | A buffer big enough, not exact | [gpu](crates/gpu/src/lib.rs) `Spare::take` | every replay bit for bit; measured by `orla bench` on a scene whose Fields change size |
 | Four levels of a fold in one pass | [rules](crates/rules/src/reduce.rs), [wgsl](crates/gpu/src/wgsl.rs) `emit_reduce`, [gpu](crates/gpu/src/lib.rs) `fold` | [rules test](crates/rules/src/reduce.rs) (a run folds to the same expressions as the levels), every replay bit for bit |
 | A profile that adds up | [runtime](crates/runtime/src/lib.rs) `execute`, `measurement_floor`, [gpu](crates/gpu/src/lib.rs) `clock`, `wait_floor`, `settle_measured`, [raster](crates/gpu/src/raster.rs), [bench](crates/cli/src/bench.rs) `node_times` | [runtime tests](crates/runtime/tests/mixed.rs) (a backend whose clock answers for Kernels and not for native operations) |
@@ -636,6 +637,20 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- Finding a node by name is an index, not a walk
+  ([`Graph::index`](crates/graph/src/lib.rs)): `Graph::node(id)` walks
+  the node list, and the topological sort, the pruner and the planner
+  each did it once a node, once a cached entry and once a binding — so
+  a frame was squared in the node count. At two thousand nodes the sort
+  was 7.10 ms, the plan 6.98 and the pruning 2.18 of an eighteen
+  millisecond frame, against 2.18 for the execution, the only linear
+  one. The index is built once and passed to the phase that needs it,
+  the sort works out each node's dependencies once instead of on every
+  step of its walk, and the planner keeps a map of where its groups
+  are. Two thousand nodes on the JIT went 19.19 to 5.05 ms, on the
+  interpreter 23.62 to 9.36, on the GPU 69.03 to 55.09; examples are
+  unchanged, since none has enough nodes for a square to show.
 
 - What an iterative solve costs, measured and left alone: its iteration
   count times the floor every node pays. `fluid`'s frame against its

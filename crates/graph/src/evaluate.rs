@@ -1011,12 +1011,22 @@ impl Evaluator {
         for (_, source) in &graph.outputs {
             count(source);
         }
+        let nodes = graph.index();
         let mut domains: BTreeMap<NodeId, Domain> = BTreeMap::new();
         let mut absorbed_into: BTreeMap<NodeId, usize> = BTreeMap::new();
+        // Where each group is, by the node it is named for. Groups are
+        // never added or removed while this runs, only rewired, so the
+        // positions hold.
+        let at: BTreeMap<NodeId, usize> = groups
+            .iter()
+            .enumerate()
+            .map(|(position, group)| (group.node.id.clone(), position))
+            .collect();
         for position in 0..groups.len() {
             // Planned domain of this group, for the equality check.
             let planned = self.planned_domain(
                 graph,
+                &nodes,
                 &groups[position],
                 runtime,
                 externals,
@@ -1045,12 +1055,13 @@ impl Evaluator {
                     || self.pinned.contains(&producer_id)
                     || absorbed_into.contains_key(&producer_id)
                     || groups[position].node.is_async
-                    || graph.node(&producer_id).is_some_and(|node| node.is_async)
+                    || nodes
+                        .get(&producer_id)
+                        .is_some_and(|at| graph.nodes[*at].is_async)
                 {
                     continue;
                 }
-                let Some(producer_position) = groups.iter().position(|g| g.node.id == producer_id)
-                else {
+                let Some(producer_position) = at.get(&producer_id).copied() else {
                     continue;
                 };
                 let producer_domain = domains.get(&producer_id).copied();
@@ -1377,6 +1388,7 @@ impl Evaluator {
     fn planned_domain(
         &self,
         graph: &Graph,
+        nodes: &BTreeMap<&NodeId, usize>,
         group: &Group,
         runtime: &Runtime,
         externals: &BTreeMap<String, Handle>,
@@ -1398,7 +1410,10 @@ impl Evaluator {
         // what it committed last, else what its initial value is sized.
         let of_source = |source: &Source| match source {
             Source::Node { node, port } => {
-                match graph.node(node).and_then(|n| n.inputs.get(port)) {
+                match nodes
+                    .get(node)
+                    .and_then(|at| graph.nodes[*at].inputs.get(port))
+                {
                     Some(Binding::Previous { initial, .. }) => self
                         .committed
                         .get(&(node.clone(), port.clone()))
@@ -1468,10 +1483,14 @@ impl Evaluator {
 
     /// Releases cache entries and state of nodes that left the graph.
     fn prune(&mut self, graph: &Graph, runtime: &mut Runtime) {
+        // One index for the three sweeps below; each used to walk the
+        // whole node list once a cached entry.
+        let index = graph.index();
+        let gone_from = |id: &NodeId| !index.contains_key(id);
         let stale: Vec<NodeId> = self
             .cache
             .keys()
-            .filter(|id| graph.node(id).is_none())
+            .filter(|id| gone_from(id))
             .cloned()
             .collect();
         for id in stale {
@@ -1480,7 +1499,7 @@ impl Evaluator {
         let gone: Vec<NodeId> = self
             .running
             .keys()
-            .filter(|id| graph.node(id).is_none())
+            .filter(|id| gone_from(id))
             .cloned()
             .collect();
         for id in gone {
@@ -1491,7 +1510,7 @@ impl Evaluator {
         let stale_state: Vec<(NodeId, String)> = self
             .committed
             .keys()
-            .filter(|(node, _)| graph.node(node).is_none())
+            .filter(|(node, _)| gone_from(node))
             .cloned()
             .collect();
         for key in stale_state {

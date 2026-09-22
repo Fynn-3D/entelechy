@@ -382,6 +382,19 @@ impl Graph {
         self.nodes.iter().find(|node| &node.id == id)
     }
 
+    /// Where every node is, by name. Finding one by name is a walk of
+    /// the whole list, so anything that does it once a node is a walk
+    /// of the list squared: an evaluation builds this once and looks
+    /// nodes up in it. A graph of a thousand nodes spent most of a
+    /// frame on those walks.
+    pub fn index(&self) -> BTreeMap<&NodeId, usize> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(at, node)| (&node.id, at))
+            .collect()
+    }
+
     /// Checks names and dependencies and returns node indices in an order
     /// where every producer precedes its consumers.
     pub fn order(&self) -> Result<Vec<usize>, GraphError> {
@@ -395,7 +408,8 @@ impl Graph {
                 return Err(GraphError::DuplicateName(name.clone()));
             }
         }
-        let index_of = |id: &NodeId| self.nodes.iter().position(|node| &node.id == id);
+        let index = self.index();
+        let index_of = |id: &NodeId| index.get(id).copied();
         for node in &self.nodes {
             for (port, binding) in &node.inputs {
                 let sources: Vec<&Source> = match binding {
@@ -447,6 +461,26 @@ impl Graph {
             Active,
             Done,
         }
+        // What each node waits for, worked out once. It used to be
+        // gathered again on every step of the walk below, which for a
+        // graph of any size is most of what the sort cost.
+        let waits_for: Vec<Vec<usize>> = self
+            .nodes
+            .iter()
+            .map(|node| {
+                node.inputs
+                    .values()
+                    .filter_map(|binding| match binding {
+                        Binding::Now(Source::Node { node, .. })
+                        | Binding::Previous {
+                            initial: Source::Node { node, .. },
+                            ..
+                        } => index_of(node),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect();
         let mut marks = vec![Mark::None; self.nodes.len()];
         let mut order = Vec::with_capacity(self.nodes.len());
         let mut stack: Vec<(usize, usize)> = Vec::new();
@@ -459,18 +493,7 @@ impl Graph {
             while let Some((current, next_input)) = stack.last().copied() {
                 // `Previous` sources read committed state and add no
                 // dependency; their initial sources do.
-                let dependencies: Vec<usize> = self.nodes[current]
-                    .inputs
-                    .values()
-                    .filter_map(|binding| match binding {
-                        Binding::Now(Source::Node { node, .. })
-                        | Binding::Previous {
-                            initial: Source::Node { node, .. },
-                            ..
-                        } => index_of(node),
-                        _ => None,
-                    })
-                    .collect();
+                let dependencies = &waits_for[current];
                 if next_input < dependencies.len() {
                     stack.last_mut().expect("stack is non-empty").1 += 1;
                     let dependency = dependencies[next_input];
