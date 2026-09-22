@@ -2,8 +2,9 @@
 //! rasterizer through a render pipeline, with the same contract as
 //! [`orla_rules::raster`]. Two float render targets carry the surface
 //! attributes, a depth target settles order, and a compute pass compacts
-//! the padded copies into the tight word layout the Host expects, so the
-//! result is a resident grid like any other output.
+//! the targets into the tight word layout the Host expects, reading
+//! them where they were written, so the result is a resident grid like
+//! any other output and the surface is gathered once.
 
 use std::sync::OnceLock;
 
@@ -103,26 +104,31 @@ fn fs(in: Varyings) -> Targets {
 ";
 
 const COMPACT_WGSL: &str = "
-struct Frame { width: u32, height: u32, row_words: u32, pad: u32 };
+struct Frame { width: u32, height: u32, pad0: u32, pad1: u32 };
 @group(0) @binding(0) var<uniform> frame: Frame;
-@group(0) @binding(1) var<storage, read> a: array<u32>;
-@group(0) @binding(2) var<storage, read> b: array<u32>;
+@group(0) @binding(1) var a: texture_2d<f32>;
+@group(0) @binding(2) var b: texture_2d<f32>;
 @group(0) @binding(3) var<storage, read_write> out: array<u32>;
 
+// The targets are read where they were written, so the surface is
+// gathered once rather than copied out and gathered.
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= frame.width || gid.y >= frame.height) {
         return;
     }
-    let src = gid.y * frame.row_words + gid.x * 4u;
+    let at = vec2<i32>(i32(gid.x), i32(gid.y));
+    let first = textureLoad(a, at, 0);
+    let second = textureLoad(b, at, 0);
     let dst = (gid.y * frame.width + gid.x) * 7u;
-    out[dst] = a[src];
-    out[dst + 1u] = a[src + 1u];
-    out[dst + 2u] = a[src + 2u];
-    out[dst + 3u] = a[src + 3u];
-    out[dst + 4u] = b[src];
-    out[dst + 5u] = b[src + 1u];
-    out[dst + 6u] = bitcast<u32>(i32(bitcast<f32>(b[src + 2u])) - 1i);
+    out[dst] = bitcast<u32>(first.x);
+    out[dst + 1u] = bitcast<u32>(first.y);
+    out[dst + 2u] = bitcast<u32>(first.z);
+    out[dst + 3u] = bitcast<u32>(first.w);
+    out[dst + 4u] = bitcast<u32>(second.x);
+    out[dst + 5u] = bitcast<u32>(second.y);
+    // The id was kept one above its value so a cleared zero reads as -1.
+    out[dst + 6u] = bitcast<u32>(i32(second.z) - 1i);
 }
 ";
 
@@ -223,12 +229,22 @@ fn build(device: &wgpu::Device) -> Result<RasterPipelines, String> {
         label: Some("orla compact"),
         source: wgpu::ShaderSource::Wgsl(COMPACT_WGSL.into()),
     });
+    let sampled = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
     let compact_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("orla compact"),
         entries: &[
             uniform(0, wgpu::ShaderStages::COMPUTE),
-            storage(1, wgpu::ShaderStages::COMPUTE, true),
-            storage(2, wgpu::ShaderStages::COMPUTE, true),
+            sampled(1),
+            sampled(2),
             storage(3, wgpu::ShaderStages::COMPUTE, false),
         ],
     });
@@ -256,27 +272,24 @@ fn build(device: &wgpu::Device) -> Result<RasterPipelines, String> {
     })
 }
 
+/// A target of this shape, from the backend's pile. Written as an
+/// attachment and read by the compact pass where it was written,
+/// rather than copied out first.
 fn target(
-    device: &wgpu::Device,
+    gpu: &GpuBackend,
     label: &str,
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
 ) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
+    gpu.targets().take(
+        &gpu.device,
+        label,
+        width,
+        height,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    })
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
 }
 
 /// Rasterizes on the device into a new resident surface grid.
@@ -358,34 +371,20 @@ pub(crate) fn rasterize(
             },
         ],
     });
-    let a = target(&gpu.device, "surface a", width, height, TARGET_FORMAT);
-    let b = target(&gpu.device, "surface b", width, height, TARGET_FORMAT);
-    let depth = target(&gpu.device, "surface depth", width, height, DEPTH_FORMAT);
+    let a = target(gpu, "surface a", width, height, TARGET_FORMAT);
+    let b = target(gpu, "surface b", width, height, TARGET_FORMAT);
+    let depth = target(gpu, "surface depth", width, height, DEPTH_FORMAT);
     let a_view = a.create_view(&Default::default());
     let b_view = b.create_view(&Default::default());
     let depth_view = depth.create_view(&Default::default());
 
-    // Copies of a texture need rows padded to 256 bytes.
-    let row_bytes = (width as u64 * 16).div_ceil(256) * 256;
-    let padded_size = row_bytes * height as u64;
-    // The copies the targets are read through are the same size every
-    // frame, so they come from the pile rather than the driver.
-    let padded = || {
-        gpu.spare().take(
-            &gpu.device,
-            padded_size,
-            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
-        )
-    };
-    let a_copy = padded();
-    let b_copy = padded();
     let output_size = width as u64 * height as u64 * SURFACE_WORDS as u64 * 4;
     let output_buffer = gpu.spare().take(
         &gpu.device,
         output_size,
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
     );
-    let compact_frame: [u32; 4] = [width, height, (row_bytes / 4) as u32, 0];
+    let compact_frame: [u32; 4] = [width, height, 0, 0];
     let compact_bytes: Vec<u8> = compact_frame.iter().flat_map(|v| v.to_le_bytes()).collect();
     let compact_uniform = gpu.buffer("compact frame", &compact_bytes, wgpu::BufferUsages::UNIFORM);
     let compact_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -398,11 +397,11 @@ pub(crate) fn rasterize(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: a_copy.as_entire_binding(),
+                resource: wgpu::BindingResource::TextureView(&a_view),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: b_copy.as_entire_binding(),
+                resource: wgpu::BindingResource::TextureView(&b_view),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -461,24 +460,6 @@ pub(crate) fn rasterize(
         pass.set_bind_group(0, &render_group, &[]);
         pass.draw(0..triangle_count * 3, 0..1);
     }
-    for (texture, copy) in [(&a, &a_copy), (&b, &b_copy)] {
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: copy,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row_bytes as u32),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("orla compact"),
@@ -502,8 +483,10 @@ pub(crate) fn rasterize(
             spare: Some(gpu.spare()),
         }),
     )?;
-    // The copies were this call's own; the pile takes them back.
-    gpu.spare().keep(a_copy);
-    gpu.spare().keep(b_copy);
+    // The targets were this call's own; the pile takes them back for
+    // the next rasterize of the same shape.
+    for texture in [a, b, depth] {
+        gpu.targets().keep(texture);
+    }
     Ok(vec![output])
 }

@@ -904,6 +904,28 @@ This is also a correction: the ten milliseconds that looked like a
 shading pass in a `run --profile` was the per-node device wait, not the
 pass. The measurement that matters is a frame.
 
+The rasterizer had the same disease and worse. At 1920x1080 it cost the
+same for ninety-eight triangles as for a hundred and thirty thousand —
+5.6 ms either way — which says the cost was never the geometry: it was
+2.5 nanoseconds a pixel, fifteen times what a map node's write costs,
+for a surface of seven words.
+
+Two things, both of them moving data that did not need moving. The
+targets were copied into padded buffers and gathered from there, so the
+surface was written, copied and gathered; the compact pass reads the
+targets where they were written now, which wanted nothing but
+`TEXTURE_BINDING` on them and took 5.6 to 4.0 ms. And the three targets
+were made fresh every call — seventy-four megabytes of texture at
+1920x1080 — so they come from a pile by shape and go back at the end of
+the call, which took 4.0 to 2.7. Two million triangles at 1920x1080
+went 9.3 to 5.5 ms, and the per-pixel cost of a surface is 0.99
+nanoseconds where it was 2.5.
+
+The pattern is the same one twice: what a pass costs is mostly what it
+asks the driver for. A pile bounded by count and bytes, taken by shape
+and given back when nothing holds it, is worth more than anything
+clever about the work itself.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

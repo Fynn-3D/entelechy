@@ -47,6 +47,73 @@ pub(crate) struct Spare {
 const SPARE_BUFFERS: usize = 12;
 const SPARE_BYTES: u64 = 512 * 1024 * 1024;
 
+/// The targets a rasterizer draws into, kept by shape between calls.
+/// They belong to the call and to nothing else, so they go back at the
+/// end of it; asking the driver for tens of megabytes of texture is
+/// most of what a pass of the rasterizer costs.
+#[derive(Clone, Default)]
+pub(crate) struct SpareTextures {
+    held: Arc<Mutex<Vec<wgpu::Texture>>>,
+}
+
+/// How many targets the pile holds, and how much of it: a rasterizer
+/// wants three of a shape, and a scene rarely rasterizes into more than
+/// two shapes. Beyond that they are the driver's again.
+const SPARE_TEXTURES: usize = 8;
+const SPARE_TEXTURE_BYTES: u64 = 512 * 1024 * 1024;
+
+impl SpareTextures {
+    /// A target of exactly this shape, from the pile or from the device.
+    pub(crate) fn take(
+        &self,
+        device: &wgpu::Device,
+        label: &str,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> wgpu::Texture {
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(index) = held.iter().position(|texture| {
+            texture.width() == width
+                && texture.height() == height
+                && texture.format() == format
+                && texture.usage() == usage
+        }) {
+            return held.swap_remove(index);
+        }
+        drop(held);
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    }
+
+    /// Keeps a target the call is done with, while the pile is small
+    /// enough to be worth keeping.
+    pub(crate) fn keep(&self, texture: wgpu::Texture) {
+        let bytes = |texture: &wgpu::Texture| -> u64 {
+            let size = texture.format().target_pixel_byte_cost().unwrap_or(16) as u64;
+            u64::from(texture.width()) * u64::from(texture.height()) * size
+        };
+        let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let held_bytes: u64 = held.iter().map(bytes).sum();
+        if held.len() < SPARE_TEXTURES && held_bytes + bytes(&texture) <= SPARE_TEXTURE_BYTES {
+            held.push(texture);
+        }
+    }
+}
+
 impl Spare {
     /// A buffer of exactly this size, from the pile or from the device.
     pub(crate) fn take(
@@ -120,6 +187,8 @@ pub struct GpuBackend {
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
     /// Buffers released Fields left behind; see [`Spare`].
     spare: Spare,
+    /// The rasterizer's own targets, kept by shape; see [`SpareTextures`].
+    targets: SpareTextures,
     /// The context and the parameters of the execution being staged.
     /// One execution runs at a time and a queue's writes are ordered
     /// with its submissions, so these are written again per node rather
@@ -225,6 +294,7 @@ impl GpuBackend {
             written: Mutex::new((Vec::new(), Vec::new())),
             raster: OnceLock::new(),
             spare: Spare::default(),
+            targets: SpareTextures::default(),
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -351,6 +421,11 @@ impl GpuBackend {
     /// of the backend that make outputs of their own.
     pub(crate) fn spare(&self) -> Spare {
         self.spare.clone()
+    }
+
+    /// The pile of rasterizer targets.
+    pub(crate) fn targets(&self) -> SpareTextures {
+        self.targets.clone()
     }
 
     /// The context and parameter buffers for the execution being
