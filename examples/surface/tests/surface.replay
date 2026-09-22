@@ -1,0 +1,41 @@
+scene ../scene.osn
+window 320 180
+param size 24
+
+# A volume of 13824 cells, of which the surface passes through 458. The
+# graph places 458 cells' worth of corners and triangles and no more:
+# the counts are what `value(count)` resolved to.
+frame 0.0
+expect kept.total.result[0] = 458
+expect count corners.result = 3664
+expect count faces.result = 5496
+expect 120 70 = 0.675 0.411 0.469 0.02
+expect 170 100 = 0.444 0.380 0.522 0.02
+expect 40 40 = 0.077 0.094 0.140 0.02
+expect 160 140 = 0.043 0.056 0.090 0.02
+
+# The same frame with the compaction turned off: a cube placed for every
+# cell in the volume, thirty times the geometry, and the same picture to
+# the last pixel. A cell the surface misses puts its eight corners on one
+# point, and a triangle of no area is not drawn.
+reset
+param compaction false
+frame 0.0
+expect kept.total.result[0] = 13824
+expect count corners.result = 110592
+expect count faces.result = 165888
+expect 120 70 = 0.675 0.411 0.469 0.02
+expect 170 100 = 0.444 0.380 0.522 0.02
+expect 40 40 = 0.077 0.094 0.140 0.02
+expect 160 140 = 0.043 0.056 0.090 0.02
+
+# Further along, the balls have moved: a different surface, a different
+# count, and the graph resized to it without a parameter carrying the
+# number.
+reset
+param compaction true
+frame 0.0
+frame 1.5
+expect kept.total.result[0] = 528
+expect count corners.result = 4224
+expect count faces.result = 6336

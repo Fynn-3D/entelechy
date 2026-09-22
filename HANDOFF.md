@@ -1644,6 +1644,47 @@ the numbers above are where its design starts, and the first of them is
 that on this device a barrier buys back less than the cache already
 gives.
 
+Then the direction was turned round. Rather than build the scan because
+an operation is five times faster in a probe, write the scene that wants
+one and see what it pays: `examples/surface`. A volume of `size` cells a
+side — 128 by default, so 2,097,152 — holds an integer field of three
+balls on integer paths with the surface's threshold already taken off,
+so the surface is where the field changes sign. One flag a cell says
+whether its eight corners straddle it, the compact package ranks the
+flags, and the geometry is `domain = max(value(count), 1) * 8` corners
+and `* 12` triangles, each kept cell a cube with the field's gradient
+for a normal. At the first frame the surface touches 19,132 of the two
+million cells — nine in a thousand — and the graph places 229,584
+triangles.
+
+What it costs at 1280x720 on the GPU: 28.3 ms a frame, of which the rank
+is 12.2 — the most expensive node in the scene, nearly half the frame
+and three times the rasterizer's 4.3. The same node is 11.2 ms on the
+JIT, where the frame is 122.9 (the field and the flags over two million
+cells are 52 and 25 of it), and the two are nearly equal for the reason
+the round before found: on the GPU that node is the JIT.
+
+So the scene asks the question that round left open and answers it with
+a number that is not three per cent. A blocked prefix sum on the device
+would put that 12.2 ms at about a quarter of one, and this frame at
+about 16. That is the case for building it: not an operation's five
+times in a probe, but a scene whose frame is half one ordered node.
+
+Two more things it measured. The compaction is worth 4.1 times even
+while the rank is this expensive — placing a cube for every cell of the
+volume and collapsing the ones the surface misses is 115.9 ms a frame
+for the same picture, which is what `--param compaction=false` and the
+replay check to the last pixel. And the next wall behind the scan is the
+scatter that gathers the kept indices: 7.1 ms for two million sources
+into a target of two million slots, where a million sources into a small
+one were measured at 0.96 two rounds ago. A scatter whose target is as
+long as its sources is not the same animal, and why is not yet measured.
+
+Everything the field decides is integer work, so the three backends flag
+exactly the same cells and the replay pins the counts with no tolerance
+at all: 458 of 13,824 at `size=24`, 528 two frames later, and 13,824
+with the compaction off.
+
 A structure round against the Code Rules (no behaviour change; the
 matrix and every replay bit for bit): the rules every backend shares
 moved out of the CPU crate into `orla-rules`; `gpu::execute` is a
