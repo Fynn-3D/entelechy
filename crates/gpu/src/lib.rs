@@ -24,6 +24,18 @@ use orla_ir::{Mode, Validated};
 use orla_rules::{ExecutionError, check_invocation};
 use orla_runtime::{Backend, NativeOp, Prepared};
 
+/// What asking the device's own clock has been worth; see
+/// [`GpuBackend::device_clock_answered`].
+mod clock {
+    /// Nobody has asked yet.
+    pub const UNTRIED: u8 = 0;
+    /// The clock answered, so a profile prints what the device says.
+    pub const ANSWERED: u8 = 1;
+    /// The driver took the queries and resolved nothing, so a profile
+    /// prints the call and its wait, and nothing asks again.
+    pub const SILENT: u8 = 2;
+}
+
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
 pub(crate) struct DeviceImage {
     pub(crate) buffer: wgpu::Buffer,
@@ -210,6 +222,12 @@ pub struct GpuBackend {
     /// Offering them is not writing them: a driver that takes the
     /// queries and resolves zeros leaves the wait as the measurement.
     timestamps: bool,
+    /// What asking the device's own clock has been worth: `UNTRIED`
+    /// until a measured run asks, then `ANSWERED` or `SILENT`. A driver
+    /// that offers timestamps and resolves zeros is asked once and not
+    /// again — the asking is a buffer mapped and waited for per node,
+    /// which is most of what a profile's overhead was.
+    clock: std::sync::atomic::AtomicU8,
     /// The nanoseconds the last measured execution took on the device,
     /// or `u64::MAX` for none.
     last_nanos: std::sync::atomic::AtomicU64,
@@ -298,6 +316,7 @@ impl GpuBackend {
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
+            clock: std::sync::atomic::AtomicU8::new(clock::UNTRIED),
         })
     }
 
@@ -322,6 +341,133 @@ impl GpuBackend {
             .last_nanos
             .swap(u64::MAX, std::sync::atomic::Ordering::Relaxed);
         (nanos != u64::MAX).then(|| std::time::Duration::from_nanos(nanos))
+    }
+
+    /// The query set a measured call writes its passes' edges into, or
+    /// `None` when nothing is being measured or the adapter has no
+    /// timestamps. Made before the encoder so the opening timestamp is
+    /// its first command.
+    fn timing_set(&self, count: u32) -> Option<wgpu::QuerySet> {
+        let worth_asking = self.clock.load(std::sync::atomic::Ordering::Relaxed) != clock::SILENT;
+        (self.measured() && self.timestamps && worth_asking).then(|| {
+            self.device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("orla timing"),
+                ty: wgpu::QueryType::Timestamp,
+                count,
+            })
+        })
+    }
+
+    /// Copies a call's timestamps out where the Host can read them,
+    /// added to the same encoder so they cost no submission of their own.
+    fn resolve_timing(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        set: Option<&wgpu::QuerySet>,
+        count: u32,
+    ) -> Option<wgpu::Buffer> {
+        set.map(|set| {
+            let bytes = u64::from(count) * 8;
+            let resolved = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("orla timing resolve"),
+                size: bytes,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let read = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("orla timing read"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.resolve_query_set(set, 0..count, &resolved, 0);
+            encoder.copy_buffer_to_buffer(&resolved, 0, &read, 0, bytes);
+            read
+        })
+    }
+
+    /// Waits for a measured call and records what the device's own clock
+    /// said about it, from the first timestamp to the last. Does nothing
+    /// when the run is not being measured: a submission a later node
+    /// reads needs no wait, since one queue runs in order.
+    fn settle_measured(&self, submission: wgpu::SubmissionIndex, timing: Option<wgpu::Buffer>) {
+        if !self.measured() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            return;
+        }
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        });
+        let Some(read) = timing else { return };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        read.slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+            });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        if receiver.recv().is_ok_and(|result| result.is_ok())
+            && let Ok(bytes) = read.slice(..).get_mapped_range()
+        {
+            let ticks =
+                |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap_or([0; 8]));
+            let (begin, end) = (ticks(0), ticks(bytes.len() - 8));
+            let period = self.queue.get_timestamp_period() as f64;
+            drop(bytes);
+            read.unmap();
+            // Some drivers take the queries and write nothing (Metal
+            // through wgpu, at the time of writing): then there is no
+            // device time and the wait is the answer.
+            let (answer, kind) = if end > begin {
+                (((end - begin) as f64 * period) as u64, clock::ANSWERED)
+            } else {
+                (u64::MAX, clock::SILENT)
+            };
+            if answer != u64::MAX {
+                self.last_nanos
+                    .store(answer, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.clock.store(kind, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// What a measured execution's wait costs when there is nothing to
+    /// wait for: one empty submission polled to completion, the least of
+    /// sixteen. Every node a profile times carries exactly this before
+    /// it does any work of its own, so a profile that does not take it
+    /// off reports a tenth of a millisecond for a node that writes four
+    /// kibibytes.
+    pub fn wait_floor(&self) -> std::time::Duration {
+        let mut least = std::time::Duration::MAX;
+        for _ in 0..16 {
+            let encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("orla floor"),
+                });
+            let started = std::time::Instant::now();
+            let submission = self.queue.submit(Some(encoder.finish()));
+            let _ = self.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            });
+            least = least.min(started.elapsed());
+        }
+        least
+    }
+
+    /// Whether the device's own clock has answered a measured
+    /// execution. The adapter's feature bit is not the answer: Metal
+    /// through wgpu takes the queries and resolves them to zeros, so
+    /// this is set the first time a resolve comes back with two
+    /// different numbers in it. Until then a measured run's numbers are
+    /// the call and its wait, not the work, and whatever prints them
+    /// has to say so.
+    pub fn device_clock_answered(&self) -> bool {
+        self.clock.load(std::sync::atomic::Ordering::Relaxed) == clock::ANSWERED
     }
 
     /// The adapter's name, for diagnostics.
@@ -533,6 +679,16 @@ impl Backend for GpuBackend {
 
     fn last_device_time(&self) -> Option<std::time::Duration> {
         self.last_device_time()
+    }
+
+    fn measurement_floor(&self) -> std::time::Duration {
+        // A number the device's own clock gave carries nothing of the
+        // wait around it; a number the wait gave carries all of it.
+        if self.device_clock_answered() {
+            std::time::Duration::ZERO
+        } else {
+            self.wait_floor()
+        }
     }
 
     /// Waits for the queue to run dry. A dispatch is submitted and not
@@ -768,13 +924,7 @@ impl Backend for GpuBackend {
         // Under a profile, the device's own clock around every pass of
         // this node: the set is made first so the opening timestamp is
         // the encoder's first command.
-        let timing_set = (self.measured() && self.timestamps).then(|| {
-            self.device.create_query_set(&wgpu::QuerySetDescriptor {
-                label: Some("orla timing"),
-                ty: wgpu::QueryType::Timestamp,
-                count: 2,
-            })
-        });
+        let timing_set = self.timing_set(2);
         let staged = self.stage(
             pipeline,
             module,
@@ -823,65 +973,12 @@ impl Backend for GpuBackend {
             _ => output_buffer,
         };
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let timing = timing_set.as_ref().map(|set| {
-            let resolved = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("orla timing resolve"),
-                size: 16,
-                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-            let read = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("orla timing read"),
-                size: 16,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            encoder.resolve_query_set(set, 0..2, &resolved, 0);
-            encoder.copy_buffer_to_buffer(&resolved, 0, &read, 0, 16);
-            read
-        });
+        let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
         let submission = self.queue.submit(Some(encoder.finish()));
         // Submissions on one queue run in order, so a later node reading
         // this output needs no wait here; only observation does. Under
         // `set_measured`, this call waits, so what times it is the work.
-        if self.measured() {
-            let _ = self.device.poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            });
-            if let Some(read) = timing {
-                let (sender, receiver) = std::sync::mpsc::channel();
-                read.slice(..)
-                    .map_async(wgpu::MapMode::Read, move |result| {
-                        let _ = sender.send(result);
-                    });
-                let _ = self.device.poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                });
-                if receiver.recv().is_ok_and(|result| result.is_ok())
-                    && let Ok(bytes) = read.slice(..).get_mapped_range()
-                {
-                    let ticks = |at: usize| {
-                        u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap_or([0; 8]))
-                    };
-                    let (begin, end) = (ticks(0), ticks(8));
-                    let period = self.queue.get_timestamp_period() as f64;
-                    drop(bytes);
-                    read.unmap();
-                    // Some drivers take the queries and write nothing
-                    // (Metal through wgpu, at the time of writing): then
-                    // there is no device time and the wait is the answer.
-                    if end > begin {
-                        let nanos = ((end - begin) as f64 * period) as u64;
-                        self.last_nanos
-                            .store(nanos, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            }
-        } else {
-            let _ = self.device.poll(wgpu::PollType::Poll);
-        }
+        self.settle_measured(submission, timing);
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(error.to_string()));
         }

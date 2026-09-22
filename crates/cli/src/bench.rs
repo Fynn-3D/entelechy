@@ -92,6 +92,14 @@ pub struct Measured {
     /// that does not change with the clock reuses everything, and what
     /// is measured is the check that nothing changed.
     pub ran: bool,
+    /// Whether the node numbers are what the device's own clock said
+    /// about the work. Where a driver takes the timestamps and resolves
+    /// nothing, they are the call and its wait instead, less the floor
+    /// below, and a reader has to be told which.
+    pub device_clock: bool,
+    /// What measuring one node cost before the node did anything, in
+    /// milliseconds, already taken off every number above.
+    pub floor: f64,
 }
 
 /// Measures every backend the options name.
@@ -175,18 +183,34 @@ pub fn measure(
         runs.push(took / f64::from(options.frames.max(1)));
     }
     runs.sort_by(f64::total_cmp);
-    let nodes = if options.nodes {
+    let run = if options.nodes {
         node_times(session, options, &context, &mut frame, backend)?
     } else {
-        Vec::new()
+        NodeRun {
+            nodes: Vec::new(),
+            device_clock: false,
+            floor: 0.0,
+        }
     };
     Ok(Measured {
         backend: backend.to_owned(),
         best: runs[0],
         median: runs[runs.len() / 2],
-        nodes,
+        nodes: run.nodes,
         ran,
+        device_clock: run.device_clock,
+        floor: run.floor,
     })
+}
+
+/// What one measured run of the nodes came to: each node's
+/// milliseconds a frame, whether those are the device's own clock or
+/// the call and its wait, and what measuring one node cost before it
+/// did anything.
+struct NodeRun {
+    nodes: Vec<(String, f64)>,
+    device_clock: bool,
+    floor: f64,
 }
 
 /// One more run with the device waited for after every node, which is
@@ -198,7 +222,7 @@ fn node_times(
     context: &impl Fn(u32) -> Context,
     frame: &mut u32,
     backend: &str,
-) -> Result<Vec<(String, f64)>, String> {
+) -> Result<NodeRun, String> {
     session.set_measured(true);
     let mut totals: BTreeMap<String, f64> = BTreeMap::new();
     let frames = options.frames.max(1);
@@ -212,13 +236,19 @@ fn node_times(
         }
     }
     session.set_measured(false);
+    // What measuring a node costs before the node does anything comes
+    // off every node: one submission and one wait, the same for all of
+    // them, which is a tenth of a millisecond on a device and nothing
+    // at all where the caller's clock is the whole measurement. Asked
+    // after the run, because a backend only knows once it has tried.
+    let floor = session.measurement_floor().as_secs_f64() * 1000.0;
     // A node placed several times, or a graph placed several times, is
     // one line: `steps/*.spread/*` and how many there were. Sixty-four
     // lines of a tenth of a millisecond say less than their sum does.
     let mut grouped: BTreeMap<String, (f64, usize)> = BTreeMap::new();
     for (node, total) in totals {
         let entry = grouped.entry(pattern(&node)).or_default();
-        entry.0 += total / f64::from(frames);
+        entry.0 += (total / f64::from(frames) - floor).max(0.0);
         entry.1 += 1;
     }
     let mut nodes: Vec<(String, f64)> = grouped
@@ -233,7 +263,11 @@ fn node_times(
         })
         .collect();
     nodes.sort_by(|a, b| b.1.total_cmp(&a.1));
-    Ok(nodes)
+    Ok(NodeRun {
+        nodes,
+        device_clock: session.measures_the_device(),
+        floor,
+    })
 }
 
 /// What a node's name is without its repetitions: `steps/3.spread/6`
@@ -328,13 +362,33 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
         if entry.nodes.is_empty() {
             continue;
         }
+        let how = if entry.device_clock {
+            "what the device's own clock said each one took".to_owned()
+        } else if entry.floor > 0.0 {
+            format!(
+                "the call and the wait after it, less the {:.3} ms measuring one node costs before it does anything (this driver takes the timestamps and resolves nothing)",
+                entry.floor
+            )
+        } else {
+            "the call, which is the whole of the work on this backend".to_owned()
+        };
         out.push_str(&format!(
-            "\n{}, ms a frame a node, the device waited for after each one, so these are the work and not the frame:\n",
+            "\n{}, ms a frame a node — {how}:\n",
             entry.backend
         ));
         for (node, took) in &entry.nodes {
             out.push_str(&format!("  {node:<28} {took:8.3}\n"));
         }
+        // What the parts come to against the whole. A node measured
+        // alone waits for its own work, so the setting up of the next
+        // one no longer hides behind it: the difference is what a frame
+        // overlaps, and naming it is the difference between a profile
+        // that can be read and one that quietly does not add up.
+        let sum: f64 = entry.nodes.iter().map(|(_, took)| took).sum();
+        out.push_str(&format!(
+            "  {:<28} {sum:8.3} against a frame of {:.3}; a node runs alone here, and what a frame overlaps it does not\n",
+            "(sum)", entry.best
+        ));
     }
     out
 }
@@ -391,6 +445,8 @@ pub fn read(path: &Path) -> Result<Vec<Measured>, String> {
             median: number("median_ms")?,
             nodes: Vec::new(),
             ran: true,
+            device_clock: false,
+            floor: 0.0,
         });
     }
     if measured.is_empty() {

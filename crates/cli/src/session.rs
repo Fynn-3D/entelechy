@@ -2192,6 +2192,24 @@ impl Session {
         }
     }
 
+    /// What measuring one node costs before the node does anything, so
+    /// a profile can take it off what it prints; see
+    /// [`orla_runtime::Backend::measurement_floor`]. Ask after a
+    /// measured run: a backend only knows once it has tried.
+    pub fn measurement_floor(&self) -> std::time::Duration {
+        self.runtime().measurement_floor()
+    }
+
+    /// Whether a profile's numbers are what the device's own clock said
+    /// about the work, rather than what the call and its wait took.
+    pub fn measures_the_device(&self) -> bool {
+        self.runtime()
+            .backend()
+            .as_any()
+            .downcast_ref::<orla_gpu::GpuBackend>()
+            .is_some_and(|gpu| gpu.device_clock_answered())
+    }
+
     /// Enables or disables fusion of pointwise chains.
     pub fn set_fusion(&mut self, enabled: bool) {
         self.evaluator.set_fusion(enabled);

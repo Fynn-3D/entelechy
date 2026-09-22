@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| A profile that adds up | [runtime](crates/runtime/src/lib.rs) `execute`, `measurement_floor`, [gpu](crates/gpu/src/lib.rs) `clock`, `wait_floor`, `settle_measured`, [raster](crates/gpu/src/raster.rs), [bench](crates/cli/src/bench.rs) `node_times` | [runtime tests](crates/runtime/tests/mixed.rs) (a backend whose clock answers for Kernels and not for native operations) |
 | Which ones, not just how many | [compact package](packages/compact.orlapkg/kernels/compact.orla), [preset](packages/compact.orlapkg/graphs/compact.osn) | [culled replay](examples/culled/tests/culled.replay) (the same picture with the culling on and off) |
 | A domain a Kernel decides | [domain](crates/graph/src/domain.rs) `DomainExpr::Value`, `values_read`, `renamed`, [evaluate](crates/graph/src/evaluate.rs) `domain_values` | [graph tests](crates/graph/tests/composition.rs), [domain tests](crates/graph/src/domain.rs), [decided replay](examples/decided/tests/decided.replay) |
 | How long a Field came out | [replay](crates/cli/src/replay.rs) `ExpectCount`, [session](crates/cli/src/session.rs) `element_count` | [decided replay](examples/decided/tests/decided.replay) |
@@ -633,6 +634,27 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- A profile's numbers are the node's, and they add up
+  ([`Runtime::execute`](crates/runtime/src/lib.rs),
+  [`measurement_floor`](crates/runtime/src/lib.rs),
+  [`node_times`](crates/cli/src/bench.rs)): a native operation was never
+  measured — the runtime set `last_measured` only in the Kernel branch,
+  so a rasterize was printed with whatever its neighbour had left
+  standing, and it never waited for its own submission, so the work it
+  had queued was billed to the node after it. On the culled scene the
+  rasterizer read 0.087 ms of a 9.0 ms frame and the shading 4.76; they
+  are 3.92 and 1.33. The number is cleared before every execution and
+  asked for after a native one too; the rasterizer waits under a
+  measured run and carries timestamps across its two passes. The
+  device's own clock is asked once and remembered — Metal through wgpu
+  resolves timestamps to zeros, and asking again per node cost a mapped
+  buffer and a polled queue every time — and what measuring one node
+  costs before it does anything (`Backend::measurement_floor`, one
+  empty submission polled to completion, 0.014 ms here) comes off every
+  line. A profile says which kind of number it is printing and prints
+  the sum against the frame, since a node measured alone does not
+  overlap the ones around it.
 
 - Stream compaction is a package, not an engine feature
   ([compact](packages/compact.orlapkg/kernels/compact.orla)): a rank is

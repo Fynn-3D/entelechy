@@ -216,6 +216,16 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// What measuring one execution costs when the execution is
+    /// nothing: the submission and the wait a measured run puts around
+    /// every node, which is in every number it prints and belongs to
+    /// none of them. Zero for a backend whose work is done when
+    /// `execute` returns, since then the caller's clock is the whole of
+    /// it.
+    fn measurement_floor(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
     /// Runs a map `repeat` times, feeding input `chain.0` from output
     /// `chain.1` each time: what a node placed several times over its
     /// own output is. A backend that can do the whole run without
@@ -873,6 +883,12 @@ impl Runtime {
         self.last_measured
     }
 
+    /// What measuring one node costs before the node does anything; see
+    /// [`Backend::measurement_floor`].
+    pub fn measurement_floor(&self) -> std::time::Duration {
+        self.backend.measurement_floor()
+    }
+
     /// The name of the backend a version executes on.
     pub fn executes_on(&self, version: &KernelVersion) -> &'static str {
         match version.module() {
@@ -1034,6 +1050,11 @@ impl Runtime {
         invocation: &Invocation,
     ) -> Result<Vec<Handle>, ExecutionError> {
         let granted = version.manifest().requires.clone();
+        // Nothing carries over: a backend that does not measure this
+        // execution must answer `None` here, not the previous node's
+        // number. A native operation used to leave it standing, and its
+        // neighbour's time was printed as its own.
+        self.last_measured = None;
         match &version.body {
             Body::Kernel { module, prepared } => {
                 let ordered = self.ordered.is_some() && module.manifest.mode == orla_ir::Mode::Scan;
@@ -1057,8 +1078,13 @@ impl Runtime {
                 outputs
             }
             Body::Native(op) => {
-                let mut scope = Scope::new(&mut self.host, granted);
-                self.backend.execute_native(*op, invocation, &mut scope)
+                let backend = Arc::clone(&self.backend);
+                let outputs = {
+                    let mut scope = Scope::new(&mut self.host, granted);
+                    backend.execute_native(*op, invocation, &mut scope)
+                };
+                self.last_measured = backend.last_device_time();
+                outputs
             }
         }
     }

@@ -26,7 +26,10 @@ usage:
       take it.
       --profile prints how long each executed node took; it waits for the
       device after each one, so a GPU's numbers are the work, not the
-      submission, and the frame is slower than it would be.
+      submission, and the frame is slower than it would be. What
+      measuring a node costs before it does anything is taken off every
+      line; a node runs alone under a profile, so the lines add up to
+      more than a frame, and the sum says by how much.
   orla render <scene.osn> --frames <n> [--rate <fps>] [--sound-rate <hz>]
                           [--out <dir>] [--library <dir|file>] [--input <name>=<file.ppm>]...
                           [--param <name>=<literal>]... [--window <w>x<h>[@<scale>]]
@@ -74,7 +77,11 @@ usage:
       Step the scene for --frames frames --repeat times on each backend and
       print the least of the runs, a millisecond a frame. The first frame
       of all is thrown away: it compiles and allocates. --nodes measures
-      every node as well, waiting for the device after each one. --json
+      every node as well, waiting for the device after each one, native
+      operations included; what measuring a node costs before it does
+      anything is taken off every line, and the sum says how the parts
+      come to more than the whole, since a node runs alone there and a
+      frame overlaps them. --json
       writes the measurement, and --compare reads one back and prints what
       changed since, which is how a change is shown to cost nothing.
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
@@ -1245,10 +1252,34 @@ fn evaluate_and_export(
                 .collect::<Vec<_>>()
                 .join(", ");
             if profile {
+                // `run` evaluates once, so a profile is of the first
+                // frame: what it prints includes compiling every Kernel
+                // and asking the driver for every buffer. `bench
+                // --nodes` throws that frame away and measures a scene
+                // that is already running.
+                // What measuring a node costs before the node does
+                // anything comes off every line; see
+                // `orla_runtime::Backend::measurement_floor`.
+                let floor = session.measurement_floor().as_secs_f64() * 1000.0;
                 for (node, took) in &report.timings {
                     let name = node.to_string();
-                    eprintln!("  {name:<28} {:>9.3} ms", took.as_secs_f64() * 1000.0);
+                    let ms = (took.as_secs_f64() * 1000.0 - floor).max(0.0);
+                    eprintln!("  {name:<28} {ms:>9.3} ms");
                 }
+                let sum: f64 = report
+                    .timings
+                    .iter()
+                    .map(|(_, took)| (took.as_secs_f64() * 1000.0 - floor).max(0.0))
+                    .sum();
+                let kind = if session.measures_the_device() {
+                    "what the device's own clock said"
+                } else {
+                    "the call and the wait after it"
+                };
+                eprintln!(
+                    "  {:<28} {sum:>9.3} ms  ({kind}; the first frame, which compiles and allocates, and a node runs alone under a profile — `bench --nodes` measures a scene already running)",
+                    "(sum)"
+                );
             }
             for (node, port, path) in saves {
                 match session.save(&orla_graph::NodeId(node.clone()), port, path) {

@@ -951,6 +951,52 @@ driven by the depth buffer's number is not a fog driven by distance —
 sky. The surface carries the world position in its `uv`, so the
 distance is there to be had; a depth buffer's number is not one.
 
+Then the measurement itself, because every round's conclusions had come
+from comparing whole frames and the per-node numbers had never been
+trustworthy. They were worse than untrustworthy. On the culled scene at
+1920x1080 the profile said the rasterizer took 0.087 ms of a 9.0 ms
+frame — the cheapest node in it — and the shading took 4.76. The truth
+is 3.92 and 1.33: the rasterizer is the most expensive thing in the
+frame and was reported as the least.
+
+Three faults, each of which alone would do it. A native operation was
+never measured: `Runtime::execute` set `last_measured` in the Kernel
+branch and not the native one, so a rasterize was given whatever the
+node before it had left standing, and its own submission was never
+waited for, so the work it had queued was billed to the node after it —
+which is where the shading's 4.76 came from. The runtime clears the
+number before every execution now and asks after a native operation
+too, and the rasterizer waits under a measured run and carries
+timestamps across its two passes like any other pass. A backend that
+did not time a call answers `None` and the caller's clock is used;
+`crates/runtime/tests/mixed.rs` holds a backend whose clock answers for
+Kernels and not for native operations, and it fails against the old
+runtime.
+
+The second: the device's own clock does not work here. The adapter
+reports `TIMESTAMP_QUERY` and Metal through wgpu 30 resolves the query
+set to zeros, every time — the code already knew and fell back to the
+wait, but it asked again for every node of every frame, and asking is a
+buffer mapped and a queue polled. It is asked once now and remembered
+(`clock::UNTRIED`, `ANSWERED`, `SILENT`), and nothing prints a number
+as the device's when it is the call's.
+
+The third: what measuring costs was inside what was measured. One empty
+submission polled to completion is 0.014 ms on this machine, and every
+node carried it. `Backend::measurement_floor` is that, measured as the
+least of sixteen, zero where the caller's clock is the whole
+measurement and zero again where the device's clock answers, and it
+comes off every line a profile prints.
+
+What makes the numbers checkable is that they now add up. On the JIT,
+where there is no device at all, the mesh example's nodes come to 2.247
+ms against a frame of 2.219. On the GPU the culled scene's come to 9.90
+against 9.20, and the gap is named in the output rather than left to be
+noticed: a node measured alone waits for its own work, so the setting
+up of the next one no longer hides behind it. `run --profile` says as
+well that it is the first frame, which compiles and allocates, and that
+`bench --nodes` is the one that measures a scene already running.
+
 The third thing the renderer wanted turned out not to be a change to
 Orla at all. A texture running away from the eye crawls because
 `at_linear` blends four texels of one Field and a distant pixel covers

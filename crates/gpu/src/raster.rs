@@ -432,6 +432,10 @@ pub(crate) fn rasterize(
         ],
     });
 
+    // The set is made before the encoder so the opening timestamp is
+    // its first command; the render pass takes the first pair and the
+    // compact pass the second, and the span is the first to the last.
+    let timing_set = gpu.timing_set(4);
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -474,7 +478,13 @@ pub(crate) fn rasterize(
                 }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes: timing_set.as_ref().map(|query_set| {
+                wgpu::RenderPassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }
+            }),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -485,15 +495,26 @@ pub(crate) fn rasterize(
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("orla compact"),
-            timestamp_writes: None,
+            timestamp_writes: timing_set.as_ref().map(|query_set| {
+                wgpu::ComputePassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: Some(2),
+                    end_of_pass_write_index: Some(3),
+                }
+            }),
         });
         pass.set_pipeline(&pipelines.compact);
         pass.set_bind_group(0, &compact_group, &[]);
         pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
     }
     let guard = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-    gpu.queue.submit(Some(encoder.finish()));
-    let _ = gpu.device.poll(wgpu::PollType::Poll);
+    // A native operation is a node like any other: under a measured run
+    // it waits for the device, so what times it is its work and not its
+    // submission, and it reports the device's own clock where there is
+    // one.
+    let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 4);
+    let submission = gpu.queue.submit(Some(encoder.finish()));
+    gpu.settle_measured(submission, timing);
     if let Some(error) = pollster::block_on(guard.pop()) {
         return Err(ExecutionError::Device(format!("rasterize: {error}")));
     }
