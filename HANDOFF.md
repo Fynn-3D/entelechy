@@ -1561,34 +1561,88 @@ optimizer, so it can still follow the calls.
 
 ## Open
 
-The next thing worth building, and how to start it: a tile — memory a
-group of elements shares, and the barrier between writing it and
-reading it. It is what a parallel prefix sum, a blocked Jacobi, an FFT
-and a sorting network all need, and none of them can be written well
-without it. `fluid` is the standing case: three quarters of a Jacobi
-step is that it is a node, and a step that did several passes inside
-one dispatch would not be.
+The tile — memory a group of elements shares, and the barrier between
+writing it and reading it — was measured before it was designed, and
+the measurement declines it. Both halves of its case were written as
+hand-written WGSL outside Orla, on this machine, against the shapes a
+scene writes today; every tiled run gives the plain run's answer bit
+for bit, so the comparison is of one answer arrived at two ways.
 
-The hard part is not the device. WGSL has `var<workgroup>` and
-`workgroupBarrier()`. The hard part is that the interpreter and the JIT
-must give the same answer, and a barrier has no meaning where there is
-one thread: the language would have to say what a tile is — a group of
-`n` elements that share a Field and meet at a barrier — so that a
-device maps it to a workgroup and the other two run the whole tile
-through, one element at a time, to each barrier and then on. That is a
-new scope in the IR, a visibility rule for what a tile shares, and an
-order between barriers, and all three belong in `orla-rules` before any
-backend sees them, or the three will drift the way the four edges
-drifted this round.
+The blocked Jacobi was the half that was supposed to carry it, and it
+does not. `fluid`'s grid is 384x216 and its solve is forty steps: a
+plain pass an iteration is 1.17 ms a solve as forty submissions and
+1.05 as one, and the best tiled shape — a 32-cell tile, four iterations
+inside it, 256 threads, the halo recomputed and thrown away — is 0.96.
+That is 1.2 times, against a bar of three. In the frame it would show
+as less: eight steps is 0.74 ms a frame at 1280x720 and forty is 1.89,
+so the solve is 1.44 of that 1.89 and the tile would take the frame to
+about 1.4 ms.
 
-So the first step is a measurement, not a design. Write the blocked
-prefix sum and the blocked Jacobi as hand-written WGSL, outside Orla,
-and see what they are worth against what a scene writes today. Under
-three times, the feature is not worth what it costs; over, the shape it
-wants is the shape to design. The numbers to beat are here: a
-sequential scan is 0.26 ms for four thousand and 0.54 for sixty-five
-thousand, a node costs 0.027 ms in a frame whatever it does, and
-`fluid` at 1280x720 is 0.037 ms a node over forty-six of them.
+Three numbers say why, and the third of them is the one that closes the
+question. A pass of that grid costs 0.0264 ms, of which about 0.018 is
+the submission and the wait that any pass pays and 0.0088 is the
+arithmetic — so a third of a step is the step's own work, which is the
+`fluid` measurement from two rounds ago read the other way round. A
+tile that runs four iterations must load a halo it then throws away,
+which at that shape is 1.78 times the cells. And the same arithmetic
+through shared memory with a barrier around it costs about a quarter
+more than it costs through the cache (0.011 ms a grid's worth against
+0.0088), because this device's cache is already doing what a tile is
+for. Put together: four times fewer passes, 1.78 times the work, a
+quarter more for each unit of it.
+
+The third number is the ceiling. If the halo were free and shared
+memory cost nothing — a tile better than any that can be written — the
+solve would be forty passes' arithmetic with no pass overhead at all,
+0.35 ms against 1.06, which is 3.0 times exactly. The bar is the
+ceiling. Nothing built out of `var<workgroup>` can do better than break
+even against the rule this project set for itself, and the one that can
+actually be written reaches 1.2.
+
+Where a tile does win is where a grid is small enough that a pass is
+nothing but overhead: 64x64 goes 1.006 ms to 0.191 (5.3 times) and
+128x128 0.993 to 0.350 (2.8), while 1024x1024 goes the other way, 5.16
+to 10.30, because there the work is the cost and the tile does 1.8
+times as much of it. So a tile pays for a solve over a few thousand
+cells and not for the ones scenes here actually run.
+
+The prefix sum is the half that passes the bar, and it turns out not to
+want a tile in the language at all. What a scene pays today, measured
+as a frame with the scan against the same frame with a map in its
+place: 4096 elements 0.26 ms, 65536 0.51, a million 6.63 — the JIT
+walking the row, since a GPU session hands its scans to the JIT, and
+the hand-off is the cheap part (the device walking the same row in one
+invocation is 0.36, 5.69 and 94.8). The same sums as hand-written WGSL
+through a workgroup's shared memory are 0.031, 0.075 and 0.222, and
+with a node's own 0.027 ms added, 0.058, 0.102 and 0.249: four and a
+half times, five times, and twenty-seven. The million is the one that
+matters. A scan over a million is 6.6 ms today and effectively a wall,
+which is why `compact` says in its own source to rank the things a
+scene decides about and never the elements they expand into; the wall
+is what a blocked scan takes away.
+
+And it takes it away without a new scope in the IR. A scan whose step
+is `total <op> f(element)` — where the op is one of the integer folds
+that are exactly associative (`+`, `min`, `max`, `&`, `|`, `^`), `f`
+does not read the carried value, and nothing is `put` into a memory —
+has the same answer in every grouping, so the GPU backend may run it as
+a blocked scan over workgroups while the interpreter and the JIT keep
+their loop, and all three still give the same bits. That is a
+recognizer in `orla-rules` and one shader shape in the GPU backend: no
+tile in the language, no visibility rule, no order between barriers,
+and nothing for the three backends to drift over. Floats stay
+sequential, since their sum is not associative and every replay is bit
+for bit.
+
+So: the tile is declined, and what the measurement leaves in its place
+is that parallel integer scan, worth four to five times where a scan is
+small and twenty-seven where it is large, and worth more than that as a
+ceiling removed from `compact` and from anything else that wants to
+rank a million things. The rest of the tile's case — an FFT, a sorting
+network — is real and has no scene here asking for it; when one asks,
+the numbers above are where its design starts, and the first of them is
+that on this device a barrier buys back less than the cache already
+gives.
 
 A structure round against the Code Rules (no behaviour change; the
 matrix and every replay bit for bit): the rules every backend shares
