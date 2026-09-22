@@ -1110,6 +1110,36 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+Compiling had never been measured against size, and an agent pays it on
+every edit. A Kernel of `n` statements in one block: 6.2 microseconds a
+statement at sixteen hundred, 7.8 at sixty-four hundred, 10.2 at twelve
+thousand eight hundred, 17.2 at twenty-five thousand six hundred, which
+is 0.44 seconds for the last. A binding may not repeat a name of its
+own block, and lowering asked that by walking the block's bindings —
+once a binding. Each block keeps the set of names it has bound now, and
+the same Kernel is 0.08 seconds, at 3.1 microseconds a statement from
+six thousand to twenty-five thousand: flat. Shadowing in a nested block
+still works and a repeat in one block is still refused, which is what
+the set is exactly equivalent to, since the only other things that push
+a local are a loop's carried values, pushed and popped inside the loop
+expression and never visible to a sibling binding's check.
+
+The other compile-time axes are linear and were left alone: sixteen
+hundred Kernels in one file are 0.013 milliseconds each, a scene of
+four thousand nodes loads at 0.020 milliseconds a node, and an array
+builder of four thousand and ninety-six elements is ten milliseconds.
+Every `.orla` in the repository still checks in 0.07 seconds together,
+so none of this was about the examples — the biggest of them is four
+hundred lines and compiles in under ten milliseconds. It is about what
+a Kernel a program wrote looks like.
+
+One quadratic was measured and declined: a block of `loop` expressions
+costs 50 microseconds each at eight hundred of them and 116 at three
+thousand two hundred, because a loop walks the visible locals to find
+what the loop around it carries. Nothing writes a thousand `loop`s in
+one block — the way a program unrolls is `[each n { ... }]`, which does
+not, and scales flat to four thousand and ninety-six.
+
 What the graph costs a node now, from a hundred and twenty-eight to
 four thousand and ninety-six of them: 2.03, 2.13, 2.48, 2.90
 microseconds. Thirty-two times the nodes for one and a half times the

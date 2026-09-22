@@ -1,7 +1,7 @@
 //! Semantic analysis and lowering from AST to IR.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use orla_ir::{
@@ -483,6 +483,11 @@ struct Builder<'a> {
     locals: Vec<(String, Local)>,
     /// Index into `locals` where each open block scope starts.
     scopes: Vec<usize>,
+    /// The names bound in each open block scope. A binding may not
+    /// repeat a name of its own block, and asking that by walking the
+    /// block's bindings is a walk once a binding: a Kernel of a few
+    /// thousand `let`s spent most of its lowering on it.
+    bound: Vec<BTreeSet<String>>,
     /// Instruction buffers, one per open block; the last is current.
     buffers: Vec<Vec<Instruction>>,
     /// Type of every emitted value by id.
@@ -508,6 +513,7 @@ impl<'a> Builder<'a> {
             fields,
             locals: Vec::new(),
             scopes: vec![0],
+            bound: vec![BTreeSet::new()],
             buffers: vec![Vec::new()],
             types: Vec::new(),
             loops: Vec::new(),
@@ -635,6 +641,7 @@ impl<'a> Builder<'a> {
         F: FnOnce(&mut Self, &Expr) -> Result<ValueId, CompileError>,
     {
         self.scopes.push(self.locals.len());
+        self.bound.push(BTreeSet::new());
         let lowered = (|| {
             for (name, value) in &block.lets {
                 // A statement for its effect: `put(...)`, or `let _ = ...`.
@@ -642,10 +649,11 @@ impl<'a> Builder<'a> {
                     self.value(value)?;
                     continue;
                 }
-                let scope_start = *self.scopes.last().expect("a scope is open");
-                if self.locals[scope_start..]
-                    .iter()
-                    .any(|(existing, _)| existing == &name.value)
+                if self
+                    .bound
+                    .last()
+                    .expect("a scope is open")
+                    .contains(&name.value)
                 {
                     return Err(semantic(
                         name.span,
@@ -659,11 +667,16 @@ impl<'a> Builder<'a> {
                 if name.value != "_" {
                     self.bindings.push((id, name.value.clone()));
                 }
+                self.bound
+                    .last_mut()
+                    .expect("a scope is open")
+                    .insert(name.value.clone());
                 self.locals.push((name.value.clone(), Local::Value(id)));
             }
             result(self, &block.result)
         })();
         let start = self.scopes.pop().expect("a scope is open");
+        self.bound.pop();
         self.locals.truncate(start);
         lowered
     }

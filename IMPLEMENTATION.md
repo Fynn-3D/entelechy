@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| Lowering a block of a thousand `let`s | [lower](crates/compiler/src/lower/mod.rs) `bound`, `scoped` | [compile tests](crates/compiler/tests/compile.rs); a Kernel of 25600 statements, 0.44 to 0.08 s |
 | A pixel is a pixel, not a picture | [session](crates/cli/src/session.rs) `read_pixel`, [evaluate](crates/graph/src/evaluate.rs) `needed` | the whole replay suite over three backends, 16.12 to 13.60 s |
 | A Kernel as wide as the device | [gpu](crates/gpu/src/lib.rs) `required_limits`, `prepare` | a Kernel of twenty-eight inputs runs on the GPU where eight was refused |
 | A graph of a thousand states | [evaluate](crates/graph/src/evaluate.rs) `cached_handles`, `committed_handles`, `cache_put`, `commit_put`, `commit` | a `debug_assert` that the counts agree with the walk, on every test run; every replay bit for bit |
