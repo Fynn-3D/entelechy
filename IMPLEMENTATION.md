@@ -637,6 +637,16 @@ capability claim.
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
 
+- What an iterative solve costs, measured and left alone: its iteration
+  count times the floor every node pays. `fluid`'s frame against its
+  node count at 1280x720 is a slope of 0.037 ms a node, of which 0.027
+  is that floor, so about three quarters of a Jacobi step is that it is
+  a step. A `times` that stopped when the residual was small would not
+  have helped: forty steps is not where Jacobi converges (the residual
+  is 39 at forty, 22 at sixty-four, 14 at a hundred and twenty-eight),
+  it is the budget its author chose. Fewer and bigger iterations are an
+  algorithm's business, not the substrate's.
+
 - The buffer pile serves a buffer that is big enough, not one of
   exactly the size ([`Spare::take`](crates/gpu/src/lib.rs)): nothing
   reads past the element count the uniform gives — no emitted shader

@@ -1110,6 +1110,30 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+A `times` that reads a number — a solve that stops when it has
+converged — was the next thing to build, and measuring first killed it.
+`fluid` relaxes its pressure with forty Jacobi steps, and the premise
+was that it converges before forty and the rest are waste. It does not
+converge at forty. The divergence left after the projection, summed
+over a sixty-four square grid at frame forty: 133 after eight steps,
+73 after sixteen, 59 after twenty-four, 39 after forty, 22 after
+sixty-four, 14 after a hundred and twenty-eight. Still halving. Forty
+is not where it converged, it is the budget its author chose, and a
+count that ran until the residual was small would run hundreds, not
+fewer.
+
+The second measurement says what an iterative solver actually costs
+here, and it is not the arithmetic. `fluid`'s frame against its node
+count, at 1280x720: fourteen nodes 0.74 ms, twenty-two 0.94, forty-six
+1.80, seventy 2.82 — a slope of 0.037 ms a node, of which 0.027 is the
+floor every node pays whatever it does. About three quarters of a
+Jacobi step is that it is a step. So the cost of an iterative solve in
+Orla is its iteration count times a floor that the round before this
+one established is not ours to lower, and the way to a cheaper solve is
+an algorithm that needs fewer and bigger iterations — a coarse grid, a
+red-black sweep — which is the author's to choose and not something the
+substrate can supply. A dynamic `times` would not have touched it.
+
 `showcase` is the slowest example, at 22.4 ms a frame at 1920x1080, and
 it was measured so that nobody measures it again. It is one node: the
 render is 22.2 ms and the state 0.28, so the engine's share is about
