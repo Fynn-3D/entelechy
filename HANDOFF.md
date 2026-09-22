@@ -926,6 +926,29 @@ asks the driver for. A pile bounded by count and bytes, taken by shape
 and given back when nothing holds it, is worth more than anything
 clever about the work itself.
 
+The interpreter had a third kind of the same disease, on the other
+side: it was compiling the Kernel again on every execution. `prepare`
+built nothing, so each `execute` walked the module and laid out every
+value's words afresh — about seventy nanoseconds a statement, paid
+per frame per node whatever the domain. A thousand-statement Kernel
+over one element cost 80 microseconds a frame, of which 70 was the
+compiling. The word code is a [`Code`] now, built once where the
+backend prepares the module and held by the `Prepared` the runtime
+already keeps, and that frame is 10 microseconds. A hundred-and-twenty
+statement Kernel over sixteen elements went 90 to 60 microseconds, the
+rest being the sines it actually computes. Nothing moved on the
+examples, which are all pixel-bound and compile once per twenty
+thousand elements; what this is for is a graph of many nodes over
+small domains, which is what interactive logic looks like. The JIT was
+checked for the same thing and does not have it: it compiles in
+`prepare` already, and the same one-element Kernel costs it nothing
+measurable.
+
+A direct `CpuBackend::execute` still compiles on the spot, so the
+crate stands alone; `execute_with` is the one that takes a prepared
+[`Code`], and `trace` deliberately compiles its own, without the
+optimizer, so it can still follow the calls.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

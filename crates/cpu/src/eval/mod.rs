@@ -1,7 +1,8 @@
 //! The IR interpreter.
 //!
-//! A module is compiled once per execution into word-addressed code and
-//! that code runs once per element. Every value lives in a flat stack of
+//! A module is compiled once into word-addressed code — when the backend
+//! prepares it, not when it runs — and that code runs once per element.
+//! Every value lives in a flat stack of
 //! 32-bit words at an offset fixed at compile time, in the layout the ABI
 //! gives elements: a scalar is one word, a vector one per component, a
 //! struct its fields in order. Reading an argument, a struct field, a
@@ -14,5 +15,5 @@ mod code;
 mod compile;
 mod run;
 
-pub(crate) use compile::Program;
+pub(crate) use compile::{Compiled, Program};
 pub(crate) use run::{CALL_RECORDS, Machine};

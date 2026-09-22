@@ -18,12 +18,8 @@ pub(super) struct InputView<'s> {
 /// A module compiled for one invocation, shared by every thread that
 /// runs it.
 pub(crate) struct Program<'s> {
-    pub(super) functions: Vec<Code>,
-    pub(super) entry: Code,
-    pub(super) merge: Option<Code>,
-    pub(super) init: Option<Code>,
-    /// Words of a scan's carried value at the front of the entry frame.
-    pub(super) carry: usize,
+    /// The word code, which belongs to the module and is made once.
+    pub(super) code: std::sync::Arc<Compiled>,
     pub(super) inputs: Vec<InputView<'s>>,
     /// Which inputs are memories, written by the steps of a scan.
     pub(super) memories: Vec<bool>,
@@ -32,6 +28,19 @@ pub(crate) struct Program<'s> {
     /// for a reduction or a scan.
     pub(crate) domain: Domain,
     pub(super) context: orla_abi::Context,
+}
+
+/// A module compiled to word code: what does not change from one
+/// execution to the next. Compiling a Kernel of a hundred statements
+/// takes about eighty microseconds, which a frame should not pay for
+/// every node it runs.
+pub struct Compiled {
+    pub(super) functions: Vec<Code>,
+    pub(super) entry: Code,
+    pub(super) merge: Option<Code>,
+    pub(super) init: Option<Code>,
+    /// Words of a scan's carried value at the front of the entry frame.
+    pub(super) carry: usize,
 }
 
 /// What every function's compilation shares.
@@ -67,26 +76,15 @@ impl<'s> Program<'s> {
     /// Compiles `module` for `invocation`, borrowing its inputs from
     /// `scope`. Every Host access of the run happens here, through the
     /// scope's gate.
-    pub(crate) fn new(
-        module: &Validated,
-        invocation: &Invocation,
-        scope: &'s Scope<'_>,
-        domain: Domain,
-    ) -> Result<Self, ExecutionError> {
-        let mut inputs = Vec::with_capacity(invocation.inputs.len());
-        for handle in &invocation.inputs {
-            inputs.push(InputView {
-                words: scope.words(*handle)?,
-                domain: scope.size(*handle)?,
-                stride: scope.schema(*handle)?.words(),
-            });
-        }
-        let mut params = Vec::new();
-        let mut param_at = Vec::with_capacity(invocation.params.len());
-        for value in &invocation.params {
-            param_at.push(params.len());
-            let (words, n) = value_words(*value);
-            params.extend_from_slice(&words[..n]);
+    /// Compiles `module` to word code, which is the module's own and
+    /// keeps from one execution to the next.
+    pub fn compile(module: &Validated) -> Compiled {
+        let mut param_at = Vec::with_capacity(module.manifest.params.len());
+        let mut at = 0;
+        for param in &module.manifest.params {
+            param_at.push(at);
+            let (_, n) = value_words(param.default);
+            at += n;
         }
         let mut structs: Vec<StructLayout> = Vec::with_capacity(module.structs.len());
         for def in &module.structs {
@@ -137,6 +135,55 @@ impl<'s> Program<'s> {
             .init
             .as_ref()
             .map(|init| compile_function(&shared, init, None));
+        Compiled {
+            functions: shared.functions,
+            entry,
+            merge,
+            init,
+            carry,
+        }
+    }
+
+    /// Compiles `module` and runs it for `invocation`, for a caller
+    /// with no compiled code of its own.
+    pub(crate) fn new(
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &'s Scope<'_>,
+        domain: Domain,
+    ) -> Result<Self, ExecutionError> {
+        Self::with(
+            std::sync::Arc::new(Self::compile(module)),
+            module,
+            invocation,
+            scope,
+            domain,
+        )
+    }
+
+    /// Binds `invocation` to code already compiled, borrowing its
+    /// inputs from `scope`. Every Host access of the run happens here,
+    /// through the scope's gate.
+    pub(crate) fn with(
+        code: std::sync::Arc<Compiled>,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &'s Scope<'_>,
+        domain: Domain,
+    ) -> Result<Self, ExecutionError> {
+        let mut inputs = Vec::with_capacity(invocation.inputs.len());
+        for handle in &invocation.inputs {
+            inputs.push(InputView {
+                words: scope.words(*handle)?,
+                domain: scope.size(*handle)?,
+                stride: scope.schema(*handle)?.words(),
+            });
+        }
+        let mut params = Vec::new();
+        for value in &invocation.params {
+            let (words, n) = value_words(*value);
+            params.extend_from_slice(&words[..n]);
+        }
         let memories = module
             .manifest
             .inputs
@@ -144,11 +191,7 @@ impl<'s> Program<'s> {
             .map(|port| module.manifest.memories.contains(&port.name))
             .collect();
         Ok(Self {
-            functions: shared.functions,
-            entry,
-            merge,
-            init,
-            carry,
+            code,
             inputs,
             memories,
             params,

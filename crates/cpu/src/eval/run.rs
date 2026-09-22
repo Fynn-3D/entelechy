@@ -56,7 +56,7 @@ impl<'p, 's> Machine<'p, 's> {
             calls: None,
             calls_truncated: false,
             memories,
-            stack: vec![0; program.entry.frame * 2],
+            stack: vec![0; program.code.entry.frame * 2],
             sp: 0,
             loops: Vec::new(),
             at: [0; 3],
@@ -72,7 +72,7 @@ impl<'p, 's> Machine<'p, 's> {
         out: &mut [u32],
     ) -> Result<(), ExecutionError> {
         let program = self.program;
-        let entry = &program.entry;
+        let entry = &program.code.entry;
         self.at = at;
         self.loops.clear();
         self.begin(entry.frame);
@@ -96,12 +96,12 @@ impl<'p, 's> Machine<'p, 's> {
         out: &mut [u32],
     ) -> Result<(), ExecutionError> {
         let program = self.program;
-        let entry = &program.entry;
+        let entry = &program.code.entry;
         self.at = [index, 0, 0];
         self.loops.clear();
         self.loops.push(index as i32);
         self.begin(entry.frame);
-        self.stack[..program.carry].copy_from_slice(carried);
+        self.stack[..program.code.carry].copy_from_slice(carried);
         self.run(&entry.code, 0)?;
         let result = entry.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
@@ -112,6 +112,7 @@ impl<'p, 's> Machine<'p, 's> {
     pub(crate) fn run_init_words(&mut self, out: &mut [u32]) -> Result<(), ExecutionError> {
         let program = self.program;
         let init = program
+            .code
             .init
             .as_ref()
             .expect("only scan modules have an init");
@@ -133,7 +134,11 @@ impl<'p, 's> Machine<'p, 's> {
         out: &mut [u32],
     ) -> Result<(), ExecutionError> {
         let program = self.program;
-        let merge = program.merge.as_ref().expect("only reduce modules merge");
+        let merge = program
+            .code
+            .merge
+            .as_ref()
+            .expect("only reduce modules merge");
         self.at = [0; 3];
         self.loops.clear();
         self.begin(merge.frame);
@@ -164,21 +169,21 @@ impl<'p, 's> Machine<'p, 's> {
         frame: &[u32],
         id: orla_ir::ValueId,
     ) -> Vec<u32> {
-        let loc = self.program.functions[function].locs[id.0 as usize];
+        let loc = self.program.code.functions[function].locs[id.0 as usize];
         frame[loc.at..loc.at + loc.n].to_vec()
     }
 
     /// The words of the `index`th result of function `function` in a
     /// recorded frame.
     pub(crate) fn function_result(&self, function: usize, frame: &[u32], index: usize) -> Vec<u32> {
-        let loc = self.program.functions[function].results[index];
+        let loc = self.program.code.functions[function].results[index];
         frame[loc.at..loc.at + loc.n].to_vec()
     }
 
     /// Zeros the entry's frame, so a trace of one step shows nothing
     /// left over from the steps before it.
     pub(crate) fn clear_entry_frame(&mut self) {
-        let frame = self.program.entry.frame;
+        let frame = self.program.code.entry.frame;
         if self.stack.len() < frame {
             self.stack.resize(frame, 0);
         }
@@ -189,13 +194,13 @@ impl<'p, 's> Machine<'p, 's> {
     /// left them in its frame (the frame begins at the stack's start):
     /// the value's last assignment, or zeros if its block never ran.
     pub(crate) fn entry_value(&self, id: orla_ir::ValueId) -> Vec<u32> {
-        let loc = self.program.entry.locs[id.0 as usize];
+        let loc = self.program.code.entry.locs[id.0 as usize];
         self.stack[loc.at..loc.at + loc.n].to_vec()
     }
 
     /// The words of the entry's `index`th result after a run.
     pub(crate) fn entry_result(&self, index: usize) -> Vec<u32> {
-        let loc = self.program.entry.results[index];
+        let loc = self.program.code.entry.results[index];
         self.stack[loc.at..loc.at + loc.n].to_vec()
     }
 
@@ -658,7 +663,7 @@ impl<'p, 's> Machine<'p, 's> {
                 dst,
                 n,
             } => {
-                let callee = &program.functions[*function];
+                let callee = &program.code.functions[*function];
                 let base = self.sp;
                 if s.len() < base + callee.frame {
                     s.resize(base + callee.frame, 0);

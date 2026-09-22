@@ -257,9 +257,13 @@ pub trait Backend: Send + Sync {
     }
 }
 
-struct NothingPrepared;
+/// The interpreter's word code, compiled once when the module is
+/// prepared. A Kernel of a hundred statements takes tens of
+/// microseconds to compile, which is more than most nodes take to run,
+/// so a frame must not pay it per execution.
+struct CpuCode(orla_cpu::Code);
 
-impl Prepared for NothingPrepared {
+impl Prepared for CpuCode {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -274,18 +278,19 @@ impl Backend for orla_cpu::CpuBackend {
         self
     }
 
-    fn prepare(&self, _module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        Ok(Box::new(NothingPrepared))
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        Ok(Box::new(CpuCode(orla_cpu::Code::of(module))))
     }
 
     fn execute(
         &self,
-        _prepared: &dyn Prepared,
+        prepared: &dyn Prepared,
         module: &Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        orla_cpu::CpuBackend::execute(self, module, invocation, scope)
+        let code = prepared.as_any().downcast_ref::<CpuCode>().map(|c| &c.0);
+        orla_cpu::CpuBackend::execute_with(self, code, module, invocation, scope)
     }
 
     fn execute_native(

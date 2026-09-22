@@ -623,6 +623,19 @@ capability claim.
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
 
+- The interpreter's word code built once, not once per execution
+  ([`Code`](crates/cpu/src/lib.rs), [`Program::compile`](crates/cpu/src/eval/compile.rs),
+  [`CpuCode`](crates/runtime/src/lib.rs)): `prepare` used to build nothing,
+  so every `execute` laid out every value's words again — about seventy
+  nanoseconds a statement, paid per frame per node however small the
+  domain. The compiled code is what the backend's `Prepared` holds now,
+  and `execute_with` binds an invocation to it. A thousand-statement
+  Kernel over one element went 80 to 10 microseconds a frame; a
+  hundred-and-twenty-statement one over sixteen elements 90 to 60, the
+  rest being real arithmetic. `CpuBackend::execute` still compiles on the
+  spot for a direct caller, and `trace` compiles its own without the
+  optimizer. The JIT was checked and already compiles in `prepare`.
+
 - Two float operations as one interpreter instruction (`FBin2`): a
   value that a single following operation reads never reaches the frame
   and one dispatch does the work of two. Only the instruction just

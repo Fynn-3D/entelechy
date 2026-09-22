@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 //! CPU backend.
 //!
-//! Compiles a [`Validated`] module to word-addressed code and runs it once
-//! per output element. The backend is trusted Rust, but the Kernel it runs
+//! Compiles a [`Validated`] module to word-addressed code — once, into a
+//! [`Code`] a caller keeps — and runs it once per output element. The backend is trusted Rust, but the Kernel it runs
 //! is not: every Host access goes through the capability-gated [`Scope`],
 //! and the backend creates and releases the outputs it allocates so a
 //! failed execution leaks nothing.
@@ -30,6 +30,20 @@ const PARALLEL_THRESHOLD: usize = 4096;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CpuBackend;
 
+/// A module compiled to the interpreter's word code. Compiling a
+/// Kernel of a hundred statements takes about eighty microseconds,
+/// which a frame should not pay for every node it runs, so a backend
+/// compiles once and binds an invocation to it.
+#[derive(Clone)]
+pub struct Code(std::sync::Arc<eval::Compiled>);
+
+impl Code {
+    /// Compiles a module.
+    pub fn of(module: &Validated) -> Self {
+        Self(std::sync::Arc::new(eval::Program::compile(module)))
+    }
+}
+
 impl CpuBackend {
     /// Executes `module` over `invocation.domain`, returning one handle per
     /// manifest output. The handles are owned by the caller's Host.
@@ -39,16 +53,32 @@ impl CpuBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
+        self.execute_with(None, module, invocation, scope)
+    }
+
+    /// The same, with the module's word code already compiled.
+    pub fn execute_with(
+        &self,
+        code: Option<&Code>,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
         check_invocation(module, invocation)?;
+        let code = match code {
+            Some(code) => code.0.clone(),
+            None => Code::of(module).0,
+        };
         let strides = output_strides(module);
         if module.manifest.mode == Mode::Reduce {
-            return reduce(module, invocation, scope, strides[0]);
+            return reduce(&code, module, invocation, scope, strides[0]);
         }
         if module.manifest.mode == Mode::Scan {
-            return scan(module, invocation, scope, strides[0]);
+            return scan(&code, module, invocation, scope, strides[0]);
         }
         if let Mode::Scatter { base, combine } = module.manifest.mode {
             return scatter(
+                &code,
                 module,
                 invocation,
                 scope,
@@ -57,7 +87,7 @@ impl CpuBackend {
                 combine,
             );
         }
-        let program = eval::Program::new(module, invocation, scope, invocation.domain)?;
+        let program = eval::Program::with(code, module, invocation, scope, invocation.domain)?;
         let results = compute(&program, &strides)?;
         drop(program);
         let domain = invocation.domain;
@@ -115,13 +145,14 @@ fn output_strides(module: &Validated) -> Vec<usize> {
 /// fold with `merge` in a fixed tree, so the result does not depend on
 /// how many threads ran the map. One `Rows` element comes out.
 fn reduce(
+    code: &std::sync::Arc<eval::Compiled>,
     module: &Validated,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
     stride: usize,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
-    let program = eval::Program::new(module, invocation, scope, domain)?;
+    let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
     let mut level = compute(&program, &[stride])?;
     let mut machine = eval::Machine::new(&program);
     let mut count = domain.count();
@@ -443,6 +474,7 @@ pub fn trace(
 /// work runs on one thread; that is its nature, not a limitation of the
 /// backend.
 fn scan(
+    code: &std::sync::Arc<eval::Compiled>,
     module: &Validated,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
@@ -450,7 +482,7 @@ fn scan(
 ) -> Result<Vec<Handle>, ExecutionError> {
     let domain = check_scan(invocation, scope)?;
     let count = domain.count();
-    let program = eval::Program::new(module, invocation, scope, domain)?;
+    let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
     let mut machine = eval::Machine::new(&program);
     let mut carried = vec![0u32; stride];
     machine.run_init_words(&mut carried)?;
@@ -500,6 +532,7 @@ fn scan(
 /// The order is the rule, so the result is the same on every backend,
 /// floats included.
 fn scatter(
+    code: &std::sync::Arc<eval::Compiled>,
     module: &Validated,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
@@ -510,7 +543,7 @@ fn scatter(
     let target = check_scatter(invocation, scope, base)?;
     let sources = invocation.domain;
     let address = address_words(target);
-    let program = eval::Program::new(module, invocation, scope, sources)?;
+    let program = eval::Program::with(code.clone(), module, invocation, scope, sources)?;
     let pairs = compute(&program, &[address + stride])?;
     drop(program);
     let mut words = scope.words(invocation.inputs[base])?.to_vec();
