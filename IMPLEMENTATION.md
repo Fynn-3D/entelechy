@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| A buffer big enough, not exact | [gpu](crates/gpu/src/lib.rs) `Spare::take` | every replay bit for bit; measured by `orla bench` on a scene whose Fields change size |
 | Four levels of a fold in one pass | [rules](crates/rules/src/reduce.rs), [wgsl](crates/gpu/src/wgsl.rs) `emit_reduce`, [gpu](crates/gpu/src/lib.rs) `fold` | [rules test](crates/rules/src/reduce.rs) (a run folds to the same expressions as the levels), every replay bit for bit |
 | A profile that adds up | [runtime](crates/runtime/src/lib.rs) `execute`, `measurement_floor`, [gpu](crates/gpu/src/lib.rs) `clock`, `wait_floor`, `settle_measured`, [raster](crates/gpu/src/raster.rs), [bench](crates/cli/src/bench.rs) `node_times` | [runtime tests](crates/runtime/tests/mixed.rs) (a backend whose clock answers for Kernels and not for native operations) |
 | Which ones, not just how many | [compact package](packages/compact.orlapkg/kernels/compact.orla), [preset](packages/compact.orlapkg/graphs/compact.osn) | [culled replay](examples/culled/tests/culled.replay) (the same picture with the culling on and off) |
@@ -635,6 +636,19 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- The buffer pile serves a buffer that is big enough, not one of
+  exactly the size ([`Spare::take`](crates/gpu/src/lib.rs)): nothing
+  reads past the element count the uniform gives — no emitted shader
+  asks a buffer how long it is — so the tail of a bigger one is never
+  touched, and the smallest that fits is taken, never one more than
+  twice the size. It is what makes the pile work for a scene whose
+  Fields change size, which is every scene that sizes a node by what a
+  Kernel decided: `culled` keeps a different number of chunks every
+  frame, so an exact match never hit and every geometry buffer came
+  from the driver. At 1920x1080 it went 8.61 to 6.93 ms, and a world of
+  a hundred and sixty million triangles 12.59 to 9.82; scenes of fixed
+  sizes are unchanged.
 
 - What a node costs beyond its work, measured and left alone: on the
   GPU 26 microseconds a node (the slope of one to a hundred and

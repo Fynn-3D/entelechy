@@ -127,7 +127,17 @@ impl SpareTextures {
 }
 
 impl Spare {
-    /// A buffer of exactly this size, from the pile or from the device.
+    /// A buffer at least this size, from the pile or from the device.
+    ///
+    /// At least, not exactly: nothing reads past the element count the
+    /// uniform gives — no shader asks a buffer how long it is — so the
+    /// tail of a bigger one is never touched. It is what makes the pile
+    /// work for a scene whose Fields change size, which is every scene
+    /// that sizes a node by what a Kernel decided: a count that wanders
+    /// by a chunk between frames missed an exact match every time and
+    /// went to the driver. The smallest that fits is taken, and never
+    /// one more than twice the size, so a Field of a thousand elements
+    /// cannot be handed the buffer of a million.
     pub(crate) fn take(
         &self,
         device: &wgpu::Device,
@@ -135,9 +145,17 @@ impl Spare {
         usage: wgpu::BufferUsages,
     ) -> wgpu::Buffer {
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
+        let fits = |buffer: &wgpu::Buffer| {
+            buffer.usage() == usage
+                && buffer.size() >= size
+                && buffer.size() <= size.saturating_mul(2).max(256)
+        };
         if let Some(index) = held
             .iter()
-            .position(|buffer| buffer.size() == size && buffer.usage() == usage)
+            .enumerate()
+            .filter(|(_, buffer)| fits(buffer))
+            .min_by_key(|(_, buffer)| buffer.size())
+            .map(|(index, _)| index)
         {
             return held.swap_remove(index);
         }

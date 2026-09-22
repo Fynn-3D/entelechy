@@ -28,13 +28,16 @@ rasterizer.
 and off is the same picture to the last pixel, having built a third of
 the geometry. `--param culling=false` is that switch.
 
+A hand steers it: the left stick, or the arrow keys, which is what the
+Player presses the stick as. With no hand it sweeps on its own, so the
+scene runs and replays without one.
+
 Measured at 1920x1080, least of runs of twenty frames:
 
 | world | placed | whole world placed |
 |---|---|---|
-| 64x64 chunks, 10.0M triangles | 12.0 ms | 26.1 ms |
-| 128x128 chunks, 40.1M triangles | 13.1 ms | 73.0 ms |
-| 256x256 chunks, 160.6M triangles | 13.6 ms | (does not fit) |
+| 64x64 chunks, 10.0M triangles | 6.9 ms | 26.1 ms |
+| 256x256 chunks, 160.6M triangles | 9.8 ms | (does not fit) |
 
 Sixteen times the world for a millisecond and a half, which is the cull
 test and its prefix sum over sixteen times the chunks. What a frame

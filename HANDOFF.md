@@ -1086,6 +1086,43 @@ them, and a chain of nodes needs one, so every node is a pass of its
 own. That is the floor until a backend can say "dispatch, then a
 barrier, then dispatch" inside a pass.
 
+Then the culled world was driven rather than looked at, which found the
+thing looking at it could not. A hand steers it now — the left stick or
+the arrow keys, and the automatic sweep when there is no hand, so the
+replay is unchanged — and a replay drives a pad, so a roam is a test. A
+thousand two hundred frames of turning leave the camera at (0.117,
+0.245) in a world one and a half across: the wrap holds and nothing
+drifts. In the hundred and sixty million triangle world, steering, the
+kept count sits at 1419, 1422, 1421 of sixty-five thousand chunks
+across the roam, and the window may be resized mid-flight.
+
+What that turned up: the buffer pile matched a size exactly, and a
+scene whose Fields change size never matches. `culled` keeps a
+different number of chunks every frame — 1419 then 1422 — so every
+geometry buffer it asked for was a size the pile had never seen, and
+every one came from the driver. The pile takes the smallest buffer that
+is big enough now, and never one more than twice the size. Nothing
+reads past the element count the uniform gives — no shader asks a
+buffer how long it is — so the tail of a bigger one is never touched.
+`culled` at 1920x1080 went 8.61 to 6.93 ms, and the hundred and sixty
+million triangle world 12.59 to 9.82. Every other example is unchanged,
+because every other example has Fields of a fixed size; this is the
+cost of the shape the last few rounds made possible, and it was hiding
+where only driving the thing would find it.
+
+The other half of the round was narrow and is worth stating as a rule
+rather than as a change. A scatter's `last` cannot be one pass: an
+invocation that has done its atomic does not know whether a later
+source will beat it, and there is no barrier across a dispatch, so a
+backend writes the winners in one pass and gathers their values in
+another. Sixty-four bit atomics would pack the pair but still leave the
+unpacking. What a scene can do instead is not ask for `last` when its
+addresses are unique — `compact.gather`'s are, since a rank is unique —
+and `max` over integers is one pass of atomics and nothing else: a
+million sources 1.30 ms to 0.96, four thousand 0.41 to 0.35. The
+package says why in its own source, since the reason is what makes it
+safe.
+
 The third thing the renderer wanted turned out not to be a change to
 Orla at all. A texture running away from the eye crawls because
 `at_linear` blends four texels of one Field and a distant pixel covers

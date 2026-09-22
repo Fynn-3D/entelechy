@@ -34,21 +34,36 @@ kernel world.start@1 {
 }
 
 // The camera walks forward and turns, wrapping in the world's square.
+// A hand on it steers: the left stick, or the arrow keys, which is what
+// the Player presses the stick as. With no hand it sweeps on its own,
+// so the scene runs and replays without one.
 kernel world.fly@1 {
-    requires { field.read; field.write; time.read; }
+    requires { field.read; field.write; time.read; input.read; }
     input previous: Rows<Camera>;
     param speed: Float = 0.004;
+    param turn: Float = 0.035;
     param cols: Int = 64;
     param cell: Float = 0.03125;
     output result: Rows<Camera>;
+
+    fn held(code: Int) -> Float {
+        return if key(code) { 1.0 } else { 0.0 };
+    }
 
     compute {
         let span = float(cols) * cell;
         let half = span * 0.5;
         let was = at(previous, 0);
-        let heading = sin(time() * 0.23) * 0.9;
-        let x = was.x + sin(heading) * speed;
-        let z = was.z + cos(heading) * speed;
+        let pad = stick(0);
+        let keys = vec2(held(39) - held(37), held(38) - held(40));
+        let drive = if abs(pad.x) + abs(pad.y) > 0.01 { pad } else { keys };
+        let driven = abs(drive.x) + abs(drive.y) > 0.01;
+        // Steered, the heading is carried and the stick turns it; left
+        // alone, it sweeps, which is what the replay pins.
+        let heading = if driven { was.heading + drive.x * turn } else { sin(time() * 0.23) * 0.9 };
+        let step = if driven { speed * drive.y } else { speed };
+        let x = was.x + sin(heading) * step;
+        let z = was.z + cos(heading) * step;
         let wrapped_x = x - span * floor((x + half) / span);
         let wrapped_z = z - span * floor((z + half) / span);
         return Camera {
