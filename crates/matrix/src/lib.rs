@@ -118,8 +118,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             // begin. An index past the end clamps as an array's does,
             // and the element the address names clamps as a Field's.
             "parts of an element",
-            "let patch = at(parts, i % 8); let p = patch.points[i % 4] + patch.points[i - 9] + patch.points[i + 9]; let deep = patch.links[i % 3][i % 2] + patch.links[i + 40][1] + patch.links[0 - i][0]; let far = at(parts, i + 100).label + int(at(parts, 0 - i).points[2].z * 10.0); let corner = at(parts, i % 8).points[0].y;",
-            "Out { f: p.x + p.z + corner, i: deep + far + patch.label, b: p.y > 0.0, v: p }",
+            "let patch = at(parts, i % 8); let p = patch.points[i % 4] + patch.points[i - 9] + patch.points[i + 9]; let deep = patch.links[i % 3][i % 2] + patch.links[i + 40][1] + patch.links[0 - i][0]; let far = at(parts, i + 100).label + int(at(parts, 0 - i).points[2].z * 10.0); let corner = at(parts, i % 8).points[0].y; let here = near.points[i % 4] + near.points[i + 9]; let own = near.links[i % 3][i % 2] + near.label;",
+            "Out { f: p.x + p.z + corner + here.y, i: deep + far + patch.label + own, b: p.y > 0.0, v: p + here }",
         ),
         (
             // What a float does where no number answers: an infinity
@@ -281,13 +281,15 @@ const HEAD: &str = "requires { field.read; field.write; input.read; time.read; }
     fn width<T>(value: T) -> Int { let doubled = twice(value); return int(doubled == twice(value)); }
 ";
 
-const ENV: &str = "let x = float(i) * 0.37 + 0.1; let sampled = sample(rows);";
-const GRID_ENV: &str = "let x = float(i) * 0.37 + 0.1; let sampled = sample(cells).a;";
+const ENV: &str =
+    "let x = float(i) * 0.37 + 0.1; let sampled = sample(rows); let near = sample(parts);";
+const GRID_ENV: &str =
+    "let x = float(i) * 0.37 + 0.1; let sampled = sample(cells).a; let near = sample(patches);";
 
 fn map_rows(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.map_rows@1 {{ {HEAD}
-    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>;
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     output result: Rows<Out>;
     compute {{ let i = element(); {ENV} {lets} let out = {out}; return out; }} }}"
     )
@@ -296,7 +298,7 @@ fn map_rows(lets: &str, out: &str) -> String {
 fn map_grid(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.map_grid@1 {{ {HEAD}
-    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>;
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     output result: Grid<Out>;
     compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; {GRID_ENV} {lets} let out = {out}; return out; }} }}"
     )
@@ -305,7 +307,7 @@ fn map_grid(lets: &str, out: &str) -> String {
 fn reduce(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.reduce@1 {{ {HEAD}
-    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>;
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     output result: Rows<Out>;
     compute {{ let i = element(); {ENV} {lets} let out = {out}; return out; }}
     merge(a, b) {{ return Out {{ f: a.f + b.f, i: (a.i & 0xFFFF) + (b.i & 0xFFFF), b: a.b || b.b, v: a.v + b.v }}; }} }}"
@@ -315,7 +317,7 @@ fn reduce(lets: &str, out: &str) -> String {
 fn scan(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.scan@1 {{ {HEAD}
-    input ticks: Rows<Int>; input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>;
+    input ticks: Rows<Int>; input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     memory mem: Rows<Int>;
     output result: Rows<Out>;
     fn store(m: Rows<Int>, a: Int, v: Int) -> Int {{ return put(m, a, v); }}
@@ -332,7 +334,7 @@ fn scan(lets: &str, out: &str) -> String {
 fn scatter(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.scatter@1 {{ {HEAD}
-    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input target: Rows<Out>;
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>; input target: Rows<Out>;
     output result: Rows<Out>;
     struct Pair {{ at: Int; value: Out; }}
     scatter into target with last {{ let i = element(); {ENV} {lets} let out = {out}; return Pair {{ at: (i * 7) % 16, value: out }}; }} }}"
@@ -391,6 +393,20 @@ fn parts_input() -> (Schema, Domain, Vec<u32>) {
     (Schema::new(scalars), Domain::Rows(8), words)
 }
 
+/// The same element over a grid, which a sample reads at its own place.
+fn patches_input() -> (Schema, Domain, Vec<u32>) {
+    let (schema, _, _) = parts_input();
+    let words = (0..64u32)
+        .flat_map(|e| {
+            let points =
+                (0..12).map(move |k| ((e as f32) * 0.11 + (k as f32) * 0.23).cos().to_bits());
+            let links = (0..6).map(move |k| ((e + k * 2) % 5) as i32 as u32);
+            points.chain(links).chain(std::iter::once(e % 9))
+        })
+        .collect();
+    (schema, Domain::Grid(16, 4), words)
+}
+
 fn out_schema() -> Schema {
     Schema::new(vec![
         Scalar::Float,
@@ -439,15 +455,15 @@ pub fn cases() -> Vec<Case> {
             let source = wrap(lets, result);
             let (inputs, domain) = match mode {
                 "map over rows" => (
-                    vec![rows(), ints(), cells(), parts_input()],
+                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
                     Domain::Rows(COUNT),
                 ),
                 "map over a grid" => (
-                    vec![rows(), ints(), cells(), parts_input()],
+                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
                     Domain::Grid(16, 3),
                 ),
                 "reduce" => (
-                    vec![rows(), ints(), cells(), parts_input()],
+                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
                     Domain::Rows(1),
                 ),
                 "scan" => (
@@ -461,6 +477,7 @@ pub fn cases() -> Vec<Case> {
                         ints(),
                         cells(),
                         parts_input(),
+                        patches_input(),
                         (
                             Schema::new(vec![Scalar::Int]),
                             Domain::Rows(16),
@@ -475,6 +492,7 @@ pub fn cases() -> Vec<Case> {
                         ints(),
                         cells(),
                         parts_input(),
+                        patches_input(),
                         (out_schema(), Domain::Rows(16), vec![0; 16 * 6]),
                     ],
                     Domain::Rows(16),

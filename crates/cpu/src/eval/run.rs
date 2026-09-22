@@ -725,15 +725,7 @@ impl<'p, 's> Machine<'p, 's> {
             Instr::Size { dst, input } => write_extent(s, fp + dst, program.inputs[*input].domain),
             Instr::Sample { dst, input, n } => {
                 let view = &program.inputs[*input];
-                let [x, y, z] = self.at;
-                let index = linear(
-                    view.domain,
-                    [
-                        x.min(view.domain.width() - 1),
-                        y.min(view.domain.height() - 1),
-                        z.min(view.domain.depth() - 1),
-                    ],
-                );
+                let index = own_index(self.at, view.domain);
                 let start = index * view.stride;
                 let words = self.memories[*input].as_deref().unwrap_or(view.words);
                 s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
@@ -755,13 +747,15 @@ impl<'p, 's> Machine<'p, 's> {
                 dst,
                 input,
                 address,
-                kind,
                 base,
                 steps,
                 n,
             } => {
                 let view = &program.inputs[*input];
-                let index = address_index(s, fp + address, *kind, view.domain);
+                let index = match address {
+                    Some((at, kind)) => address_index(s, fp + at, *kind, view.domain),
+                    None => own_index(self.at, view.domain),
+                };
                 let words = self.memories[*input].as_deref().unwrap_or(view.words);
                 // Where the path leads: the words it is known to pass
                 // over, then each index clamped into what it indexes.
@@ -875,6 +869,20 @@ pub(super) fn write_extent(stack: &mut [u32], at: usize, domain: Domain) {
 }
 
 /// Reads an address of the given kind; missing axes take `rest`.
+/// This element's own place in an input, clamped into it: what a
+/// `sample` reads, and a part of one.
+#[inline]
+pub(super) fn own_index([x, y, z]: [u32; 3], domain: Domain) -> usize {
+    linear(
+        domain,
+        [
+            x.min(domain.width() - 1),
+            y.min(domain.height() - 1),
+            z.min(domain.depth() - 1),
+        ],
+    )
+}
+
 /// The element an address names, clamped into an input: a row's
 /// address is one `Int` and one clamp, which is what most reads are;
 /// the rest go by axis through floats.

@@ -712,6 +712,26 @@ is really waiting for. Asking costs the overlap between one frame's
 device work and the next frame's own, so nothing but the line asks,
 and a backend with no device of its own has no such field.
 
+Then the half of that the round left: `sample`. A part of an element
+read at this element's own place is the same narrowing, and the same
+instruction with no address. What held it up was fusion, which replaces
+a sample by the value the producer computed: a part of a value is not
+a read at all, so fusion writes it out as the extracts and subscripts
+the path stands for, walked against the producer's element type in the
+fused module's own numbering. The JIT reads a sampled part from the
+place the run already carries for that input, so it is the loads and
+an offset and nothing else.
+
+Measured, a grid of a 97-word element sampled for two of its words at
+480x270: 1.29 to 0.71 ms on the GPU and 1.02 to 0.67 on the JIT, and
+2.45 to 2.72 on the interpreter, which pays the same nine percent it
+paid for `at` and for the same reason. The examples do not move: their
+elements are a few words, so there was little to save; seventeen of
+them read a sampled part now and their replays are bit for bit what
+they were. A per-element cache of where this element sits in each
+input was tried for the interpreter and taken out again: resetting it
+cost more than the arithmetic it saved.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

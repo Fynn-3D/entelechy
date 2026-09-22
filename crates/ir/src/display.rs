@@ -245,7 +245,10 @@ impl fmt::Display for Op {
             Self::Sample(input) => write!(f, "host sample input{input}"),
             Self::At(input, index) => write!(f, "host at input{input} {index}"),
             Self::Part { input, at, path } => {
-                write!(f, "host part input{input} {at}")?;
+                match at {
+                    Some(at) => write!(f, "host part input{input} {at}")?,
+                    None => write!(f, "host part input{input}")?,
+                }
                 for step in path {
                     match step {
                         Step::Field(k) => write!(f, ".{k}")?,

@@ -973,11 +973,25 @@ impl<'a> Checker<'a> {
                 let port = self.input(*input, position)?;
                 let (name, element) = (port.name.clone(), port.element());
                 let (shape, index_type) = (port.shape(), port.ty.index_type());
-                let actual = self.operand(*at, position)?;
-                if actual != index_type {
-                    return Err(self.fail(format!(
-                        "{position} addresses input `{name}`, a {shape}, with {actual} instead of {index_type}"
-                    )));
+                match at {
+                    Some(at) => {
+                        let actual = self.operand(*at, position)?;
+                        if actual != index_type {
+                            return Err(self.fail(format!(
+                                "{position} addresses input `{name}`, a {shape}, with {actual} instead of {index_type}"
+                            )));
+                        }
+                    }
+                    // Its own element, as a sample reads it.
+                    None => {
+                        self.entry_only(position)?;
+                        if shape != self.output_shape() {
+                            return Err(self.fail(format!(
+                                "{position} samples part of input `{name}`, a {shape}, over a {} output; use at()",
+                                self.output_shape()
+                            )));
+                        }
+                    }
                 }
                 for step in path {
                     if let crate::Step::Index(index) = step {

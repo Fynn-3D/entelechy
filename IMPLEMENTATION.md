@@ -639,8 +639,13 @@ capability claim.
   [`narrowed`](crates/ir/src/optimize.rs)): the instruction holds the
   way from the element to the part, field by field and index by index,
   and each backend reads only the words the path names — the
-  interpreter one copy, the JIT a load at a worked-out offset, the GPU
-  an indexed read of the storage buffer. Without it a Kernel whose
+  interpreter one copy, the JIT a load at a worked-out offset (from the
+  place the run already carries, where the element is this one's own),
+  the GPU an indexed read of the storage buffer. The element is the one
+  an address names or, with no address, this element's own, which is
+  what `sample` reads; a fused producer leaves nothing to read, so
+  fusion writes such a part out as the extracts and subscripts it
+  stands for ([`fuse`](crates/ir/src/fuse.rs)). Without it a Kernel whose
   input element is a record of arrays copies every word of an element
   into every element of its own domain to reach three of them: a
   Kernel reading two fields of a 481-word element at 960x540 took

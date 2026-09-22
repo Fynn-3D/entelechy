@@ -1112,17 +1112,20 @@ pub enum Op {
     /// (`Int`, `Vec2`, or `Vec3`; clamped), as its element type. Host call:
     /// `field.read`.
     At(u32, ValueId),
-    /// Part of the element of an input at an address: what an `extract`
-    /// or a `subscript` of a whole element comes to when nothing needs
-    /// the whole. The path says which part, field by field and index by
+    /// Part of one element of an input: what an `extract` or a
+    /// `subscript` of a whole element comes to when nothing needs the
+    /// whole. The path says which part, field by field and index by
     /// index; a backend reads only the words it names, where reading
-    /// the element would have copied all of them. Host call:
-    /// `field.read`.
+    /// the element would have copied all of them. The element is the
+    /// one at the address, as [`Op::At`] takes it, or this element's
+    /// own where there is none, as [`Op::Sample`] reads it, which is
+    /// entry point only. Host call: `field.read`.
     Part {
         /// The input read, by manifest index.
         input: u32,
-        /// The address, of the input's index type, as [`Op::At`] takes.
-        at: ValueId,
+        /// The address, of the input's index type, or `None` for this
+        /// element's own.
+        at: Option<ValueId>,
         /// The way from the whole element to the part, outermost first.
         path: Vec<Step>,
     },

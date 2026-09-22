@@ -42,6 +42,9 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
         for instruction in instructions {
             match &instruction.op {
                 Op::Sample(i) if *i == input => use_.sampled = true,
+                Op::Part {
+                    input: i, at: None, ..
+                } if *i == input => use_.sampled = true,
                 Op::At(i, _)
                 | Op::AtLinear(i, _)
                 | Op::Count(i)
@@ -257,6 +260,12 @@ pub fn fuse(
     let produced = entry_renumber.map(producer.entry.results[0]);
     let mut consumer_renumber = Renumber::new(&consumer_ops, &identity, Some((input, produced)));
     consumer_renumber.next = entry_renumber.next;
+    // The path is walked against what the producer made, which is the
+    // producer's own element type in the fused table's numbering.
+    consumer_renumber.parts = Some((
+        &structs,
+        shift_struct(producer_manifest.outputs[0].element()),
+    ));
     body.extend(consumer_renumber.block(&consumer.entry.body));
     let results = consumer
         .entry
@@ -309,6 +318,10 @@ struct Renumber<'a> {
     ops: &'a dyn Fn(&Op) -> Op,
     types: &'a dyn Fn(Type) -> Type,
     replace: Option<(u32, ValueId)>,
+    /// What the replaced input's element is and the structs to read a
+    /// path against: a part of a sample becomes the extracts and
+    /// subscripts it stands for, since the value is then in hand.
+    parts: Option<(&'a [StructDef], Type)>,
 }
 
 impl<'a> Renumber<'a> {
@@ -323,6 +336,7 @@ impl<'a> Renumber<'a> {
             ops,
             types,
             replace,
+            parts: None,
         }
     }
 
@@ -360,6 +374,44 @@ impl<'a> Renumber<'a> {
                 && *i == input
             {
                 self.ids.insert(instruction.id.0, replacement.0);
+                continue;
+            }
+            // A part of that sample: the producer's result is a value
+            // here, so the way to the part is the extracts and
+            // subscripts it stands for, and nothing is read.
+            if let (
+                Some((input, replacement)),
+                Op::Part {
+                    input: i,
+                    at: None,
+                    path,
+                },
+            ) = (self.replace, &instruction.op)
+                && *i == input
+                && let Some((structs, element)) = self.parts
+            {
+                let mut source = replacement;
+                let mut ty = element;
+                for step in path {
+                    let (part, op) = match step {
+                        Step::Field(k) => (
+                            crate::part_at(structs, ty, *k as usize).map(|(_, ty)| ty),
+                            Op::Extract(source, *k),
+                        ),
+                        Step::Index(index) => (
+                            crate::elements_of(structs, ty).map(|(ty, _, _)| ty),
+                            Op::Subscript(source, self.map(*index)),
+                        ),
+                    };
+                    let Some(part) = part else { break };
+                    let id = ValueId(self.next);
+                    self.next += 1;
+                    // The types walked are already the fused table's.
+                    out.push(Instruction { id, ty: part, op });
+                    source = id;
+                    ty = part;
+                }
+                self.ids.insert(instruction.id.0, source.0);
                 continue;
             }
             let id = ValueId(self.next);
@@ -439,7 +491,9 @@ impl<'a> Renumber<'a> {
             }
             Op::At(_, coord) | Op::AtLinear(_, coord) => *coord = self.map(*coord),
             Op::Part { at, path, .. } => {
-                *at = self.map(*at);
+                if let Some(at) = at {
+                    *at = self.map(*at);
+                }
                 for step in path {
                     if let Step::Index(index) = step {
                         *index = self.map(*index);

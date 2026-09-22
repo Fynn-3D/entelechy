@@ -1605,9 +1605,26 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.load_scratch(&tys)
             }
             Op::Part { input, at, path } => {
-                let address = self.words(at);
                 let tys = word_types(self.module, ty);
                 let within = self.part_offset(*input, path, tys.len());
+                // This element's own, where there is no address: the
+                // run already carries where it is in every input, so
+                // the part is the loads at its offset and nothing else.
+                let Some(at) = at else {
+                    if let Some(base) = self.settled_view(*input).and_then(|view| view.at) {
+                        let offset = self.b.ins().uextend(self.ptr, within);
+                        let base = self.b.ins().iadd(base, offset);
+                        return tys
+                            .iter()
+                            .enumerate()
+                            .map(|(k, t)| self.b.ins().load(*t, self.flags, base, (k * 4) as i32))
+                            .collect();
+                    }
+                    let (x, y, z, _) = self.coords.expect("entry point");
+                    let index = self.sample_index(*input, x, y, z);
+                    return self.part_words(*input, index, within, &tys);
+                };
+                let address = self.words(at);
                 if matches!(self.ty(at), Type::Int) {
                     let index = self.rows_index(*input, address[0]);
                     return self.part_words(*input, index, within, &tys);

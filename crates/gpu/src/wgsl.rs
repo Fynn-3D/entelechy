@@ -1840,12 +1840,21 @@ impl Emitter<'_> {
                     );
                 }
                 let last = stride.saturating_sub(type_words(self.module, *ty));
+                // The element the address names, or this element's
+                // own where there is none, as a sample reads it.
+                let element = match at {
+                    Some(at) => v(at),
+                    None => match self.output_shape() {
+                        Shape::Rows => "i32(element)".to_owned(),
+                        Shape::Grid => "coord.xy".to_owned(),
+                        Shape::Volume => "coord".to_owned(),
+                    },
+                };
                 let base = format!("b{}", id.0);
                 self.line(
                     depth,
                     &format!(
-                        "let {base} = index_in{input}({}) * {stride}u + u32(clamp({offset}, 0i, {last}i));",
-                        v(at)
+                        "let {base} = index_in{input}({element}) * {stride}u + u32(clamp({offset}, 0i, {last}i));"
                     ),
                 );
                 let (expression, _) = load_expr(self.module, *ty, &format!("in{input}"), &base, 0);

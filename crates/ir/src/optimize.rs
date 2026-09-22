@@ -424,7 +424,7 @@ struct Ctx<'a> {
 #[derive(Clone)]
 struct Read {
     input: u32,
-    at: ValueId,
+    at: Option<ValueId>,
     element: Type,
     /// The read of the whole element this part came out of.
     whole: ValueId,
@@ -569,7 +569,20 @@ impl Ctx<'_> {
                         instruction.id.0,
                         Read {
                             input: *input,
-                            at: *at,
+                            at: Some(*at),
+                            element: instruction.ty,
+                            whole: instruction.id,
+                            path: Vec::new(),
+                        },
+                    );
+                    instruction.op.clone()
+                }
+                Op::Sample(input) if self.narrowable(*input, instruction.ty) => {
+                    reads.insert(
+                        instruction.id.0,
+                        Read {
+                            input: *input,
+                            at: None,
                             element: instruction.ty,
                             whole: instruction.id,
                             path: Vec::new(),
@@ -1018,7 +1031,9 @@ fn operands(op: &Op) -> Vec<ValueId> {
         Op::Subscript(array, index) => vec![*array, *index],
         Op::Call(_, args) | Op::Intrinsic(_, args) => args.clone(),
         Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) => vec![*at],
-        Op::Part { at, path, .. } => std::iter::once(*at)
+        Op::Part { at, path, .. } => at
+            .iter()
+            .copied()
             .chain(path.iter().filter_map(|step| match step {
                 Step::Index(index) => Some(*index),
                 Step::Field(_) => None,
@@ -1428,7 +1443,9 @@ fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
         }
         Op::At(_, at) | Op::AtLinear(_, at) | Op::Key(at) | Op::Button(at) => *at = map(*at),
         Op::Part { at, path, .. } => {
-            *at = map(*at);
+            if let Some(at) = at {
+                *at = map(*at);
+            }
             for step in path {
                 if let Step::Index(index) = step {
                     *index = map(*index);

@@ -302,7 +302,9 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                 }
                 Op::At(_, a) | Op::AtLinear(_, a) | Op::Key(a) | Op::Button(a) => note(a),
                 Op::Part { at, path, .. } => {
-                    note(at);
+                    if let Some(at) = at {
+                        note(at);
+                    }
                     for step in path {
                         if let orla_ir::Step::Index(index) = step {
                             note(index);
@@ -898,8 +900,7 @@ impl FunctionCompiler<'_> {
                 Instr::Part {
                     dst: dst.at,
                     input: *input as usize,
-                    address: self.loc(at).at,
-                    kind: self.address(at),
+                    address: at.map(|at| (self.loc(&at).at, self.address(&at))),
                     base,
                     steps,
                     n: dst.n,
