@@ -1110,6 +1110,25 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+What the graph costs a node now, from a hundred and twenty-eight to
+four thousand and ninety-six of them: 2.03, 2.13, 2.48, 2.90
+microseconds. Thirty-two times the nodes for one and a half times the
+cost a node, which is the log of a map and the names getting longer,
+and is what linear looks like in practice.
+
+The rest of the axes were probed and are clean, which is worth writing
+down so that nobody probes them again. A protocol session does not
+degrade: four thousand rounds of a parameter and an evaluation are
+0.188 milliseconds a round from the first thousand to the last, and
+twelve hundred republishes of the Kernel a scene is using are 0.23
+milliseconds each throughout, with the Kernel count unmoved — no
+generation piles up. A hundred million elements in one `Rows`
+dispatches on the device. Nothing drifts over four thousand frames. The
+cost of a port is flat. The Host's slot table is indexed by handle, and
+the only walk left in it is over a pile of eight buffers. The one
+quadratic left is in `sync_assets`, over the files a scene declares
+against the files it has, which are the same handful.
+
 Two more walks, on the path a replay and the protocol take. The demand
 walk — what an evaluation must run when only some outputs are asked for
 — found each node by name in the node list, and that path is the one a
