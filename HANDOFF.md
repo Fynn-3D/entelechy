@@ -1110,6 +1110,28 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+The hunt went on along the axes a Kernel can be wide in, and the ports
+turned up something that was not a square but a wall. The cost of a
+port is flat — thirty-two nodes of two, eight, thirty-two and
+sixty-four inputs come to about half a microsecond a port a node on the
+JIT, and the manifest walks in `bind` are over a handful of names —
+but on the GPU a Kernel of eight inputs was refused outright, with a
+page of the driver's validation. A Kernel's ports are buffers a device
+binds at once, one for the output and one for each input, and the
+backend asked the device for `wgpu::Limits::default()` except for two
+it raised: the default is eight storage buffers a stage, and the
+adapter offers twenty-nine. It asks for what the adapter offers now, so
+a Kernel of twenty-eight inputs runs where seven was the wall, and what
+is left is the device's own and said in Orla's terms at publish —
+"`k@1` binds 30 Fields at once (29 input(s) and its output) and this
+device binds at most 29; the interpreter and the JIT have no such
+limit" — rather than as a validation dump. The reference says so too.
+
+Two more ceilings were looked for and are not there: a hundred million
+elements in one `Rows` dispatches correctly on the device (the fold
+into two and three dimensions holds), and nothing drifts over four
+thousand frames.
+
 Then the same question along the other axes, since one square was
 unlikely to be alone. Nothing drifts over a long run — `fluid` is 1.95
 ms a frame over a hundred frames and 1.85 over four thousand, `rubik`

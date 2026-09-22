@@ -297,9 +297,17 @@ impl GpuBackend {
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .map_err(|error| GpuError(error.to_string()))?;
         let adapter_limits = adapter.limits();
+        // What the device will bind at once is what a Kernel's ports
+        // come to: one buffer for the output and one for each input, so
+        // the default of eight refused a Kernel of eight inputs that the
+        // interpreter and the JIT run. The adapter offers what it offers
+        // — twenty-nine on this one — and there is no reason to ask for
+        // less.
         let required_limits = wgpu::Limits {
             max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
             max_buffer_size: adapter_limits.max_buffer_size,
+            max_storage_buffers_per_shader_stage: adapter_limits
+                .max_storage_buffers_per_shader_stage,
             ..wgpu::Limits::default()
         };
         // Timestamps at a pass's edges, when the adapter has them: what
@@ -729,6 +737,20 @@ impl Backend for GpuBackend {
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        // A Kernel's ports are buffers the device binds at once: one for
+        // the output, one for each input, and a scatter's target is one
+        // of the inputs. Saying so here is the difference between a
+        // Kernel that is too wide for this device and a page of the
+        // driver's validation.
+        let wanted = module.manifest.inputs.len() + 1;
+        let allowed = self.device.limits().max_storage_buffers_per_shader_stage as usize;
+        if wanted > allowed {
+            return Err(format!(
+                "`{}` binds {wanted} Fields at once ({} input(s) and its output) and this device binds at most {allowed}; the interpreter and the JIT have no such limit",
+                module.manifest.id,
+                module.manifest.inputs.len()
+            ));
+        }
         let source = wgsl::emit(module);
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = self

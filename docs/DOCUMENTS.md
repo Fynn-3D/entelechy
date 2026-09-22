@@ -37,8 +37,13 @@ kernel image.grayscale@1 {
 The id `name@version` is the Kernel's identity; graphs bind to it and never
 to a file.
 
-Every port carries a Field: elements of one type in one shape. The shapes
-are the dense lattices a Kernel can be mapped over, and there are three:
+Every port carries a Field: elements of one type in one shape. A Kernel
+may declare as many ports as it likes; a device binds them all at once,
+so a GPU backend refuses a Kernel whose inputs and output come to more
+than its adapter allows (twenty-nine on an Apple M4, and the refusal
+says the numbers), where the interpreter and the JIT have no limit. The
+shapes are the dense lattices a Kernel can be mapped over, and there
+are three:
 
 | Shape | Address | `size(f)` | `domain =` in a graph |
 |---|---|---|---|

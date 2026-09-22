@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| A Kernel as wide as the device | [gpu](crates/gpu/src/lib.rs) `required_limits`, `prepare` | a Kernel of twenty-eight inputs runs on the GPU where eight was refused |
 | A graph of a thousand states | [evaluate](crates/graph/src/evaluate.rs) `cached_handles`, `committed_handles`, `cache_put`, `commit_put`, `commit` | a `debug_assert` that the counts agree with the walk, on every test run; every replay bit for bit |
 | A graph of a thousand nodes | [graph](crates/graph/src/lib.rs) `Graph::index`, `order`, [evaluate](crates/graph/src/evaluate.rs) `prune`, `plan`, `planned_domain` | every replay bit for bit; measured by `orla bench` on chains of 128 to 2048 nodes |
 | A buffer big enough, not exact | [gpu](crates/gpu/src/lib.rs) `Spare::take` | every replay bit for bit; measured by `orla bench` on a scene whose Fields change size |
