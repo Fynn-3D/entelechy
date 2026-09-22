@@ -707,8 +707,10 @@ The Player's line had the same hole in it: a GPU's work lands in
 `present`, where the display's refresh also is, so 22 ms of work and
 16 ms of waiting for vsync read the same. With the line up it now
 waits for the device once evaluating has handed it everything and
-shows what that took as `gpu`, which leaves `present` the refresh it
-is really waiting for. Asking costs the overlap between one frame's
+shows what that took as `device`, which leaves `present` the refresh it
+is really waiting for. `device` and not `gpu`, which the same line
+already says further along as the name of the backend: the first
+spelling of it said `gpu` twice and meant two things. Asking costs the overlap between one frame's
 device work and the next frame's own, so nothing but the line asks,
 and a backend with no device of its own has no such field.
 

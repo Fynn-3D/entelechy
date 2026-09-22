@@ -677,8 +677,10 @@ capability claim.
   plainer question every frame while it is up: it waits for the device
   once evaluating has given it everything
   ([`Runtime::settle_device`](crates/runtime/src/lib.rs)) and shows what
-  that took as `gpu`, so the device's work is a number of its own rather
-  than a share of `present`, where the display's refresh is. A backend
+  that took as `device` (not `gpu`: the backend's own name is already
+  that, further along the same line), so the device's work is a number
+  of its own rather than a share of `present`, where the display's
+  refresh is. A backend
   with no device of its own ([`Backend::has_device`](crates/runtime/src/lib.rs))
   has no such field. Asking costs the overlap between one frame's device
   work and the next frame's own, which is why nothing but the line

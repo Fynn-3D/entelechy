@@ -181,8 +181,10 @@ impl Stats {
         } else {
             0.0
         };
+        // `device`, not `gpu`: the backend's own name follows, and one
+        // line cannot say `gpu` twice and mean two things.
         let device = match self.device {
-            Some(device) => format!("gpu {device:.2} ms | "),
+            Some(device) => format!("device {device:.2} ms | "),
             None => String::new(),
         };
         format!(
@@ -226,7 +228,8 @@ mod tests {
             stats.line("x")
         );
         // A backend with a device says what the device took, which is
-        // then not part of presenting.
+        // then not part of presenting, and is not called `gpu`: the
+        // backend's own name is already that.
         let mut stats = Stats::default();
         stats.begin();
         stats.record(
@@ -236,7 +239,7 @@ mod tests {
         );
         assert!(
             stats.line("x").starts_with(
-                "frame 0.0 ms (0 fps) | eval 2.00 ms | gpu 1.45 ms | present 0.50 ms | x"
+                "frame 0.0 ms (0 fps) | eval 2.00 ms | device 1.45 ms | present 0.50 ms | x"
             ),
             "{}",
             stats.line("x")
