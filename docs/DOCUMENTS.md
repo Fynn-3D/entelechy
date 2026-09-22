@@ -164,11 +164,21 @@ and `mul_wrap` are the arithmetic modulo 2^32 (a machine's ALU), where
 `+ - *` report an overflow as a failure, and `popcount`, `clz`, `ctz`,
 `rotl`, `rotr`, `ult`, `udiv`, `urem`, `mulhi` and `umulhi` are the bit
 counts, rotations, unsigned compare and division, and the high half of a
-64-bit product. `orla help <name>` shows any builtin's signatures. One
-caveat: a NaN made by arithmetic on the GPU (`inf * 0`, or `sqrt` of a
-negative) may come out a number under a driver's fast math, where the
-interpreter and the JIT have NaN; a NaN read from a Field is
-seen alike on every backend. What every backend does agree on, and what
+64-bit product. `orla help <name>` shows any builtin's signatures.
+
+Two caveats, both about a device. A NaN made by arithmetic on the GPU
+(`inf * 0`, or `sqrt` of a negative) may come out a number under a
+driver's fast math, where the interpreter and the JIT have NaN; a NaN
+read from a Field is seen alike on every backend. And arithmetic that
+cannot produce a value — an overflow of `+ - *`, a division or
+remainder by zero — is a failure on the interpreter and the JIT, naming
+the first element in row-major order that has it, and is **not** a
+failure on a device: `+ - *` give what `add_wrap`, `sub_wrap` and
+`mul_wrap` give, `x / 0` gives `x`, and `x % 0` gives zero. Finding an
+overflow on a device means testing every operation for it and telling
+the Host, which is a wait a node; the reference is where a Kernel is
+held to the rule, which is what running a replay on all three backends
+is for. What every backend does agree on, and what
 the feature matrix holds them to: a positive divided by zero is an
 infinity, zero divided by zero is not a number, and nothing equals or
 orders against a not-a-number. An `Int` literal may be hexadecimal, `0xFF`, its 32 bits as

@@ -1151,6 +1151,27 @@ device. The two compare equal, and making them agree costs a NaN test
 in a hot intrinsic; the contract is that the backends agree on every
 value, and which zero comes out of `min` is the backend's.
 
+The sweep went on past those four. A float sum reduced over seventeen,
+a thousand and a hundred thousand elements is the same bits on all
+three, which is the shared fold tree holding. A scatter whose addresses
+are negative, past the end, or converted from a NaN or an infinity
+lands identically. The inverse of a singular matrix is the same NaNs
+and infinities everywhere. None of those needed anything.
+
+One more did, and it is a caveat rather than a fix. Arithmetic that
+cannot produce a value — an overflow of `+ - *`, a division or a
+remainder by zero — is a failure on the interpreter and the JIT, which
+name the first element in row-major order that has it, and is not a
+failure on a device at all: `+ - *` give what the wrapping ones give,
+`x / 0` gives `x`, `x % 0` gives zero, and the frame goes on. The
+documents said "`+ - *` report an overflow as a failure" without saying
+where. Finding an overflow on a device means testing every operation
+for it and telling the Host, which is a wait a node — the thing this
+round measured at two tenths of a millisecond and a third of a frame —
+so the reference is where a Kernel is held to the rule, and running a
+replay on all three backends is what holds it. The documents say that
+now.
+
 Three rows went into the feature matrix so none of this comes back:
 `conversion edges`, `angles at the origin`, and `not a number through`,
 each run under all five modes on all three backends, which is how the
