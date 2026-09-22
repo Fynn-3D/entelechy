@@ -1561,6 +1561,35 @@ optimizer, so it can still follow the calls.
 
 ## Open
 
+The next thing worth building, and how to start it: a tile — memory a
+group of elements shares, and the barrier between writing it and
+reading it. It is what a parallel prefix sum, a blocked Jacobi, an FFT
+and a sorting network all need, and none of them can be written well
+without it. `fluid` is the standing case: three quarters of a Jacobi
+step is that it is a node, and a step that did several passes inside
+one dispatch would not be.
+
+The hard part is not the device. WGSL has `var<workgroup>` and
+`workgroupBarrier()`. The hard part is that the interpreter and the JIT
+must give the same answer, and a barrier has no meaning where there is
+one thread: the language would have to say what a tile is — a group of
+`n` elements that share a Field and meet at a barrier — so that a
+device maps it to a workgroup and the other two run the whole tile
+through, one element at a time, to each barrier and then on. That is a
+new scope in the IR, a visibility rule for what a tile shares, and an
+order between barriers, and all three belong in `orla-rules` before any
+backend sees them, or the three will drift the way the four edges
+drifted this round.
+
+So the first step is a measurement, not a design. Write the blocked
+prefix sum and the blocked Jacobi as hand-written WGSL, outside Orla,
+and see what they are worth against what a scene writes today. Under
+three times, the feature is not worth what it costs; over, the shape it
+wants is the shape to design. The numbers to beat are here: a
+sequential scan is 0.26 ms for four thousand and 0.54 for sixty-five
+thousand, a node costs 0.027 ms in a frame whatever it does, and
+`fluid` at 1280x720 is 0.037 ms a node over forty-six of them.
+
 A structure round against the Code Rules (no behaviour change; the
 matrix and every replay bit for bit): the rules every backend shares
 moved out of the CPU crate into `orla-rules`; `gpu::execute` is a
