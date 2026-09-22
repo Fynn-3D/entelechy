@@ -1043,6 +1043,49 @@ carries about 0.19 ms over a map whatever its size, which is its two
 passes — `last` applies with atomics and then gathers — and is
 structural rather than wasteful.
 
+What that per-node cost is, since it is the largest thing left that
+every scene pays and an earlier round had declined to fix it on a
+reason that turns out to be the wrong one. Measured as the slope of one
+to a hundred and twenty-eight tiny nodes: the GPU 26 microseconds a
+node, the JIT 2.4, the interpreter 4.5. So about 2 of it is the graph
+and 24 is the device backend's.
+
+It is not the submission. Timed inside `execute`: staging 3
+microseconds, the bind group 0.9, the submission 8, the error scope
+0.1 — 13 in all, and the earlier round's figure of 60 for a submission
+is not what this machine does. Nor does the 13 show up in a frame,
+because it is the CPU's and the device is working on the node before
+while it happens. What the frame pays is the device's own launch of a
+pass, which is most of the 26 and is not ours to spend or save.
+
+The proof is fusion. A hundred and twenty-eight nodes in a chain, each
+reading the one before at a computed address so none of them fuse, is
+3.41 ms a frame; the same hundred and twenty-eight reading `sample`, so
+they fuse into one, is 0.89. Fusion is the only thing that takes a pass
+away, and it already does.
+
+Batching the frame's commands into one encoder and one submission was
+tried again, properly this time, and it is not merely not worth it: it
+is unsound. The context and the parameters live in one pair of uniform
+buffers kept between nodes and rewritten with `queue.write_buffer`,
+which orders against submissions and not against recording — so every
+node of a batch reads the last node's uniforms. Twenty-six of the
+forty-one replays failed on the GPU, which is what that looks like. To
+batch, every node would need uniform buffers of its own, trading an
+allocation for a submission that was not the cost. And the shape of the
+curve says so as well: at a batch of four the tiny-node probe went 3.54
+to 3.33 ms and real scenes did not move, and at a batch of two hundred
+and fifty-six it went to 4.65, because the device waits for the whole
+frame to be recorded before it starts any of it. Declined for good, and
+now for the right reason.
+
+One thing the device could do and wgpu cannot ask for: several
+dispatches in one compute pass, which is where Metal's per-encoder cost
+goes. Consecutive dispatches in one wgpu pass have no barrier between
+them, and a chain of nodes needs one, so every node is a pass of its
+own. That is the floor until a backend can say "dispatch, then a
+barrier, then dispatch" inside a pass.
+
 The third thing the renderer wanted turned out not to be a change to
 Orla at all. A texture running away from the eye crawls because
 `at_linear` blends four texels of one Field and a distant pixel covers

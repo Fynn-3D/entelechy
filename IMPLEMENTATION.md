@@ -636,6 +636,21 @@ capability claim.
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
 
+- What a node costs beyond its work, measured and left alone: on the
+  GPU 26 microseconds a node (the slope of one to a hundred and
+  twenty-eight tiny nodes), of which the graph is 2 and the backend 24.
+  The backend's own CPU work is 13 (staging 3, the bind group 0.9, the
+  submission 8) and it hides behind the device working on the node
+  before; what the frame pays is the device's launch of a pass. Fusion
+  is the only thing that takes a pass away and already does: a hundred
+  and twenty-eight unfusable nodes are 3.41 ms a frame and the same
+  hundred and twenty-eight fused are 0.89. Batching a frame into one
+  submission is unsound, not merely unprofitable — the context and
+  parameter uniforms are one pair of buffers rewritten per node with
+  `queue.write_buffer`, which orders against submissions and not
+  against recording, so a batch's nodes all read the last one's
+  uniforms.
+
 - A reduction folds sixteen at a time, in the same tree
   ([`orla_rules::reduce`](crates/rules/src/reduce.rs),
   [`emit_reduce`](crates/gpu/src/wgsl.rs)): the tree is pairwise with an
