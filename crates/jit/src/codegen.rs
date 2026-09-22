@@ -1506,6 +1506,28 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .ins()
                     .load(types::F32, self.settled, self.ctx, offsets::POINTER + 4),
             ],
+            Op::Stick(which) => {
+                // Three pairs in the context, the number held inside
+                // them: an eight-byte step from the first.
+                let which = self.words(which)[0];
+                let zero = self.i32c(0);
+                let last = self.i32c(2);
+                let floored = self.b.ins().smax(which, zero);
+                let held = self.b.ins().smin(floored, last);
+                let off = self.b.ins().imul_imm(held, 8);
+                let wide = self.b.ins().sextend(self.ptr, off);
+                let base = self.b.ins().iadd_imm(self.ctx, offsets::STICKS as i64);
+                let at = self.b.ins().iadd(base, wide);
+                // A number outside the three is a pair of zeros.
+                let inside = self.b.ins().icmp(IntCC::Equal, which, held);
+                let x = self.b.ins().load(types::F32, self.settled, at, 0);
+                let y = self.b.ins().load(types::F32, self.settled, at, 4);
+                let none = self.f32c(0.0);
+                vec![
+                    self.b.ins().select(inside, x, none),
+                    self.b.ins().select(inside, y, none),
+                ]
+            }
             Op::Wheel => vec![
                 self.b
                     .ins()

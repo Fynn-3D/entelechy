@@ -10,8 +10,11 @@
 //! Select              Escape (27)
 //! ```
 //!
-//! Analog values are not exposed yet; when a Kernel needs them they belong
-//! in the context beside the pointer.
+//! The analog values are in the context beside the pointer: `stick(0)` is
+//! the left stick, `stick(1)` the right, `stick(2)` the two triggers, and
+//! the pad's buttons are `button(8)` upwards (south, east, west, north,
+//! the shoulders, the thumbs, start, select). A scene written for arrows
+//! still plays, since the stick presses them too.
 
 use gilrs::{Axis, Button, EventType, Gilrs};
 use orla_runtime::InputState;
@@ -22,6 +25,34 @@ pub struct Gamepad {
     /// Which arrow keys the stick currently holds, so a stick that drifts
     /// back releases them.
     stick_keys: [bool; 4],
+}
+
+/// The button number a pad button holds, if any: `orla_abi::pad`.
+pub fn button_for(button: Button) -> Option<i32> {
+    use orla_runtime::pad;
+    Some(match button {
+        Button::South => pad::SOUTH,
+        Button::East => pad::EAST,
+        Button::West => pad::WEST,
+        Button::North => pad::NORTH,
+        Button::LeftTrigger => pad::LEFT_SHOULDER,
+        Button::RightTrigger => pad::RIGHT_SHOULDER,
+        Button::LeftThumb => pad::LEFT_THUMB,
+        Button::RightThumb => pad::RIGHT_THUMB,
+        Button::Start => pad::START,
+        Button::Select => pad::SELECT,
+        _ => return None,
+    })
+}
+
+/// A stick's rest is never quite zero, so a little of it is nothing.
+fn deadened(value: f32) -> f32 {
+    let dead = 0.12;
+    if value.abs() <= dead {
+        0.0
+    } else {
+        ((value.abs() - dead) / (1.0 - dead)).min(1.0) * value.signum()
+    }
 }
 
 /// The key code a button maps to, if any.
@@ -63,13 +94,30 @@ impl Gamepad {
                     if let Some(code) = key_for(button) {
                         input.set_key(code, true);
                     }
+                    if let Some(code) = button_for(button) {
+                        input.set_button(code, true);
+                    }
                 }
                 EventType::ButtonReleased(button, _) => {
                     if let Some(code) = key_for(button) {
                         input.set_key(code, false);
                     }
+                    if let Some(code) = button_for(button) {
+                        input.set_button(code, false);
+                    }
                 }
                 EventType::AxisChanged(axis, value, _) => {
+                    // The analog value as it is, less its dead middle.
+                    let held = deadened(value);
+                    match axis {
+                        Axis::LeftStickX => input.sticks[0][0] = held,
+                        Axis::LeftStickY => input.sticks[0][1] = held,
+                        Axis::RightStickX => input.sticks[1][0] = held,
+                        Axis::RightStickY => input.sticks[1][1] = held,
+                        Axis::LeftZ => input.sticks[2][0] = held.abs(),
+                        Axis::RightZ => input.sticks[2][1] = held.abs(),
+                        _ => {}
+                    }
                     // The stick presses an arrow past a threshold and
                     // releases it well inside, so it never chatters.
                     let (negative, positive) = match axis {

@@ -29,7 +29,7 @@ pub const WORKGROUP: u32 = 8;
 /// 0]`, where `fold` is the elements each unit of `gid.y` stands for
 /// when a long `Rows` domain is dispatched as a grid of workgroups (zero
 /// otherwise). Each input then has `[width, height, depth, 0]`.
-pub const CONTEXT_HEAD: usize = 6;
+pub const CONTEXT_HEAD: usize = 8;
 
 /// The context word holding 1, as an expression: a value the shader
 /// compiler cannot fold, multiplied into an integer dividend so that a
@@ -227,8 +227,14 @@ fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
     let word = bitcast<u32>(ctx[2u + (c >> 7u)][(c >> 5u) & 3u]);
     return ((word >> (c & 31u)) & 1u) == 1u;
 }}
+fn stick_at(which: i32) -> vec2<f32> {{
+    if (which == 0) {{ return ctx[6].xy; }}
+    if (which == 1) {{ return ctx[6].zw; }}
+    if (which == 2) {{ return ctx[7].xy; }}
+    return vec2<f32>(0.0, 0.0);
+}}
 fn button_down(code: i32) -> bool {{
-    if (code < 0 || code > 2) {{ return false; }}
+    if (code < 0 || code > 23) {{ return false; }}
     return ((u32(ctx[0].w) >> u32(code)) & 1u) == 1u;
 }}"
     );
@@ -1795,6 +1801,7 @@ impl Emitter<'_> {
             Op::PointerDown => "button_down(0)".to_owned(),
             Op::Button(code) => format!("button_down({})", v(code)),
             Op::Wheel => "ctx[4].xy".to_owned(),
+            Op::Stick(which) => format!("stick_at({})", v(which)),
             Op::Window => "ctx[4].zw".to_owned(),
             Op::Scale => "ctx[5].x".to_owned(),
             Op::Key(code) => format!("key_down({})", v(code)),

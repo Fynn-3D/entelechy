@@ -26,6 +26,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
 pub use orla_abi::file;
+pub use orla_abi::pad;
 pub use orla_abi::{
     ABI_VERSION, Context, Domain, FieldData, Handle, Host, HostError, Image, InputState,
     Invocation, Pixel, Scalar, Schema, Scope, Shape, Value,

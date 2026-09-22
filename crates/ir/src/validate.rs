@@ -875,6 +875,16 @@ impl<'a> Checker<'a> {
                 }
                 Type::Bool
             }
+            Op::Stick(which) => {
+                self.require(Capability::InputRead, position)?;
+                let actual = self.operand(*which, position)?;
+                if actual != Type::Int {
+                    return Err(self.fail(format!(
+                        "{position} asks for a stick numbered {actual}, not an Int"
+                    )));
+                }
+                Type::Vec2
+            }
             Op::Wheel => {
                 self.require(Capability::InputRead, position)?;
                 Type::Vec2

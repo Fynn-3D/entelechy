@@ -47,6 +47,8 @@ pub struct Ctx {
     rate: f32,
     pointer: [f32; 2],
     wheel: [f32; 2],
+    /// A pad's axis pairs: the left stick, the right, the triggers.
+    sticks: [[f32; 2]; 3],
     window: [f32; 2],
     scale: f32,
     buttons: u32,
@@ -278,6 +280,7 @@ fn shared(
         rate: invocation.context.rate,
         pointer: input.pointer,
         wheel: input.wheel,
+        sticks: input.sticks,
         window: invocation.context.window,
         scale: invocation.context.scale,
         buttons: input.button_bits(),
@@ -340,6 +343,7 @@ fn compute_into(
         rate: t.rate,
         pointer: t.pointer,
         wheel: t.wheel,
+        sticks: t.sticks,
         window: t.window,
         scale: t.scale,
         buttons: t.buttons,
@@ -785,9 +789,10 @@ unsafe extern "C" fn orla_jit_key(ctx: *const Ctx, code: i32) -> i32 {
     ((keys[(code >> 5) as usize] >> (code & 31)) & 1) as i32
 }
 
-/// Whether a pointer button is held: 0 left, 1 right, 2 middle.
+/// Whether a button is held: 0 left, 1 right, 2 middle of a pointer,
+/// then a pad's from 8.
 unsafe extern "C" fn orla_jit_button(ctx: *const Ctx, code: i32) -> i32 {
-    if !(0..3).contains(&code) {
+    if !(0..orla_abi::BUTTONS).contains(&code) {
         return 0;
     }
     let bits = unsafe { (*ctx).buttons };
@@ -924,6 +929,7 @@ pub(crate) mod offsets {
     pub const RATE: i32 = std::mem::offset_of!(Ctx, rate) as i32;
     pub const POINTER: i32 = std::mem::offset_of!(Ctx, pointer) as i32;
     pub const WHEEL: i32 = std::mem::offset_of!(Ctx, wheel) as i32;
+    pub const STICKS: i32 = std::mem::offset_of!(Ctx, sticks) as i32;
     pub const WINDOW: i32 = std::mem::offset_of!(Ctx, window) as i32;
     pub const SCALE: i32 = std::mem::offset_of!(Ctx, scale) as i32;
     pub const WIDTH: i32 = std::mem::offset_of!(Ctx, width) as i32;

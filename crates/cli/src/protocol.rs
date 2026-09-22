@@ -354,12 +354,7 @@ pub fn context_of(session: &Session, request: &Json) -> Context {
     context.input.pointer_down = request.get("down").and_then(Json::as_bool).unwrap_or(false);
     if let Some(buttons) = request.get("buttons").and_then(Json::as_array) {
         for button in buttons.iter().filter_map(Json::as_i64) {
-            match button {
-                0 => context.input.pointer_down = true,
-                1 => context.input.pointer_right = true,
-                2 => context.input.pointer_middle = true,
-                _ => {}
-            }
+            context.input.set_button(button as i32, true);
         }
     }
     if let Some(wheel) = request.get("wheel").and_then(Json::as_array) {
@@ -367,6 +362,18 @@ pub fn context_of(session: &Session, request: &Json) -> Context {
             wheel.first().and_then(Json::as_f64).unwrap_or(0.0) as f32,
             wheel.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
         ];
+    }
+    // A pad's axes: `"sticks": [[lx, ly], [rx, ry], [lt, rt]]`, as many
+    // pairs as are given.
+    if let Some(sticks) = request.get("sticks").and_then(Json::as_array) {
+        for (slot, pair) in sticks.iter().take(3).enumerate() {
+            if let Some(pair) = pair.as_array() {
+                context.input.sticks[slot] = [
+                    pair.first().and_then(Json::as_f64).unwrap_or(0.0) as f32,
+                    pair.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
+                ];
+            }
+        }
     }
     if let Some(keys) = request.get("keys").and_then(Json::as_array) {
         for key in keys.iter().filter_map(Json::as_i64) {

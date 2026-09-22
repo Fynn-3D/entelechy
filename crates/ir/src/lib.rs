@@ -1093,6 +1093,11 @@ pub enum Op {
     /// What the wheel scrolled since the last evaluation, as `Vec2`.
     /// Context: `input.read`.
     Wheel,
+    /// A pad's axis pair by number, as `Vec2`: 0 the left stick, 1 the
+    /// right, 2 the two triggers. Sticks run `-1..1` with `y` away from
+    /// the person, triggers `0..1`; all zero without a pad.
+    /// Context: `input.read`.
+    Stick(ValueId),
     /// The window's size in physical pixels as `Vec2`, zero by zero
     /// without a window. Context: `input.read`.
     Window,

@@ -1081,6 +1081,10 @@ impl GpuBackend {
         // The third word is a one the shader compiler cannot see through
         // (`wgsl::OPAQUE_ONE`); the fourth is spare.
         context.extend_from_slice(&[invocation.context.scale, fold as f32, 1.0, 0.0]);
+        // The pad: two sticks in one vec4, the triggers in the next.
+        let sticks = input.sticks;
+        context.extend_from_slice(&[sticks[0][0], sticks[0][1], sticks[1][0], sticks[1][1]]);
+        context.extend_from_slice(&[sticks[2][0], sticks[2][1], 0.0, 0.0]);
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());

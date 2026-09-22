@@ -504,7 +504,7 @@ impl<'a> Renumber<'a> {
                 *address = self.map(*address);
                 *value = self.map(*value);
             }
-            Op::Key(code) | Op::Button(code) => *code = self.map(*code),
+            Op::Key(code) | Op::Button(code) | Op::Stick(code) => *code = self.map(*code),
             Op::Const(_)
             | Op::Param(_)
             | Op::Arg(_)

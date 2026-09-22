@@ -185,8 +185,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "context",
-            "let t = time() + rate() + window().x + window().y + scale() + pointer().x + pointer().y + wheel().x + wheel().y; let keys = int(key(65)) + int(key(37)) * 2 + int(pointer_down()) * 4 + int(button(1)) * 8 + int(button(2)) * 16;",
-            "Out { f: t, i: keys, b: key(32), v: vec3(window().x, scale(), 0.0) }",
+            "let t = time() + rate() + window().x + window().y + scale() + pointer().x + pointer().y + wheel().x + wheel().y; let keys = int(key(65)) + int(key(37)) * 2 + int(pointer_down()) * 4 + int(button(1)) * 8 + int(button(2)) * 16; let pad = stick(0) + stick(1) * 2.0 + stick(2) * 4.0 + stick(9); let held = int(button(8)) + int(button(11)) * 2 + int(button(16)) * 4 + int(button(23)) * 8;",
+            "Out { f: t + pad.x + pad.y, i: keys + held * 32, b: key(32), v: vec3(window().x, scale(), pad.y) }",
         ),
         (
             "params",
@@ -438,6 +438,12 @@ pub fn context() -> Context {
     input.set_key(65, true);
     input.set_key(37, true);
     input.set_key(32, true);
+    // A pad: both sticks off centre, one trigger half down, and three
+    // of its buttons held.
+    input.sticks = [[0.625, -0.375], [-0.8125, 0.25], [0.5, 0.0]];
+    input.set_button(orla_abi::pad::SOUTH, true);
+    input.set_button(orla_abi::pad::NORTH, true);
+    input.set_button(orla_abi::pad::START, true);
     Context {
         time: 1.5,
         rate: 48000.0,

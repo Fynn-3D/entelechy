@@ -316,9 +316,22 @@ capability claim.
   [feedback tests](crates/graph/tests/composition.rs),
   [Life example](examples/life/README.md)).
 - Input is context, like time: `pointer()`, `pointer_down()`, `button(n)`,
-  `wheel()`, and `key(code)` behind `input.read`; only nodes that declare it
-  re-execute when input changes ([ABI](crates/abi/src/lib.rs),
+  `wheel()`, `stick(n)`, and `key(code)` behind `input.read`; only nodes
+  that declare it re-execute when input changes ([ABI](crates/abi/src/lib.rs),
   [parity](crates/gpu/tests/parity.rs)).
+- A pad is context too, not a device a scene opens: `stick(0)` is the left
+  stick, `stick(1)` the right, `stick(2)` the two triggers (`x` left, `y`
+  right), each pair in the context beside the pointer, and the pad's
+  buttons are `button(8)` upwards ([`orla_abi::pad`](crates/abi/src/lib.rs)
+  names them). The Player fills them from gilrs with a dead middle taken
+  out, and still presses the arrow keys from the left stick, so a scene
+  written before a pad existed plays on one
+  ([gamepad](crates/player/src/gamepad.rs)). A replay drives them
+  (`stick left 0.5 -0.25`, `button south down`) and the protocol takes
+  `"sticks": [[lx, ly], [rx, ry], [lt, rt]]`, so what a pad does is
+  testable without one ([replay](crates/cli/src/replay.rs),
+  [protocol](crates/cli/src/protocol.rs), [feature matrix](crates/matrix/src/lib.rs)
+  `context`).
 - The window is context too, a device fact like the sound card's rate:
   `Context` carries its size in physical pixels and its scale factor, a
   node's `domain` may take them (`domain = window();`) and so may a

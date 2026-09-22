@@ -425,18 +425,70 @@ pub struct InputState {
     /// What the wheel scrolled since the last evaluation, in lines: `x`
     /// sideways, `y` positive away from the person.
     pub wheel: [f32; 2],
+    /// A pad's analog axes, each in `-1..1`: the left stick, the right
+    /// stick, and the two triggers as one pair (`x` left, `y` right,
+    /// both in `0..1`). Zero without a pad.
+    pub sticks: [[f32; 2]; 3],
+    /// A pad's buttons as bits, the lowest being [`pad::SOUTH`].
+    pad_buttons: u32,
     keys: [u32; 8],
 }
 
+/// How many buttons `InputState::button` knows: three of a pointer's,
+/// then a pad's from 8.
+pub const BUTTONS: i32 = 24;
+
+/// A pad's buttons, by the number `button()` takes.
+pub mod pad {
+    /// The lower face button (A, Cross).
+    pub const SOUTH: i32 = 8;
+    /// The right face button (B, Circle).
+    pub const EAST: i32 = 9;
+    /// The left face button (X, Square).
+    pub const WEST: i32 = 10;
+    /// The upper face button (Y, Triangle).
+    pub const NORTH: i32 = 11;
+    /// The left shoulder.
+    pub const LEFT_SHOULDER: i32 = 12;
+    /// The right shoulder.
+    pub const RIGHT_SHOULDER: i32 = 13;
+    /// The left stick pressed in.
+    pub const LEFT_THUMB: i32 = 14;
+    /// The right stick pressed in.
+    pub const RIGHT_THUMB: i32 = 15;
+    /// Start.
+    pub const START: i32 = 16;
+    /// Select.
+    pub const SELECT: i32 = 17;
+}
+
 impl InputState {
-    /// Whether the pointer button numbered `code` is held: 0 left, 1
-    /// right, 2 middle; any other number is never held.
+    /// Whether the button numbered `code` is held: 0 left, 1 right, 2
+    /// middle of a pointer, then a pad's from 8 (see [`pad`]); any other
+    /// number is never held.
     pub fn button(&self, code: i32) -> bool {
+        if !(0..BUTTONS).contains(&code) {
+            return false;
+        }
+        (self.button_bits() >> code) & 1 == 1
+    }
+
+    /// Holds or releases a button; numbers outside `0..BUTTONS` are
+    /// ignored, and the pointer's three keep their own fields.
+    pub fn set_button(&mut self, code: i32, down: bool) {
         match code {
-            0 => self.pointer_down,
-            1 => self.pointer_right,
-            2 => self.pointer_middle,
-            _ => false,
+            0 => self.pointer_down = down,
+            1 => self.pointer_right = down,
+            2 => self.pointer_middle = down,
+            code if (8..BUTTONS).contains(&code) => {
+                let bit = 1 << (code - 8);
+                if down {
+                    self.pad_buttons |= bit;
+                } else {
+                    self.pad_buttons &= !bit;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -445,6 +497,17 @@ impl InputState {
         (self.pointer_down as u32)
             | (self.pointer_right as u32) << 1
             | (self.pointer_middle as u32) << 2
+            | (self.pad_buttons & 0xFFFF) << 8
+    }
+
+    /// One of the pad's axis pairs, by the number `stick()` takes: 0 the
+    /// left stick, 1 the right, 2 the triggers. Any other number is a
+    /// pair of zeros.
+    pub fn stick(&self, which: i32) -> [f32; 2] {
+        match which {
+            0..=2 => self.sticks[which as usize],
+            _ => [0.0, 0.0],
+        }
     }
 
     /// Whether the key with `code` is held; codes outside `0..256` are never held.
@@ -487,6 +550,11 @@ impl InputState {
         feed(self.button_bits());
         feed(self.wheel[0].to_bits());
         feed(self.wheel[1].to_bits());
+        for pair in self.sticks {
+            feed(pair[0].to_bits());
+            feed(pair[1].to_bits());
+        }
+        feed(self.pad_buttons);
         for word in self.keys {
             feed(word);
         }

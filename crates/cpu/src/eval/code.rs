@@ -357,6 +357,11 @@ pub(super) enum Instr {
         dst: usize,
         code: usize,
     },
+    /// `dst` = the pad axis pair numbered by the slot at `which`.
+    Stick {
+        dst: usize,
+        which: usize,
+    },
     Wheel {
         dst: usize,
     },

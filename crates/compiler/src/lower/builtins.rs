@@ -345,6 +345,21 @@ impl Builder<'_> {
                 }
                 Ok(self.emit(Type::Bool, Op::Button(code)))
             }
+            "stick" => {
+                self.require(name, Capability::InputRead, span)?;
+                self.arity(name, args, 1, span)?;
+                let which = self.value(&args[0])?;
+                if self.ty(which) != Type::Int {
+                    return Err(semantic(
+                        args[0].span,
+                        format!(
+                            "`stick` needs an Int number, found {}",
+                            self.describe(self.ty(which))
+                        ),
+                    ));
+                }
+                Ok(self.emit(Type::Vec2, Op::Stick(which)))
+            }
             "wheel" => {
                 self.require(name, Capability::InputRead, span)?;
                 self.arity(name, args, 0, span)?;

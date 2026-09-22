@@ -103,7 +103,7 @@ pub(crate) fn literal(expr: &Expr) -> Result<Value, CompileError> {
 /// context and construction ones, whose forms the language owns. The
 /// math builtins are ordinary calls, and a function of one's name
 /// stands for it in its document.
-pub(super) const RESERVED_BUILTINS: [&str; 33] = [
+pub(super) const RESERVED_BUILTINS: [&str; 34] = [
     "put",
     "sample",
     "at",
@@ -125,6 +125,7 @@ pub(super) const RESERVED_BUILTINS: [&str; 33] = [
     "pointer_down",
     "button",
     "wheel",
+    "stick",
     "key",
     "index",
     "vec2",

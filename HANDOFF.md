@@ -793,6 +793,34 @@ reach, not a shading question. The replay pins five pixels of it on all
 three backends; its `detail` parameter bakes a small Field, which is
 what makes the interpreter able to answer at all.
 
+A pad's analog values are in the context now, which the gamepad file
+had said for months they belonged: `stick(0)` the left stick, `stick(1)`
+the right, `stick(2)` the two triggers, and the pad's buttons as
+`button(8)` upwards beside the pointer's three. One new operation for
+all of it rather than three (a pair by number, as `button` takes a
+number), and the existing `button` widened, which is why this cost the
+IR one variant and each backend one arm: the interpreter reads the
+pair, the JIT indexes three pairs in its context struct with the number
+clamped and selects zero outside them, the GPU carries them in two more
+words of the context head. The Player fills them from gilrs with a dead
+middle taken out, and still presses the arrow keys from the left stick,
+so every scene written before a pad existed plays on one.
+
+A replay drives a pad (`stick left 0.5 -0.25`, `button south down`) and
+the protocol takes `"sticks"`, so what a pad does is testable without
+one; the matrix's `context` row now reads both sticks, the triggers, a
+stick that does not exist and four pad buttons, under every mode, bit
+for bit on the JIT and within rounding on the GPU.
+
+This is the first half of what a scene someone walks through needs. The
+second is a renderer that takes its geometry from Blender rather than
+from a function: the pieces are already here (`native.rasterize@1` is a
+visibility buffer, `orla import` writes the rows a scene reads, and the
+bridge's Push writes those same rows with the Host watching them), and
+what they are worth is 590 thousand triangles in 12.7 ms at 1920x1080,
+where 37 thousand cost 11 — the frame is the pixels, and the triangles
+are nearly free.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

@@ -708,6 +708,11 @@ impl<'p, 's> Machine<'p, 's> {
             Instr::Button { dst, code } => {
                 s[fp + dst] = program.context.input.button(s[fp + code] as i32) as u32;
             }
+            Instr::Stick { dst, which } => {
+                let [x, y] = program.context.input.stick(s[fp + which] as i32);
+                s[fp + dst] = x.to_bits();
+                s[fp + dst + 1] = y.to_bits();
+            }
             Instr::Wheel { dst } => {
                 let [x, y] = program.context.input.wheel;
                 s[fp + dst] = x.to_bits();

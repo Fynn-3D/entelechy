@@ -71,6 +71,14 @@ pub enum Step {
     },
     /// What the wheel scrolls for the next frame.
     Wheel([f32; 2]),
+    /// Where a pad's axis pair stands: 0 the left stick, 1 the right, 2
+    /// the two triggers.
+    Stick {
+        /// Which pair.
+        which: i32,
+        /// Its two values.
+        at: [f32; 2],
+    },
     /// The window's size in pixels and its scale factor from here on.
     Window {
         /// Width and height in pixels.
@@ -188,11 +196,36 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     "left" => 0,
                     "right" => 1,
                     "middle" => 2,
-                    _ => return Err(error("button is `left`, `right`, or `middle`".into())),
+                    "south" => orla_runtime::pad::SOUTH,
+                    "east" => orla_runtime::pad::EAST,
+                    "west" => orla_runtime::pad::WEST,
+                    "north" => orla_runtime::pad::NORTH,
+                    "l1" => orla_runtime::pad::LEFT_SHOULDER,
+                    "r1" => orla_runtime::pad::RIGHT_SHOULDER,
+                    "l3" => orla_runtime::pad::LEFT_THUMB,
+                    "r3" => orla_runtime::pad::RIGHT_THUMB,
+                    "start" => orla_runtime::pad::START,
+                    "select" => orla_runtime::pad::SELECT,
+                    _ => {
+                        return Err(error(
+                            "button is `left`, `right`, `middle`, or a pad's `south`, `east`, \
+                             `west`, `north`, `l1`, `r1`, `l3`, `r3`, `start`, `select`"
+                                .into(),
+                        ));
+                    }
                 },
                 down: *state == "down",
             }),
             ["wheel", x, y] => steps.push(Step::Wheel([number(x, "x")?, number(y, "y")?])),
+            ["stick", which, x, y] => steps.push(Step::Stick {
+                which: match *which {
+                    "left" => 0,
+                    "right" => 1,
+                    "triggers" => 2,
+                    _ => return Err(error("stick is `left`, `right`, or `triggers`".into())),
+                },
+                at: [number(x, "x")?, number(y, "y")?],
+            }),
             ["window", w, h, rest @ ..] if rest.len() <= 1 => {
                 let scale = match rest {
                     [s] => number(s, "scale")?,
@@ -362,11 +395,12 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                 input.pointer_down = *down;
             }
             Step::Key { code, down } => input.set_key(*code, *down),
-            Step::Button { code, down } => match code {
-                0 => input.pointer_down = *down,
-                1 => input.pointer_right = *down,
-                _ => input.pointer_middle = *down,
-            },
+            Step::Button { code, down } => input.set_button(*code, *down),
+            Step::Stick { which, at } => {
+                if let Some(pair) = input.sticks.get_mut(*which as usize) {
+                    *pair = *at;
+                }
+            }
             Step::Wheel(delta) => input.wheel = *delta,
             Step::Reset => session.reset_state(),
             Step::Param { name, value } => {
