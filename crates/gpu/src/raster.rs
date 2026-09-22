@@ -64,18 +64,40 @@ struct Varyings {
     @location(2) @interpolate(flat) id: u32,
 };
 
+// Where a triangle's corner is, by the same clamped index the reference
+// reads.
+fn corner_at(tri: u32, k: u32) -> u32 {
+    let raw = bitcast<i32>(triangles[tri * 3u + k]);
+    return u32(clamp(raw, 0i, i32(frame.vertex_count) - 1i)) * 9u;
+}
+
+// A vertex the contract can use: every clip component finite and w above
+// zero. The test is on the words, where a NaN and an infinity are the
+// ones exponent, so no fast maths can fold it away.
+fn usable(v: u32) -> bool {
+    let w = vertices[v + 3u];
+    return (w & 0x7F800000u) != 0x7F800000u && bitcast<f32>(w) > 0.0;
+}
+
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> Varyings {
     let tri = vi / 3u;
     let corner = vi - tri * 3u;
-    let raw = bitcast<i32>(triangles[tri * 3u + corner]);
-    let v = u32(clamp(raw, 0i, i32(frame.vertex_count) - 1i)) * 9u;
+    let v = corner_at(tri, corner);
     var out: Varyings;
     out.clip = vec4<f32>(
         bitcast<f32>(vertices[v]),
         bitcast<f32>(vertices[v + 1u]),
         bitcast<f32>(vertices[v + 2u]),
         bitcast<f32>(vertices[v + 3u]));
+    // No clipping: a triangle with any vertex behind the eye, or any clip
+    // component not finite, is skipped whole. The hardware would clip it
+    // and draw what is left, which the reference does not, so the three
+    // corners are sent to one point, where nothing rasterizes.
+    if (!usable(corner_at(tri, 0u)) || !usable(corner_at(tri, 1u))
+        || !usable(corner_at(tri, 2u))) {
+        out.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
     out.normal = vec3<f32>(
         bitcast<f32>(vertices[v + 4u]),
         bitcast<f32>(vertices[v + 5u]),

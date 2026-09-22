@@ -77,10 +77,12 @@ fn addressed_inputs_do_not_fuse() {
 
 #[test]
 fn producer_helpers_with_struct_arguments_survive_fusion() {
-    // The consumer has structs of its own, so the producer's struct indices
-    // shift; a helper taking a struct argument must shift exactly once.
+    // The consumer has structs of its own, so a producer struct the
+    // consumer does not have is appended; a helper taking it as an
+    // argument must shift exactly once. The element type the two share
+    // is the same struct in the fused table, not a copy of it.
     let producer = compile(
-        "kernel test.points@1 { requires { field.write; } output result: Rows<Point>; struct Point { p: Vec2; w: Float; } fn nudge(a: Point) -> Point { return Point { p: a.p + vec2(1.0, 0.0), w: a.w }; } compute { return nudge(Point { p: vec2(float(element()), 0.0), w: 2.0 }); } }",
+        "kernel test.points@1 { requires { field.write; } output result: Rows<Point>; struct Point { p: Vec2; w: Float; } struct Wide { a: Float; b: Float; c: Float; } fn nudge(a: Wide) -> Point { return Point { p: vec2(a.a + 1.0, a.b), w: a.c }; } compute { return nudge(Wide { a: float(element()), b: 0.0, c: 2.0 }); } }",
     )
     .unwrap();
     let consumer = compile(
@@ -88,7 +90,8 @@ fn producer_helpers_with_struct_arguments_survive_fusion() {
     )
     .unwrap();
     let fused = fuse(&consumer, 0, &producer, "points").unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(fused.structs.len(), 4);
+    assert_eq!(fused.structs.len(), 4, "Point is shared, Wide is added");
+    assert_eq!(fused.structs[3].name, "points/Wide");
     let helper = fused
         .functions
         .iter()
@@ -119,4 +122,48 @@ fn producer_helpers_with_struct_arguments_survive_fusion() {
         .map(|i| f32::from_bits(host.element(output, i).unwrap()[0]))
         .collect();
     assert_eq!(values, [2.0, 4.0, 6.0]);
+}
+
+#[test]
+fn a_whole_element_the_consumer_passes_on_keeps_its_own_struct() {
+    // The consumer's sample of the fused input becomes the producer's
+    // result, so a whole element it hands around — one arm of an `if`,
+    // the other arm a struct it builds itself — has to be the same
+    // struct as its own. If the producer's copy were added to the table
+    // beside it, the two arms would yield different types and the fused
+    // module would not validate.
+    let producer = compile(
+        "kernel test.faces@1 { requires { field.write; } output result: Rows<Tri>; struct Tri { a: Int; b: Int; c: Int; } compute { let i = element(); return Tri { a: i, b: i + 1, c: i + 2 }; } }",
+    )
+    .unwrap();
+    let consumer = compile(
+        "kernel test.cull@1 { requires { field.read; field.write; } input faces: Rows<Tri>; output result: Rows<Tri>; struct Tri { a: Int; b: Int; c: Int; } compute { let t = sample(faces); return if t.a % 2 == 0 { Tri { a: 0, b: 0, c: 0 } } else { t }; } }",
+    )
+    .unwrap();
+    let fused = fuse(&consumer, 0, &producer, "faces").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(fused.structs.len(), 1, "one Tri, not two");
+
+    let mut host = Host::new(1 << 16);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(
+        &mut host,
+        [Capability::FieldRead, Capability::FieldWrite]
+            .into_iter()
+            .collect(),
+    );
+    let output = orla_cpu::CpuBackend
+        .execute(&fused, &invocation, &mut scope)
+        .unwrap()[0];
+    let rows: Vec<[u32; 3]> = (0..4)
+        .map(|i| {
+            let words = host.element(output, i).unwrap();
+            [words[0], words[1], words[2]]
+        })
+        .collect();
+    assert_eq!(rows, [[0, 0, 0], [1, 2, 3], [0, 0, 0], [3, 4, 5]]);
 }

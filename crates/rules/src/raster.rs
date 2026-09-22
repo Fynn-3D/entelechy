@@ -15,9 +15,14 @@
 //!   perspective-correct attributes and the triangle's row index as `id`.
 //!   Pixels nothing covers hold depth `1.0`, zeros, and id `-1`.
 //!
-//! No culling and no clipping: a triangle with any vertex at `w <= 0` is
-//! skipped. Triangles are drawn in row order; a nearer fragment replaces
-//! a farther one, and an equal depth keeps the earlier triangle.
+//! No culling and no clipping: a triangle with any vertex at `w <= 0`,
+//! or any clip component that is not finite, is skipped whole — not
+//! clipped at the near plane and drawn in part. A triangle of no area is
+//! skipped too, so a Kernel says "not this one" by putting its three
+//! corners on one vertex, which is how a fixed-length row of triangles
+//! draws a varying number of them. Triangles are drawn in row order; a
+//! nearer fragment replaces a farther one, and an equal depth keeps the
+//! earlier triangle.
 //!
 //! The cutout form takes one more input and one parameter:
 //! - input 2, `mask`: an `Image` whose alpha says what the surface

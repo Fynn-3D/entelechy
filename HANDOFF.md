@@ -797,10 +797,61 @@ What ten million triangles cost, once they fit: 27.8 ms a frame at
 three million — a fixed 9.8 ms of pixels and about 2.6 ms a million
 triangles, with no culling of any kind and every triangle on screen.
 The rasterizer itself is 2.4 ms of that; the rest is projecting every
-vertex and shading every pixel. A frame that culled what it cannot see,
-which a Kernel can do (a triangle whose vertices go behind the eye is
-skipped by the contract), would carry several times the geometry at the
-same cost.
+vertex and shading every pixel.
+
+That last paragraph used to end by saying a frame that culled what it
+cannot see would carry several times the geometry at the same cost. It
+was a guess, and measuring it says otherwise. A Kernel can cull: a
+triangle whose three corners are one vertex is skipped, so a map over
+the triangles writes `Tri { a: 0, b: 0, c: 0 }` for the ones it does
+not want and the row keeps the length its domain fixed. It is correct —
+the picture is bit for bit what it is with the triangles simply absent,
+on all three backends, with the camera inside the mesh. What it is
+worth is small. Two million triangles at 1920x1080: 5.53 ms as they
+are, 5.52 with a culling node that keeps every one of them, 4.85 with
+ninety-nine hundredths culled, 4.84 with all of them culled. A sheet
+that really has the twenty thousand triangles the ninety-nine per cent
+leaves is 2.57 ms.
+
+So culling by collapsing a triangle removes 0.68 ms of two million —
+the rasterizer's own per-triangle work, which was already the cheapest
+part — and cannot touch the 2.27 ms that is projecting a million
+vertices, because that Kernel's domain is fixed and it runs over every
+vertex whether or not the triangle it belongs to survives. The lesson
+is about the shape of the language, not the backend: culling in Orla
+shortens no row. What a scene of ten million triangles wants is fewer
+vertices to project, and the only thing that gives it is a graph that
+places less geometry — not a Kernel that hides some of what it is
+given.
+
+Two real faults came out of measuring it, both of which any renderer
+would have hit. Routing the triangle row through a Kernel at all —
+even one that returns what it was given — made the fused module
+invalid: `%36 branches yield S1 and S4`. Fusion appended the producer's
+structs to the consumer's table, so the consumer's sample of the fused
+input arrived carrying the producer's copy of `Tri` while the literal
+in the other arm of the `if` carried its own; the two are the same type
+and the validator could only see two indices. Structs that are the same
+structurally are now one entry in the fused table, which is also what
+makes the splice type at all. And the GPU did not keep the contract at
+the near plane: `native.rasterize` skips a triangle with any vertex at
+`w <= 0` whole, which the interpreter and the JIT do, and the device
+clipped it and drew what was left — 330 pixels where the reference drew
+none. Its vertex stage now reads all three corners' `w` and sends the
+triangle to a single point when any of them is behind the eye, which
+costs nothing measurable (two million triangles 5.54 to 5.51 ms, every
+example within noise). `examples/mesh/tests/near.replay` is the whole
+contract written down: a corner in front, the same corner at half the
+`w`, at zero, behind, three corners collapsed onto one, and a corner
+that is not a number — the picture the same on all three backends in
+every case, and the old GPU fails it.
+
+Two float divergences seen while doing this and left alone, both of
+them the shader compiler's and not the rasterizer's: a literal
+`1.0 / 0.0` in a Kernel compiles on the interpreter and the JIT and is
+refused by the device at publish ("Divide operation overflowed"), and
+`0.0 * x` where `x` is not a number is zero on the device and not a
+number on the reference.
 
 The third thing the renderer wanted turned out not to be a change to
 Orla at all. A texture running away from the eye crawls because

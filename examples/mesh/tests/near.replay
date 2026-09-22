@@ -1,0 +1,57 @@
+scene near.osn
+
+# A triangle in front of the eye: the sheet is drawn and the corners of
+# the picture are not.
+frame 0.0
+expect 32 40 = 1.0 1.0 1.0 0.01
+expect 32 20 = 1.0 1.0 1.0 0.01
+expect 20 50 = 1.0 1.0 1.0 0.01
+expect 5 50 = 0.0 0.0 0.0 0.01
+expect 32 2 = 0.0 0.0 0.0 0.01
+# Below the base, where a device that clipped the near plane instead of
+# skipping the triangle would put what was left of it.
+expect 32 60 = 0.0 0.0 0.0 0.01
+
+# Halve the third corner's w and it projects to the same point: the
+# picture does not move.
+param w 0.5
+frame 0.0
+expect 32 40 = 1.0 1.0 1.0 0.01
+expect 32 20 = 1.0 1.0 1.0 0.01
+
+# The contract at the near plane: one corner at w <= 0 and the whole
+# triangle is gone. No backend clips it and draws the rest — a device
+# rasterizer would, so its vertex stage collapses the triangle first.
+param w 0.0
+frame 0.0
+expect 32 40 = 0.0 0.0 0.0 0.01
+expect 32 20 = 0.0 0.0 0.0 0.01
+expect 32 60 = 0.0 0.0 0.0 0.01
+
+param w -0.5
+frame 0.0
+expect 32 40 = 0.0 0.0 0.0 0.01
+expect 32 20 = 0.0 0.0 0.0 0.01
+expect 32 60 = 0.0 0.0 0.0 0.01
+
+# Three corners on one vertex: nothing is drawn. This is how a Kernel
+# says "not this triangle" while the row keeps the length its domain
+# fixed, which is what culling is here.
+param collapse 1
+frame 0.0
+expect 32 40 = 0.0 0.0 0.0 0.01
+expect 32 20 = 0.0 0.0 0.0 0.01
+
+# A corner that is not a number, and one that is infinite. The reference
+# tests every clip component and skips the triangle; the device gets the
+# same answer from its own rasterizer, which draws nothing for a vertex
+# it cannot place.
+param bad 1
+frame 0.0
+expect 32 40 = 0.0 0.0 0.0 0.01
+expect 20 50 = 0.0 0.0 0.0 0.01
+
+param bad 2
+frame 0.0
+expect 32 40 = 0.0 0.0 0.0 0.01
+expect 20 50 = 0.0 0.0 0.0 0.01

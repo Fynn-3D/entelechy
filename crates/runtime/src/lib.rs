@@ -152,7 +152,11 @@ impl NativeOp {
 // `clip` is a clip-space position (x, y in [-1, 1] after the divide by w,
 // z in [0, 1]); the nearest fragment at each pixel centre is written with
 // perspective-correct attributes and its triangle's row as `id`; empty
-// pixels hold depth 1, zeros, and id -1. No culling, no clipping.
+// pixels hold depth 1, zeros, and id -1. No culling, no clipping: a
+// triangle with a vertex at w <= 0, or a clip component that is not
+// finite, is skipped whole rather than clipped, and one whose three
+// corners are the same vertex is skipped too — which is how a row of a
+// fixed length draws a varying number of triangles.
 "
             }
         }

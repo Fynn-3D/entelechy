@@ -32,6 +32,8 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| The near plane on the device | [gpu](crates/gpu/src/raster.rs) `usable`, `corner_at`, [contract](crates/rules/src/raster.rs) | [near-plane replay](examples/mesh/tests/near.replay) on all three backends |
+| One struct, not two, after fusion | [fuse](crates/ir/src/fuse.rs) `moved` | [fusion tests](crates/ir/tests/fusion.rs) |
 | Targets a rasterize left behind | [gpu](crates/gpu/src/lib.rs) `SpareTextures`, [raster](crates/gpu/src/raster.rs) `target` | every replay bit for bit on the GPU; measured by `orla bench` |
 | Buffers a Field left behind | [gpu](crates/gpu/src/lib.rs) `Spare`, `DeviceImage::drop`, [raster](crates/gpu/src/raster.rs) | every replay bit for bit on the GPU; measured by `orla bench` |
 | Uniforms that have not changed | [gpu](crates/gpu/src/lib.rs) `uniform_buffers` | every replay bit for bit on the GPU; measured by `orla bench` |
@@ -160,7 +162,13 @@ capability claim.
   render pipeline into two float targets and a depth target compacted
   into the tight word layout ([raster](crates/gpu/src/raster.rs)); they
   agree on every interior pixel ([parity test](crates/gpu/tests/parity.rs),
-  [runtime test](crates/runtime/tests/hot_swap.rs)). Projection and
+  [runtime test](crates/runtime/tests/hot_swap.rs)). The contract has no
+  clipping: a triangle with any vertex at `w <= 0` is skipped whole. A
+  device rasterizer would clip it and draw what is left, so the vertex
+  stage reads all three corners' `w` and sends the triangle to one point
+  when any of them is behind the eye; a triangle of no area draws
+  nothing on either side, which is also how a Kernel culls
+  ([near-plane replay](examples/mesh/tests/near.replay)). Projection and
   shading stay Kernels on either side of it
   ([mesh example](examples/mesh/README.md)).
 
@@ -622,6 +630,17 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- Structs that are the same are one entry in a fused module's table
+  ([`fuse`](crates/ir/src/fuse.rs)): the consumer's sample of the fused
+  input becomes the producer's result, so a whole element the consumer
+  passes around — returned from one arm of an `if` beside one it builds
+  itself — must carry the consumer's own struct. Appending the
+  producer's copy beside it made the two arms yield different indices of
+  the same type and the fused module did not validate. A struct may only
+  contain structs before it, so one pass in order maps every producer
+  struct into the fused table, reusing an identical one where there is
+  one.
 
 - The interpreter's word code built once, not once per execution
   ([`Code`](crates/cpu/src/lib.rs), [`Program::compile`](crates/cpu/src/eval/compile.rs),

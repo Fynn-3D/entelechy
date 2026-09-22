@@ -138,11 +138,49 @@ pub fn fuse(
     let consumer_inputs = consumer_manifest.inputs.len() as u32;
     let consumer_params = consumer_manifest.params.len() as u32;
     let consumer_functions = consumer.functions.len() as u32;
-    let consumer_structs = consumer.structs.len() as u32;
     let rename = |name: &str| format!("{prefix}/{name}");
 
+    // The producer's structs join the consumer's table, and one the
+    // consumer already has is not added twice. The dedup is what makes
+    // the splice type: the consumer's sample of the fused input becomes
+    // the producer's result, so a whole element the consumer passes
+    // around — returned from one arm of an `if` beside one it builds
+    // itself — must carry the same struct as the consumer's own. Struct
+    // `i` may only contain structs before it, so one pass in order is
+    // enough to map every producer struct into the fused table.
+    let mut structs = consumer.structs.clone();
+    let mut moved: Vec<u32> = Vec::with_capacity(producer.structs.len());
+    for def in &producer.structs {
+        let mapped = |ty: Type| match ty {
+            Type::Struct(index) => Type::Struct(moved[index as usize]),
+            other => other,
+        };
+        let fields: Vec<crate::Field> = def
+            .fields
+            .iter()
+            .map(|field| crate::Field {
+                name: field.name.clone(),
+                ty: mapped(field.ty),
+            })
+            .collect();
+        let element = def.element.map(mapped);
+        match structs
+            .iter()
+            .position(|other| other.fields == fields && other.element == element)
+        {
+            Some(index) => moved.push(index as u32),
+            None => {
+                moved.push(structs.len() as u32);
+                structs.push(StructDef {
+                    name: rename(&def.name),
+                    fields,
+                    element,
+                });
+            }
+        }
+    }
     let shift_struct = |ty: Type| match ty {
-        Type::Struct(index) => Type::Struct(index + consumer_structs),
+        Type::Struct(index) => Type::Struct(moved[index as usize]),
         other => other,
     };
     let mut inputs: Vec<Port> = consumer_manifest
@@ -178,22 +216,6 @@ pub fn fuse(
         memories: Vec::new(),
         outputs: consumer_manifest.outputs.clone(),
     };
-
-    let mut structs = consumer.structs.clone();
-    structs.extend(producer.structs.iter().map(|def| {
-        StructDef {
-            name: rename(&def.name),
-            fields: def
-                .fields
-                .iter()
-                .map(|field| crate::Field {
-                    name: field.name.clone(),
-                    ty: shift_struct(field.ty),
-                })
-                .collect(),
-            element: def.element.map(shift_struct),
-        }
-    }));
 
     // Consumer ops: inputs after the fused one move down by one.
     let consumer_ops = move |op: &Op| -> Op {
