@@ -732,6 +732,25 @@ they were. A per-element cache of where this element sits in each
 input was tried for the interpreter and taken out again: resetting it
 cost more than the arithmetic it saved.
 
+The other half asked about was local aggregates: an array a Kernel
+builds and a record a function gives back, both made and copied whole.
+Looking found one thing worth changing and one worth declining, both
+measured. The JIT put an array down in a stack slot of its own for
+every index of it, so a table read at three places stored its
+thirty-two words three times; it stores them once per block now and
+the later reads are loads, which took a table of thirty-two built and
+read three times per pixel at 960x540 from 11.7 to 10.4 ms. The
+examples do not move: the arrays they index are tables known when the
+Kernel compiles, which already lived in read-only data.
+
+Declined, with the numbers: writing out a function that gives back a
+wide value, as one taking a wide argument already is. A function
+building a 64-float table, called once per pixel, went 40.1 to 39.2 ms
+on the JIT and 1.08 to 1.31 on the GPU, which is the shader growing
+for nothing. A function that builds a wide value pays for building it,
+not for handing it over, and the argument rule is what it is because a
+copy at every element is the whole of that call.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

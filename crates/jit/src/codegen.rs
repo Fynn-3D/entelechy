@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    AbiParam, BlockArg, BlockCall, FuncRef, InstBuilder, JumpTableData, MemFlags, Signature,
+    AbiParam, Block, BlockArg, BlockCall, FuncRef, InstBuilder, JumpTableData, MemFlags, Signature,
     StackSlot, StackSlotData, StackSlotKind, Value, types,
 };
 use cranelift_codegen::isa::TargetIsa;
@@ -370,6 +370,10 @@ struct Fx<'a, 'b> {
     /// address of their words. An array picked out of a constant table
     /// is one, so a table of tables is indexed without a copy.
     pointers: HashMap<u32, Value>,
+    /// Where an array's words were put down to be indexed, and the
+    /// block that put them there: a second index of the same array in
+    /// that block reads what is already stored.
+    spilled: HashMap<u32, (Block, Value)>,
     /// The tables defined so far, by the id of the array they hold.
     tables: HashMap<u32, cranelift_codegen::ir::GlobalValue>,
     /// The words of every value, by id.
@@ -459,6 +463,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             name: String::new(),
             constants: HashMap::new(),
             pointers: HashMap::new(),
+            spilled: HashMap::new(),
             tables: HashMap::new(),
             values: Vec::new(),
             types: Vec::new(),
@@ -1173,6 +1178,15 @@ impl<'a, 'b> Fx<'a, 'b> {
                     && matches!(self.ty(array), Type::Struct(_))
                 {
                     (self.table(array.0), self.flags.with_readonly())
+                } else if let Some((block, address)) = self.spilled.get(&array.0).copied()
+                    && Some(block) == self.b.current_block()
+                {
+                    // The same array indexed again where it was put
+                    // down: one slot holds it, however many places are
+                    // read out of it. Only in the block that stored it,
+                    // which is the block every later read is in when it
+                    // can use what was stored.
+                    (address, self.flags)
                 } else {
                     let words = self.words(array);
                     let slot = self.b.create_sized_stack_slot(StackSlotData::new(
@@ -1183,7 +1197,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                     for (k, word) in words.iter().enumerate() {
                         self.b.ins().stack_store(*word, slot, (k * 4) as i32);
                     }
-                    (self.b.ins().stack_addr(self.ptr, slot, 0), self.flags)
+                    let address = self.b.ins().stack_addr(self.ptr, slot, 0);
+                    if let Some(block) = self.b.current_block() {
+                        self.spilled.insert(array.0, (block, address));
+                    }
+                    (address, self.flags)
                 };
                 let raw = self.words(index)[0];
                 let zero = self.i32c(0);

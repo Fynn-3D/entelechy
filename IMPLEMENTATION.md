@@ -451,7 +451,10 @@ capability claim.
   any struct on every backend, and a run-time index is one more
   operation, `subscript`, clamped into the array (the CPU copies the
   element's words, the GPU indexes a WGSL `array<T, N>` alias, the JIT
-  spills the array to a stack slot and loads at the index). Proof: the
+  spills the array to a stack slot and loads at the index — one slot
+  per array in the block that stored it, so reading a second place out
+  of an array a Kernel built is one more load and not another store of
+  every word). Proof: the
   [feature matrix](crates/matrix/src/lib.rs) under every mode on both
   backends, [diagnostics](crates/compiler/tests/compile.rs), and the
   [CHIP-8](examples/chip8/kernels/chip8.orla) and

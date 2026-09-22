@@ -40,9 +40,11 @@ const INLINE_LIMIT: usize = 96;
 /// A function taking a record or an array of at least this many words
 /// is written out where it is called even when it is longer: the
 /// argument is copied at every element, which costs more than the
-/// instructions do, and written out its reads narrow to the words they
-/// use. Beyond [`INLINE_BIG_LIMIT`] instructions the code would grow
-/// too far for what one copy is worth.
+/// instructions do, and written out its reads narrow too. Beyond
+/// [`INLINE_BIG_LIMIT`] instructions the code would grow too far for
+/// what one copy is worth. Giving one back was tried and measured as
+/// nothing: a function that builds a wide value pays for building it,
+/// not for handing it over.
 const BIG_ARG_WORDS: usize = 32;
 /// How long a function taking a wide argument may be and still be
 /// written out where it is called.
