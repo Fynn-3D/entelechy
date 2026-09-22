@@ -396,6 +396,10 @@ impl Backend for GpuBackend {
         });
     }
 
+    fn has_device(&self) -> bool {
+        true
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

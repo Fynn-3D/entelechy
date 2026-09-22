@@ -123,10 +123,13 @@ pub fn stamp(panel: &Panel, frame: &mut [u32], frame_width: u32, frame_height: u
 #[derive(Debug)]
 pub struct Stats {
     last_start: Option<Instant>,
-    /// Smoothed milliseconds: between frames, evaluating, presenting (on
-    /// the device, that includes waiting for the display's refresh).
+    /// Smoothed milliseconds: between frames, evaluating, waiting for
+    /// the device to finish what evaluating gave it, and presenting
+    /// (which includes waiting for the display's refresh). The device's
+    /// own time is `None` for a backend that has no device.
     interval: f64,
     evaluate: f64,
+    device: Option<f64>,
     present: f64,
 }
 
@@ -136,6 +139,7 @@ impl Default for Stats {
             last_start: None,
             interval: 0.0,
             evaluate: 0.0,
+            device: None,
             present: 0.0,
         }
     }
@@ -160,9 +164,13 @@ impl Stats {
         }
     }
 
-    /// Records how long evaluation and presentation took this frame.
-    pub fn record(&mut self, evaluate: Duration, present: Duration) {
+    /// Records how long evaluating, waiting for the device and
+    /// presenting took this frame.
+    pub fn record(&mut self, evaluate: Duration, device: Option<Duration>, present: Duration) {
         smooth(&mut self.evaluate, evaluate);
+        if let Some(device) = device {
+            smooth(self.device.get_or_insert(0.0), device);
+        }
         smooth(&mut self.present, present);
     }
 
@@ -173,8 +181,12 @@ impl Stats {
         } else {
             0.0
         };
+        let device = match self.device {
+            Some(device) => format!("gpu {device:.2} ms | "),
+            None => String::new(),
+        };
         format!(
-            "frame {:.1} ms ({fps:.0} fps) | eval {:.2} ms | present {:.2} ms | {rest}",
+            "frame {:.1} ms ({fps:.0} fps) | eval {:.2} ms | {device}present {:.2} ms | {rest}",
             self.interval, self.evaluate, self.present
         )
     }
@@ -205,11 +217,29 @@ mod tests {
         assert_eq!(frame[3 * 4 + 3], INK, "the stem, clipped to the frame");
         let mut stats = Stats::default();
         stats.begin();
-        stats.record(Duration::from_millis(2), Duration::from_micros(500));
+        stats.record(Duration::from_millis(2), None, Duration::from_micros(500));
         assert!(
             stats
                 .line("x")
-                .starts_with("frame 0.0 ms (0 fps) | eval 2.00 ms | present 0.50 ms | x")
+                .starts_with("frame 0.0 ms (0 fps) | eval 2.00 ms | present 0.50 ms | x"),
+            "a backend with no device has no time of its own: {}",
+            stats.line("x")
+        );
+        // A backend with a device says what the device took, which is
+        // then not part of presenting.
+        let mut stats = Stats::default();
+        stats.begin();
+        stats.record(
+            Duration::from_millis(2),
+            Some(Duration::from_micros(1450)),
+            Duration::from_micros(500),
+        );
+        assert!(
+            stats.line("x").starts_with(
+                "frame 0.0 ms (0 fps) | eval 2.00 ms | gpu 1.45 ms | present 0.50 ms | x"
+            ),
+            "{}",
+            stats.line("x")
         );
     }
 }

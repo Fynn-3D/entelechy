@@ -663,7 +663,18 @@ capability claim.
   carries it to the runtime and into the report's timings, so the
   numbers are the device's own clock where the driver honours the
   queries, and the work plus one round trip where it resolves zeros,
-  which is what Metal through wgpu does today.
+  which is what Metal through wgpu does today. Since that round trip is
+  counted per node, a profile says which node is heavy and not what a
+  frame costs; `bench` answers that. The Player's F10 line asks the
+  plainer question every frame while it is up: it waits for the device
+  once evaluating has given it everything
+  ([`Runtime::settle_device`](crates/runtime/src/lib.rs)) and shows what
+  that took as `gpu`, so the device's work is a number of its own rather
+  than a share of `present`, where the display's refresh is. A backend
+  with no device of its own ([`Backend::has_device`](crates/runtime/src/lib.rs))
+  has no such field. Asking costs the overlap between one frame's device
+  work and the next frame's own, which is why nothing but the line
+  asks.
 
 - Diagnostics that cross files: a `use` that comes back to the document
   it started from is reported as the cycle it is (`declarations_within`

@@ -199,6 +199,13 @@ pub trait Backend: Send + Sync {
     /// frame, or hands the machine to something else, has to ask.
     fn settle_device(&self) {}
 
+    /// Whether this backend's work is finished by a device of its own,
+    /// so that `execute` returning is not the work being done and
+    /// [`Backend::settle_device`] is what waits for it.
+    fn has_device(&self) -> bool {
+        false
+    }
+
     /// Downloads the bytes of a resource this backend left resident:
     /// `byte_len` bytes of little-endian words. The default is for backends
     /// that never do.
@@ -717,6 +724,13 @@ impl Runtime {
     /// [`Backend::settle_device`].
     pub fn settle_device(&self) {
         self.backend().settle_device();
+    }
+
+    /// Whether the backend finishes its work on a device, so that what
+    /// a frame gave it is done when [`Runtime::settle_device`] returns
+    /// and not when `execute` did.
+    pub fn has_device(&self) -> bool {
+        self.backend().has_device()
     }
 
     /// The backend executing Kernels.

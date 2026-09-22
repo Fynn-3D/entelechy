@@ -703,6 +703,15 @@ state node of that scene cost 11 ms while the whole frame is 1.5.
 Read it for which node is heavy, not for what a frame costs; `bench`
 answers that.
 
+The Player's line had the same hole in it: a GPU's work lands in
+`present`, where the display's refresh also is, so 22 ms of work and
+16 ms of waiting for vsync read the same. With the line up it now
+waits for the device once evaluating has handed it everything and
+shows what that took as `gpu`, which leaves `present` the refresh it
+is really waiting for. Asking costs the overlap between one frame's
+device work and the next frame's own, so nothing but the line asks,
+and a backend with no device of its own has no such field.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

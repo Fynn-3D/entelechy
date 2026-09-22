@@ -224,9 +224,21 @@ impl Player {
                     .and_then(|node| self.session.cached(node, "result"))
                     .unwrap_or(displayed);
                 self.panel = self.hud.then(|| self.panel_for(&report, target, &context));
+                // With the line on, the frame waits here for the
+                // device to finish what evaluating gave it, so what it
+                // took is a number of its own rather than a share of
+                // `present`, where it would look like the display's
+                // refresh. Asking costs the overlap between this
+                // frame's device work and the next frame's own; only
+                // the line asks.
+                let device = (self.hud && self.session.runtime().has_device()).then(|| {
+                    let waiting = Instant::now();
+                    self.session.runtime().settle_device();
+                    waiting.elapsed()
+                });
                 let presenting = Instant::now();
                 self.path = self.show(target);
-                self.stats.record(elapsed, presenting.elapsed());
+                self.stats.record(elapsed, device, presenting.elapsed());
                 self.play(&report);
                 self.status = "running".into();
                 Some(report)
