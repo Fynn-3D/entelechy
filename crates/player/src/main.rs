@@ -26,7 +26,7 @@ use winit::window::{Window, WindowId};
 const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
-              [--window <w>x<h>] [--backend gpu|cpu|jit]
+              [--window <w>x<h>] [--backend gpu|cpu|jit] [--memory <MB>]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the
@@ -35,6 +35,8 @@ usage:
       instead of the output's size times --scale. F5 resets state;
       Tab cycles the preview through the graph's nodes and back to the output;
       F10 shows a line of frame data over the picture.
+      --memory says how many mebibytes of Fields the Host may hold at once,
+      2048 by default; a scene of millions of triangles wants more.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window, and on every connection to --listen <host:port>: an agent's
@@ -57,6 +59,8 @@ struct Options {
     params: Vec<(String, orla_runtime::Value)>,
     /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
+    /// Words the Host may hold at once.
+    memory: usize,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -70,6 +74,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         serve: false,
         listen: None,
         params: Vec::new(),
+        memory: orla::session::DEFAULT_BUDGET_WORDS,
         no_audio: false,
     };
     let mut scene = None;
@@ -83,6 +88,16 @@ fn parse(args: &[String]) -> Result<Options, String> {
         match arg.as_str() {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--backend" => options.backend = Some(value("--backend")?),
+            "--memory" => {
+                let text = value("--memory")?;
+                let megabytes: usize = text
+                    .parse()
+                    .map_err(|_| format!("--memory takes whole mebibytes, found `{text}`"))?;
+                if megabytes == 0 {
+                    return Err("--memory needs at least one mebibyte".into());
+                }
+                options.memory = orla::session::budget_of_megabytes(megabytes);
+            }
             "--serve" => options.serve = true,
             "--listen" => {
                 options.serve = true;
@@ -694,7 +709,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let budget = orla::session::DEFAULT_BUDGET_PIXELS;
+    let budget = options.memory;
     let runtime = match options.backend.as_deref() {
         Some(name) => Session::runtime_for(name, budget),
         None => Session::runtime_for("gpu", budget).or_else(|error| {

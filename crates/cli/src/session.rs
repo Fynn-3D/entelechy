@@ -21,8 +21,18 @@ use orla_runtime::{
 
 use crate::{png, ppm, wav};
 
-/// Default pixel budget for a session's Host.
-pub const DEFAULT_BUDGET_PIXELS: usize = 64 * 1024 * 1024;
+/// How many words a session's Host may hold at once unless it is told
+/// otherwise: two gibibytes of them. A budget is a net and not a
+/// policy — it stops a scene that has run away before the machine
+/// starts swapping — so the default is generous enough for a scene
+/// with millions of triangles in it and `--memory` states the policy
+/// where a scene wants more.
+pub const DEFAULT_BUDGET_WORDS: usize = 512 * 1024 * 1024;
+
+/// The words in a number of mebibytes, which is how `--memory` asks.
+pub fn budget_of_megabytes(megabytes: usize) -> usize {
+    megabytes.saturating_mul(1024 * 1024 / 4)
+}
 
 /// Something the session observed while synchronizing with the filesystem.
 #[derive(Clone, Debug, PartialEq, Eq)]

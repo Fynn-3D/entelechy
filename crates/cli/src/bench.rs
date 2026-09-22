@@ -43,6 +43,8 @@ pub struct Options {
     pub inputs: Vec<(String, PathBuf)>,
     /// Whether fusion is on.
     pub fusion: bool,
+    /// Words the Host may hold at once.
+    pub memory: usize,
     /// Whether to measure each node as well as the frame.
     pub nodes: bool,
     /// Where to write the measurement as JSON.
@@ -64,6 +66,7 @@ impl Default for Options {
             params: Vec::new(),
             inputs: Vec::new(),
             fusion: true,
+            memory: crate::session::DEFAULT_BUDGET_WORDS,
             nodes: false,
             json: None,
             compare: None,
@@ -248,7 +251,7 @@ fn pattern(node: &str) -> String {
 }
 
 fn open(options: &Options, backend: &str) -> Result<Session, String> {
-    let runtime = Session::runtime_for(backend, crate::session::DEFAULT_BUDGET_PIXELS)?;
+    let runtime = Session::runtime_for(backend, options.memory)?;
     let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         session

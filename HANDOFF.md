@@ -781,6 +781,27 @@ what they are worth is 590 thousand triangles in 12.7 ms at 1920x1080,
 where 37 thousand cost 11 — the frame is the pixels, and the triangles
 are nearly free.
 
+The Host's budget was a number nobody had chosen for anything: sixty-four
+mebibytes of words, which is a fine net for a scene of pictures and a
+wall for a scene of geometry. Ten million triangles asks for about four
+hundred and sixty megabytes of Fields — the vertices, the same vertices
+projected, and the indices — so it did not run, and what stopped it was
+a constant rather than the machine or the device. The default is two
+gibibytes now, and `--memory <MB>` states the policy where a scene wants
+more: `run`, `render`, `replay`, `serve`, `graph`, `trace`, `bench` and
+the Player all take it. A budget is still a net, and the message still
+says what was asked for and what was left.
+
+What ten million triangles cost, once they fit: 27.8 ms a frame at
+1920x1080 on the GPU, against 11.1 for half a million and 18.0 for
+three million — a fixed 9.8 ms of pixels and about 2.6 ms a million
+triangles, with no culling of any kind and every triangle on screen.
+The rasterizer itself is 2.4 ms of that; the rest is projecting every
+vertex and shading every pixel. A frame that culled what it cannot see,
+which a Kernel can do (a triangle whose vertices go behind the eye is
+skipped by the contract), would carry several times the geometry at the
+same cost.
+
 ## Open
 
 A structure round against the Code Rules (no behaviour change; the

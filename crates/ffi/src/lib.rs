@@ -181,7 +181,7 @@ pub unsafe extern "C" fn orla_open(
         };
         let backend = unsafe { text(backend) }.unwrap_or("jit");
         let library = unsafe { text(library) }.map(Path::new);
-        let runtime = Session::runtime_for(backend, orla::session::DEFAULT_BUDGET_PIXELS)?;
+        let runtime = Session::runtime_for(backend, orla::session::DEFAULT_BUDGET_WORDS)?;
         let mut session = Session::open_with(Path::new(scene), library, runtime);
         let events = session.sync();
         if session.graph().is_none() {

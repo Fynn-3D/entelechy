@@ -51,6 +51,7 @@ capability claim.
 | Advance | [protocol](crates/cli/src/protocol.rs) `advance`, [session](crates/cli/src/session.rs) `element_field` | [protocol test](crates/cli/tests/protocol.rs) |
 | Inlining | [optimize](crates/ir/src/optimize.rs) `inline_calls` | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) |
 | Parts of an element | [ir](crates/ir/src/lib.rs) `Op::Part`, [optimize](crates/ir/src/optimize.rs) `narrowed`, [interpreter](crates/cpu/src/eval/run.rs), [jit](crates/jit/src/codegen.rs) `part_words`, [wgsl](crates/gpu/src/wgsl.rs) | [optimizer](crates/cpu/tests/optimizer.rs), [feature matrix](crates/matrix/src/lib.rs) `parts of an element` |
+| A session's memory | [session](crates/cli/src/session.rs) `DEFAULT_BUDGET_WORDS`, `budget_of_megabytes`, [cli](crates/cli/src/main.rs) `--memory`, [player](crates/player/src/main.rs) | [session tests](crates/cli/tests/session.rs) (refused, then held) |
 | Measured profiles | [gpu](crates/gpu/src/lib.rs) `set_measured`, [runtime](crates/runtime/src/lib.rs) `last_measured` | [profile output](crates/cli/tests/session.rs) |
 | Diagnostics across files | [session](crates/cli/src/session.rs) `located`, `declarations_within` | [session tests](crates/cli/tests/session.rs) |
 | Run-time loop counts | [loop](crates/compiler/src/lower/expr.rs), [ir](crates/ir/src/lib.rs) `Op::Loop::bound` | [feature matrix](crates/matrix/src/lib.rs) `loops` |

@@ -1172,7 +1172,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_PIXELS,
+        orla::session::DEFAULT_BUDGET_WORDS,
     );
     let events = session.sync();
     assert!(
@@ -1235,7 +1235,7 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_PIXELS,
+        orla::session::DEFAULT_BUDGET_WORDS,
     );
     session.sync();
     let read = |session: &mut Session, handle| {
@@ -1296,7 +1296,7 @@ fn a_name_a_kernel_cannot_find_names_the_file_that_declares_it() {
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_PIXELS,
+        orla::session::DEFAULT_BUDGET_WORDS,
     );
     let events = session.sync();
     let reported = rejected(&events).join("\n");
@@ -1349,7 +1349,7 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_PIXELS,
+        orla::session::DEFAULT_BUDGET_WORDS,
     );
     let events = session.sync();
     assert!(
@@ -1611,4 +1611,46 @@ fn what_new_writes_checks_and_replays() {
         );
     }
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A budget is a net, not a policy: a scene that wants more than the
+/// Host holds is told so and by how much, and a session that is given
+/// more runs it. The default holds a scene of millions of triangles,
+/// which a fixed sixty-four mebibytes did not.
+#[test]
+fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
+    let dir = std::env::temp_dir().join(format!("orla-budget-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A grid of a million pixels: four million words, and one more copy
+    // of it for the second node.
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node fill: kernel { requires { field.write; } output result: Image; domain = vec2(1024, 1024); compute { return vec4(coord().x, coord().y, 0.0, 1.0); } }\n\
+         node keep: kernel { requires { field.read; field.write; } input source: Image <- fill.result; output result: Image; domain = vec2(1024, 1024); compute { return sample(source) * 0.5; } }\n\
+         output result <- keep.result;\n",
+    )
+    .unwrap();
+    let scene = dir.join("scene.osn");
+
+    // Two mebibytes hold neither of them.
+    let mut small = Session::open(&scene, None, orla::session::budget_of_megabytes(2));
+    small.sync();
+    let refused = small.evaluate(&Context::default()).unwrap_err().to_string();
+    assert!(
+        refused.contains("resource budget exceeded") && refused.contains("available"),
+        "{refused}"
+    );
+
+    // Sixty-four hold both, and the words are the ones the Kernel wrote.
+    let mut enough = Session::open(&scene, None, orla::session::budget_of_megabytes(64));
+    enough.sync();
+    let report = enough.evaluate(&Context::default()).unwrap();
+    let image = enough.runtime().host().image(report.output).unwrap();
+    assert_eq!(image.width(), 1024);
+    assert_eq!(image.pixels()[100][0], 50.0, "half of that pixel's own x");
+
+    // Mebibytes are words four to one.
+    assert_eq!(orla::session::budget_of_megabytes(1), 256 * 1024);
+    let _ = std::fs::remove_dir_all(&dir);
 }
