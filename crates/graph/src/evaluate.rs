@@ -161,6 +161,31 @@ pub enum EvaluateError {
     Host(HostError),
 }
 
+impl EvaluateError {
+    /// The node the failure belongs to, where it belongs to one, so a
+    /// caller that has the graph can say where that node was written.
+    pub fn node(&self) -> Option<&NodeId> {
+        match self {
+            Self::UnknownKernel { node, .. }
+            | Self::MissingExternal { node, .. }
+            | Self::UnboundInput { node, .. }
+            | Self::UnknownPort { node, .. }
+            | Self::ParamType { node, .. }
+            | Self::UnknownOutput { node, .. }
+            | Self::NoDomain(node)
+            | Self::Execution { node, .. }
+            | Self::Domain { node, .. }
+            | Self::NotState { node, .. }
+            | Self::WordCount { node, .. }
+            | Self::Fusion { node, .. }
+            | Self::ReduceDomain(node)
+            | Self::PortKind { node, .. }
+            | Self::Migration { node, .. } => Some(node),
+            Self::Graph(_) | Self::Host(_) => None,
+        }
+    }
+}
+
 impl fmt::Display for EvaluateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

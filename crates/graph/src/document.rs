@@ -251,6 +251,12 @@ struct Lowering<'a, 'b> {
     functions: Vec<orla_language::FnDecl>,
 }
 
+/// Where something in a document was written, in the `file:line:column`
+/// a Kernel's diagnostics use.
+fn written_at(path: &Path, span: orla_language::Span) -> String {
+    format!("{}:{}:{}", path.display(), span.line, span.column)
+}
+
 pub(crate) fn lower(
     document: &Document,
     text: &str,
@@ -799,6 +805,7 @@ impl Lowering<'_, '_> {
                         .parse::<KernelId>()
                         .map_err(|e| error(kernel.span, e.to_string()))?;
                     self.out.graph.nodes.push(Node {
+                        at: Some(written_at(path, decl.name.span)),
                         id,
                         kernel: kernel_id,
                         inputs,
@@ -866,6 +873,7 @@ impl Lowering<'_, '_> {
                         document: path.to_path_buf(),
                     });
                     self.out.graph.nodes.push(Node {
+                        at: Some(written_at(path, decl.name.span)),
                         id,
                         kernel: kernel_id,
                         inputs,
@@ -920,6 +928,7 @@ impl Lowering<'_, '_> {
                         document: path.to_path_buf(),
                     });
                     self.out.graph.nodes.push(Node {
+                        at: Some(written_at(path, decl.name.span)),
                         id,
                         kernel: kernel_id,
                         inputs,

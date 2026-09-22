@@ -1345,7 +1345,15 @@ fn evaluate_and_export(
             }
         }
         Err(error) => {
-            eprintln!("evaluation failed: {error}; last output is kept");
+            // Where the node was written, as a Kernel's diagnostics say
+            // it: a scene's failures named only which node, and a node
+            // of a placed sub-graph has a name nobody wrote.
+            let at = error
+                .node()
+                .and_then(|node| session.graph()?.node(node)?.at.clone())
+                .map(|at| format!("{at}: "))
+                .unwrap_or_default();
+            eprintln!("{at}evaluation failed: {error}; last output is kept");
             false
         }
     }

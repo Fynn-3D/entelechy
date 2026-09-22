@@ -122,7 +122,7 @@ pub struct GraphParam {
 }
 
 /// A node: a Kernel binding plus its connections and parameter overrides.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Node {
     /// Node name; nodes of a placed sub-graph carry its node name as a
     /// dotted prefix.
@@ -142,6 +142,24 @@ pub struct Node {
     /// state it feeds stays as it was. Its first run is on the frame, so
     /// its readers have something to read.
     pub is_async: bool,
+    /// Where the node was written, as `file:line:column`, when the
+    /// graph came from a document. A Kernel's diagnostics have always
+    /// said where; a scene's said only which node, and a scene of a
+    /// placed sub-graph has nodes whose names nobody wrote.
+    pub at: Option<String>,
+}
+
+/// Where a node was written is provenance and not identity: the same
+/// graph written twice, or printed and read back, is the same graph.
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.kernel == other.kernel
+            && self.inputs == other.inputs
+            && self.params == other.params
+            && self.domain == other.domain
+            && self.is_async == other.is_async
+    }
 }
 
 /// An external a document reads from a file.

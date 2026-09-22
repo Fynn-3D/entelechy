@@ -1110,6 +1110,14 @@ because every other example has Fields of a fixed size; this is the
 cost of the shape the last few rounds made possible, and it was hiding
 where only driving the thing would find it.
 
+A scene's failures say where now, as a Kernel's always have. A node
+carries the `file:line:column` it was written at, and the reporting
+prefixes it: `scene.osn:3:6: evaluation failed: node `b` refers to
+`sorce`...`. It matters most for a node of a placed sub-graph, whose
+name nobody wrote. Where a node was written is provenance and not
+identity, so it stays out of equality: the same graph printed and read
+back is the same graph.
+
 The third sweep went at the diagnostics, since an agent's loop is
 reading one and trying again, and a message that names the fix saves a
 whole turn of it. Thirty-odd programs were written wrong on purpose —
