@@ -1049,9 +1049,12 @@ fn result_type_of(function: &Function, id: ValueId) -> Type {
 pub const REDUCE_WORKGROUP: u32 = 64;
 
 /// Emits the reduce step of a reduce module: element `i` of the output
-/// level is `merge(in[2i], in[2i + 1])`, or `in[2i]` alone at an odd tail.
-/// Run with the level's element count in the uniform until one element
-/// is left. Both backends fold in this same tree.
+/// level is the run of at most [`orla_rules::reduce::FOLD`] elements
+/// starting at `i * FOLD`, folded by the pairwise tree every backend
+/// folds in — which is [`orla_rules::reduce::LEVELS_AT_ONCE`] of that
+/// tree's levels in one pass, and the same values as walking them one
+/// at a time. Run with the level's element count in the uniform until
+/// one element is left.
 pub fn emit_reduce(module: &Module) -> String {
     debug_assert_eq!(module.manifest.mode, Mode::Reduce);
     let Some(merge) = &module.merge else {
@@ -1101,21 +1104,41 @@ pub fn emit_reduce(module: &Module) -> String {
         out.push('\n');
     }
     emit_function(&mut out, module, merge, "merge", false);
+    let fold = orla_rules::reduce::FOLD;
+    let element = wgsl_type(element);
     let _ = writeln!(
         out,
         "
 @compute @workgroup_size({REDUCE_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let n = level.x;
-    let i = gid.x;
-    if (i >= (n + 1u) / 2u) {{
+    let start = gid.x * {fold}u;
+    if (start >= n) {{
         return;
     }}
-    if (2u * i + 1u < n) {{
-        store_level(i, merge(load_level(2u * i), load_level(2u * i + 1u)));
-    }} else {{
-        store_level(i, load_level(2u * i));
+    // The run this element folds, then that run folded by the tree: a
+    // level of pairs, an odd last one carried up, until one is left.
+    var held: array<{element}, {fold}>;
+    var run = min({fold}u, n - start);
+    var at = 0u;
+    loop {{
+        if (at >= run) {{ break; }}
+        held[at] = load_level(start + at);
+        at = at + 1u;
     }}
+    loop {{
+        if (run <= 1u) {{ break; }}
+        let pairs = run / 2u;
+        var k = 0u;
+        loop {{
+            if (k >= pairs) {{ break; }}
+            held[k] = merge(held[2u * k], held[2u * k + 1u]);
+            k = k + 1u;
+        }}
+        if ((run & 1u) == 1u) {{ held[pairs] = held[run - 1u]; }}
+        run = (run + 1u) / 2u;
+    }}
+    store_level(gid.x, held[0]);
 }}"
     );
     out

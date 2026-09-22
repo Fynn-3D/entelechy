@@ -1493,14 +1493,18 @@ impl GpuBackend {
         let final_buffer = mapped;
         let stride = output_words as u64 * 4;
         let mut count = element_count as u64;
-        let other = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("reduce level"),
-            size: (count.div_ceil(2) * stride).max(16),
-            usage: wgpu::BufferUsages::STORAGE
+        // The level between the levels, from the pile: a scene reduces
+        // the same count every frame, and asking the driver for it
+        // again is what the pile is for. Every element a level reads
+        // was written by the level before it, so nothing stale is ever
+        // seen.
+        let other = self.spare.take(
+            &self.device,
+            (orla_rules::reduce::after_fold(count as usize) as u64 * stride).max(16),
+            wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        );
         let mut current = final_buffer;
         let mut next = other;
         while count > 1 {
@@ -1556,15 +1560,17 @@ impl GpuBackend {
             });
             pass.set_pipeline(reduce_pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(
-                (count.div_ceil(2) as u32).div_ceil(wgsl::REDUCE_WORKGROUP),
-                1,
-                1,
-            );
+            let ahead = orla_rules::reduce::after_fold(count as usize) as u32;
+            pass.dispatch_workgroups(ahead.div_ceil(wgsl::REDUCE_WORKGROUP), 1, 1);
             drop(pass);
-            count = count.div_ceil(2);
+            count = u64::from(ahead);
             std::mem::swap(&mut current, &mut next);
         }
+        // One of the two is the answer and goes on to be the Field; the
+        // other is this call's own and goes back. What read it was
+        // submitted before whatever writes it next, and one queue runs
+        // its submissions in order.
+        self.spare.keep(next);
         current
     }
 
@@ -1591,14 +1597,15 @@ impl GpuBackend {
     ) -> wgpu::Buffer {
         let final_buffer = pairs;
         let size = (target_count * output_words * 4) as u64;
-        let target = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("scatter target"),
-            size: size.max(16).div_ceil(16) * 16,
-            usage: wgpu::BufferUsages::STORAGE
+        // The target is copied over whole before anything reads it, so
+        // it may come from the pile.
+        let target = self.spare.take(
+            &self.device,
+            size.max(16).div_ceil(16) * 16,
+            wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        );
         encoder.copy_buffer_to_buffer(base_buffer, 0, &target, 0, size);
         let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
         let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);

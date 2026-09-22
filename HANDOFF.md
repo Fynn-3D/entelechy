@@ -997,6 +997,52 @@ up of the next one no longer hides behind it. `run --profile` says as
 well that it is the first frame, which compiles and allocates, and that
 `bench --nodes` is the one that measures a scene already running.
 
+Then the ruler was used, which is the point of having made it. The
+first thing it pointed at: a reduction over four thousand integers cost
+0.68 ms where a map over the same four thousand cost nothing
+measurable. Sixteen kibibytes of work and two thirds of a millisecond.
+
+The fold halved a level per pass — element `i` of the next level is
+`merge(in[2i], in[2i + 1])` — so a level of `n` took log2(n)
+dispatches, twelve for four thousand and twenty for a million, each
+with a bind group and a uniform buffer of its own. A run of sixteen
+folded at once is four of those levels, and the reason it may be done
+at once is that it is the same tree: folding a run by the pairwise rule
+reaches the same expressions as walking the levels one at a time, ragged
+ends included, which `orla_rules::reduce`'s test states over counts from
+one to four thousand. So nothing moved a bit. Every backend's reduction
+of the same rows gives what it gave before, on counts that divide by
+sixteen and counts that do not.
+
+The first attempt did move something, and is worth writing down: folding
+a run left to right rather than as a tree made the JIT three times
+slower on a million elements (1.94 to 6.64 ms). Sixteen merges in a row
+are a dependency chain and a level of pairs is sixteen chains a machine
+can run at once. A tree within the run costs a device nothing and keeps
+the machine's hands free, so the interpreter and the JIT still walk one
+level at a time and did not change at all.
+
+The second thing the ruler pointed at was the disease of two rounds
+back, in the two places the cure had not reached: a reduction asked the
+driver for its level buffer and a scatter for its target on every
+execution. They come from the pile now. A reduction over a million went
+0.71 to 0.54 ms with that, and a reduction over four thousand is 0.35
+where it was 0.59.
+
+What it is worth on real scenes, at 1280x720, least of three runs of
+twenty frames: `collapse` 5.64 to 3.78 ms, `million` 2.31 to 1.72,
+`spectrum` 0.90 to 0.81, `learn` 3.57 to 3.44, `culled` 7.37 to 7.11,
+and nothing slower. The 123 replays are bit for bit throughout.
+
+Two measurements that came out of the same pass and are worth keeping.
+A node costs 0.027 ms in a frame, measured as the slope of one to
+thirty-two tiny nodes (0.19 to 1.02 ms), which is what a scene of many
+small nodes pays and what a profile's 0.19 ms per tiny node is not: the
+rest of that is the serialization a measured run adds. And a scatter
+carries about 0.19 ms over a map whatever its size, which is its two
+passes — `last` applies with atomics and then gathers — and is
+structural rather than wasteful.
+
 The third thing the renderer wanted turned out not to be a change to
 Orla at all. A texture running away from the eye crawls because
 `at_linear` blends four texels of one Field and a distant pixel covers

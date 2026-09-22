@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| Four levels of a fold in one pass | [rules](crates/rules/src/reduce.rs), [wgsl](crates/gpu/src/wgsl.rs) `emit_reduce`, [gpu](crates/gpu/src/lib.rs) `fold` | [rules test](crates/rules/src/reduce.rs) (a run folds to the same expressions as the levels), every replay bit for bit |
 | A profile that adds up | [runtime](crates/runtime/src/lib.rs) `execute`, `measurement_floor`, [gpu](crates/gpu/src/lib.rs) `clock`, `wait_floor`, `settle_measured`, [raster](crates/gpu/src/raster.rs), [bench](crates/cli/src/bench.rs) `node_times` | [runtime tests](crates/runtime/tests/mixed.rs) (a backend whose clock answers for Kernels and not for native operations) |
 | Which ones, not just how many | [compact package](packages/compact.orlapkg/kernels/compact.orla), [preset](packages/compact.orlapkg/graphs/compact.osn) | [culled replay](examples/culled/tests/culled.replay) (the same picture with the culling on and off) |
 | A domain a Kernel decides | [domain](crates/graph/src/domain.rs) `DomainExpr::Value`, `values_read`, `renamed`, [evaluate](crates/graph/src/evaluate.rs) `domain_values` | [graph tests](crates/graph/tests/composition.rs), [domain tests](crates/graph/src/domain.rs), [decided replay](examples/decided/tests/decided.replay) |
@@ -634,6 +635,23 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- A reduction folds sixteen at a time, in the same tree
+  ([`orla_rules::reduce`](crates/rules/src/reduce.rs),
+  [`emit_reduce`](crates/gpu/src/wgsl.rs)): the tree is pairwise with an
+  odd last element carried up, and a run of sixteen folded by that rule
+  reaches the same expressions as four of its levels walked one at a
+  time, ragged ends included — which is what lets a device do four
+  levels in one dispatch and change no value. A level was a dispatch
+  with a bind group and a uniform of its own, so a reduction over four
+  thousand integers took twelve of them and cost 0.68 ms where a map
+  over the same four thousand cost nothing measurable. The interpreter
+  and the JIT still walk one level at a time: sixteen merges in a row
+  are a dependency chain, and folding a run left to right rather than as
+  a tree made the JIT three times slower. The level buffer and a
+  scatter's target come from the buffer pile now rather than from the
+  driver, which is the same lesson as the full-screen pass. Measured at
+  1280x720: `collapse` 5.64 to 3.78 ms, `million` 2.31 to 1.72.
 
 - A profile's numbers are the node's, and they add up
   ([`Runtime::execute`](crates/runtime/src/lib.rs),
