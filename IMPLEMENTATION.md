@@ -32,6 +32,7 @@ capability claim.
 | A map's entry walks a run | [codegen](crates/jit/src/codegen.rs) `map_run`, `element_words` | [jit parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs) |
 | Filling a Field in place | [host](crates/host/src/lib.rs) `words_mut`, `create_for_fill`, `spare`, [abi](crates/abi/src/lib.rs), [jit](crates/jit/src/lib.rs) `run` | every replay bit for bit |
 | An answer before the exit | [protocol](crates/cli/src/protocol.rs) `Reply` | [protocol tests](crates/cli/tests/protocol.rs) |
+| Which ones, not just how many | [compact package](packages/compact.orlapkg/kernels/compact.orla), [preset](packages/compact.orlapkg/graphs/compact.osn) | [culled replay](examples/culled/tests/culled.replay) (the same picture with the culling on and off) |
 | A domain a Kernel decides | [domain](crates/graph/src/domain.rs) `DomainExpr::Value`, `values_read`, `renamed`, [evaluate](crates/graph/src/evaluate.rs) `domain_values` | [graph tests](crates/graph/tests/composition.rs), [domain tests](crates/graph/src/domain.rs), [decided replay](examples/decided/tests/decided.replay) |
 | How long a Field came out | [replay](crates/cli/src/replay.rs) `ExpectCount`, [session](crates/cli/src/session.rs) `element_count` | [decided replay](examples/decided/tests/decided.replay) |
 | The near plane on the device | [gpu](crates/gpu/src/raster.rs) `usable`, `corner_at`, [contract](crates/rules/src/raster.rs) | [near-plane replay](examples/mesh/tests/near.replay) on all three backends |
@@ -632,6 +633,21 @@ capability claim.
   130 ms, raymarch 365 to 246 ms, the replay suite 12.4 to 11.3 s; the
   JIT unchanged, since Cranelift already hoisted them, and the GPU the
   same.
+
+- Stream compaction is a package, not an engine feature
+  ([compact](packages/compact.orlapkg/kernels/compact.orla)): a rank is
+  a prefix sum over the flags, which `scan` is; the count is a reduce;
+  and putting each kept index where its rank says is a scatter, whose
+  addresses outside the target are dropped, which is what a flag of zero
+  sends. With `value(count)` sizing what runs next, that is culling: a
+  chunk nobody can see is never placed, not skipped. The prefix sum is
+  ordered work, one thread on every backend — 0.26 ms for four thousand
+  flags on the device, 0.54 for sixty-five thousand — so it ranks the
+  things a scene decides about, not the elements they expand into. A
+  parallel scan is log N passes of dispatch overhead and loses at these
+  sizes. Measured in [culled](examples/culled/README.md) at 1920x1080: a
+  world of ten million triangles is 12.0 ms a frame against 26.1 for
+  placing all of it, and a hundred and sixty million is 13.6.
 
 - A node's `domain` may read a number a Kernel wrote
   ([`value(port)`](crates/graph/src/domain.rs),

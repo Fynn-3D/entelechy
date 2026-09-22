@@ -77,6 +77,13 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   value(detail)` makes the ground exactly that big: 24 by 24 vertices
   high up, 263 by 263 on the deck, no parameter carrying the number. The
   replay pins the counts with `expect count`.
+- [culled](culled/README.md): a world of ten million triangles, of which
+  a frame places what it can see. A Kernel writes a flag per chunk, the
+  compact package turns the flags into the kept indices and their count,
+  and every node that builds geometry is `domain = value(count) * <per
+  chunk>`. The replay runs the same frame with the culling on and off
+  and gets the same picture from a third of the geometry; sixteen times
+  the world costs a millisecond and a half more.
 - [voxel](voxel/README.md): a voxel editor, the first tool: a
   `Volume<Int>` edited a voxel per click under a minimal bar with a label
   from the text library, the pointer's voxel found by a grid walk in a

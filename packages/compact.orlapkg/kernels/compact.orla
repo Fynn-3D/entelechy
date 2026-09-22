@@ -1,0 +1,58 @@
+// Stream compaction, the three steps, over a row of flags where a
+// non-zero flag keeps that element's index.
+//
+// It is the piece that turns `value(port)` from "how many" into "which
+// ones": a culling Kernel writes one flag per thing, and what comes out
+// is the kept indices at the front of a row and the count of them, so
+// the nodes that do the work are sized by the count and read the
+// indices to know what they are working on.
+
+// What a slot holds when nothing was gathered into it.
+kernel compact.blank@1 {
+    requires { field.read; field.write; }
+    input flags: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return -1; }
+}
+
+// The rank of each kept element: an inclusive prefix sum, so a kept
+// element at `i` belongs at `offsets[i] - 1`. Ordered work, one thread
+// on every backend, which is what a prefix sum is; it costs about a
+// quarter of a millisecond for four thousand flags on a device and
+// grows slowly, so it is a rank over the things a scene decides about
+// (chunks, bodies, lights), not over the elements they expand into.
+kernel compact.offsets@1 {
+    requires { field.read; field.write; }
+    input flags: Rows<Int>;
+    output result: Rows<Int>;
+    scan with total = 0 {
+        return total + (if sample(flags) != 0 { 1 } else { 0 });
+    }
+}
+
+// How many were kept, as a row of one, which is what a `domain` reads:
+// `domain = value(count) * per_thing;`.
+kernel compact.total@1 {
+    requires { field.read; field.write; }
+    input flags: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return if sample(flags) != 0 { 1 } else { 0 }; }
+    merge(a, b) { return a + b; }
+}
+
+// Every kept element's index, written where its rank says. An address
+// outside the target is dropped, so a flag of zero sends its index to
+// -1 and nothing lands.
+kernel compact.gather@1 {
+    requires { field.read; field.write; }
+    input flags: Rows<Int>;
+    input offsets: Rows<Int>;
+    input slots: Rows<Int>;
+    output result: Rows<Int>;
+    struct Kept { slot: Int; index: Int; }
+    scatter into slots with last {
+        let i = element();
+        let keep = at(flags, i) != 0;
+        return Kept { slot: if keep { at(offsets, i) - 1 } else { -1 }, index: i };
+    }
+}

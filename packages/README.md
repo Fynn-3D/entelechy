@@ -34,5 +34,12 @@ use "picture.orlapkg";
   a string into glyph rows, and the Kernels that draw them. A scene
   binds the font beside using the package:
   `input font: Grid<Float> = "../../packages/text.orlapkg/font.png";`
+- **compact** — a row of flags in, the kept indices and their count
+  out. A `domain` reading `value(count)` says how many things a frame
+  works on; this says which ones. `graphs/compact.osn` is the three
+  steps — a prefix sum for the rank, a reduce for the count, a scatter
+  that puts each kept index where its rank says — and what comes back
+  sizes and steers whatever does the work. Frustum culling, live
+  particles, the lights that reach a tile: the shape is the same.
 - **pixelfx** — a coarse pixel grid and a four-colour palette, and the
   NES look made of both as a preset. The example of what a package is.

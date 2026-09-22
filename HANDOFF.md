@@ -910,6 +910,47 @@ A replay can say how long a Field came out: `expect count
 ground.result = 576`. Without it the capability could be measured and
 not written down.
 
+A Kernel could then say how many, and the next thing it wanted was to
+say which ones. That needed no engine at all. A rank is a prefix sum
+over the flags, which `scan` is; the count is a reduce; and putting
+each kept index where its rank says is a scatter whose out-of-range
+addresses are dropped, which is what a flag of zero sends. The three
+are `packages/compact.orlapkg`: a row of flags in, the kept indices and
+their count out. The prefix sum is ordered work, one thread on every
+backend, and it costs 0.26 ms for four thousand flags on the device and
+0.54 for sixty-five thousand — so it is a rank over the things a scene
+decides about, chunks and bodies and lights, never over the elements
+they expand into. A parallel scan is log N passes of dispatch overhead
+and would lose at these sizes; it is worth having only past a few
+hundred thousand, and nothing wants that yet.
+
+`examples/culled` is the whole thing standing up: a world of `cols` by
+`cols` chunks, a Kernel that flags the ones in front of the eye, the
+compact package, and every geometry node at `domain = max(value(count),
+1) * <per chunk>`. At 1920x1080 a world of ten million triangles costs
+12.0 ms a frame against 26.1 for placing all of it; forty million costs
+13.1 against 73.0; a hundred and sixty million costs 13.6, and placing
+all of that does not fit in memory. Sixteen times the world for a
+millisecond and a half — the cull test and its prefix sum over sixteen
+times the chunks — because what a frame costs is what it can see and
+the world above that is free. That is the answer to a question from
+several rounds back: a scene carries geometry it could never draw, and
+the way it does is that the geometry it cannot draw is never a Field.
+
+The replay is the claim rather than the numbers: the same frame with
+the culling on and off, `--param culling=false`, is the same picture to
+the last pixel, from a third of the geometry. A cull that changes a
+pixel is a bug, and this one would say so.
+
+Two things that cost an hour each and are worth writing down. The
+cull's side planes must cover the projection's: the test used a half
+angle narrower than `aspect / f`, so it cut inside the picture and left
+a sawtooth of chunk edges down both sides of the screen. And a fog
+driven by the depth buffer's number is not a fog driven by distance —
+`s.depth * 1.6` saturated at every pixel and the whole world came out
+sky. The surface carries the world position in its `uv`, so the
+distance is there to be had; a depth buffer's number is not one.
+
 The third thing the renderer wanted turned out not to be a change to
 Orla at all. A texture running away from the eye crawls because
 `at_linear` blends four texels of one Field and a distant pixel covers
