@@ -681,7 +681,7 @@ output result <- copy.result;
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("loaded photo from"), "{stderr}");
-    let (field, _) = Session::load_field(&dir.join("copy.field"), None).unwrap();
+    let (field, _) = orla_formats::read(&dir.join("copy.field"), None).unwrap();
     assert_eq!(field.domain(), orla_runtime::Domain::Grid(2, 1));
     assert_eq!(f32::from_bits(field.storage()[0]), 1.0);
     assert_eq!(
@@ -698,12 +698,12 @@ output result <- copy.result;
         orla_formats::png::encode(2, 1, &pixels),
     )
     .unwrap();
-    let (as_pixels, detail) = Session::load_field(&dir.join("photo.png"), Some("Image")).unwrap();
+    let (as_pixels, detail) = orla_formats::read(&dir.join("photo.png"), Some("Image")).unwrap();
     assert!(
         as_pixels.schema().is_pixel() && detail.contains("Grid 2"),
         "{detail}"
     );
-    let (as_gray, _) = Session::load_field(&dir.join("photo.png"), Some("Grid<Float>")).unwrap();
+    let (as_gray, _) = orla_formats::read(&dir.join("photo.png"), Some("Grid<Float>")).unwrap();
     assert_eq!(as_gray.schema().value_words(), 1);
     assert!((f32::from_bits(as_gray.storage()[0]) - 0.2126).abs() < 1e-5);
     let sound: Vec<u32> = [0.0f32, 0.5, -0.5, 0.25]
@@ -715,7 +715,7 @@ output result <- copy.result;
         orla_formats::wav::encode(&sound, 2, 22050),
     )
     .unwrap();
-    let (rows, detail) = Session::load_field(&dir.join("hit.wav"), Some("Rows<Vec2>")).unwrap();
+    let (rows, detail) = orla_formats::read(&dir.join("hit.wav"), Some("Rows<Vec2>")).unwrap();
     assert_eq!(rows.domain(), orla_runtime::Domain::Rows(2));
     assert!(detail.ends_with("at 22050 Hz"), "{detail}");
     let output = Command::new(orla)
@@ -732,7 +732,7 @@ output result <- copy.result;
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let (again, _) = Session::load_field(&dir.join("copy.png"), Some("Image")).unwrap();
+    let (again, _) = orla_formats::read(&dir.join("copy.png"), Some("Image")).unwrap();
     assert_eq!(f32::from_bits(again.storage()[0]), 1.0);
     let _ = std::fs::remove_dir_all(&dir);
 }

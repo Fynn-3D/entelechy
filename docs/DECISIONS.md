@@ -100,3 +100,41 @@ scenes cost what they did.
 **What would change it.** A measure of work that is as deterministic
 across backends and cheaper to keep, or a Kernel form that needs
 unbounded iteration and cannot be split across evaluations.
+
+## A few formats are read live; the rest are bytes or converted
+
+The Host knows one format of its own, `.field`, and raw bytes. Every
+other format a file comes in goes one of three ways:
+
+- **Read live** by [`orla-formats`](../crates/formats/src/lib.rs): PNG,
+  PPM, PGM, WAV and MIDI. A scene's input names the file, and the
+  session decodes it again whenever it changes.
+- **Bytes to a Kernel**: `input level: Rows<Int> = bytes "level.bin";`,
+  and what the bytes mean is the Kernel's business. A level, a ROM, a
+  text such as Markdown.
+- **Converted outside the runtime** by `orla-import` and `orla-export`,
+  or by a bridge written in another program's language: glTF, MP3 and
+  the other lossy sounds, and documents such as a PDF or a slide deck,
+  which come in as the pictures and text they hold.
+
+A format is read live when it decodes to a numerical Field, needs no
+dependency outside the workspace, and is worth editing while a scene
+runs.
+
+**Why.** A decoder that holds a compression algorithm (inflate, a
+Huffman table) is not a Kernel's work: it is serial, it would be run
+again by every scene, and it carries no meaning of the application's. A
+format whose meaning *is* the application's belongs in a Kernel, where
+it is typed, traced and hot-reloaded. A document is not a Field at all;
+bringing it past the runtime's edge would grow a subsystem for it, which
+the typed-field architecture refuses. Keeping the live set closed keeps
+`orla-formats` from becoming where every format lands.
+
+**Where.** [`orla-formats`](../crates/formats/src/lib.rs) takes the Host
+and nothing else; `orla-import` and `orla-export` depend on it and the
+Host, never on the session or a backend. `read`, `read_bytes` and
+`encode` are the only ways a session turns a file into a Field and back.
+
+**What would change it.** A format that meets all three conditions (it
+joins the live set), or one the live set holds that starts to need a
+dependency (it leaves for `orla-import`).

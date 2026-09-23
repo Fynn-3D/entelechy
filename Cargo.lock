@@ -1738,9 +1738,8 @@ name = "orla-export"
 version = "0.1.0"
 dependencies = [
  "orla-formats",
+ "orla-host",
  "orla-import",
- "orla-runtime",
- "orla-session",
  "serde_json",
 ]
 
@@ -1796,10 +1795,8 @@ version = "0.1.0"
 name = "orla-import"
 version = "0.1.0"
 dependencies = [
- "orla-export",
  "orla-formats",
- "orla-runtime",
- "orla-session",
+ "orla-host",
  "serde_json",
  "symphonia",
 ]

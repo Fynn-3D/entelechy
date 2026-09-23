@@ -126,7 +126,7 @@ mod tests {
             "{name}: {} frames",
             imported.frames
         );
-        let (field, detail) = orla_session::Session::load_field(&imported.file, None).unwrap();
+        let (field, detail) = orla_formats::read(&imported.file, None).unwrap();
         assert!(detail.ends_with("at 22050 Hz"), "{detail}");
         assert_eq!(field.schema().value_words(), channels);
         let left: Vec<f32> = field

@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use orla_runtime::{FieldData, Scalar};
+use orla_host::{FieldData, Scalar};
 use serde_json::{Value as Json, json};
 
 /// What makes a mesh a rig: the rows beside it.
@@ -169,13 +169,10 @@ pub fn write_rig(
     rig: Option<&Rig<'_>>,
     name: &str,
 ) -> Result<Vec<u8>, String> {
-    if vertices.schema().value_words() != 8
-        || vertices.domain().shape() != orla_runtime::Shape::Rows
-    {
+    if vertices.schema().value_words() != 8 || vertices.domain().shape() != orla_host::Shape::Rows {
         return Err("vertices must be rows of {position: Vec3, normal: Vec3, uv: Vec2}".into());
     }
-    if triangles.schema().value_words() != 3
-        || triangles.domain().shape() != orla_runtime::Shape::Rows
+    if triangles.schema().value_words() != 3 || triangles.domain().shape() != orla_host::Shape::Rows
     {
         return Err("triangles must be rows of {a: Int, b: Int, c: Int}".into());
     }
@@ -505,7 +502,7 @@ pub fn export_rig(
 ) -> Result<(), String> {
     let read = |path: &Path| -> Result<FieldData, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        orla_runtime::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+        orla_host::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     };
     let png = match texture {
         Some(path) => {

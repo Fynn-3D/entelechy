@@ -22,12 +22,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use orla_formats::{png, ppm, wav};
+use orla_formats::ppm;
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_language::{Document, Kernel};
 use orla_runtime::{
-    Backend, Context, Expect, FieldData, Generation, Handle, KernelId, Runtime, Shape, Ticket,
-    Value,
+    Backend, Context, Expect, FieldData, Generation, Handle, KernelId, Runtime, Ticket, Value,
 };
 
 /// What `trace` returns: the reference interpreter's record of one
@@ -958,85 +957,6 @@ impl Session {
             .collect()
     }
 
-    /// Reads a file as its bytes: `Rows<Int>`, one element a byte, 0 to
-    /// 255. What a Kernel does with them is the Kernel's business, which
-    /// is how a scene reads a format nothing here knows.
-    pub fn load_bytes(path: &Path) -> Result<(FieldData, String), String> {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        if bytes.is_empty() {
-            return Err("the file is empty; a Field has no empty extent".into());
-        }
-        let words: Vec<u32> = bytes.iter().map(|byte| u32::from(*byte)).collect();
-        let data = FieldData::from_storage(
-            orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
-            orla_runtime::Domain::Rows(words.len() as u32),
-            words,
-        )
-        .map_err(|e| e.to_string())?;
-        let detail = format!("{} byte(s)", bytes.len());
-        Ok((data, detail))
-    }
-
-    /// Reads a Field file: `.field` as the Host writes it; `.png`, `.ppm`,
-    /// and `.pgm` as a grid of pixels, or as a `Grid<Float>` of luminance
-    /// when `want` says so; `.wav` as rows of one or two floats. Returns
-    /// the Field and a line saying what came in.
-    pub fn load_field(path: &Path, want: Option<&str>) -> Result<(FieldData, String), String> {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let gray = want.is_some_and(|ty| without_encoding(ty) == "Grid<Float>");
-        let describe = |data: &FieldData| {
-            format!(
-                "{} {} {}",
-                data.domain().shape(),
-                data.domain().count(),
-                data.schema()
-            )
-        };
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("field") => {
-                let data = orla_runtime::file::decode(&bytes).map_err(|e| e.to_string())?;
-                let detail = describe(&data);
-                Ok((data, detail))
-            }
-            Some("png") => {
-                let data = png::decode_field(&bytes, gray).map_err(|e| e.to_string())?;
-                let detail = describe(&data);
-                Ok((data, detail))
-            }
-            Some("ppm") | Some("pgm") => {
-                let data = ppm::decode_field(&bytes).map_err(|e| e.to_string())?;
-                let data = if gray && data.schema().is_pixel() {
-                    let words = data
-                        .storage()
-                        .chunks_exact(4)
-                        .map(|p| {
-                            (f32::from_bits(p[0]) * 0.2126
-                                + f32::from_bits(p[1]) * 0.7152
-                                + f32::from_bits(p[2]) * 0.0722)
-                                .to_bits()
-                        })
-                        .collect();
-                    FieldData::from_storage(
-                        orla_runtime::Schema::new(vec![orla_runtime::Scalar::Float]),
-                        data.domain(),
-                        words,
-                    )
-                    .map_err(|e| e.to_string())?
-                } else {
-                    data
-                };
-                let detail = describe(&data);
-                Ok((data, detail))
-            }
-            Some("wav") => {
-                let sound = wav::decode(&bytes).map_err(|e| e.to_string())?;
-                let detail = format!("{} at {} Hz", describe(&sound.field), sound.rate);
-                Ok((sound.field, detail))
-            }
-            _ => Err("unknown Field file format; use .field, .png, .ppm, .pgm, or .wav".into()),
-        }
-    }
-
     /// Reads every input's file that is new or changed since it was last
     /// read, and forgets inputs the scene no longer declares.
     fn sync_assets(&mut self, events: &mut Vec<Event>) {
@@ -1080,9 +1000,9 @@ impl Session {
                 },
             );
             let read = if bytes {
-                Self::load_bytes(&path)
+                orla_formats::read_bytes(&path)
             } else {
-                Self::load_field(&path, Some(&ty))
+                orla_formats::read(&path, Some(&ty))
             };
             let read = read.and_then(|(data, detail)| {
                 let data = kept_as(data, &ty)?;
@@ -1195,74 +1115,15 @@ impl Session {
             .map_err(|e| e.to_string())?;
         let host = self.runtime.host();
         let data = host.data(handle).map_err(|e| e.to_string())?;
-        let domain = data.domain();
-        let bytes = match path.extension().and_then(|e| e.to_str()) {
-            Some("field") => orla_runtime::file::encode_data(data),
-            Some("ppm") => {
-                if !data.schema().is_pixel() || domain.shape() != Shape::Grid {
-                    return Err(format!(
-                        "`{node}.{port}` is not a grid of pixels; save it as .field"
-                    ));
+        let bytes =
+            orla_formats::encode(data, &orla_formats::extension(path), None).map_err(|why| {
+                match why {
+                    orla_formats::EncodeError::Unknown => why.to_string(),
+                    orla_formats::EncodeError::Unfit(what) => {
+                        format!("`{node}.{port}` is {what}; save it as .field")
+                    }
                 }
-                let image = self.runtime.image(handle).map_err(|e| e.to_string())?;
-                ppm::encode(&image)
-            }
-            Some("pgm") => {
-                if data.schema().value_words() != 1 || domain.shape() != Shape::Grid {
-                    return Err(format!(
-                        "`{node}.{port}` is not a Grid<Float>; save it as .field"
-                    ));
-                }
-                let samples: Vec<f32> = data.values().iter().map(|w| f32::from_bits(*w)).collect();
-                ppm::encode_gray(domain.width(), domain.height(), &samples)
-            }
-            Some("png") => {
-                if domain.shape() != Shape::Grid {
-                    return Err(format!("`{node}.{port}` is not a grid; save it as .field"));
-                }
-                let values = data.values();
-                let pixels: Vec<[f32; 4]> = if data.schema().is_pixel() {
-                    values
-                        .chunks_exact(4)
-                        .map(|p| {
-                            [
-                                f32::from_bits(p[0]),
-                                f32::from_bits(p[1]),
-                                f32::from_bits(p[2]),
-                                f32::from_bits(p[3]),
-                            ]
-                        })
-                        .collect()
-                } else if data.schema().value_words() == 1 {
-                    values
-                        .iter()
-                        .map(|w| {
-                            let v = f32::from_bits(*w);
-                            [v, v, v, 1.0]
-                        })
-                        .collect()
-                } else {
-                    return Err(format!(
-                        "`{node}.{port}` is neither pixels nor a Grid<Float>; save it as .field"
-                    ));
-                };
-                png::encode(domain.width(), domain.height(), &pixels)
-            }
-            Some("wav") => {
-                let channels = data.schema().value_words();
-                if domain.shape() != Shape::Rows || channels > 2 {
-                    return Err(format!(
-                        "`{node}.{port}` is not rows of one or two floats; save it as .field"
-                    ));
-                }
-                wav::encode(&data.values(), channels, 48_000)
-            }
-            _ => {
-                return Err(
-                    "unknown Field file format; use .field, .png, .ppm, .pgm, or .wav".into(),
-                );
-            }
-        };
+            })?;
         std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
@@ -1429,7 +1290,7 @@ impl Session {
             }
             let path = sequence.files[index].clone();
             let ty = sequence.ty.clone();
-            let loaded = Self::load_field(&path, Some(&ty)).and_then(|(data, _)| {
+            let loaded = orla_formats::read(&path, Some(&ty)).and_then(|(data, _)| {
                 let data = kept_as(data, &ty)?;
                 self.runtime
                     .host_mut()
@@ -2516,13 +2377,6 @@ fn is_library(document: &Document) -> bool {
 
 /// A port type without the encoding it keeps its scalars in:
 /// `Grid<Vec4 as unorm8>` is `Grid<Vec4>`.
-fn without_encoding(ty: &str) -> String {
-    match ty.split_once(" as ") {
-        Some((head, tail)) => format!("{head}{}", tail.find('>').map_or("", |at| &tail[at..])),
-        None => ty.to_owned(),
-    }
-}
-
 /// A Field read from a file, kept as the input's type says: what a
 /// file decodes to is whole words, and an input declared
 /// `Grid<Vec4 as unorm8>` keeps it as bytes from the moment it lands.

@@ -2,8 +2,7 @@
 //! file here is built byte by byte from the format's own definition, so
 //! what is tested is the reader, not the writer.
 
-use orla_export::midi as write;
-use orla_import::midi as read;
+use orla_formats::midi::{self as read, Note, encode};
 
 /// A variable-length quantity, as the format writes one.
 fn varint(mut value: u32) -> Vec<u8> {
@@ -107,22 +106,22 @@ fn a_tempo_change_moves_the_notes_after_it() {
 
 #[test]
 fn what_is_written_reads_back_the_same() {
-    let notes: Vec<write::Note> = vec![
-        write::Note {
+    let notes: Vec<Note> = vec![
+        Note {
             start: 0.0,
             duration: 0.5,
             pitch: 60,
             velocity: 100.0 / 127.0,
             channel: 0,
         },
-        write::Note {
+        Note {
             start: 0.5,
             duration: 0.25,
             pitch: 67,
             velocity: 80.0 / 127.0,
             channel: 1,
         },
-        write::Note {
+        Note {
             start: 0.5,
             duration: 1.0,
             pitch: 48,
@@ -130,7 +129,7 @@ fn what_is_written_reads_back_the_same() {
             channel: 1,
         },
     ];
-    let bytes = write::midi(&notes, 120.0);
+    let bytes = encode(&notes, 120.0);
     let song = read::read(&bytes).unwrap();
     assert_eq!(song.notes.len(), notes.len());
     // A score reads back in its own order: by when a note starts, then
@@ -145,7 +144,7 @@ fn what_is_written_reads_back_the_same() {
         assert!((read.velocity - written.velocity).abs() < 1e-3, "{read:?}");
     }
     // At another tempo the ticks differ and the seconds do not.
-    let slow = read::read(&write::midi(&notes, 75.0)).unwrap();
+    let slow = read::read(&encode(&notes, 75.0)).unwrap();
     for (read, written) in slow.notes.iter().zip(&expected) {
         assert!((read.start - written.start).abs() < 1e-3, "{read:?}");
         assert!((read.duration - written.duration).abs() < 1e-3, "{read:?}");
@@ -163,4 +162,45 @@ fn what_is_not_a_midi_file_says_so() {
     smpte.extend((-25i16).to_be_bytes());
     let error = read::read(&smpte).unwrap_err();
     assert!(error.contains("SMPTE"), "{error}");
+}
+
+#[test]
+fn a_score_read_live_is_the_score_imported() {
+    // `examples/score` holds the file and what `orla-import` wrote of it:
+    // a scene naming the `.mid` itself reads the same rows.
+    let score = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/score");
+    let (live, detail) = orla_formats::read(&score.join("song.mid"), None).unwrap();
+    let (imported, _) = orla_formats::read(&score.join("assets/song.notes.field"), None).unwrap();
+    assert_eq!(live, imported, "{detail}");
+    // And written out again, it reads back as the same rows.
+    let written = orla_formats::encode(&live, "mid", None).unwrap();
+    let again = orla_formats::midi::field(&read::read(&written).unwrap()).unwrap();
+    assert_eq!(again.domain(), live.domain());
+}
+
+#[test]
+fn a_field_that_does_not_fit_a_format_says_what_it_is_not() {
+    use orla_formats::EncodeError;
+    use orla_host::{Domain, FieldData, Scalar, Schema};
+    let rows = FieldData::from_storage(
+        Schema::new(vec![Scalar::Float]),
+        Domain::Rows(2),
+        vec![0.5f32.to_bits(); 2],
+    )
+    .unwrap();
+    assert_eq!(
+        orla_formats::encode(&rows, "png", None),
+        Err(EncodeError::Unfit("not a grid"))
+    );
+    assert_eq!(
+        orla_formats::encode(&rows, "mid", None),
+        Err(EncodeError::Unfit(
+            "not rows of a note (start, duration, pitch, velocity, channel)"
+        ))
+    );
+    assert_eq!(
+        orla_formats::encode(&rows, "pdf", None),
+        Err(EncodeError::Unknown)
+    );
+    assert!(orla_formats::encode(&rows, "wav", Some(8000)).is_ok());
 }

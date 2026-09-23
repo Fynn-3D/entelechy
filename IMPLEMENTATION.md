@@ -38,7 +38,7 @@ contract is enforced, and the constraints that are not visible from the code.
 | Command line | [cli](crates/cli/src/main.rs), [replay](crates/cli/src/replay.rs), [render](crates/cli/src/render.rs), [packages](crates/cli/src/package.rs), [scaffold](crates/cli/src/scaffold.rs) | every example replay on three backends |
 | C ABI | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
 | Player | [window loop](crates/player/src/main.rs), [audio](crates/player/src/audio.rs), [gamepad](crates/player/src/gamepad.rs) | presentation and blit tests |
-| Import and export | [import](crates/import/src/), [export](crates/export/src/) | [MIDI tests](crates/import/tests/midi.rs), [round trip](crates/export/tests/round_trip.rs) |
+| Import and export | [import](crates/import/src/), [export](crates/export/src/) | [MIDI tests](crates/formats/tests/midi.rs), [round trip](crates/export/tests/round_trip.rs) |
 | Bridges | [bridges](bridges/), each in its program's own language | [bridge tests](crates/cli/tests/bridges.rs), run when the program is present |
 | Feature matrix | [matrix](crates/matrix/src/lib.rs) | [on the JIT](crates/jit/tests/matrix.rs) bit for bit, [on the GPU](crates/gpu/tests/matrix.rs) ints exact and floats to rounding; the 64-bit rows on the JIT, the `Long` rows on both |
 
@@ -336,14 +336,16 @@ Represented in the IR, and so on every backend:
 ### Files and tools
 
 - Assets are inputs with files, re-read when their stamp changes
-  ([file](crates/host/src/file.rs)): PNG, PPM, PGM, WAV, `.field`, `text`,
+  ([file](crates/host/src/file.rs)): PNG, PPM, PGM, WAV, MIDI, `.field`, `text`,
   `bytes` and `frames`. PNG, WAV and inflate are written with no
   dependency and checked against reference vectors
   ([png](crates/formats/src/png.rs), [wav](crates/formats/src/wav.rs),
-  [inflate](crates/formats/src/inflate.rs)). A format of one's own is a
-  Kernel over `bytes`; formats other software writes keep their readers in
-  `orla-import`, where dependencies are allowed.
-- MIDI in and out are written from the format's definition; glTF comes in
+  [inflate](crates/formats/src/inflate.rs)). Which formats are read live
+  and which are converted is [a decision](docs/DECISIONS.md) and
+  [`orla-formats`](crates/formats/src/lib.rs) holds the ones read live.
+- MIDI in and out are written from the format's definition
+  ([midi](crates/formats/src/midi.rs)), and an input may name a `.mid`
+  itself; glTF comes in
   with transforms baked and goes out as GLB, bit for bit on the round
   trip; compressed audio comes in through symphonia and goes out only as
   WAV ([import](crates/import/src/), [export](crates/export/src/)).

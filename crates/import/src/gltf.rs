@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value as Json;
 
-use orla_runtime::{Domain, Scalar, Schema, file};
+use orla_host::{Domain, Scalar, Schema, file};
 
 use orla_formats::base64::unbase64;
 

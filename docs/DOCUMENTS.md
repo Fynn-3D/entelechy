@@ -318,8 +318,10 @@ the Host reads for it, relative to the document, and reads again whenever
 the file changes: a picture as `.png` or `.ppm` (as pixels, or as a
 `Grid<Float>` of luminance when the input says `Grid<Float>`), a
 `Grid<Float>` as `.pgm`, a sound as `.wav` (rows of one or two floats; the
-rate is reported, not stored, and a Kernel resamples with `at_linear`), and
-any Field as `.field`, the Host's own format. `run --save` and the
+rate is reported, not stored, and a Kernel resamples with `at_linear`), a
+score as `.mid` (rows of `{start, duration, pitch, velocity, channel}`,
+its ticks and tempo map read as seconds), and any Field as `.field`, the
+Host's own format. `run --save` and the
 protocol's `read` write all of them. `input title: Rows<Int> = text
 "ORLA";` holds text: the session supplies the characters' codes as rows
 and writes them again when the document's text changes, so a label is a

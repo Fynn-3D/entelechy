@@ -6,12 +6,12 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orla_export::{gltf, midi, sound};
-use orla_runtime::{FieldData, Shape};
+use orla_export::gltf;
+use orla_host::{FieldData, Shape};
 
 const USAGE: &str = "\
 usage:
-  orla-export <file>... --out <target> [--rate <hz>]
+  orla-export <file>... --out <target> [--rate <hz>] [--beats <n>]
       To .glb: a vertices .field (rows of position, normal, uv), a triangles
       .field (rows of three ints), and a .png for the base colour if you have
       .field and, when it has one, a PNG; a rig's weights, skeleton and clip
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
 }
 
 fn read_field(path: &Path) -> Result<FieldData, String> {
-    orla_session::Session::load_field(path, None)
+    orla_formats::read(path, None)
         .map(|(data, _)| data)
         .map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -52,6 +52,7 @@ fn export(args: &[String]) -> Result<String, String> {
     let mut inputs: Vec<PathBuf> = Vec::new();
     let mut out: Option<PathBuf> = None;
     let mut rate: Option<u32> = None;
+    let mut beats: Option<u32> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -62,6 +63,14 @@ fn export(args: &[String]) -> Result<String, String> {
                         .ok_or("--rate needs a number")?
                         .parse()
                         .map_err(|_| "--rate needs a whole number")?,
+                )
+            }
+            "--beats" => {
+                beats = Some(
+                    iter.next()
+                        .ok_or("--beats needs a number")?
+                        .parse()
+                        .map_err(|_| "--beats needs a whole number")?,
                 )
             }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
@@ -91,7 +100,7 @@ fn export(args: &[String]) -> Result<String, String> {
                     "field" => {
                         let data = read_field(input)?;
                         let integer = |k: usize| {
-                            data.schema().scalars().get(k) == Some(&orla_runtime::Scalar::Int)
+                            data.schema().scalars().get(k) == Some(&orla_host::Scalar::Int)
                         };
                         // A rig's rows say which they are by their
                         // layout, as `docs/RIGS.md` has them.
@@ -145,124 +154,59 @@ fn export(args: &[String]) -> Result<String, String> {
             };
             Ok(format!("wrote {}{extra}", out.display()))
         }
-        "wav" => {
-            if inputs.len() != 1 {
-                return Err("a sound comes from one file".into());
-            }
-            let (data, detail) = orla_session::Session::load_field(&inputs[0], None)
-                .map_err(|e| format!("{}: {e}", inputs[0].display()))?;
-            let channels = data.schema().value_words();
-            if data.domain().shape() != Shape::Rows || channels > 2 || data.schema().is_pixel() {
-                return Err(format!(
-                    "{}: not rows of one or two floats",
-                    inputs[0].display()
-                ));
-            }
-            // A WAV brings its rate; a .field is given one.
-            let file_rate = detail
-                .rsplit_once(" at ")
-                .and_then(|(_, tail)| tail.strip_suffix(" Hz"))
-                .and_then(|hz| hz.parse::<u32>().ok());
-            let rate = rate.or(file_rate).unwrap_or(48_000);
-            let samples: Vec<f32> = data.values().iter().map(|w| f32::from_bits(*w)).collect();
-            let pcm = sound::Pcm {
-                samples: &samples,
-                channels,
-                rate,
+        format @ ("wav" | "mid" | "midi" | "png") => {
+            let [input] = inputs.as_slice() else {
+                return Err(format!("a .{format} comes from one file"));
             };
-            std::fs::write(&out, sound::wav(&pcm))
-                .map_err(|e| format!("{}: {e}", out.display()))?;
-            Ok(format!(
-                "wrote {}: {} frames, {channels} channel(s) at {rate} Hz",
-                out.display(),
-                data.domain().count()
-            ))
-        }
-        "mid" | "midi" => {
-            if inputs.len() != 1 {
-                return Err("a score comes from one file".into());
-            }
-            let data = read_field(&inputs[0])?;
-            let words = data.schema().value_words();
-            if data.domain().shape() != Shape::Rows || words != 5 {
-                return Err(format!(
-                    "{}: not rows of a note (start, duration, pitch, velocity, channel)",
-                    inputs[0].display()
-                ));
-            }
-            let notes: Vec<midi::Note> = data
-                .values()
-                .chunks_exact(words)
-                .map(|note| midi::Note {
-                    start: f32::from_bits(note[0]),
-                    duration: f32::from_bits(note[1]),
-                    pitch: note[2] as i32,
-                    velocity: f32::from_bits(note[3]),
-                    channel: note[4] as i32,
-                })
-                .collect();
-            let beats = rate.map(|beats| beats as f32).unwrap_or(120.0);
-            std::fs::write(&out, midi::midi(&notes, beats))
-                .map_err(|e| format!("{}: {e}", out.display()))?;
-            let seconds = notes
-                .iter()
-                .map(|note| note.start + note.duration)
-                .fold(0.0f32, f32::max);
-            Ok(format!(
-                "wrote {}: {} note(s) over {seconds:.2} s at {beats} beats a minute",
-                out.display(),
-                notes.len()
-            ))
-        }
-        "png" => {
-            if inputs.len() != 1 {
-                return Err("a picture comes from one file".into());
-            }
-            let data = read_field(&inputs[0])?;
+            let data = read_field(input)?;
+            let rate = match format {
+                // A WAV brings its rate; a .field is given one.
+                "wav" => rate.or_else(|| {
+                    let bytes = std::fs::read(input).ok()?;
+                    orla_formats::wav::decode(&bytes)
+                        .ok()
+                        .map(|sound| sound.rate)
+                }),
+                "png" => None,
+                _ => beats,
+            };
+            let bytes = orla_formats::encode(&data, format, rate)
+                .map_err(|why| format!("{}: {why}", input.display()))?;
+            std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
             let domain = data.domain();
-            if domain.shape() != Shape::Grid {
-                return Err(format!("{}: not a grid", inputs[0].display()));
-            }
-            let pixels: Vec<[f32; 4]> = if data.schema().is_pixel() {
-                data.values()
-                    .chunks_exact(4)
-                    .map(|p| {
-                        [
-                            f32::from_bits(p[0]),
-                            f32::from_bits(p[1]),
-                            f32::from_bits(p[2]),
-                            f32::from_bits(p[3]),
-                        ]
-                    })
-                    .collect()
-            } else if data.schema().value_words() == 1 {
-                data.values()
-                    .iter()
-                    .map(|w| {
-                        let v = f32::from_bits(*w);
-                        [v, v, v, 1.0]
-                    })
-                    .collect()
-            } else {
-                return Err(format!(
-                    "{}: neither pixels nor a Grid<Float>",
-                    inputs[0].display()
-                ));
-            };
-            std::fs::write(
-                &out,
-                orla_formats::png::encode(domain.width(), domain.height(), &pixels),
-            )
-            .map_err(|e| format!("{}: {e}", out.display()))?;
-            Ok(format!(
-                "wrote {}: {} by {}",
-                out.display(),
-                domain.width(),
-                domain.height()
-            ))
+            Ok(match format {
+                "wav" => format!(
+                    "wrote {}: {} frames, {} channel(s) at {} Hz",
+                    out.display(),
+                    domain.count(),
+                    data.schema().value_words(),
+                    rate.unwrap_or(orla_formats::DEFAULT_RATE)
+                ),
+                "png" => format!(
+                    "wrote {}: {} by {}",
+                    out.display(),
+                    domain.width(),
+                    domain.height()
+                ),
+                _ => {
+                    let values = data.values();
+                    let notes = values
+                        .chunks_exact(orla_formats::midi::schema().value_words())
+                        .map(orla_formats::midi::note);
+                    let seconds = notes
+                        .map(|note| note.start + note.duration)
+                        .fold(0.0f32, f32::max);
+                    format!(
+                        "wrote {}: {} note(s) over {seconds:.2} s at {} beats a minute",
+                        out.display(),
+                        domain.count(),
+                        beats.map_or(orla_formats::DEFAULT_BEATS, |beats| beats as f32)
+                    )
+                }
+            })
         }
         other => Err(format!(
-            "`.{other}` is not a format export knows; write .glb, .wav, or .png"
+            "`.{other}` is not a format export knows; write .glb, .wav, .mid, or .png"
         )),
     }
 }

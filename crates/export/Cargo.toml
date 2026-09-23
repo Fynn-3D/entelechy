@@ -14,9 +14,8 @@ name = "orla-export"
 path = "src/main.rs"
 
 [dependencies]
-orla-session = { path = "../session" }
 orla-formats = { path = "../formats" }
-orla-runtime = { path = "../runtime" }
+orla-host = { path = "../host" }
 serde_json = "1"
 
 [dev-dependencies]

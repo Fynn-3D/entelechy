@@ -51,14 +51,10 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
             [v, v]
         })
         .collect();
-    let pcm = orla_export::sound::Pcm {
-        samples: &samples,
-        channels: 2,
-        rate,
-    };
     let name = "tone.wav";
     let path = dir.join(name);
-    std::fs::write(&path, orla_export::sound::wav(&pcm)).unwrap();
+    let words: Vec<u32> = samples.iter().map(|v| v.to_bits()).collect();
+    std::fs::write(&path, orla_formats::wav::encode(&words, 2, rate)).unwrap();
     let imported = orla_import::audio::import(&path, &dir.join("back")).unwrap();
     assert_eq!((imported.rate, imported.channels), (rate, 2), "{name}");
     assert!(
@@ -66,7 +62,7 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
         "{name}: {} frames",
         imported.frames
     );
-    let (field, _) = orla_session::Session::load_field(&imported.file, None).unwrap();
+    let (field, _) = orla_formats::read(&imported.file, None).unwrap();
     let left: Vec<f32> = field
         .storage()
         .iter()
@@ -128,9 +124,9 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     // a rounding of where they were.
     for name in ["swing", "curl"] {
         let before =
-            orla_runtime::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())
+            orla_host::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())
                 .unwrap();
-        let after = orla_runtime::file::decode(
+        let after = orla_host::file::decode(
             &std::fs::read(back.join(format!("arm.{name}.clip.field"))).unwrap(),
         )
         .unwrap();
