@@ -33,8 +33,8 @@ contract is enforced, and the constraints that are not visible from the code.
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs), [off-frame runs](crates/runtime/src/later.rs); takes validated IR and the backend it is given | [hot swap](crates/runtime/tests/hot_swap.rs), [async](crates/runtime/tests/later.rs), [mixed clocks](crates/runtime/tests/mixed.rs) |
 | Scene documents | [scene](crates/scene/src/lib.rs), [domain expressions](crates/scene/src/domain.rs) | [lowering tests](crates/scene/src/lib.rs) |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [evaluator](crates/graph/src/evaluate.rs), [domain](crates/graph/src/domain.rs) | [composition tests](crates/scene/tests/composition.rs), written as documents |
-| Session | [session](crates/session/src/lib.rs), [bench](crates/session/src/bench.rs), [file formats](crates/session/src/) | [session tests](crates/cli/tests/session.rs) |
-| Creation protocol | [protocol](crates/session/src/protocol.rs), [WebSocket](crates/session/src/websocket.rs), [contract](docs/PROTOCOL.md) | [client test](crates/cli/tests/protocol.rs); [an agent's record](examples/scanline/agent.jsonl) replayed |
+| Session | [session](crates/session/src/lib.rs), [bench](crates/session/src/bench.rs), [file formats](crates/formats/src/lib.rs) | [session tests](crates/cli/tests/session.rs) |
+| Creation protocol | [protocol](crates/protocol/src/lib.rs), [WebSocket](crates/protocol/src/websocket.rs), [contract](docs/PROTOCOL.md) | [client test](crates/cli/tests/protocol.rs); [an agent's record](examples/scanline/agent.jsonl) replayed |
 | Command line | [cli](crates/cli/src/main.rs), [replay](crates/cli/src/replay.rs), [render](crates/cli/src/render.rs), [packages](crates/cli/src/package.rs), [scaffold](crates/cli/src/scaffold.rs) | every example replay on three backends |
 | C ABI | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
 | Player | [window loop](crates/player/src/main.rs), [audio](crates/player/src/audio.rs), [gamepad](crates/player/src/gamepad.rs) | presentation and blit tests |
@@ -79,7 +79,7 @@ What these packages do needed no engine feature; keep it that way.
   outside converts by [`Number::as_kind`](crates/abi/src/lib.rs), a
   float given to a double taken as the decimal it reads as. Held by
   [values against Rust's own](crates/cpu/tests/wide.rs), the matrix's
-  64-bit rows, the [protocol round trip](crates/session/src/protocol.rs)
+  64-bit rows, the [protocol round trip](crates/protocol/src/lib.rs)
   and the [precision example](examples/precision/README.md).
 - A scalar may be kept narrower than a word (`Grid<Vec4 as unorm8>`):
   the schema carries each scalar's [`Encoding`](crates/host/src/encoding.rs)
@@ -339,8 +339,8 @@ Represented in the IR, and so on every backend:
   ([file](crates/host/src/file.rs)): PNG, PPM, PGM, WAV, `.field`, `text`,
   `bytes` and `frames`. PNG, WAV and inflate are written with no
   dependency and checked against reference vectors
-  ([png](crates/session/src/png.rs), [wav](crates/session/src/wav.rs),
-  [inflate](crates/session/src/inflate.rs)). A format of one's own is a
+  ([png](crates/formats/src/png.rs), [wav](crates/formats/src/wav.rs),
+  [inflate](crates/formats/src/inflate.rs)). A format of one's own is a
   Kernel over `bytes`; formats other software writes keep their readers in
   `orla-import`, where dependencies are allowed.
 - MIDI in and out are written from the format's definition; glTF comes in
@@ -355,7 +355,7 @@ Represented in the IR, and so on every backend:
 - The protocol is an interface over the session, not a new authority:
   `prepare` never publishes, `publish` checks an expected generation,
   `compose` rewrites the scene document so the file stays the source of
-  truth ([protocol](crates/session/src/protocol.rs)). `--listen` feeds every
+  truth ([protocol](crates/protocol/src/lib.rs)). `--listen` feeds every
   connection to the one session; a connection that opens with an HTTP
   upgrade speaks RFC 6455, written with no dependency.
 - The C ABI is the session in another process's memory: a Field is read

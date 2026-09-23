@@ -68,7 +68,7 @@ pub fn handshake(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Resu
 pub fn accept_key(key: &str) -> String {
     let mut material = key.trim().as_bytes().to_vec();
     material.extend_from_slice(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    crate::protocol::base64(&sha1(&material))
+    orla_formats::base64::base64(&sha1(&material))
 }
 
 /// Reads one message, joining fragments; `Ok(None)` when the peer closed

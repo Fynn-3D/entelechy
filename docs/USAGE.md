@@ -5,7 +5,7 @@
 Orla is a Rust workspace whose runtime crates have no external
 dependencies; the GPU and JIT backends take the one their machine needs
 (wgpu, Cranelift), and otherwise only the interface layer takes them
-(`orla-session` for the protocol's JSON, the Player, `orla-import`). Build and verify:
+(`orla-protocol` for its JSON, the Player, `orla-import`). Build and verify:
 
 ```sh
 cargo build --workspace

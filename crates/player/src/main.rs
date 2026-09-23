@@ -163,7 +163,7 @@ struct Player {
     /// How the last frame reached the window, for the F10 line.
     path: &'static str,
     /// Protocol requests arriving from stdin or a socket, when serving.
-    requests: Option<Receiver<orla_session::protocol::Incoming>>,
+    requests: Option<Receiver<orla_protocol::Incoming>>,
     /// The node whose image is shown instead of the graph output.
     preview: Option<orla_graph::NodeId>,
     /// The sound card, opened when a scene has a sound-shaped output.
@@ -283,22 +283,20 @@ impl Player {
         let Some(requests) = &self.requests else {
             return;
         };
-        let pending: Vec<orla_session::protocol::Incoming> =
+        let pending: Vec<orla_protocol::Incoming> =
             std::iter::from_fn(|| requests.try_recv().ok()).collect();
         for incoming in pending {
-            let (response, quit) = match orla_session::protocol::parse_request(&incoming.line) {
+            let (response, quit) = match orla_protocol::parse_request(&incoming.line) {
                 Ok((id, request))
                     if request.get("op").and_then(Json::as_str) == Some("evaluate") =>
                 {
                     let result = match self.frame() {
-                        Some(report) => {
-                            Ok(orla_session::protocol::report_json(&self.session, &report))
-                        }
+                        Some(report) => Ok(orla_protocol::report_json(&self.session, &report)),
                         None => Err(serde_json::json!({ "message": self.status })),
                     };
-                    (orla_session::protocol::envelope(&id, result), false)
+                    (orla_protocol::envelope(&id, result), false)
                 }
-                _ => orla_session::protocol::respond_line(&mut self.session, &incoming.line),
+                _ => orla_protocol::respond_line(&mut self.session, &incoming.line),
             };
             incoming.reply.send(response);
             // A quit on standard input closes the window; on a socket it
@@ -822,7 +820,7 @@ fn main() -> ExitCode {
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {
-            match orla_session::protocol::listen(address, sender.clone()) {
+            match orla_protocol::listen(address, sender.clone()) {
                 Ok(bound) => eprintln!("listening on {bound}"),
                 Err(error) => {
                     eprintln!("error: cannot listen on {address}: {error}");
@@ -830,7 +828,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        orla_session::protocol::stdin_into(sender);
+        orla_protocol::stdin_into(sender);
         player.requests = Some(receiver);
         eprintln!("serving the creation protocol on stdin/stdout");
     }

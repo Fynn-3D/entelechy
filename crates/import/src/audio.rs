@@ -91,7 +91,7 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("sound");
     let file = out_dir.join(format!("{stem}.wav"));
-    std::fs::write(&file, orla_session::wav::encode(&words, channels, rate))
+    std::fs::write(&file, orla_formats::wav::encode(&words, channels, rate))
         .map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(Imported {
         file,

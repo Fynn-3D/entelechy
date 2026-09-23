@@ -72,7 +72,7 @@ one line and returns its answer, beside the C functions that evaluate
 and read Fields in place.
 
 Operations, fields, and results are listed in
-[the protocol module](../crates/session/src/protocol.rs), which is the
+[the protocol module](../crates/protocol/src/lib.rs), which is the
 authoritative definition; [the end-to-end test](../crates/cli/tests/protocol.rs)
 drives the binary as a client. Values cross as JSON numbers, booleans,
 and arrays, as the paragraph on values below says. Kernels published

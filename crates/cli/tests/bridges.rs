@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use orla_session::png;
+use orla_formats::png;
 
 /// The workspace root, from this crate.
 fn root() -> PathBuf {

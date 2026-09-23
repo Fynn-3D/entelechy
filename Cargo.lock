@@ -1696,9 +1696,11 @@ version = "0.1.0"
 dependencies = [
  "orla-compiler",
  "orla-cpu",
+ "orla-formats",
  "orla-graph",
  "orla-ir",
  "orla-language",
+ "orla-protocol",
  "orla-runtime",
  "orla-scene",
  "orla-session",
@@ -1735,6 +1737,7 @@ dependencies = [
 name = "orla-export"
 version = "0.1.0"
 dependencies = [
+ "orla-formats",
  "orla-import",
  "orla-runtime",
  "orla-session",
@@ -1747,7 +1750,15 @@ version = "0.1.0"
 dependencies = [
  "orla-abi",
  "orla-graph",
+ "orla-protocol",
  "orla-session",
+]
+
+[[package]]
+name = "orla-formats"
+version = "0.1.0"
+dependencies = [
+ "orla-host",
 ]
 
 [[package]]
@@ -1786,6 +1797,7 @@ name = "orla-import"
 version = "0.1.0"
 dependencies = [
  "orla-export",
+ "orla-formats",
  "orla-runtime",
  "orla-session",
  "serde_json",
@@ -1842,11 +1854,26 @@ dependencies = [
  "orla-gpu",
  "orla-graph",
  "orla-language",
+ "orla-protocol",
  "orla-runtime",
  "orla-session",
  "serde_json",
  "softbuffer",
  "winit",
+]
+
+[[package]]
+name = "orla-protocol"
+version = "0.1.0"
+dependencies = [
+ "orla-compiler",
+ "orla-formats",
+ "orla-graph",
+ "orla-ir",
+ "orla-language",
+ "orla-runtime",
+ "orla-session",
+ "serde_json",
 ]
 
 [[package]]
@@ -1887,6 +1914,7 @@ version = "0.1.0"
 dependencies = [
  "orla-compiler",
  "orla-cpu",
+ "orla-formats",
  "orla-gpu",
  "orla-graph",
  "orla-ir",
@@ -1894,7 +1922,6 @@ dependencies = [
  "orla-language",
  "orla-runtime",
  "orla-scene",
- "serde_json",
 ]
 
 [[package]]

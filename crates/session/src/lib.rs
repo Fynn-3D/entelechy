@@ -9,25 +9,20 @@
 //!
 //! This crate is what every interface drives: the command line, the
 //! Player, the C ABI, the importer and the exporter each open a
-//! [`Session`] and speak the [`protocol`] to it, and none of them
-//! depends on another. The file formats a session reads and writes
-//! travel with it.
+//! [`Session`], and none of them depends on another. The wire an agent
+//! speaks to it is `orla-protocol`, and the file formats it reads and
+//! writes are `orla-formats`; neither is the session's own.
 
 #![warn(missing_docs)]
 
 pub mod bench;
-pub mod inflate;
-pub mod png;
-pub mod ppm;
-pub mod protocol;
-pub mod wav;
-pub mod websocket;
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use orla_formats::{png, ppm, wav};
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_language::{Document, Kernel};
 use orla_runtime::{

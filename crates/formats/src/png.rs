@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use orla_runtime::{Domain, FieldData, HostError, Scalar, Schema};
+use orla_host::{Domain, FieldData, HostError, Scalar, Schema};
 
 use crate::inflate::{InflateError, unzlib, zlib_stored};
 

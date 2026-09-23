@@ -251,7 +251,7 @@ fn export(args: &[String]) -> Result<String, String> {
             };
             std::fs::write(
                 &out,
-                orla_session::png::encode(domain.width(), domain.height(), &pixels),
+                orla_formats::png::encode(domain.width(), domain.height(), &pixels),
             )
             .map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(format!(

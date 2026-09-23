@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 orla-session = { path = "../session" }
+orla-formats = { path = "../formats" }
 orla-runtime = { path = "../runtime" }
 serde_json = "1"
 # Lossy and compressed audio: a decoder is not worth writing again. Only

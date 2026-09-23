@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 orla-session = { path = "../session" }
+orla-protocol = { path = "../protocol" }
 orla-runtime = { path = "../runtime" }
 orla-gpu = { path = "../gpu" }
 orla-graph = { path = "../graph" }

@@ -929,13 +929,12 @@ fn serve(args: &[String]) -> Result<(), String> {
     session.set_background(true);
     let (sink, requests) = std::sync::mpsc::channel();
     if let Some(address) = &listen {
-        let bound =
-            orla_session::protocol::listen(address, sink.clone()).map_err(|e| e.to_string())?;
+        let bound = orla_protocol::listen(address, sink.clone()).map_err(|e| e.to_string())?;
         eprintln!("listening on {bound}");
     }
-    orla_session::protocol::stdin_into(sink);
+    orla_protocol::stdin_into(sink);
     for incoming in requests {
-        if orla_session::protocol::answer(&mut session, incoming) {
+        if orla_protocol::answer(&mut session, incoming) {
             break;
         }
     }
@@ -1153,26 +1152,26 @@ fn trace(args: &[String]) -> Result<(), String> {
     println!("{node} ({kernel}), {place}, as the evaluation after time {time} runs it");
     for value in &traced.bindings {
         let shown = if value.ran {
-            orla_session::protocol::words_text(module, value.ty, &value.words)
+            orla_protocol::words_text(module, value.ty, &value.words)
         } else {
             "- (not run)".to_owned()
         };
         println!(
             "  {}: {} = {shown}",
             value.name,
-            orla_session::protocol::type_name(module, value.ty)
+            orla_protocol::type_name(module, value.ty)
         );
     }
     let show = |value: &orla_session::TraceValue, indent: &str, arrow: &str| {
         let shown = if value.ran {
-            orla_session::protocol::words_text(module, value.ty, &value.words)
+            orla_protocol::words_text(module, value.ty, &value.words)
         } else {
             "- (not run)".to_owned()
         };
         println!(
             "{indent}{arrow}{}: {} = {shown}",
             value.name,
-            orla_session::protocol::type_name(module, value.ty)
+            orla_protocol::type_name(module, value.ty)
         );
     };
     for (number, call) in traced.calls.iter().enumerate() {

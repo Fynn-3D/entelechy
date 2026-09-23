@@ -20,6 +20,8 @@ orla-graph = { path = "../graph" }
 orla-scene = { path = "../scene" }
 orla-runtime = { path = "../runtime" }
 orla-session = { path = "../session" }
+orla-formats = { path = "../formats" }
+orla-protocol = { path = "../protocol" }
 
 [lints]
 workspace = true

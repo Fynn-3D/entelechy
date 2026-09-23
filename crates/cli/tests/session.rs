@@ -695,7 +695,7 @@ output result <- copy.result;
     let pixels = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
     std::fs::write(
         dir.join("photo.png"),
-        orla_session::png::encode(2, 1, &pixels),
+        orla_formats::png::encode(2, 1, &pixels),
     )
     .unwrap();
     let (as_pixels, detail) = Session::load_field(&dir.join("photo.png"), Some("Image")).unwrap();
@@ -712,7 +712,7 @@ output result <- copy.result;
         .collect();
     std::fs::write(
         dir.join("hit.wav"),
-        orla_session::wav::encode(&sound, 2, 22050),
+        orla_formats::wav::encode(&sound, 2, 22050),
     )
     .unwrap();
     let (rows, detail) = Session::load_field(&dir.join("hit.wav"), Some("Rows<Vec2>")).unwrap();
@@ -1142,12 +1142,12 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
     assert!(stderr.contains("rendered 0.05 s of sound"), "{stderr}");
     for index in 0..3 {
         let bytes = std::fs::read(orla::render::picture_path(&out, index)).unwrap();
-        let picture = orla_session::png::decode(&bytes).unwrap();
+        let picture = orla_formats::png::decode(&bytes).unwrap();
         assert_eq!((picture.width, picture.height), (320, 240));
     }
     assert!(!out.join("0003.png").exists());
     let sound =
-        orla_session::wav::decode(&std::fs::read(out.join(orla::render::SOUND_NAME)).unwrap())
+        orla_formats::wav::decode(&std::fs::read(out.join(orla::render::SOUND_NAME)).unwrap())
             .unwrap();
     assert_eq!(sound.rate, 48_000);
     assert_eq!(
@@ -1214,7 +1214,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
         let pixels = vec![*colour; 4];
         std::fs::write(
             dir.join(format!("clip/{index}.png")),
-            orla_session::png::encode(2, 2, &pixels),
+            orla_formats::png::encode(2, 2, &pixels),
         )
         .unwrap();
     }
@@ -1249,7 +1249,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     // A frame dropped in is seen at the next sync and takes its turn.
     std::fs::write(
         dir.join("clip/2.png"),
-        orla_session::png::encode(2, 2, &[[0.0, 0.0, 1.0, 1.0]; 4]),
+        orla_formats::png::encode(2, 2, &[[0.0, 0.0, 1.0, 1.0]; 4]),
     )
     .unwrap();
     let events = session.sync();

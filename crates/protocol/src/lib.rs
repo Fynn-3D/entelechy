@@ -32,6 +32,10 @@
 //! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
 //! | `quit` | | bye |
 
+#![warn(missing_docs)]
+
+pub mod websocket;
+
 use std::io::{BufRead, Write};
 
 use orla_graph::{Binding, ParamValue, Source};
@@ -39,8 +43,9 @@ use orla_ir::{Type, Validated};
 use orla_runtime::{Context, Expect, Generation, InputState, KernelId, Manifest, Shape, Value};
 use serde_json::{Value as Json, json};
 
-use crate::ppm;
-use crate::{Event, Session};
+use orla_formats::base64::{base64, unbase64};
+use orla_formats::ppm;
+use orla_session::{Event, Session};
 
 /// Serves requests from `input` until EOF or `quit`, writing responses to
 /// `output`.
@@ -544,9 +549,9 @@ pub fn trace_json(
     module: &Validated,
     node: &str,
     kernel: &KernelId,
-    trace: &orla_cpu::Trace,
+    trace: &orla_session::Trace,
 ) -> Json {
-    let values = |list: &[orla_cpu::TraceValue]| {
+    let values = |list: &[orla_session::TraceValue]| {
         list.iter()
             .map(|value| json!({ "name": value.name, "type": type_name(module, value.ty), "value": words_json(module, value.ty, &value.words), "ran": value.ran }))
             .collect::<Vec<_>>()
@@ -627,7 +632,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     };
     match op {
         "status" => Ok(json!({
-            "versions": { "api": orla_runtime::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": crate::PACKAGE_VERSION },
+            "versions": { "api": orla_runtime::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": orla_session::PACKAGE_VERSION },
             "backend": session.runtime().backend_name(),
             "scene": session.root().display().to_string(),
             "watched": session.watched().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
@@ -780,7 +785,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 .and_then(Json::as_bool)
                 .unwrap_or(false);
             let backend = session.runtime().backend_name();
-            let measured = crate::bench::measure(
+            let measured = orla_session::bench::measure(
                 session,
                 backend,
                 frames as u32,
@@ -825,7 +830,8 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     let target = test.get("target").and_then(Json::as_str).ok_or_else(|| {
                         failure("`until` names a `target`, as `node.port[0].field`")
                     })?;
-                    let (node, port, index, path) = crate::parse_target(target).map_err(failure)?;
+                    let (node, port, index, path) =
+                        orla_session::parse_target(target).map_err(failure)?;
                     let (kind, bound) = ["below", "above", "equals"]
                         .iter()
                         .find_map(|kind| {
@@ -1408,81 +1414,9 @@ pub fn value_from_json(json: &Json) -> Result<Value, Json> {
     }
 }
 
-/// Decodes standard base64, with or without padding.
-pub fn unbase64(text: &str) -> Result<Vec<u8>, String> {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = Vec::with_capacity(text.len() * 3 / 4);
-    let mut acc: u32 = 0;
-    let mut bits = 0;
-    for byte in text.bytes() {
-        if byte == b'=' || byte.is_ascii_whitespace() {
-            continue;
-        }
-        let value = ALPHABET
-            .iter()
-            .position(|c| *c == byte)
-            .ok_or_else(|| format!("`{}` is not base64", byte as char))?;
-        acc = (acc << 6) | value as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-            acc &= (1 << bits) - 1;
-        }
-    }
-    Ok(out)
-}
-
-/// Standard base64 with padding.
-pub fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let mut word = 0u32;
-        for (index, byte) in chunk.iter().enumerate() {
-            word |= (*byte as u32) << (16 - 8 * index);
-        }
-        for index in 0..4 {
-            if index <= chunk.len() {
-                out.push(ALPHABET[((word >> (18 - 6 * index)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base64_decodes_what_it_encodes() {
-        for sample in [
-            &b""[..],
-            b"f",
-            b"fo",
-            b"foo",
-            b"foob",
-            b"fooba",
-            b"foobar",
-            &[0, 255, 7, 128],
-        ] {
-            assert_eq!(unbase64(&base64(sample)).unwrap(), sample);
-        }
-        assert_eq!(unbase64("Zm9v").unwrap(), b"foo");
-        assert!(unbase64("Zm9*").is_err());
-    }
-
-    #[test]
-    fn base64_matches_the_standard() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-    }
 
     #[test]
     fn values_round_trip_through_json() {

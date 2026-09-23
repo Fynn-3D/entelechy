@@ -295,8 +295,7 @@ pub unsafe extern "C" fn orla_evaluate(
         };
         match s.session.evaluate(&context) {
             Ok(report) => {
-                s.report =
-                    c_string(&orla_session::protocol::report_json(&s.session, &report).to_string());
+                s.report = c_string(&orla_protocol::report_json(&s.session, &report).to_string());
                 0
             }
             Err(error) => s.fail(error.to_string()),
@@ -412,7 +411,7 @@ pub unsafe extern "C" fn orla_request(
     let line = unsafe { text(line) }.unwrap_or("").to_owned();
     guarded(session, |s| {
         s.clear();
-        let (response, _quit) = orla_session::protocol::respond_line(&mut s.session, &line);
+        let (response, _quit) = orla_protocol::respond_line(&mut s.session, &line);
         s.response = c_string(&response);
         0
     });

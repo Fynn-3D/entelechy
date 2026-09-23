@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::Path;
 
-use orla_runtime::{Domain, FieldData, HostError, Image, Scalar, Schema};
+use orla_host::{Domain, FieldData, HostError, Image, Scalar, Schema};
 
 /// Why a PPM file could not be read.
 #[derive(Debug)]

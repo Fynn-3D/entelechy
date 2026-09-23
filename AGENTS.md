@@ -307,10 +307,11 @@ runtime, graph, scene, and the matrix that holds backends to them) free of
 external dependencies. Two backends take the one dependency their machine
 needs and keep it behind the `Backend` boundary: `orla-gpu` takes wgpu (and
 pollster to wait on it) to reach a device, and `orla-jit` takes Cranelift to
-generate native code. The interface layer (`orla-session`, the `orla` CLI, the
-Player, `orla-import`, `orla-export`, `orla-ffi`) is the only other place that
-may take them, for devices, for formats that are not worth decoding twice,
-and for the protocol's JSON. `orla-jit` and `orla-ffi` are the
+generate native code. The interface layer (`orla-session`, `orla-protocol`,
+the `orla` CLI, the Player, `orla-import`, `orla-export`, `orla-ffi`) is the
+only other place that may take them, for devices, for formats that are not
+worth decoding twice, and for the protocol's JSON; `orla-formats`, the codecs
+they share, takes none. `orla-jit` and `orla-ffi` are the
 two crates allowed `unsafe`: the JIT calls the code it produces, the FFI
 reads the pointers and strings a C caller hands it, and nothing else.
 Bridges to other programs live in `bridges/<program>/`, written in that
