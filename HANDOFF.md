@@ -40,10 +40,11 @@ done
 ## Next
 
 Drive a rig rather than play one. `examples/skin` blends two clips by
-where the pointer is; what a game needs next is a joint a Kernel writes —
-a head that follows a point, a foot held on the ground — between the
-sample and the palette, and a clip that starts where the last one left
-off rather than at its own frame zero.
+where the pointer is and `examples/crowd` poses sixty-four out of one
+rig; what a game needs next is a joint a Kernel writes — a head that
+follows a point, a foot held on the ground — between the sample and the
+palette, and root motion: a clip whose root travels, the travel taken
+out of the pose and carried by the scene's own state.
 
 Done when:
 
