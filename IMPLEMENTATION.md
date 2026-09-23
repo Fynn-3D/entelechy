@@ -29,11 +29,11 @@ the workspace, is checked by [a test](crates/interface/orla/tests/layers.rs).
 
 | Layer | Implementation | Evidence |
 | --- | --- | --- |
-| Host Core | [host](crates/core/host/src/lib.rs), [files](crates/core/host/src/file.rs) | handles, budgets, bounds |
+| Host Core | [host](crates/core/host/src/lib.rs), [files](crates/core/host/src/file.rs) | handles, budgets, bounds; [the `.field` bytes pinned](crates/core/host/tests/format.rs) |
 | Capability ABI | [abi](crates/core/abi/src/lib.rs), [names](crates/core/abi/src/names.rs) | grants checked before every Host call; [the capability set pinned to `ABI_VERSION`](crates/core/abi/tests/contract.rs) |
 | Orla IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | typing, SSA order, capability coverage; [fusion bit-identity](crates/core/ir/tests/fusion.rs) |
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs) | syntax, precedence, positioned errors, near misses |
-| Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs) |
+| Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [the language surface at its version](crates/frontend/compiler/tests/surface.rs) |
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [the `Backend` contract](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer contract and reference](crates/core/rules/src/raster.rs) | every backend's parity test runs by them |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution tests](crates/backends/cpu/tests/execute.rs), [optimizer tests](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), every replay on `jit` |

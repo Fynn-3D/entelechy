@@ -138,3 +138,33 @@ Host, never on the session or a backend. `read`, `read_bytes` and
 **What would change it.** A format that meets all three conditions (it
 joins the live set), or one the live set holds that starts to need a
 dependency (it leaves for `orla-import`).
+
+## A public contract grows; it breaks only with its version
+
+Five things are written against by programs and sources Orla does not
+see: the protocol an agent speaks, the C ABI, the capabilities a Kernel
+declares, the `.field` file, and what a Kernel may call and write. Each
+may grow. What was valid against it stays valid, or its version changes.
+
+| Contract | Held by |
+| --- | --- |
+| Protocol operations | the table in [the protocol module](../crates/interface/protocol/src/lib.rs), held to `OPERATIONS` and to the server answering each |
+| C ABI | [`header.rs`](../crates/interface/ffi/tests/header.rs): the header's functions, version and struct layouts against the library's |
+| Capabilities | [`contract.rs`](../crates/core/abi/tests/contract.rs): the set, pinned to `ABI_VERSION` |
+| `.field` | [`format.rs`](../crates/core/host/tests/format.rs): every scalar and a spread of encodings pinned byte for byte, and every file in the repository still read |
+| Language surface | [`surface.txt`](../crates/frontend/compiler/tests/surface.txt) at `LANGUAGE_VERSION`, held by [`surface.rs`](../crates/frontend/compiler/tests/surface.rs) |
+
+**Why.** A contract that changes by accident breaks someone who is not
+in the room: a Blender scene saved last month, a Kernel an agent wrote
+yesterday, a C program built against last week's header. A test that
+fails on any difference makes every change a decision, and the version
+says which kind it was.
+
+**Where.** The tests above. The language's surface is the one recorded
+as data: a new builtin or signature, or a capability no longer needed,
+is recorded with `ORLA_BLESS=1`; dropping or tightening anything a
+source could write is refused until `LANGUAGE_VERSION` is raised.
+
+**What would change it.** A contract that has no outside reader after
+all, which then need not be held; or a second version of one living
+beside the first, which would need both held.

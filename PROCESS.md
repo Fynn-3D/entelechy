@@ -31,6 +31,12 @@ KernelID
 Serialized Graph Format
 ```
 
+What other programs and written sources build against is held to its
+implementation by a test, and grows without breaking what came before;
+see `docs/DECISIONS.md`, *A public contract grows; it breaks only with its
+version*. When the language's surface grows, record it with
+`ORLA_BLESS=1 cargo test -p orla-compiler --test surface`.
+
 Prefer clear, small, boring, testable over clever, abstract, magical,
 prematurely generic.
 

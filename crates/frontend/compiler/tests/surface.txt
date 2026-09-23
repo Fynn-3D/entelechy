@@ -1,0 +1,694 @@
+language 1
+builtin abs
+  abs(x: DVec2) -> DVec2
+  abs(x: DVec3) -> DVec3
+  abs(x: DVec4) -> DVec4
+  abs(x: Double) -> Double
+  abs(x: Float) -> Float
+  abs(x: IVec2) -> IVec2
+  abs(x: IVec3) -> IVec3
+  abs(x: Int) -> Int
+  abs(x: LVec2) -> LVec2
+  abs(x: LVec3) -> LVec3
+  abs(x: Long) -> Long
+  abs(x: Vec2) -> Vec2
+  abs(x: Vec3) -> Vec3
+  abs(x: Vec4) -> Vec4
+builtin acos
+  acos(x: DVec2) -> DVec2
+  acos(x: DVec3) -> DVec3
+  acos(x: DVec4) -> DVec4
+  acos(x: Double) -> Double
+  acos(x: Float) -> Float
+  acos(x: Vec2) -> Vec2
+  acos(x: Vec3) -> Vec3
+  acos(x: Vec4) -> Vec4
+builtin add_wrap
+  add_wrap(a: Int, b: Int) -> Int
+  add_wrap(a: Long, b: Long) -> Long
+builtin asin
+  asin(x: DVec2) -> DVec2
+  asin(x: DVec3) -> DVec3
+  asin(x: DVec4) -> DVec4
+  asin(x: Double) -> Double
+  asin(x: Float) -> Float
+  asin(x: Vec2) -> Vec2
+  asin(x: Vec3) -> Vec3
+  asin(x: Vec4) -> Vec4
+builtin at requires field.read
+  at(field: Grid<T>, at: IVec2) -> T
+  at(field: Grid<T>, at: Vec2) -> T
+  at(field: Rows<T>, index: Int) -> T
+  at(field: Volume<T>, at: IVec3) -> T
+  at(field: Volume<T>, at: Vec3) -> T
+builtin at_linear requires field.read
+  at_linear(field: Grid<T>, position: Vec2) -> T
+  at_linear(field: Rows<T>, position: Float) -> T
+  at_linear(field: Volume<T>, position: Vec3) -> T
+builtin atan
+  atan(x: DVec2) -> DVec2
+  atan(x: DVec3) -> DVec3
+  atan(x: DVec4) -> DVec4
+  atan(x: Double) -> Double
+  atan(x: Float) -> Float
+  atan(x: Vec2) -> Vec2
+  atan(x: Vec3) -> Vec3
+  atan(x: Vec4) -> Vec4
+builtin atan2
+  atan2(y: Double, x: Double) -> Double
+  atan2(y: Float, x: Float) -> Float
+builtin button requires input.read
+  button(n: Int) -> Bool
+builtin ceil
+  ceil(x: DVec2) -> DVec2
+  ceil(x: DVec3) -> DVec3
+  ceil(x: DVec4) -> DVec4
+  ceil(x: Double) -> Double
+  ceil(x: Float) -> Float
+  ceil(x: Vec2) -> Vec2
+  ceil(x: Vec3) -> Vec3
+  ceil(x: Vec4) -> Vec4
+builtin clamp
+  clamp(x: DVec2, low: DVec2, high: DVec2) -> DVec2
+  clamp(x: DVec2, low: Double, high: Double) -> DVec2
+  clamp(x: DVec3, low: DVec3, high: DVec3) -> DVec3
+  clamp(x: DVec3, low: Double, high: Double) -> DVec3
+  clamp(x: DVec4, low: DVec4, high: DVec4) -> DVec4
+  clamp(x: DVec4, low: Double, high: Double) -> DVec4
+  clamp(x: Double, low: Double, high: Double) -> Double
+  clamp(x: Float, low: Float, high: Float) -> Float
+  clamp(x: IVec2, low: IVec2, high: IVec2) -> IVec2
+  clamp(x: IVec2, low: Int, high: Int) -> IVec2
+  clamp(x: IVec3, low: IVec3, high: IVec3) -> IVec3
+  clamp(x: IVec3, low: Int, high: Int) -> IVec3
+  clamp(x: Int, low: Int, high: Int) -> Int
+  clamp(x: LVec2, low: LVec2, high: LVec2) -> LVec2
+  clamp(x: LVec2, low: Long, high: Long) -> LVec2
+  clamp(x: LVec3, low: LVec3, high: LVec3) -> LVec3
+  clamp(x: LVec3, low: Long, high: Long) -> LVec3
+  clamp(x: Long, low: Long, high: Long) -> Long
+  clamp(x: Vec2, low: Float, high: Float) -> Vec2
+  clamp(x: Vec2, low: Vec2, high: Vec2) -> Vec2
+  clamp(x: Vec3, low: Float, high: Float) -> Vec3
+  clamp(x: Vec3, low: Vec3, high: Vec3) -> Vec3
+  clamp(x: Vec4, low: Float, high: Float) -> Vec4
+  clamp(x: Vec4, low: Vec4, high: Vec4) -> Vec4
+builtin clz
+  clz(x: Int) -> Int
+builtin coord entry
+  coord() -> Vec2
+  coord() -> Vec3
+builtin cos
+  cos(x: DVec2) -> DVec2
+  cos(x: DVec3) -> DVec3
+  cos(x: DVec4) -> DVec4
+  cos(x: Double) -> Double
+  cos(x: Float) -> Float
+  cos(x: Vec2) -> Vec2
+  cos(x: Vec3) -> Vec3
+  cos(x: Vec4) -> Vec4
+builtin cosh
+  cosh(x: DVec2) -> DVec2
+  cosh(x: DVec3) -> DVec3
+  cosh(x: DVec4) -> DVec4
+  cosh(x: Double) -> Double
+  cosh(x: Float) -> Float
+  cosh(x: Vec2) -> Vec2
+  cosh(x: Vec3) -> Vec3
+  cosh(x: Vec4) -> Vec4
+builtin count requires field.read
+  count(field: Grid<T>) -> Int
+  count(field: Rows<T>) -> Int
+  count(field: Volume<T>) -> Int
+builtin cross
+  cross(a: DVec3, b: DVec3) -> DVec3
+  cross(a: Vec3, b: Vec3) -> Vec3
+builtin ctz
+  ctz(x: Int) -> Int
+builtin degrees
+  degrees(x: Float) -> Float
+  degrees(x: Vec2) -> Vec2
+  degrees(x: Vec3) -> Vec3
+  degrees(x: Vec4) -> Vec4
+builtin determinant
+  determinant(m: DMat4) -> Double
+  determinant(m: Mat2) -> Float
+  determinant(m: Mat3) -> Float
+  determinant(m: Mat4) -> Float
+builtin distance
+  distance(a: Vec2, b: Vec2) -> Float
+  distance(a: Vec3, b: Vec3) -> Float
+  distance(a: Vec4, b: Vec4) -> Float
+builtin dmat2
+  dmat2(c0: DVec2, c1: DVec2) -> DMat2
+  dmat2(diagonal: Double) -> DMat2
+builtin dmat3
+  dmat3(c0: DVec3, c1: DVec3, c2: DVec3) -> DMat3
+  dmat3(diagonal: Double) -> DMat3
+builtin dmat4
+  dmat4(c0: DVec4, c1: DVec4, c2: DVec4, c3: DVec4) -> DMat4
+  dmat4(diagonal: Double) -> DMat4
+builtin domain entry
+  domain() -> Int
+  domain() -> Vec2
+  domain() -> Vec3
+builtin dot
+  dot(a: DVec3, b: DVec3) -> Double
+  dot(a: Vec2, b: Vec2) -> Float
+  dot(a: Vec3, b: Vec3) -> Float
+  dot(a: Vec4, b: Vec4) -> Float
+builtin double
+  double(x: Bool) -> Double
+  double(x: Float) -> Double
+  double(x: IVec2) -> DVec2
+  double(x: IVec3) -> DVec3
+  double(x: Int) -> Double
+  double(x: LVec2) -> DVec2
+  double(x: LVec3) -> DVec3
+  double(x: Long) -> Double
+  double(x: Mat2) -> DMat2
+  double(x: Mat3) -> DMat3
+  double(x: Mat4) -> DMat4
+  double(x: Vec2) -> DVec2
+  double(x: Vec3) -> DVec3
+  double(x: Vec4) -> DVec4
+builtin dvec2
+  dvec2(x: Double, y: Double) -> DVec2
+builtin dvec3
+  dvec3(v: Vec3) -> DVec3
+  dvec3(x: Double, y: Double, z: Double) -> DVec3
+  dvec3(xy: DVec2, z: Double) -> DVec3
+builtin dvec4
+  dvec4(v: Vec4) -> DVec4
+  dvec4(x: Double, y: Double, z: Double, w: Double) -> DVec4
+  dvec4(xyz: DVec3, w: Double) -> DVec4
+builtin element entry
+  element() -> Int
+builtin exp
+  exp(x: DVec2) -> DVec2
+  exp(x: DVec3) -> DVec3
+  exp(x: DVec4) -> DVec4
+  exp(x: Double) -> Double
+  exp(x: Float) -> Float
+  exp(x: Vec2) -> Vec2
+  exp(x: Vec3) -> Vec3
+  exp(x: Vec4) -> Vec4
+builtin exp2
+  exp2(x: DVec2) -> DVec2
+  exp2(x: DVec3) -> DVec3
+  exp2(x: DVec4) -> DVec4
+  exp2(x: Double) -> Double
+  exp2(x: Float) -> Float
+  exp2(x: Vec2) -> Vec2
+  exp2(x: Vec3) -> Vec3
+  exp2(x: Vec4) -> Vec4
+builtin fetch requires field.read
+  fetch(field: Grid<T>, at: IVec2) -> T
+  fetch(field: Grid<T>, at: Vec2) -> T
+  fetch(field: Rows<T>, index: Int) -> T
+  fetch(field: Volume<T>, at: IVec3) -> T
+  fetch(field: Volume<T>, at: Vec3) -> T
+builtin float
+  float(x: Bool) -> Float
+  float(x: DMat2) -> Mat2
+  float(x: DMat3) -> Mat3
+  float(x: DMat4) -> Mat4
+  float(x: DVec2) -> Vec2
+  float(x: DVec3) -> Vec3
+  float(x: DVec4) -> Vec4
+  float(x: Double) -> Float
+  float(x: IVec2) -> Vec2
+  float(x: IVec3) -> Vec3
+  float(x: Int) -> Float
+  float(x: LVec2) -> Vec2
+  float(x: LVec3) -> Vec3
+  float(x: Long) -> Float
+builtin floor
+  floor(x: DVec2) -> DVec2
+  floor(x: DVec3) -> DVec3
+  floor(x: DVec4) -> DVec4
+  floor(x: Double) -> Double
+  floor(x: Float) -> Float
+  floor(x: Vec2) -> Vec2
+  floor(x: Vec3) -> Vec3
+  floor(x: Vec4) -> Vec4
+builtin fma
+  fma(a: DVec2, b: DVec2, c: DVec2) -> DVec2
+  fma(a: DVec3, b: DVec3, c: DVec3) -> DVec3
+  fma(a: DVec4, b: DVec4, c: DVec4) -> DVec4
+  fma(a: Double, b: Double, c: Double) -> Double
+  fma(a: Float, b: Float, c: Float) -> Float
+  fma(a: Vec2, b: Vec2, c: Vec2) -> Vec2
+  fma(a: Vec3, b: Vec3, c: Vec3) -> Vec3
+  fma(a: Vec4, b: Vec4, c: Vec4) -> Vec4
+builtin fract
+  fract(x: DVec2) -> DVec2
+  fract(x: DVec3) -> DVec3
+  fract(x: DVec4) -> DVec4
+  fract(x: Double) -> Double
+  fract(x: Float) -> Float
+  fract(x: Vec2) -> Vec2
+  fract(x: Vec3) -> Vec3
+  fract(x: Vec4) -> Vec4
+builtin icoord entry
+  icoord() -> IVec2
+  icoord() -> IVec3
+builtin idomain entry
+  idomain() -> IVec2
+  idomain() -> IVec3
+  idomain() -> Int
+builtin index
+  index() -> Int
+builtin int
+  int(x: Bool) -> Int
+  int(x: DVec2) -> IVec2
+  int(x: DVec3) -> IVec3
+  int(x: Double) -> Int
+  int(x: Float) -> Int
+  int(x: LVec2) -> IVec2
+  int(x: LVec3) -> IVec3
+  int(x: Long) -> Int
+  int(x: Vec2) -> IVec2
+  int(x: Vec3) -> IVec3
+builtin inverse
+  inverse(m: DMat4) -> DMat4
+  inverse(m: Mat2) -> Mat2
+  inverse(m: Mat3) -> Mat3
+  inverse(m: Mat4) -> Mat4
+builtin inversesqrt
+  inversesqrt(x: Float) -> Float
+  inversesqrt(x: Vec2) -> Vec2
+  inversesqrt(x: Vec3) -> Vec3
+  inversesqrt(x: Vec4) -> Vec4
+builtin isinf
+  isinf(x: Float) -> Bool
+builtin isize requires field.read
+  isize(field: Grid<T>) -> IVec2
+  isize(field: Rows<T>) -> Int
+  isize(field: Volume<T>) -> IVec3
+builtin isnan
+  isnan(x: Float) -> Bool
+builtin ivec2
+  ivec2(x: Int, y: Int) -> IVec2
+builtin ivec3
+  ivec3(x: Int, y: Int, z: Int) -> IVec3
+  ivec3(x: Int, yz: IVec2) -> IVec3
+  ivec3(xy: IVec2, z: Int) -> IVec3
+builtin key requires input.read
+  key(code: Int) -> Bool
+builtin length
+  length(v: DVec3) -> Double
+  length(v: Vec2) -> Float
+  length(v: Vec3) -> Float
+  length(v: Vec4) -> Float
+builtin log
+  log(x: DVec2) -> DVec2
+  log(x: DVec3) -> DVec3
+  log(x: DVec4) -> DVec4
+  log(x: Double) -> Double
+  log(x: Float) -> Float
+  log(x: Vec2) -> Vec2
+  log(x: Vec3) -> Vec3
+  log(x: Vec4) -> Vec4
+builtin log2
+  log2(x: DVec2) -> DVec2
+  log2(x: DVec3) -> DVec3
+  log2(x: DVec4) -> DVec4
+  log2(x: Double) -> Double
+  log2(x: Float) -> Float
+  log2(x: Vec2) -> Vec2
+  log2(x: Vec3) -> Vec3
+  log2(x: Vec4) -> Vec4
+builtin long
+  long(x: Bool) -> Long
+  long(x: DVec2) -> LVec2
+  long(x: DVec3) -> LVec3
+  long(x: Double) -> Long
+  long(x: Float) -> Long
+  long(x: IVec2) -> LVec2
+  long(x: IVec3) -> LVec3
+  long(x: Int) -> Long
+  long(x: Vec2) -> LVec2
+  long(x: Vec3) -> LVec3
+builtin lvec2
+  lvec2(v: IVec2) -> LVec2
+  lvec2(x: Long, y: Long) -> LVec2
+builtin lvec3
+  lvec3(v: IVec3) -> LVec3
+  lvec3(x: Long, y: Long, z: Long) -> LVec3
+  lvec3(xy: LVec2, z: Long) -> LVec3
+builtin mat2
+  mat2(c0: Vec2, c1: Vec2) -> Mat2
+  mat2(diagonal: Float) -> Mat2
+builtin mat3
+  mat3(c0: Vec3, c1: Vec3, c2: Vec3) -> Mat3
+  mat3(diagonal: Float) -> Mat3
+builtin mat4
+  mat4(c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4) -> Mat4
+  mat4(diagonal: Float) -> Mat4
+builtin max
+  max(a: DVec2, b: DVec2) -> DVec2
+  max(a: DVec2, b: Double) -> DVec2
+  max(a: DVec3, b: DVec3) -> DVec3
+  max(a: DVec3, b: Double) -> DVec3
+  max(a: DVec4, b: DVec4) -> DVec4
+  max(a: DVec4, b: Double) -> DVec4
+  max(a: Double, b: Double) -> Double
+  max(a: Float, b: Float) -> Float
+  max(a: IVec2, b: IVec2) -> IVec2
+  max(a: IVec2, b: Int) -> IVec2
+  max(a: IVec3, b: IVec3) -> IVec3
+  max(a: IVec3, b: Int) -> IVec3
+  max(a: Int, b: Int) -> Int
+  max(a: LVec2, b: LVec2) -> LVec2
+  max(a: LVec2, b: Long) -> LVec2
+  max(a: LVec3, b: LVec3) -> LVec3
+  max(a: LVec3, b: Long) -> LVec3
+  max(a: Long, b: Long) -> Long
+  max(a: Vec2, b: Float) -> Vec2
+  max(a: Vec2, b: Vec2) -> Vec2
+  max(a: Vec3, b: Float) -> Vec3
+  max(a: Vec3, b: Vec3) -> Vec3
+  max(a: Vec4, b: Float) -> Vec4
+  max(a: Vec4, b: Vec4) -> Vec4
+builtin min
+  min(a: DVec2, b: DVec2) -> DVec2
+  min(a: DVec2, b: Double) -> DVec2
+  min(a: DVec3, b: DVec3) -> DVec3
+  min(a: DVec3, b: Double) -> DVec3
+  min(a: DVec4, b: DVec4) -> DVec4
+  min(a: DVec4, b: Double) -> DVec4
+  min(a: Double, b: Double) -> Double
+  min(a: Float, b: Float) -> Float
+  min(a: IVec2, b: IVec2) -> IVec2
+  min(a: IVec2, b: Int) -> IVec2
+  min(a: IVec3, b: IVec3) -> IVec3
+  min(a: IVec3, b: Int) -> IVec3
+  min(a: Int, b: Int) -> Int
+  min(a: LVec2, b: LVec2) -> LVec2
+  min(a: LVec2, b: Long) -> LVec2
+  min(a: LVec3, b: LVec3) -> LVec3
+  min(a: LVec3, b: Long) -> LVec3
+  min(a: Long, b: Long) -> Long
+  min(a: Vec2, b: Float) -> Vec2
+  min(a: Vec2, b: Vec2) -> Vec2
+  min(a: Vec3, b: Float) -> Vec3
+  min(a: Vec3, b: Vec3) -> Vec3
+  min(a: Vec4, b: Float) -> Vec4
+  min(a: Vec4, b: Vec4) -> Vec4
+builtin mix
+  mix(a: DVec2, b: DVec2, t: DVec2) -> DVec2
+  mix(a: DVec2, b: DVec2, t: Double) -> DVec2
+  mix(a: DVec3, b: DVec3, t: DVec3) -> DVec3
+  mix(a: DVec3, b: DVec3, t: Double) -> DVec3
+  mix(a: DVec4, b: DVec4, t: DVec4) -> DVec4
+  mix(a: DVec4, b: DVec4, t: Double) -> DVec4
+  mix(a: Double, b: Double, t: Double) -> Double
+  mix(a: Float, b: Float, t: Float) -> Float
+  mix(a: Vec2, b: Vec2, t: Float) -> Vec2
+  mix(a: Vec2, b: Vec2, t: Vec2) -> Vec2
+  mix(a: Vec3, b: Vec3, t: Float) -> Vec3
+  mix(a: Vec3, b: Vec3, t: Vec3) -> Vec3
+  mix(a: Vec4, b: Vec4, t: Float) -> Vec4
+  mix(a: Vec4, b: Vec4, t: Vec4) -> Vec4
+builtin mod
+  mod(x: Float, y: Float) -> Float
+  mod(x: Vec2, y: Float) -> Vec2
+  mod(x: Vec2, y: Vec2) -> Vec2
+  mod(x: Vec3, y: Float) -> Vec3
+  mod(x: Vec3, y: Vec3) -> Vec3
+  mod(x: Vec4, y: Float) -> Vec4
+  mod(x: Vec4, y: Vec4) -> Vec4
+builtin mul_wrap
+  mul_wrap(a: Int, b: Int) -> Int
+  mul_wrap(a: Long, b: Long) -> Long
+builtin mulhi
+  mulhi(a: Int, b: Int) -> Int
+builtin normalize
+  normalize(v: DVec3) -> DVec3
+  normalize(v: Vec2) -> Vec2
+  normalize(v: Vec3) -> Vec3
+  normalize(v: Vec4) -> Vec4
+builtin pointer requires input.read
+  pointer() -> Vec2
+builtin pointer_down requires input.read
+  pointer_down() -> Bool
+builtin popcount
+  popcount(x: Int) -> Int
+builtin pow
+  pow(base: DVec2, exponent: DVec2) -> DVec2
+  pow(base: DVec2, exponent: Double) -> DVec2
+  pow(base: DVec3, exponent: DVec3) -> DVec3
+  pow(base: DVec3, exponent: Double) -> DVec3
+  pow(base: DVec4, exponent: DVec4) -> DVec4
+  pow(base: DVec4, exponent: Double) -> DVec4
+  pow(base: Double, exponent: Double) -> Double
+  pow(base: Float, exponent: Float) -> Float
+  pow(base: Vec2, exponent: Float) -> Vec2
+  pow(base: Vec2, exponent: Vec2) -> Vec2
+  pow(base: Vec3, exponent: Float) -> Vec3
+  pow(base: Vec3, exponent: Vec3) -> Vec3
+  pow(base: Vec4, exponent: Float) -> Vec4
+  pow(base: Vec4, exponent: Vec4) -> Vec4
+builtin put requires field.write
+  put(memory: Grid<T>, at: IVec2, value: T) -> T
+  put(memory: Grid<T>, at: Vec2, value: T) -> T
+  put(memory: Rows<T>, index: Int, value: T) -> T
+  put(memory: Volume<T>, at: IVec3, value: T) -> T
+  put(memory: Volume<T>, at: Vec3, value: T) -> T
+builtin radians
+  radians(x: Float) -> Float
+  radians(x: Vec2) -> Vec2
+  radians(x: Vec3) -> Vec3
+  radians(x: Vec4) -> Vec4
+builtin rate requires time.read
+  rate() -> Float
+builtin reflect
+  reflect(incident: DVec3, normal: DVec3) -> DVec3
+  reflect(incident: Vec2, normal: Vec2) -> Vec2
+  reflect(incident: Vec3, normal: Vec3) -> Vec3
+builtin refract
+  refract(incident: Vec2, normal: Vec2, eta: Float) -> Vec2
+  refract(incident: Vec3, normal: Vec3, eta: Float) -> Vec3
+  refract(incident: Vec4, normal: Vec4, eta: Float) -> Vec4
+builtin rotl
+  rotl(x: Int, n: Int) -> Int
+builtin rotr
+  rotr(x: Int, n: Int) -> Int
+builtin round
+  round(x: DVec2) -> DVec2
+  round(x: DVec3) -> DVec3
+  round(x: DVec4) -> DVec4
+  round(x: Double) -> Double
+  round(x: Float) -> Float
+  round(x: Vec2) -> Vec2
+  round(x: Vec3) -> Vec3
+  round(x: Vec4) -> Vec4
+builtin sample requires field.read entry
+  sample(field: Grid<T>) -> T
+  sample(field: Rows<T>) -> T
+  sample(field: Volume<T>) -> T
+builtin saturate
+  saturate(x: Float) -> Float
+  saturate(x: Vec2) -> Vec2
+  saturate(x: Vec3) -> Vec3
+  saturate(x: Vec4) -> Vec4
+builtin scale requires input.read
+  scale() -> Float
+builtin sign
+  sign(x: DVec2) -> DVec2
+  sign(x: DVec3) -> DVec3
+  sign(x: DVec4) -> DVec4
+  sign(x: Double) -> Double
+  sign(x: Float) -> Float
+  sign(x: IVec2) -> IVec2
+  sign(x: IVec3) -> IVec3
+  sign(x: Int) -> Int
+  sign(x: LVec2) -> LVec2
+  sign(x: LVec3) -> LVec3
+  sign(x: Long) -> Long
+  sign(x: Vec2) -> Vec2
+  sign(x: Vec3) -> Vec3
+  sign(x: Vec4) -> Vec4
+builtin sin
+  sin(x: DVec2) -> DVec2
+  sin(x: DVec3) -> DVec3
+  sin(x: DVec4) -> DVec4
+  sin(x: Double) -> Double
+  sin(x: Float) -> Float
+  sin(x: Vec2) -> Vec2
+  sin(x: Vec3) -> Vec3
+  sin(x: Vec4) -> Vec4
+builtin sinh
+  sinh(x: DVec2) -> DVec2
+  sinh(x: DVec3) -> DVec3
+  sinh(x: DVec4) -> DVec4
+  sinh(x: Double) -> Double
+  sinh(x: Float) -> Float
+  sinh(x: Vec2) -> Vec2
+  sinh(x: Vec3) -> Vec3
+  sinh(x: Vec4) -> Vec4
+builtin size requires field.read
+  size(field: Grid<T>) -> Vec2
+  size(field: Volume<T>) -> Vec3
+builtin smoothstep
+  smoothstep(low: DVec2, high: DVec2, x: DVec2) -> DVec2
+  smoothstep(low: DVec3, high: DVec3, x: DVec3) -> DVec3
+  smoothstep(low: DVec4, high: DVec4, x: DVec4) -> DVec4
+  smoothstep(low: Double, high: Double, x: DVec2) -> DVec2
+  smoothstep(low: Double, high: Double, x: DVec3) -> DVec3
+  smoothstep(low: Double, high: Double, x: DVec4) -> DVec4
+  smoothstep(low: Double, high: Double, x: Double) -> Double
+  smoothstep(low: Float, high: Float, x: Float) -> Float
+  smoothstep(low: Float, high: Float, x: Vec2) -> Vec2
+  smoothstep(low: Float, high: Float, x: Vec3) -> Vec3
+  smoothstep(low: Float, high: Float, x: Vec4) -> Vec4
+  smoothstep(low: Vec2, high: Vec2, x: Vec2) -> Vec2
+  smoothstep(low: Vec3, high: Vec3, x: Vec3) -> Vec3
+  smoothstep(low: Vec4, high: Vec4, x: Vec4) -> Vec4
+builtin sqrt
+  sqrt(x: DVec2) -> DVec2
+  sqrt(x: DVec3) -> DVec3
+  sqrt(x: DVec4) -> DVec4
+  sqrt(x: Double) -> Double
+  sqrt(x: Float) -> Float
+  sqrt(x: Vec2) -> Vec2
+  sqrt(x: Vec3) -> Vec3
+  sqrt(x: Vec4) -> Vec4
+builtin step
+  step(edge: DVec2, x: DVec2) -> DVec2
+  step(edge: DVec3, x: DVec3) -> DVec3
+  step(edge: DVec4, x: DVec4) -> DVec4
+  step(edge: Double, x: DVec2) -> DVec2
+  step(edge: Double, x: DVec3) -> DVec3
+  step(edge: Double, x: DVec4) -> DVec4
+  step(edge: Double, x: Double) -> Double
+  step(edge: Float, x: Float) -> Float
+  step(edge: Float, x: Vec2) -> Vec2
+  step(edge: Float, x: Vec3) -> Vec3
+  step(edge: Float, x: Vec4) -> Vec4
+  step(edge: Vec2, x: Vec2) -> Vec2
+  step(edge: Vec3, x: Vec3) -> Vec3
+  step(edge: Vec4, x: Vec4) -> Vec4
+builtin stick requires input.read
+  stick(n: Int) -> Vec2
+builtin sub_wrap
+  sub_wrap(a: Int, b: Int) -> Int
+  sub_wrap(a: Long, b: Long) -> Long
+builtin tan
+  tan(x: DVec2) -> DVec2
+  tan(x: DVec3) -> DVec3
+  tan(x: DVec4) -> DVec4
+  tan(x: Double) -> Double
+  tan(x: Float) -> Float
+  tan(x: Vec2) -> Vec2
+  tan(x: Vec3) -> Vec3
+  tan(x: Vec4) -> Vec4
+builtin tanh
+  tanh(x: DVec2) -> DVec2
+  tanh(x: DVec3) -> DVec3
+  tanh(x: DVec4) -> DVec4
+  tanh(x: Double) -> Double
+  tanh(x: Float) -> Float
+  tanh(x: Vec2) -> Vec2
+  tanh(x: Vec3) -> Vec3
+  tanh(x: Vec4) -> Vec4
+builtin time requires time.read
+  time() -> Float
+builtin transpose
+  transpose(m: DMat4) -> DMat4
+  transpose(m: Mat2) -> Mat2
+  transpose(m: Mat3) -> Mat3
+  transpose(m: Mat4) -> Mat4
+builtin trunc
+  trunc(x: DVec2) -> DVec2
+  trunc(x: DVec3) -> DVec3
+  trunc(x: DVec4) -> DVec4
+  trunc(x: Double) -> Double
+  trunc(x: Float) -> Float
+  trunc(x: Vec2) -> Vec2
+  trunc(x: Vec3) -> Vec3
+  trunc(x: Vec4) -> Vec4
+builtin udiv
+  udiv(a: Int, b: Int) -> Int
+builtin ult
+  ult(a: Int, b: Int) -> Bool
+builtin umulhi
+  umulhi(a: Int, b: Int) -> Int
+builtin urem
+  urem(a: Int, b: Int) -> Int
+builtin vec2
+  vec2(x: Float, y: Float) -> Vec2
+  vec2(x: Int, y: Int) -> Vec2
+builtin vec3
+  vec3(x: Float, y: Float, z: Float) -> Vec3
+  vec3(x: Float, yz: Vec2) -> Vec3
+  vec3(x: Int, y: Int, z: Int) -> Vec3
+  vec3(xy: Vec2, z: Float) -> Vec3
+builtin vec4
+  vec4(x: Float, y: Float, z: Float, w: Float) -> Vec4
+  vec4(x: Float, yzw: Vec3) -> Vec4
+  vec4(x: Int, y: Int, z: Int, w: Int) -> Vec4
+  vec4(xy: Vec2, z: Float, w: Float) -> Vec4
+  vec4(xy: Vec2, zw: Vec2) -> Vec4
+  vec4(xyz: Vec3, w: Float) -> Vec4
+builtin wheel requires input.read
+  wheel() -> Vec2
+builtin window requires input.read
+  window() -> Vec2
+form and
+  a && b   a || b   !a
+form array
+  [a, b, c]   [value; n]   a[i]
+form async
+  async = true;
+form break
+  loop n with x = init { if done { break x; } next }
+form budget
+  budget 100000;
+form compute
+  compute { return value; }
+form each
+  [each n { body }]
+form fill
+  node zeros: Rows<Float> { domain = 65; value = 0.5; }
+form fn
+  fn name(a: Float) -> Float { ... }   fn name<T>(a: T) -> T { ... }
+form graph
+  node name: graph "other.osn" { input <- src; param = 2; }
+form if
+  if condition { a } else { b }   if condition { return a; }
+form inline
+  node name: kernel { ... input x: Image <- src; ... }
+form input
+  input x: Image;   = "atlas.png";   = text "ORLA";   = frames "clip/" at 30;
+form kernel
+  kernel id@version { requires { ... } input ... output ... compute { ... } }
+form let
+  let name = expr;   let { x, y: top } = value;
+form loop
+  loop n with x = init until done { next }
+form match
+  match i { 0 => a, 1 | 2 => b, 8..16 => c, 16..=31 => d, _ => e }
+form memory
+  memory ram: Rows<Int>;   put(ram, address, value)
+form merge
+  compute { ... } merge(a, b) { ... }
+form node
+  node name: kernel.id@1 { port <- source.result; param = 2; domain = vec2(w, h); }
+form package
+  package name@1 { language = 1; ir = 1; }
+form prefix
+  prefix with sum { return value; }
+form previous
+  port <~ node.output from initial [migrate id@v];
+form scan
+  scan with y = init { return next; }
+form scatter
+  scatter into target with sum { return Pair { at: address, value: v }; }
+form struct
+  Name { a: 1.0, b: 2 }   Name { ..base, a: 3.0 }
+form times
+  times = 5;   carry port <- output;
+form use
+  use "kernels/";   use "name.orlapkg";
