@@ -22,6 +22,7 @@ Then, by the question:
 | How is a Kernel or a scene written? | `docs/DOCUMENTS.md` |
 | What command does this? | `docs/USAGE.md` |
 | What does an agent send over the wire? | `docs/PROTOCOL.md` |
+| What rows is a rig? | `docs/RIGS.md` |
 | What may a Kernel call? | `orla help`, `orla help <name>` |
 
 Then inspect:

@@ -29,7 +29,7 @@ node swinging: skin.sample@1 { skeleton <- skeleton; clip <- swing; at <- clock.
 node curling: skin.sample@1 { skeleton <- skeleton; clip <- curl; at <- clock.result; rate = rate; }
 node poses: skin.blend@1 { first <- swinging.result; second <- curling.result; mix <- mix.result; }
 node palette: skin.palette@1 { poses <- poses.result; skeleton <- skeleton; }
-node posed: skin.apply@1 { mesh <- mesh; weights <- weights; palette <- palette.result; }
+node posed: skin.apply@1 { mesh <- mesh; weights <- weights; palette <- palette.result; skeleton <- skeleton; }
 
 node project: arm.project@1 { mesh <- posed.result; }
 node raster: native.rasterize@1 { vertices <- project.result; triangles <- faces; domain = window(); }

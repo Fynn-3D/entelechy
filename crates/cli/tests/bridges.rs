@@ -5,6 +5,8 @@
 //! they are not, so a change to the protocol that breaks a bridge
 //! breaks this rather than waiting for someone to open one.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -124,6 +126,20 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
         .arg(&dir);
     passed(command, "the Blender rig", "pushed Arm.swing.clip.field");
 
+    // What it pushed, against the one table every rig row is held to.
+    let pushed_rows = common::rows_keep_the_contract(&dir.join("pushed"));
+    assert_eq!(
+        pushed_rows.len(),
+        6,
+        "five kinds, two of them clips: {pushed_rows:?}"
+    );
+    let live = common::rows_keep_the_contract(&dir.join("live"));
+    assert!(
+        live.iter()
+            .any(|(kind, name)| kind == "clip.field" && name.ends_with("pose.clip.field")),
+        "Live pushes the pose it stands on: {live:?}"
+    );
+
     // The converter is another crate's binary; `cargo test --workspace`
     // builds it beside this one.
     let importer = Path::new(env!("CARGO_BIN_EXE_orla"))
@@ -165,7 +181,7 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
                  at <- clock.result; rate = 24.0; }}\n\
                  node palette: skin.palette@1 {{ poses <- poses.result; skeleton <- skeleton; }}\n\
                  node posed: skin.apply@1 {{ mesh <- mesh; weights <- weights; \
-                 palette <- palette.result; }}\n\
+                 palette <- palette.result; skeleton <- skeleton; }}\n\
                  node project: arm.project@1 {{ mesh <- posed.result; spin = 0.0; }}\n\
                  node raster: native.rasterize@1 {{ vertices <- project.result; \
                  triangles <- faces; domain = vec2(200, 120); }}\n\

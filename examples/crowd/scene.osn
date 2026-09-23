@@ -1,0 +1,84 @@
+// Sixty-four arms out of one rig: one mesh, one skeleton, two clips,
+// and a row per instance saying when it is in the clip and where it
+// stands.
+//
+// The `skin` package's Kernels do a crowd when the node is sized for
+// one — `domain = instances * count(skeleton)` for the poses and
+// `instances * count(mesh)` for the mesh — so nothing here is a second
+// way of skinning.
+use "kernels/";
+use "../../packages/skin.orlapkg/kernels/skin.orla";
+
+input mesh: Rows<Point> = "../skin/assets/arm.vertices.field";
+input faces: Triangles = "../skin/assets/arm.triangles.field";
+input weights: Rows<Bound> = "../skin/assets/arm.weights.field";
+input skeleton: Skeleton = "../skin/assets/arm.skeleton.field";
+input swing: Clip = "../skin/assets/arm.swing.clip.field";
+input curl: Clip = "../skin/assets/arm.curl.clip.field";
+
+param instances: Int = 64;
+param across: Int = 8;
+param rate: Float = 30.0;
+param speed: Float = 1.0;
+// How much of the second clip the bone above the root takes: a mask, so
+// one action runs in the shoulder while another runs in the arm.
+param upper: Float = 1.0;
+// How much of the second clip is laid *over* the pose rather than
+// blended into it: an additive lean, measured from that clip's own
+// first frame. Zero leaves the pose as the blend left it.
+param lean: Float = 0.0;
+
+node times: crowd.times@1 { speed = speed; domain = instances; }
+node places: crowd.places@1 { across = across; domain = instances; }
+node mask: crowd.mask@1 { skeleton <- skeleton; upper = upper; }
+
+node swinging: skin.sample@1 {
+    skeleton <- skeleton;
+    clip <- swing;
+    at <- times.result;
+    rate = rate;
+    domain = instances * count(skeleton);
+}
+node curling: skin.sample@1 {
+    skeleton <- skeleton;
+    clip <- curl;
+    at <- times.result;
+    rate = rate;
+    domain = instances * count(skeleton);
+}
+node poses: skin.blend@1 { first <- swinging.result; second <- curling.result; mix <- mask.result; }
+
+// The same clip read at its own first frame is what an additive layer
+// is measured from.
+node still: crowd.times@1 { speed = 0.0; domain = instances; }
+node resting: skin.sample@1 {
+    skeleton <- skeleton;
+    clip <- curl;
+    at <- still.result;
+    rate = rate;
+    domain = instances * count(skeleton);
+}
+node weight: crowd.weight@1 { lean = lean; domain = 1; }
+node leaning: skin.add@1 {
+    base <- poses.result;
+    add <- curling.result;
+    rest <- resting.result;
+    weight <- weight.result;
+}
+
+node palette: skin.palette@1 { poses <- leaning.result; skeleton <- skeleton; }
+node posed: skin.apply@1 {
+    mesh <- mesh;
+    weights <- weights;
+    palette <- palette.result;
+    skeleton <- skeleton;
+    domain = instances * count(mesh);
+}
+node standing: skin.place@1 { mesh <- posed.result; places <- places.result; one <- mesh; }
+node triangles: crowd.faces@1 { faces <- faces; mesh <- mesh; domain = instances * count(faces); }
+
+node project: crowd.project@1 { mesh <- standing.result; }
+node raster: native.rasterize@1 { vertices <- project.result; triangles <- triangles.result; domain = window(); }
+node view: crowd.shade@1 { surface <- raster.surface; faces <- faces; domain = window(); }
+
+output result <- view.result;

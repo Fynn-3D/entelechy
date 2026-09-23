@@ -49,10 +49,14 @@ use "picture.orlapkg";
   into the nine cells around one.
 - **skin** — a skeleton, the clips that pose it, and the mesh that
   follows. `orla import` writes the rows out of a rigged glTF and the
-  Blender bridge writes the same ones; sampling a clip, blending two,
+  Blender bridge writes the same ones ([the contract](../docs/RIGS.md)); sampling a clip, blending two,
   composing a joint's parents and moving a vertex by the four joints it
   hangs off are Kernels, so a pose is data all the way through and a
-  scene can drive it. `graphs/pose.osn` plays one clip as one node;
-  `examples/skin` blends two.
+  scene can drive it. The same Kernels do a crowd when the node is sized
+  for one — `instances * count(skeleton)` poses that many skeletons —
+  and `skin.blend@1` takes a weight a joint, which is a mask, while
+  `skin.add@1` lays a clip over a pose rather than into it.
+  `graphs/pose.osn` plays one clip as one node; `examples/skin` blends
+  two by hand and `examples/crowd` poses sixty-four.
 - **pixelfx** — a coarse pixel grid and a four-colour palette, and the
   NES look made of both as a preset. The example of what a package is.

@@ -1,0 +1,139 @@
+// A field of arms out of one rig: where each stands, when each is in
+// its clip, and which bone follows which action.
+use "../../../packages/skin.orlapkg/kernels/skin.orla";
+
+struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
+struct Tri { a: Int; b: Int; c: Int; }
+struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
+type Vertices = Rows<Vertex>;
+type Triangles = Rows<Tri>;
+type GBuffer = Grid<Surface>;
+
+fn mix32(x: Int) -> Int {
+    let a = mul_wrap(x ^ (x >>> 16), 0x7FEB352D);
+    let b = mul_wrap(a ^ (a >>> 15), 0x846CA68B);
+    return b ^ (b >>> 16);
+}
+
+fn unit(x: Int) -> Float {
+    return float(mix32(x) & 0xFFFFFF) / 16777216.0;
+}
+
+// One clock an instance: the same clip, everybody out of step.
+kernel crowd.times@1 {
+    requires { field.write; time.read; }
+    param speed: Float = 1.0;
+    output result: Rows<Float>;
+    compute { return time() * speed + unit(element() * 3 + 11) * 4.0; }
+}
+
+// Where each one stands and which way it faces: a grid, turned a little
+// by its own hash.
+kernel crowd.places@1 {
+    requires { field.write; }
+    param across: Int = 8;
+    param apart: Float = 2.6;
+    output result: Rows<Pose>;
+    compute {
+        let i = element();
+        let x = (float(i % across) - float(across - 1) * 0.5) * apart;
+        let z = (float(i / across) - float(across - 1) * 0.5) * apart;
+        let turn = (unit(i * 7 + 3) - 0.5) * 1.2;
+        return Pose {
+            at: vec3(x, 0.0, z),
+            turn: vec4(0.0, sin(turn * 0.5), 0.0, cos(turn * 0.5)),
+            grow: vec3(1.0, 1.0, 1.0),
+        };
+    }
+}
+
+// How much of the additive layer to take, as a row of one.
+kernel crowd.weight@1 {
+    requires { field.write; }
+    param lean: Float = 0.0;
+    output result: Rows<Float>;
+    compute { return lean; }
+}
+
+// A weight a joint, which is what makes a blend a mask: the bone at the
+// root keeps the first clip, the one above it takes the second.
+kernel crowd.mask@1 {
+    requires { field.read; field.write; }
+    input skeleton: Skeleton;
+    param upper: Float = 1.0;
+    output result: Rows<Float>;
+    compute { return if sample(skeleton).parent < 0 { 0.0 } else { upper }; }
+}
+
+// One instance's triangles after another, each indexing its own block
+// of vertices.
+kernel crowd.faces@1 {
+    requires { field.read; field.write; }
+    input faces: Triangles;
+    input mesh: Rows<Point>;
+    output result: Triangles;
+    compute {
+        let per = count(faces);
+        let base = element() / per * count(mesh);
+        let t = at(faces, element() % per);
+        return Tri { a: base + t.a, b: base + t.b, c: base + t.c };
+    }
+}
+
+fn rotate_y(a: Float) -> Mat3 {
+    return mat3(vec3(cos(a), 0.0, -sin(a)), vec3(0.0, 1.0, 0.0), vec3(sin(a), 0.0, cos(a)));
+}
+
+fn rotate_x(a: Float) -> Mat3 {
+    return mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(a), sin(a)), vec3(0.0, -sin(a), cos(a)));
+}
+
+kernel crowd.project@1 {
+    requires { field.read; field.write; time.read; }
+    input mesh: Rows<Point>;
+    param aspect: Float = 1.7778;
+    param focus: Vec3 = vec3(0.0, 0.7, -0.9);
+    param distance: Float = 13.0;
+    param tilt: Float = 0.42;
+    param spin: Float = 0.12;
+    param turn: Float = 0.6;
+    output result: Vertices;
+    compute {
+        let v = sample(mesh);
+        let orbit = rotate_x(tilt) * rotate_y(turn + time() * spin);
+        let p = orbit * (v.position - focus);
+        let n = orbit * v.normal;
+        let view = vec3(p.x, p.y, p.z - distance);
+        let f = 2.1445;
+        let near = 0.1;
+        let far = 80.0;
+        return Vertex {
+            clip: vec4(view.x * f / aspect, view.y * f,
+                       view.z * far / (near - far) + near * far / (near - far), 0.0 - view.z),
+            normal: n,
+            uv: v.uv,
+        };
+    }
+}
+
+// A triangle knows which instance it belongs to — its row over the
+// triangles of one — so the crowd is a crowd of somebodies rather than
+// one body drawn many times.
+kernel crowd.shade@1 {
+    requires { field.read; field.write; }
+    input surface: GBuffer;
+    input faces: Triangles;
+    param light: Vec3 = vec3(0.4, 0.8, 0.5);
+    output result: Image;
+    compute {
+        let s = sample(surface);
+        let up = coord().y / domain().y;
+        let sky = mix(vec3(0.10, 0.12, 0.18), vec3(0.03, 0.04, 0.07), up);
+        let n = normalize(s.normal);
+        let lit = max(dot(n, normalize(light)), 0.0);
+        let who = s.id / count(faces);
+        let tint = mix(vec3(0.92, 0.72, 0.45), vec3(0.45, 0.68, 0.86), unit(who * 13 + 5));
+        let body = tint * (0.30 + 0.80 * lit);
+        return vec4(if s.id < 0 { sky } else { body }, 1.0);
+    }
+}

@@ -62,6 +62,19 @@ fn between(a: Vec4, b: Vec4, t: Float) -> Vec4 {
     return if length > 0.0 { mixed / length } else { a };
 }
 
+// One rotation after another, and the way back from one.
+fn after(a: Vec4, b: Vec4) -> Vec4 {
+    return vec4(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z);
+}
+
+fn back(q: Vec4) -> Vec4 {
+    return vec4(0.0 - q.x, 0.0 - q.y, 0.0 - q.z, q.w);
+}
+
 fn mixing(a: Pose, b: Pose, t: Float) -> Pose {
     return Pose {
         at: mix(a.at, b.at, t),
@@ -83,6 +96,13 @@ kernel skin.clock@1 {
 // between the two frames it falls between. A clip ends where its rows
 // end: `repeat` wraps round to the start, and otherwise the last frame
 // holds.
+//
+// A node sized `instances * count(skeleton)` poses a crowd instead of
+// one: element `e` is joint `e % joints` of instance `e / joints`, and
+// each instance reads its own row of `at`, so a hundred of them walk
+// the same clip out of step. Sized for one — which is what a node with
+// no `domain` of its own is — it is the same Kernel doing the same
+// thing.
 kernel skin.sample@1 {
     requires { field.read; field.write; }
     input skeleton: Skeleton;
@@ -97,7 +117,7 @@ kernel skin.sample@1 {
     compute {
         let joints = count(skeleton);
         let frames = count(clip) / joints;
-        let moment = at(at, 0) * rate;
+        let moment = at(at, element() / joints) * rate;
         let last = float(frames - 1);
         let held = if repeat {
             moment - float(frames) * floor(moment / float(frames))
@@ -107,14 +127,18 @@ kernel skin.sample@1 {
         let first = int(floor(held));
         let next = if repeat { (first + 1) % frames } else { min(first + 1, frames - 1) };
         let t = held - floor(held);
-        let joint = element();
+        let joint = element() % joints;
         return mixing(at(clip, first * joints + joint), at(clip, next * joints + joint), t);
     }
 }
 
 // Two poses of one skeleton, blended: a walk into a run, a turn laid
-// over either. `mix` is a row of one, so a Kernel or the graph decides
-// it and it can move every frame.
+// over either. A Kernel or the graph decides `mix`, so it can move every
+// frame.
+//
+// `mix` of one row is the whole skeleton. A row a joint is a mask: an
+// upper body running while the legs walk is the same blend with ones
+// down the arms and zeros down the legs.
 kernel skin.blend@1 {
     requires { field.read; field.write; }
     input first: Rows<Pose>;
@@ -122,7 +146,39 @@ kernel skin.blend@1 {
     input mix: Rows<Float>;
     output result: Rows<Pose>;
     compute {
-        return mixing(sample(first), sample(second), clamp(at(mix, 0), 0.0, 1.0));
+        let masked = count(mix) > 1;
+        let joints = count(mix);
+        let how = if masked { at(mix, element() % joints) } else { at(mix, 0) };
+        return mixing(sample(first), sample(second), clamp(how, 0.0, 1.0));
+    }
+}
+
+// A pose laid over another: what `add` does differently from `rest` is
+// done to `base`, by `weight`. A clip authored as a difference — a
+// flinch, a lean, a breath — plays over whatever the body is already
+// doing, which is what a game blends on top of a walk.
+//
+// `rest` is the frame the difference is measured from, which is the
+// additive clip's own first frame: sample it at zero.
+kernel skin.add@1 {
+    requires { field.read; field.write; }
+    input base: Rows<Pose>;
+    input add: Rows<Pose>;
+    input rest: Rows<Pose>;
+    input weight: Rows<Float>;
+    output result: Rows<Pose>;
+    compute {
+        let joints = count(weight);
+        let how = clamp(if joints > 1 { at(weight, element() % joints) } else { at(weight, 0) }, 0.0, 1.0);
+        let b = sample(base);
+        let over = sample(add);
+        let was = sample(rest);
+        let turned = between(vec4(0.0, 0.0, 0.0, 1.0), after(back(was.turn), over.turn), how);
+        return Pose {
+            at: b.at + (over.at - was.at) * how,
+            turn: after(b.turn, turned),
+            grow: b.grow * mix(vec3(1.0, 1.0, 1.0), over.grow / was.grow, how),
+        };
     }
 }
 
@@ -145,33 +201,70 @@ kernel skin.palette@1 {
     compute {
         // Up the chain, each parent applied on the left of what the
         // walk has so far. `until` is asked before a step, so a root
-        // stops it having applied only its own.
-        let walked = loop depth with w = Walk { matrix: posing(sample(poses)), joint: element() }
+        // stops it having applied only its own. An instance's joints
+        // are a block of their own, so a walk stays inside it.
+        let joints = count(skeleton);
+        let block = element() / joints * joints;
+        let mine = element() % joints;
+        let walked = loop depth with w = Walk { matrix: posing(sample(poses)), joint: mine }
             until at(skeleton, w.joint).parent < 0 {
             let up = at(skeleton, w.joint).parent;
-            Walk { matrix: posing(at(poses, up)) * w.matrix, joint: up }
+            Walk { matrix: posing(at(poses, block + up)) * w.matrix, joint: up }
         };
-        return walked.matrix * at(skeleton, element()).bind;
+        return walked.matrix * at(skeleton, mine).bind;
     }
 }
 
-// The mesh in the pose the palette says: four joints a vertex, weighted.
+// The mesh in the pose the palette says: four joints a vertex,
+// weighted. A node sized `instances * count(mesh)` poses a crowd out of
+// one mesh, each instance reading its own block of the palette.
+//
+// A vertex bound to nothing — all four weights zero, which is what a
+// model that mixes skinned and unskinned meshes writes — is left where
+// it is.
 kernel skin.apply@1 {
     requires { field.read; field.write; }
     input mesh: Rows<Point>;
     input weights: Rows<Bound>;
     input palette: Palette;
+    // Bound for its count: how many joints an instance's palette holds.
+    input skeleton: Skeleton;
     output result: Rows<Point>;
 
     compute {
-        let v = sample(mesh);
-        let b = sample(weights);
-        let m = at(palette, b.joints[0]) * b.weights.x
-              + at(palette, b.joints[1]) * b.weights.y
-              + at(palette, b.joints[2]) * b.weights.z
-              + at(palette, b.joints[3]) * b.weights.w;
+        let vertices = count(mesh);
+        let block = element() / vertices * count(skeleton);
+        let v = at(mesh, element() % vertices);
+        let b = at(weights, element() % vertices);
+        if b.weights.x + b.weights.y + b.weights.z + b.weights.w == 0.0 { return v; }
+        let m = at(palette, block + b.joints[0]) * b.weights.x
+              + at(palette, block + b.joints[1]) * b.weights.y
+              + at(palette, block + b.joints[2]) * b.weights.z
+              + at(palette, block + b.joints[3]) * b.weights.w;
         let moved = m * vec4(v.position.x, v.position.y, v.position.z, 1.0);
         let turned = m * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
+        return Point {
+            position: vec3(moved.x, moved.y, moved.z),
+            normal: normalize(vec3(turned.x, turned.y, turned.z)),
+            uv: v.uv,
+        };
+    }
+}
+
+// Where each instance stands: one `Pose` a instance, applied to the
+// mesh it posed. A crowd is this over `skin.apply@1`'s output.
+kernel skin.place@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    input places: Rows<Pose>;
+    // Bound for its count: how many vertices one instance has.
+    input one: Rows<Point>;
+    output result: Rows<Point>;
+    compute {
+        let v = sample(mesh);
+        let place = posing(at(places, element() / count(one)));
+        let moved = place * vec4(v.position.x, v.position.y, v.position.z, 1.0);
+        let turned = place * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
         return Point {
             position: vec3(moved.x, moved.y, moved.z),
             normal: normalize(vec3(turned.x, turned.y, turned.z)),

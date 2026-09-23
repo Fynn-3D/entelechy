@@ -346,8 +346,9 @@ three indices, and the base colour texture as a PNG, into `--out <dir>`
 (the source's directory by default); sparse accessors and JPEG textures
 are reported and left out.
 
-A model with a skin writes three more kinds of row, which the
-[`skin` package](../packages/skin.orlapkg) poses a mesh from:
+A model with a skin writes three more kinds of row ([the
+contract](RIGS.md)), which the [`skin` package](../packages/skin.orlapkg)
+poses a mesh from:
 `<stem>.weights.field`, the four joints each vertex hangs off and how
 much of each; `<stem>.skeleton.field`, every joint's parent and inverse
 bind matrix; and one `<stem>.<name>.clip.field` per animation, sampled at
