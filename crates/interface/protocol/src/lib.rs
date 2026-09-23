@@ -9,7 +9,9 @@
 //!
 //! Every request is one JSON object per line with an `op` and an optional
 //! `id` that is echoed back; every response is one line, `{"id", "ok": ...}`
-//! or `{"id", "error": {"message", "line"?, "column"?}}`.
+//! or `{"id", "error": {"message", "line"?, "column"?}}`. An error says what
+//! an agent can act on as data as well as in words: an unknown operation
+//! lists the `operations`, and an unknown name in `help` the `similar` ones.
 //!
 //! | op | request fields | ok |
 //! | --- | --- | --- |
@@ -25,10 +27,14 @@
 //! | `retire` | `kernel` (the Kernel's id) | retired |
 //! | `param` | `name`, `value` | ok |
 //! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `window`? (`[w, h]` in pixels), `scale`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
+//! | `advance` | `frames`, `fps`?, `time`?, the context `evaluate` takes, `until`? (`{target, below / above / equals}`), `save`? | frames, stopped, target, value, saved, millis, report |
+//! | `bench` | `frames`?, `fps`?, `repeat`?, `nodes`? | backend, frames, repeat, best_ms, median_ms, nodes, ran |
 //! | `window` | `size` (`[w, h]` in pixels, or null for none), `scale`? | the window a headless session reports to evaluations that name none |
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
 //! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `reset` | | ok |
+//! | `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
+//! | `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
 //! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
 //! | `quit` | | bye |
 
@@ -613,6 +619,15 @@ fn positioned(message: String) -> Json {
     failure(message)
 }
 
+/// Every operation the protocol answers, in the order the table above
+/// lists them. A request naming another is refused with this list, so an
+/// agent that guessed wrong learns what there is.
+pub const OPERATIONS: [&str; 23] = [
+    "status", "kernels", "kernel", "graph", "document", "compose", "sync", "prepare", "publish",
+    "retire", "param", "evaluate", "advance", "bench", "window", "read", "write", "reset", "help",
+    "trace", "pin", "unpin", "quit",
+];
+
 /// Handles one request.
 pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     let op = request
@@ -990,10 +1005,13 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     Some(builtin) => Ok(entry(&builtin)),
                     None => match orla_compiler::help::form_named(name) {
                         Some(form) => Ok(shape(&form)),
-                        None => Err(failure(format!(
-                            "nothing named `{name}`; similar: {}",
-                            orla_compiler::help::similar(name).join(", ")
-                        ))),
+                        None => {
+                            let similar = orla_compiler::help::similar(name);
+                            Err(json!({
+                                "message": format!("nothing named `{name}`; similar: {}", similar.join(", ")),
+                                "similar": similar,
+                            }))
+                        }
                     },
                 },
                 None => Ok(json!({
@@ -1245,7 +1263,10 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             Ok(json!({ "unpinned": node }))
         }
         "quit" => Ok(json!({ "bye": true })),
-        other => Err(failure(format!("unknown op `{other}`"))),
+        other => Err(json!({
+            "message": format!("unknown op `{other}`; the operations are {}", OPERATIONS.join(", ")),
+            "operations": OPERATIONS,
+        })),
     }
 }
 
@@ -1417,6 +1438,50 @@ pub fn value_from_json(json: &Json) -> Result<Value, Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The table at the top of this module is the protocol's contract.
+    /// It names every operation the server answers, the server answers
+    /// every operation it names, and a name that is neither is told the
+    /// list: an operation cannot be added, dropped or renamed without the
+    /// contract saying so.
+    #[test]
+    fn the_table_is_every_operation_and_every_operation_is_answered() {
+        let documented: Vec<&str> = include_str!("lib.rs")
+            .lines()
+            .take_while(|line| line.starts_with("//!"))
+            .filter_map(|line| line.strip_prefix("//! | `"))
+            .flat_map(|row| {
+                let cell = row.split(" |").next().unwrap_or_default();
+                cell.split(" / ").map(|op| op.trim_matches('`'))
+            })
+            .collect();
+        assert_eq!(documented, OPERATIONS, "the table and `OPERATIONS` differ");
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/grayscale/scene.osn");
+        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        session.sync();
+        for op in OPERATIONS {
+            // Asked with nothing else, an operation may refuse for want of
+            // a field; what it may not do is not know its own name.
+            if let Err(error) = handle(&mut session, &json!({ "op": op })) {
+                assert!(
+                    error.get("operations").is_none(),
+                    "`{op}` is in the table but the server does not answer it: {error}"
+                );
+            }
+        }
+        let error = handle(&mut session, &json!({ "op": "compile" })).unwrap_err();
+        assert_eq!(error["operations"], json!(OPERATIONS));
+    }
+
+    #[test]
+    fn an_unknown_name_in_help_lists_the_similar_ones_as_data() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/grayscale/scene.osn");
+        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        let error = handle(&mut session, &json!({ "op": "help", "name": "clmap" })).unwrap_err();
+        assert_eq!(error["similar"][0], "clamp", "{error}");
+    }
 
     #[test]
     fn values_round_trip_through_json() {

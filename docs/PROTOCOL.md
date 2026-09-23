@@ -132,8 +132,9 @@ with what it asked before.
 the language and the documents are written in (`forms`, each `{name,
 kind, shape, doc}`: `loop`, `each`, `scatter`, `node`, `fill`,
 `previous`, `async` and the rest), or, with `name`, whichever it is; an
-unknown name is an error naming similar ones. It is what the compiler
-accepts, generated from its tables.
+unknown name is an error listing similar ones in `similar`. It is what
+the compiler accepts, generated from its tables. An operation that is
+not one is an error listing every one in `operations`.
 
 `trace` runs one element of a node on the interpreter, over the Kernel
 as its document wrote it (compiled again without the optimizer, so the
