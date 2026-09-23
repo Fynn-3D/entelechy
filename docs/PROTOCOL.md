@@ -118,7 +118,8 @@ most 100000. The first frame of all is thrown away, since it compiles
 and allocates; with `nodes` true, one more run times every node with
 the device waited for after each, and a node placed several times is
 one line. The answer says `backend`, `frames`, `repeat`, `best_ms`,
-`median_ms`, `nodes` (each `{node, ms}`, the costliest first) and
+`median_ms`, `nodes` (each `{node, ms, backend, routed, uploaded,
+downloaded}`, the costliest first, as `placements` below) and
 `ran`, which is false when the scene does not change with the clock and
 every node was reused after the first frame. The clock advances while
 it measures, as `advance` advances it, so a measurement is also a run:
@@ -148,6 +149,11 @@ a branch the element did not take, and `calls`, each `{function,
 bindings, results}` in the order the calls returned (`calls_truncated`
 when more than 256 were made). An evaluation's report carries
 `timings`, `{node, millis}` for every node that executed, in order;
+`placements`, `{node, backend, routed, uploaded, downloaded}` for the
+same nodes: the backend that ran it, why the main one did not when it
+did not (a scan on a GPU session, a `Double`), and the bytes its run
+brought to a device from Host memory and back, which is what leaving
+the device costs;
 `migrated`, `{node, port, kernel}` for every `<~` port whose state was
 carried into a new layout by its `migrate` Kernel before the nodes ran;
 and `reset`, `{node, port, reason}` for every such port that had no

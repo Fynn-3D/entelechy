@@ -401,6 +401,7 @@ pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
         "fused": report.fused.iter().map(|(node, absorbed)| json!({ "node": node.to_string(), "absorbed": absorbed.iter().map(ToString::to_string).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "outputs": outputs,
         "timings": report.timings.iter().map(|(node, took)| json!({ "node": node.to_string(), "millis": took.as_secs_f64() * 1000.0 })).collect::<Vec<_>>(),
+        "placements": report.placements.iter().map(|placed| json!({ "node": placed.node.to_string(), "backend": placed.backend, "routed": placed.routed, "uploaded": placed.uploaded, "downloaded": placed.downloaded })).collect::<Vec<_>>(),
         "migrated": report.migrated.iter().map(|(node, port, kernel)| json!({ "node": node.to_string(), "port": port, "kernel": kernel.to_string() })).collect::<Vec<_>>(),
         "reset": report.reset.iter().map(|(node, port, reason)| json!({ "node": node.to_string(), "port": port, "reason": reason })).collect::<Vec<_>>(),
         "pending": report.pending.iter().map(ToString::to_string).collect::<Vec<_>>(),
@@ -815,7 +816,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 "best_ms": measured.best,
                 "median_ms": measured.median,
                 "ran": measured.ran,
-                "nodes": measured.nodes.iter().map(|(node, ms)| json!({ "node": node, "ms": ms })).collect::<Vec<_>>(),
+                "nodes": measured.nodes.iter().map(|time| json!({ "node": time.node, "ms": time.ms, "backend": time.backend, "routed": time.routed, "uploaded": time.uploaded, "downloaded": time.downloaded })).collect::<Vec<_>>(),
             }))
         }
         "advance" => {

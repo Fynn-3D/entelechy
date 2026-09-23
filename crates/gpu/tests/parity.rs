@@ -1704,3 +1704,52 @@ fn load(
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
+
+#[test]
+fn a_node_off_the_device_says_what_its_trip_carried() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let mut runtime =
+        orla_runtime::Runtime::with_backends(1 << 20, Box::new(gpu), Some(Box::new(CpuBackend)));
+    let mut publish = |source: &str| {
+        let module = compile(source).unwrap();
+        let candidate = runtime.prepare_module(module, source).unwrap();
+        runtime
+            .publish(candidate, orla_runtime::Expect::Absent)
+            .unwrap()
+    };
+    let map = publish(
+        "kernel t.map@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 2; } }",
+    );
+    let scan = publish(
+        "kernel t.scan@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { return acc + sample(rows); } }",
+    );
+    let back = publish(
+        "kernel t.back@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows) + 1; } }",
+    );
+    let run = |runtime: &mut orla_runtime::Runtime, version, inputs| {
+        let outputs = runtime
+            .execute(
+                version,
+                &Invocation {
+                    inputs,
+                    params: vec![],
+                    domain: Domain::Rows(5),
+                    context: Context::default(),
+                },
+            )
+            .unwrap();
+        (outputs[0], runtime.take_moved())
+    };
+    let (rows, moved) = run(&mut runtime, &map, vec![]);
+    assert_eq!(moved, orla_runtime::Moved::default());
+    // The scan reads in Host memory: the map's rows come home.
+    assert!(runtime.placement(&scan).routed.is_some());
+    let (sums, moved) = run(&mut runtime, &scan, vec![rows]);
+    assert_eq!(moved.downloaded, 20);
+    // And the map after it takes the scan's rows up again.
+    let (_, moved) = run(&mut runtime, &back, vec![sums]);
+    assert_eq!(moved.uploaded, 20);
+    assert_eq!(moved.downloaded, 0);
+}

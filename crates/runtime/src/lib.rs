@@ -297,6 +297,9 @@ pub struct Runtime {
     /// What the device took over the last execution, when the backend
     /// measured it; see [`Runtime::last_measured`].
     last_measured: Option<std::time::Duration>,
+    /// Bytes carried between Host memory and a device by executions
+    /// since it was last taken; see [`Runtime::take_moved`].
+    moved: Moved,
     ready: BTreeMap<Ticket, Result<Candidate, PrepareError>>,
     discarded: BTreeSet<Ticket>,
     runs: later::Runs,
@@ -324,6 +327,7 @@ impl Runtime {
             worker: None,
             next_ticket: 1,
             last_measured: None,
+            moved: Moved::default(),
             ready: BTreeMap::new(),
             discarded: BTreeSet::new(),
             runs: later::Runs::new(),
@@ -514,12 +518,18 @@ impl Runtime {
     /// Brings a resident Field back into Host memory through the backend
     /// that owns it; a no-op for Fields already in memory.
     pub fn materialize(&mut self, handle: Handle) -> Result<(), ExecutionError> {
+        self.bring_home(handle).map(|_| ())
+    }
+
+    /// Brings a resident Field's words into Host memory, answering how
+    /// many bytes came back.
+    fn bring_home(&mut self, handle: Handle) -> Result<u64, ExecutionError> {
         let Some(device) = self
             .host
             .resident(handle)
             .map_err(|e| ExecutionError::Abi(e.into()))?
         else {
-            return Ok(());
+            return Ok(0);
         };
         let domain = self
             .host
@@ -542,7 +552,8 @@ impl Runtime {
             .collect();
         self.host
             .materialize(handle, words)
-            .map_err(|e| ExecutionError::Abi(e.into()))
+            .map_err(|e| ExecutionError::Abi(e.into()))?;
+        Ok(byte_len as u64)
     }
 
     /// The image view of a Field of pixels, materialized if it was
@@ -602,10 +613,43 @@ impl Runtime {
 
     /// The name of the backend a version executes on.
     pub fn executes_on(&self, version: &KernelVersion) -> &'static str {
-        match version.module() {
-            Some(module) => self.backend_for(module).name(),
-            None => self.backend.name(),
+        self.placement(version).backend
+    }
+
+    /// Where a version executes, and why when it is not the main
+    /// backend: what a report shows beside each node, so a node that
+    /// leaves the device, and pays for the trip, says so.
+    pub fn placement(&self, version: &KernelVersion) -> Placement {
+        let Some(module) = version.module() else {
+            return Placement {
+                backend: self.backend.name(),
+                routed: None,
+            };
+        };
+        if !self.routed(module) {
+            return Placement {
+                backend: self.backend.name(),
+                routed: None,
+            };
         }
+        let why = match self.backend.declines(module) {
+            Some(reason) => format!("not on {}: {reason}", self.backend.name()),
+            None => format!(
+                "not on {}: a scan runs its steps in order, on one thread",
+                self.backend.name()
+            ),
+        };
+        Placement {
+            backend: self.backend_for(module).name(),
+            routed: Some(why),
+        }
+    }
+
+    /// The bytes executions carried between Host memory and a device
+    /// since the last call, and none after it: what one node's run cost
+    /// in traffic, when the caller takes it around the run.
+    pub fn take_moved(&mut self) -> Moved {
+        std::mem::take(&mut self.moved)
     }
 
     /// The name of the backend ordered work runs on, when it is not the
@@ -719,6 +763,7 @@ impl Runtime {
         {
             let granted = version.manifest().requires.clone();
             let backend = Arc::clone(&self.backend);
+            let before = backend.uploaded();
             let answered = {
                 let mut scope = Scope::new(&mut self.host, granted);
                 backend.execute_repeated(
@@ -730,6 +775,7 @@ impl Runtime {
                     chain,
                 )
             };
+            self.moved.uploaded += backend.uploaded().saturating_sub(before);
             if let Some(outputs) = answered {
                 self.last_measured = backend.last_device_time();
                 return held_to(version.manifest(), &mut self.host, outputs);
@@ -781,7 +827,7 @@ impl Runtime {
                     // whatever the main one left resident comes back
                     // first.
                     for handle in &invocation.inputs {
-                        self.materialize(*handle)?;
+                        self.moved.downloaded += self.bring_home(*handle)?;
                     }
                 }
                 let backend = if ordered {
@@ -789,19 +835,23 @@ impl Runtime {
                 } else {
                     Arc::clone(&self.backend)
                 };
+                let before = backend.uploaded();
                 let outputs = {
                     let mut scope = Scope::new(&mut self.host, granted);
                     backend.execute(prepared.as_ref(), module, invocation, &mut scope)
                 };
+                self.moved.uploaded += backend.uploaded().saturating_sub(before);
                 self.last_measured = backend.last_device_time();
                 held_to(version.manifest(), &mut self.host, outputs)
             }
             Body::Native(op) => {
                 let backend = Arc::clone(&self.backend);
+                let before = backend.uploaded();
                 let outputs = {
                     let mut scope = Scope::new(&mut self.host, granted);
                     backend.execute_native(*op, invocation, &mut scope)
                 };
+                self.moved.uploaded += backend.uploaded().saturating_sub(before);
                 self.last_measured = backend.last_device_time();
                 held_to(version.manifest(), &mut self.host, outputs)
             }
@@ -836,5 +886,25 @@ pub(crate) fn held_to(
 /// Whether a module belongs on the ordered backend rather than `main`:
 /// a scan, or a module `main` does not take.
 fn goes_ordered(main: &dyn Backend, module: &Validated) -> bool {
-    module.manifest.mode == orla_ir::Mode::Scan || !main.takes(module)
+    module.manifest.mode == orla_ir::Mode::Scan || main.declines(module).is_some()
+}
+
+/// Where a version executes: the backend's name, and why it is not the
+/// main backend when it is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placement {
+    /// The backend that runs it.
+    pub backend: &'static str,
+    /// Why the main backend does not, when it does not.
+    pub routed: Option<String>,
+}
+
+/// Bytes carried between Host memory and a device.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Moved {
+    /// Brought to a device from Host memory.
+    pub uploaded: u64,
+    /// Brought back to Host memory from a device, for a backend that
+    /// reads there.
+    pub downloaded: u64,
 }

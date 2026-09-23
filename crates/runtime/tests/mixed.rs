@@ -13,6 +13,8 @@ struct Recorder {
     name: &'static str,
     log: Arc<Mutex<Vec<String>>>,
     cpu: orla_cpu::CpuBackend,
+    /// Declines a module holding a `Double`, as a device without one does.
+    no_doubles: bool,
 }
 
 impl Backend for Recorder {
@@ -21,6 +23,10 @@ impl Backend for Recorder {
     }
     fn as_any(&self) -> &dyn Any {
         self
+    }
+    fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
+        (self.no_doubles && module.holds(orla_abi::Type::Double))
+            .then(|| "it holds a Double".to_owned())
     }
     fn prepare(
         &self,
@@ -58,11 +64,13 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
         name: "main",
         log: log.clone(),
         cpu: orla_cpu::CpuBackend,
+        no_doubles: false,
     };
     let ordered = Recorder {
         name: "ordered",
         log: log.clone(),
         cpu: orla_cpu::CpuBackend,
+        no_doubles: false,
     };
     let mut runtime = Runtime::with_backends(1 << 20, Box::new(main), Some(Box::new(ordered)));
     let map = prepare(&runtime, "kernel t.map@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 2; } }")
@@ -108,10 +116,58 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
             "ordered executes t.scan@1",
         ]
     );
+    // Where each runs, and why the scan does not run on the main one.
+    assert_eq!(runtime.placement(&map).routed, None);
+    assert_eq!(
+        runtime.placement(&scan).routed.as_deref(),
+        Some("not on main: a scan runs its steps in order, on one thread")
+    );
+    // Backends that compute in Host memory carry nothing anywhere.
+    assert_eq!(runtime.take_moved(), orla_runtime::Moved::default());
     // Without a second backend, everything is the main one's.
     let plain = cpu(1 << 16);
     assert_eq!(plain.ordered_backend_name(), None);
     let _ = all();
+}
+
+#[test]
+fn what_the_main_backend_declines_goes_to_the_ordered_one_and_says_why() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let backend = |name, no_doubles| Recorder {
+        name,
+        log: log.clone(),
+        cpu: orla_cpu::CpuBackend,
+        no_doubles,
+    };
+    let mut runtime = Runtime::with_backends(
+        1 << 20,
+        Box::new(backend("main", true)),
+        Some(Box::new(backend("ordered", false))),
+    );
+    let wide = prepare(&runtime, "kernel t.wide@1 { requires { field.write; } output result: Rows<Double>; compute { return double(element()) * 0.5; } }")
+        .unwrap();
+    let wide = runtime.publish(wide, Expect::Absent).unwrap();
+    let placement = runtime.placement(&wide);
+    assert_eq!(placement.backend, "ordered");
+    assert_eq!(
+        placement.routed.as_deref(),
+        Some("not on main: it holds a Double")
+    );
+    runtime
+        .execute(
+            &wide,
+            &Invocation {
+                inputs: vec![],
+                params: vec![],
+                domain: Domain::Rows(3),
+                context: Default::default(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        log.lock().unwrap().clone(),
+        ["ordered prepares t.wide@1", "ordered executes t.wide@1"]
+    );
 }
 
 /// A backend that claims a device time for every Kernel it runs and

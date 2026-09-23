@@ -1256,10 +1256,20 @@ fn evaluate_and_export(
                 // anything comes off every line; see
                 // `orla_runtime::Backend::measurement_floor`.
                 let floor = session.measurement_floor().as_secs_f64() * 1000.0;
-                for (node, took) in &report.timings {
+                // Where each ran, why when it left the main backend, and
+                // what that carried between Host memory and a device.
+                for ((node, took), placed) in report.timings.iter().zip(&report.placements) {
                     let name = node.to_string();
                     let ms = (took.as_secs_f64() * 1000.0 - floor).max(0.0);
-                    eprintln!("  {name:<28} {ms:>9.3} ms");
+                    let time = orla_session::bench::NodeTime {
+                        node: name.clone(),
+                        ms,
+                        backend: placed.backend.to_owned(),
+                        routed: placed.routed.clone(),
+                        uploaded: placed.uploaded,
+                        downloaded: placed.downloaded,
+                    };
+                    eprintln!("  {name:<28} {ms:>9.3} ms  {}", time.placement_text());
                 }
                 let sum: f64 = report
                     .timings

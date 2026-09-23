@@ -299,6 +299,10 @@ pub struct Report {
     /// as its submission; under a measured profile, what the device's own
     /// clock says the work took.
     pub timings: Vec<(NodeId, std::time::Duration)>,
+    /// Where each executed node ran, in evaluation order: the backend,
+    /// why it was not the main one when it was not, and the bytes its
+    /// run carried between Host memory and a device.
+    pub placements: Vec<Placed>,
     /// State ports whose committed value was carried into a new layout
     /// by the binding's migration Kernel before the nodes ran.
     pub migrated: Migrated,
@@ -313,6 +317,21 @@ pub struct Report {
     /// `async` nodes whose run landed before this evaluation's nodes ran,
     /// so their readers saw the new output.
     pub landed: Vec<NodeId>,
+}
+
+/// Where one node ran; see [`Report::placements`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    /// The node.
+    pub node: NodeId,
+    /// The backend that ran it.
+    pub backend: &'static str,
+    /// Why the main backend did not, when it did not.
+    pub routed: Option<String>,
+    /// Bytes its run brought to a device from Host memory.
+    pub uploaded: u64,
+    /// Bytes its run brought back to Host memory from a device.
+    pub downloaded: u64,
 }
 
 /// State ports carried into a new layout: the reading node, its port,
@@ -789,6 +808,7 @@ impl Evaluator {
         let mut reused = Vec::new();
         let mut fused = Vec::new();
         let mut timings = Vec::new();
+        let mut placements = Vec::new();
         let mut pending = Vec::new();
         for group in &groups {
             let node = &group.node;
@@ -853,6 +873,8 @@ impl Evaluator {
             if let Some(running) = self.running.remove(&node.id) {
                 runtime.discard_run(running.run);
             }
+            let placement = runtime.placement(&group.version);
+            runtime.take_moved();
             let started = std::time::Instant::now();
             let outputs = match group.chain {
                 Some(chain) => {
@@ -868,6 +890,14 @@ impl Evaluator {
             // own time otherwise.
             let took = runtime.last_measured().unwrap_or_else(|| started.elapsed());
             timings.push((node.id.clone(), took));
+            let moved = runtime.take_moved();
+            placements.push(Placed {
+                node: node.id.clone(),
+                backend: placement.backend,
+                routed: placement.routed,
+                uploaded: moved.uploaded,
+                downloaded: moved.downloaded,
+            });
             self.store(&node.id, key, outputs, output_names, runtime);
             executed.push(node.id.clone());
         }
@@ -912,6 +942,7 @@ impl Evaluator {
             output,
             executed,
             timings,
+            placements,
             reused,
             committed,
             outputs,

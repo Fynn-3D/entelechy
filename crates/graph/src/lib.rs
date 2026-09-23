@@ -22,7 +22,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use domain::{DomainError, DomainExpr, DomainOp, DomainSpec};
-pub use evaluate::{EvaluateError, Evaluator, PlanEntry, Report};
+pub use evaluate::{EvaluateError, Evaluator, Placed, PlanEntry, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
 

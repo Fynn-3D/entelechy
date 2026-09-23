@@ -138,7 +138,10 @@ hands scans to the JIT, and every module the GPU does not take
 ([`Backend::takes`](crates/rules/src/backend.rs)): one holding a `Double`,
 or a `Long` outside a map or a reduction or on a device without 64-bit
 integers. Their inputs come to the Host and their outputs upload when
-read ([test](crates/runtime/tests/mixed.rs)). On the device a `Long` is
+read ([test](crates/runtime/tests/mixed.rs)). A report says where every
+node ran, why when it left the main backend, and the bytes the trip
+carried ([`Runtime::placement`](crates/runtime/src/lib.rs),
+[traffic test](crates/gpu/tests/parity.rs)). On the device a `Long` is
 WGSL's `i64`; naga's own 64-bit `/` and `%` go through `select`, which
 Metal cannot pick for a `long`, so the preamble writes its own division
 and nothing emitted for a `Long` may use `select`

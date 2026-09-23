@@ -151,13 +151,22 @@ pub trait Backend: Send + Sync {
     /// presents a resident image directly.
     fn as_any(&self) -> &dyn Any;
 
-    /// Whether this backend runs `module` at all. One that cannot, a GPU
-    /// without 64-bit arithmetic say, answers false, and a runtime with a
-    /// second backend prepares the module there; one without says why
-    /// when the module is prepared here.
-    fn takes(&self, module: &Validated) -> bool {
+    /// Why this backend does not run `module`, when it does not: a GPU
+    /// without 64-bit arithmetic, say. A runtime with a second backend
+    /// prepares the module there and reports the reason beside the node;
+    /// one without says it when the module is prepared here. `None` is a
+    /// module this backend runs.
+    fn declines(&self, module: &Validated) -> Option<String> {
         let _ = module;
-        true
+        None
+    }
+
+    /// Bytes this backend has brought to its device from Host memory
+    /// since it was made: inputs a node on another backend left there,
+    /// and inputs read from outside. A runtime reads it around an
+    /// execution. Zero for a backend that computes in Host memory.
+    fn uploaded(&self) -> u64 {
+        0
     }
 
     /// Builds backend state for a validated module.

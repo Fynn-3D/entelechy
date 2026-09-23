@@ -242,6 +242,8 @@ pub struct GpuBackend {
     timestamps: bool,
     /// Whether the device computes 64-bit integers.
     int64: bool,
+    /// Bytes uploaded from Host memory since the backend was made.
+    uploaded: std::sync::atomic::AtomicU64,
     /// What asking the device's own clock has been worth: `UNTRIED`
     /// until a measured run asks, then `ANSWERED` or `SILENT`. A driver
     /// that offers timestamps and resolves zeros is asked once and not
@@ -307,17 +309,17 @@ impl GpuBackend {
     /// the mode folds words it would have to fold in pairs.
     fn refusal(&self, module: &Validated) -> Option<&'static str> {
         if module.holds(orla_abi::Type::Double) {
-            return Some("holds a Double, which this backend does not compute");
+            return Some("it holds a Double, which the device does not compute");
         }
         if !module.holds(orla_abi::Type::Long) {
             return None;
         }
         if !self.int64 {
-            return Some("holds a Long, and this device has no 64-bit integers");
+            return Some("it holds a Long, and the device has no 64-bit integers");
         }
         match module.manifest.mode {
             orla_ir::Mode::Map | orla_ir::Mode::Reduce => None,
-            _ => Some("holds a Long, which this backend computes in a map or a reduction only"),
+            _ => Some("it holds a Long, which the device computes in a map or a reduction only"),
         }
     }
 
@@ -380,6 +382,7 @@ impl GpuBackend {
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
             int64,
+            uploaded: std::sync::atomic::AtomicU64::new(0),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
             clock: std::sync::atomic::AtomicU8::new(clock::UNTRIED),
         })
@@ -613,6 +616,8 @@ impl GpuBackend {
             .iter()
             .flat_map(|w| w.to_le_bytes())
             .collect::<Vec<u8>>();
+        self.uploaded
+            .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
         let buffer = self.buffer(
             &format!("input {index}"),
             &bytes,
@@ -771,14 +776,18 @@ impl Backend for GpuBackend {
         self
     }
 
-    fn takes(&self, module: &Validated) -> bool {
-        self.refusal(module).is_none()
+    fn declines(&self, module: &Validated) -> Option<String> {
+        self.refusal(module).map(str::to_owned)
+    }
+
+    fn uploaded(&self) -> u64 {
+        self.uploaded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         if let Some(reason) = self.refusal(module) {
             return Err(format!(
-                "`{}` {reason}; a session with an ordered backend runs it there",
+                "`{}`: {reason}; a session with an ordered backend runs it there",
                 module.manifest.id
             ));
         }

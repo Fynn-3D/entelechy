@@ -84,10 +84,10 @@ pub struct Measured {
     /// Milliseconds a frame in the middle run, which says how much the
     /// machine wandered while measuring.
     pub median: f64,
-    /// Milliseconds a frame each node took, when asked for; a node that
-    /// did not run in a frame is counted over the frames all the same,
-    /// as the frame's cost is what is being divided.
-    pub nodes: Vec<(String, f64)>,
+    /// What each node took a frame, when asked for; a node that did not
+    /// run in a frame is counted over the frames all the same, as the
+    /// frame's cost is what is being divided.
+    pub nodes: Vec<NodeTime>,
     /// Whether any node ran at all after the warm-up frame. A scene
     /// that does not change with the clock reuses everything, and what
     /// is measured is the check that nothing changed.
@@ -208,7 +208,7 @@ pub fn measure(
 /// the call and its wait, and what measuring one node cost before it
 /// did anything.
 struct NodeRun {
-    nodes: Vec<(String, f64)>,
+    nodes: Vec<NodeTime>,
     device_clock: bool,
     floor: f64,
 }
@@ -224,15 +224,29 @@ fn node_times(
     backend: &str,
 ) -> Result<NodeRun, String> {
     session.set_measured(true);
-    let mut totals: BTreeMap<String, f64> = BTreeMap::new();
+    // A node's time, where it ran, and its traffic, over every frame.
+    #[derive(Default)]
+    struct Total {
+        ms: f64,
+        backend: String,
+        routed: Option<String>,
+        uploaded: u64,
+        downloaded: u64,
+    }
+    let mut totals: BTreeMap<String, Total> = BTreeMap::new();
     let frames = options.frames.max(1);
     for _ in 0..frames {
         let report = session
             .evaluate(&context(*frame))
             .map_err(|e| format!("{backend}: {e}"))?;
         *frame += 1;
-        for (node, took) in &report.timings {
-            *totals.entry(node.0.clone()).or_default() += took.as_secs_f64() * 1000.0;
+        for ((node, took), placed) in report.timings.iter().zip(&report.placements) {
+            let total = totals.entry(node.0.clone()).or_default();
+            total.ms += took.as_secs_f64() * 1000.0;
+            total.backend = placed.backend.to_owned();
+            total.routed.clone_from(&placed.routed);
+            total.uploaded += placed.uploaded;
+            total.downloaded += placed.downloaded;
         }
     }
     session.set_measured(false);
@@ -245,24 +259,39 @@ fn node_times(
     // A node placed several times, or a graph placed several times, is
     // one line: `steps/*.spread/*` and how many there were. Sixty-four
     // lines of a tenth of a millisecond say less than their sum does.
-    let mut grouped: BTreeMap<String, (f64, usize)> = BTreeMap::new();
+    let mut grouped: BTreeMap<String, (NodeTime, usize)> = BTreeMap::new();
+    let per_frame = u64::from(frames);
     for (node, total) in totals {
-        let entry = grouped.entry(pattern(&node)).or_default();
-        entry.0 += (total / f64::from(frames) - floor).max(0.0);
-        entry.1 += 1;
+        let (entry, count) = grouped.entry(pattern(&node)).or_insert_with(|| {
+            (
+                NodeTime {
+                    node: String::new(),
+                    ms: 0.0,
+                    backend: total.backend.clone(),
+                    routed: total.routed.clone(),
+                    uploaded: 0,
+                    downloaded: 0,
+                },
+                0,
+            )
+        });
+        entry.ms += (total.ms / f64::from(frames) - floor).max(0.0);
+        entry.uploaded += total.uploaded / per_frame;
+        entry.downloaded += total.downloaded / per_frame;
+        *count += 1;
     }
-    let mut nodes: Vec<(String, f64)> = grouped
+    let mut nodes: Vec<NodeTime> = grouped
         .into_iter()
-        .map(|(node, (took, count))| {
-            let name = if count > 1 {
+        .map(|(node, (mut time, count))| {
+            time.node = if count > 1 {
                 format!("{node} ({count})")
             } else {
                 node
             };
-            (name, took)
+            time
         })
         .collect();
-    nodes.sort_by(|a, b| b.1.total_cmp(&a.1));
+    nodes.sort_by(|a, b| b.ms.total_cmp(&a.ms));
     Ok(NodeRun {
         nodes,
         device_clock: session.measures_the_device(),
@@ -374,21 +403,74 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
             "\n{}, ms a frame a node — {how}:\n",
             entry.backend
         ));
-        for (node, took) in &entry.nodes {
-            out.push_str(&format!("  {node:<28} {took:8.3}\n"));
+        for time in &entry.nodes {
+            out.push_str(&format!(
+                "  {:<28} {:8.3}  {}\n",
+                time.node,
+                time.ms,
+                time.placement_text()
+            ));
         }
         // What the parts come to against the whole. A node measured
         // alone waits for its own work, so the setting up of the next
         // one no longer hides behind it: the difference is what a frame
         // overlaps, and naming it is the difference between a profile
         // that can be read and one that quietly does not add up.
-        let sum: f64 = entry.nodes.iter().map(|(_, took)| took).sum();
+        let sum: f64 = entry.nodes.iter().map(|time| time.ms).sum();
         out.push_str(&format!(
             "  {:<28} {sum:8.3} against a frame of {:.3}; a node runs alone here, and what a frame overlaps it does not\n",
             "(sum)", entry.best
         ));
     }
     out
+}
+
+/// What one node, or the nodes one pattern names, took a frame, and
+/// where it ran.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NodeTime {
+    /// The node, or its pattern and how many it stands for.
+    pub node: String,
+    /// Milliseconds a frame.
+    pub ms: f64,
+    /// The backend that ran it.
+    pub backend: String,
+    /// Why the main backend did not, when it did not.
+    pub routed: Option<String>,
+    /// Bytes a frame its runs brought to a device from Host memory.
+    pub uploaded: u64,
+    /// Bytes a frame its runs brought back to Host memory.
+    pub downloaded: u64,
+}
+
+impl NodeTime {
+    /// Where it ran and what that carried, as a profile line ends: the
+    /// backend, why it is not the main one, and the traffic.
+    pub fn placement_text(&self) -> String {
+        let mut out = self.backend.clone();
+        if let Some(why) = &self.routed {
+            out.push_str(&format!(" ({why})"));
+        }
+        if self.uploaded > 0 {
+            out.push_str(&format!(", {} up", bytes_text(self.uploaded)));
+        }
+        if self.downloaded > 0 {
+            out.push_str(&format!(", {} down", bytes_text(self.downloaded)));
+        }
+        out
+    }
+}
+
+/// A count of bytes as a person reads it: `512 B`, `1.5 KiB`, `3.2 MiB`.
+pub fn bytes_text(bytes: u64) -> String {
+    let b = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if b < 1024.0 * 1024.0 {
+        format!("{:.1} KiB", b / 1024.0)
+    } else {
+        format!("{:.1} MiB", b / (1024.0 * 1024.0))
+    }
 }
 
 /// The measurement as JSON, for `--compare` on a later build.
@@ -399,7 +481,12 @@ pub fn json(options: &Options, measured: &[Measured]) -> String {
             let nodes: Vec<String> = entry
                 .nodes
                 .iter()
-                .map(|(node, took)| format!("      {{\"node\": {node:?}, \"ms\": {took:.4}}}"))
+                .map(|time| {
+                    format!(
+                        "      {{\"node\": {:?}, \"ms\": {:.4}, \"backend\": {:?}}}",
+                        time.node, time.ms, time.backend
+                    )
+                })
                 .collect();
             format!(
                 "    {{\"backend\": {:?}, \"best_ms\": {:.4}, \"median_ms\": {:.4}, \"nodes\": [\n{}\n    ]}}",

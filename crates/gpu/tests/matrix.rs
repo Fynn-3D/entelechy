@@ -34,7 +34,7 @@ fn every_long_feature_matches_the_interpreter_where_the_device_has_longs() {
     };
     let cases = orla_matrix::long_cases();
     let module = compile(&cases[0].source).unwrap();
-    if !gpu.takes(&module) {
+    if gpu.declines(&module).is_some() {
         return;
     }
     let failures = differences(&gpu, &cases);
@@ -159,7 +159,7 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
     };
     for case in orla_matrix::wide_cases() {
         let module = compile(&case.source).unwrap();
-        assert!(!gpu.takes(&module), "{}: taken", case.name);
+        assert!(gpu.declines(&module).is_some(), "{}: taken", case.name);
         let Err(error) = Backend::prepare(&gpu, &module) else {
             panic!("{}: prepared", case.name);
         };
@@ -168,6 +168,6 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
     // Everything else it takes.
     for case in orla_matrix::cases() {
         let module = compile(&case.source).unwrap();
-        assert!(gpu.takes(&module), "{}: not taken", case.name);
+        assert!(gpu.declines(&module).is_none(), "{}: not taken", case.name);
     }
 }

@@ -76,7 +76,10 @@ node, a node of a placed graph (whose own name carries dots and slashes,
 one of the scene's own outputs, which stands for what it is wired to. A Kernel that draws a
 sprite sheet or synthesizes a drum, and a `--save`, are how an asset is
 made; `--out` is written only when the output is a picture. `--profile`
-prints how long each executed node's Kernel took. On the GPU it asks
+prints how long each executed node's Kernel took, the backend that ran
+it (and why, when a GPU session sent it to the JIT), and the bytes it
+carried between Host memory and the device; `bench --nodes` prints the
+same. On the GPU it asks
 the device for the time between the first pass of a node and the last,
 by the device's own clock, and waits for the work before going on; so
 the numbers are the work rather than the submission, and the run is
