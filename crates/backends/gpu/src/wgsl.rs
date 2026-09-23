@@ -222,13 +222,27 @@ pub fn dispatch(domain: orla_abi::Domain) -> (u32, u32, u32, u32) {
     }
 }
 
+/// The shader's name for helper function `index` of a module. A name the
+/// source wrote never reaches the shader, and a name WGSL has for itself
+/// must not either: `f32` is its type, and a 33rd helper once took that
+/// name. No word WGSL reserves or predeclares is letters, an underscore
+/// and digits, so no number of helpers meets one.
+fn function_name(index: usize) -> String {
+    format!("fn_{index}")
+}
+
+/// The shader's name for field `k` of a struct, by the same rule.
+fn member_name(k: usize) -> String {
+    format!("m_{k}")
+}
+
 /// The path to field `k` of a struct value: a named field, or an
 /// array's element.
 fn field_path(module: &Module, index: u32, k: usize) -> String {
     if module.structs[index as usize].is_array() {
         format!("[{k}]")
     } else {
-        format!(".f{k}")
+        format!(".{}", member_name(k))
     }
 }
 
@@ -247,7 +261,7 @@ fn struct_decl(module: &Module, index: usize) -> String {
                 .fields
                 .iter()
                 .enumerate()
-                .map(|(k, field)| format!("f{k}: {}", wgsl_type(field.ty)))
+                .map(|(k, field)| format!("{}: {}", member_name(k), wgsl_type(field.ty)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("struct S{index} {{ {fields} }}")
@@ -871,7 +885,7 @@ pub fn emit(module: &Module) -> String {
         );
     }
     for (index, function) in module.functions.iter().enumerate() {
-        emit_function(&mut out, module, function, &format!("f{index}"), false);
+        emit_function(&mut out, module, function, &function_name(index), false);
         out.push('\n');
     }
     emit_function(&mut out, module, &module.entry, "entry", true);
@@ -1197,23 +1211,25 @@ fn scatter_address(module: &Module, exit: &str) -> String {
     };
     let target = &module.manifest.inputs[base as usize];
     let slot = CONTEXT_HEAD + base as usize;
+    // A pair is its address, then its value.
+    let address = format!("p.{}", member_name(0));
     match target.shape() {
         // Named `row`, not `i`: the pass's own `i` is the source index.
         Shape::Rows => format!(
-            "let row = p.f0;
+            "let row = {address};
     if (row < 0i || row >= i32(ctx[{slot}].x)) {{ {exit} }}
     let at = u32(row);"
         ),
         Shape::Grid => format!(
-            "let x = floor(p.f0.x);
-    let y = floor(p.f0.y);
+            "let x = floor({address}.x);
+    let y = floor({address}.y);
     if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y)) {{ {exit} }}
     let at = u32(y) * u32(ctx[{slot}].x) + u32(x);"
         ),
         Shape::Volume => format!(
-            "let x = floor(p.f0.x);
-    let y = floor(p.f0.y);
-    let z = floor(p.f0.z);
+            "let x = floor({address}.x);
+    let y = floor({address}.y);
+    let z = floor({address}.z);
     if (!(x >= 0.0 && x < ctx[{slot}].x && y >= 0.0 && y < ctx[{slot}].y && z >= 0.0 && z < ctx[{slot}].z)) {{ {exit} }}
     let at = (u32(z) * u32(ctx[{slot}].y) + u32(y)) * u32(ctx[{slot}].x) + u32(x);"
         ),
@@ -1418,7 +1434,12 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
     let stride = target.ty.schema.value_words();
     let mut out = scatter_header(module, Some(true), &winners_binding(false));
     let mut words = Vec::new();
-    value_words(module, element, "p.f1", &mut words);
+    value_words(
+        module,
+        element,
+        &format!("p.{}", member_name(1)),
+        &mut words,
+    );
     let mut lines = Vec::new();
     match combine {
         Combine::Sum => {
@@ -1477,7 +1498,12 @@ pub fn emit_scatter_gather(module: &Module) -> String {
     let slot = CONTEXT_HEAD + base as usize;
     let mut out = scatter_header(module, Some(false), &winners_binding(true));
     let mut words = Vec::new();
-    value_words(module, target.element(), "p.f1", &mut words);
+    value_words(
+        module,
+        target.element(),
+        &format!("p.{}", member_name(1)),
+        &mut words,
+    );
     let stores = words
         .iter()
         .enumerate()
@@ -1673,11 +1699,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if (pos >= n || keys[pos] != e) {{
             break;
         }}
-        acc = combine(acc, load_pair(order[pos]).f1);
+        acc = combine(acc, load_pair(order[pos]).{value});
         pos = pos + 1u;
     }}
     store_out0(e, acc);
-}}"
+}}",
+        value = member_name(1),
     );
     out
 }
@@ -1769,7 +1796,7 @@ pub fn emit_reduce(module: &Module) -> String {
         wgsl_type(element)
     );
     for (index, function) in module.functions.iter().enumerate() {
-        emit_function(&mut out, module, function, &format!("f{index}"), false);
+        emit_function(&mut out, module, function, &function_name(index), false);
         out.push('\n');
     }
     emit_function(&mut out, module, merge, "merge", false);
@@ -2780,7 +2807,8 @@ impl Emitter<'_> {
                 format!("{}[clamp({}, 0, {})]", v(array), v(index), count - 1)
             }
             Op::Call(index, args) => format!(
-                "f{index}({})",
+                "{}({})",
+                function_name(*index as usize),
                 args.iter().map(v).collect::<Vec<_>>().join(", ")
             ),
             Op::Intrinsic(intrinsic, args) => self.intrinsic(*intrinsic, args, *ty),

@@ -1834,3 +1834,38 @@ fn a_failure_on_the_device_is_the_reference_failure() {
         .count();
     assert_eq!(failing, cases.len() - 1);
 }
+
+/// Every name the shader gives what the source did not name is its own:
+/// the 17th, 33rd and 65th helper and field of a struct would once have
+/// been `f16`, `f32` and `f64`, which WGSL spells its own types with, and
+/// a Kernel with that many helpers did not compile on the device. How
+/// many a source may write is the language's business, not the shader's.
+#[test]
+fn a_kernel_of_many_helpers_and_fields_runs_on_the_device() {
+    let Some(gpu) = gpu() else { return };
+    const MANY: usize = 70;
+    let helpers: String = (0..MANY)
+        .map(|k| match k {
+            0 => "fn h0(x: Float) -> Float { return loop 2 with a = x { a + 0.5 }; }\n".to_owned(),
+            k => format!(
+                "fn h{k}(x: Float) -> Float {{ return loop 2 with a = h{}(x) {{ a * 0.5 + {k}.0 }}; }}\n",
+                k - 1
+            ),
+        })
+        .collect();
+    let fields: String = (0..MANY).map(|k| format!("m{k}: Float; ")).collect();
+    let values: String = (0..MANY).map(|k| format!("m{k}: c.x + {k}.0, ")).collect();
+    let source = format!(
+        "kernel test.many@1 {{ requires {{ field.write; }} output result: Image;
+        struct Wide {{ {fields}}}
+        {helpers}
+        compute {{
+            let c = coord();
+            let w = Wide {{ {values}}};
+            return vec4(h{last}(c.x), w.m16 + w.m32, w.m64, w.m{last});
+        }} }}",
+        last = MANY - 1
+    );
+    let (cpu, gpu_pixels) = both(&gpu, &source, &[], (1, 1), vec![], Domain::Grid(4, 2));
+    assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-4), 0.0);
+}
