@@ -8,6 +8,61 @@ pub mod hud;
 
 pub use orla_gpu::present::{Placement, placement};
 
+/// What a run of failures says on the way past.
+///
+/// A scene that cannot evaluate says so once a frame. Dragging a
+/// window's corner fails every frame, each one naming the size the
+/// window was, so the terminal fills with the same failure wearing
+/// different numbers. [`Reporting`] prints a failure's first frame,
+/// stays quiet while it keeps happening, and says when evaluating comes
+/// back.
+#[derive(Default)]
+pub struct Reporting {
+    shape: String,
+}
+
+impl Reporting {
+    /// Whether this failure is worth printing: a new one, or one of
+    /// another shape than the one still happening.
+    pub fn failed(&mut self, message: &str) -> bool {
+        let shape = failure_shape(message);
+        if self.shape == shape {
+            return false;
+        }
+        self.shape = shape;
+        true
+    }
+
+    /// Whether a frame that worked ends a run of failures, and so is
+    /// worth a line of its own.
+    pub fn worked(&mut self) -> bool {
+        let was_failing = !self.shape.is_empty();
+        self.shape.clear();
+        was_failing
+    }
+}
+
+/// A failure's shape, with the numbers in it taken out: two failures
+/// that differ only in a size, a count or an element are one failure.
+fn failure_shape(message: &str) -> String {
+    let mut shape = String::with_capacity(message.len());
+    let mut inside = false;
+    for character in message.chars() {
+        let digit =
+            character.is_ascii_digit() || (inside && (character == '.' || character == ','));
+        if digit {
+            if !inside {
+                shape.push('#');
+                inside = true;
+            }
+        } else {
+            inside = false;
+            shape.push(character);
+        }
+    }
+    shape
+}
+
 /// Maps a window position to output pixel coordinates; positions in the
 /// letterbox clamp to the nearest edge.
 pub fn to_output(
@@ -92,6 +147,31 @@ pub fn key_code(name: &str) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
+    /// A hand on the window's corner: one failure a frame, each naming
+    /// the size the window was.
+    #[test]
+    fn a_run_of_one_failure_is_printed_once() {
+        let side = |v: &str| {
+            format!(
+                "evaluation failed: node `canvas`: `domain` resolves to window() / 2, whose sides must be positive whole numbers, found {v}"
+            )
+        };
+        let mut reporting = super::Reporting::default();
+        assert!(reporting.failed(&side("953.5")), "the first one is news");
+        for size in ["945.5", "939.5", "937.5", "933.5"] {
+            assert!(!reporting.failed(&side(size)), "{size} is the same failure");
+        }
+        // Another node, or another fault, is another failure.
+        assert!(reporting.failed(&side("933.5").replace("canvas", "heat")));
+        assert!(reporting.failed("evaluation failed: node `bodies`: integer overflow"));
+
+        // A frame that works ends the run, and says so once; the same
+        // failure after it is news again.
+        assert!(reporting.worked());
+        assert!(!reporting.worked(), "nothing was failing");
+        assert!(reporting.failed(&side("953.5")));
+    }
+
     use super::*;
 
     #[test]

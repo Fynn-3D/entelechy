@@ -162,6 +162,9 @@ struct Player {
     input: InputState,
     cursor: (f32, f32),
     status: String,
+    /// What a run of failures has already said, so a hand on the
+    /// window's corner does not fill the terminal.
+    reported: orla_player::Reporting,
     /// How the last frame reached the window, for the F10 line.
     path: &'static str,
     /// Protocol requests arriving from stdin or a socket, when serving.
@@ -255,15 +258,23 @@ impl Player {
                 self.path = self.show(target);
                 self.stats.record(elapsed, device, presenting.elapsed());
                 self.play(&report);
+                if self.reported.worked() {
+                    eprintln!("evaluating again");
+                }
                 self.status = "running".into();
                 Some(report)
             }
             Err(error) => {
                 let message = format!("evaluation failed: {error}");
-                if self.status != message {
+                // One failure a frame, each naming the size the window
+                // was that frame, is one failure: a hand on the corner
+                // should not fill the terminal. What is printed again is
+                // a failure of another shape, or this one after a frame
+                // that worked.
+                if self.reported.failed(&message) {
                     eprintln!("{message}; last frame is kept");
-                    self.status = message;
                 }
+                self.status = message;
                 self.blit();
                 None
             }
@@ -764,6 +775,7 @@ fn main() -> ExitCode {
         input: InputState::default(),
         cursor: (0.0, 0.0),
         status: "starting".into(),
+        reported: orla_player::Reporting::default(),
         path: "",
         requests: None,
         preview: None,

@@ -341,12 +341,13 @@ impl DomainExpr {
                 .ok_or_else(|| {
                     // Two cases are worth naming the remedy for: a count
                     // a Kernel works out reaches zero the frame it culls
-                    // everything, and a window divided is a fraction as
-                    // soon as somebody drags the corner to an odd width.
+                    // everything, and a side is fractional as soon as
+                    // somebody drags a window's corner to an odd width or
+                    // a Kernel writes a count as a `Float`.
                     let hint = if v == 0.0 {
                         "; a count that can reach zero wants `max(..., 1)`"
                     } else if v.fract() != 0.0 {
-                        "; a side that divides wants `floor(...)`"
+                        "; a side that comes out fractional wants `floor(...)`"
                     } else {
                         ""
                     };
