@@ -17,7 +17,7 @@ pub use backend::{Backend, NativeOp, Prepared};
 
 use std::fmt;
 
-use orla_abi::{AbiError, Domain, Invocation, Scalar, Scope, Shape, Type};
+use orla_abi::{AbiError, Domain, Invocation, Scalar, Scope, Shape};
 use orla_ir::{Combine, Mode, Validated};
 
 /// Integer arithmetic that cannot produce a value.
@@ -56,14 +56,14 @@ pub enum ExecutionError {
         /// Parameters supplied.
         actual: usize,
     },
-    /// A parameter has the wrong type.
+    /// A parameter's value is not of its type's layout.
     ParamType {
         /// Parameter name.
         name: String,
-        /// Declared type.
-        expected: Type,
-        /// Supplied type.
-        actual: Type,
+        /// Declared type, as the Kernel names it.
+        expected: String,
+        /// The value supplied.
+        actual: String,
     },
     /// The output domain has no elements.
     EmptyDomain,
@@ -246,12 +246,15 @@ pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(
             actual: invocation.params.len(),
         });
     }
+    // A value is its type's words, scalar for scalar: what a caller
+    // widened or reshaped (`orla_ir::value_as`) arrives exact.
     for (param, value) in manifest.params.iter().zip(&invocation.params) {
-        if value.ty() != param.default.ty() {
+        let wanted = orla_ir::schema_of(param.ty, &module.structs).map(|s| s.scalars().to_vec());
+        if wanted.as_deref() != Some(value.scalars().as_slice()) {
             return Err(ExecutionError::ParamType {
                 name: param.name.clone(),
-                expected: param.default.ty(),
-                actual: value.ty(),
+                expected: orla_ir::type_name(param.ty, &module.structs),
+                actual: value.to_string(),
             });
         }
     }

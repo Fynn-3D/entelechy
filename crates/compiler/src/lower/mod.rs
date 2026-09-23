@@ -16,8 +16,8 @@ mod builtins;
 mod declare;
 mod expr;
 
-pub(crate) use declare::literal;
 use declare::{RESERVED_BUILTINS, aliases, manifest, port_type, structs};
+pub(crate) use declare::{literal, literal_in};
 
 fn semantic(span: Span, message: impl Into<String>) -> CompileError {
     CompileError::Semantic {
@@ -772,7 +772,7 @@ impl<'a> Builder<'a> {
             return Ok(self.emit(ty, Op::Arg(index as u32)));
         }
         if let Some(index) = self.manifest.params.iter().position(|p| p.name == name) {
-            let ty = self.manifest.params[index].default.ty();
+            let ty = self.manifest.params[index].ty;
             return Ok(self.emit(ty, Op::Param(index as u32)));
         }
         if self.manifest.inputs.iter().any(|input| input.name == name) {

@@ -171,6 +171,16 @@ Kernel's, one per scalar, whatever the port keeps: a Field kept narrow
 (`Grid<Vec4 as unorm8>`) is read widened and written narrowed by the
 Host's rule, and only the `field` format carries its packed bytes.
 
+A value in a request is JSON: a number (an integer is an `Int`, and
+stands in for a float), `true` or `false`, or an array of values in
+order, which the parameter it is given to takes in its own shape: a
+vector's components, a matrix's columns (`[[3, 0, 0, 0], [0, 3, 0, 0],
+[0, 0, 1, -1], [0, 0, 0, 0]]` for a `Mat4`), a struct's fields or an
+array's elements. A value of another layout is refused with the
+parameter's type; a parameter the scene does not declare keeps what it
+was given. Replies spell values the same way, and `kernel` and `graph`
+name each parameter's type.
+
 A saved edit to a Kernel that is already running is prepared on a worker
 thread: `sync` reports `preparing` at once and `published` (or `rejected`)
 on a later `sync`, and every `evaluate` in between runs the previous

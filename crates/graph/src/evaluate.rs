@@ -74,10 +74,10 @@ pub enum EvaluateError {
         node: NodeId,
         /// The parameter.
         name: String,
-        /// Declared type.
-        expected: Type,
-        /// Supplied type.
-        actual: Type,
+        /// Declared type, as the Kernel names it.
+        expected: String,
+        /// The value given.
+        actual: String,
     },
     /// A source refers to an output port the producer does not declare.
     UnknownOutput {
@@ -354,12 +354,12 @@ struct Cached {
 
 /// A graph parameter's value: the caller's override, or its default.
 fn graph_param(graph: &Graph, name: &str, overrides: &BTreeMap<String, Value>) -> Option<Value> {
-    overrides.get(name).copied().or_else(|| {
+    overrides.get(name).cloned().or_else(|| {
         graph
             .params
             .iter()
             .find(|p| p.name == name)
-            .map(|p| p.default)
+            .map(|p| p.default.clone())
     })
 }
 
@@ -1667,9 +1667,9 @@ impl Evaluator {
                         .params
                         .iter()
                         .find(|p| p.name == name)
-                        .map(|p| p.default);
+                        .map(|p| p.default.clone());
                     match group.node.params.get(name) {
-                        Some(ParamValue::Literal(value)) => Some(*value),
+                        Some(ParamValue::Literal(value)) => Some(value.clone()),
                         Some(ParamValue::Graph(name)) => graph_param(graph, name, overrides),
                         None => manifest_default.or_else(|| graph_param(graph, name, overrides)),
                     }
@@ -1948,17 +1948,17 @@ impl Evaluator {
         for param in &manifest.params {
             let given = match node.params.get(&param.name) {
                 None => None,
-                Some(ParamValue::Literal(value)) => Some(*value),
+                Some(ParamValue::Literal(value)) => Some(value.clone()),
                 Some(ParamValue::Graph(name)) => Some(
                     overrides
                         .get(name)
-                        .copied()
+                        .cloned()
                         .or_else(|| {
                             graph
                                 .params
                                 .iter()
                                 .find(|p| &p.name == name)
-                                .map(|p| p.default)
+                                .map(|p| p.default.clone())
                         })
                         .ok_or_else(|| {
                             let known: Vec<&str> =
@@ -1971,18 +1971,19 @@ impl Evaluator {
                         })?,
                 ),
             };
+            // What was given, in the parameter's type: its layout, an
+            // integer standing in for a float, whatever it was spelled as.
+            let structs = version.module().map_or(&[][..], |module| &module.structs);
             let value = match given {
-                None => param.default,
-                Some(Value::Int(v)) if param.default.ty() == Type::Float => Value::Float(v as f32),
-                Some(value) if value.ty() == param.default.ty() => value,
-                Some(value) => {
-                    return Err(EvaluateError::ParamType {
+                None => param.default.clone(),
+                Some(value) => orla_ir::value_as(&value, param.ty, structs).ok_or_else(|| {
+                    EvaluateError::ParamType {
                         node: node.id.clone(),
                         name: param.name.clone(),
-                        expected: param.default.ty(),
-                        actual: value.ty(),
-                    });
-                }
+                        expected: orla_ir::type_name(param.ty, structs),
+                        actual: value.to_string(),
+                    }
+                })?,
             };
             params.push(value);
         }
@@ -1997,7 +1998,7 @@ impl Evaluator {
                 (Some(DomainSpec::Expr(expr)), _) => {
                     let read = Self::domain_values(node, manifest, expr, runtime, &inputs)?;
                     let element =
-                        |name: &str, index: u32| read.get(&(name.to_owned(), index)).copied();
+                        |name: &str, index: u32| read.get(&(name.to_owned(), index)).cloned();
                     let port = |name: &str| {
                         manifest
                             .inputs
@@ -2010,7 +2011,7 @@ impl Evaluator {
                             .params
                             .iter()
                             .position(|p| p.name == name)
-                            .map(|index| params[index])
+                            .map(|index| params[index].clone())
                             .or_else(|| graph_param(graph, name, overrides))
                     };
                     expr.resolve(&port, &param, &window_context(context), &element)
@@ -2214,7 +2215,11 @@ fn migrate(
     }
     let invocation = Invocation {
         inputs: vec![state],
-        params: manifest.params.iter().map(|param| param.default).collect(),
+        params: manifest
+            .params
+            .iter()
+            .map(|param| param.default.clone())
+            .collect(),
         domain,
         context: *context,
     };

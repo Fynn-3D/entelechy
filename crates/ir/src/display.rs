@@ -86,7 +86,7 @@ impl Manifest {
                 f,
                 "  param {}: {} = {}",
                 param.name,
-                param.default.ty(),
+                type_name(param.ty, structs),
                 param.default
             )?;
         }

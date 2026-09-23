@@ -184,6 +184,23 @@ their outputs when read ([test](crates/runtime/tests/mixed.rs)).
   what the manifest uses once its versions fit, and files are
   canonicalized so a Kernel reached by two paths has one owner. The four
   version constants are printed by `orla version` and `status`.
+- A parameter is any value type, carried as its words: the manifest
+  gives each [`Param`](crates/ir/src/lib.rs) its type, a
+  [`Value`](crates/abi/src/lib.rs) is a matrix, an integer vector or a
+  `Record` of a struct's fields or an array's elements, and a value is
+  checked against a type by layout alone ([`value_as`](crates/ir/src/lib.rs),
+  `Value::shaped_like`): an integer stands in for a float, and a record
+  given by position takes the parameter's shape. That one rule serves
+  a Kernel's default ([compiler](crates/compiler/src/lower/declare.rs)
+  `literal_in`), a scene's literal, a graph parameter set by a replay
+  or the protocol ([session](crates/session/src/lib.rs) `set_param`),
+  and the binding of a node ([evaluator](crates/graph/src/evaluate.rs)).
+  The interpreter and the JIT read a parameter's words where the params
+  are laid end to end; the GPU keeps them as `vec4<u32>` slots, each
+  parameter from a slot of its own, and builds the value from its words
+  ([wgsl](crates/gpu/src/wgsl.rs) `param_slots`), held by the
+  [matrix](crates/matrix/src/lib.rs) row of such parameters under every
+  mode and the [cube](examples/cube/README.md) replay.
 - `size(port)` of another node's memory port is the memory's extent, not
   that node's domain.
 

@@ -325,10 +325,10 @@ impl DomainExpr {
                     .map(|arg| arg.value(port, param, context, element))
                     .collect::<Result<Vec<_>, _>>()?;
                 match (name.as_str(), &values[..]) {
-                    ("floor", [v]) => map(*v, f32::floor),
-                    ("ceil", [v]) => map(*v, f32::ceil),
-                    ("max", [a, b]) => zip(*a, *b, f32::max, i32::max)?,
-                    ("min", [a, b]) => zip(*a, *b, f32::min, i32::min)?,
+                    ("floor", [v]) => map(v.clone(), f32::floor),
+                    ("ceil", [v]) => map(v.clone(), f32::ceil),
+                    ("max", [a, b]) => zip(a.clone(), b.clone(), f32::max, i32::max)?,
+                    ("min", [a, b]) => zip(a.clone(), b.clone(), f32::min, i32::min)?,
                     _ => unreachable!("accepted calls have their arity"),
                 }
             }
@@ -384,13 +384,13 @@ fn zip(
     let fail = || DomainError {
         message: format!("`domain` cannot combine {a} with {b}"),
     };
-    let scalar = |v: Value| match v {
-        Value::Int(v) => Some(v as f32),
-        Value::Float(v) => Some(v),
+    let scalar = |v: &Value| match v {
+        Value::Int(v) => Some(*v as f32),
+        Value::Float(v) => Some(*v),
         _ => None,
     };
-    Ok(match (a, b) {
-        (Value::Int(x), Value::Int(y)) => Value::Int(i(x, y)),
+    Ok(match (&a, &b) {
+        (Value::Int(x), Value::Int(y)) => Value::Int(i(*x, *y)),
         (Value::Vec2(x), Value::Vec2(y)) => Value::Vec2([f(x[0], y[0]), f(x[1], y[1])]),
         (Value::Vec3(x), Value::Vec3(y)) => {
             Value::Vec3([f(x[0], y[0]), f(x[1], y[1]), f(x[2], y[2])])

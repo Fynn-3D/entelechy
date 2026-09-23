@@ -1283,12 +1283,12 @@ impl Simplify<'_> {
         let mut budget = LOOP_BUDGET;
         for index in 0..*count {
             if let Some(until) = until
-                && self.run_block(until, carried, index, &mut env, &mut budget)?
+                && self.run_block(until, &carried, index, &mut env, &mut budget)?
                     == Value::Bool(true)
             {
                 return Some(carried);
             }
-            carried = self.run_block(body, carried, index, &mut env, &mut budget)?;
+            carried = self.run_block(body, &carried, index, &mut env, &mut budget)?;
         }
         Some(carried)
     }
@@ -1298,7 +1298,7 @@ impl Simplify<'_> {
     fn run_block(
         &self,
         block: &Block,
-        carried: Value,
+        carried: &Value,
         index: u32,
         env: &mut HashMap<u32, Value>,
         budget: &mut u32,
@@ -1315,14 +1315,14 @@ impl Simplify<'_> {
     fn run_op(
         &self,
         op: &Op,
-        carried: Value,
+        carried: &Value,
         index: u32,
         env: &mut HashMap<u32, Value>,
         budget: &mut u32,
     ) -> Option<Value> {
         match op {
-            Op::Const(value) => Some(*value),
-            Op::Carried => Some(carried),
+            Op::Const(value) => Some(value.clone()),
+            Op::Carried => Some(carried.clone()),
             Op::Index => Some(Value::Int(index as i32)),
             Op::Unary(unary, a) => fold_unary(*unary, self.known(*a, env)?),
             Op::Binary(binary, a, b) => {
@@ -1373,11 +1373,11 @@ impl Simplify<'_> {
                 for step in 0..*count {
                     *budget = budget.checked_sub(1)?;
                     if let Some(until) = until
-                        && self.run_block(until, inner, step, env, budget)? == Value::Bool(true)
+                        && self.run_block(until, &inner, step, env, budget)? == Value::Bool(true)
                     {
                         return Some(inner);
                     }
-                    inner = self.run_block(body, inner, step, env, budget)?;
+                    inner = self.run_block(body, &inner, step, env, budget)?;
                 }
                 Some(inner)
             }
@@ -1389,10 +1389,10 @@ impl Simplify<'_> {
     /// computed, or a literal from outside it.
     fn known(&self, id: ValueId, env: &HashMap<u32, Value>) -> Option<Value> {
         if let Some(value) = env.get(&id.0) {
-            return Some(*value);
+            return Some(value.clone());
         }
         match self.defs.get(&id.0) {
-            Some((_, Op::Const(value))) => Some(*value),
+            Some((_, Op::Const(value))) => Some(value.clone()),
             _ => None,
         }
     }
@@ -1407,7 +1407,7 @@ impl Simplify<'_> {
             return None;
         }
         let literal = |id: &ValueId| match self.defs.get(&id.0) {
-            Some((_, Op::Const(value))) => Some(*value),
+            Some((_, Op::Const(value))) => Some(value.clone()),
             _ => None,
         };
         match op {
@@ -1591,25 +1591,25 @@ fn fold_intrinsic(intrinsic: Intrinsic, args: &[Value]) -> Option<Value> {
         }
     };
     match (intrinsic, args) {
-        (Floor, [a]) => map(*a, f32::floor),
-        (Ceil, [a]) => map(*a, f32::ceil),
-        (Round, [a]) => map(*a, f32::round_ties_even),
-        (Trunc, [a]) => map(*a, f32::trunc),
-        (Fract, [a]) => map(*a, |v| v - v.floor()),
+        (Floor, [a]) => map(a.clone(), f32::floor),
+        (Ceil, [a]) => map(a.clone(), f32::ceil),
+        (Round, [a]) => map(a.clone(), f32::round_ties_even),
+        (Trunc, [a]) => map(a.clone(), f32::trunc),
+        (Fract, [a]) => map(a.clone(), |v| v - v.floor()),
         (Abs, [Value::Int(v)]) => Some(Value::Int(v.wrapping_abs())),
-        (Abs, [a]) => map(*a, f32::abs),
+        (Abs, [a]) => map(a.clone(), f32::abs),
         (Sign, [Value::Int(v)]) => Some(Value::Int(v.signum())),
-        (Sign, [a]) => map(*a, sign),
+        (Sign, [a]) => map(a.clone(), sign),
         (Min, [Value::Int(x), Value::Int(y)]) => Some(Value::Int((*x).min(*y))),
         (Max, [Value::Int(x), Value::Int(y)]) => Some(Value::Int((*x).max(*y))),
-        (Min, [a, b]) => zip(*a, *b, f32::min),
-        (Max, [a, b]) => zip(*a, *b, f32::max),
+        (Min, [a, b]) => zip(a.clone(), b.clone(), f32::min),
+        (Max, [a, b]) => zip(a.clone(), b.clone(), f32::max),
         (Clamp, [Value::Int(v), Value::Int(low), Value::Int(high)]) => {
             Some(Value::Int((*v).max(*low).min(*high)))
         }
         (Clamp, [v, low, high]) => {
-            let floored = zip(*v, *low, f32::max)?;
-            zip(floored, *high, f32::min)
+            let floored = zip(v.clone(), low.clone(), f32::max)?;
+            zip(floored, high.clone(), f32::min)
         }
         (ToFloat, [Value::Int(v)]) => Some(Value::Float(*v as f32)),
         (ToFloat, [Value::Bool(v)]) => Some(Value::Float(if *v { 1.0 } else { 0.0 })),

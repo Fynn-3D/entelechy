@@ -161,7 +161,9 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
     let data = read["data"].as_str().unwrap();
     assert_eq!(data.len(), (160 * 120 * 16usize).div_ceil(3) * 4);
 
-    assert_eq!(ok(8)["value"], json!([1.0, 2.0]));
+    // A param the scene does not declare has no type to shape it: kept
+    // as given.
+    assert_eq!(ok(8)["value"], json!([1, 2]));
 
     let events = ok(9)["events"].as_array().unwrap();
     assert_eq!(events[0]["kind"], "scene_rejected");
@@ -1050,4 +1052,38 @@ fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
     assert!(message(5).contains("not a node"), "{}", message(5));
     // The node that is one reads, having been pinned.
     assert!(responses[6]["ok"].is_object(), "{:?}", responses[6]);
+}
+
+#[test]
+fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
+    // JSON has arrays and no types: the parameter a value is given to
+    // takes it in its own shape, and says what it is when it cannot.
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/cube/scene.osn");
+    let replies = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "param", "name": "lens", "value": [[3, 0, 0, 0], [0, 3, 0, 0], [0, 0, 1, -1], [0, 0, 0, 0]] }),
+            json!({ "id": 2, "op": "param", "name": "style", "value": [[0.9, 0.9, 0.9], [0.8, 0.1, 0.1], 2] }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 4, "op": "param", "name": "lens", "value": [1, 2, 3] }),
+            json!({ "id": 5, "op": "graph" }),
+        ],
+    );
+    assert_eq!(
+        replies[0]["ok"]["value"],
+        json!([
+            [3.0, 0.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, -1.0],
+            [0.0, 0.0, 0.0, 0.0]
+        ])
+    );
+    assert!(replies[1].get("ok").is_some(), "{}", replies[1]);
+    assert!(replies[2].get("ok").is_some(), "{}", replies[2]);
+    let message = replies[3]["error"].to_string();
+    assert!(message.contains("param `lens` is a Mat4"), "{message}");
+    let params = replies[4]["ok"]["params"].as_array().unwrap();
+    let style = params.iter().find(|p| p["name"] == "style").unwrap();
+    assert_eq!(style["type"], "Style");
+    assert_eq!(style["value"][2], json!(2.0));
 }

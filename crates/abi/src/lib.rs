@@ -325,8 +325,10 @@ impl FromStr for Type {
     }
 }
 
-/// A plain value crossing the Kernel boundary (parameters, constants).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A value crossing the Kernel boundary: a parameter, a constant. Any
+/// value a Kernel can hold, a struct's fields and an array's elements as
+/// a [`Value::Record`] in order.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// A float.
     Float(f32),
@@ -340,31 +342,207 @@ pub enum Value {
     Vec3([f32; 3]),
     /// A four-component vector.
     Vec4([f32; 4]),
+    /// A two-component integer vector.
+    IVec2([i32; 2]),
+    /// A three-component integer vector.
+    IVec3([i32; 3]),
+    /// A 2x2 matrix, column by column.
+    Mat2([f32; 4]),
+    /// A 3x3 matrix, column by column.
+    Mat3([f32; 9]),
+    /// A 4x4 matrix, column by column.
+    Mat4([f32; 16]),
+    /// A struct's fields, or an array's elements, in order. Its type is
+    /// the struct or array a Kernel declares; what it must match is the
+    /// layout, never a name.
+    Record(Vec<Value>),
 }
 
 impl Value {
-    /// The type of the value.
-    pub fn ty(&self) -> Type {
-        match self {
+    /// The type of a value that is not a record; a record's type is a
+    /// struct of the Kernel that takes it.
+    pub fn ty(&self) -> Option<Type> {
+        Some(match self {
             Self::Float(_) => Type::Float,
             Self::Int(_) => Type::Int,
             Self::Bool(_) => Type::Bool,
             Self::Vec2(_) => Type::Vec2,
             Self::Vec3(_) => Type::Vec3,
             Self::Vec4(_) => Type::Vec4,
+            Self::IVec2(_) => Type::IVec2,
+            Self::IVec3(_) => Type::IVec3,
+            Self::Mat2(_) => Type::Mat2,
+            Self::Mat3(_) => Type::Mat3,
+            Self::Mat4(_) => Type::Mat4,
+            Self::Record(_) => return None,
+        })
+    }
+
+    /// The Kernel's words, one per scalar, in layout order.
+    pub fn words(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        self.push_words(&mut out);
+        out
+    }
+
+    fn push_words(&self, out: &mut Vec<u32>) {
+        let floats = |out: &mut Vec<u32>, v: &[f32]| out.extend(v.iter().map(|x| x.to_bits()));
+        let ints = |out: &mut Vec<u32>, v: &[i32]| out.extend(v.iter().map(|x| *x as u32));
+        match self {
+            Self::Float(v) => out.push(v.to_bits()),
+            Self::Int(v) => out.push(*v as u32),
+            Self::Bool(v) => out.push(u32::from(*v)),
+            Self::Vec2(v) => floats(out, v),
+            Self::Vec3(v) => floats(out, v),
+            Self::Vec4(v) => floats(out, v),
+            Self::IVec2(v) => ints(out, v),
+            Self::IVec3(v) => ints(out, v),
+            Self::Mat2(v) => floats(out, v),
+            Self::Mat3(v) => floats(out, v),
+            Self::Mat4(v) => floats(out, v),
+            Self::Record(members) => {
+                for member in members {
+                    member.push_words(out);
+                }
+            }
+        }
+    }
+
+    /// What each word is, in layout order.
+    pub fn scalars(&self) -> Vec<Scalar> {
+        let mut out = Vec::new();
+        self.push_scalars(&mut out);
+        out
+    }
+
+    fn push_scalars(&self, out: &mut Vec<Scalar>) {
+        let (kind, n) = match self {
+            Self::Float(_) => (Scalar::Float, 1),
+            Self::Int(_) => (Scalar::Int, 1),
+            Self::Bool(_) => (Scalar::Bool, 1),
+            Self::Vec2(_) => (Scalar::Float, 2),
+            Self::Vec3(_) => (Scalar::Float, 3),
+            Self::Vec4(_) | Self::Mat2(_) => (Scalar::Float, 4),
+            Self::IVec2(_) => (Scalar::Int, 2),
+            Self::IVec3(_) => (Scalar::Int, 3),
+            Self::Mat3(_) => (Scalar::Float, 9),
+            Self::Mat4(_) => (Scalar::Float, 16),
+            Self::Record(members) => {
+                for member in members {
+                    member.push_scalars(out);
+                }
+                return;
+            }
+        };
+        out.extend(std::iter::repeat_n(kind, n));
+    }
+
+    /// This value in `template`'s shape, when its scalars are the
+    /// template's in order, an integer standing in for a float. What a
+    /// value must match is a layout, never a spelling: `[[1, 0], [0, 1]]`
+    /// is a `Mat2`, and `[vec3(0.0, 1.0, 0.0), 2]` a struct of a `Vec3`
+    /// and a `Float`.
+    pub fn shaped_like(&self, template: &Value) -> Option<Value> {
+        let words = widened(self, &template.scalars())?;
+        let mut words = words.into_iter();
+        let shaped = template.rebuilt(&mut words);
+        Some(shaped)
+    }
+
+    /// A value of this one's shape made of `words`, taken in order.
+    pub fn rebuilt(&self, words: &mut impl Iterator<Item = u32>) -> Value {
+        let mut next = || words.next().unwrap_or(0);
+        let float = |w: u32| f32::from_bits(w);
+        macro_rules! floats {
+            ($n:expr) => {{
+                let mut out = [0.0f32; $n];
+                for slot in &mut out {
+                    *slot = float(next());
+                }
+                out
+            }};
+        }
+        macro_rules! ints {
+            ($n:expr) => {{
+                let mut out = [0i32; $n];
+                for slot in &mut out {
+                    *slot = next() as i32;
+                }
+                out
+            }};
+        }
+        match self {
+            Self::Float(_) => Self::Float(float(next())),
+            Self::Int(_) => Self::Int(next() as i32),
+            Self::Bool(_) => Self::Bool(next() != 0),
+            Self::Vec2(_) => Self::Vec2(floats!(2)),
+            Self::Vec3(_) => Self::Vec3(floats!(3)),
+            Self::Vec4(_) => Self::Vec4(floats!(4)),
+            Self::IVec2(_) => Self::IVec2(ints!(2)),
+            Self::IVec3(_) => Self::IVec3(ints!(3)),
+            Self::Mat2(_) => Self::Mat2(floats!(4)),
+            Self::Mat3(_) => Self::Mat3(floats!(9)),
+            Self::Mat4(_) => Self::Mat4(floats!(16)),
+            Self::Record(members) => {
+                Self::Record(members.iter().map(|member| member.rebuilt(words)).collect())
+            }
         }
     }
 }
 
+/// `value`'s words as a layout of `wanted` scalars: the same kinds in the
+/// same order, an integer widened where a float is wanted; `None` when
+/// they are another layout.
+pub fn widened(value: &Value, wanted: &[Scalar]) -> Option<Vec<u32>> {
+    let have = value.scalars();
+    if have.len() != wanted.len() {
+        return None;
+    }
+    let words = value.words();
+    have.iter()
+        .zip(wanted)
+        .zip(words)
+        .map(|((have, want), word)| match (have, want) {
+            (a, b) if a == b => Some(word),
+            (Scalar::Int, Scalar::Float) => Some((word as i32 as f32).to_bits()),
+            _ => None,
+        })
+        .collect()
+}
+
 impl fmt::Display for Value {
+    /// The literal that reads back as this value, in a scene or a replay.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let list = |f: &mut fmt::Formatter<'_>, name: &str, parts: Vec<String>| {
+            write!(f, "{name}({})", parts.join(", "))
+        };
+        let floats = |v: &[f32]| v.iter().map(|x| format!("{x:?}")).collect::<Vec<_>>();
+        let columns = |v: &[f32], n: usize| {
+            v.chunks(n)
+                .map(|column| format!("vec{n}({})", floats(column).join(", ")))
+                .collect::<Vec<_>>()
+        };
         match self {
             Self::Float(value) => write!(f, "{value:?}"),
             Self::Int(value) => write!(f, "{value}"),
             Self::Bool(value) => write!(f, "{value}"),
-            Self::Vec2([x, y]) => write!(f, "vec2({x:?}, {y:?})"),
-            Self::Vec3([x, y, z]) => write!(f, "vec3({x:?}, {y:?}, {z:?})"),
-            Self::Vec4([x, y, z, w]) => write!(f, "vec4({x:?}, {y:?}, {z:?}, {w:?})"),
+            Self::Vec2(v) => list(f, "vec2", floats(v)),
+            Self::Vec3(v) => list(f, "vec3", floats(v)),
+            Self::Vec4(v) => list(f, "vec4", floats(v)),
+            Self::IVec2(v) => list(f, "ivec2", v.iter().map(i32::to_string).collect()),
+            Self::IVec3(v) => list(f, "ivec3", v.iter().map(i32::to_string).collect()),
+            Self::Mat2(v) => list(f, "mat2", columns(v, 2)),
+            Self::Mat3(v) => list(f, "mat3", columns(v, 3)),
+            Self::Mat4(v) => list(f, "mat4", columns(v, 4)),
+            Self::Record(members) => write!(
+                f,
+                "[{}]",
+                members
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 }

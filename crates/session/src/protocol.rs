@@ -741,8 +741,9 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         }
         "param" => {
             let name = text_field("name")?;
-            let value = value_from_json(field("value")?)?;
-            session.set_param(&name, value);
+            let given = value_from_json(field("value")?)?;
+            session.set_param(&name, given).map_err(failure)?;
+            let value = session.params().get(&name).cloned().expect("just set");
             // A param that sizes the graph lowers the document again now.
             let events = session.sync();
             Ok(json!({ "name": name, "value": value_json(&value), "events": events_json(&events) }))
@@ -1272,7 +1273,7 @@ fn manifest_json(
         "mode": manifest.mode.to_string(),
         "requires": manifest.requires.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
         "inputs": manifest.inputs.iter().map(|p| json!({ "name": p.name, "type": port(&p.ty) })).collect::<Vec<_>>(),
-        "params": manifest.params.iter().map(|p| json!({ "name": p.name, "type": p.default.ty().to_string(), "default": value_json(&p.default) })).collect::<Vec<_>>(),
+        "params": manifest.params.iter().map(|p| json!({ "name": p.name, "type": orla_ir::type_name(p.ty, structs), "default": value_json(&p.default) })).collect::<Vec<_>>(),
         "outputs": manifest.outputs.iter().map(|p| json!({ "name": p.name, "type": port(&p.ty) })).collect::<Vec<_>>(),
         "memories": manifest.memories,
     })
@@ -1288,7 +1289,7 @@ fn graph_json(
         "inputs": graph.externals,
         "params": graph.params.iter().map(|p| json!({
             "name": p.name,
-            "type": p.default.ty().to_string(),
+            "type": p.ty,
             "default": value_json(&p.default),
             "value": value_json(overrides.get(&p.name).unwrap_or(&p.default)),
         })).collect::<Vec<_>>(),
@@ -1344,8 +1345,11 @@ fn events_json(events: &[Event]) -> Vec<Json> {
         .collect()
 }
 
-/// Values cross the protocol as JSON numbers, booleans, and float arrays.
+/// Values cross the protocol as JSON numbers and booleans, a vector as
+/// an array of its components, a matrix as an array of its columns, and a
+/// struct or an array as an array of its members.
 pub fn value_json(value: &Value) -> Json {
+    let columns = |v: &[f32], n: usize| json!(v.chunks(n).collect::<Vec<_>>());
     match value {
         Value::Float(v) => json!(v),
         Value::Int(v) => json!(v),
@@ -1353,11 +1357,20 @@ pub fn value_json(value: &Value) -> Json {
         Value::Vec2(v) => json!(v),
         Value::Vec3(v) => json!(v),
         Value::Vec4(v) => json!(v),
+        Value::IVec2(v) => json!(v),
+        Value::IVec3(v) => json!(v),
+        Value::Mat2(v) => columns(v, 2),
+        Value::Mat3(v) => columns(v, 3),
+        Value::Mat4(v) => columns(v, 4),
+        Value::Record(members) => json!(members.iter().map(value_json).collect::<Vec<_>>()),
     }
 }
 
 /// Reads a value: integers become `Int`, other numbers `Float`, booleans
-/// `Bool`, arrays of two, three, or four numbers vectors.
+/// `Bool`, and an array the record of its items, which the parameter it
+/// is given to shapes: `[1, 2.5]` a `Vec2`, `[3, 4]` an `IVec2` or a
+/// `Vec2`, `[[1, 0], [0, 1]]` a `Mat2`, `[[0, 1, 0], 2]` a struct of a
+/// `Vec3` and a `Float`.
 pub fn value_from_json(json: &Json) -> Result<Value, Json> {
     match json {
         Json::Bool(v) => Ok(Value::Bool(*v)),
@@ -1368,20 +1381,15 @@ pub fn value_from_json(json: &Json) -> Result<Value, Json> {
                 Ok(Value::Float(n.as_f64().unwrap_or(0.0) as f32))
             }
         }
-        Json::Array(items) => {
-            let floats: Vec<f32> = items
+        Json::Array(items) if !items.is_empty() => Ok(Value::Record(
+            items
                 .iter()
-                .map(|item| item.as_f64().map(|v| v as f32))
-                .collect::<Option<_>>()
-                .ok_or_else(|| failure("vector components must be numbers"))?;
-            match floats.as_slice() {
-                [x, y] => Ok(Value::Vec2([*x, *y])),
-                [x, y, z] => Ok(Value::Vec3([*x, *y, *z])),
-                [x, y, z, w] => Ok(Value::Vec4([*x, *y, *z, *w])),
-                _ => Err(failure("a vector has two, three, or four components")),
-            }
-        }
-        _ => Err(failure("a value is a number, a boolean, or a vector array")),
+                .map(value_from_json)
+                .collect::<Result<_, _>>()?,
+        )),
+        _ => Err(failure(
+            "a value is a number, a boolean, or an array of values",
+        )),
     }
 }
 
@@ -1470,8 +1478,13 @@ mod tests {
             Value::Vec2([1.0, 2.0]),
             Value::Vec3([1.0, 2.0, 3.0]),
             Value::Vec4([1.0, 2.0, 3.0, 4.0]),
+            Value::IVec2([3, -4]),
+            Value::Mat2([1.0, 0.0, 0.5, 1.0]),
+            Value::Record(vec![Value::Vec3([0.0, 1.0, 0.0]), Value::Int(2)]),
         ] {
-            assert_eq!(value_from_json(&value_json(&value)).unwrap(), value);
+            // JSON is untyped; what the value is read as is its shape.
+            let back = value_from_json(&value_json(&value)).unwrap();
+            assert_eq!(back.shaped_like(&value), Some(value));
         }
         assert!(value_from_json(&json!("no")).is_err());
     }

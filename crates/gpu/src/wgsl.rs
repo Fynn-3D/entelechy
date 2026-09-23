@@ -186,6 +186,13 @@ fn literal(value: &Value) -> String {
             format!("{v:?}")
         }
     };
+    let ints = |v: &[i32]| {
+        v.iter()
+            .map(|i| literal(&Value::Int(*i)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let floats = |v: &[f32]| v.iter().map(|x| f(*x)).collect::<Vec<_>>().join(", ");
     match value {
         Value::Float(v) => f(*v),
         // WGSL has no literal for the most negative int; its bits do.
@@ -197,6 +204,14 @@ fn literal(value: &Value) -> String {
         Value::Vec4([x, y, z, w]) => {
             format!("vec4<f32>({}, {}, {}, {})", f(*x), f(*y), f(*z), f(*w))
         }
+        Value::IVec2(v) => format!("vec2<i32>({})", ints(v)),
+        Value::IVec3(v) => format!("vec3<i32>({})", ints(v)),
+        Value::Mat2(v) => format!("mat2x2<f32>({})", floats(v)),
+        Value::Mat3(v) => format!("mat3x3<f32>({})", floats(v)),
+        Value::Mat4(v) => format!("mat4x4<f32>({})", floats(v)),
+        // The validator refuses a constant record: a struct or an array
+        // is built by `Construct`.
+        Value::Record(_) => unreachable!("a constant of the IR is never a record"),
     }
 }
 
@@ -209,14 +224,14 @@ fn literal(value: &Value) -> String {
 fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
     let manifest = &module.manifest;
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
-    let params_len = manifest.params.len().max(1);
+    let params_len = param_slots(module).1.max(1);
     let _ = writeln!(
         out,
         "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;"
     );
     let _ = writeln!(
         out,
-        "@group(0) @binding({PARAMS_BINDING}) var<uniform> params: array<vec4<f32>, {params_len}>;"
+        "@group(0) @binding({PARAMS_BINDING}) var<uniform> params: array<vec4<u32>, {params_len}>;"
     );
     if with_output {
         for k in 0..written_outputs(module) {
@@ -1881,7 +1896,20 @@ fn load_expr(
     offset: usize,
     encoding: Encoding,
 ) -> (String, usize) {
-    let scalar = |kind: Scalar, k: usize| scalar_load(encoding, kind, buffer, base, k);
+    compose(module, ty, offset, &|kind, k| {
+        scalar_load(encoding, kind, buffer, base, k)
+    })
+}
+
+/// A value of type `ty` built from its scalars, `offset` in, each an
+/// expression `scalar` gives for its kind and index; and the scalars it
+/// takes.
+fn compose(
+    module: &Module,
+    ty: Type,
+    offset: usize,
+    scalar: &dyn Fn(Scalar, usize) -> String,
+) -> (String, usize) {
     match ty {
         Type::Float => (scalar(Scalar::Float, offset), 1),
         Type::Int => (scalar(Scalar::Int, offset), 1),
@@ -1915,13 +1943,26 @@ fn load_expr(
             let mut parts = Vec::new();
             let mut used = 0;
             for field in &def.fields {
-                let (expr, n) = load_expr(module, field.ty, buffer, base, offset + used, encoding);
+                let (expr, n) = compose(module, field.ty, offset + used, scalar);
                 parts.push(expr);
                 used += n;
             }
             (format!("S{index}({})", parts.join(", ")), used)
         }
     }
+}
+
+/// Where each parameter begins in the params uniform, in `vec4<u32>`
+/// slots, and how many slots there are: a parameter is its words, from a
+/// slot of its own, as many slots as its words fill.
+pub fn param_slots(module: &Module) -> (Vec<usize>, usize) {
+    let mut starts = Vec::with_capacity(module.manifest.params.len());
+    let mut slots = 0;
+    for param in &module.manifest.params {
+        starts.push(slots);
+        slots += param.default.words().len().div_ceil(4).max(1);
+    }
+    (starts, slots)
 }
 
 /// Statements storing `path` (a value of type `ty`) into `out0[b + ..]`.
@@ -2088,21 +2129,20 @@ impl Emitter<'_> {
         let expression = match op {
             Op::Const(value) => literal(value),
             Op::Param(index) => {
-                let slot = format!("params[{index}]");
-                match self.module.manifest.params[*index as usize].default.ty() {
-                    Type::Float => format!("{slot}.x"),
-                    Type::Int => format!("bitcast<i32>({slot}.x)"),
-                    Type::Bool => format!("({slot}.x != 0.0)"),
-                    Type::Vec2 => format!("{slot}.xy"),
-                    Type::Vec3 => format!("{slot}.xyz"),
-                    Type::Vec4
-                    | Type::IVec2
-                    | Type::IVec3
-                    | Type::Mat2
-                    | Type::Mat3
-                    | Type::Mat4
-                    | Type::Struct(_) => slot,
-                }
+                // The parameter's words from its slots, as the type builds
+                // them: the uniform holds words, as the interpreter does.
+                let (starts, _) = param_slots(self.module);
+                let start = starts[*index as usize];
+                let ty = self.module.manifest.params[*index as usize].ty;
+                let word = |kind: Scalar, k: usize| {
+                    let word = format!("params[{}u][{}u]", start + k / 4, k % 4);
+                    match kind {
+                        Scalar::Float => format!("bitcast<f32>({word})"),
+                        Scalar::Int => format!("bitcast<i32>({word})"),
+                        Scalar::Bool => format!("({word} != 0u)"),
+                    }
+                };
+                compose(self.module, ty, 0, &word).0
             }
             Op::Arg(index) => format!("a{index}"),
             // naga has no negation of a matrix; a scale by -1 flips the

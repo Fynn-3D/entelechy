@@ -263,6 +263,11 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: w.x + w.w + t.x + t.y + s.y, i: iv.x * 10 + iv.y, b: p.xyz == v && q.gb == vec2(2.0, 3.0), v: w.yzw + vec3(s.xy, 1.0) + p.rrr }",
         ),
         (
+            "matrix, integer vector, struct and array parameters",
+            "let q = m3 * vec3(x, 1.0, 2.0); let s = site.cell + spot; let w = steps[i % 4] + site.weight;",
+            "Out { f: q.x + q.y * 0.5 + q.z, i: s.x * 100 + s.y + w, b: s.x > s.y, v: q }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",
@@ -293,6 +298,10 @@ const HEAD: &str = "requires { field.read; field.write; input.read; time.read; }
     param n: Int = 7;
     param flag: Bool = true;
     param v: Vec3 = vec3(1.0, 2.0, 3.0);
+    param m3: Mat3 = mat3(1.0);
+    param spot: IVec2 = ivec2(0, 0);
+    param site: Site = Site { cell: ivec2(0, 0), weight: 0 };
+    param steps: [Int; 4] = [0; 4];
     fn twist(p: Vec3, t: Float) -> Vec3 { return vec3(p.x * cos(t) - p.y * sin(t), p.x * sin(t) + p.y * cos(t), p.z); }
     fn peek(g: Grid<Cell>, c: Vec2) -> Float { return at(g, c).a; }
     fn score(c: Cell) -> Cell { return Cell { a: c.a * 2.0, b: c.b + 1, on: !c.on }; }
@@ -477,6 +486,16 @@ fn params() -> Vec<Value> {
         Value::Int(7),
         Value::Bool(true),
         Value::Vec3([1.0, 2.0, 3.0]),
+        // Not the defaults, so a backend that read the defaults shows.
+        Value::Mat3([1.0, 2.0, 0.0, -1.0, 0.5, 0.0, 0.25, 0.0, 1.0]),
+        Value::IVec2([3, -2]),
+        Value::Record(vec![Value::IVec2([5, 7]), Value::Int(-4)]),
+        Value::Record(vec![
+            Value::Int(11),
+            Value::Int(-3),
+            Value::Int(8),
+            Value::Int(1),
+        ]),
     ]
 }
 

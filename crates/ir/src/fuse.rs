@@ -262,7 +262,8 @@ pub fn fuse_outputs(
     let mut params: Vec<Param> = consumer_manifest.params.clone();
     params.extend(producer_manifest.params.iter().map(|param| Param {
         name: rename(&param.name),
-        default: param.default,
+        ty: shift_struct(param.ty),
+        default: param.default.clone(),
     }));
     let mut requires: Capabilities = consumer_manifest.requires.clone();
     for capability in producer_manifest.requires.iter() {

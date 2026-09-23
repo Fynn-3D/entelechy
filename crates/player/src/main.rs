@@ -793,7 +793,10 @@ fn main() -> ExitCode {
         panel: None,
     };
     for (name, value) in &options.params {
-        player.session.set_param(name, *value);
+        if let Err(error) = player.session.set_param(name, value.clone()) {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
     }
     if options.serve {
         let (sender, receiver) = channel();

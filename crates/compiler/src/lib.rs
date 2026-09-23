@@ -106,3 +106,14 @@ pub fn compile_unoptimized(source: &str) -> Result<Validated, CompileError> {
 pub fn literal(expr: &orla_language::Expr) -> Result<orla_ir::Value, CompileError> {
     lower::literal(expr)
 }
+
+/// Evaluates a literal of any value a Kernel can hold, before it has a
+/// type: a struct literal's fields in the order `fields_of` lists them
+/// for its name, an array or a struct as a record of its members.
+/// [`orla_ir::value_as`] shapes it into a type.
+pub fn literal_in(
+    expr: &orla_language::Expr,
+    fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> Result<orla_ir::Value, CompileError> {
+    lower::literal_in(expr, fields_of)
+}

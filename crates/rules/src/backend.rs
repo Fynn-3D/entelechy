@@ -52,6 +52,7 @@ impl NativeOp {
             });
             manifest.params.push(orla_ir::Param {
                 name: "cutout".into(),
+                ty: Type::Float,
                 default: orla_abi::Value::Float(0.5),
             });
             return manifest;

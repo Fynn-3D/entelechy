@@ -115,7 +115,10 @@ pub enum ParamValue {
 pub struct GraphParam {
     /// Parameter name.
     pub name: String,
-    /// Default value; its type is the parameter type.
+    /// Its type as the document writes it, which a record needs to be
+    /// read back as what it is.
+    pub ty: String,
+    /// Default value, of that type; a value given for it takes its shape.
     pub default: Value,
 }
 
@@ -460,7 +463,7 @@ impl fmt::Display for Graph {
                 f,
                 "param {}: {} = {};",
                 param.name,
-                param.default.ty(),
+                param.ty,
                 literal_text(&param.default)
             )?;
         }
@@ -496,12 +499,5 @@ impl fmt::Display for Graph {
 
 /// Renders a value in the literal grammar shared with `.orla`.
 pub fn literal_text(value: &Value) -> String {
-    match value {
-        Value::Float(v) => format!("{v:?}"),
-        Value::Int(v) => v.to_string(),
-        Value::Bool(v) => v.to_string(),
-        Value::Vec2([x, y]) => format!("vec2({x:?}, {y:?})"),
-        Value::Vec3([x, y, z]) => format!("vec3({x:?}, {y:?}, {z:?})"),
-        Value::Vec4([x, y, z, w]) => format!("vec4({x:?}, {y:?}, {z:?}, {w:?})"),
-    }
+    value.to_string()
 }

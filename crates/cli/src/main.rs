@@ -464,7 +464,7 @@ fn render(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     for (name, value) in &options.params {
-        session.set_param(name, *value);
+        session.set_param(name, value.clone())?;
     }
     session.set_fusion(options.fusion);
     for (node, _, _) in &options.saves {
@@ -589,7 +589,7 @@ fn run(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     for (name, value) in &options.params {
-        session.set_param(name, *value);
+        session.set_param(name, value.clone())?;
     }
     session.set_fusion(options.fusion);
     // A profile waits for the device after each node, so the times are
@@ -1126,7 +1126,7 @@ fn trace(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     for (name, value) in &options.params {
-        session.set_param(name, *value);
+        session.set_param(name, value.clone())?;
     }
     session.set_fusion(options.fusion);
     report_events(&session.sync());

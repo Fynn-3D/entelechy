@@ -837,10 +837,22 @@ impl Session {
         &self.root
     }
 
-    /// Overrides a graph parameter for later evaluations. Unknown names are
-    /// kept and take effect if the graph later declares them.
-    pub fn set_param(&mut self, name: &str, value: Value) {
-        let previous = self.params.insert(name.to_owned(), value);
+    /// Overrides a graph parameter for later evaluations, in the shape of
+    /// its declared type: `[[1, 0], [0, 1]]` for a `Mat2`, an integer for a
+    /// float. A value of another layout is refused. Unknown names are kept
+    /// as given and take effect if the graph later declares them.
+    pub fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
+        let declared = self
+            .graph
+            .as_ref()
+            .and_then(|graph| graph.params.iter().find(|p| p.name == name));
+        let value = match declared {
+            Some(param) => value
+                .shaped_like(&param.default)
+                .ok_or_else(|| format!("param `{name}` is a {}; `{value}` is not one", param.ty))?,
+            None => value,
+        };
+        let previous = self.params.insert(name.to_owned(), value.clone());
         // A parameter that sizes the graph (a node's `times`) changes its
         // structure: the document is lowered again on the next sync.
         if previous != Some(value)
@@ -851,6 +863,7 @@ impl Session {
         {
             self.root_stamp = None;
         }
+        Ok(())
     }
 
     /// Current graph parameter overrides.

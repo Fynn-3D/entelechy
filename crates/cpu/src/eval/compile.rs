@@ -125,8 +125,7 @@ impl<'s> Program<'s> {
         let mut at = 0;
         for param in &module.manifest.params {
             param_at.push(at);
-            let (_, n) = value_words(param.default);
-            at += n;
+            at += param.default.words().len();
         }
         let mut structs: Vec<StructLayout> = Vec::with_capacity(module.structs.len());
         for def in &module.structs {
@@ -225,8 +224,7 @@ impl<'s> Program<'s> {
         }
         let mut params = Vec::new();
         for value in &invocation.params {
-            let (words, n) = value_words(*value);
-            params.extend_from_slice(&words[..n]);
+            params.extend(value.words());
         }
         let memories = module
             .manifest
@@ -245,16 +243,15 @@ impl<'s> Program<'s> {
     }
 }
 
-/// The words of a parameter or constant, and how many are meaningful.
-pub(super) fn value_words(value: Value) -> ([u32; 4], usize) {
-    match value {
-        Value::Float(v) => ([v.to_bits(), 0, 0, 0], 1),
-        Value::Int(v) => ([v as u32, 0, 0, 0], 1),
-        Value::Bool(v) => ([v as u32, 0, 0, 0], 1),
-        Value::Vec2([x, y]) => ([x.to_bits(), y.to_bits(), 0, 0], 2),
-        Value::Vec3([x, y, z]) => ([x.to_bits(), y.to_bits(), z.to_bits(), 0], 3),
-        Value::Vec4(v) => (v.map(f32::to_bits), 4),
-    }
+/// The words of a constant, and how many are meaningful: a constant of
+/// the IR is a scalar or a vector, at most four words (a matrix or a
+/// struct is built by `Construct`).
+pub(super) fn value_words(value: &Value) -> ([u32; 4], usize) {
+    let words = value.words();
+    let mut out = [0; 4];
+    let n = words.len().min(4);
+    out[..n].copy_from_slice(&words[..n]);
+    (out, n)
 }
 
 /// Compiles one function. `carry` is the type of a scan's carried value,
@@ -517,7 +514,7 @@ impl FunctionCompiler<'_> {
         Some(match &instruction.op {
             Op::Const(value) => {
                 let dst = define(self);
-                let (words, n) = value_words(*value);
+                let (words, n) = value_words(value);
                 Instr::Const {
                     dst: dst.at,
                     words,
@@ -1028,7 +1025,7 @@ impl FunctionCompiler<'_> {
     fn note_constant(&mut self, instruction: &Instruction) {
         let words = match &instruction.op {
             Op::Const(value) => {
-                let (words, n) = value_words(*value);
+                let (words, n) = value_words(value);
                 Some(words[..n].to_vec())
             }
             Op::Construct(parts)

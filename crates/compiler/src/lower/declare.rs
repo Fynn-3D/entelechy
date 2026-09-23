@@ -14,7 +14,7 @@ use orla_language::{Expr, ExprKind, Kernel, Span, Spanned};
 
 use crate::CompileError;
 
-use super::{Structs, describe, parse_type, resolve_type, semantic};
+use super::{Structs, describe, resolve_type, semantic};
 
 pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
     let structs: Structs = RefCell::new(Vec::new());
@@ -60,43 +60,191 @@ pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
 }
 
 /// Evaluates a literal without a declared type: integers stay `Int`.
+/// Struct literals are refused, as nothing here declares a struct.
 pub(crate) fn literal(expr: &Expr) -> Result<Value, CompileError> {
+    literal_in(expr, &|_| None)
+}
+
+/// Evaluates a literal of any value a Kernel can hold, before it has a
+/// type: numbers (integers stay `Int`), booleans, `vec2`..`vec4`,
+/// `ivec2` and `ivec3`, `mat2`..`mat4` from their columns or one value
+/// down the diagonal, `[a, b]` and `[v; N]`, and `Name { field: .. }`,
+/// whose fields `fields_of` lists in declaration order. An array or a
+/// struct is a record of its members in order; a type shapes it after
+/// ([`orla_ir::value_as`]).
+pub(crate) fn literal_in(
+    expr: &Expr,
+    fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> Result<Value, CompileError> {
+    let fail = |message: String| semantic(expr.span, message);
     match &expr.kind {
         ExprKind::Float(value) => Ok(Value::Float(*value)),
         ExprKind::Int(value) => Ok(Value::Int(*value)),
         ExprKind::Bool(value) => Ok(Value::Bool(*value)),
-        ExprKind::Neg(inner) => match literal(inner)? {
-            Value::Float(v) => Ok(Value::Float(-v)),
-            Value::Int(v) => v
-                .checked_neg()
-                .map(Value::Int)
-                .ok_or_else(|| semantic(expr.span, "integer literal overflows when negated")),
-            Value::Bool(_) => Err(semantic(expr.span, "cannot negate a Bool")),
-            Value::Vec2([x, y]) => Ok(Value::Vec2([-x, -y])),
-            Value::Vec3([x, y, z]) => Ok(Value::Vec3([-x, -y, -z])),
-            Value::Vec4([x, y, z, w]) => Ok(Value::Vec4([-x, -y, -z, -w])),
-        },
-        ExprKind::Call(name, _) => {
-            let ty = match name.as_str() {
-                "vec2" => Type::Vec2,
-                "vec3" => Type::Vec3,
-                "vec4" => Type::Vec4,
-                _ => {
+        ExprKind::Neg(inner) => {
+            let value = literal_in(inner, fields_of)?;
+            negated(&value).ok_or_else(|| match value {
+                Value::Int(_) => fail("integer literal overflows when negated".into()),
+                other => fail(format!("cannot negate `{other}`")),
+            })
+        }
+        ExprKind::Array(elements) => Ok(Value::Record(
+            elements
+                .iter()
+                .map(|element| literal_in(element, fields_of))
+                .collect::<Result<_, _>>()?,
+        )),
+        ExprKind::Repeat(element, count) => {
+            let value = literal_in(element, fields_of)?;
+            Ok(Value::Record(vec![value; count.value as usize]))
+        }
+        ExprKind::Struct { name, base, fields } => {
+            if base.is_some() {
+                return Err(fail(
+                    "a literal struct lists its fields; `..base` belongs in a Kernel".into(),
+                ));
+            }
+            let order = fields_of(&name.value).ok_or_else(|| {
+                semantic(
+                    name.span,
+                    format!(
+                        "`{}` is not a struct declared where this literal is read",
+                        name.value
+                    ),
+                )
+            })?;
+            let mut given: Vec<Option<Value>> = vec![None; order.len()];
+            for (field, value) in fields {
+                let Some(at) = order.iter().position(|f| *f == field.value) else {
                     return Err(semantic(
-                        expr.span,
-                        format!(
-                            "`{name}` is not a literal; only numbers, booleans, and vec2/vec3/vec4 are"
-                        ),
+                        field.span,
+                        format!("`{}` has no field `{}`", name.value, field.value),
+                    ));
+                };
+                if given[at].is_some() {
+                    return Err(semantic(
+                        field.span,
+                        format!("field `{}` is set twice", field.value),
                     ));
                 }
-            };
-            constant(expr, ty)
+                given[at] = Some(literal_in(value, fields_of)?);
+            }
+            let members = given
+                .into_iter()
+                .zip(&order)
+                .map(|(value, field)| {
+                    value.ok_or_else(|| {
+                        semantic(
+                            name.span,
+                            format!("`{}` needs field `{field}`", name.value),
+                        )
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(Value::Record(members))
         }
-        _ => Err(semantic(
-            expr.span,
-            "expected a literal: a number, `true`/`false`, or vec2/vec3/vec4",
+        ExprKind::Call(name, args) => {
+            let values = args
+                .iter()
+                .map(|arg| literal_in(arg, fields_of))
+                .collect::<Result<Vec<_>, _>>()?;
+            constructed(name, &values).ok_or_else(|| {
+                fail(format!(
+                    "`{name}(..)` is not a literal of numbers; a literal is a number, `true`/`false`, a vector, a matrix, or an array or struct of them"
+                ))
+            })
+        }
+        _ => Err(fail(
+            "expected a literal: a number, `true`/`false`, a vector, a matrix, or an array or struct of them"
+                .into(),
         )),
     }
+}
+
+/// A literal negated component by component; a boolean is not.
+fn negated(value: &Value) -> Option<Value> {
+    let floats = |v: &[f32]| v.iter().map(|x| -x).collect::<Vec<f32>>();
+    let ints = |v: &[i32]| {
+        v.iter()
+            .map(|x| x.checked_neg())
+            .collect::<Option<Vec<i32>>>()
+    };
+    Some(match value {
+        Value::Float(v) => Value::Float(-v),
+        Value::Int(v) => Value::Int(v.checked_neg()?),
+        Value::Bool(_) => return None,
+        Value::Vec2(v) => Value::Vec2(floats(v).try_into().ok()?),
+        Value::Vec3(v) => Value::Vec3(floats(v).try_into().ok()?),
+        Value::Vec4(v) => Value::Vec4(floats(v).try_into().ok()?),
+        Value::IVec2(v) => Value::IVec2(ints(v)?.try_into().ok()?),
+        Value::IVec3(v) => Value::IVec3(ints(v)?.try_into().ok()?),
+        Value::Mat2(v) => Value::Mat2(floats(v).try_into().ok()?),
+        Value::Mat3(v) => Value::Mat3(floats(v).try_into().ok()?),
+        Value::Mat4(v) => Value::Mat4(floats(v).try_into().ok()?),
+        Value::Record(members) => {
+            Value::Record(members.iter().map(negated).collect::<Option<Vec<_>>>()?)
+        }
+    })
+}
+
+/// A constructor applied to literal arguments: `vec3(1, 0, 0)` with its
+/// integers widened, `ivec2(3, 4)`, `mat3(c0, c1, c2)` from columns and
+/// `mat3(1.0)` down the diagonal.
+fn constructed(name: &str, args: &[Value]) -> Option<Value> {
+    let float = |value: &Value| match value {
+        Value::Float(v) => Some(*v),
+        Value::Int(v) => Some(*v as f32),
+        _ => None,
+    };
+    let int = |value: &Value| match value {
+        Value::Int(v) => Some(*v),
+        _ => None,
+    };
+    let floats = |n: usize| -> Option<Vec<f32>> {
+        (args.len() == n).then(|| args.iter().map(float).collect())?
+    };
+    let ints = |n: usize| -> Option<Vec<i32>> {
+        (args.len() == n).then(|| args.iter().map(int).collect())?
+    };
+    let matrix = |n: usize| -> Option<Vec<f32>> {
+        if let [diagonal] = args {
+            let d = float(diagonal)?;
+            return Some(
+                (0..n * n)
+                    .map(|k| if k % (n + 1) == 0 { d } else { 0.0 })
+                    .collect(),
+            );
+        }
+        if args.len() != n {
+            return None;
+        }
+        let mut entries = Vec::with_capacity(n * n);
+        for column in args {
+            let words = column.words();
+            let is_column = column.ty()
+                == Some(match n {
+                    2 => Type::Vec2,
+                    3 => Type::Vec3,
+                    _ => Type::Vec4,
+                });
+            if !is_column {
+                return None;
+            }
+            entries.extend(words.into_iter().map(f32::from_bits));
+        }
+        Some(entries)
+    };
+    Some(match name {
+        "vec2" => Value::Vec2(floats(2)?.try_into().ok()?),
+        "vec3" => Value::Vec3(floats(3)?.try_into().ok()?),
+        "vec4" => Value::Vec4(floats(4)?.try_into().ok()?),
+        "ivec2" => Value::IVec2(ints(2)?.try_into().ok()?),
+        "ivec3" => Value::IVec3(ints(3)?.try_into().ok()?),
+        "mat2" => Value::Mat2(matrix(2)?.try_into().ok()?),
+        "mat3" => Value::Mat3(matrix(3)?.try_into().ok()?),
+        "mat4" => Value::Mat4(matrix(4)?.try_into().ok()?),
+        _ => return None,
+    })
 }
 
 /// The builtins a function cannot be named after: the Field, memory,
@@ -620,21 +768,13 @@ pub(super) fn manifest(
         .params
         .iter()
         .map(|decl| {
-            if kernel
-                .structs
-                .iter()
-                .any(|def| def.name.value == decl.ty.value)
-                || decl.ty.value.starts_with('[')
-            {
-                return Err(semantic(
-                    decl.ty.span,
-                    "parameters cross the ABI and cannot be structs or arrays; use plain values",
-                ));
-            }
-            let ty = parse_type(&decl.ty)?;
-            let default = constant(&decl.default, ty)?;
+            // Any value type a Kernel can hold crosses as its words: a
+            // matrix, an integer vector, a struct, an array.
+            let ty = resolve_type(&decl.ty, structs)?;
+            let default = constant(&decl.default, ty, &structs.borrow())?;
             Ok::<_, CompileError>(Param {
                 name: decl.name.value.clone(),
+                ty,
                 default,
             })
         })
@@ -666,63 +806,30 @@ pub(super) fn manifest(
     })
 }
 
-/// Evaluates a parameter default at compile time.
-pub(super) fn constant(expr: &Expr, ty: Type) -> Result<Value, CompileError> {
-    let value = match (&expr.kind, ty) {
-        (ExprKind::Float(value), Type::Float) => Value::Float(*value),
-        (ExprKind::Int(value), Type::Float) => Value::Float(*value as f32),
-        (ExprKind::Int(value), Type::Int) => Value::Int(*value),
-        (ExprKind::Bool(value), Type::Bool) => Value::Bool(*value),
-        (ExprKind::Neg(inner), _) => match constant(inner, ty)? {
-            Value::Float(v) => Value::Float(-v),
-            Value::Int(v) => Value::Int(
-                v.checked_neg()
-                    .ok_or_else(|| semantic(expr.span, "integer literal overflows when negated"))?,
-            ),
-            Value::Bool(_) => return Err(semantic(expr.span, "cannot negate a Bool")),
-            Value::Vec2([x, y]) => Value::Vec2([-x, -y]),
-            Value::Vec3([x, y, z]) => Value::Vec3([-x, -y, -z]),
-            Value::Vec4([x, y, z, w]) => Value::Vec4([-x, -y, -z, -w]),
-        },
-        (ExprKind::Call(name, args), Type::Vec2 | Type::Vec3 | Type::Vec4)
-            if constructor(ty) == Some(name.as_str()) =>
-        {
-            let count = ty.components().unwrap_or(0) as usize;
-            if args.len() != count {
-                return Err(semantic(
-                    expr.span,
-                    format!("`{name}` takes {count} components, found {}", args.len()),
-                ));
-            }
-            let mut parts = [0.0; 4];
-            for (slot, arg) in parts.iter_mut().zip(args) {
-                let Value::Float(component) = constant(arg, Type::Float)? else {
-                    unreachable!()
-                };
-                *slot = component;
-            }
-            match ty {
-                Type::Vec2 => Value::Vec2([parts[0], parts[1]]),
-                Type::Vec3 => Value::Vec3([parts[0], parts[1], parts[2]]),
-                _ => Value::Vec4(parts),
-            }
-        }
-        _ => {
-            return Err(semantic(
-                expr.span,
-                format!("a {ty} default must be a literal of that type"),
-            ));
-        }
+/// Evaluates a parameter default at compile time, as a value of `ty`:
+/// the literal, shaped into the type's layout, an integer standing in for
+/// a float. A struct literal names a struct of the Kernel's table.
+pub(super) fn constant(
+    expr: &Expr,
+    ty: Type,
+    structs: &[StructDef],
+) -> Result<Value, CompileError> {
+    let fields_of = |name: &str| {
+        structs
+            .iter()
+            .find(|def| def.name == name && !def.is_array())
+            .map(|def| def.fields.iter().map(|field| field.name.clone()).collect())
     };
-    Ok(value)
-}
-
-/// The builtin that constructs a vector type.
-pub(super) fn constructor(ty: Type) -> Option<&'static str> {
-    match ty {
-        Type::Vec2 => Some("vec2"),
-        Type::Vec3 => Some("vec3"),
-        Type::Vec4 => Some("vec4"),
-        _ => None,
-    }
+    let value = literal_in(expr, &fields_of)?;
+    orla_ir::value_as(&value, ty, structs).ok_or_else(|| {
+        semantic(expr.span, {
+            let name = describe(ty, structs);
+            let article = if name.starts_with(['A', 'E', 'I', 'O', 'U']) {
+                "an"
+            } else {
+                "a"
+            };
+            format!("{article} {name} default must be a literal of that type; `{value}` is not")
+        })
+    })
 }

@@ -14,10 +14,10 @@ fn placed(r: Mat3, t: Vec3) -> Mat4 {
     return mat4(vec4(r[0], 0.0), vec4(r[1], 0.0), vec4(r[2], 0.0), vec4(t, 1.0));
 }
 
-// Perspective with focal length f: x and y scaled, w = -z for the divide.
-fn perspective(f: Float) -> Mat4 {
-    return mat4(vec4(f, 0.0, 0.0, 0.0), vec4(0.0, f, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0));
-}
+// How the picture is drawn: the colour where nothing is, the colour and
+// the width of an edge. Declared here, at the top of the document, so a
+// scene that uses this file can write one: `Style { .. }`.
+struct Style { ground: Vec3; edge: Vec3; width: Float; }
 
 // A point through a model-view-projection matrix to pixels, y down.
 fn project(mvp: Mat4, p: Vec3, half: Vec2) -> Vec2 {
@@ -40,16 +40,27 @@ kernel cube.draw@1 {
     requires { field.write; time.read; }
     param spin: Float = 0.6;
     param tilt: Float = 0.5;
+    // The camera: a perspective with focal length 2.2, x and y scaled,
+    // w = -z for the divide. The scene hands it over whole.
+    param lens: Mat4 = mat4(vec4(2.2, 0.0, 0.0, 0.0), vec4(0.0, 2.2, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0));
+    // Which corners each of the twelve edges joins.
+    param edges: [IVec2; 12] = [
+        ivec2(0, 1), ivec2(1, 2), ivec2(2, 3), ivec2(3, 0),
+        ivec2(4, 5), ivec2(5, 6), ivec2(6, 7), ivec2(7, 4),
+        ivec2(0, 4), ivec2(1, 5), ivec2(2, 6), ivec2(3, 7)
+    ];
+    param style: Style = Style { ground: vec3(0.06, 0.07, 0.1), edge: vec3(1.0, 0.95, 0.8), width: 1.0 };
     output result: Image;
 
     compute {
         let res = domain();
         let half = res * 0.5;
         let c = coord() + 0.5;
-        let f = 2.2;
+        // The focal length is the lens's first entry.
+        let f = lens[0].x;
         let r = rot_y(time() * spin) * rot_x(tilt);
         let model = placed(r, vec3(0.0, 0.0, -4.5));
-        let mvp = perspective(f) * model;
+        let mvp = lens * model;
 
         // The solid: the ray leaves the eye at the origin, is taken into
         // the cube's own space by the inverse model matrix, and marches a
@@ -74,7 +85,7 @@ kernel cube.draw@1 {
         let light = normalize(vec3(0.4, 0.8, 0.6));
         let shade = max(dot(world_n, light), 0.0) * 0.75 + 0.25;
         let tint = abs(n) * 0.35 + vec3(0.55, 0.35, 0.2);
-        let base = if hit { tint * shade } else { vec3(0.06, 0.07, 0.1) };
+        let base = if hit { tint * shade } else { style.ground };
 
         // The edges: every pixel measures its distance to the twelve
         // projected segments and lights up near the closest.
@@ -82,19 +93,14 @@ kernel cube.draw@1 {
             vec3(-1.0, -1.0, -1.0), vec3(1.0, -1.0, -1.0), vec3(1.0, 1.0, -1.0), vec3(-1.0, 1.0, -1.0),
             vec3(-1.0, -1.0, 1.0), vec3(1.0, -1.0, 1.0), vec3(1.0, 1.0, 1.0), vec3(-1.0, 1.0, 1.0),
         ];
-        let edges = [
-            ivec2(0, 1), ivec2(1, 2), ivec2(2, 3), ivec2(3, 0),
-            ivec2(4, 5), ivec2(5, 6), ivec2(6, 7), ivec2(7, 4),
-            ivec2(0, 4), ivec2(1, 5), ivec2(2, 6), ivec2(3, 7),
-        ];
         let nearest = loop 12 with best = 1000.0 {
             let edge = edges[index()];
             let a = project(mvp, corners[edge.x], half);
             let b = project(mvp, corners[edge.y], half);
             min(best, segment(c, a, b))
         };
-        let line = 1.0 - smoothstep(0.6, 1.4, nearest);
-        let color = mix(base, vec3(1.0, 0.95, 0.8), line * 0.9);
+        let line = 1.0 - smoothstep(0.6 * style.width, 1.4 * style.width, nearest);
+        let color = mix(base, style.edge, line * 0.9);
         return vec4(color, 1.0);
     }
 }

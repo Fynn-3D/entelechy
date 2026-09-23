@@ -512,10 +512,21 @@ fn validate_manifest(manifest: &Manifest, structs: &[StructDef]) -> Result<(), V
         }
     }
     for param in &manifest.params {
-        if !param.default.ty().is_value() {
+        let within = match param.ty {
+            Type::Struct(index) => (index as usize) < structs.len(),
+            _ => true,
+        };
+        let default = within
+            .then(|| crate::value_as(&param.default, param.ty, structs))
+            .flatten();
+        if default.as_ref() != Some(&param.default) {
             return Err(error(
                 "manifest",
-                format!("param `{}` must be a plain value", param.name),
+                format!(
+                    "param `{}` is a {} and its default is not one",
+                    param.name,
+                    crate::type_name(param.ty, structs)
+                ),
             ));
         }
     }
@@ -630,11 +641,13 @@ impl<'a> Checker<'a> {
         self.next += 1;
         let manifest = &self.module.manifest;
         let actual = match op {
-            Op::Const(value) => value.ty(),
+            Op::Const(value) => value
+                .ty()
+                .ok_or_else(|| self.fail(format!("{position} is a constant record")))?,
             Op::Param(param) => manifest
                 .params
                 .get(*param as usize)
-                .map(|param| param.default.ty())
+                .map(|param| param.ty)
                 .ok_or_else(|| self.fail(format!("{position} reads unknown param {param}")))?,
             Op::Arg(arg) => *self
                 .function

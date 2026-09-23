@@ -732,7 +732,9 @@ output result <- blocks.result;
     session.sync();
     assert_eq!(session.graph().unwrap().nodes.len(), 3);
     assert!(session.evaluate(&Context::default()).is_ok());
-    session.set_param("level", orla_runtime::Value::Int(3));
+    session
+        .set_param("level", orla_runtime::Value::Int(3))
+        .unwrap();
     let events = session.sync();
     assert!(
         events.iter().any(|e| matches!(e, Event::SceneLoaded)),
@@ -755,7 +757,9 @@ output result <- blocks.result;
         report.executed
     );
     // A param that does not size the graph does not lower it again.
-    session.set_param("nothing", orla_runtime::Value::Int(1));
+    session
+        .set_param("nothing", orla_runtime::Value::Int(1))
+        .unwrap();
     assert!(
         !session
             .sync()
@@ -1287,13 +1291,19 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
         .1;
     assert_eq!(read(&mut session, zeros), vec![0.0; 4]);
     // Both the fill and the loop's count follow their graph params.
-    session.set_param("level", orla_runtime::Value::Float(1.0));
-    session.set_param("depth", orla_runtime::Value::Int(10));
+    session
+        .set_param("level", orla_runtime::Value::Float(1.0))
+        .unwrap();
+    session
+        .set_param("depth", orla_runtime::Value::Int(10))
+        .unwrap();
     session.sync();
     let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(read(&mut session, report.output), vec![11.0; 4]);
     // A count of zero yields what the loop carries.
-    session.set_param("depth", orla_runtime::Value::Int(0));
+    session
+        .set_param("depth", orla_runtime::Value::Int(0))
+        .unwrap();
     session.sync();
     let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(read(&mut session, report.output), vec![1.0; 4]);
@@ -1765,4 +1775,56 @@ fn narrow_fields_land_live_and_leave_as_their_bytes() {
     let back = orla_runtime::file::decode(&bytes).unwrap();
     let host = session.runtime().host();
     assert_eq!(&back, host.data(normal).unwrap());
+}
+
+#[test]
+fn a_parameter_of_any_value_type_is_set_by_its_layout() {
+    // The cube takes its camera as a Mat4 and its style as a struct; a
+    // value of their layouts is taken in their shape, whatever it was
+    // spelled as, and a value of another layout is refused by name.
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/cube/scene.osn");
+    let mut session = Session::open(&scene, None, 1 << 22);
+    assert!(session.sync().contains(&Event::SceneLoaded));
+    use orla_runtime::Value;
+    let columns = Value::Record(vec![
+        Value::Record(vec![
+            Value::Int(3),
+            Value::Int(0),
+            Value::Int(0),
+            Value::Int(0),
+        ]),
+        Value::Vec4([0.0, 3.0, 0.0, 0.0]),
+        Value::Vec4([0.0, 0.0, 1.0, -1.0]),
+        Value::Vec4([0.0; 4]),
+    ]);
+    session.set_param("lens", columns).unwrap();
+    let Some(Value::Mat4(lens)) = session.params().get("lens") else {
+        panic!("a Mat4: {:?}", session.params().get("lens"));
+    };
+    assert_eq!(lens[0], 3.0);
+    assert_eq!(lens[11], -1.0);
+    session
+        .set_param(
+            "style",
+            Value::Record(vec![
+                Value::Vec3([0.9, 0.9, 0.9]),
+                Value::Vec3([0.8, 0.1, 0.1]),
+                Value::Int(2),
+            ]),
+        )
+        .unwrap();
+    assert_eq!(
+        session.params()["style"].to_string(),
+        "[vec3(0.9, 0.9, 0.9), vec3(0.8, 0.1, 0.1), 2.0]"
+    );
+    session.evaluate(&Context::default()).unwrap();
+
+    let error = session
+        .set_param("lens", Value::Vec3([1.0, 2.0, 3.0]))
+        .unwrap_err();
+    assert!(error.contains("param `lens` is a Mat4"), "{error}");
+    let error = session
+        .set_param("style", Value::Record(vec![Value::Bool(true)]))
+        .unwrap_err();
+    assert!(error.contains("param `style` is a Style"), "{error}");
 }

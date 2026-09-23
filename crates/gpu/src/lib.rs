@@ -688,16 +688,12 @@ impl GpuBackend {
 }
 
 fn param_bytes(params: &[Value]) -> Vec<u8> {
+    // Each parameter's words from a `vec4<u32>` slot of its own, as many
+    // slots as they fill (`wgsl::param_slots`).
     let mut bytes = Vec::with_capacity(params.len().max(1) * 16);
     for value in params {
-        let words: [u32; 4] = match value {
-            Value::Float(v) => [v.to_bits(), 0, 0, 0],
-            Value::Int(v) => [*v as u32, 0, 0, 0],
-            Value::Bool(v) => [(*v as u8 as f32).to_bits(), 0, 0, 0],
-            Value::Vec2([x, y]) => [x.to_bits(), y.to_bits(), 0, 0],
-            Value::Vec3([x, y, z]) => [x.to_bits(), y.to_bits(), z.to_bits(), 0],
-            Value::Vec4([x, y, z, w]) => [x.to_bits(), y.to_bits(), z.to_bits(), w.to_bits()],
-        };
+        let mut words = value.words();
+        words.resize(words.len().div_ceil(4).max(1) * 4, 0);
         for word in words {
             bytes.extend_from_slice(&word.to_le_bytes());
         }

@@ -130,7 +130,7 @@ fn parameter_defaults_are_constants_of_the_declared_type() {
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } param f: Float = 1.0 + 1.0; output r: Image; compute { return vec4(f, 0.0, 0.0, 1.0); } }",
     );
-    assert!(message.contains("must be a literal"), "{message}");
+    assert!(message.contains("expected a literal"), "{message}");
 }
 
 #[test]
@@ -280,9 +280,9 @@ fn structs_are_checked_by_name_and_field() {
         "{message}"
     );
     let (_, message) = semantic(
-        "kernel t.k@1 { requires { field.write; } output r: Image; struct Hit { t: Float; } param h: Hit = 1.0; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+        "kernel t.k@1 { requires { field.write; } output r: Image; struct Hit { t: Float; } param h: Hit = vec2(1.0, 2.0); compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
     );
-    assert!(message.contains("cannot be structs"), "{message}");
+    assert!(message.contains("a Hit default must be"), "{message}");
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output r: Image; struct Node { next: Node; } compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
     );
@@ -756,7 +756,7 @@ fn arrays_are_typed_built_indexed_and_checked() {
     );
     assert_eq!(
         message,
-        "parameters cross the ABI and cannot be structs or arrays; use plain values"
+        "a [Int; 2] default must be a literal of that type; `0` is not"
     );
 }
 
@@ -1207,4 +1207,75 @@ fn a_port_keeps_its_scalars_as_the_type_says() {
         "{}",
         folded.1
     );
+}
+
+#[test]
+fn a_parameter_is_any_value_a_kernel_can_hold() {
+    let module = compile(
+        "kernel scene.light@1 {
+            requires { field.write; }
+            struct Light { dir: Vec3; color: Vec3; power: Float; }
+            param view: Mat4 = mat4(1.0);
+            param turn: Mat2 = mat2(vec2(0.0, 1.0), vec2(-1.0, 0.0));
+            param cell: IVec2 = -ivec2(3, 4);
+            param sun: Light = Light { color: vec3(1, 1, 1), dir: vec3(0.0, 1.0, 0.0), power: 2 };
+            param ramp: [Float; 3] = [0, 0.5, 1];
+            param same: [Int; 4] = [7; 4];
+            output result: Image;
+            compute {
+                let p = view * vec4(1.0, 2.0, 3.0, 1.0);
+                let t = turn * vec2(1.0, 0.0);
+                return vec4(p.x + t.y + float(cell.x + same[2]), sun.color.y * sun.power, ramp[1], 1.0);
+            }
+        }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let params = &module.manifest.params;
+    let names: Vec<String> = params
+        .iter()
+        .map(|p| orla_ir::type_name(p.ty, &module.structs))
+        .collect();
+    assert_eq!(
+        names,
+        ["Mat4", "Mat2", "IVec2", "Light", "[Float; 3]", "[Int; 4]"]
+    );
+    use orla_ir::Value;
+    let mut identity = [0.0f32; 16];
+    for k in 0..4 {
+        identity[k * 5] = 1.0;
+    }
+    assert_eq!(params[0].default, Value::Mat4(identity));
+    assert_eq!(params[1].default, Value::Mat2([0.0, 1.0, -1.0, 0.0]));
+    assert_eq!(params[2].default, Value::IVec2([-3, -4]));
+    // Fields in declaration order, integers widened where floats are.
+    assert_eq!(
+        params[3].default,
+        Value::Record(vec![
+            Value::Vec3([0.0, 1.0, 0.0]),
+            Value::Vec3([1.0, 1.0, 1.0]),
+            Value::Float(2.0),
+        ])
+    );
+    assert_eq!(
+        params[4].default,
+        Value::Record(vec![
+            Value::Float(0.0),
+            Value::Float(0.5),
+            Value::Float(1.0)
+        ])
+    );
+    assert_eq!(params[5].default, Value::Record(vec![Value::Int(7); 4]));
+
+    let (_, missing) = semantic(
+        "kernel k.a@1 { requires { field.write; } struct L { a: Float; b: Float; } param l: L = L { a: 1.0 }; output r: Image; compute { return vec4(l.a); } }",
+    );
+    assert!(missing.contains("`L` needs field `b`"), "{missing}");
+    let (_, short) = semantic(
+        "kernel k.a@1 { requires { field.write; } param m: Mat3 = mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)); output r: Image; compute { return vec4(m[0], 1.0); } }",
+    );
+    assert!(short.contains("is not a literal of numbers"), "{short}");
+    let (_, wrong) = semantic(
+        "kernel k.a@1 { requires { field.write; } param c: IVec2 = vec2(1.5, 2.0); output r: Image; compute { return vec4(float(c.x)); } }",
+    );
+    assert!(wrong.contains("an IVec2 default must be"), "{wrong}");
 }

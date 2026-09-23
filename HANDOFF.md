@@ -39,23 +39,22 @@ done
 
 ## Next
 
-Parameter types, the third of three changes to the ABI the user asked
-for (several outputs and narrow storage are done; f64 and i64 are
-queued after, on the user's word; the rig work after that). A parameter
-is a `Float`, `Int`, `Bool` or `Vec2`–`Vec4` today, so a camera's
-`Mat4`, a cell's `IVec2` or a light's struct has to be rebuilt inside the
-Kernel or passed through a Field. Let a parameter be any value type a
-Kernel can hold — matrices, integer vectors, structs, fixed arrays —
-carried as the Kernel's words like any other value.
+Drive a rig rather than play one. The three changes to the ABI the user
+asked for are done (several outputs, narrow storage, parameters of any
+value type); `f64` and `i64` wait on the user's word. `examples/skin`
+blends two clips by where the pointer is and `examples/crowd` poses
+sixty-four out of one rig; what a game needs next is a joint a Kernel
+writes — a head that follows a point, a foot held on the ground —
+between the sample and the palette, and root motion: a clip whose root
+travels, the travel taken out of the pose and carried by the scene's own
+state.
 
 Done when:
 
-- `param view: Mat4 = mat4(1.0);`, an `IVec2`, a struct and an array
-  parameter compile, with their defaults, and a graph sets them;
-- the protocol, the C ABI and replay's `param` line take them, with
-  a clear refusal where a value does not fit the type;
-- the interpreter, the JIT and the GPU agree on them, held by rows of
-  the feature matrix;
-- an example uses one where it was rebuilding it before, with a replay
-  on all three backends;
+- an example holds a rig whose pose is partly authored and partly
+  computed, with its `kernels/`, scene, README and replay;
+- the replay passes on the interpreter, the JIT and the GPU, pinning the
+  joint matrices at two moments;
+- anything it turns up in the engine or in the `skin` package is fixed
+  with a test of its own;
 - the verification above is clean.

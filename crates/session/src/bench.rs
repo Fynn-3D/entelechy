@@ -293,7 +293,7 @@ fn open(options: &Options, backend: &str) -> Result<Session, String> {
             .map_err(|e| e.to_string())?;
     }
     for (name, value) in &options.params {
-        session.set_param(name, *value);
+        session.set_param(name, value.clone())?;
     }
     session.set_fusion(options.fusion);
     let events = session.sync();

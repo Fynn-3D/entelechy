@@ -335,6 +335,22 @@ struct Level {
 }
 
 impl Lowering<'_, '_> {
+    /// The structs a literal of this document may name, and their fields
+    /// in order: the document's own and those it uses.
+    fn known_structs(&self) -> Vec<(String, Vec<String>)> {
+        self.structs
+            .iter()
+            .map(|decl| {
+                let fields = decl
+                    .fields
+                    .iter()
+                    .map(|(field, _)| field.value.clone())
+                    .collect();
+                (decl.name.value.clone(), fields)
+            })
+            .collect()
+    }
+
     /// A node with `times = N;` stands for `N` nodes `name/1` to `name/N`,
     /// each wired as written, except that a `carry port <- output;` feeds
     /// the port from the previous time's output from the second time on;
@@ -370,24 +386,24 @@ impl Lowering<'_, '_> {
                         ));
                     }
                     match placement.and_then(|p| p.params.get(param)) {
-                        Some(ParamValue::Literal(v)) => *v,
+                        Some(ParamValue::Literal(v)) => v.clone(),
                         Some(ParamValue::Graph(root)) => self
                             .overrides
                             .get(root)
-                            .copied()
+                            .cloned()
                             .or_else(|| {
                                 self.out
                                     .graph
                                     .params
                                     .iter()
                                     .find(|p| &p.name == root)
-                                    .map(|p| p.default)
+                                    .map(|p| p.default.clone())
                             })
                             .unwrap_or_else(|| {
                                 params
                                     .iter()
                                     .find(|p| &p.name == param)
-                                    .map(|p| p.default)
+                                    .map(|p| p.default.clone())
                                     .unwrap()
                             }),
                         None => {
@@ -396,19 +412,19 @@ impl Lowering<'_, '_> {
                             }
                             self.overrides
                                 .get(param)
-                                .copied()
+                                .cloned()
                                 .filter(|_| placement.is_none())
                                 .unwrap_or_else(|| {
                                     params
                                         .iter()
                                         .find(|p| &p.name == param)
-                                        .map(|p| p.default)
+                                        .map(|p| p.default.clone())
                                         .unwrap()
                                 })
                         }
                     }
                 }
-                _ => orla_compiler::literal(expr).map_err(|e| error(expr.span, e.to_string()))?,
+                _ => literal(expr, &self.known_structs())?,
             };
             let count = match value {
                 Value::Int(n) if n >= 1 => n as usize,
@@ -621,8 +637,7 @@ impl Lowering<'_, '_> {
         }
         let mut params = Vec::new();
         for decl in &document.params {
-            let default = orla_compiler::literal(&decl.default)
-                .map_err(|e| error(decl.default.span, e.to_string()))?;
+            let default = literal(&decl.default, &self.known_structs())?;
             if params
                 .iter()
                 .any(|p: &GraphParam| p.name == decl.name.value)
@@ -634,6 +649,7 @@ impl Lowering<'_, '_> {
             }
             params.push(GraphParam {
                 name: decl.name.value.clone(),
+                ty: resolved(&decl.ty.value, &self.aliases),
                 default,
             });
         }
@@ -678,6 +694,7 @@ impl Lowering<'_, '_> {
         // Resolves a value written in this document: a literal, or a graph
         // param of this document, which in a placed sub-graph becomes what
         // the parent passed (or the default).
+        let known = self.known_structs();
         let resolve_value = |expr: &Expr| -> Result<ParamValue, DocumentError> {
             if let ExprKind::Name(param) = &expr.kind {
                 let declared = params.iter().find(|p| &p.name == param).ok_or_else(|| {
@@ -688,21 +705,20 @@ impl Lowering<'_, '_> {
                 })?;
                 return Ok(match placement.and_then(|p| p.params.get(param)) {
                     Some(from_parent) => from_parent.clone(),
-                    None if placement.is_some() => ParamValue::Literal(declared.default),
+                    None if placement.is_some() => ParamValue::Literal(declared.default.clone()),
                     None => ParamValue::Graph(param.clone()),
                 });
             }
-            let value =
-                orla_compiler::literal(expr).map_err(|e| error(expr.span, e.to_string()))?;
+            let value = literal(expr, &known)?;
             Ok(ParamValue::Literal(value))
         };
         let default_of = |value: &ParamValue| -> Value {
             match value {
-                ParamValue::Literal(v) => *v,
+                ParamValue::Literal(v) => v.clone(),
                 ParamValue::Graph(name) => params
                     .iter()
                     .find(|p| &p.name == name)
-                    .map(|p| p.default)
+                    .map(|p| p.default.clone())
                     .unwrap_or(Value::Float(0.0)),
             }
         };
@@ -930,7 +946,9 @@ impl Lowering<'_, '_> {
                     };
                     let text = format!(
                         "kernel {kernel_id} {{\n    requires {{ field.write; }}\n    param value: {} = {};\n    output result: {};\n    compute {{ return value; }}\n}}\n",
-                        value.ty(),
+                        value
+                            .ty()
+                            .map_or_else(|| ty.value.clone(), |t| t.to_string()),
                         literal_text(&value),
                         ty.value
                     );
@@ -1106,23 +1124,25 @@ impl Lowering<'_, '_> {
     }
 }
 
-/// A literal expression carrying a value, for rewriting param defaults.
+/// A literal as a scene writes it: any value a Kernel can hold, a struct
+/// literal naming one of `known` (a struct the document declares or uses).
+fn literal(expr: &Expr, known: &[(String, Vec<String>)]) -> Result<Value, DocumentError> {
+    let fields_of = |name: &str| {
+        known
+            .iter()
+            .find(|(struct_name, _)| struct_name == name)
+            .map(|(_, fields)| fields.clone())
+    };
+    orla_compiler::literal_in(expr, &fields_of).map_err(|e| error(expr.span, e.to_string()))
+}
+
+/// A literal expression carrying a value, for rewriting param defaults:
+/// the value's own literal, read back.
 fn literal_expr(value: Value, span: Span) -> Expr {
-    let float = |v: f32| Expr {
-        kind: ExprKind::Float(v),
-        span,
-    };
-    let kind = match value {
-        Value::Float(v) => ExprKind::Float(v),
-        Value::Int(v) => ExprKind::Int(v),
-        Value::Bool(v) => ExprKind::Bool(v),
-        Value::Vec2([x, y]) => ExprKind::Call("vec2".into(), vec![float(x), float(y)]),
-        Value::Vec3([x, y, z]) => ExprKind::Call("vec3".into(), vec![float(x), float(y), float(z)]),
-        Value::Vec4([x, y, z, w]) => {
-            ExprKind::Call("vec4".into(), vec![float(x), float(y), float(z), float(w)])
-        }
-    };
-    Expr { kind, span }
+    let mut expr =
+        orla_language::parse_literal(&value.to_string()).expect("a value's literal reads back");
+    expr.span = span;
+    expr
 }
 
 /// Parses a `.osn` document that references published Kernels only.

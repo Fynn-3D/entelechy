@@ -140,8 +140,23 @@ activations and `[each 4 { if index() == k { v } else { a[index()] } }]`
 is `a` with element `k` replaced. An array has one
 to 4096 elements and is laid out as its elements in order, so a lookup
 table, a ROM or a register file is written as data (the CHIP-8's font
-and the Thumb core's program are). Parameters stay plain values: an
-array never crosses the ABI.
+and the Thumb core's program are).
+
+A parameter is any value a Kernel can hold, and crosses as its words:
+`param lens: Mat4 = mat4(1.0);`, `param cell: IVec2 = ivec2(3, 4);`,
+`param edges: [IVec2; 12] = [..];`, `param style: Style = Style {
+ground: vec3(0.1, 0.1, 0.1), width: 1.0 };`. A default is a literal:
+numbers and booleans, `vec2`..`vec4`, `ivec2` and `ivec3`, `mat2`..`mat4`
+from their columns or one value down the diagonal (`mat4(1.0)` is the
+identity), `[a, b]` and `[v; N]`, and a struct literal naming every
+field. What a value must match is its type's layout, never a spelling:
+an integer stands in for a float, and anywhere a value is given from
+outside (a scene, a replay's `param`, the protocol) an array of values
+in order is taken in the shape of the parameter it is given to, so
+`[vec3(0.9, 0.9, 0.9), vec3(0.8, 0.1, 0.1), 2.0]` is a `Style` and
+`[[1, 0], [0, 1]]` a `Mat2`. A scene may name a struct its documents
+declare at the top; a struct declared inside a Kernel is that Kernel's
+alone, and is given by position.
 
 Matrices `Mat2`, `Mat3` and `Mat4` are square, of floats, stored by
 columns. `mat3(c0, c1, c2)` builds one from its column vectors (where

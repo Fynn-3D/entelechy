@@ -434,7 +434,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
             Step::Wheel(delta) => input.wheel = *delta,
             Step::Reset => session.reset_state(),
             Step::Param { name, value } => {
-                session.set_param(name, *value);
+                session.set_param(name, value.clone())?;
                 let _ = session.sync();
             }
             Step::ExpectElement {

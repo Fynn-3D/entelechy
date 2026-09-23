@@ -221,15 +221,7 @@ impl Backend for JitBackend {
 
 /// Words of a parameter, as the CPU lays them out.
 fn param_words(value: &orla_abi::Value) -> Vec<u32> {
-    use orla_abi::Value;
-    match value {
-        Value::Float(v) => vec![v.to_bits()],
-        Value::Int(v) => vec![*v as u32],
-        Value::Bool(v) => vec![*v as u32],
-        Value::Vec2(v) => v.iter().map(|c| c.to_bits()).collect(),
-        Value::Vec3(v) => v.iter().map(|c| c.to_bits()).collect(),
-        Value::Vec4(v) => v.iter().map(|c| c.to_bits()).collect(),
-    }
+    value.words()
 }
 
 /// Shared read-only data the threads' contexts point into, and the

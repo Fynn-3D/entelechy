@@ -155,13 +155,47 @@ pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
     Some(Schema::new(scalars))
 }
 
-/// A named parameter with a default value.
+/// A named parameter of any value type, with a default value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param {
     /// Parameter name.
     pub name: String,
-    /// Default value; its type is the parameter type.
+    /// Its type: any value type, a struct or an array of the module
+    /// included.
+    pub ty: Type,
+    /// Default value, of that type.
     pub default: Value,
+}
+
+/// A value of type `ty` with every word zero: the shape a value given for
+/// a parameter of that type is taken into.
+pub fn template(ty: Type, structs: &[StructDef]) -> Value {
+    match ty {
+        Type::Float => Value::Float(0.0),
+        Type::Int => Value::Int(0),
+        Type::Bool => Value::Bool(false),
+        Type::Vec2 => Value::Vec2([0.0; 2]),
+        Type::Vec3 => Value::Vec3([0.0; 3]),
+        Type::Vec4 => Value::Vec4([0.0; 4]),
+        Type::IVec2 => Value::IVec2([0; 2]),
+        Type::IVec3 => Value::IVec3([0; 3]),
+        Type::Mat2 => Value::Mat2([0.0; 4]),
+        Type::Mat3 => Value::Mat3([0.0; 9]),
+        Type::Mat4 => Value::Mat4([0.0; 16]),
+        Type::Struct(index) => Value::Record(
+            structs[index as usize]
+                .fields
+                .iter()
+                .map(|field| template(field.ty, structs))
+                .collect(),
+        ),
+    }
+}
+
+/// `value` as a value of type `ty`, when its layout is the type's (an
+/// integer standing in for a float); `None` when it is another layout.
+pub fn value_as(value: &Value, ty: Type, structs: &[StructDef]) -> Option<Value> {
+    value.shaped_like(&template(ty, structs))
 }
 
 /// The stable contract between a Kernel and the runtime.

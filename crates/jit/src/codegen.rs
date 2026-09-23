@@ -673,17 +673,9 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// Records a value's words when they are known at compile time: a
     /// literal, or a construction or extraction of known words.
     fn note_constant(&mut self, instruction: &Instruction) {
-        use orla_abi::Value as V;
         let id = instruction.id.0;
         let words = match &instruction.op {
-            Op::Const(value) => Some(match value {
-                V::Float(v) => vec![v.to_bits()],
-                V::Int(v) => vec![*v as u32],
-                V::Bool(v) => vec![u32::from(*v)],
-                V::Vec2(v) => v.iter().map(|c| c.to_bits()).collect(),
-                V::Vec3(v) => v.iter().map(|c| c.to_bits()).collect(),
-                V::Vec4(v) => v.iter().map(|c| c.to_bits()).collect(),
-            }),
+            Op::Const(value) => Some(value.words()),
             // A float vector from Int literals widens them; the words
             // are then not the parts' words, so only all-float parts count.
             Op::Construct(parts)
@@ -1173,20 +1165,26 @@ impl<'a, 'b> Fx<'a, 'b> {
         let id = instruction.id;
         match &instruction.op {
             Op::Const(value) => {
-                use orla_abi::Value as V;
-                match value {
-                    V::Float(v) => vec![self.f32c(*v)],
-                    V::Int(v) => vec![self.i32c(*v as i64)],
-                    V::Bool(v) => vec![self.i32c(*v as i64)],
-                    V::Vec2(v) => v.iter().map(|c| self.f32c(*c)).collect(),
-                    V::Vec3(v) => v.iter().map(|c| self.f32c(*c)).collect(),
-                    V::Vec4(v) => v.iter().map(|c| self.f32c(*c)).collect(),
-                }
+                // A constant is its words, each a float or an integer as
+                // the type lays it out.
+                let kinds = word_types(self.module, ty);
+                value
+                    .words()
+                    .into_iter()
+                    .zip(kinds)
+                    .map(|(word, kind)| {
+                        if kind == types::F32 {
+                            self.f32c(f32::from_bits(word))
+                        } else {
+                            self.i32c(word as i32 as i64)
+                        }
+                    })
+                    .collect()
             }
             Op::Param(index) => {
                 let offset: usize = self.module.manifest.params[..*index as usize]
                     .iter()
-                    .map(|p| word_types(self.module, p.default.ty()).len())
+                    .map(|p| word_types(self.module, p.ty).len())
                     .sum();
                 let base = self
                     .b

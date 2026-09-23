@@ -16,3 +16,21 @@ expect 100 80 = 0.52 0.66 0.19 0.03
 expect 219 80 = 0.52 0.66 0.19 0.03
 expect 81 120 = 0.95 0.9 0.78 0.12        # an edge
 expect 238 120 = 0.95 0.9 0.78 0.12       # its mirror
+
+# A longer lens, handed over whole as the scene's Mat4 parameter: the
+# cube fills more of the picture, so what was above it is its top face,
+# and the front face is where it was.
+param lens mat4(vec4(3.0, 0.0, 0.0, 0.0), vec4(0.0, 3.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0))
+frame 0.0
+expect 160 40 = 0.52 0.66 0.19 0.03       # the top face, lit
+expect 160 120 = 0.19 0.12 0.19 0.03
+expect 2 2 = 0.06 0.07 0.1 0.01
+
+# Another style, the struct given by position (ground, edge, width): a
+# pale ground, red edges twice as wide, the edge now down column 54.
+param style [vec3(0.9, 0.9, 0.9), vec3(0.8, 0.1, 0.1), 2.0]
+frame 0.0
+expect 2 2 = 0.9 0.9 0.9 0.01
+expect 160 120 = 0.19 0.12 0.19 0.03
+expect 54 120 = 0.68 0.10 0.12 0.12       # a red edge
+expect 45 120 = 0.9 0.9 0.9 0.01          # the ground beside it
