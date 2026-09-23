@@ -580,6 +580,46 @@ impl Evaluator {
         gone
     }
 
+    /// Waits on every check the nodes' runs answered with, in the order
+    /// they ran: the first failure fails the evaluation as a failure on
+    /// the frame does, naming its node, and nothing commits. What that
+    /// node and every node after it left in the cache was computed from
+    /// a failed run, and goes, so the next evaluation runs them again.
+    fn wait_for_checks(
+        &mut self,
+        checks: Vec<(NodeId, Vec<Box<dyn orla_runtime::Check>>)>,
+        runtime: &mut Runtime,
+    ) -> Result<(), EvaluateError> {
+        if checks.iter().all(|(_, checks)| checks.is_empty()) {
+            return Ok(());
+        }
+        let mut failed: Option<(usize, NodeId, orla_runtime::ExecutionError)> = None;
+        let mut order = Vec::with_capacity(checks.len());
+        for (at, (node, node_checks)) in checks.into_iter().enumerate() {
+            order.push(node.clone());
+            for check in node_checks {
+                if let Err(error) = check.wait()
+                    && failed.is_none()
+                {
+                    failed = Some((at, node.clone(), error));
+                }
+            }
+        }
+        let Some((at, node, error)) = failed else {
+            return Ok(());
+        };
+        for stale in &order[at..] {
+            if let Some(gone) = self.cache_take(stale) {
+                for output in gone.outputs {
+                    if !self.is_committed(output) {
+                        release(runtime, output);
+                    }
+                }
+            }
+        }
+        Err(EvaluateError::Execution { node, error })
+    }
+
     /// Takes a node's entry out of the cache, keeping the count.
     fn cache_take(&mut self, id: &NodeId) -> Option<Cached> {
         let gone = self.cache.remove(id);
@@ -809,6 +849,11 @@ impl Evaluator {
         let mut fused = Vec::new();
         let mut timings = Vec::new();
         let mut placements = Vec::new();
+        // Every node run on the frame, in order, with what its runs
+        // answered besides their outputs: whether a device's run failed,
+        // known once the device is waited for, before anything commits.
+        let mut checks: Vec<(NodeId, Vec<Box<dyn orla_runtime::Check>>)> = Vec::new();
+        runtime.take_checks();
         let mut pending = Vec::new();
         for group in &groups {
             let node = &group.node;
@@ -890,6 +935,7 @@ impl Evaluator {
             // own time otherwise.
             let took = runtime.last_measured().unwrap_or_else(|| started.elapsed());
             timings.push((node.id.clone(), took));
+            checks.push((node.id.clone(), runtime.take_checks()));
             let moved = runtime.take_moved();
             placements.push(Placed {
                 node: node.id.clone(),
@@ -937,6 +983,7 @@ impl Evaluator {
             .first()
             .map(|(_, handle)| *handle)
             .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
+        self.wait_for_checks(checks, runtime)?;
         let committed = self.commit(graph, runtime)?;
         Ok(Report {
             output,

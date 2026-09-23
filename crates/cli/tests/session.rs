@@ -1905,3 +1905,56 @@ output result <- plain.result;
             .any(|event| matches!(event, Event::Routed { .. }))
     );
 }
+
+#[test]
+fn a_device_failure_fails_the_evaluation_as_the_reference_does() {
+    let Ok(device) = Session::runtime_for("gpu", 1 << 22) else {
+        return;
+    };
+    let dir = scratch("device-failure");
+    std::fs::write(
+        dir.join("scene.osn"),
+        "param k: Int = 10;
+node n: kernel { requires { field.write; } param k: Int = k; output result: Rows<Int>; domain = 4;
+    compute { return 2147483647 - k + element(); } }
+node m: kernel { requires { field.read; field.write; } input rows: Rows<Int> <- n.result; output result: Rows<Int>;
+    compute { return sample(rows) / 2; } }
+output result <- m.result;
+",
+    )
+    .unwrap();
+    // The same scene on the reference and on the device, taken through
+    // the same values: every answer the same, failure for failure.
+    let reference = Session::runtime_for("cpu", 1 << 22).unwrap();
+    let mut sessions = [
+        Session::open_with(&dir.join("scene.osn"), None, reference),
+        Session::open_with(&dir.join("scene.osn"), None, device),
+    ];
+    let mut answers: [Vec<Result<(), String>>; 2] = [Vec::new(), Vec::new()];
+    for (session, answers) in sessions.iter_mut().zip(&mut answers) {
+        session.sync();
+        let evaluate = |session: &mut Session| {
+            session
+                .evaluate(&Context::default())
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        };
+        answers.push(evaluate(session));
+        session.set_param("k", orla_runtime::Value::Int(1)).unwrap();
+        // Element 2 overflows, and again the next time: nothing computed
+        // from the failed run is kept.
+        answers.push(evaluate(session));
+        answers.push(evaluate(session));
+        session
+            .set_param("k", orla_runtime::Value::Int(10))
+            .unwrap();
+        answers.push(evaluate(session));
+    }
+    assert_eq!(answers[1], answers[0]);
+    let failure = answers[0][1].clone().unwrap_err();
+    assert!(
+        failure.contains("at element (2, 0): integer overflow"),
+        "{failure}"
+    );
+    assert!(answers[0][0].is_ok() && answers[0][3].is_ok());
+}

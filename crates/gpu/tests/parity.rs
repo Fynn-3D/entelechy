@@ -1753,3 +1753,88 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
     assert_eq!(moved.uploaded, 20);
     assert_eq!(moved.downloaded, 0);
 }
+
+#[test]
+fn a_failure_on_the_device_is_the_reference_failure() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let run = |backend: &dyn Backend, source: &str, domain: Domain, inputs: &[Vec<u32>]| {
+        let module = compile(source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+        let mut host = Host::new(1 << 20);
+        let handles = inputs
+            .iter()
+            .map(|words| {
+                host.adopt(
+                    orla_abi::FieldData::from_values(
+                        orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                        Domain::Rows(words.len() as u32),
+                        words,
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect();
+        let invocation = Invocation {
+            inputs: handles,
+            params: vec![],
+            domain,
+            context: Context::default(),
+        };
+        let prepared = backend.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, Capability::ALL.into_iter().collect());
+        backend
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    };
+    let map = |body: &str, ty: &str| {
+        format!(
+            "kernel t.f@1 {{ requires {{ field.write; }} output result: {ty}; compute {{ {body} }} }}"
+        )
+    };
+    let cases = [
+        (map("return 2147483600 + element() * 10;", "Rows<Int>"), Domain::Rows(16)),
+        (map("let c = icoord(); return 100 / (c.x - 3) + c.y;", "Grid<Int>"), Domain::Grid(8, 4)),
+        (map("let c = icoord(); return 7 % (c.y - 2) + c.x;", "Grid<Int>"), Domain::Grid(8, 4)),
+        (map("return (element() + 1) * 1000000000;", "Rows<Int>"), Domain::Rows(8)),
+        (map("return -(0x80000000 + element() * 0);", "Rows<Int>"), Domain::Rows(4)),
+        (map("return udiv(10, element() - 5);", "Rows<Int>"), Domain::Rows(8)),
+        (map("return ivec2(element(), 1) * 1073741824;", "Rows<IVec2>"), Domain::Rows(8)),
+        (map("return 3000000000000000000l * long(element());", "Rows<Long>"), Domain::Rows(8)),
+        (map("return 9223372036854775807l / (long(element()) - 6) + 1;", "Rows<Long>"), Domain::Rows(8)),
+        // What is not taken fails nowhere.
+        (map("let i = element(); return if i != 0 { 100 / i } else { 0 };", "Rows<Int>"), Domain::Rows(8)),
+        (
+            "kernel t.r@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>;
+                compute { return sample(rows); } merge(a, b) { return a + b; } }"
+                .to_owned(),
+            Domain::Rows(1),
+        ),
+    ];
+    let rows: Vec<u32> = (0..64).map(|_| 1 << 28).collect();
+    for (source, domain) in &cases {
+        let inputs = if source.contains("merge") {
+            vec![rows.clone()]
+        } else {
+            Vec::new()
+        };
+        let reference = run(&CpuBackend, source, *domain, &inputs);
+        let device = run(&gpu, source, *domain, &inputs);
+        assert_eq!(device, reference, "{source}");
+    }
+    // Every case but the guarded one fails on the reference.
+    let failing = cases
+        .iter()
+        .filter(|(source, domain)| {
+            let inputs = if source.contains("merge") {
+                vec![rows.clone()]
+            } else {
+                Vec::new()
+            };
+            run(&CpuBackend, source, *domain, &inputs).is_err()
+        })
+        .count();
+    assert_eq!(failing, cases.len() - 1);
+}

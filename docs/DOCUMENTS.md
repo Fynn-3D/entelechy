@@ -242,19 +242,22 @@ and `mul_wrap` are the arithmetic modulo 2^32 (a machine's ALU), where
 counts, rotations, unsigned compare and division, and the high half of a
 64-bit product. `orla help <name>` shows any builtin's signatures.
 
-Two caveats, both about a device. A NaN made by arithmetic on the GPU
-(`inf * 0`, or `sqrt` of a negative) may come out a number under a
-driver's fast math, where the interpreter and the JIT have NaN; a NaN
-read from a Field is seen alike on every backend. And arithmetic that
-cannot produce a value — an overflow of `+ - *`, a division or
-remainder by zero — is a failure on the interpreter and the JIT, naming
-the first element in row-major order that has it, and is **not** a
-failure on a device: `+ - *` give what `add_wrap`, `sub_wrap` and
-`mul_wrap` give, `x / 0` gives `x`, and `x % 0` gives zero. Finding an
-overflow on a device means testing every operation for it and telling
-the Host, which is a wait a node; the reference is where a Kernel is
-held to the rule, which is what running a replay on all three backends
-is for. What every backend does agree on, and what
+Integer arithmetic that cannot produce a value — an overflow of `+ - *`,
+a division or remainder by zero, the least integer negated, `udiv` or
+`urem` by zero — is a failure on every backend, naming the first element
+in row-major order that has it and the first failure within it: the
+evaluation fails there and nothing it computed commits. A device records
+the failure as it runs and the evaluation waits for the device once,
+before it commits, when a node that ran can fail; one whose arithmetic
+cannot pays nothing. Two caveats remain, both about a device. A NaN made
+by arithmetic on the GPU (`inf * 0`, or `sqrt` of a negative) may come
+out a number under a driver's fast math, which wgpu does not let a
+program turn off, where the interpreter and the JIT have NaN; a NaN read
+from a Field is seen alike on every backend. And an integer `sum` a
+scatter or a prefix folds is added on a device in an order of its own,
+so whether a partial sum passes the end of the range, which is what the
+reference fails on in element order, is not the same question there; a
+device's sum wraps. What every backend does agree on, and what
 the feature matrix holds them to: a positive divided by zero is an
 infinity, zero divided by zero is not a number, and nothing equals or
 orders against a not-a-number. An `Int` literal may be hexadecimal, `0xFF`, its 32 bits as

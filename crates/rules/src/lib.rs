@@ -12,7 +12,7 @@ pub mod backend;
 pub mod raster;
 pub mod reduce;
 
-pub use backend::{Backend, NativeOp, Prepared};
+pub use backend::{Backend, Check, NativeOp, Prepared};
 
 use std::fmt;
 

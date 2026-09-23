@@ -141,6 +141,19 @@ pub trait Prepared: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
+/// Whether a run that has been handed back failed after all: what a
+/// backend that does not wait for its device answers with. Waiting on it
+/// waits for the run.
+pub trait Check: Send {
+    /// The run's first failure, as the reference would name it, or
+    /// nothing.
+    fn wait(self: Box<Self>) -> Result<(), ExecutionError>;
+}
+
+/// What a run answers with when it is checked later: its outputs, and
+/// the check, when there is one.
+pub type Checked = (Vec<Handle>, Option<Box<dyn Check>>);
+
 /// An execution backend. `prepare` does all expensive work so that
 /// publishing is a pointer swap.
 pub trait Backend: Send + Sync {
@@ -182,6 +195,23 @@ pub trait Backend: Send + Sync {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError>;
+
+    /// Executes a prepared module as [`Backend::execute`] does, answering
+    /// with the outputs and, where the backend learns only later whether
+    /// the run failed (a device, which is not waited for), the check
+    /// that says so. A caller that waits for the check before it commits
+    /// anything holds the run to the reference's failures exactly; the
+    /// default answers at once and has none.
+    fn execute_checked(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Checked, ExecutionError> {
+        self.execute(prepared, module, invocation, scope)
+            .map(|outputs| (outputs, None))
+    }
 
     /// Executes a native operation. The default is for backends that
     /// have none.

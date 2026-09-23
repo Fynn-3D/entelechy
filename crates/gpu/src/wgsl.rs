@@ -23,6 +23,138 @@ pub const OUTPUT_BINDING: u32 = 2;
 /// `INPUT_BINDING + i`.
 pub const INPUT_BINDING: u32 = 3;
 
+/// Binding index of the word a pass that can fail records its first
+/// failure in: all ones less the element times four plus the failure's
+/// code, the greatest kept, so the first element in row-major order is
+/// the one named, as the reference names it. Zero is none, which is what
+/// a cleared buffer holds.
+pub const FAILURE_BINDING: u32 = 90;
+
+/// A failure's code in the word: an overflow.
+pub const FAILED_OVERFLOW: u32 = 1;
+/// A failure's code in the word: a division by zero.
+pub const FAILED_DIVISION: u32 = 2;
+
+/// Whether any function of the module does integer arithmetic that can
+/// fail: `+ - *` past the ends of the range, `/ %` by zero, `-` of the
+/// least integer, `udiv` and `urem` by zero. Such a module's passes
+/// record their first failure; any other pays nothing for the checking.
+pub fn can_fail(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain([&module.entry])
+        .chain(module.merge.iter())
+        .chain(module.init.iter())
+        .any(|function| function.body.iter().any(fails_within))
+}
+
+/// Whether an instruction, or any inside it, can fail.
+fn fails_within(instruction: &Instruction) -> bool {
+    let nested = |blocks: &[&Block]| {
+        blocks
+            .iter()
+            .any(|block| block.body.iter().any(fails_within))
+    };
+    match &instruction.op {
+        Op::If {
+            then, otherwise, ..
+        } => nested(&[then, otherwise]),
+        Op::Match {
+            arms, otherwise, ..
+        } => arms.iter().any(|(_, block)| nested(&[block])) || nested(&[otherwise]),
+        Op::Loop { until, body, .. } => {
+            until.as_ref().is_some_and(|block| nested(&[block])) || nested(&[body])
+        }
+        other => fails(other, instruction.ty),
+    }
+}
+
+/// Whether one operation of result type `ty` can fail.
+fn fails(op: &Op, ty: Type) -> bool {
+    match op {
+        Op::Binary(
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
+            ..,
+        )
+        | Op::Unary(UnaryOp::Neg, _) => ty.is_int_kind(),
+        Op::Intrinsic(Intrinsic::Udiv | Intrinsic::Urem, _) => true,
+        _ => false,
+    }
+}
+
+/// The integer arithmetic that records its failures: each gives what
+/// WGSL's own gives (the sum modulo 2^32, `x / 0` the dividend, `x % 0`
+/// zero) and, where the reference fails, records the element and why.
+const CHECKED_HELPERS: &str = "
+fn add_i32(a: i32, b: i32) -> i32 {
+    let r = a + b;
+    if (((a ^ r) & (b ^ r)) < 0) { fail(1u); }
+    return r;
+}
+fn sub_i32(a: i32, b: i32) -> i32 {
+    let r = a - b;
+    if (((a ^ b) & (a ^ r)) < 0) { fail(1u); }
+    return r;
+}
+fn mul_i32(a: i32, b: i32) -> i32 {
+    let r = a * b;
+    if (mulhi_i32(a, b) != (r >> 31u)) { fail(1u); }
+    return r;
+}
+fn div_i32(a: i32, b: i32) -> i32 {
+    if (b == 0) { fail(2u); return a; }
+    if (a == i32(-2147483647 - 1) && b == -1) { fail(1u); return a; }
+    return whole_i32(a) / b;
+}
+fn rem_i32(a: i32, b: i32) -> i32 {
+    if (b == 0) { fail(2u); return 0; }
+    if (a == i32(-2147483647 - 1) && b == -1) { fail(1u); return 0; }
+    return whole_i32(a) % b;
+}
+fn neg_i32(a: i32) -> i32 {
+    if (a == i32(-2147483647 - 1)) { fail(1u); }
+    return 0 - a;
+}
+fn udiv_checked(a: u32, b: u32) -> u32 {
+    if (b == 0u) { fail(2u); return a; }
+    return udiv_u32(a, b);
+}
+fn urem_checked(a: u32, b: u32) -> u32 {
+    if (b == 0u) { fail(2u); return 0u; }
+    return urem_u32(a, b);
+}
+";
+
+/// The checked arithmetic componentwise, for an integer vector of `n`.
+fn checked_vector_helpers(n: u8) -> String {
+    let letters = ["x", "y", "z"];
+    let mut out = String::new();
+    for op in ["add", "sub", "mul", "div", "rem"] {
+        let parts = letters
+            .iter()
+            .take(usize::from(n))
+            .map(|c| format!("{op}_i32(a.{c}, b.{c})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            out,
+            "fn {op}_i32x{n}(a: vec{n}<i32>, b: vec{n}<i32>) -> vec{n}<i32> {{ return vec{n}<i32>({parts}); }}"
+        );
+    }
+    let parts = letters
+        .iter()
+        .take(usize::from(n))
+        .map(|c| format!("neg_i32(a.{c})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let _ = writeln!(
+        out,
+        "fn neg_i32x{n}(a: vec{n}<i32>) -> vec{n}<i32> {{ return vec{n}<i32>({parts}); }}"
+    );
+    out
+}
+
 /// How many outputs the main pass writes: a map's every output, each to a
 /// buffer of its own; one for the other modes, whose single output is
 /// what their later passes work on.
@@ -229,8 +361,11 @@ fn udivmod_u64(n: u64, d: u64) -> vec2<u64> {
 // zero divisor gives the dividend and a zero remainder, and the most
 // negative over minus one gives itself, as WGSL does for an Int.
 fn div_i64(a: i64, b: i64) -> i64 {
-    if (b == 0li) { return a; }
-    if (b == -1li) { return -a; }
+    if (b == 0li) { fail(2u); return a; }
+    if (b == -1li) {
+        if (a == -9223372036854775807li - 1li) { fail(1u); }
+        return -a;
+    }
     var ua = bitcast<u64>(a);
     if (a < 0li) { ua = bitcast<u64>(-a); }
     var ub = bitcast<u64>(b);
@@ -240,7 +375,11 @@ fn div_i64(a: i64, b: i64) -> i64 {
     return q;
 }
 fn rem_i64(a: i64, b: i64) -> i64 {
-    if (b == 0li || b == -1li) { return 0li; }
+    if (b == 0li) { fail(2u); return 0li; }
+    if (b == -1li) {
+        if (a == -9223372036854775807li - 1li) { fail(1u); }
+        return 0li;
+    }
     var ua = bitcast<u64>(a);
     if (a < 0li) { ua = bitcast<u64>(-a); }
     var ub = bitcast<u64>(b);
@@ -261,6 +400,51 @@ fn rem_i64x2(a: vec2<i64>, b: vec2<i64>) -> vec2<i64> {
 fn rem_i64x3(a: vec3<i64>, b: vec3<i64>) -> vec3<i64> {
     return vec3<i64>(rem_i64(a.x, b.x), rem_i64(a.y, b.y), rem_i64(a.z, b.z));
 }
+// The high 64 bits of a 128-bit product, from 32-bit halves.
+fn umulhi_u64(a: u64, b: u64) -> u64 {
+    let a0 = a & 0xFFFFFFFFlu;
+    let a1 = a >> 32u;
+    let b0 = b & 0xFFFFFFFFlu;
+    let b1 = b >> 32u;
+    let p00 = a0 * b0;
+    let p01 = a0 * b1;
+    let p10 = a1 * b0;
+    let middle = (p00 >> 32u) + (p01 & 0xFFFFFFFFlu) + (p10 & 0xFFFFFFFFlu);
+    return a1 * b1 + (p01 >> 32u) + (p10 >> 32u) + (middle >> 32u);
+}
+fn mulhi_i64(a: i64, b: i64) -> i64 {
+    var hi = bitcast<i64>(umulhi_u64(bitcast<u64>(a), bitcast<u64>(b)));
+    if (a < 0li) { hi = hi - b; }
+    if (b < 0li) { hi = hi - a; }
+    return hi;
+}
+fn add_i64(a: i64, b: i64) -> i64 {
+    let r = a + b;
+    if (((a ^ r) & (b ^ r)) < 0li) { fail(1u); }
+    return r;
+}
+fn sub_i64(a: i64, b: i64) -> i64 {
+    let r = a - b;
+    if (((a ^ b) & (a ^ r)) < 0li) { fail(1u); }
+    return r;
+}
+fn mul_i64(a: i64, b: i64) -> i64 {
+    let r = a * b;
+    if (mulhi_i64(a, b) != (r >> 63u)) { fail(1u); }
+    return r;
+}
+fn neg_i64(a: i64) -> i64 {
+    if (a == -9223372036854775807li - 1li) { fail(1u); }
+    return 0li - a;
+}
+fn add_i64x2(a: vec2<i64>, b: vec2<i64>) -> vec2<i64> { return vec2<i64>(add_i64(a.x, b.x), add_i64(a.y, b.y)); }
+fn add_i64x3(a: vec3<i64>, b: vec3<i64>) -> vec3<i64> { return vec3<i64>(add_i64(a.x, b.x), add_i64(a.y, b.y), add_i64(a.z, b.z)); }
+fn sub_i64x2(a: vec2<i64>, b: vec2<i64>) -> vec2<i64> { return vec2<i64>(sub_i64(a.x, b.x), sub_i64(a.y, b.y)); }
+fn sub_i64x3(a: vec3<i64>, b: vec3<i64>) -> vec3<i64> { return vec3<i64>(sub_i64(a.x, b.x), sub_i64(a.y, b.y), sub_i64(a.z, b.z)); }
+fn mul_i64x2(a: vec2<i64>, b: vec2<i64>) -> vec2<i64> { return vec2<i64>(mul_i64(a.x, b.x), mul_i64(a.y, b.y)); }
+fn mul_i64x3(a: vec3<i64>, b: vec3<i64>) -> vec3<i64> { return vec3<i64>(mul_i64(a.x, b.x), mul_i64(a.y, b.y), mul_i64(a.z, b.z)); }
+fn neg_i64x2(a: vec2<i64>) -> vec2<i64> { return vec2<i64>(neg_i64(a.x), neg_i64(a.y)); }
+fn neg_i64x3(a: vec3<i64>) -> vec3<i64> { return vec3<i64>(neg_i64(a.x), neg_i64(a.y), neg_i64(a.z)); }
 fn sign_i64(x: i64) -> i64 {
     if (x > 0li) { return 1li; }
     if (x < 0li) { return -1li; }
@@ -409,6 +593,30 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     return vec3<i32>(to_int(v.x), to_int(v.y), to_int(v.z));
 }}"
     );
+    // Where a failure is recorded: this invocation's element, set by
+    // the pass's `main`, and the word the pass binds when it can fail.
+    out.push_str("var<private> current: u32;\nvar<private> failed_here: bool;\n");
+    if can_fail(module) {
+        // An invocation records its first failure only: the reference
+        // stops at it, so a failure after it within the same element (a
+        // sum over the dividend a division by zero gave) is not what it
+        // names.
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({FAILURE_BINDING}) var<storage, read_write> failure: atomic<u32>;
+fn fail(code: u32) {{
+    if (!failed_here) {{
+        failed_here = true;
+        atomicMax(&failure, 0xFFFFFFFFu - (current * 4u + code));
+    }}
+}}"
+        );
+        out.push_str(CHECKED_HELPERS);
+        out.push_str(&checked_vector_helpers(2));
+        out.push_str(&checked_vector_helpers(3));
+    } else {
+        out.push_str("fn fail(code: u32) {}\n");
+    }
     if module.holds(Type::Long) {
         out.push_str(LONG_HELPERS);
     }
@@ -604,6 +812,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     var carried: {} = init();
     for (var i: u32 = 0u; i < n; i = i + 1u) {{
         storageBarrier();
+        current = i;
         carried = entry(vec3<f32>(f32(i), 0.0, 0.0), i, carried);
         store_out0(i, carried);
     }}
@@ -641,6 +850,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return;
     }}
     let element = (gid.z * h + y) * w + x;
+    current = element;
     let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
     {store}
 }}"
@@ -1446,6 +1656,8 @@ pub fn emit_reduce(module: &Module) -> String {
 @compute @workgroup_size({REDUCE_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let n = level.x;
+    // A merge that fails fails at the first element, as the reference's.
+    current = 0u;
     let start = gid.x * {fold}u;
     if (start >= n) {{
         return;
@@ -2113,13 +2325,25 @@ pub(crate) fn result_type(function: &Function) -> Type {
 /// Whether a block is short plain arithmetic, which costs less computed
 /// than branched around: no loop, branch, call or write.
 fn speculable(block: &Block) -> bool {
+    // An arm that can fail is not computed where it is not taken: the
+    // failure would be recorded for work the reference never does.
     block.body.len() <= 16
         && block.body.iter().all(|instruction| {
             !matches!(
                 instruction.op,
                 Op::Loop { .. } | Op::If { .. } | Op::Match { .. } | Op::Put(..) | Op::Call(..)
-            )
+            ) && !fails(&instruction.op, instruction.ty)
         })
+}
+
+/// The suffix of the checked helper for an integer type: `i32`,
+/// `i32x2`, `i64x3` and the rest.
+fn checked_name(ty: Type) -> String {
+    let base = if ty.is_64bit() { "i64" } else { "i32" };
+    match ty.lanes() {
+        Some((n, _)) => format!("{base}x{n}"),
+        None => base.to_owned(),
+    }
 }
 
 /// Whether WGSL's `select` chooses between two values of a type: a
@@ -2184,6 +2408,10 @@ impl Emitter<'_> {
             // same bits.
             Op::Unary(UnaryOp::Neg, a) if self.type_of(*a).order().is_some() => {
                 format!("({} * -1.0)", v(a))
+            }
+            // An integer negated records the least one's overflow.
+            Op::Unary(UnaryOp::Neg, a) if ty.is_int_kind() => {
+                format!("neg_{}({})", checked_name(*ty), v(a))
             }
             Op::Unary(UnaryOp::Neg, a) => format!("(-{})", v(a)),
             Op::Unary(UnaryOp::Not, a) => format!("(!{})", v(a)),
@@ -2256,6 +2484,24 @@ impl Emitter<'_> {
                     Some(n) => format!("vec{n}<u64>"),
                     None => "u64".to_owned(),
                 };
+                // Integer arithmetic records what fails, both operands at
+                // the result's width.
+                let checked = match op {
+                    BinaryOp::Add => Some("add"),
+                    BinaryOp::Sub => Some("sub"),
+                    BinaryOp::Mul => Some("mul"),
+                    BinaryOp::Div => Some("div"),
+                    BinaryOp::Rem => Some("rem"),
+                    _ => None,
+                };
+                if let Some(name) = checked
+                    && ty.is_int_kind()
+                {
+                    let helper = checked_name(*ty);
+                    let text = format!("{name}_{helper}({}, {})", widen(a), widen(b));
+                    self.line(depth, &format!("let v{}: {ty_name} = {text};", id.0));
+                    return;
+                }
                 match op {
                     BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor if long => {
                         format!("({} {symbol} {})", widen(a), widen(b))
@@ -2655,8 +2901,16 @@ impl Emitter<'_> {
             Intrinsic::Rotl => format!("rotl_i32({list})"),
             Intrinsic::Rotr => format!("rotr_i32({list})"),
             Intrinsic::Ult => format!("(u32({}) < u32({}))", v(&args[0]), v(&args[1])),
-            Intrinsic::Udiv => format!("i32(udiv_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
-            Intrinsic::Urem => format!("i32(urem_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
+            Intrinsic::Udiv => format!(
+                "i32(udiv_checked(u32({}), u32({})))",
+                v(&args[0]),
+                v(&args[1])
+            ),
+            Intrinsic::Urem => format!(
+                "i32(urem_checked(u32({}), u32({})))",
+                v(&args[0]),
+                v(&args[1])
+            ),
             Intrinsic::Mulhi => format!("mulhi_i32({list})"),
             Intrinsic::Umulhi => format!(
                 "i32(umulhi_u32(u32({}), u32({})))",

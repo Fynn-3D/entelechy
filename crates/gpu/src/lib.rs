@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use orla_abi::{Handle, Invocation, Scope, Value};
 use orla_ir::{Mode, Validated};
-use orla_rules::{Backend, NativeOp, Prepared};
+use orla_rules::{ArithmeticError, Backend, Check, NativeOp, Prepared};
 use orla_rules::{ExecutionError, check_invocation};
 
 /// What asking the device's own clock has been worth; see
@@ -242,6 +242,9 @@ pub struct GpuBackend {
     timestamps: bool,
     /// Whether the device computes 64-bit integers.
     int64: bool,
+    /// Failure words and the buffers they are read back through, ready
+    /// to be used again: a checked node takes a pair each run.
+    failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
     /// Bytes uploaded from Host memory since the backend was made.
     uploaded: std::sync::atomic::AtomicU64,
     /// What asking the device's own clock has been worth: `UNTRIED`
@@ -270,6 +273,9 @@ struct Pipeline {
     scatter: Option<Scatter>,
     /// The fold of a prefix module, run over the map's output in place.
     prefix: Option<Prefix>,
+    /// Whether the module's arithmetic can fail, so its map and fold
+    /// passes record their first failure; see [`wgsl::can_fail`].
+    fails: bool,
 }
 
 /// A prefix fold's three passes: a block a walk, the blocks' totals
@@ -383,6 +389,7 @@ impl GpuBackend {
             timestamps,
             int64,
             uploaded: std::sync::atomic::AtomicU64::new(0),
+            failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
             clock: std::sync::atomic::AtomicU8::new(clock::UNTRIED),
         })
@@ -633,6 +640,33 @@ impl GpuBackend {
         Ok(buffer)
     }
 
+    /// A failure word and its way back to the Host, from the pile or new.
+    fn failure_pair(&self) -> (wgpu::Buffer, wgpu::Buffer) {
+        if let Some(pair) = self
+            .failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop()
+        {
+            return pair;
+        }
+        let word = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("failure"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let back = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("failure back"),
+            size: 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        (word, back)
+    }
+
     /// The pile of buffers released Fields left behind, for the parts
     /// of the backend that make outputs of their own.
     pub(crate) fn spare(&self) -> Spare {
@@ -850,6 +884,10 @@ impl Backend for GpuBackend {
         for k in 1..written {
             entries.push(storage_entry(wgsl::output_binding(module, k), false));
         }
+        let fails = wgsl::can_fail(module);
+        if fails {
+            entries.push(storage_entry(wgsl::FAILURE_BINDING, false));
+        }
         let layout = self
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -899,6 +937,9 @@ impl Backend for GpuBackend {
                 storage_entry(in_binding, true),
                 storage_entry(out_binding, false),
             ]);
+            if fails {
+                entries.push(storage_entry(wgsl::FAILURE_BINDING, false));
+            }
             let layout = self
                 .device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1041,6 +1082,7 @@ impl Backend for GpuBackend {
             reduce,
             scatter,
             prefix,
+            fails,
         }))
     }
 
@@ -1051,6 +1093,27 @@ impl Backend for GpuBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
+        // A caller that asks for the outputs alone is answered as the
+        // reference would: the run's failure, waited for, is its answer.
+        let (outputs, check) = self.execute_checked(prepared, module, invocation, scope)?;
+        if let Some(check) = check
+            && let Err(error) = check.wait()
+        {
+            for handle in outputs {
+                let _ = scope.release(handle);
+            }
+            return Err(error);
+        }
+        Ok(outputs)
+    }
+
+    fn execute_checked(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<orla_rules::backend::Checked, ExecutionError> {
         check_invocation(module, invocation)?;
         let Some(pipeline) = prepared.as_any().downcast_ref::<Pipeline>() else {
             return Err(ExecutionError::Device(
@@ -1092,6 +1155,7 @@ impl Backend for GpuBackend {
             further_outputs,
             output_words,
             element_count,
+            failure,
         } = staged;
         // What the map pass left is the output, unless the mode has more
         // to do with it: a reduction folds it, a scatter combines it
@@ -1108,6 +1172,7 @@ impl Backend for GpuBackend {
                 element_count,
                 output_words,
                 timing_set.as_ref(),
+                failure.as_ref().map(|(word, _)| word),
             ),
             (Mode::Prefix { .. }, _, _) => {
                 let prefix = pipeline
@@ -1136,6 +1201,11 @@ impl Backend for GpuBackend {
             ),
             _ => output_buffer,
         };
+        // The failure word, copied where it can be read once the device
+        // is waited for: at the caller's commit, not here.
+        if let Some((word, back)) = &failure {
+            encoder.copy_buffer_to_buffer(word, 0, back, 0, 4);
+        }
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
         let submission = self.queue.submit(Some(encoder.finish()));
@@ -1146,7 +1216,7 @@ impl Backend for GpuBackend {
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(error.to_string()));
         }
-        adopt_outputs(
+        let outputs = adopt_outputs(
             scope,
             module,
             output_domain,
@@ -1154,7 +1224,16 @@ impl Backend for GpuBackend {
             further_outputs,
             memory_outputs,
             Some(self.spare.clone()),
-        )
+        )?;
+        let check = failure.map(|pair| {
+            Box::new(FailureCheck {
+                device: self.device.clone(),
+                pair: Some(pair),
+                pile: Arc::clone(&self.failures),
+                width: domain.width(),
+            }) as Box<dyn Check>
+        });
+        Ok((outputs, check))
     }
 
     /// A map run several times over its own output, all of it in one
@@ -1182,6 +1261,9 @@ impl Backend for GpuBackend {
             || module.manifest.outputs.len() != 1
             || !module.manifest.memories.is_empty()
             || self.measured()
+            // A run that can fail is checked a time at a time, as the
+            // ordinary way does.
+            || wgsl::can_fail(module)
         {
             return None;
         }
@@ -1317,6 +1399,9 @@ struct Staged {
     further_outputs: Vec<wgpu::Buffer>,
     output_words: usize,
     element_count: usize,
+    /// The word the passes record their first failure in, when the
+    /// module can fail, and the buffer it is read back through.
+    failure: Option<(wgpu::Buffer, wgpu::Buffer)>,
 }
 
 /// The domain the entry maps over: a reduction's and a scatter's first
@@ -1431,6 +1516,7 @@ impl GpuBackend {
             further_outputs: _,
             output_words: _,
             element_count,
+            failure: _,
         } = staged;
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         // The first time reads the input it was given and writes the
@@ -1623,6 +1709,15 @@ impl GpuBackend {
                 resource: buffer.as_entire_binding(),
             });
         }
+        // The failure word and its way back, from the pile; cleared below,
+        // before the pass, which is no failure.
+        let failure = pipeline.fails.then(|| self.failure_pair());
+        if let Some((failure, _)) = &failure {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::FAILURE_BINDING,
+                resource: failure.as_entire_binding(),
+            });
+        }
         // A map's further outputs, each a buffer of its own words.
         let further_outputs: Vec<wgpu::Buffer> = module
             .manifest
@@ -1658,6 +1753,9 @@ impl GpuBackend {
             });
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
+        }
+        if let Some((failure, _)) = &failure {
+            encoder.clear_buffer(failure, 0, None);
         }
         // A narrow output whose elements share words is stored by atomic
         // or, which needs every word it lands in to start at zero.
@@ -1697,6 +1795,7 @@ impl GpuBackend {
             further_outputs,
             output_words,
             element_count,
+            failure,
         })
     }
 
@@ -1793,6 +1892,7 @@ impl GpuBackend {
         element_count: usize,
         output_words: usize,
         timing: Option<&wgpu::QuerySet>,
+        failure: Option<&wgpu::Buffer>,
     ) -> wgpu::Buffer {
         let (reduce_pipeline, reduce_layout) = reduce;
         let params_buffer_for_reduce = params_buffer;
@@ -1849,6 +1949,12 @@ impl GpuBackend {
                     resource: next.as_entire_binding(),
                 },
             ]);
+            if let Some(failure) = failure {
+                fold_entries.push(wgpu::BindGroupEntry {
+                    binding: wgsl::FAILURE_BINDING,
+                    resource: failure.as_entire_binding(),
+                });
+            }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("orla reduce"),
                 layout: reduce_layout,
@@ -2089,5 +2195,55 @@ impl GpuBackend {
             }
         }
         target
+    }
+}
+
+/// A device run's failure word, to be read once the device is waited
+/// for: the first failing element, in row-major order, and why.
+struct FailureCheck {
+    device: wgpu::Device,
+    /// The failure word and the buffer it was copied to, which go back
+    /// to the pile once read.
+    pair: Option<(wgpu::Buffer, wgpu::Buffer)>,
+    pile: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
+    /// The width of the domain the run mapped over, which turns the
+    /// element's number into the reference's column and row.
+    width: u32,
+}
+
+impl Check for FailureCheck {
+    fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
+        let (word_buffer, back) = self.pair.take().expect("a check is waited on once");
+        let slice = back.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| ExecutionError::Device(error.to_string()))?;
+        let word = {
+            let bytes = slice
+                .get_mapped_range()
+                .map_err(|error| ExecutionError::Device(error.to_string()))?;
+            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+        };
+        back.unmap();
+        self.pile
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((word_buffer, back));
+        if word == 0 {
+            return Ok(());
+        }
+        let word = u32::MAX - word;
+        let element = word / 4;
+        let error = match word % 4 {
+            wgsl::FAILED_DIVISION => ArithmeticError::DivisionByZero,
+            _ => ArithmeticError::Overflow,
+        };
+        let width = self.width.max(1);
+        Err(ExecutionError::Arithmetic {
+            x: element % width,
+            y: element / width,
+            error,
+        })
     }
 }

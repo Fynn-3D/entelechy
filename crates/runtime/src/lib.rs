@@ -34,7 +34,7 @@ pub use orla_abi::{
 };
 pub use orla_abi::{encoding, file};
 pub use orla_ir::{KernelId, Manifest, Validated};
-pub use orla_rules::{Backend, ExecutionError, NativeOp, Prepared};
+pub use orla_rules::{Backend, Check, ExecutionError, NativeOp, Prepared};
 
 mod later;
 pub use later::Run;
@@ -300,6 +300,10 @@ pub struct Runtime {
     /// Bytes carried between Host memory and a device by executions
     /// since it was last taken; see [`Runtime::take_moved`].
     moved: Moved,
+    /// What executions since they were last taken answered with besides
+    /// their outputs: whether a run on a device that is not waited for
+    /// failed after all; see [`Runtime::take_checks`].
+    checks: Vec<Box<dyn Check>>,
     ready: BTreeMap<Ticket, Result<Candidate, PrepareError>>,
     discarded: BTreeSet<Ticket>,
     runs: later::Runs,
@@ -328,6 +332,7 @@ impl Runtime {
             next_ticket: 1,
             last_measured: None,
             moved: Moved::default(),
+            checks: Vec::new(),
             ready: BTreeMap::new(),
             discarded: BTreeSet::new(),
             runs: later::Runs::new(),
@@ -645,6 +650,15 @@ impl Runtime {
         }
     }
 
+    /// The checks executions since the last call answered with, in the
+    /// order they ran: a device's run is not waited for, so whether it
+    /// failed is known when a check is waited on. A caller that commits
+    /// nothing before waiting on every check it took is held to the
+    /// reference's failures exactly.
+    pub fn take_checks(&mut self) -> Vec<Box<dyn Check>> {
+        std::mem::take(&mut self.checks)
+    }
+
     /// The bytes executions carried between Host memory and a device
     /// since the last call, and none after it: what one node's run cost
     /// in traffic, when the caller takes it around the run.
@@ -838,10 +852,14 @@ impl Runtime {
                 let before = backend.uploaded();
                 let outputs = {
                     let mut scope = Scope::new(&mut self.host, granted);
-                    backend.execute(prepared.as_ref(), module, invocation, &mut scope)
+                    backend.execute_checked(prepared.as_ref(), module, invocation, &mut scope)
                 };
                 self.moved.uploaded += backend.uploaded().saturating_sub(before);
                 self.last_measured = backend.last_device_time();
+                let outputs = outputs.map(|(outputs, check)| {
+                    self.checks.extend(check);
+                    outputs
+                });
                 held_to(version.manifest(), &mut self.host, outputs)
             }
             Body::Native(op) => {

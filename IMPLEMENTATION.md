@@ -269,6 +269,15 @@ Represented in the IR, and so on every backend:
   column-major, `IVec2/3`, structured `if`, bounded `loop` whose count is
   any `Int` read once and clamped to `MAX_LOOP_COUNT`, and `match` on an
   `Int` (the JIT uses a `br_table` over a dense range).
+- Integer failures are the reference's on every backend. The GPU emits
+  checked arithmetic for a module that can fail ([`can_fail`](crates/gpu/src/wgsl.rs)),
+  each invocation recording its first failure into one word by
+  `atomicMax`, so the least element wins; `execute_checked` hands back a
+  [`Check`](crates/rules/src/backend.rs) and the evaluator waits on every
+  check before it commits, dropping what the failed node and the nodes
+  after it cached ([device test](crates/gpu/tests/parity.rs),
+  [session test](crates/cli/tests/session.rs)). An arm that can fail is
+  never computed speculatively.
 - Types are structural in the ABI: a scalar of a kind, a vector, a
   matrix or a struct, with a constant for every name a source writes
   ([`Type`](crates/abi/src/lib.rs)).
