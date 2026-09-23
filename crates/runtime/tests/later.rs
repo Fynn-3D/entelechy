@@ -1,4 +1,4 @@
-use orla_runtime::{Context, Domain, Invocation, Runtime};
+use orla_runtime::{Context, Domain, Invocation};
 
 const COLOR: &str = "kernel test.color@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * 2.0, c.g, c.b, c.a); } }";
 
@@ -13,8 +13,8 @@ fn invocation(input: orla_runtime::Handle) -> Invocation {
 
 #[test]
 fn a_run_off_the_frame_lands_as_fields_of_the_host_and_is_redeemed_once() {
-    let mut runtime = Runtime::new(64);
-    let version = runtime.load(COLOR).unwrap();
+    let mut runtime = cpu(64);
+    let version = load(&mut runtime, COLOR);
     let input = runtime.host_mut().create_image(1, 1).unwrap();
     runtime
         .host_mut()
@@ -39,8 +39,8 @@ fn a_run_off_the_frame_lands_as_fields_of_the_host_and_is_redeemed_once() {
 
 #[test]
 fn a_discarded_run_keeps_nothing_and_a_failed_run_says_why() {
-    let mut runtime = Runtime::new(64);
-    let version = runtime.load(COLOR).unwrap();
+    let mut runtime = cpu(64);
+    let version = load(&mut runtime, COLOR);
     let input = runtime.host_mut().create_image(1, 1).unwrap();
     let live = runtime.host().live();
     let run = runtime.execute_later(&version, &invocation(input)).unwrap();
@@ -66,4 +66,19 @@ fn a_discarded_run_keeps_nothing_and_a_failed_run_says_why() {
         "{error}"
     );
     assert_eq!(runtime.host().live(), live);
+}
+
+/// A runtime on the reference backend, as a session opens one.
+fn cpu(budget_words: usize) -> orla_runtime::Runtime {
+    orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+}
+
+/// Compiles and publishes a Kernel as a session does: the runtime takes
+/// validated IR, and compiling is the caller's step.
+fn load(
+    runtime: &mut orla_runtime::Runtime,
+    source: &str,
+) -> std::sync::Arc<orla_runtime::KernelVersion> {
+    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+    runtime.load(module, source).unwrap()
 }

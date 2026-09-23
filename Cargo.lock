@@ -1816,7 +1816,6 @@ dependencies = [
  "orla-ir",
  "orla-matrix",
  "orla-rules",
- "orla-runtime",
 ]
 
 [[package]]
@@ -1875,6 +1874,7 @@ version = "0.1.0"
 dependencies = [
  "orla-abi",
  "orla-compiler",
+ "orla-cpu",
  "orla-graph",
  "orla-ir",
  "orla-language",

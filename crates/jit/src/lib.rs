@@ -21,7 +21,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use orla_abi::{Domain, Handle, Invocation, Scope};
 use orla_ir::{Combine, Mode, Validated};
 use orla_rules::{ArithmeticError, ExecutionError, check_invocation};
-use orla_runtime::{Backend, NativeOp, Prepared};
+use orla_rules::{Backend, NativeOp, Prepared};
 
 /// Elements per thread below which the run stays single-threaded.
 const PARALLEL_THRESHOLD: usize = 4096;

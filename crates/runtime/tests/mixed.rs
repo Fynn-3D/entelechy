@@ -65,11 +65,9 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
         cpu: orla_cpu::CpuBackend,
     };
     let mut runtime = Runtime::with_backends(1 << 20, Box::new(main), Some(Box::new(ordered)));
-    let map = runtime
-        .prepare("kernel t.map@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 2; } }")
+    let map = prepare(&runtime, "kernel t.map@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 2; } }")
         .unwrap();
-    let scan = runtime
-        .prepare("kernel t.scan@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { return acc + sample(rows); } }")
+    let scan = prepare(&runtime, "kernel t.scan@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { return acc + sample(rows); } }")
         .unwrap();
     let map = runtime.publish(map, Expect::Absent).unwrap();
     let scan = runtime.publish(scan, Expect::Absent).unwrap();
@@ -111,7 +109,7 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
         ]
     );
     // Without a second backend, everything is the main one's.
-    let plain = Runtime::new(1 << 16);
+    let plain = cpu(1 << 16);
     assert_eq!(plain.ordered_backend_name(), None);
     let _ = all();
 }
@@ -176,11 +174,9 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
             timed: std::sync::atomic::AtomicBool::new(false),
         }),
     );
-    let points = runtime
-        .prepare("kernel t.points@1 { requires { field.write; } output result: Rows<Vertex>; struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; } compute { let i = element(); return Vertex { clip: vec4(float(i) - 0.5, -0.5, 0.2, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) }; } }")
+    let points = prepare(&runtime, "kernel t.points@1 { requires { field.write; } output result: Rows<Vertex>; struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; } compute { let i = element(); return Vertex { clip: vec4(float(i) - 0.5, -0.5, 0.2, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) }; } }")
         .unwrap();
-    let faces = runtime
-        .prepare("kernel t.faces@1 { requires { field.write; } output result: Rows<Tri>; struct Tri { a: Int; b: Int; c: Int; } compute { return Tri { a: 0, b: 1, c: 2 }; } }")
+    let faces = prepare(&runtime, "kernel t.faces@1 { requires { field.write; } output result: Rows<Tri>; struct Tri { a: Int; b: Int; c: Int; } compute { return Tri { a: 0, b: 1, c: 2 }; } }")
         .unwrap();
     let points = runtime.publish(points, Expect::Absent).unwrap();
     let faces = runtime.publish(faces, Expect::Absent).unwrap();
@@ -233,4 +229,18 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
         None,
         "a native operation must not be given the previous node's time"
     );
+}
+
+/// A runtime on the reference backend, as a session opens one.
+fn cpu(budget_words: usize) -> orla_runtime::Runtime {
+    orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+}
+
+/// Compiles and prepares a Kernel without publishing it.
+fn prepare(
+    runtime: &orla_runtime::Runtime,
+    source: &str,
+) -> Result<orla_runtime::Candidate, orla_runtime::PrepareError> {
+    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+    runtime.prepare_module(module, source)
 }

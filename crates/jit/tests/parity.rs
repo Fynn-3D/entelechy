@@ -5,7 +5,7 @@ use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scop
 use orla_compiler::compile;
 use orla_cpu::{ArithmeticError, CpuBackend, ExecutionError};
 use orla_jit::JitBackend;
-use orla_runtime::Backend;
+use orla_rules::Backend;
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()

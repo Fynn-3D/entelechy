@@ -10,6 +10,8 @@ rust-version.workspace = true
 orla-rules = { path = "../rules" }
 orla-abi = { path = "../abi" }
 orla-ir = { path = "../ir" }
+
+[dev-dependencies]
 orla-compiler = { path = "../compiler" }
 orla-cpu = { path = "../cpu" }
 

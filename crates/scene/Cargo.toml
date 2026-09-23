@@ -15,6 +15,7 @@ orla-graph = { path = "../graph" }
 
 [dev-dependencies]
 orla-runtime = { path = "../runtime" }
+orla-cpu = { path = "../cpu" }
 
 [lints]
 workspace = true

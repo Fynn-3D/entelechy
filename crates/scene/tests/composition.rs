@@ -31,9 +31,9 @@ fn near(actual: [f32; 4], expected: [f32; 4]) {
 }
 
 fn runtime() -> Runtime {
-    let mut runtime = Runtime::new(1024);
+    let mut runtime = cpu(1024);
     for source in [GRADIENT, GRAYSCALE, INVERT] {
-        runtime.load(source).unwrap();
+        load(&mut runtime, source);
     }
     runtime
 }
@@ -89,14 +89,13 @@ fn republishing_a_kernel_invalidates_only_its_dependents() {
         )
         .unwrap();
 
-    runtime
-        .load(
-            &GRAYSCALE
-                .replace("0.2126", "1.0")
-                .replace("0.7152", "0.0")
-                .replace("0.0722", "0.0"),
-        )
-        .unwrap();
+    load(
+        &mut runtime,
+        &GRAYSCALE
+            .replace("0.2126", "1.0")
+            .replace("0.7152", "0.0")
+            .replace("0.0722", "0.0"),
+    );
     let report = evaluator
         .evaluate(
             &graph,
@@ -231,9 +230,10 @@ fn failures_are_attributed_and_last_good_results_survive() {
         )
         .unwrap();
 
-    runtime
-        .load("kernel image.invert@1 { requires { field.read; field.write; } input source: Image; param d: Int = 0; output result: Image; compute { let q = 1 / d; return vec4(float(q), 0.0, 0.0, 1.0); } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel image.invert@1 { requires { field.read; field.write; } input source: Image; param d: Int = 0; output result: Image; compute { let q = 1 / d; return vec4(float(q), 0.0, 0.0, 1.0); } }",
+    );
     let error = evaluator
         .evaluate(
             &graph,
@@ -360,9 +360,10 @@ fn structural_errors_are_reported_before_execution() {
 #[test]
 fn only_clock_reading_nodes_re_execute_when_time_advances() {
     let mut runtime = runtime();
-    runtime
-        .load("kernel image.pulse@1 { requires { field.read; field.write; time.read; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * fract(time()), c.g, c.b, c.a); } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel image.pulse@1 { requires { field.read; field.write; time.read; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * fract(time()), c.g, c.b, c.a); } }",
+    );
     let graph = orla_scene::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
@@ -417,9 +418,9 @@ fn red(runtime: &Runtime, handle: orla_runtime::Handle) -> f32 {
 
 #[test]
 fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
-    let mut runtime = Runtime::new(1024);
-    runtime.load(ZERO).unwrap();
-    runtime.load(INCREMENT).unwrap();
+    let mut runtime = cpu(1024);
+    load(&mut runtime, ZERO);
+    load(&mut runtime, INCREMENT);
     let graph = orla_scene::parse(COUNTER).unwrap();
     assert_eq!(orla_scene::parse(&graph.to_string()).unwrap(), graph);
     let mut evaluator = Evaluator::new();
@@ -447,9 +448,10 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
     }
 
     // A replaced Kernel keeps the state it inherits.
-    runtime
-        .load(&INCREMENT.replace("param by: Float = 1.0", "param by: Float = 10.0"))
-        .unwrap();
+    load(
+        &mut runtime,
+        &INCREMENT.replace("param by: Float = 1.0", "param by: Float = 10.0"),
+    );
     let report = evaluator
         .evaluate(
             &graph,
@@ -481,12 +483,13 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
 
 #[test]
 fn a_failed_evaluation_commits_nothing() {
-    let mut runtime = Runtime::new(1024);
-    runtime.load(ZERO).unwrap();
-    runtime.load(INCREMENT).unwrap();
-    runtime
-        .load("kernel test.gate@1 { requires { field.read; field.write; } input source: Image; param d: Int = 1; output result: Image; compute { let q = 1 / d; return sample(source) * float(q); } }")
-        .unwrap();
+    let mut runtime = cpu(1024);
+    load(&mut runtime, ZERO);
+    load(&mut runtime, INCREMENT);
+    load(
+        &mut runtime,
+        "kernel test.gate@1 { requires { field.read; field.write; } input source: Image; param d: Int = 1; output result: Image; compute { let q = 1 / d; return sample(source) * float(q); } }",
+    );
     let mut graph = orla_scene::parse(&format!(
         "{COUNTER}node gate: test.gate@1 {{ source <- count.result; d = 1; }}\n"
     ))
@@ -568,9 +571,10 @@ fn feedback_edges_are_not_dependencies_and_must_name_nodes() {
 #[test]
 fn input_reading_nodes_re_execute_when_input_changes() {
     let mut runtime = runtime();
-    runtime
-        .load("kernel image.paint@1 { requires { field.read; field.write; input.read; } input source: Image; output result: Image; compute { let c = sample(source); let near = length(coord() - pointer()) < 1.5; let hit = if near && pointer_down() { 1.0 } else { 0.0 }; return vec4(hit, float(key(65)), c.b, c.a); } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel image.paint@1 { requires { field.read; field.write; input.read; } input source: Image; output result: Image; compute { let c = sample(source); let near = length(coord() - pointer()) < 1.5; let hit = if near && pointer_down() { 1.0 } else { 0.0 }; return vec4(hit, float(key(65)), c.b, c.a); } }",
+    );
     let graph = orla_scene::parse("node source: image.gradient@1 { domain = vec2(4, 4); }\nnode paint: image.paint@1 { source <- source.result; }\noutput r <- paint.result;").unwrap();
     let mut evaluator = Evaluator::new();
     let mut context = Context::default();
@@ -695,9 +699,10 @@ fn pixels(runtime: &Runtime, handle: orla_runtime::Handle) -> Vec<[f32; 4]> {
 #[test]
 fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
     let mut runtime = runtime();
-    runtime
-        .load("kernel image.pixelate@1 { requires { field.read; field.write; } input source: Image; param size: Int = 2; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel image.pixelate@1 { requires { field.read; field.write; } input source: Image; param size: Int = 2; output result: Image; compute { let block = float(max(size, 1)); return fetch(source, floor(coord() / block) * block); } }",
+    );
     // gradient -> gray -> inv -> blocks: gray and inv are pointwise; blocks
     // fetches, so it stays separate and absorbs nothing.
     let graph = orla_scene::parse(
@@ -751,7 +756,7 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
     );
 
     // Republishing an absorbed producer rebuilds the group.
-    runtime.load(&GRAYSCALE.replace("0.2126", "1.0")).unwrap();
+    load(&mut runtime, &GRAYSCALE.replace("0.2126", "1.0"));
     let report = fused
         .evaluate(
             &graph,
@@ -808,8 +813,8 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
 #[test]
 fn outputs_state_sources_and_shared_producers_stay_materialized() {
     let mut runtime = runtime();
-    runtime.load(ZERO).unwrap();
-    runtime.load(INCREMENT).unwrap();
+    load(&mut runtime, ZERO);
+    load(&mut runtime, INCREMENT);
     let graph = orla_scene::parse(
         "node seed: test.zero@1 { domain = vec2(2, 2); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
@@ -925,12 +930,14 @@ fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
 #[test]
 fn reductions_produce_one_element_and_stay_out_of_fusion() {
     let mut runtime = runtime();
-    runtime
-        .load("kernel test.total@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec4>; compute { return sample(source); } merge(a, b) { return a + b; } }")
-        .unwrap();
-    runtime
-        .load("kernel test.show@1 { requires { field.read; field.write; } input total: Rows<Vec4>; output result: Image; compute { let t = at(total, 0); return t / 24.0; } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel test.total@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Vec4>; compute { return sample(source); } merge(a, b) { return a + b; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.show@1 { requires { field.read; field.write; } input total: Rows<Vec4>; output result: Image; compute { let t = at(total, 0); return t / 24.0; } }",
+    );
     let graph = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node gray: image.grayscale@1 { source <- source.result; amount = 1.0; }
@@ -997,12 +1004,14 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
 #[test]
 fn scans_follow_their_input_and_stay_out_of_fusion() {
     let mut runtime = runtime();
-    runtime
-        .load("kernel test.ramp@1 { requires { field.write; } output result: Rows<Int>; compute { return element() + 1; } }")
-        .unwrap();
-    runtime
-        .load("kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel test.ramp@1 { requires { field.write; } output result: Rows<Int>; compute { return element() + 1; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }",
+    );
     let graph = orla_scene::parse(
         "node ramp: test.ramp@1 { domain = 5; }
          node prefix: test.prefix@1 { rows <- ramp.result; }
@@ -1058,9 +1067,9 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
 
 #[test]
 fn a_write_replaces_committed_state_and_is_checked() {
-    let mut runtime = Runtime::new(1024);
-    runtime.load(ZERO).unwrap();
-    runtime.load(INCREMENT).unwrap();
+    let mut runtime = cpu(1024);
+    load(&mut runtime, ZERO);
+    load(&mut runtime, INCREMENT);
     let graph = orla_scene::parse(COUNTER).unwrap();
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
@@ -1116,9 +1125,9 @@ fn a_write_replaces_committed_state_and_is_checked() {
 
 #[test]
 fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
-    let mut runtime = Runtime::new(1024);
-    runtime.load(ZERO).unwrap();
-    runtime.load(INCREMENT).unwrap();
+    let mut runtime = cpu(1024);
+    load(&mut runtime, ZERO);
+    load(&mut runtime, INCREMENT);
     let graph = orla_scene::parse(
         "node seed: test.zero@1 { domain = vec2(2, 2); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
@@ -1251,15 +1260,18 @@ fn a_domain_may_take_the_window_and_follows_it() {
 #[test]
 fn a_memory_fed_back_persists_across_evaluations() {
     let mut runtime = runtime();
-    runtime
-        .load("kernel test.ticks@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }")
-        .unwrap();
-    runtime
-        .load("kernel test.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }")
-        .unwrap();
-    runtime
-        .load("kernel test.count@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let v = at(ram, 0) + 1; put(ram, 0, v); return v; } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel test.ticks@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.count@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let v = at(ram, 0) + 1; put(ram, 0, v); return v; } }",
+    );
     let graph = orla_scene::parse(
         "node ticks: test.ticks@1 { domain = 3; }
 node zero: test.zero@1 { domain = 2; }
@@ -1333,14 +1345,14 @@ fn tally(runtime: &Runtime, handle: orla_runtime::Handle) -> Vec<i32> {
 
 #[test]
 fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
-    let mut runtime = Runtime::new(1024);
+    let mut runtime = cpu(1024);
     for source in [
         TALLY_ZERO,
         TALLY_STEP_V1,
         TALLY_UPGRADE,
         TALLY_UPGRADE_WRONG,
     ] {
-        runtime.load(source).unwrap();
+        load(&mut runtime, source);
     }
     let graph = orla_scene::parse(TALLY_SCENE).unwrap();
     assert_eq!(orla_scene::parse(&graph.to_string()).unwrap(), graph);
@@ -1358,7 +1370,7 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
 
     // The Kernel grows a field: the committed state is carried over by
     // the migration, and the count goes on.
-    runtime.load(TALLY_STEP_V2).unwrap();
+    load(&mut runtime, TALLY_STEP_V2);
     let report = evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
     assert_eq!(tally(&runtime, report.output), vec![5, 10]);
     assert_eq!(
@@ -1379,7 +1391,7 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     // again once it is back.
     let wrong =
         orla_scene::parse(&TALLY_SCENE.replace("tally.upgrade@1", "tally.wrong@1")).unwrap();
-    runtime.load(TALLY_STEP_V1).unwrap();
+    load(&mut runtime, TALLY_STEP_V1);
     let error = evaluate(&mut evaluator, &mut runtime, &wrong).unwrap_err();
     assert!(
         matches!(&error, EvaluateError::Migration { kernel, .. } if kernel.to_string() == "tally.wrong@1"),
@@ -1389,7 +1401,7 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
         error.to_string().contains("the state stays as it was"),
         "{error}"
     );
-    runtime.load(TALLY_STEP_V2).unwrap();
+    load(&mut runtime, TALLY_STEP_V2);
     let report = evaluate(&mut evaluator, &mut runtime, &wrong).unwrap();
     assert_eq!(
         tally(&runtime, report.output),
@@ -1400,7 +1412,7 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     // Without a migration named, a changed layout restarts the state
     // from its initial source, and says so.
     let plain = orla_scene::parse(&TALLY_SCENE.replace(" migrate tally.upgrade@1", "")).unwrap();
-    runtime.load(TALLY_STEP_V1).unwrap();
+    load(&mut runtime, TALLY_STEP_V1);
     let report = evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
     assert_eq!(tally(&runtime, report.output), vec![1]);
     assert_eq!(report.reset.len(), 1);
@@ -1433,7 +1445,7 @@ fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
     let graph = orla_scene::parse(OFF_FRAME).unwrap();
     assert!(graph.to_string().contains("async = true;"));
     let mut runtime = runtime();
-    runtime.load(COUNT).unwrap();
+    load(&mut runtime, COUNT);
     let mut evaluator = Evaluator::new();
     let none = BTreeMap::new();
     let defaults = BTreeMap::new();
@@ -1513,9 +1525,9 @@ fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
         "node zeros: test.zeros@1 { domain = 4; }\nnode spread: test.spread@1 { target <- zeros.result; domain = 10; }\nnode plain: test.spread@1 { target <- zeros.result; }\noutput result <- spread.result;\noutput plain <- plain.result;\n",
     )
     .unwrap();
-    let mut runtime = Runtime::new(1024);
-    runtime.load(ZEROS).unwrap();
-    runtime.load(SPREAD).unwrap();
+    let mut runtime = cpu(1024);
+    load(&mut runtime, ZEROS);
+    load(&mut runtime, SPREAD);
     let mut evaluator = Evaluator::new();
     let none = BTreeMap::new();
     let defaults = BTreeMap::new();
@@ -1565,12 +1577,14 @@ fn a_filled_field_says_what_it_cannot_hold_and_what_it_needs() {
 #[test]
 fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
     let mut runtime = runtime();
-    runtime
-        .load("kernel test.step@1 { requires { field.read; field.write; } input previous: Grid<Float>; param by: Float = 1.0; output result: Grid<Float>; compute { return at(previous, icoord()) + by; } }")
-        .unwrap();
-    runtime
-        .load("kernel test.seed@1 { requires { field.write; } output result: Grid<Float>; compute { return coord().x; } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel test.step@1 { requires { field.read; field.write; } input previous: Grid<Float>; param by: Float = 1.0; output result: Grid<Float>; compute { return at(previous, icoord()) + by; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.seed@1 { requires { field.write; } output result: Grid<Float>; compute { return coord().x; } }",
+    );
     let source = "node seed: test.seed@1 { domain = vec2(4, 3); }
          node step: test.step@1 { times = 5; carry previous <- result; previous <- seed.result; by = 2.0; }
          output result <- step.result;";
@@ -1681,9 +1695,9 @@ fn a_kernel_decides_how_many_elements_the_next_node_runs() {
     // number `live` put in a Field this frame, so the graph places less
     // work when a Kernel says there is less to do.
     let graph = orla_scene::parse(DECIDED).unwrap();
-    let mut runtime = Runtime::new(1 << 16);
+    let mut runtime = cpu(1 << 16);
     for source in [TALLY, RUN] {
-        runtime.load(source).unwrap();
+        load(&mut runtime, source);
     }
     let mut evaluator = Evaluator::new();
     let count = |runtime: &Runtime, handle| runtime.host().domain(handle).unwrap().count();
@@ -1741,13 +1755,13 @@ output result <- twice.result;
 ",
     )
     .unwrap();
-    let mut runtime = Runtime::new(1 << 16);
+    let mut runtime = cpu(1 << 16);
     for source in [
         TALLY,
         RUN,
         "kernel test.twice@1 { requires { field.read; field.write; } input source: Rows<Float>; output result: Rows<Float>; compute { return sample(source) * 2.0; } }",
     ] {
-        runtime.load(source).unwrap();
+        load(&mut runtime, source);
     }
     let mut evaluator = Evaluator::new();
     let report = evaluator
@@ -1768,4 +1782,19 @@ output result <- twice.result;
         f32::from_bits(runtime.host().element(report.output, 5).unwrap()[0]),
         (5.0 + 200.0) * 2.0
     );
+}
+
+/// A runtime on the reference backend, as a session opens one.
+fn cpu(budget_words: usize) -> orla_runtime::Runtime {
+    orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+}
+
+/// Compiles and publishes a Kernel as a session does: the runtime takes
+/// validated IR, and compiling is the caller's step.
+fn load(
+    runtime: &mut orla_runtime::Runtime,
+    source: &str,
+) -> std::sync::Arc<orla_runtime::KernelVersion> {
+    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+    runtime.load(module, source).unwrap()
 }

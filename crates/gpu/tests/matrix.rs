@@ -5,7 +5,7 @@ use orla_abi::{Capabilities, Capability, Host, Invocation, Scope};
 use orla_compiler::compile;
 use orla_cpu::CpuBackend;
 use orla_gpu::GpuBackend;
-use orla_runtime::Backend;
+use orla_rules::Backend;
 
 fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()

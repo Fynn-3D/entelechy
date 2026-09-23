@@ -755,7 +755,11 @@ impl Session {
     /// Creates a CPU-backed session; call [`Session::sync`] to load files.
     /// `library` is an extra directory or file of Kernels to use.
     pub fn open(scene: &Path, library: Option<&Path>, budget_words: usize) -> Self {
-        Self::open_with(scene, library, Runtime::new(budget_words))
+        Self::open_with(
+            scene,
+            library,
+            Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend)),
+        )
     }
 
     /// Creates a session over a runtime built by the caller, for choosing
@@ -795,7 +799,10 @@ impl Session {
     /// is available.
     pub fn runtime_for(backend: &str, budget_words: usize) -> Result<Runtime, String> {
         match backend {
-            "cpu" => Ok(Runtime::new(budget_words)),
+            "cpu" => Ok(Runtime::with_backend(
+                budget_words,
+                Box::new(orla_cpu::CpuBackend),
+            )),
             "gpu" => {
                 // A GPU walks a scan on one thread; the JIT takes the
                 // scans, the GPU everything else.
@@ -1789,8 +1796,12 @@ impl Session {
                 continue;
             }
             let prepared = orla_compiler::compile_kernel(&kernel, Some(&id))
-                .map_err(orla_runtime::PrepareError::Compile)
-                .and_then(|module| self.runtime.prepare_module(module, &text));
+                .map_err(|error| error.to_string())
+                .and_then(|module| {
+                    self.runtime
+                        .prepare_module(module, &text)
+                        .map_err(|error| error.to_string())
+                });
             match prepared {
                 Ok(candidate) => {
                     let expect = match self.runtime.kernel(&id) {

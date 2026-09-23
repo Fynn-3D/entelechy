@@ -4,11 +4,16 @@
 //! invocation must look like, how a scan and a scatter are sized, where
 //! a scattered value lands and how it meets what is there, the tree a
 //! reduction folds in, the order floats take as keys, the matrix
-//! formulas, and the rasterizer's contract. Nothing here executes a Kernel; the backends do, by these.
+//! formulas, the rasterizer's contract, and the [`Backend`] trait each
+//! backend implements. Nothing here executes a Kernel; the backends do,
+//! by these.
 
+pub mod backend;
 pub mod matrix;
 pub mod raster;
 pub mod reduce;
+
+pub use backend::{Backend, NativeOp, Prepared};
 
 use std::fmt;
 

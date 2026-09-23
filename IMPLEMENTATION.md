@@ -26,11 +26,11 @@ contract is enforced, and the constraints that are not visible from the code.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs), [optimizer](crates/ir/src/optimize.rs) | typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel language | [language](crates/language/src/lib.rs), [parser](crates/language/src/parser.rs), [lexer](crates/language/src/lexer.rs) | syntax, precedence, positioned errors, near misses |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/), [help](crates/compiler/src/help.rs) | [compile tests](crates/compiler/tests/compile.rs) |
-| Shared rules | [rules](crates/rules/src/lib.rs), [reduce tree](crates/rules/src/reduce.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | every backend's parity test runs by them |
+| Shared rules | [rules](crates/rules/src/lib.rs), [the `Backend` contract](crates/rules/src/backend.rs), [reduce tree](crates/rules/src/reduce.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | every backend's parity test runs by them |
 | Reference backend | [cpu](crates/cpu/src/lib.rs), [word code](crates/cpu/src/eval/) | [execution tests](crates/cpu/tests/execute.rs), [optimizer tests](crates/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/jit/src/lib.rs), [Cranelift emission](crates/jit/src/codegen.rs) | [parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs), every replay on `jit` |
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs), [rasterizer](crates/gpu/src/raster.rs), [presenter](crates/gpu/src/present.rs) | [parity](crates/gpu/tests/parity.rs), [matrix](crates/gpu/tests/matrix.rs); both skip without an adapter |
-| Kernel Runtime | [runtime](crates/runtime/src/lib.rs), [off-frame runs](crates/runtime/src/later.rs) | [hot swap](crates/runtime/tests/hot_swap.rs), [async](crates/runtime/tests/later.rs), [mixed clocks](crates/runtime/tests/mixed.rs) |
+| Kernel Runtime | [runtime](crates/runtime/src/lib.rs), [off-frame runs](crates/runtime/src/later.rs); takes validated IR and the backend it is given | [hot swap](crates/runtime/tests/hot_swap.rs), [async](crates/runtime/tests/later.rs), [mixed clocks](crates/runtime/tests/mixed.rs) |
 | Scene documents | [scene](crates/scene/src/lib.rs), [domain expressions](crates/scene/src/domain.rs) | [lowering tests](crates/scene/src/lib.rs) |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [evaluator](crates/graph/src/evaluate.rs), [domain](crates/graph/src/domain.rs) | [composition tests](crates/scene/tests/composition.rs), written as documents |
 | Session | [session](crates/session/src/lib.rs), [bench](crates/session/src/bench.rs), [file formats](crates/session/src/) | [session tests](crates/cli/tests/session.rs) |
@@ -114,10 +114,10 @@ their outputs when read ([test](crates/runtime/tests/mixed.rs)).
   own output, same generation, params, bindings and domain, nothing else
   reading between, is one group ([planner](crates/graph/src/evaluate.rs));
   the GPU records the passes into one encoder with two buffers taking
-  turns ([`Backend::execute_repeated`](crates/runtime/src/lib.rs)).
+  turns ([`Backend::execute_repeated`](crates/rules/src/backend.rs)).
 - Native operations are device access published as versions at
   generation zero; a Kernel may not be published over one and none is
-  fused ([`NativeOp`](crates/runtime/src/lib.rs)). The rasterizer's
+  fused ([`NativeOp`](crates/rules/src/backend.rs)). The rasterizer's
   contract ([rules](crates/rules/src/raster.rs)) has no clipping: a
   triangle with any `w <= 0` is skipped whole, so the device stage sends
   such a triangle to a point rather than clip it
@@ -261,8 +261,15 @@ Represented in the IR, and so on every backend:
 
 ### Runtime and backends
 
+- The three backends are peers: each implements the
+  [`Backend`](crates/rules/src/backend.rs) contract in its own crate, and
+  the Kernel Runtime depends on none of them and on no frontend. It takes
+  validated IR; compiling is the caller's step before `prepare_module`,
+  so a Kernel that does not compile never reaches the registry
+  ([hot swap](crates/runtime/tests/hot_swap.rs)). Which backend runs is the
+  session's choice ([session](crates/session/src/lib.rs)).
 - `prepare` does the expensive work, so `publish` is a pointer swap
-  ([`Backend`](crates/runtime/src/lib.rs)). `prepare_later` moves it to one
+  ([`Backend`](crates/rules/src/backend.rs)). `prepare_later` moves it to one
   worker; `run`, `replay` and `check` prepare inline for determinism, and
   `serve` and the Player enable the worker after the first load. The old
   version runs until the ticket lands, and a group runs unfused until its

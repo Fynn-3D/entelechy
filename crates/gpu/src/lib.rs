@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use orla_abi::{Handle, Invocation, Scope, Value};
 use orla_ir::{Mode, Validated};
+use orla_rules::{Backend, NativeOp, Prepared};
 use orla_rules::{ExecutionError, check_invocation};
-use orla_runtime::{Backend, NativeOp, Prepared};
 
 /// What asking the device's own clock has been worth; see
 /// [`GpuBackend::device_clock_answered`].

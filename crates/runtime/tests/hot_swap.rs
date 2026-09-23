@@ -29,8 +29,8 @@ fn run(
 
 #[test]
 fn a_failed_candidate_leaves_the_running_kernel_alive() {
-    let mut runtime = Runtime::new(64);
-    let first = runtime.load(&source("c.r")).unwrap();
+    let mut runtime = cpu(64);
+    let first = load(&mut runtime, &source("c.r"));
     assert_eq!(first.generation(), Generation(1));
     let input = runtime.host_mut().create_image(1, 1).unwrap();
     runtime
@@ -39,7 +39,7 @@ fn a_failed_candidate_leaves_the_running_kernel_alive() {
         .unwrap();
     assert_eq!(run(&mut runtime, &first, input), [0.25, 0.5, 0.75, 1.0]);
 
-    let error = runtime.prepare(&source("nonsense")).unwrap_err();
+    let error = orla_compiler::compile(&source("nonsense")).unwrap_err();
     assert!(
         error.to_string().contains("`nonsense` is not defined"),
         "{error}"
@@ -51,15 +51,15 @@ fn a_failed_candidate_leaves_the_running_kernel_alive() {
 
 #[test]
 fn publish_is_an_atomic_swap_that_keeps_pinned_versions_valid() {
-    let mut runtime = Runtime::new(64);
-    let first = runtime.load(&source("c.r")).unwrap();
+    let mut runtime = cpu(64);
+    let first = load(&mut runtime, &source("c.r"));
     let input = runtime.host_mut().create_image(1, 1).unwrap();
     runtime
         .host_mut()
         .write_pixel(input, 0, 0, [0.25, 0.5, 0.75, 1.0])
         .unwrap();
 
-    let candidate = runtime.prepare(&source("1.0")).unwrap();
+    let candidate = prepare(&runtime, &source("1.0")).unwrap();
     assert_eq!(candidate.id(), &id());
     let second = runtime
         .publish(candidate, Expect::Generation(first.generation()))
@@ -75,24 +75,24 @@ fn publish_is_an_atomic_swap_that_keeps_pinned_versions_valid() {
 
 #[test]
 fn stale_and_foreign_candidates_are_rejected() {
-    let mut runtime = Runtime::new(64);
-    let first = runtime.load(&source("c.r")).unwrap();
+    let mut runtime = cpu(64);
+    let first = load(&mut runtime, &source("c.r"));
 
-    let stale = runtime.prepare(&source("0.0")).unwrap();
+    let stale = prepare(&runtime, &source("0.0")).unwrap();
     let error = runtime
         .publish(stale, Expect::Generation(Generation(7)))
         .unwrap_err();
     assert_eq!(error.actual, Some(first.generation()));
     assert!(error.to_string().contains("registry holds g1"), "{error}");
 
-    let duplicate = runtime.prepare(&source("0.0")).unwrap();
+    let duplicate = prepare(&runtime, &source("0.0")).unwrap();
     let error = runtime.publish(duplicate, Expect::Absent).unwrap_err();
     assert_eq!(error.expected, Expect::Absent);
     assert_eq!(runtime.kernel(&id()).unwrap().generation(), Generation(1));
 
     runtime.retire(&id()).unwrap();
     assert!(runtime.kernel(&id()).is_none());
-    let fresh = runtime.prepare(&source("0.0")).unwrap();
+    let fresh = prepare(&runtime, &source("0.0")).unwrap();
     assert_eq!(
         runtime.publish(fresh, Expect::Absent).unwrap().generation(),
         Generation(2)
@@ -101,10 +101,11 @@ fn stale_and_foreign_candidates_are_rejected() {
 
 #[test]
 fn execution_is_scoped_to_the_manifest_capabilities() {
-    let mut runtime = Runtime::new(64);
-    let version = runtime
-        .load("kernel test.gen@1 { requires { field.write; } output result: Image; compute { return vec4(coord().x, 0.0, 0.0, 1.0); } }")
-        .unwrap();
+    let mut runtime = cpu(64);
+    let version = load(
+        &mut runtime,
+        "kernel test.gen@1 { requires { field.write; } output result: Image; compute { return vec4(coord().x, 0.0, 0.0, 1.0); } }",
+    );
     let invocation = Invocation {
         inputs: vec![],
         params: vec![],
@@ -125,7 +126,7 @@ fn execution_is_scoped_to_the_manifest_capabilities() {
 
 #[test]
 fn background_preparation_resolves_through_tickets() {
-    let mut runtime = Runtime::new(64);
+    let mut runtime = cpu(64);
     let input = runtime.host_mut().create_image(1, 1).unwrap();
     // Inline: a ticket is ready as soon as it is issued.
     let module = orla_compiler::compile(&source("0.25")).unwrap();
@@ -138,7 +139,7 @@ fn background_preparation_resolves_through_tickets() {
     // replacement is collected and published.
     runtime.set_background(true);
     assert!(runtime.background());
-    let running = runtime.load(&source("0.5")).unwrap();
+    let running = load(&mut runtime, &source("0.5"));
     let module = orla_compiler::compile(&source("0.75")).unwrap();
     let ticket = runtime.prepare_later(module, source("0.75"));
     let mut candidate = None;
@@ -174,7 +175,7 @@ fn background_preparation_resolves_through_tickets() {
 #[test]
 fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
     use orla_runtime::NativeOp;
-    let mut runtime = Runtime::new(1 << 16);
+    let mut runtime = cpu(1 << 16);
     let raster = runtime.kernel(&NativeOp::Rasterize.id()).unwrap();
     assert_eq!(raster.generation(), Generation(0));
     assert_eq!(raster.native(), Some(NativeOp::Rasterize));
@@ -184,9 +185,11 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
     assert!(raster.source().contains("native.rasterize@1"));
 
     // A Kernel under the native id is refused, whatever it expects.
-    let candidate = runtime
-        .prepare("kernel native.rasterize@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }")
-        .unwrap();
+    let candidate = prepare(
+        &runtime,
+        "kernel native.rasterize@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }",
+    )
+    .unwrap();
     let error = runtime.publish(candidate, Expect::Any).unwrap_err();
     assert!(error.to_string().contains("native operation"), "{error}");
 
@@ -248,4 +251,28 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
         error.to_string().contains("`vertices` must be rows of"),
         "{error}"
     );
+}
+
+/// A runtime on the reference backend, as a session opens one.
+fn cpu(budget_words: usize) -> orla_runtime::Runtime {
+    orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+}
+
+/// Compiles and publishes a Kernel as a session does: the runtime takes
+/// validated IR, and compiling is the caller's step.
+fn load(
+    runtime: &mut orla_runtime::Runtime,
+    source: &str,
+) -> std::sync::Arc<orla_runtime::KernelVersion> {
+    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+    runtime.load(module, source).unwrap()
+}
+
+/// Compiles and prepares a Kernel without publishing it.
+fn prepare(
+    runtime: &orla_runtime::Runtime,
+    source: &str,
+) -> Result<orla_runtime::Candidate, orla_runtime::PrepareError> {
+    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+    runtime.prepare_module(module, source)
 }

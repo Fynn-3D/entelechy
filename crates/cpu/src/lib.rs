@@ -15,8 +15,12 @@
 mod eval;
 pub mod raster;
 
+use std::any::Any;
+
 use orla_abi::{Domain, Handle, Invocation, Scope, Type};
 use orla_ir::{Combine, Mode, Validated};
+
+use orla_rules::{Backend, NativeOp, Prepared};
 
 pub use orla_rules::{
     ArithmeticError, ExecutionError, address_words, check_invocation, check_scan, check_scatter,
@@ -681,5 +685,54 @@ fn release_all(scope: &mut Scope<'_>, outputs: &[Handle]) {
         // The output was created through this scope, so release cannot be
         // denied; a Host failure here would mean the handle is already gone.
         let _ = scope.release(*output);
+    }
+}
+
+/// The interpreter's word code, compiled once when the module is
+/// prepared. A Kernel of a hundred statements takes tens of
+/// microseconds to compile, which is more than most nodes take to run,
+/// so a frame must not pay it per execution.
+struct CpuCode(Code);
+
+impl Prepared for CpuCode {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl Backend for CpuBackend {
+    fn name(&self) -> &'static str {
+        "cpu"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        Ok(Box::new(CpuCode(Code::of(module))))
+    }
+
+    fn execute(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        let code = prepared.as_any().downcast_ref::<CpuCode>().map(|c| &c.0);
+        CpuBackend::execute_with(self, code, module, invocation, scope)
+    }
+
+    fn execute_native(
+        &self,
+        op: NativeOp,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        match op {
+            NativeOp::Rasterize => raster::rasterize(invocation, scope),
+            NativeOp::RasterizeCutout => raster::rasterize_cutout(invocation, scope),
+        }
     }
 }

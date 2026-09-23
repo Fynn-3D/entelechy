@@ -7,7 +7,7 @@ use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scop
 use orla_compiler::compile;
 use orla_cpu::CpuBackend;
 use orla_gpu::GpuBackend;
-use orla_runtime::Backend;
+use orla_rules::Backend;
 
 /// Downloads a resident GPU output into Host memory and returns its pixels.
 fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::Handle) -> Vec<[f32; 4]> {
@@ -325,15 +325,18 @@ fn chains_and_state_stay_resident_until_observed() {
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
     let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
-    runtime
-        .load("kernel test.zero@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }")
-        .unwrap();
-    runtime
-        .load("kernel test.increment@1 { requires { field.read; field.write; } input previous: Image; output result: Image; compute { let c = sample(previous); return vec4(c.r + 1.0, c.g, c.b, 1.0); } }")
-        .unwrap();
-    runtime
-        .load("kernel test.blur@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = coord(); return (fetch(source, c) + fetch(source, c + vec2(1.0, 0.0))) * 0.5; } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel test.zero@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.increment@1 { requires { field.read; field.write; } input previous: Image; output result: Image; compute { let c = sample(previous); return vec4(c.r + 1.0, c.g, c.b, 1.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.blur@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = coord(); return (fetch(source, c) + fetch(source, c + vec2(1.0, 0.0))) * 0.5; } }",
+    );
     let graph = orla_scene::parse(
         "node seed: test.zero@1 { domain = vec2(8, 8); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
@@ -384,15 +387,18 @@ fn fields_flow_through_the_gpu_exactly() {
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
     let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
-    runtime
-        .load("kernel test.seed@1 { requires { field.write; } output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3, alive: i / 2 * 2 == i }; } }")
-        .unwrap();
-    runtime
-        .load("kernel test.step@1 { requires { field.read; field.write; } input previous: Rows<Particle>; output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 1 + count(previous), alive: !p.alive }; } }")
-        .unwrap();
-    runtime
-        .load("kernel test.draw@1 { requires { field.read; field.write; } input particles: Rows<Particle>; output result: Image; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = at(particles, int(coord().x)); return vec4(p.position.x, p.position.y, float(p.life), float(p.alive)); } }")
-        .unwrap();
+    load(
+        &mut runtime,
+        "kernel test.seed@1 { requires { field.write; } output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3, alive: i / 2 * 2 == i }; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.step@1 { requires { field.read; field.write; } input previous: Rows<Particle>; output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = sample(previous); let n = at(previous, element() + 1); return Particle { position: p.position + n.position, life: p.life - 1 + count(previous), alive: !p.alive }; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.draw@1 { requires { field.read; field.write; } input particles: Rows<Particle>; output result: Image; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = at(particles, int(coord().x)); return vec4(p.position.x, p.position.y, float(p.life), float(p.alive)); } }",
+    );
     let graph = orla_scene::parse(
         "node seed: test.seed@1 { domain = 8; }
          node step: test.step@1 { previous <~ step.result from seed.result; }
@@ -433,7 +439,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
             "kernel test.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4({value}, 0.5, 0.25, 1.0); }} }}"
         )
     };
-    let running = runtime.load(&source("0.125")).unwrap();
+    let running = load(&mut runtime, &source("0.125"));
     let invocation = orla_abi::Invocation {
         inputs: vec![],
         params: vec![],
@@ -1656,4 +1662,14 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
         }
     }
     assert!(compared > 1500, "only {compared} pixels compared");
+}
+
+/// Compiles and publishes a Kernel as a session does: the runtime takes
+/// validated IR, and compiling is the caller's step.
+fn load(
+    runtime: &mut orla_runtime::Runtime,
+    source: &str,
+) -> std::sync::Arc<orla_runtime::KernelVersion> {
+    let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
+    runtime.load(module, source).unwrap()
 }
