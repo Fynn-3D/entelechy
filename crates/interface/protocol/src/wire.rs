@@ -252,6 +252,29 @@ pub(crate) fn failure(message: impl Into<String>) -> Json {
     json!({ "message": message.into() })
 }
 
+/// A failed evaluation as data an agent can act on: the message, the node
+/// it belongs to when it belongs to one, and for a state migration that
+/// failed, the port and the migration's Kernel. `frame` says which frame
+/// of a run it was.
+pub(crate) fn evaluation_error(error: &orla_graph::EvaluateError, frame: Option<u64>) -> Json {
+    let message = match frame {
+        Some(frame) => format!("frame {frame}: {error}"),
+        None => error.to_string(),
+    };
+    let mut json = failure(message);
+    if let Some(node) = error.node() {
+        json["node"] = json!(node.to_string());
+    }
+    if let orla_graph::EvaluateError::Migration { port, kernel, .. } = error {
+        json["port"] = json!(port);
+        json["migration"] = json!(kernel.to_string());
+    }
+    if let Some(frame) = frame {
+        json["frame"] = json!(frame);
+    }
+    json
+}
+
 /// A diagnostic with a position when the message starts with `line:col:`.
 pub(crate) fn positioned(message: String) -> Json {
     let mut parts = message.splitn(3, ':');

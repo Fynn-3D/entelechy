@@ -134,7 +134,11 @@ kind, shape, doc}`: `loop`, `each`, `scatter`, `node`, `fill`,
 `previous`, `async` and the rest), or, with `name`, whichever it is; an
 unknown name is an error listing similar ones in `similar`. It is what
 the compiler accepts, generated from its tables. An operation that is
-not one is an error listing every one in `operations`.
+not one is an error listing every one in `operations`. An evaluation
+that fails names its `node` when the failure is one node's, and a state
+migration that fails names its `port` and `migration` too, so an agent
+reads that node's state and sees the layout the migration must take;
+in `advance`, `frame` says which frame it was.
 
 `trace` runs one element of a node on the interpreter, over the Kernel
 as its document wrote it (compiled again without the optimizer, so the

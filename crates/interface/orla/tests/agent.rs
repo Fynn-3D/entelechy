@@ -1,12 +1,21 @@
-//! An agent at work, live: not a record played back but a client that
+//! Agents at work, live: not a record played back but a client that
 //! decides each request from the answer to the one before, through
-//! `orla serve` and nothing else. It is given a goal, the running picture
-//! inverted, and a first draft of a Kernel with the slips a writer makes.
-//! It finds what the scene outputs, repairs the draft from the positioned
-//! diagnostics and `help`'s `similar` alone, publishes against the
-//! generation it expects, is refused where it should be and sees the
-//! running Kernel survive, composes the Kernel into the scene, and holds
-//! the picture to the goal.
+//! `orla serve` and nothing else.
+//!
+//! One is given the running picture inverted as its goal, and a first
+//! draft of a Kernel with the slips a writer makes. It finds what the
+//! scene outputs, repairs the draft from the positioned diagnostics and
+//! `help`'s `similar` alone, publishes against the generation it expects,
+//! is refused where it should be and sees the running Kernel survive,
+//! composes the Kernel into the scene, and holds the picture to the goal.
+//!
+//! The other changes what a running state carries. It finds the state in
+//! the graph, learns its fields by tracing an element, runs until a value
+//! says to stop, and publishes a migration whose first draft takes the
+//! wrong layout. The evaluation refuses it, naming the node and the
+//! migration, and keeps the state; the agent reads the state's layout,
+//! repairs the migration from it, and holds the count to going on from
+//! where it was.
 //!
 //! Any agent in any language speaks this; the test is written in Rust
 //! because the workspace's tests are, and it touches no Rust API of
@@ -66,6 +75,19 @@ impl Agent {
             Some(ok) => Ok(ok.clone()),
             None => Err(answer["error"].clone()),
         }
+    }
+
+    /// What a node holds now: its layout as a file spells it, and its words.
+    fn state(&mut self, node: &str) -> (String, Vec<u32>) {
+        let read = self
+            .ask("read", json!({ "node": node }))
+            .expect("the node's state reads");
+        let bytes = orla_formats::base64::unbase64(read["data"].as_str().unwrap()).unwrap();
+        let words = bytes
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect();
+        (read["schema"].as_str().unwrap().to_owned(), words)
     }
 
     /// The scene's output `name` as RGBA floats.
@@ -163,11 +185,13 @@ kernel agent.invert@1 {
 }
 ";
 
-/// A copy of the grayscale example the agent may rewrite.
-fn scene() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("orla-agent-{}", std::process::id()));
+/// A copy of an example the agent may rewrite.
+fn scene(example: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("orla-agent-{example}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/grayscale");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../examples")
+        .join(example);
     std::fs::create_dir_all(dir.join("kernels")).unwrap();
     for entry in std::fs::read_dir(example.join("kernels"))
         .unwrap()
@@ -181,7 +205,7 @@ fn scene() -> PathBuf {
 
 #[test]
 fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
-    let scene = scene();
+    let scene = scene("grayscale");
     let mut agent = Agent::start(&scene);
 
     // Look before touching: the versions it speaks, and what the scene
@@ -285,5 +309,200 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
         changed |= is != was;
     }
     assert!(changed, "the picture did not change");
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}
+
+/// A Kernel type for one scalar of a layout as a file spells it.
+fn scalar_type(letter: &str) -> &'static str {
+    match letter {
+        "i" => "Int",
+        "b" => "Bool",
+        _ => "Float",
+    }
+}
+
+/// A migration from the state as the agent believes it is laid out,
+/// `fields` of `(name, type)`, to the same fields and a `doubled` Int.
+fn widen(fields: &[(String, String)], generation: &str) -> String {
+    let old: Vec<String> = fields
+        .iter()
+        .map(|(name, ty)| format!("{name}: {ty};"))
+        .collect();
+    let kept: Vec<String> = fields
+        .iter()
+        .map(|(name, ty)| match ty.as_str() {
+            "Int" => format!("{name}: o.{name}"),
+            _ => format!("{name}: int(o.{name})"),
+        })
+        .collect();
+    let first = &fields[0].0;
+    let doubled = match fields[0].1.as_str() {
+        "Int" => format!("o.{first} * 2"),
+        _ => format!("int(o.{first}) * 2"),
+    };
+    format!(
+        "// The state as it was, carried into the state as it is: every field\n\
+         // kept, and `doubled` made from the first. ({generation})\n\
+         kernel agent.widen@1 {{\n    requires {{ field.read; field.write; }}\n    \
+         struct Old {{ {} }}\n    struct Tally {{ count: Int; doubled: Int; }}\n    \
+         input old: Rows<Old>;\n    output result: Rows<Tally>;\n    \
+         compute {{ let o = sample(old); return Tally {{ {}, doubled: {doubled} }}; }}\n}}\n",
+        old.join(" "),
+        kept.join(", ")
+    )
+}
+
+#[test]
+fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
+    let scene = scene("migrate");
+    let mut agent = Agent::start(&scene);
+
+    // Find the state: a node whose port reads what it committed before.
+    let graph = agent.ask("graph", json!({})).unwrap();
+    let (node, port, kernel) = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|node| {
+            node["inputs"]
+                .as_object()?
+                .iter()
+                .find_map(|(port, binding)| {
+                    (binding["kind"] == "previous").then(|| {
+                        (
+                            node["id"].as_str().unwrap().to_owned(),
+                            port.clone(),
+                            node["kernel"].as_str().unwrap().to_owned(),
+                        )
+                    })
+                })
+        })
+        .expect("the scene carries state");
+
+    // Learn what the state holds by tracing one element through its
+    // Kernel: the result's fields, by name.
+    let manifest = agent.ask("kernel", json!({ "kernel": kernel })).unwrap();
+    let element = manifest["outputs"][0]["type"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("Rows<")
+        .trim_end_matches('>')
+        .to_owned();
+    let trace = agent
+        .ask("trace", json!({ "node": node, "element": 0, "time": 0.0 }))
+        .unwrap();
+    let result = trace["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["type"] == element)
+        .expect("the trace shows the state's element");
+    let names: Vec<String> = result["value"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(names, ["count"], "{result}");
+
+    // Run until the count passes four.
+    let target = format!("{node}.result[0].{}", names[0]);
+    let ran = agent
+        .ask(
+            "advance",
+            json!({ "frames": 100, "until": { "target": target, "above": 4 } }),
+        )
+        .unwrap();
+    assert_eq!(ran["stopped"], "until", "{ran}");
+    let (layout, words) = agent.state(&node);
+    assert_eq!((layout.as_str(), words.as_slice()), ("i", &[5][..]));
+
+    // The new step carries `doubled` too: the running source, edited.
+    let step = manifest["source"].as_str().unwrap();
+    let counted = "Tally { count: t.count + 1 }";
+    assert!(
+        step.contains(counted),
+        "the step counts as the agent read it: {step}"
+    );
+    let step = step
+        .replacen(
+            "requires { field.read; field.write; }",
+            "requires { field.read; field.write; }\n    struct Tally { count: Int; doubled: Int; }",
+            1,
+        )
+        .replace(
+            counted,
+            "Tally { count: t.count + 1, doubled: (t.count + 1) * 2 }",
+        );
+
+    // A first draft of the migration types the fields from the trace's
+    // JSON, where every number looks alike: it takes each as a Float.
+    let guessed: Vec<(String, String)> = names
+        .iter()
+        .map(|name| (name.clone(), "Float".to_owned()))
+        .collect();
+    let first = agent
+        .ask(
+            "publish",
+            json!({ "source": widen(&guessed, "first draft"), "expect": "absent" }),
+        )
+        .unwrap();
+    agent
+        .ask("publish", json!({ "source": step, "expect": "any" }))
+        .unwrap();
+    let document = agent.ask("document", json!({})).unwrap();
+    let text = document["text"].as_str().unwrap();
+    let binding = format!("{port} <~ {node}.result from seed.result;");
+    assert!(text.contains(&binding), "{text}");
+    let composed = text.replace(
+        &binding,
+        &format!("{port} <~ {node}.result from seed.result migrate agent.widen@1;"),
+    );
+    agent.ask("compose", json!({ "text": composed })).unwrap();
+
+    // The evaluation refuses the draft, says whose state and which
+    // migration, and keeps the state as it was.
+    let refused = agent
+        .ask("evaluate", json!({ "time": 1.0 }))
+        .expect_err("a migration that takes the wrong layout fails the evaluation");
+    assert_eq!(refused["node"], node.as_str(), "{refused}");
+    assert_eq!(refused["port"], port.as_str(), "{refused}");
+    assert_eq!(refused["migration"], "agent.widen@1", "{refused}");
+    let (layout, words) = agent.state(&node);
+    assert_eq!(
+        (layout.as_str(), words.as_slice()),
+        ("i", &[5][..]),
+        "a refused migration leaves the state as it was"
+    );
+
+    // Repair from the state itself: its layout says what each field is.
+    let typed: Vec<(String, String)> = names
+        .iter()
+        .zip(layout.split(','))
+        .map(|(name, letter)| (name.clone(), scalar_type(letter).to_owned()))
+        .collect();
+    agent
+        .ask(
+            "publish",
+            json!({ "source": widen(&typed, "typed from the state"), "expect": first["generation"] }),
+        )
+        .unwrap();
+    let migrated = agent.ask("evaluate", json!({ "time": 1.0 })).unwrap();
+    assert!(
+        migrated["migrated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["node"] == node.as_str() && entry["kernel"] == "agent.widen@1"),
+        "{migrated}"
+    );
+
+    // The goal: the count went on from where it was, never restarted, and
+    // carries its double.
+    let (layout, words) = agent.state(&node);
+    assert_eq!((layout.as_str(), words.as_slice()), ("i,i", &[6, 12][..]));
+    agent.ask("advance", json!({ "frames": 3 })).unwrap();
+    let (_, words) = agent.state(&node);
+    assert_eq!(words, [9, 18]);
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }

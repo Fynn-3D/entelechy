@@ -8,7 +8,7 @@ use serde_json::{Value as Json, json};
 use orla_session::Session;
 
 use crate::request::Request;
-use crate::wire::{context_of, failure, report_json};
+use crate::wire::{context_of, evaluation_error, failure, report_json};
 
 /// The most frames one `advance` runs: past this, an agent asks again,
 /// which is where it can look at what it has.
@@ -31,7 +31,7 @@ fn scalar((ty, words): (orla_ir::Type, Vec<u32>)) -> Result<f64, String> {
 pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let context = context_of(session, request.json());
     if request.get("settle").and_then(Json::as_bool) == Some(true) {
-        session.settle().map_err(|e| failure(e.to_string()))?;
+        session.settle().map_err(|e| evaluation_error(&e, None))?;
     }
     let report = match request.get("nodes").and_then(Json::as_array) {
         Some(nodes) => {
@@ -44,7 +44,7 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
         }
         None => session.evaluate(&context),
     }
-    .map_err(|e| failure(e.to_string()))?;
+    .map_err(|e| evaluation_error(&e, None))?;
     Ok(report_json(session, &report))
 }
 
@@ -212,10 +212,10 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
             } else {
                 session.evaluate_for(&context, &demand)
             }
-            .map_err(|e| failure(format!("frame {frame}: {e}")))?;
+            .map_err(|e| evaluation_error(&e, Some(frame)))?;
             session
                 .settle()
-                .map_err(|e| failure(format!("frame {frame}: {e}")))?;
+                .map_err(|e| evaluation_error(&e, Some(frame)))?;
             ran += 1;
             last = Some(report);
             if let Some((_, node, port, index, path, kind, bound)) = &until {

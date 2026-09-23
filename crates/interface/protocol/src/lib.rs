@@ -11,7 +11,9 @@
 //! `id` that is echoed back; every response is one line, `{"id", "ok": ...}`
 //! or `{"id", "error": {"message", "line"?, "column"?}}`. An error says what
 //! an agent can act on as data as well as in words: an unknown operation
-//! lists the `operations`, and an unknown name in `help` the `similar` ones.
+//! lists the `operations`, an unknown name in `help` the `similar` ones,
+//! and a failed evaluation the `node` it belongs to (and for a state
+//! migration, the `port` and the `migration`), with the `frame` of a run.
 //!
 //! | op | request fields | ok |
 //! | --- | --- | --- |
