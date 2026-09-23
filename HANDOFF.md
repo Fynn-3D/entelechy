@@ -39,15 +39,18 @@ done
 
 ## Next
 
-Play in a domain the platform has not been driven in yet, and fix what
-writing it turns up. `examples/neighbours` is the pattern to follow: a
-scene that needs something, written until it works, with what it found
-fixed under a test of its own.
+Drive a rig rather than play one. `examples/skin` blends two clips by
+where the pointer is; what a game needs next is a joint a Kernel writes —
+a head that follows a point, a foot held on the ground — between the
+sample and the palette, and a clip that starts where the last one left
+off rather than at its own frame zero.
 
 Done when:
 
-- `examples/<name>/` holds the scene, `kernels/`, README and replay;
-- the replay passes on the interpreter, the JIT and the GPU, pinning
-  whatever the scene claims with no tolerance where the work is integer;
-- anything it turns up in the engine is fixed with a test of its own;
+- an example holds a rig whose pose is partly authored and partly
+  computed, with its `kernels/`, scene, README and replay;
+- the replay passes on the interpreter, the JIT and the GPU, pinning the
+  joint matrices at two moments;
+- anything it turns up in the engine or in the `skin` package is fixed
+  with a test of its own;
 - the verification above is clean.
