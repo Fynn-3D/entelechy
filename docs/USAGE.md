@@ -47,7 +47,9 @@ language itself is in [DOCUMENTS](DOCUMENTS.md).
 ## Check a Kernel
 
 Compile `.orla` files and print their manifests. Diagnostics carry
-`file:line:column`. Add `--ir` to print the validated Orla IR.
+`file:line:column`. Add `--ir` to print the validated Orla IR as a
+backend runs it, where the Kernel's work is counted (`work spend` after
+a loop) and looked at (`work look`) included.
 
 ```sh
 cargo run -- check --ir examples/grayscale/kernels/grayscale.orla

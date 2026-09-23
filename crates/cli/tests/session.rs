@@ -258,6 +258,29 @@ fn the_binary_checks_and_runs() {
         stdout.contains("graph `scene` with 3 node(s), 1 use(s)"),
         "{stdout}"
     );
+    // The IR shown is the IR a backend runs: a Kernel whose loop can
+    // pass a block shows where its work is counted and looked at.
+    std::fs::write(
+        dir.join("kernels/counted.orla"),
+        "kernel t.counted@1 { requires { field.write; } param n: Int = 3; output result: Rows<Int>; compute { return loop n with a = 0 { a + 1 }; } }",
+    )
+    .unwrap();
+    let counted = Command::new(orla)
+        .args(["check", "--ir"])
+        .arg(dir.join("kernels/counted.orla"))
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&counted.stdout);
+    assert!(counted.status.success(), "{shown}");
+    assert!(
+        shown.contains("work spend") && shown.contains("work look"),
+        "{shown}"
+    );
+    assert!(
+        !stdout.contains("work spend"),
+        "grayscale has no loop: {stdout}"
+    );
+    std::fs::remove_file(dir.join("kernels/counted.orla")).unwrap();
 
     std::fs::write(
         dir.join("kernels/bad.orla"),

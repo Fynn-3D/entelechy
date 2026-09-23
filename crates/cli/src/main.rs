@@ -11,6 +11,8 @@ const USAGE: &str = "\
 usage:
   orla check [--ir] <file.orla|file.osn>...
       Parse documents, compile their Kernels, and print manifests or diagnostics.
+      --ir prints each Kernel's IR as a backend runs it: where its work is
+      counted (`work spend`) and looked at (`work look`) included.
   orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
                        [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu|jit]
@@ -225,8 +227,10 @@ fn check(args: &[String]) -> Result<(), String> {
                         module.manifest.id,
                         module.manifest.named(&module.structs)
                     );
+                    // What a backend runs, not a step before it: the
+                    // module with its work accounted.
                     if show_ir {
-                        println!("{module}");
+                        println!("{}", orla_ir::account(&module));
                     }
                 }
                 Err(error) => {
