@@ -10,9 +10,12 @@ use orla_import::{audio, gltf, midi};
 
 const USAGE: &str = "\
 usage:
-  orla-import <file> [--out <dir>]
+  orla-import <file> [--out <dir>] [--rate <fps>]
       A model (.gltf, .glb) becomes <stem>.vertices.field, <stem>.triangles.field
-      and, when it has one in PNG, <stem>.albedo.png; a sound (.mp3, .ogg, .flac,
+      and, when it has one in PNG, <stem>.albedo.png. A model with a skin also
+      becomes <stem>.weights.field and <stem>.skeleton.field, and one
+      <stem>.<name>.clip.field per animation, sampled at --rate frames a second
+      (30 by default), which the `skin` package poses a mesh from; a sound (.mp3, .ogg, .flac,
       .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate; a score (.mid,
       .midi) becomes <stem>.notes.field, a row a note with its seconds, its key,
       how hard it was struck and its channel. Files go to --out, the source's
@@ -37,10 +40,19 @@ fn main() -> ExitCode {
 fn import(args: &[String]) -> Result<(), String> {
     let mut source = None;
     let mut out = None;
+    let mut rate = 30.0f32;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a directory")?)),
+            "--rate" => {
+                let text = iter.next().ok_or("--rate needs frames a second")?;
+                rate = text
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|v| *v > 0.0 && v.is_finite())
+                    .ok_or_else(|| format!("--rate takes frames a second, found `{text}`"))?;
+            }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => {
                 if source.replace(PathBuf::from(other)).is_some() {
@@ -63,7 +75,7 @@ fn import(args: &[String]) -> Result<(), String> {
         .unwrap_or_default();
     match extension.as_str() {
         "gltf" | "glb" => {
-            let imported = gltf::import(&source, &out)?;
+            let imported = gltf::import(&source, &out, rate)?;
             for file in &imported.files {
                 println!("wrote {}", file.display());
             }
@@ -84,6 +96,28 @@ fn import(args: &[String]) -> Result<(), String> {
                     ", no texture"
                 }
             );
+            if imported.joints > 0 {
+                let clips: Vec<String> = imported
+                    .clips
+                    .iter()
+                    .map(|(name, frames)| format!("{name} ({frames} frames)"))
+                    .collect();
+                println!(
+                    "{} joints, {} at {} frames a second{}",
+                    imported.joints,
+                    if clips.is_empty() {
+                        "no clips".to_owned()
+                    } else {
+                        clips.join(", ")
+                    },
+                    imported.rate,
+                    if clips.is_empty() {
+                        ""
+                    } else {
+                        "; a scene reads a clip through the `skin` package"
+                    }
+                );
+            }
             for note in &imported.notes {
                 println!("note: {note}");
             }

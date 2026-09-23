@@ -343,8 +343,18 @@ Player that takes dependencies. `import` reads a glTF or GLB model and
 writes what a scene takes as inputs: vertices as rows of `{position,
 normal, uv}` with every node's transform baked in, triangles as rows of
 three indices, and the base colour texture as a PNG, into `--out <dir>`
-(the source's directory by default); skins, animations, sparse accessors
-and JPEG textures are reported and left out. It reads a compressed sound
+(the source's directory by default); sparse accessors and JPEG textures
+are reported and left out.
+
+A model with a skin writes three more kinds of row, which the
+[`skin` package](../packages/skin.orlapkg) poses a mesh from:
+`<stem>.weights.field`, the four joints each vertex hangs off and how
+much of each; `<stem>.skeleton.field`, every joint's parent and inverse
+bind matrix; and one `<stem>.<name>.clip.field` per animation, sampled at
+`--rate` frames a second (30 by default) into rows of a local
+translation, rotation and scale, a frame's joints together. A skinned
+mesh keeps its own space, since its joints place it, and the tool prints
+the joints, the clips and the rate a scene needs to read them. It reads a compressed sound
 (MP3, OGG Vorbis, FLAC, AAC in MP4, Matroska audio) and writes a WAV at the
 file's own rate, one or two channels, which `input` reads. It reads a
 standard MIDI file and writes `<stem>.notes.field`, a row a note: the
@@ -357,6 +367,7 @@ another tool.
 
 ```sh
 cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
+cargo run -p orla-import -- examples/skin/source/arm.glb --out examples/skin/assets
 cargo run -p orla-import -- song.ogg --out assets   # writes assets/song.wav
 cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
 ```

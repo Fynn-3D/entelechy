@@ -21,7 +21,7 @@ fn the_crate_leaves_as_glb_and_comes_back_the_same() {
         &out,
     )
     .unwrap();
-    let imported = orla_import::gltf::import(&out, &dir.join("back")).unwrap();
+    let imported = orla_import::gltf::import(&out, &dir.join("back"), 30.0).unwrap();
     assert_eq!((imported.vertices, imported.triangles), (24, 12));
     assert!(
         imported.texture.is_some() && imported.notes.is_empty(),

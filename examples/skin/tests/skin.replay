@@ -1,0 +1,20 @@
+scene ../scene.osn
+window 320 180
+
+# At rest both clips stand where the rig does, so the arm is straight
+# and the second joint's matrix is the identity.
+frame 0.0
+expect count posed.result = 1734
+expect palette.result[1] = 1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1 0.0001
+expect 160 100 = 0.782 0.654 0.527 0.02
+expect 140 105 = 0.331 0.267 0.202 0.02
+expect 180 95 = 0.068 0.083 0.117 0.02
+
+# A third of a second in, the elbow is bent: the second joint carries a
+# turn of about seventy-seven degrees and the move that goes with it,
+# and the picture has the arm somewhere else.
+frame 0.35
+expect palette.result[1] = 1 0 0 0  0 0.21441 0.97674 0  0 -0.97674 0.21441 0  0 -0.78957 -0.76791 1 0.0005
+expect 160 100 = 0.356 0.286 0.217 0.02
+expect 140 105 = 0.065 0.079 0.112 0.02
+expect 180 95 = 0.823 0.690 0.558 0.02

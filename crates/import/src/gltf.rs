@@ -26,6 +26,13 @@ pub struct Imported {
     pub notes: Vec<String>,
     /// Corners of the model's bounding box after transforms.
     pub bounds: ([f32; 3], [f32; 3]),
+    /// Joints of the skin, when the model has one.
+    pub joints: usize,
+    /// Each animation as a clip: its name and how many frames it was
+    /// sampled into.
+    pub clips: Vec<(String, usize)>,
+    /// Frames a second the clips were sampled at.
+    pub rate: f32,
     /// Every file written.
     pub files: Vec<PathBuf>,
 }
@@ -235,6 +242,7 @@ impl Model {
             "VEC2" => 2,
             "VEC3" => 3,
             "VEC4" => 4,
+            "MAT4" => 16,
             other => return Err(format!("accessor {index} has type {other}")),
         };
         let component = accessor["componentType"].as_u64().unwrap_or(0);
@@ -344,9 +352,332 @@ struct Point {
     uv: [f32; 2],
 }
 
+/// What a vertex is bound to: four joints of the skin and how much of
+/// each. All four weights zero means the vertex is bound to nothing,
+/// which is how a model that mixes skinned and unskinned meshes says
+/// "leave this one where it is".
+#[derive(Clone, Copy, Default)]
+struct Bound {
+    joints: [u32; 4],
+    weights: [f32; 4],
+}
+
+/// A skin as the rows a scene reads: a parent and an inverse bind
+/// matrix per joint, parents before children.
+struct Skeleton {
+    /// Which node each joint is, in the skin's own order.
+    nodes: Vec<usize>,
+    /// The joint's parent in this same row, or -1 at a root.
+    parents: Vec<i32>,
+    binds: Vec<Matrix>,
+}
+
+/// How a sampler reads between its keys.
+#[derive(Clone, Copy, PartialEq)]
+enum Between {
+    Step,
+    Linear,
+    Cubic,
+}
+
+/// One channel of an animation: the times, the values, and how to read
+/// between them.
+struct Track {
+    times: Vec<f32>,
+    values: Vec<f32>,
+    stride: usize,
+    between: Between,
+}
+
+impl Track {
+    /// The value at `t`, held at the ends.
+    fn at(&self, t: f32, rotation: bool) -> Vec<f32> {
+        let stride = self.stride;
+        let keys = self.times.len();
+        if keys == 0 {
+            return vec![0.0; stride];
+        }
+        let value = |k: usize| -> &[f32] {
+            let base = if self.between == Between::Cubic {
+                k * stride * 3 + stride
+            } else {
+                k * stride
+            };
+            &self.values[base..base + stride]
+        };
+        if keys == 1 || t <= self.times[0] {
+            return value(0).to_vec();
+        }
+        if t >= self.times[keys - 1] {
+            return value(keys - 1).to_vec();
+        }
+        let next = self.times.iter().position(|&time| time > t).unwrap_or(1);
+        let first = next - 1;
+        let span = self.times[next] - self.times[first];
+        let u = if span > 0.0 {
+            (t - self.times[first]) / span
+        } else {
+            0.0
+        };
+        match self.between {
+            Between::Step => value(first).to_vec(),
+            Between::Linear if rotation => slerp(value(first), value(next), u),
+            Between::Linear => value(first)
+                .iter()
+                .zip(value(next))
+                .map(|(a, b)| a + (b - a) * u)
+                .collect(),
+            Between::Cubic => {
+                // The spline glTF defines: each key is an in-tangent,
+                // the value, and an out-tangent.
+                let out = |k: usize| &self.values[k * stride * 3 + stride * 2..][..stride];
+                let into = |k: usize| &self.values[k * stride * 3..][..stride];
+                let (t2, t3) = (u * u, u * u * u);
+                let a = 2.0 * t3 - 3.0 * t2 + 1.0;
+                let b = t3 - 2.0 * t2 + u;
+                let c = -2.0 * t3 + 3.0 * t2;
+                let d = t3 - t2;
+                let mixed: Vec<f32> = (0..stride)
+                    .map(|k| {
+                        a * value(first)[k]
+                            + b * span * out(first)[k]
+                            + c * value(next)[k]
+                            + d * span * into(next)[k]
+                    })
+                    .collect();
+                if rotation { normalize4(&mixed) } else { mixed }
+            }
+        }
+    }
+}
+
+/// The shorter way round between two rotations.
+fn slerp(a: &[f32], b: &[f32], t: f32) -> Vec<f32> {
+    let mut d: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let sign = if d < 0.0 { -1.0 } else { 1.0 };
+    d = d.abs();
+    if d > 0.9995 {
+        let mixed: Vec<f32> = a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| x + (y * sign - x) * t)
+            .collect();
+        return normalize4(&mixed);
+    }
+    let angle = d.acos();
+    let (first, second) = (
+        ((1.0 - t) * angle).sin() / angle.sin(),
+        (t * angle).sin() / angle.sin(),
+    );
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| x * first + y * sign * second)
+        .collect()
+}
+
+fn normalize4(v: &[f32]) -> Vec<f32> {
+    let length = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if length > 0.0 {
+        v.iter().map(|x| x / length).collect()
+    } else {
+        vec![0.0, 0.0, 0.0, 1.0]
+    }
+}
+
+/// A node's own transform as the ten floats a `Pose` holds.
+fn rest_pose(node: &Json) -> [f32; 10] {
+    let three = |key: &str, fallback: [f32; 3]| -> [f32; 3] {
+        node.get(key)
+            .and_then(Json::as_array)
+            .filter(|v| v.len() == 3)
+            .map(|v| {
+                let mut out = fallback;
+                for (k, slot) in out.iter_mut().enumerate() {
+                    *slot = v[k].as_f64().unwrap_or(0.0) as f32;
+                }
+                out
+            })
+            .unwrap_or(fallback)
+    };
+    let at = three("translation", [0.0; 3]);
+    let grow = three("scale", [1.0; 3]);
+    let turn = node
+        .get("rotation")
+        .and_then(Json::as_array)
+        .filter(|v| v.len() == 4)
+        .map(|v| {
+            let mut out = [0.0, 0.0, 0.0, 1.0];
+            for (k, slot) in out.iter_mut().enumerate() {
+                *slot = v[k].as_f64().unwrap_or(0.0) as f32;
+            }
+            out
+        })
+        .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+    [
+        at[0], at[1], at[2], turn[0], turn[1], turn[2], turn[3], grow[0], grow[1], grow[2],
+    ]
+}
+
+/// The skin's joints as rows: each one's parent in the same row and its
+/// inverse bind matrix. The order is the skin's own, which is what a
+/// vertex's `JOINTS_0` indexes.
+fn skeleton_of(model: &Model, skin: usize) -> Result<Skeleton, String> {
+    let skin = model.json["skins"]
+        .get(skin)
+        .ok_or_else(|| format!("skin {skin} is missing"))?;
+    let nodes: Vec<usize> = skin["joints"]
+        .as_array()
+        .ok_or("a skin has no joints")?
+        .iter()
+        .filter_map(|j| j.as_u64().map(|n| n as usize))
+        .collect();
+    if nodes.is_empty() {
+        return Err("a skin has no joints".into());
+    }
+    // Who holds whom, over every node there is: a joint's parent may be
+    // any node, and only the ones that are joints of this skin count.
+    let mut parent_of: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for (index, node) in model.json["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        for child in node["children"].as_array().into_iter().flatten() {
+            if let Some(child) = child.as_u64() {
+                parent_of.insert(child as usize, index);
+            }
+        }
+    }
+    let place = |node: usize| nodes.iter().position(|&j| j == node);
+    let parents: Vec<i32> = nodes
+        .iter()
+        .map(|&node| {
+            parent_of
+                .get(&node)
+                .and_then(|&up| place(up))
+                .map(|index| index as i32)
+                .unwrap_or(-1)
+        })
+        .collect();
+    let binds = match skin["inverseBindMatrices"].as_u64() {
+        Some(accessor) => {
+            let (values, components) = model.floats(accessor as usize)?;
+            if components != 16 {
+                return Err("inverse bind matrices are not 4x4".into());
+            }
+            nodes
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let mut m = IDENTITY;
+                    m.copy_from_slice(&values[index * 16..index * 16 + 16]);
+                    m
+                })
+                .collect()
+        }
+        None => vec![IDENTITY; nodes.len()],
+    };
+    Ok(Skeleton {
+        nodes,
+        parents,
+        binds,
+    })
+}
+
+/// One animation as a clip: every joint's local transform at every
+/// frame, a frame's joints together, sampled at `rate`.
+fn clip_of(
+    model: &Model,
+    animation: &Json,
+    skeleton: &Skeleton,
+    rate: f32,
+) -> Result<(Vec<f32>, usize), String> {
+    let samplers = animation["samplers"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    // A track per joint per path, and how long the whole thing runs.
+    let mut tracks: std::collections::BTreeMap<(usize, String), Track> =
+        std::collections::BTreeMap::new();
+    let mut seconds: f32 = 0.0;
+    for channel in animation["channels"].as_array().into_iter().flatten() {
+        let Some(node) = channel["target"]["node"].as_u64() else {
+            continue;
+        };
+        let Some(joint) = skeleton.nodes.iter().position(|&j| j == node as usize) else {
+            continue;
+        };
+        let path = channel["target"]["path"].as_str().unwrap_or("").to_owned();
+        if !matches!(path.as_str(), "translation" | "rotation" | "scale") {
+            continue;
+        }
+        let Some(sampler) = channel["sampler"]
+            .as_u64()
+            .and_then(|index| samplers.get(index as usize))
+        else {
+            continue;
+        };
+        let (times, _) = model.floats(sampler["input"].as_u64().unwrap_or(0) as usize)?;
+        let (values, stride) = model.floats(sampler["output"].as_u64().unwrap_or(0) as usize)?;
+        let between = match sampler["interpolation"].as_str().unwrap_or("LINEAR") {
+            "STEP" => Between::Step,
+            "CUBICSPLINE" => Between::Cubic,
+            _ => Between::Linear,
+        };
+        seconds = seconds.max(times.last().copied().unwrap_or(0.0));
+        tracks.insert(
+            (joint, path),
+            Track {
+                times,
+                values,
+                stride,
+                between,
+            },
+        );
+    }
+    let frames = ((seconds * rate).ceil() as usize + 1).max(1);
+    let joints = skeleton.nodes.len();
+    let rest: Vec<[f32; 10]> = skeleton
+        .nodes
+        .iter()
+        .map(|&node| {
+            model.json["nodes"]
+                .get(node)
+                .map(rest_pose)
+                .unwrap_or([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0])
+        })
+        .collect();
+    let mut out = Vec::with_capacity(frames * joints * 10);
+    for frame in 0..frames {
+        let t = frame as f32 / rate;
+        for (joint, base) in rest.iter().enumerate() {
+            let mut pose = *base;
+            if let Some(track) = tracks.get(&(joint, "translation".to_owned())) {
+                pose[..3].copy_from_slice(&track.at(t, false)[..3]);
+            }
+            if let Some(track) = tracks.get(&(joint, "rotation".to_owned())) {
+                pose[3..7].copy_from_slice(&track.at(t, true)[..4]);
+            }
+            if let Some(track) = tracks.get(&(joint, "scale".to_owned())) {
+                pose[7..10].copy_from_slice(&track.at(t, false)[..3]);
+            }
+            out.extend_from_slice(&pose);
+        }
+    }
+    Ok((out, frames))
+}
+
 /// Reads `path` and writes `<stem>.vertices.field`, `<stem>.triangles.field`
 /// and, when there is one in PNG, `<stem>.albedo.png` into `out_dir`.
-pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
+///
+/// A model with a skin writes two more — `<stem>.weights.field`, the four
+/// joints and weights of every vertex, and `<stem>.skeleton.field`, each
+/// joint's parent and inverse bind matrix — and one `<stem>.<name>.clip.field`
+/// per animation, sampled at `rate` frames a second: rows of a local
+/// translation, rotation and scale, a frame's joints together. The
+/// `skin` package poses a mesh from those.
+pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String> {
     let model = Model::open(path)?;
     let stem = path
         .file_stem()
@@ -356,12 +687,23 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
     let mut notes = Vec::new();
     let mut points: Vec<Point> = Vec::new();
     let mut triangles: Vec<[u32; 3]> = Vec::new();
-    if model.json.get("skins").is_some() {
-        notes.push("skins are left out; the mesh comes in at its rest pose".into());
+    let mut bounds: Vec<Bound> = Vec::new();
+    let skins = model
+        .json
+        .get("skins")
+        .and_then(Json::as_array)
+        .map(|s| s.len())
+        .unwrap_or(0);
+    if skins > 1 {
+        notes.push(format!(
+            "the model has {skins} skins; the first one comes in and the rest are left out"
+        ));
     }
-    if model.json.get("animations").is_some() {
-        notes.push("animations are left out".into());
-    }
+    let skeleton = if skins > 0 {
+        Some(skeleton_of(&model, 0)?)
+    } else {
+        None
+    };
     // Walk the scene: nodes carry meshes and transforms.
     let scene_index = model.json["scene"].as_u64().unwrap_or(0) as usize;
     let roots: Vec<usize> = model.json["scenes"]
@@ -422,6 +764,19 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
                 Some(i) => Some(model.floats(i as usize)?.0),
                 None => None,
             };
+            let joints = match attributes["JOINTS_0"].as_u64() {
+                Some(i) => Some(model.floats(i as usize)?.0),
+                None => None,
+            };
+            let weights = match attributes["WEIGHTS_0"].as_u64() {
+                Some(i) => Some(model.floats(i as usize)?.0),
+                None => None,
+            };
+            // A skinned mesh is placed by its joints, so glTF says to
+            // ignore the node's own transform; an unskinned one is
+            // placed where its author put it.
+            let skinned = node.get("skin").is_some() && joints.is_some() && weights.is_some();
+            let world = if skinned { IDENTITY } else { world };
             let base = points.len() as u32;
             for k in 0..count {
                 let position = transform_point(
@@ -441,6 +796,22 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
                     normal,
                     uv,
                 });
+                if skeleton.is_some() {
+                    bounds.push(match (&joints, &weights) {
+                        (Some(j), Some(w)) => Bound {
+                            joints: [
+                                j[k * 4] as u32,
+                                j[k * 4 + 1] as u32,
+                                j[k * 4 + 2] as u32,
+                                j[k * 4 + 3] as u32,
+                            ],
+                            weights: [w[k * 4], w[k * 4 + 1], w[k * 4 + 2], w[k * 4 + 3]],
+                        },
+                        // Bound to nothing, which the `skin` package
+                        // reads as "leave it where it is".
+                        _ => Bound::default(),
+                    });
+                }
             }
             let indices = match primitive["indices"].as_u64() {
                 Some(i) => model.indices(i as usize)?,
@@ -561,12 +932,101 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
             notes.push("the base colour texture is not PNG (JPEG, likely); convert it to PNG and it comes in".into());
         }
     }
+    // The skin: what every vertex is bound to, what the joints are, and
+    // every animation sampled into a clip.
+    let mut clips = Vec::new();
+    let joints = skeleton.as_ref().map(|s| s.nodes.len()).unwrap_or(0);
+    if let Some(skeleton) = &skeleton {
+        let weight_words: Vec<u32> = bounds
+            .iter()
+            .flat_map(|b| {
+                [
+                    b.joints[0],
+                    b.joints[1],
+                    b.joints[2],
+                    b.joints[3],
+                    b.weights[0].to_bits(),
+                    b.weights[1].to_bits(),
+                    b.weights[2].to_bits(),
+                    b.weights[3].to_bits(),
+                ]
+            })
+            .collect();
+        let weights_path = out_dir.join(format!("{stem}.weights.field"));
+        std::fs::write(
+            &weights_path,
+            file::encode(
+                &Schema::new([vec![Scalar::Int; 4], vec![Scalar::Float; 4]].concat()),
+                Domain::Rows(bounds.len() as u32),
+                &weight_words,
+            ),
+        )
+        .map_err(|e| format!("{}: {e}", weights_path.display()))?;
+        files.push(weights_path);
+
+        let skeleton_words: Vec<u32> = skeleton
+            .parents
+            .iter()
+            .zip(&skeleton.binds)
+            .flat_map(|(parent, bind)| {
+                let mut row = vec![*parent as u32];
+                row.extend(bind.iter().map(|v| v.to_bits()));
+                row
+            })
+            .collect();
+        let skeleton_path = out_dir.join(format!("{stem}.skeleton.field"));
+        std::fs::write(
+            &skeleton_path,
+            file::encode(
+                &Schema::new([vec![Scalar::Int], vec![Scalar::Float; 16]].concat()),
+                Domain::Rows(joints as u32),
+                &skeleton_words,
+            ),
+        )
+        .map_err(|e| format!("{}: {e}", skeleton_path.display()))?;
+        files.push(skeleton_path);
+
+        for (index, animation) in model.json["animations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let (values, frames) = clip_of(&model, animation, skeleton, rate)?;
+            let name: String = animation["name"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            let name = if name.trim_matches('-').is_empty() {
+                format!("clip{index}")
+            } else {
+                name.trim_matches('-').to_lowercase()
+            };
+            let clip_path = out_dir.join(format!("{stem}.{name}.clip.field"));
+            std::fs::write(
+                &clip_path,
+                file::encode(
+                    &Schema::new(vec![Scalar::Float; 10]),
+                    Domain::Rows((frames * joints) as u32),
+                    &values.iter().map(|v| v.to_bits()).collect::<Vec<u32>>(),
+                ),
+            )
+            .map_err(|e| format!("{}: {e}", clip_path.display()))?;
+            files.push(clip_path);
+            clips.push((name, frames));
+        }
+    }
     Ok(Imported {
         vertices: points.len(),
         triangles: triangles.len(),
         texture,
         notes,
         bounds: (lo, hi),
+        joints,
+        clips,
+        rate,
         files,
     })
 }
@@ -608,13 +1068,150 @@ mod tests {
         )
     }
 
+    /// Two vertices on a chain of two joints, the upper one turning a
+    /// quarter circle over a second: the skin, the skeleton and the clip
+    /// a scene reads.
+    fn rigged_gltf() -> String {
+        let mut bin = Vec::new();
+        // positions
+        for p in [[0.0f32, 0.0, 0.0], [0.0, 2.0, 0.0]] {
+            bin.extend(p.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let joints_at = bin.len();
+        for j in [[0u16, 0, 0, 0], [1, 0, 0, 0]] {
+            bin.extend(j.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let weights_at = bin.len();
+        for w in [[1.0f32, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]] {
+            bin.extend(w.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let indices_at = bin.len();
+        for i in [0u16, 1, 0] {
+            bin.extend(i.to_le_bytes());
+        }
+        let binds_at = bin.len();
+        // Column-major: the identity, then a lift of one undone.
+        for m in [
+            [
+                1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+            [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0,
+            ],
+        ] {
+            bin.extend(m.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let times_at = bin.len();
+        for t in [0.0f32, 1.0] {
+            bin.extend(t.to_le_bytes());
+        }
+        let turns_at = bin.len();
+        let half = std::f32::consts::FRAC_PI_4;
+        for q in [[0.0f32, 0.0, 0.0, 1.0], [half.sin(), 0.0, 0.0, half.cos()]] {
+            bin.extend(q.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let uri = format!(
+            "data:application/octet-stream;base64,{}",
+            orla::protocol::base64(&bin)
+        );
+        format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0,1]}}],
+            "nodes":[{{"mesh":0,"skin":0,"translation":[9,9,9]}},
+                     {{"children":[2]}},
+                     {{"translation":[0,1,0]}}],
+            "skins":[{{"joints":[1,2],"inverseBindMatrices":4}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}},"indices":3}}]}}],
+            "animations":[{{"name":"Bend","channels":[{{"sampler":0,"target":{{"node":2,"path":"rotation"}}}}],
+                            "samplers":[{{"input":5,"output":6,"interpolation":"LINEAR"}}]}}],
+            "buffers":[{{"byteLength":{},"uri":"{uri}"}}],
+            "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":24}},
+                           {{"buffer":0,"byteOffset":{joints_at},"byteLength":16}},
+                           {{"buffer":0,"byteOffset":{weights_at},"byteLength":32}},
+                           {{"buffer":0,"byteOffset":{indices_at},"byteLength":6}},
+                           {{"buffer":0,"byteOffset":{binds_at},"byteLength":128}},
+                           {{"buffer":0,"byteOffset":{times_at},"byteLength":8}},
+                           {{"buffer":0,"byteOffset":{turns_at},"byteLength":32}}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":2,"type":"VEC3"}},
+                         {{"bufferView":1,"componentType":5123,"count":2,"type":"VEC4"}},
+                         {{"bufferView":2,"componentType":5126,"count":2,"type":"VEC4"}},
+                         {{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"}},
+                         {{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}},
+                         {{"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR"}},
+                         {{"bufferView":6,"componentType":5126,"count":2,"type":"VEC4"}}]}}"#,
+            bin.len()
+        )
+    }
+
+    #[test]
+    fn a_rig_imports_as_a_skeleton_a_binding_and_a_clip() {
+        let dir = std::env::temp_dir().join(format!("orla-gltf-rig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("arm.gltf"), rigged_gltf()).unwrap();
+        let out = dir.join("out");
+        let imported = import(&dir.join("arm.gltf"), &out, 30.0).unwrap();
+        assert_eq!(imported.joints, 2);
+        assert_eq!(imported.clips, vec![("bend".to_owned(), 31)]);
+        assert!(imported.notes.is_empty(), "{:?}", imported.notes);
+
+        let read = |name: &str| {
+            let bytes = std::fs::read(out.join(name)).unwrap();
+            let data = file::decode(&bytes).unwrap();
+            (data.words().to_vec(), data.domain())
+        };
+        // A skinned mesh is placed by its joints, so the node's own
+        // translation of nine is not in the positions.
+        let (vertices, _) = read("arm.vertices.field");
+        assert_eq!(f32::from_bits(vertices[1]), 0.0, "the first vertex");
+        assert_eq!(f32::from_bits(vertices[9]), 2.0, "the second vertex");
+
+        // The second vertex hangs off the second joint.
+        let (weights, domain) = read("arm.weights.field");
+        assert_eq!(domain, Domain::Rows(2));
+        assert_eq!(weights[8], 1, "the joint it is bound to");
+        assert_eq!(f32::from_bits(weights[12]), 1.0, "how much of it");
+
+        // The root has no parent; the second joint hangs off it.
+        let (skeleton, domain) = read("arm.skeleton.field");
+        assert_eq!(domain, Domain::Rows(2));
+        assert_eq!(skeleton[0] as i32, -1);
+        assert_eq!(skeleton[17] as i32, 0);
+
+        // The clip: the joint at rest to start, a quarter turn about x
+        // by the last frame, and the halfway frame halfway round.
+        let (clip, domain) = read("arm.bend.clip.field");
+        assert_eq!(domain, Domain::Rows(31 * 2));
+        let pose = |frame: usize, joint: usize| -> Vec<f32> {
+            clip[(frame * 2 + joint) * 10..][..10]
+                .iter()
+                .map(|w| f32::from_bits(*w))
+                .collect()
+        };
+        assert_eq!(pose(0, 1)[..3], [0.0, 1.0, 0.0], "where the joint rests");
+        assert!(
+            pose(0, 1)[3..7]
+                .iter()
+                .zip([0.0, 0.0, 0.0, 1.0])
+                .all(|(a, b)| (a - b).abs() < 1e-5)
+        );
+        let end = pose(30, 1);
+        let quarter = std::f32::consts::FRAC_PI_4;
+        assert!((end[3] - quarter.sin()).abs() < 1e-4, "{end:?}");
+        assert!((end[6] - quarter.cos()).abs() < 1e-4, "{end:?}");
+        // Halfway is halfway round, which is what slerp is for.
+        let middle = pose(15, 1);
+        let eighth = std::f32::consts::FRAC_PI_8;
+        assert!((middle[3] - eighth.sin()).abs() < 1e-3, "{middle:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_quad_imports_transformed_with_computed_normals() {
         let dir = std::env::temp_dir().join(format!("orla-gltf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("quad.gltf"), quad_gltf()).unwrap();
-        let imported = import(&dir.join("quad.gltf"), &dir.join("out")).unwrap();
+        let imported = import(&dir.join("quad.gltf"), &dir.join("out"), 30.0).unwrap();
         assert_eq!((imported.vertices, imported.triangles), (4, 2));
         assert!(
             imported.texture.is_none() && imported.notes.is_empty(),

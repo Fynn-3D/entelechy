@@ -47,5 +47,12 @@ use "picture.orlapkg";
   scene reads its own rows through it. `examples/neighbours` sorts
   bodies by the grid cell they are in, which is what turns every pair
   into the nine cells around one.
+- **skin** — a skeleton, the clips that pose it, and the mesh that
+  follows. `orla import` writes the rows out of a rigged glTF and the
+  Blender bridge writes the same ones; sampling a clip, blending two,
+  composing a joint's parents and moving a vertex by the four joints it
+  hangs off are Kernels, so a pose is data all the way through and a
+  scene can drive it. `graphs/pose.osn` plays one clip as one node;
+  `examples/skin` blends two.
 - **pixelfx** — a coarse pixel grid and a four-colour palette, and the
   NES look made of both as a preset. The example of what a package is.

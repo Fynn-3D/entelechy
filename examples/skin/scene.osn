@@ -1,0 +1,38 @@
+// An arm from Blender, posed by its own skeleton.
+//
+//   blender -b --python bridges/blender/make_rig.py -- --out examples/skin/source/arm.glb
+//   orla import examples/skin/source/arm.glb --out examples/skin/assets
+//
+// wrote the five rows this reads: the mesh and its triangles, what each
+// vertex is bound to, the joints, and one clip per action. The Host
+// watches them, so re-importing changes the running window.
+use "kernels/";
+use "../../packages/skin.orlapkg/kernels/skin.orla";
+
+input mesh: Rows<Point> = "assets/arm.vertices.field";
+input faces: Triangles = "assets/arm.triangles.field";
+input weights: Rows<Bound> = "assets/arm.weights.field";
+input skeleton: Skeleton = "assets/arm.skeleton.field";
+input swing: Clip = "assets/arm.swing.clip.field";
+input curl: Clip = "assets/arm.curl.clip.field";
+
+param rate: Float = 30.0;      // what `orla import` sampled the clips at
+param speed: Float = 1.0;
+
+// The clock and the blend, together in a row of two: a Kernel decides
+// them, so the pointer drives the pose and nothing is baked.
+node hand: arm.hand@1 { speed = speed; domain = 2; }
+node clock: arm.clock@1 { hand <- hand.result; domain = 1; }
+node mix: arm.mix@1 { hand <- hand.result; domain = 1; }
+
+node swinging: skin.sample@1 { skeleton <- skeleton; clip <- swing; at <- clock.result; rate = rate; }
+node curling: skin.sample@1 { skeleton <- skeleton; clip <- curl; at <- clock.result; rate = rate; }
+node poses: skin.blend@1 { first <- swinging.result; second <- curling.result; mix <- mix.result; }
+node palette: skin.palette@1 { poses <- poses.result; skeleton <- skeleton; }
+node posed: skin.apply@1 { mesh <- mesh; weights <- weights; palette <- palette.result; }
+
+node project: arm.project@1 { mesh <- posed.result; }
+node raster: native.rasterize@1 { vertices <- project.result; triangles <- faces; domain = window(); }
+node view: arm.shade@1 { surface <- raster.surface; domain = window(); }
+
+output result <- view.result;

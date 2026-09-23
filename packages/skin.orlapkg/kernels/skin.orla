@@ -1,0 +1,181 @@
+// A skeleton, the clips that pose it, and the mesh that follows.
+//
+// Nothing here is an engine feature: a joint palette is a `Rows<Mat4>`,
+// a clip is rows of local transforms, and skinning is a map. What that
+// buys is that a pose is data all the way through, so a scene can blend
+// two clips, scrub one from the pointer, or write a joint itself
+// between sampling and the palette — which is what a game does and a
+// baked palette cannot.
+//
+// The rows, which `orla import` writes and the Blender bridge writes the
+// same way:
+//
+//   skeleton  Rows<Joint>   one per joint, parents before children
+//   clip      Rows<Pose>    frames * joints, a frame's joints together
+//   weights   Rows<Bound>   one per vertex, in the mesh's own row order
+//   mesh      Rows<Point>   position, normal, uv — the rest pose
+//
+// A joint's `parent` is its place in this same row, or -1 at the root.
+// `bind` is the inverse bind matrix: where the joint was when the mesh
+// was bound to it.
+struct Joint { parent: Int; bind: Mat4; }
+
+// A local transform: where a joint sits in its parent, as a translation,
+// a rotation (a quaternion, x y z w) and a scale.
+struct Pose { at: Vec3; turn: Vec4; grow: Vec3; }
+
+// What a vertex is bound to: four joints and how much of each.
+struct Bound { joints: [Int; 4]; weights: Vec4; }
+
+// What the rasterizer's projection takes, and what a mesh comes in as.
+struct Point { position: Vec3; normal: Vec3; uv: Vec2; }
+
+type Skeleton = Rows<Joint>;
+type Clip = Rows<Pose>;
+type Palette = Rows<Mat4>;
+
+// A quaternion as a rotation.
+fn turning(q: Vec4) -> Mat4 {
+    let x = q.x; let y = q.y; let z = q.z; let w = q.w;
+    return mat4(
+        vec4(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w), 0.0),
+        vec4(2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w), 0.0),
+        vec4(2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y), 0.0),
+        vec4(0.0, 0.0, 0.0, 1.0));
+}
+
+// A pose as the matrix it stands for: scale, then turn, then move.
+fn posing(p: Pose) -> Mat4 {
+    let r = turning(p.turn);
+    return mat4(
+        r[0] * p.grow.x,
+        r[1] * p.grow.y,
+        r[2] * p.grow.z,
+        vec4(p.at.x, p.at.y, p.at.z, 1.0));
+}
+
+// The shorter way round between two rotations, blended.
+fn between(a: Vec4, b: Vec4, t: Float) -> Vec4 {
+    let same = if dot(a, b) < 0.0 { vec4(0.0, 0.0, 0.0, 0.0) - b } else { b };
+    let mixed = a * (1.0 - t) + same * t;
+    let length = sqrt(dot(mixed, mixed));
+    return if length > 0.0 { mixed / length } else { a };
+}
+
+fn mixing(a: Pose, b: Pose, t: Float) -> Pose {
+    return Pose {
+        at: mix(a.at, b.at, t),
+        turn: between(a.turn, b.turn, t),
+        grow: mix(a.grow, b.grow, t),
+    };
+}
+
+// The clock a clip is read at, as a row of one second: the simple case,
+// where a clip plays at its own speed from the start of the session.
+kernel skin.clock@1 {
+    requires { field.write; time.read; }
+    param speed: Float = 1.0;
+    output result: Rows<Float>;
+    compute { return time() * speed; }
+}
+
+// Every joint's local transform at the moment the clock says, blended
+// between the two frames it falls between. A clip ends where its rows
+// end: `repeat` wraps round to the start, and otherwise the last frame
+// holds.
+kernel skin.sample@1 {
+    requires { field.read; field.write; }
+    input skeleton: Skeleton;
+    input clip: Clip;
+    input at: Rows<Float>;
+    // Frames a second the clip was written at, which `orla import`
+    // prints and the bridge writes.
+    param rate: Float = 30.0;
+    param repeat: Bool = true;
+    output result: Rows<Pose>;
+
+    compute {
+        let joints = count(skeleton);
+        let frames = count(clip) / joints;
+        let moment = at(at, 0) * rate;
+        let last = float(frames - 1);
+        let held = if repeat {
+            moment - float(frames) * floor(moment / float(frames))
+        } else {
+            clamp(moment, 0.0, last)
+        };
+        let first = int(floor(held));
+        let next = if repeat { (first + 1) % frames } else { min(first + 1, frames - 1) };
+        let t = held - floor(held);
+        let joint = element();
+        return mixing(at(clip, first * joints + joint), at(clip, next * joints + joint), t);
+    }
+}
+
+// Two poses of one skeleton, blended: a walk into a run, a turn laid
+// over either. `mix` is a row of one, so a Kernel or the graph decides
+// it and it can move every frame.
+kernel skin.blend@1 {
+    requires { field.read; field.write; }
+    input first: Rows<Pose>;
+    input second: Rows<Pose>;
+    input mix: Rows<Float>;
+    output result: Rows<Pose>;
+    compute {
+        return mixing(sample(first), sample(second), clamp(at(mix, 0), 0.0, 1.0));
+    }
+}
+
+// A joint's walk up its parents: where it has got to, and whose
+// transform it has not applied yet.
+struct Walk { matrix: Mat4; joint: Int; }
+
+// The palette: each joint's local transform composed up the parent
+// chain and taken through its inverse bind, which is the matrix a
+// vertex bound to that joint is moved by.
+kernel skin.palette@1 {
+    requires { field.read; field.write; }
+    input poses: Rows<Pose>;
+    input skeleton: Skeleton;
+    // How deep a skeleton may be. A joint's walk stops at the root long
+    // before this unless someone built a chain of them.
+    param depth: Int = 64;
+    output result: Palette;
+
+    compute {
+        // Up the chain, each parent applied on the left of what the
+        // walk has so far. `until` is asked before a step, so a root
+        // stops it having applied only its own.
+        let walked = loop depth with w = Walk { matrix: posing(sample(poses)), joint: element() }
+            until at(skeleton, w.joint).parent < 0 {
+            let up = at(skeleton, w.joint).parent;
+            Walk { matrix: posing(at(poses, up)) * w.matrix, joint: up }
+        };
+        return walked.matrix * at(skeleton, element()).bind;
+    }
+}
+
+// The mesh in the pose the palette says: four joints a vertex, weighted.
+kernel skin.apply@1 {
+    requires { field.read; field.write; }
+    input mesh: Rows<Point>;
+    input weights: Rows<Bound>;
+    input palette: Palette;
+    output result: Rows<Point>;
+
+    compute {
+        let v = sample(mesh);
+        let b = sample(weights);
+        let m = at(palette, b.joints[0]) * b.weights.x
+              + at(palette, b.joints[1]) * b.weights.y
+              + at(palette, b.joints[2]) * b.weights.z
+              + at(palette, b.joints[3]) * b.weights.w;
+        let moved = m * vec4(v.position.x, v.position.y, v.position.z, 1.0);
+        let turned = m * vec4(v.normal.x, v.normal.y, v.normal.z, 0.0);
+        return Point {
+            position: vec3(moved.x, moved.y, moved.z),
+            normal: normalize(vec3(turned.x, turned.y, turned.z)),
+            uv: v.uv,
+        };
+    }
+}
