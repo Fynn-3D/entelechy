@@ -763,8 +763,8 @@ what it says; the test is the claim, this is the index to it.
   again is the same rows.
 
 - Models and compressed sounds come in through a tool: `orla-import`
-  ([crate](crates/import)) sits in the interface layer beside the CLI and
-  the Player, the only layer that takes dependencies. `import` reads
+  ([crate](crates/import)) sits in the interface layer beside the session,
+  the CLI and the Player, the layer that may take dependencies. `import` reads
   glTF/GLB (external, data-URI or GLB buffers; every accessor type; node
   transforms baked; normals computed when absent) and writes vertex and
   triangle rows as `.field` and the base colour texture as PNG

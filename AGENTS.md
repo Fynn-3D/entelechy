@@ -301,11 +301,15 @@ new Rust test code or a native rebuild to validate their work.
 Keep each demo in `examples/<demo>/`, with its project entry, `kernels/`, and
 authored `tests/`. Demo-specific documentation belongs in that directory. Follow
 `examples/README.md`; do not add flat examples or a redundant project manifest.
-Keep the runtime crates (host, abi, ir, compiler, language, cpu, gpu, runtime,
-graph, and the `orla` CLI) free of external dependencies; the interface layer
-(the Player, `orla-import`, `orla-export`, `orla-jit`, `orla-ffi`) is the
-only place that may take them, for devices, for formats that are not worth
-decoding twice, and for a code generator. `orla-jit` and `orla-ffi` are the
+Keep the runtime crates (host, abi, ir, language, compiler, rules, cpu,
+runtime, graph, scene, and the matrix that holds backends to them) free of
+external dependencies. Two backends take the one dependency their machine
+needs and keep it behind the `Backend` boundary: `orla-gpu` takes wgpu (and
+pollster to wait on it) to reach a device, and `orla-jit` takes Cranelift to
+generate native code. The interface layer (`orla-session`, the `orla` CLI, the
+Player, `orla-import`, `orla-export`, `orla-ffi`) is the only other place that
+may take them, for devices, for formats that are not worth decoding twice,
+and for the protocol's JSON. `orla-jit` and `orla-ffi` are the
 two crates allowed `unsafe`: the JIT calls the code it produces, the FFI
 reads the pointers and strings a C caller hands it, and nothing else.
 Bridges to other programs live in `bridges/<program>/`, written in that

@@ -3,8 +3,9 @@
 **Answers:** which command does what, with a line you can run.
 
 Orla is a Rust workspace whose runtime crates have no external
-dependencies; only the interface layer (the Player, `orla-import`) takes
-them, and `orla-export` needs none. Build and verify:
+dependencies; the GPU and JIT backends take the one their machine needs
+(wgpu, Cranelift), and otherwise only the interface layer takes them
+(`orla-session` for the protocol's JSON, the Player, `orla-import`). Build and verify:
 
 ```sh
 cargo build --workspace
@@ -338,8 +339,8 @@ their fused version arrives.
 ## Import a model or a sound
 
 `orla-import` is the interface layer's converter: it speaks the Host's file
-formats from outside the runtime, and it is the one place besides the
-Player that takes dependencies. `import` reads a glTF or GLB model and
+formats from outside the runtime, in the interface layer that may take
+dependencies. `import` reads a glTF or GLB model and
 writes what a scene takes as inputs: vertices as rows of `{position,
 normal, uv}` with every node's transform baked in, triangles as rows of
 three indices, and the base colour texture as a PNG, into `--out <dir>`
