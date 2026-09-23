@@ -37,7 +37,12 @@ pose it stands in — one clip of one frame, `<name>.pose.clip.field` —
 so posing a bone in Blender moves the mesh in the window without
 rewriting the mesh or the clips.
 
-`test_rig.py` builds a rig, pushes it, and exports the same rig as glTF;
+With **Live** on, posing in Pose Mode pushes too: Pose Mode makes the
+armature the active object, so an armature stands for the meshes it
+deforms.
+
+`test_rig.py` builds a rig, pushes it, poses a bone with Live on, and
+exports the same rig as glTF;
 `crates/cli/tests/bridges.rs` poses both and checks they put the arm in
 the same place, which is what "the two ways in agree" means when their
 vertices are in different orders:

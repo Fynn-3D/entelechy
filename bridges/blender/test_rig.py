@@ -50,6 +50,26 @@ assert any(os.path.basename(p) == "Arm.pose.clip.field" for p in live), [
 ]
 print(f"live: {len(live)} rows for the frame it stands on")
 
+# Live: posing the armature — which is what Pose Mode makes active —
+# pushes the mesh it deforms, not nothing.
+import math
+
+bridge.register()
+scene = bpy.context.scene
+scene.orla.assets_dir = os.path.join(out, "live")
+scene.orla.live = True
+bpy.context.view_layer.objects.active = armature
+pose_file = os.path.join(out, "live", "Arm.pose.clip.field")
+before = open(pose_file, "rb").read()
+bridge._last_push = 0.0
+armature.pose.bones["upper"].rotation_mode = "XYZ"
+armature.pose.bones["upper"].rotation_euler = (math.radians(55.0), 0.0, 0.0)
+bpy.context.view_layer.update()
+after = open(pose_file, "rb").read()
+assert after != before, "posing the armature pushed nothing"
+print("live: posing the armature pushed the mesh it deforms")
+scene.orla.live = False
+
 glb = os.path.join(out, "arm.glb")
 bpy.ops.export_scene.gltf(
     filepath=glb,

@@ -747,28 +747,72 @@ class ORLA_PT_panel(bpy.types.Panel):
 _last_push = 0.0
 
 
+def deformed_by(armature):
+    """The mesh objects this armature poses."""
+    return [
+        obj
+        for obj in bpy.data.objects
+        if obj.type == "MESH" and armature_of(obj) is armature
+    ]
+
+
+def live_targets(active):
+    """What a push should write when `active` is what the person is
+    working on, and which ids changing means it is worth writing.
+
+    Posing happens with the armature active, not the mesh — Pose Mode
+    selects the armature — so an armature stands for the meshes it
+    deforms.
+    """
+    if active is None:
+        return [], set()
+    if active.type == "ARMATURE":
+        targets = deformed_by(active)
+    elif active.type == "MESH":
+        targets = [active]
+    else:
+        return [], set()
+    watched = set()
+    for obj in targets:
+        watched.add(obj)
+        if obj.data is not None:
+            watched.add(obj.data)
+        armature = armature_of(obj)
+        if armature is not None:
+            watched.add(armature)
+            if armature.data is not None:
+                watched.add(armature.data)
+    return targets, watched
+
+
+def push_live(obj, assets_dir, axes, depsgraph=None):
+    """What Live writes for one object: a rigged one pushes the pose it
+    stands in — the mesh and the joints do not change while it is posed,
+    so a frame costs one clip of one frame — and anything else pushes
+    the mesh it has become."""
+    if armature_of(obj) is not None:
+        return push_rig(obj, assets_dir, axes, clips=False)
+    return push_object(obj, assets_dir, depsgraph, axes)
+
+
 def _on_depsgraph(scene, depsgraph):
     global _last_push
     settings = getattr(scene, "orla", None)
     if settings is None or not settings.live or not settings.assets_dir:
         return
-    obj = bpy.context.view_layer.objects.active
-    if obj is None or obj.type != "MESH":
+    targets, watched = live_targets(bpy.context.view_layer.objects.active)
+    if not targets:
         return
-    changed = any(update.id.original == obj.data or update.id.original == obj for update in depsgraph.updates if update.is_updated_geometry or update.is_updated_transform)
+    changed = any(update.id.original in watched for update in depsgraph.updates)
     if not changed or time.monotonic() - _last_push < 0.2:
         return
     _last_push = time.monotonic()
-    try:
-        # A rigged object pushes the pose it stands in: the mesh and the
-        # joints do not change while it is posed, so what a frame costs
-        # is one clip of one frame.
-        if armature_of(obj) is not None:
-            push_rig(obj, bpy.path.abspath(settings.assets_dir), settings.axes, clips=False)
-        else:
-            push_object(obj, bpy.path.abspath(settings.assets_dir), depsgraph, settings.axes)
-    except Exception as error:
-        print("orla bridge: push failed:", error)
+    assets = bpy.path.abspath(settings.assets_dir)
+    for obj in targets:
+        try:
+            push_live(obj, assets, settings.axes, depsgraph)
+        except Exception as error:
+            print("orla bridge: push failed:", error)
 
 
 classes = (OrlaPreferences, OrlaSettings, ORLA_OT_push, ORLA_OT_push_rig, ORLA_OT_pull_mesh, ORLA_OT_watch, ORLA_OT_pull_image, ORLA_OT_param, ORLA_OT_publish, ORLA_PT_panel)

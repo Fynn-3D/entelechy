@@ -704,6 +704,31 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     } else {
         None
     };
+    // What a model can carry that these rows do not, said rather than
+    // dropped: a reader that loses something in silence is worse than
+    // one that refuses.
+    let morphs = model.json["meshes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|mesh| mesh["primitives"].as_array().into_iter().flatten())
+        .any(|primitive| primitive.get("targets").is_some());
+    if morphs {
+        notes.push("morph targets are left out; the mesh comes in at its own shape".into());
+    }
+    let textured = model.json["materials"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|material| {
+            material["pbrMetallicRoughness"]["baseColorTexture"]["index"].is_number()
+        })
+        .count();
+    if textured > 1 {
+        notes.push(format!(
+            "the model has {textured} materials with a base colour texture; the first comes in and the rest are left out"
+        ));
+    }
     // Walk the scene: nodes carry meshes and transforms.
     let scene_index = model.json["scene"].as_u64().unwrap_or(0) as usize;
     let roots: Vec<usize> = model.json["scenes"]
@@ -1140,6 +1165,43 @@ mod tests {
                          {{"bufferView":6,"componentType":5126,"count":2,"type":"VEC4"}}]}}"#,
             bin.len()
         )
+    }
+
+    /// What a model carries that these rows do not is said, not dropped.
+    #[test]
+    fn what_is_left_out_is_named() {
+        let dir = std::env::temp_dir().join(format!("orla-gltf-notes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = quad_gltf()
+            .replace(
+                r#""attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2"#,
+                r#""attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2,"targets":[{"POSITION":0}]"#,
+            )
+            .replace(
+                r#""nodes":[{"mesh":0"#,
+                r#""materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}},{"pbrMetallicRoughness":{"baseColorTexture":{"index":1}}}],
+                "nodes":[{"mesh":0"#,
+            );
+        std::fs::write(dir.join("quad.gltf"), text).unwrap();
+        let imported = import(&dir.join("quad.gltf"), &dir.join("out"), 30.0).unwrap();
+        assert!(
+            imported
+                .notes
+                .iter()
+                .any(|note| note.contains("morph targets")),
+            "{:?}",
+            imported.notes
+        );
+        assert!(
+            imported
+                .notes
+                .iter()
+                .any(|note| note.contains("2 materials with a base colour texture")),
+            "{:?}",
+            imported.notes
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

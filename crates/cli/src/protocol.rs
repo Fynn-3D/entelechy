@@ -597,6 +597,24 @@ fn failure(message: impl Into<String>) -> Json {
     json!({ "message": message.into() })
 }
 
+/// Refuses a name that is not a node of the loaded scene, naming the
+/// near miss where there is one. `pin` used to take any word and say
+/// `ok`, which a caller only found out about one request later, as a
+/// read that told it to pin.
+fn known_node(session: &Session, node: &str) -> Result<(), Json> {
+    let Some(graph) = session.graph() else {
+        return Err(failure("no scene is loaded"));
+    };
+    if graph.nodes.iter().any(|n| n.id.0 == node) {
+        return Ok(());
+    }
+    let known: Vec<&str> = graph.nodes.iter().map(|n| n.id.0.as_str()).collect();
+    Err(failure(format!(
+        "`{node}` is not a node of this scene{}",
+        orla_language::did_you_mean(node, known)
+    )))
+}
+
 /// A diagnostic with a position when the message starts with `line:col:`.
 fn positioned(message: String) -> Json {
     let mut parts = message.splitn(3, ':');
@@ -1089,6 +1107,16 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 session
                     .cached(&orla_graph::NodeId(node.to_owned()), port)
                     .ok_or_else(|| {
+                        // A name that is not a node at all is the likelier
+                        // mistake, and pinning it again will not help.
+                        if !graph.nodes.iter().any(|n| n.id.0 == node) {
+                            let known: Vec<&str> =
+                                graph.nodes.iter().map(|n| n.id.0.as_str()).collect();
+                            return failure(format!(
+                                "`{node}` is not a node of this scene{}",
+                                orla_language::did_you_mean(node, known)
+                            ));
+                        }
                         failure(format!(
                             "node `{node}` has no materialized `{port}`; pin it and evaluate again"
                         ))
@@ -1218,11 +1246,13 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         }
         "pin" => {
             let node = text_field("node")?;
+            known_node(session, &node)?;
             session.pin(orla_graph::NodeId(node.clone()));
             Ok(json!({ "pinned": node }))
         }
         "unpin" => {
             let node = text_field("node")?;
+            known_node(session, &node)?;
             session.unpin(&orla_graph::NodeId(node.clone()));
             Ok(json!({ "unpinned": node }))
         }

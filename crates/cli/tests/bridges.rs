@@ -7,8 +7,9 @@
 
 mod common;
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use orla::png;
 
@@ -97,6 +98,59 @@ fn the_godot_bridge_passes_its_own_test() {
         "the Godot bridge",
         "mesh: the torus is an ArrayMesh",
     );
+}
+
+/// The bridge talks to a running session: it pushes files, pulls rows
+/// and a picture back, watches a node, and sets a parameter. Run from
+/// here so a change to the protocol, or to the names a scene's nodes
+/// have, breaks this rather than waiting for someone to open Blender.
+#[test]
+fn the_blender_bridge_passes_its_own_test() {
+    let Some(blender) = tool(&[
+        "/Applications/Blender.app/Contents/MacOS/Blender",
+        "blender",
+    ]) else {
+        eprintln!("skipped: no Blender on this machine");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("orla-blender-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut session = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .current_dir(root())
+        .arg("serve")
+        .arg("examples/mesh/scene.osn")
+        .args(["--listen", "127.0.0.1:0"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(session.stderr.take().unwrap());
+    let port = stderr
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| {
+            line.strip_prefix("listening on 127.0.0.1:")
+                .map(str::to_owned)
+        })
+        .expect("the session names its port");
+    let mut command = Command::new(blender);
+    command
+        .current_dir(root())
+        .args(["-b", "--python", "bridges/blender/test_bridge.py", "--"])
+        .args(["--port", &port])
+        .arg("--out")
+        .arg(&dir);
+    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        passed(command, "the Blender bridge", "pull: ok");
+    }));
+    let _ = session.kill();
+    let _ = session.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(panic) = checked {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 /// The two ways a rig comes in — the Blender bridge writing the rows

@@ -62,6 +62,15 @@ same place.
 A tool of your own writes these five files and is done; there is nothing
 else to register, and no format to teach the runtime.
 
+## What does not come in yet
+
+`orla import` takes the first skin of a model and leaves the rest, and
+says so. Morph targets, a second material's texture and anything else
+these five rows do not hold are named in its notes rather than dropped
+in silence. The way back out is a mesh, not a rig: `orla-export` writes
+vertices, triangles and a texture as a GLB, and a rig exported from Orla
+would need a skin and animations written there too.
+
 ## More than one of them
 
 Nothing above changes for a crowd. A scene that poses many instances of

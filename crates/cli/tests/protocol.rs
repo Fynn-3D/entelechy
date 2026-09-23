@@ -1006,3 +1006,47 @@ fn an_agent_can_measure_the_scene_it_is_holding() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A name that is not a node is refused where it is written, rather
+/// than accepted by `pin` and reported a request later as a read that
+/// says to pin it — which is what sent one reader looking for a fault
+/// in the materializing.
+#[test]
+fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mesh/scene.osn");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "pin", "node": "vertices" }),
+            json!({ "id": 2, "op": "pin", "node": "subdivided.vertice" }),
+            json!({ "id": 3, "op": "pin", "node": "subdivided.vertices" }),
+            json!({ "id": 4, "op": "unpin", "node": "nowhere" }),
+            json!({ "id": 5, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 6, "op": "read", "node": "verticez" }),
+            json!({ "id": 7, "op": "read", "node": "subdivided.vertices" }),
+            json!({ "id": 8, "op": "quit" }),
+        ],
+    );
+    let message = |at: usize| -> String {
+        responses[at]["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(
+        message(0).contains("`vertices` is not a node of this scene"),
+        "{}",
+        message(0)
+    );
+    // A near miss says which node was meant.
+    assert!(
+        message(1).contains("did you mean `subdivided.vertices`?"),
+        "{}",
+        message(1)
+    );
+    assert!(responses[2]["ok"].is_object(), "{:?}", responses[2]);
+    assert!(message(3).contains("not a node"), "{}", message(3));
+    assert!(message(5).contains("not a node"), "{}", message(5));
+    // The node that is one reads, having been pinned.
+    assert!(responses[6]["ok"].is_object(), "{:?}", responses[6]);
+}

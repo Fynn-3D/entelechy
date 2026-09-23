@@ -61,8 +61,11 @@ assert status["nodes"] >= 3, status
 torus = bridge.pull_mesh(client, "torus", "faces", name="Torus", weld=False)
 assert len(torus.data.vertices) == 1152 and len(torus.data.polygons) == 2304, (len(torus.data.vertices), len(torus.data.polygons))
 # The subdivided torus is a Kernel's product behind fusion: the pull pins
-# it; welded, its corners fold back to shared vertices.
-fine = bridge.pull_mesh(client, "vertices", "triangles", name="Fine")
+# it; welded, its corners fold back to shared vertices. It is a node of a
+# placed sub-graph, so its name carries the placement's — `orla graph`
+# prints the names a session knows, and a name that is not one of them is
+# refused rather than pinned.
+fine = bridge.pull_mesh(client, "subdivided.vertices", "subdivided.triangles", name="Fine")
 assert len(fine.data.polygons) == 9216 and len(fine.data.vertices) < 8064, (len(fine.data.vertices), len(fine.data.polygons))
 # The torus lies in Orla's xz plane; turned back, it lies flat in Blender's xy.
 zs = [v.co.z for v in fine.data.vertices]
@@ -70,7 +73,11 @@ ys = [v.co.y for v in fine.data.vertices]
 assert max(zs) - min(zs) < max(ys) - min(ys), (max(zs) - min(zs), max(ys) - min(ys))
 # A watch reads the rows each tick and rebuilds only when they change.
 settings = bpy.context.scene.orla
-settings.vertex_node, settings.triangle_node, settings.watch_name = "vertices", "triangles", "Watched"
+settings.vertex_node, settings.triangle_node, settings.watch_name = (
+    "subdivided.vertices",
+    "subdivided.triangles",
+    "Watched",
+)
 bridge._watch["client"] = client
 assert bridge.watch_once(bpy.context) == "built"
 assert "Watched" in bpy.data.objects
@@ -82,3 +89,4 @@ client.call("param", name="exposure", value=1.5)
 client.close()
 print("pull: ok")
 print("bridge: ok")
+print("RESULT: ok")
