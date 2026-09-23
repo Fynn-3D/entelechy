@@ -16,8 +16,42 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
     let Some(gpu) = GpuBackend::new().ok() else {
         return;
     };
+    let cases = orla_matrix::cases();
+    let failures = differences(&gpu, &cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn every_long_feature_matches_the_interpreter_where_the_device_has_longs() {
+    let Some(gpu) = GpuBackend::new().ok() else {
+        return;
+    };
+    let cases = orla_matrix::long_cases();
+    let module = compile(&cases[0].source).unwrap();
+    if !gpu.takes(&module) {
+        return;
+    }
+    let failures = differences(&gpu, &cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+/// What each case's GPU run says against the interpreter's: integers
+/// and booleans exact, floats to rounding.
+fn differences(gpu: &GpuBackend, cases: &[orla_matrix::Case]) -> Vec<String> {
     let mut failures = Vec::new();
-    for case in orla_matrix::cases() {
+    for case in cases {
         let module = match compile(&case.source) {
             Ok(module) => module,
             Err(error) => {
@@ -50,7 +84,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
                 continue;
             }
         };
-        let prepared = match Backend::prepare(&gpu, &module) {
+        let prepared = match Backend::prepare(gpu, &module) {
             Ok(prepared) => prepared,
             Err(error) => {
                 failures.push(format!(
@@ -62,8 +96,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
             }
         };
         let mut scope = Scope::new(&mut host, all());
-        let out = match Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope)
-        {
+        let out = match Backend::execute(gpu, prepared.as_ref(), &module, &invocation, &mut scope) {
             Ok(outputs) => outputs,
             Err(error) => {
                 failures.push(format!("{}: the GPU fails: {error}", case.name));
@@ -89,7 +122,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
             let candidate: Vec<u32> = match host.resident(*b).unwrap() {
                 Some(device) => {
                     let storage: Vec<u32> =
-                        Backend::download(&gpu, device, schema.storage_words(count) * 4)
+                        Backend::download(gpu, device, schema.storage_words(count) * 4)
                             .unwrap()
                             .chunks_exact(4)
                             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -116,13 +149,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{} of {} cases differ:\n{}",
-        failures.len(),
-        orla_matrix::cases().len(),
-        failures.join("\n")
-    );
+    failures
 }
 
 #[test]
@@ -136,11 +163,7 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
         let Err(error) = Backend::prepare(&gpu, &module) else {
             panic!("{}: prepared", case.name);
         };
-        assert!(
-            error.contains("a Double or a Long"),
-            "{}: {error}",
-            case.name
-        );
+        assert!(error.contains("holds a Double"), "{}: {error}", case.name);
     }
     // Everything else it takes.
     for case in orla_matrix::cases() {

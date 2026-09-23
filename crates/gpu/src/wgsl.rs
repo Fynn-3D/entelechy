@@ -128,6 +128,9 @@ fn wgsl_type(ty: Type) -> String {
         Type::Mat2 => "mat2x2<f32>".into(),
         Type::Mat3 => "mat3x3<f32>".into(),
         Type::Mat4 => "mat4x4<f32>".into(),
+        Type::Long => "i64".into(),
+        Type::LVec2 => "vec2<i64>".into(),
+        Type::LVec3 => "vec3<i64>".into(),
         Type::Struct(index) => format!("S{index}"),
         other => unreachable!("the GPU refuses a module holding {other}"),
     }
@@ -194,6 +197,12 @@ fn literal(value: &Value) -> String {
             .join(", ")
     };
     let floats = |v: &[f32]| v.iter().map(|x| f(*x)).collect::<Vec<_>>().join(", ");
+    let longs = |v: &[i64]| {
+        v.iter()
+            .map(|l| long_literal(*l))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     match value {
         Value::Float(v) => f(*v),
         // WGSL has no literal for the most negative int; its bits do.
@@ -210,12 +219,117 @@ fn literal(value: &Value) -> String {
         Value::Mat2(v) => format!("mat2x2<f32>({})", floats(v)),
         Value::Mat3(v) => format!("mat3x3<f32>({})", floats(v)),
         Value::Mat4(v) => format!("mat4x4<f32>({})", floats(v)),
+        Value::Long(v) => long_literal(*v),
+        Value::LVec2(v) => format!("vec2<i64>({})", longs(v)),
+        Value::LVec3(v) => format!("vec3<i64>({})", longs(v)),
         // The validator refuses a constant record: a struct or an array
         // is built by `Construct`.
         Value::Record(_) => unreachable!("a constant of the IR is never a record"),
         other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
+
+/// A `Long` as WGSL writes one; the most negative has no literal, and
+/// is one below the next.
+fn long_literal(v: i64) -> String {
+    if v == i64::MIN {
+        "(-9223372036854775807li - 1li)".to_owned()
+    } else {
+        format!("{v}li")
+    }
+}
+
+/// What a module holding a `Long` needs besides WGSL's own: a division
+/// and a remainder (the device compiler refuses the ones naga writes for
+/// 64 bits), a sign, and a float's conversion, each the reference's
+/// rule, and none of them through `select`, which the device compiler
+/// cannot pick for a 64-bit integer.
+const LONG_HELPERS: &str = "
+// The quotient and remainder of magnitudes, a bit at a time.
+fn udivmod_u64(n: u64, d: u64) -> vec2<u64> {
+    var q: u64 = 0lu;
+    var r: u64 = 0lu;
+    for (var i: i32 = 63; i >= 0; i = i - 1) {
+        r = (r << 1u) | ((n >> u32(i)) & 1lu);
+        if (r >= d) {
+            r = r - d;
+            q = q | (1lu << u32(i));
+        }
+    }
+    return vec2<u64>(q, r);
+}
+// Truncated toward zero, the remainder taking the dividend's sign; a
+// zero divisor gives the dividend and a zero remainder, and the most
+// negative over minus one gives itself, as WGSL does for an Int.
+fn div_i64(a: i64, b: i64) -> i64 {
+    if (b == 0li) { return a; }
+    if (b == -1li) { return -a; }
+    var ua = bitcast<u64>(a);
+    if (a < 0li) { ua = bitcast<u64>(-a); }
+    var ub = bitcast<u64>(b);
+    if (b < 0li) { ub = bitcast<u64>(-b); }
+    let q = bitcast<i64>(udivmod_u64(ua, ub).x);
+    if ((a < 0li) != (b < 0li)) { return -q; }
+    return q;
+}
+fn rem_i64(a: i64, b: i64) -> i64 {
+    if (b == 0li || b == -1li) { return 0li; }
+    var ua = bitcast<u64>(a);
+    if (a < 0li) { ua = bitcast<u64>(-a); }
+    var ub = bitcast<u64>(b);
+    if (b < 0li) { ub = bitcast<u64>(-b); }
+    let r = bitcast<i64>(udivmod_u64(ua, ub).y);
+    if (a < 0li) { return -r; }
+    return r;
+}
+fn div_i64x2(a: vec2<i64>, b: vec2<i64>) -> vec2<i64> {
+    return vec2<i64>(div_i64(a.x, b.x), div_i64(a.y, b.y));
+}
+fn div_i64x3(a: vec3<i64>, b: vec3<i64>) -> vec3<i64> {
+    return vec3<i64>(div_i64(a.x, b.x), div_i64(a.y, b.y), div_i64(a.z, b.z));
+}
+fn rem_i64x2(a: vec2<i64>, b: vec2<i64>) -> vec2<i64> {
+    return vec2<i64>(rem_i64(a.x, b.x), rem_i64(a.y, b.y));
+}
+fn rem_i64x3(a: vec3<i64>, b: vec3<i64>) -> vec3<i64> {
+    return vec3<i64>(rem_i64(a.x, b.x), rem_i64(a.y, b.y), rem_i64(a.z, b.z));
+}
+fn sign_i64(x: i64) -> i64 {
+    if (x > 0li) { return 1li; }
+    if (x < 0li) { return -1li; }
+    return 0li;
+}
+fn sign_i64x2(v: vec2<i64>) -> vec2<i64> {
+    return vec2<i64>(sign_i64(v.x), sign_i64(v.y));
+}
+fn sign_i64x3(v: vec3<i64>) -> vec3<i64> {
+    return vec3<i64>(sign_i64(v.x), sign_i64(v.y), sign_i64(v.z));
+}
+// A Float to a Long as the reference converts it: truncated, saturating
+// at the ends, and zero for what is not a number.
+fn to_long(x: f32) -> i64 {
+    if (is_nan(x)) { return 0li; }
+    if (x >= 9223372036854775808.0) { return 9223372036854775807li; }
+    if (x <= -9223372036854775808.0) { return -9223372036854775807li - 1li; }
+    return i64(x);
+}
+fn to_long2(v: vec2<f32>) -> vec2<i64> {
+    return vec2<i64>(to_long(v.x), to_long(v.y));
+}
+fn to_long3(v: vec3<f32>) -> vec3<i64> {
+    return vec3<i64>(to_long(v.x), to_long(v.y), to_long(v.z));
+}
+// The words of a Long, the low one first.
+fn long_low(x: i64) -> u32 {
+    return u32(bitcast<u64>(x) & 0xFFFFFFFFlu);
+}
+fn long_high(x: i64) -> u32 {
+    return u32(bitcast<u64>(x) >> 32u);
+}
+fn long_of(low: u32, high: u32) -> i64 {
+    return bitcast<i64>((u64(high) << 32u) | u64(low));
+}
+";
 
 /// The preamble both shaders share: the context and params uniforms, the
 /// output buffer when `with_output`, every input's buffer, the structs,
@@ -328,6 +442,9 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     return vec3<i32>(to_int(v.x), to_int(v.y), to_int(v.z));
 }}"
     );
+    if module.holds(Type::Long) {
+        out.push_str(LONG_HELPERS);
+    }
     for (index, port) in manifest.inputs.iter().enumerate() {
         let element = port.element();
         // Words an element takes, or bytes when the input keeps it narrow.
@@ -1464,12 +1581,11 @@ fn all_floats(module: &Module, ty: Type) -> bool {
         | Type::Mat2
         | Type::Mat3
         | Type::Mat4 => true,
-        Type::Int | Type::Bool | Type::IVec2 | Type::IVec3 => false,
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
             .all(|field| all_floats(module, field.ty)),
-        other => unreachable!("the GPU refuses a module holding {other}"),
+        _ => false,
     }
 }
 
@@ -1772,6 +1888,7 @@ fn scalar_load(encoding: Encoding, kind: Scalar, buffer: &str, base: &str, k: us
             Scalar::Float => format!("bitcast<f32>({word})"),
             Scalar::Int => format!("bitcast<i32>({word})"),
             Scalar::Bool => format!("({word} != 0u)"),
+            Scalar::Long => format!("long_of({word}, {buffer}[{base} + {}u])", k + 1),
             other => unreachable!("the GPU refuses a module holding a {other:?}"),
         };
     }
@@ -1945,6 +2062,16 @@ fn compose(
                 .join(", ");
             (format!("{}({parts})", wgsl_type(ty)), n * n)
         }
+        // A long is two words, the low one first.
+        Type::Long => (scalar(Scalar::Long, offset), 2),
+        Type::LVec2 | Type::LVec3 => {
+            let n = ty.lanes().map_or(2, |(n, _)| usize::from(n));
+            let parts = (0..n)
+                .map(|k| scalar(Scalar::Long, offset + 2 * k))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (format!("{}({parts})", wgsl_type(ty)), 2 * n)
+        }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
             let mut parts = Vec::new();
@@ -2015,6 +2142,28 @@ fn store_lines(
                 }
             }
             n * n
+        }
+        Type::Long => {
+            out.push(format!("    out0[b + {offset}u] = long_low({path});"));
+            out.push(format!(
+                "    out0[b + {}u] = long_high({path});",
+                offset + 1
+            ));
+            2
+        }
+        Type::LVec2 | Type::LVec3 => {
+            let n = ty.lanes().map_or(2, |(n, _)| usize::from(n));
+            for (k, component) in ["x", "y", "z"].iter().take(n).enumerate() {
+                let at = offset + 2 * k;
+                out.push(format!(
+                    "    out0[b + {at}u] = long_low({path}.{component});"
+                ));
+                out.push(format!(
+                    "    out0[b + {}u] = long_high({path}.{component});",
+                    at + 1
+                ));
+            }
+            2 * n
         }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
@@ -2149,6 +2298,11 @@ impl Emitter<'_> {
                         Scalar::Float => format!("bitcast<f32>({word})"),
                         Scalar::Int => format!("bitcast<i32>({word})"),
                         Scalar::Bool => format!("({word} != 0u)"),
+                        Scalar::Long => {
+                            let high = k + 1;
+                            let high = format!("params[{}u][{}u]", start + high / 4, high % 4);
+                            format!("long_of({word}, {high})")
+                        }
                         other => unreachable!("the GPU refuses a module holding a {other:?}"),
                     }
                 };
@@ -2210,7 +2364,45 @@ impl Emitter<'_> {
                     };
                     format!("(vec{n}<u32>({unsigned}) & vec{n}<u32>(31u))")
                 };
+                // A long: the bit operators with a scalar widened beside a
+                // vector, a shift's count modulo 64, and the division and
+                // remainder the preamble writes.
+                let long = self.type_of(*a).scalar() == Some(Type::Long);
+                let lanes = ty.lanes().map(|(n, _)| n);
+                let count64 = |id: &ValueId| match lanes {
+                    // A scalar count converts first, then splats.
+                    Some(n) if self.type_of(*id) == Type::Long => {
+                        format!("(vec{n}<u32>(u32({})) & vec{n}<u32>(63u))", v(id))
+                    }
+                    Some(n) => format!("(vec{n}<u32>({}) & vec{n}<u32>(63u))", v(id)),
+                    None => format!("(u32({}) & 63u)", v(id)),
+                };
+                let suffix = match lanes {
+                    Some(n) => format!("x{n}"),
+                    None => String::new(),
+                };
+                let unsigned = match lanes {
+                    Some(n) => format!("vec{n}<u64>"),
+                    None => "u64".to_owned(),
+                };
                 match op {
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor if long => {
+                        format!("({} {symbol} {})", widen(a), widen(b))
+                    }
+                    BinaryOp::Shl | BinaryOp::Shr if long => {
+                        format!("({} {symbol} {})", widen(a), count64(b))
+                    }
+                    BinaryOp::Ushr if long => format!(
+                        "bitcast<{ty_name}>(bitcast<{unsigned}>({}) >> {})",
+                        widen(a),
+                        count64(b)
+                    ),
+                    BinaryOp::Div if long => {
+                        format!("div_i64{suffix}({}, {})", widen(a), widen(b))
+                    }
+                    BinaryOp::Rem if long => {
+                        format!("rem_i64{suffix}({}, {})", widen(a), widen(b))
+                    }
                     BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor if int_vector => {
                         format!("({} {symbol} {})", widen(a), widen(b))
                     }
@@ -2519,14 +2711,34 @@ impl Emitter<'_> {
         let v = |id: &ValueId| format!("v{}", id.0);
         let list = args.iter().map(v).collect::<Vec<_>>().join(", ");
         let splat = |id: &ValueId, target: Type| {
-            if target.lanes().is_some() && matches!(self.type_of(*id), Type::Float | Type::Int) {
+            if target.lanes().is_some()
+                && matches!(self.type_of(*id), Type::Float | Type::Int | Type::Long)
+            {
                 format!("{}({})", wgsl_type(target), v(id))
             } else {
                 v(id)
             }
         };
+        let from = self.type_of(args[0]).scalar();
+        let lanes = ty.lanes().map(|(n, _)| n);
+        let suffix = |base: &str| match lanes {
+            Some(n) => format!("{base}{n}"),
+            None => base.to_owned(),
+        };
         match intrinsic {
             Intrinsic::ToFloat => format!("{}({list})", wgsl_type(ty)),
+            // A long keeps its low 32 bits, as the reference's does.
+            Intrinsic::ToInt if from == Some(Type::Long) => format!("{}({list})", wgsl_type(ty)),
+            // Saturating from a float, as `to_int` does; from an integer
+            // or a Bool, WGSL's own.
+            Intrinsic::ToLong if from == Some(Type::Float) => {
+                format!("{}({list})", suffix("to_long"))
+            }
+            Intrinsic::ToLong => format!("{}({list})", wgsl_type(ty)),
+            Intrinsic::Sign if from == Some(Type::Long) => match lanes {
+                Some(n) => format!("sign_i64x{n}({list})"),
+                None => format!("sign_i64({list})"),
+            },
             // Saturating, as the reference converts; see `to_int` in
             // the preamble. A Bool is a 0 or a 1 and needs none of it.
             Intrinsic::ToInt => match (self.type_of(args[0]), ty) {

@@ -1364,25 +1364,33 @@ impl Module {
     /// A backend without 64-bit arithmetic asks this before it takes
     /// the module.
     pub fn holds_64bit(&self) -> bool {
-        let wide = |ty: Type| ty.is_64bit();
+        self.holds(Type::Double) || self.holds(Type::Long)
+    }
+
+    /// Whether the module holds a value made of `scalar` anywhere: a
+    /// port, a parameter, a struct's field, or a value any function
+    /// computes.
+    pub fn holds(&self, scalar: Type) -> bool {
+        let made_of = |ty: Type| ty.scalar() == Some(scalar);
+        let kind = scalar_kind(scalar);
         let manifest = &self.manifest;
         manifest
             .inputs
             .iter()
             .chain(&manifest.outputs)
-            .any(|port| port.ty.schema.scalars().iter().any(|s| s.words() == 2))
-            || manifest.params.iter().any(|param| wide(param.ty))
+            .any(|port| port.ty.schema.scalars().iter().any(|s| Some(*s) == kind))
+            || manifest.params.iter().any(|param| made_of(param.ty))
             || self
                 .structs
                 .iter()
-                .any(|def| def.fields.iter().any(|field| wide(field.ty)))
+                .any(|def| def.fields.iter().any(|field| made_of(field.ty)))
             || self
                 .functions
                 .iter()
                 .chain(std::iter::once(&self.entry))
                 .chain(&self.merge)
                 .chain(&self.init)
-                .any(|function| function.any_type(&wide))
+                .any(|function| function.any_type(&made_of))
     }
 }
 

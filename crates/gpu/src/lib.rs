@@ -240,6 +240,8 @@ pub struct GpuBackend {
     /// Offering them is not writing them: a driver that takes the
     /// queries and resolves zeros leaves the wait as the measurement.
     timestamps: bool,
+    /// Whether the device computes 64-bit integers.
+    int64: bool,
     /// What asking the device's own clock has been worth: `UNTRIED`
     /// until a measured run asks, then `ANSWERED` or `SILENT`. A driver
     /// that offers timestamps and resolves zeros is asked once and not
@@ -300,6 +302,25 @@ impl Prepared for Pipeline {
 }
 
 impl GpuBackend {
+    /// Why this device does not run `module`, if it does not: a `Double`
+    /// it has no arithmetic for, or a `Long` where the device has none or
+    /// the mode folds words it would have to fold in pairs.
+    fn refusal(&self, module: &Validated) -> Option<&'static str> {
+        if module.holds(orla_abi::Type::Double) {
+            return Some("holds a Double, which this backend does not compute");
+        }
+        if !module.holds(orla_abi::Type::Long) {
+            return None;
+        }
+        if !self.int64 {
+            return Some("holds a Long, and this device has no 64-bit integers");
+        }
+        match module.manifest.mode {
+            orla_ir::Mode::Map | orla_ir::Mode::Reduce => None,
+            _ => Some("holds a Long, which this backend computes in a map or a reduction only"),
+        }
+    }
+
     /// Opens the default adapter.
     pub fn new() -> Result<Self, GpuError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -325,13 +346,20 @@ impl GpuBackend {
         // Metal does not offer, so every pass carries its own.
         let timing = wgpu::Features::TIMESTAMP_QUERY;
         let timestamps = adapter.features().contains(timing);
+        // 64-bit integers, when the adapter computes them: a `Long` then
+        // runs here; without them, and for a `Double` always, the module
+        // goes to the ordered backend.
+        let int64 = adapter.features().contains(wgpu::Features::SHADER_INT64);
+        let mut features = wgpu::Features::empty();
+        if timestamps {
+            features |= timing;
+        }
+        if int64 {
+            features |= wgpu::Features::SHADER_INT64;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("orla"),
-            required_features: if timestamps {
-                timing
-            } else {
-                wgpu::Features::empty()
-            },
+            required_features: features,
             required_limits,
             ..Default::default()
         }))
@@ -351,6 +379,7 @@ impl GpuBackend {
             targets: SpareTextures::default(),
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
+            int64,
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
             clock: std::sync::atomic::AtomicU8::new(clock::UNTRIED),
         })
@@ -743,13 +772,13 @@ impl Backend for GpuBackend {
     }
 
     fn takes(&self, module: &Validated) -> bool {
-        !module.holds_64bit()
+        self.refusal(module).is_none()
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        if module.holds_64bit() {
+        if let Some(reason) = self.refusal(module) {
             return Err(format!(
-                "`{}` holds a Double or a Long, which this device does not compute; a session with an ordered backend runs it there",
+                "`{}` {reason}; a session with an ordered backend runs it there",
                 module.manifest.id
             ));
         }

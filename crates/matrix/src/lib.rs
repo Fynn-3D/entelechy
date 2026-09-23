@@ -807,6 +807,117 @@ pub fn wide_cases() -> Vec<Case> {
     out
 }
 
+/// The features of `Long` alone, which a device with 64-bit integers
+/// runs in a map and a reduction: a name, `let`s over the environment
+/// (`i: Int`, `n: Long`, the input `ids: Rows<Long>`, the params `big`,
+/// `origin` and `steps`), and the `Lng` they yield.
+pub fn long_features() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        (
+            "long arithmetic",
+            "let a = big * n + 7 - n * n * 1000000007l; let q = a / 97l + a % 97 + (0l - a) / 5; let bits = (((a << 20) ^ (a >> 3)) | (n & 5l)) & 0xFFFFFFFFFFl; let u = a >>> 40; let wrapped = (add_wrap(9223372036854775807l, n) >>> 60) + (sub_wrap(-9223372036854775807l, n) >>> 60) + (mul_wrap(big, big) >>> 40); let e = 5000000000 + n; let s = (n << 63) >>> 63; let big_q = (-9223372036854775807l - 1) / (n + 1) + 9223372036854775807l % (n + 2);",
+            "Lng { l: q + bits + u + wrapped + e + s + steps[i % 3] + abs(-n) + sign(a) + min(a, 3l) + max(n, 2l) + clamp(a, -5l, 5l) + big_q / 1000000000l, v: lvec3(q, a, -n), f: float(a) * 0.5, i: int(a % 1000l), b: a > big && a != 0l && n <= 40 }",
+        ),
+        (
+            "long vectors",
+            "let a = lvec2(n, big) + lvec2(1l, 2l) * 3; let b = lvec3(a, -n) % lvec3(7l, 11l, 13l) + lvec3(a, n) / 3l; let c = (a << lvec2(3l, 40l)) ^ lvec2(n, n); let d = (a >> 2l) + (lvec2(-n, n) >>> 60l); let widened = lvec2(ivec2(i, -i)) + lvec2(1, 2); let parts = a.yx - lvec2(1l, 1l); let clamped = clamp(lvec3(n, -n, big), -10l, 10l) + clamp(lvec3(n, n, n), lvec3(0l, 1l, 2l), lvec3(3l, 4l, 5l));",
+            "Lng { l: a.x + b.x + b.y + b.z + c.x + (c.y >>> 30) + d.x + d.y + widened.y + abs(lvec2(-n, n)).x + min(a, lvec2(5l, 6l)).y + max(a, 4l).x + parts.x + clamped.x + clamped.z + sign(lvec2(-n, 0l)).x + a[i % 2], v: lvec3(b.x, c.x, (a & 255l).y), f: float(b.z), i: int(b.z), b: a == a && b != lvec3(0l, 0l, 0l) }",
+        ),
+        (
+            "long conversions",
+            // Floats with exact products: a device's contraction must not
+            // move a truncation by one.
+            "let f = float(i) * 0.25 + 0.5; let back = int(big) + int(n * 3l); let lng = long(f * 1024.0) + long(i) + long(i > 2) + long(-f); let lv = long(vec2(f, -f)) + long(ivec2(i, 3)); let zero = f - f; let ledge = long(1.0 / zero) / 8 + long(zero / zero) + long(-1.0 / zero) / 8; let fl = float(lvec2(n, big)); let iv = int(lvec3(big, n, -n));",
+            "Lng { l: lng + lv.y + lv.x + ledge, v: lvec3(lv, n), f: fl.y + float(big) + fl.x, i: back + iv.x + iv.z, b: f > 1.0 }",
+        ),
+        (
+            "long structs, arrays and params",
+            "let s = Site { at: lvec2(n, -n) + origin, id: n * big }; let longs = [n, big, -n]; let picked = longs[i % 3] + longs[i + 10] + steps[i % 3]; let moved = Site { ..s, id: s.id + 1l }; let each_one = [each 3 { long(index()) * n }];",
+            "Lng { l: picked + moved.id + each_one[i % 3] + s.at.x, v: lvec3(s.at, 1l), f: 0.0, i: int(s.id % 1000l), b: s.id > 0l }",
+        ),
+        (
+            "long reads and control",
+            "let id = at(ids, i % 16) * 3l; let arm = match i % 3 { 0 => id, 1 => -id, _ => 7l }; let counted = loop 4 with acc = n { if acc > 100l { break acc; } acc * 3l }; let picked = if id > 0 { id / 7 } else { id % 7 };",
+            "Lng { l: id + arm + counted + picked, v: lvec3(id, arm, counted), f: float(id), i: int(id % 100l), b: id > 0l }",
+        ),
+    ]
+}
+
+const LONG_HEAD: &str = "requires { field.read; field.write; }
+    struct Lng { l: Long; v: LVec3; f: Float; i: Int; b: Bool; }
+    struct Site { at: LVec2; id: Long; }
+    param big: Long = 5000000000l;
+    param origin: LVec2 = lvec2(500000123456789, -4000000987654321);
+    param steps: [Long; 3] = [1l, -2l, 3l];
+";
+
+/// Every `Long` feature in a map over rows, a map over a grid, and a
+/// reduction.
+pub fn long_cases() -> Vec<Case> {
+    fn map_rows(lets: &str, out: &str) -> String {
+        format!(
+            "kernel long.map_rows@1 {{ {LONG_HEAD} input ids: Rows<Long>;
+    output result: Rows<Lng>;
+    compute {{ let i = element(); let n = long(i); {lets} return {out}; }} }}"
+        )
+    }
+    fn map_grid(lets: &str, out: &str) -> String {
+        format!(
+            "kernel long.map_grid@1 {{ {LONG_HEAD} input ids: Rows<Long>;
+    output result: Grid<Lng>; output lane: Grid<LVec2>;
+    compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; let n = long(i); {lets} let out = {out}; return {{ lane: out.v.xy * 2, result: out }}; }} }}"
+        )
+    }
+    fn reduce(lets: &str, out: &str) -> String {
+        format!(
+            "kernel long.reduce@1 {{ {LONG_HEAD} input ids: Rows<Long>;
+    output result: Rows<Lng>;
+    compute {{ let i = element(); let n = long(i); {lets} return {out}; }}
+    merge(a, b) {{ return Lng {{ l: add_wrap(a.l, b.l), v: lvec3(add_wrap(a.v.x, b.v.x), add_wrap(a.v.y, b.v.y), add_wrap(a.v.z, b.v.z)), f: a.f + b.f, i: (a.i & 0xFFFF) + (b.i & 0xFFFF), b: a.b || b.b }}; }} }}"
+        )
+    }
+    let modes: [(&str, Wrapper); 3] = [
+        ("map over rows", map_rows),
+        ("map over a grid", map_grid),
+        ("reduce", reduce),
+    ];
+    let mut out = Vec::new();
+    for (feature, lets, result) in long_features() {
+        for (mode, wrap) in modes {
+            let domain = match mode {
+                "map over rows" => Domain::Rows(COUNT),
+                "map over a grid" => Domain::Grid(16, 3),
+                _ => Domain::Rows(1),
+            };
+            // A reduction folds over its first input's rows.
+            let ids = if mode == "reduce" {
+                let values =
+                    (0..COUNT as i64).map(|i| Value::Long(i * 3_000_000_019 - 20_000_000_000));
+                (
+                    Schema::new(vec![Scalar::Long; 2]),
+                    Domain::Rows(COUNT),
+                    values.flat_map(|v| v.words()).collect(),
+                )
+            } else {
+                wide_ids()
+            };
+            out.push(Case {
+                name: format!("{feature} in {mode}"),
+                source: wrap(lets, result),
+                inputs: vec![ids],
+                params: vec![
+                    Value::Long(5_000_000_001),
+                    Value::LVec2([500000123456789, -4000000987654322]),
+                    Value::Record(vec![Value::Long(4), Value::Long(-5), Value::Long(6)]),
+                ],
+                domain,
+                context: context(),
+            });
+        }
+    }
+    out
+}
+
 /// Compares two outputs word by word under a layout: an Int or Bool word
 /// must match exactly, a Float word within `relative` of the larger
 /// magnitude plus `absolute` (NaN matches NaN). Returns the first
