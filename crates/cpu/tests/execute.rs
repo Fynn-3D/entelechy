@@ -405,7 +405,7 @@ fn fields_carry_struct_elements_with_exact_integers() {
     let seeded = CpuBackend.execute(&seed, &invocation, &mut scope).unwrap()[0];
     assert_eq!(host.schema(seeded).unwrap().to_string(), "f,f,i,b");
     assert_eq!(
-        host.element(seeded, 3).unwrap(),
+        &*host.element(seeded, 3).unwrap(),
         &[3.0f32.to_bits(), 1.5f32.to_bits(), 2000000009u32, 0]
     );
     let invocation = Invocation {
@@ -447,7 +447,7 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
         .collect();
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]),
                 Domain::Rows(count),
                 words,
@@ -488,7 +488,7 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
     // A single-element input folds nothing and still yields its value.
     let one = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]),
                 Domain::Rows(1),
                 vec![5, 1.5f32.to_bits()],
@@ -507,7 +507,7 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
     assert_eq!(
-        host.element(output, 0).unwrap(),
+        &*host.element(output, 0).unwrap(),
         &[5, 5, 1.5f32.to_bits(), 1]
     );
 }
@@ -527,7 +527,7 @@ fn scans_thread_the_carried_value_in_order() {
         .collect();
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]),
                 Domain::Rows(count),
                 words,
@@ -647,7 +647,7 @@ fn linear_interpolation_blends_neighbours_and_clamps() {
     .unwrap();
     let samples = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
                 Domain::Rows(3),
                 vec![0.0f32.to_bits(), 2.0f32.to_bits(), 4.0f32.to_bits()],
@@ -744,14 +744,14 @@ fn scatters_combine_into_the_target_in_element_order() {
     ]);
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_words(schema, Domain::Rows(drops.len() as u32), words)
+            orla_abi::FieldData::from_storage(schema, Domain::Rows(drops.len() as u32), words)
                 .unwrap(),
         )
         .unwrap();
     let canvas_words: Vec<u32> = (0..6).map(|i| (i as f32 * 0.1).to_bits()).collect();
     let canvas = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
                 Domain::Grid(3, 2),
                 canvas_words,
@@ -810,12 +810,12 @@ fn scatters_combine_into_the_target_in_element_order() {
         orla_abi::Scalar::Float,
     ]);
     let hits = host
-        .adopt(orla_abi::FieldData::from_words(hit_schema, Domain::Rows(4), words).unwrap())
+        .adopt(orla_abi::FieldData::from_storage(hit_schema, Domain::Rows(4), words).unwrap())
         .unwrap();
     let slot_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
     let slots = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 slot_schema,
                 Domain::Rows(3),
                 vec![
@@ -995,12 +995,12 @@ fn memories_are_written_step_by_step_and_come_out_as_outputs() {
     let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
     let ticks = host
         .adopt(
-            orla_abi::FieldData::from_words(ints.clone(), Domain::Rows(10), vec![0; 10]).unwrap(),
+            orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(10), vec![0; 10]).unwrap(),
         )
         .unwrap();
     let ram = host
         .adopt(
-            orla_abi::FieldData::from_words(ints, Domain::Rows(6), vec![10, 20, 30, 40, 50, 60])
+            orla_abi::FieldData::from_storage(ints, Domain::Rows(6), vec![10, 20, 30, 40, 50, 60])
                 .unwrap(),
         )
         .unwrap();

@@ -877,7 +877,7 @@ impl Session {
             return Err("the file is empty; a Field has no empty extent".into());
         }
         let words: Vec<u32> = bytes.iter().map(|byte| u32::from(*byte)).collect();
-        let data = FieldData::from_words(
+        let data = FieldData::from_storage(
             orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
             orla_runtime::Domain::Rows(words.len() as u32),
             words,
@@ -893,7 +893,7 @@ impl Session {
     /// the Field and a line saying what came in.
     pub fn load_field(path: &Path, want: Option<&str>) -> Result<(FieldData, String), String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let gray = matches!(want, Some("Grid<Float>"));
+        let gray = want.is_some_and(|ty| without_encoding(ty) == "Grid<Float>");
         let describe = |data: &FieldData| {
             format!(
                 "{} {} {}",
@@ -917,7 +917,7 @@ impl Session {
                 let data = ppm::decode_field(&bytes).map_err(|e| e.to_string())?;
                 let data = if gray && data.schema().is_pixel() {
                     let words = data
-                        .words()
+                        .storage()
                         .chunks_exact(4)
                         .map(|p| {
                             (f32::from_bits(p[0]) * 0.2126
@@ -926,7 +926,7 @@ impl Session {
                                 .to_bits()
                         })
                         .collect();
-                    FieldData::from_words(
+                    FieldData::from_storage(
                         orla_runtime::Schema::new(vec![orla_runtime::Scalar::Float]),
                         data.domain(),
                         words,
@@ -994,6 +994,16 @@ impl Session {
             } else {
                 Self::load_field(&path, Some(&ty))
             };
+            let read = read.and_then(|(data, detail)| {
+                let data = kept_as(data, &ty)?;
+                let detail = match data.schema().uniform_encoding() {
+                    Some(encoding) if !data.schema().is_wide() => {
+                        format!("{detail}, kept as {encoding}")
+                    }
+                    _ => detail,
+                };
+                Ok((data, detail))
+            });
             let (data, detail) = match read {
                 Ok(loaded) => loaded,
                 Err(error) => {
@@ -1108,20 +1118,21 @@ impl Session {
                 ppm::encode(&image)
             }
             Some("pgm") => {
-                if data.schema().words() != 1 || domain.shape() != Shape::Grid {
+                if data.schema().value_words() != 1 || domain.shape() != Shape::Grid {
                     return Err(format!(
                         "`{node}.{port}` is not a Grid<Float>; save it as .field"
                     ));
                 }
-                let samples: Vec<f32> = data.words().iter().map(|w| f32::from_bits(*w)).collect();
+                let samples: Vec<f32> = data.values().iter().map(|w| f32::from_bits(*w)).collect();
                 ppm::encode_gray(domain.width(), domain.height(), &samples)
             }
             Some("png") => {
                 if domain.shape() != Shape::Grid {
                     return Err(format!("`{node}.{port}` is not a grid; save it as .field"));
                 }
+                let values = data.values();
                 let pixels: Vec<[f32; 4]> = if data.schema().is_pixel() {
-                    data.words()
+                    values
                         .chunks_exact(4)
                         .map(|p| {
                             [
@@ -1132,8 +1143,8 @@ impl Session {
                             ]
                         })
                         .collect()
-                } else if data.schema().words() == 1 {
-                    data.words()
+                } else if data.schema().value_words() == 1 {
+                    values
                         .iter()
                         .map(|w| {
                             let v = f32::from_bits(*w);
@@ -1148,13 +1159,13 @@ impl Session {
                 png::encode(domain.width(), domain.height(), &pixels)
             }
             Some("wav") => {
-                let channels = data.schema().words();
+                let channels = data.schema().value_words();
                 if domain.shape() != Shape::Rows || channels > 2 {
                     return Err(format!(
                         "`{node}.{port}` is not rows of one or two floats; save it as .field"
                     ));
                 }
-                wav::encode(data.words(), channels, 48_000)
+                wav::encode(&data.values(), channels, 48_000)
             }
             _ => {
                 return Err(
@@ -1288,6 +1299,7 @@ impl Session {
             let path = sequence.files[index].clone();
             let ty = sequence.ty.clone();
             let loaded = Self::load_field(&path, Some(&ty)).and_then(|(data, _)| {
+                let data = kept_as(data, &ty)?;
                 self.runtime
                     .host_mut()
                     .adopt(data)
@@ -1337,7 +1349,7 @@ impl Session {
             }
             let words: Vec<u32> = text.chars().map(|c| c as u32).collect();
             let chars = words.len();
-            let data = FieldData::from_words(
+            let data = FieldData::from_storage(
                 orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
                 orla_runtime::Domain::Rows(chars as u32),
                 words,
@@ -1949,6 +1961,12 @@ impl Session {
         self.runtime.retire(id).is_some()
     }
 
+    /// The Field an input of the scene holds now: a file's, a text's, a
+    /// frame's, or what the caller supplied.
+    pub fn external(&self, name: &str) -> Option<Handle> {
+        self.externals.get(name).copied()
+    }
+
     /// The cached image of a node's output port, if it was evaluated.
     pub fn cached(&self, node: &orla_graph::NodeId, port: &str) -> Option<Handle> {
         self.evaluator.cached(node, port)
@@ -2122,7 +2140,7 @@ impl Session {
         // offset and a type.
         let mut ty = output.element();
         let mut offset = 0usize;
-        let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.words());
+        let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.value_words());
         for field in path {
             // A struct's field by name, or a vector's component by the
             // letter the language spells it with.
@@ -2361,4 +2379,32 @@ fn is_library(document: &Document) -> bool {
         && document.inputs.is_empty()
         && document.outputs.is_empty()
         && document.params.is_empty()
+}
+
+/// A port type without the encoding it keeps its scalars in:
+/// `Grid<Vec4 as unorm8>` is `Grid<Vec4>`.
+fn without_encoding(ty: &str) -> String {
+    match ty.split_once(" as ") {
+        Some((head, tail)) => format!("{head}{}", tail.find('>').map_or("", |at| &tail[at..])),
+        None => ty.to_owned(),
+    }
+}
+
+/// A Field read from a file, kept as the input's type says: what a
+/// file decodes to is whole words, and an input declared
+/// `Grid<Vec4 as unorm8>` keeps it as bytes from the moment it lands.
+fn kept_as(data: FieldData, ty: &str) -> Result<FieldData, String> {
+    let Some(name) = ty
+        .split_once(" as ")
+        .and_then(|(_, tail)| tail.split('>').next())
+    else {
+        return Ok(data);
+    };
+    let encoding = orla_runtime::Encoding::parse(name.trim())
+        .ok_or_else(|| format!("`{name}` is not an encoding"))?;
+    let schema = data
+        .schema()
+        .with_encoding(encoding)
+        .map_err(|why| format!("what the file holds ({}) {why}", data.schema().describe()))?;
+    FieldData::from_values(schema, data.domain(), &data.values()).map_err(|e| e.to_string())
 }

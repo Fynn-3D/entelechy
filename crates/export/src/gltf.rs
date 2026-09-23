@@ -169,10 +169,14 @@ pub fn write_rig(
     rig: Option<&Rig<'_>>,
     name: &str,
 ) -> Result<Vec<u8>, String> {
-    if vertices.schema().words() != 8 || vertices.domain().shape() != orla_runtime::Shape::Rows {
+    if vertices.schema().value_words() != 8
+        || vertices.domain().shape() != orla_runtime::Shape::Rows
+    {
         return Err("vertices must be rows of {position: Vec3, normal: Vec3, uv: Vec2}".into());
     }
-    if triangles.schema().words() != 3 || triangles.domain().shape() != orla_runtime::Shape::Rows {
+    if triangles.schema().value_words() != 3
+        || triangles.domain().shape() != orla_runtime::Shape::Rows
+    {
         return Err("triangles must be rows of {a: Int, b: Int, c: Int}".into());
     }
     let count = vertices.domain().count();
@@ -181,7 +185,7 @@ pub fn write_rig(
     let mut uvs = Vec::with_capacity(count * 8);
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
-    for vertex in vertices.words().chunks_exact(8) {
+    for vertex in vertices.values().chunks_exact(8) {
         let floats: Vec<f32> = vertex.iter().map(|w| f32::from_bits(*w)).collect();
         for k in 0..3 {
             lo[k] = lo[k].min(floats[k]);
@@ -192,7 +196,7 @@ pub fn write_rig(
         uvs.extend(floats[6..8].iter().flat_map(|v| v.to_le_bytes()));
     }
     let mut indices = Vec::with_capacity(triangles.domain().count() * 12);
-    for index in triangles.words() {
+    for index in triangles.values().iter() {
         if *index as usize >= count {
             return Err(format!(
                 "triangle index {index} is past the {count} vertices"
@@ -232,11 +236,11 @@ pub fn write_rig(
     let mut skins: Vec<Json> = Vec::new();
     if let Some(rig) = rig {
         let scalars = rig.skeleton.schema().scalars();
-        if rig.skeleton.schema().words() != 17 || scalars.first() != Some(&Scalar::Int) {
+        if rig.skeleton.schema().value_words() != 17 || scalars.first() != Some(&Scalar::Int) {
             return Err("a skeleton is rows of {parent: Int, bind: Mat4}".into());
         }
         let weight_scalars = rig.weights.schema().scalars();
-        if rig.weights.schema().words() != 8
+        if rig.weights.schema().value_words() != 8
             || weight_scalars[..4] != [Scalar::Int; 4]
             || weight_scalars[4..] != [Scalar::Float; 4]
         {
@@ -252,7 +256,7 @@ pub fn write_rig(
         let joint_count = rig.skeleton.domain().count();
         let mut joint_indices = Vec::with_capacity(count * 8);
         let mut joint_weights = Vec::with_capacity(count * 16);
-        for row in rig.weights.words().chunks_exact(8) {
+        for row in rig.weights.values().chunks_exact(8) {
             for word in &row[..4] {
                 let index = *word as i32;
                 if index < 0 || index as usize >= joint_count {
@@ -269,13 +273,13 @@ pub fn write_rig(
         let mut binds = Vec::with_capacity(joint_count * 64);
         let parents: Vec<i32> = rig
             .skeleton
-            .words()
+            .values()
             .chunks_exact(17)
             .map(|row| row[0] as i32)
             .collect();
         let bind_matrices: Vec<[f32; 16]> = rig
             .skeleton
-            .words()
+            .values()
             .chunks_exact(17)
             .map(|row| {
                 let mut m = [0.0f32; 16];
@@ -328,7 +332,7 @@ pub fn write_rig(
         // One animation a clip: a time apiece, and a joint's
         // translation, rotation and scale as they were sampled.
         for (clip_name, clip, rate) in &rig.clips {
-            if clip.schema().words() != 10 {
+            if clip.schema().value_words() != 10 {
                 return Err(format!("clip `{clip_name}` is not rows of ten floats"));
             }
             if clip.domain().count() % joint_count != 0 {
@@ -349,7 +353,7 @@ pub fn write_rig(
             }));
             let mut samplers = Vec::new();
             let mut channels = Vec::new();
-            let words = clip.words();
+            let words = clip.values();
             for joint in 0..joint_count {
                 let take = |offset: usize, lanes: usize| -> Vec<u8> {
                     (0..frames)
@@ -420,7 +424,7 @@ pub fn write_rig(
             .filter(|(index, _)| {
                 rig.map(|rig| {
                     rig.skeleton
-                        .words()
+                        .values()
                         .chunks_exact(17)
                         .nth(*index)
                         .map(|row| row[0] as i32)
@@ -523,7 +527,7 @@ pub fn export_rig(
     let mut weights = None;
     let mut skeleton = None;
     for (path, data) in rig.iter().zip(&rig_rows) {
-        match data.schema().words() {
+        match data.schema().value_words() {
             8 => weights = Some(data),
             17 => skeleton = Some(data),
             other => {

@@ -736,9 +736,8 @@ impl<'p, 's> Machine<'p, 's> {
             Instr::Sample { dst, input, n } => {
                 let view = &program.inputs[*input];
                 let index = own_index(self.at, view.domain);
-                let start = index * view.stride;
                 let words = self.memories[*input].as_deref().unwrap_or(view.words);
-                s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
+                view.read(words, index, 0, &mut s[fp + dst..fp + dst + n]);
             }
             Instr::At {
                 dst,
@@ -749,9 +748,8 @@ impl<'p, 's> Machine<'p, 's> {
             } => {
                 let view = &program.inputs[*input];
                 let index = address_index(s, fp + address, *kind, view.domain);
-                let start = index * view.stride;
                 let words = self.memories[*input].as_deref().unwrap_or(view.words);
-                s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
+                view.read(words, index, 0, &mut s[fp + dst..fp + dst + n]);
             }
             Instr::Part {
                 dst,
@@ -774,8 +772,8 @@ impl<'p, 's> Machine<'p, 's> {
                     let k = (s[fp + slot] as i32).clamp(0, *count as i32 - 1) as usize;
                     offset += k * stride;
                 }
-                let start = index * view.stride + offset.min(view.stride.saturating_sub(*n));
-                s[fp + dst..fp + dst + n].copy_from_slice(&words[start..start + n]);
+                let first = offset.min(view.stride.saturating_sub(*n));
+                view.read(words, index, first, &mut s[fp + dst..fp + dst + n]);
             }
             Instr::Put {
                 dst,
@@ -802,8 +800,7 @@ impl<'p, 's> Machine<'p, 's> {
                     }
                 };
                 if let (Some(index), Some(memory)) = (index, self.memories[*input].as_mut()) {
-                    let start = index * view.stride;
-                    memory[start..start + n].copy_from_slice(&s[written..written + n]);
+                    view.write(memory, index, &s[written..written + n]);
                 }
             }
             Instr::AtLinear {
@@ -847,10 +844,14 @@ impl<'p, 's> Machine<'p, 's> {
                         continue;
                     }
                     let (cx, cy, cz) = corner;
-                    let start = ((cz * height + cy) * width + cx) * view.stride;
+                    let index = (cz * height + cy) * width + cx;
                     let words = self.memories[*input].as_deref().unwrap_or(view.words);
-                    for (slot, word) in self.scratch.iter_mut().zip(&words[start..]) {
-                        *slot += f(*word) * weight;
+                    for (k, slot) in self.scratch.iter_mut().enumerate() {
+                        let word = match &view.narrow {
+                            None => words[index * view.stride + k],
+                            Some(schema) => schema.load(words, index, k),
+                        };
+                        *slot += f(word) * weight;
                     }
                 }
                 for (i, v) in self.scratch.iter().enumerate() {

@@ -580,7 +580,7 @@ impl GpuBackend {
             return Ok(buffer);
         }
         let bytes = scope
-            .words(handle)?
+            .storage(handle)?
             .iter()
             .flat_map(|w| w.to_le_bytes())
             .collect::<Vec<u8>>();
@@ -747,6 +747,30 @@ impl Backend for GpuBackend {
     }
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        // A port keeps every scalar one way, and only a map or a scan
+        // writes an output narrow: the other modes fold into their
+        // output in place, at full width.
+        let manifest = &module.manifest;
+        for port in manifest.inputs.iter().chain(&manifest.outputs) {
+            if port.ty.schema.uniform_encoding().is_none() && !port.ty.schema.is_wide() {
+                return Err(format!(
+                    "`{}` keeps its scalars in more than one encoding ({}); a port keeps them one way",
+                    port.name, port.ty.schema
+                ));
+            }
+        }
+        if !matches!(manifest.mode, orla_ir::Mode::Map | orla_ir::Mode::Scan)
+            && manifest
+                .outputs
+                .iter()
+                .any(|port| !port.ty.schema.is_wide())
+        {
+            return Err(format!(
+                "`{}` is a {} and writes a narrow output; it folds at full width",
+                manifest.id,
+                manifest.mode.name()
+            ));
+        }
         // A Kernel's ports are buffers the device binds at once: one for
         // each output the pass writes, one for each input, and a
         // scatter's target is one of the inputs. Saying so here is the
@@ -1361,7 +1385,7 @@ impl GpuBackend {
             memory_outputs: _,
             output_buffer,
             further_outputs: _,
-            output_words,
+            output_words: _,
             element_count,
         } = staged;
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1370,7 +1394,12 @@ impl GpuBackend {
         // wrote and writes the other.
         let spare = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("repeat"),
-            size: (element_count * output_words * 4).max(16) as u64,
+            size: (module.manifest.outputs[0]
+                .ty
+                .schema
+                .storage_words(element_count)
+                * 4)
+            .max(16) as u64,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -1411,6 +1440,10 @@ impl GpuBackend {
                 layout: &pipeline.layout,
                 entries: &entries,
             });
+            // A time that stores by atomic or starts from a cleared buffer.
+            if wgsl::output_shares_words(module, 0) {
+                encoder.clear_buffer(&written, 0, None);
+            }
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("orla repeat"),
                 timestamp_writes: None,
@@ -1489,7 +1522,7 @@ impl GpuBackend {
             let bound = self.bind_input(scope, *handle, index)?;
             let port = &module.manifest.inputs[index];
             if module.manifest.memories.contains(&port.name) {
-                let size = (extent.count() * port.ty.schema.words() * 4) as u64;
+                let size = (port.ty.schema.storage_words(extent.count()) * 4) as u64;
                 let copy = self.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("memory"),
                     size: size.max(16).div_ceil(16) * 16,
@@ -1510,16 +1543,18 @@ impl GpuBackend {
         let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
         let params_bytes = param_bytes(&invocation.params);
         let (context_buffer, params_buffer) = self.uniform_buffers(&context_bytes, &params_bytes);
-        let output_words = module.manifest.outputs[0].ty.schema.words();
-        // A scatter's map pass stores a pair per source element.
-        let map_words = if matches!(module.manifest.mode, Mode::Scatter { .. }) {
-            wgsl::type_words(module, wgsl::result_type(&module.entry))
+        let output_schema = &module.manifest.outputs[0].ty.schema;
+        let output_words = output_schema.value_words();
+        // A scatter's map pass stores a pair per source element; the
+        // rest store elements as the output keeps them.
+        let map_bytes = if matches!(module.manifest.mode, Mode::Scatter { .. }) {
+            element_count * wgsl::type_words(module, wgsl::result_type(&module.entry)) * 4
         } else {
-            output_words
+            output_schema.storage_words(element_count) * 4
         };
         let output_buffer = self.spare.take(
             &self.device,
-            (element_count * map_words * 4) as u64,
+            map_bytes as u64,
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -1554,7 +1589,7 @@ impl GpuBackend {
             .map(|port| {
                 self.spare.take(
                     &self.device,
-                    (element_count * port.ty.schema.words() * 4) as u64,
+                    (port.ty.schema.storage_words(element_count) * 4) as u64,
                     wgpu::BufferUsages::STORAGE
                         | wgpu::BufferUsages::COPY_SRC
                         | wgpu::BufferUsages::COPY_DST,
@@ -1579,6 +1614,16 @@ impl GpuBackend {
             });
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
+        }
+        // A narrow output whose elements share words is stored by atomic
+        // or, which needs every word it lands in to start at zero.
+        for (k, buffer) in std::iter::once(&output_buffer)
+            .chain(&further_outputs)
+            .enumerate()
+        {
+            if k < wgsl::written_outputs(module) && wgsl::output_shares_words(module, k) {
+                encoder.clear_buffer(buffer, 0, None);
+            }
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

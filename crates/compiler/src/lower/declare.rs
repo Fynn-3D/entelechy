@@ -238,6 +238,12 @@ pub(super) fn port_type(
             ));
         }
     };
+    // `Element as encoding`: the element a Kernel sees, and how the Field
+    // keeps its scalars.
+    let (element, kept) = match element.split_once(" as ") {
+        Some((element, kept)) => (element, Some(kept)),
+        None => (element, None),
+    };
     let element = resolve_type(
         &Spanned {
             value: element.to_owned(),
@@ -254,6 +260,30 @@ pub(super) fn port_type(
             ),
         )
     })?;
+    let schema = match kept {
+        None => schema,
+        Some(kept) => {
+            let Some(encoding) = orla_ir::Encoding::parse(kept) else {
+                let names: Vec<&str> = orla_ir::Encoding::NARROW.iter().map(|e| e.name()).collect();
+                return Err(semantic(
+                    text.span,
+                    format!(
+                        "`{kept}` is not an encoding; a Field keeps scalars as {}",
+                        names.join(", ")
+                    ),
+                ));
+            };
+            schema.with_encoding(encoding).map_err(|why| {
+                semantic(
+                    text.span,
+                    format!(
+                        "`{}` cannot be kept as `{kept}`: {why}",
+                        describe(element, &structs.borrow())
+                    ),
+                )
+            })?
+        }
+    };
     Ok(PortType {
         element,
         shape,
@@ -532,6 +562,24 @@ pub(super) fn manifest(
         return Err(semantic(
             decl.name.span,
             "writing an output needs `field.write`; add it to `requires`",
+        ));
+    }
+    // A narrow output is written an element at a time, by a map or the
+    // steps of a scan; the other modes fold into theirs in place.
+    if !matches!(mode, Mode::Map | Mode::Scan)
+        && let Some((decl, _)) = kernel
+            .outputs
+            .iter()
+            .zip(&outputs)
+            .find(|(_, port)| !port.ty.schema.is_wide())
+    {
+        return Err(semantic(
+            decl.ty.span,
+            format!(
+                "a {} folds into its output in place, in whole words; keep `{}` wide, and narrow it in a map after",
+                mode.name(),
+                decl.name.value
+            ),
         ));
     }
     // Several outputs are what a map writes per element, each to a Field

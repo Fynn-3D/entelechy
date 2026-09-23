@@ -311,6 +311,28 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             ));
         }
     }
+    // A narrow output is written one element at a time, by a map or by
+    // the steps of a scan. The other modes fold into their output in
+    // place and keep it at full width, as a scatter's target is.
+    if !matches!(module.manifest.mode, Mode::Map | Mode::Scan) {
+        let narrow = outputs
+            .iter()
+            .chain(match module.manifest.mode {
+                Mode::Scatter { base, .. } => module.manifest.inputs.get(base as usize),
+                _ => None,
+            })
+            .find(|port| !port.ty.schema.is_wide());
+        if let Some(port) = narrow {
+            return Err(error(
+                "manifest",
+                format!(
+                    "a {} folds into `{}` in place and keeps it in whole words; only a map or a scan writes a narrow output",
+                    module.manifest.mode.name(),
+                    port.name
+                ),
+            ));
+        }
+    }
     let requires = &module.manifest.requires;
     if !outputs.is_empty() && !requires.contains(Capability::FieldWrite) {
         return Err(error(
@@ -478,7 +500,8 @@ fn validate_manifest(manifest: &Manifest, structs: &[StructDef]) -> Result<(), V
                 ),
             )
         })?;
-        if *schema != expected {
+        // The scalars are the element's; how they are kept is the port's.
+        if schema.scalars() != expected.scalars() {
             return Err(error(
                 "manifest",
                 format!(

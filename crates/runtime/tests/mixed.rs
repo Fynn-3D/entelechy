@@ -96,7 +96,7 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
             },
         )
         .unwrap()[0];
-    let words: Vec<u32> = runtime.host().data(sums).unwrap().words().to_vec();
+    let words: Vec<u32> = runtime.host().data(sums).unwrap().storage().to_vec();
     assert_eq!(words, [0, 2, 6, 12, 20]);
     let log = log.lock().unwrap().clone();
     assert_eq!(

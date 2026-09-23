@@ -27,12 +27,12 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
-pub use orla_abi::file;
 pub use orla_abi::pad;
 pub use orla_abi::{
-    ABI_VERSION, Context, Domain, FieldData, Handle, Host, HostError, Image, InputState,
+    ABI_VERSION, Context, Domain, Encoding, FieldData, Handle, Host, HostError, Image, InputState,
     Invocation, Pixel, Scalar, Schema, Scope, Shape, Value,
 };
+pub use orla_abi::{encoding, file};
 pub use orla_ir::{KernelId, Manifest, Validated};
 pub use orla_rules::{Backend, ExecutionError, NativeOp, Prepared};
 
@@ -525,12 +525,13 @@ impl Runtime {
             .host
             .domain(handle)
             .map_err(|e| ExecutionError::Abi(e.into()))?;
-        let words_per_element = self
+        // The memory as kept: packed when the Field keeps scalars narrow.
+        let byte_len = self
             .host
             .schema(handle)
             .map_err(|e| ExecutionError::Abi(e.into()))?
-            .words();
-        let byte_len = domain.count() * words_per_element * 4;
+            .storage_words(domain.count())
+            * 4;
         let bytes = self
             .backend
             .download(device, byte_len)

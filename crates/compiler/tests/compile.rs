@@ -1164,3 +1164,47 @@ fn several_outputs_are_a_maps_and_are_checked() {
     );
     assert!(single.1.contains("one output"), "{}", single.1);
 }
+
+#[test]
+fn a_port_keeps_its_scalars_as_the_type_says() {
+    let module = compile(
+        "kernel image.pack@1 {
+            requires { field.read; field.write; }
+            input source: Image;
+            input bytes: Rows<Int as u8>;
+            output result: Grid<Vec4 as unorm8>;
+            compute { return sample(source) * float(at(bytes, 0)); }
+        }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let manifest = &module.manifest;
+    assert_eq!(manifest.inputs[1].ty.to_string(), "Rows<Int as u8>");
+    assert_eq!(manifest.outputs[0].ty.to_string(), "Grid<Vec4 as unorm8>");
+    assert_eq!(manifest.outputs[0].ty.schema.element_bytes(), 4);
+    // The Kernel sees a Vec4 and an Int however they are kept.
+    assert_eq!(manifest.outputs[0].element(), Type::Vec4);
+
+    let unknown = semantic(
+        "kernel k.a@1 { requires { field.write; } output r: Grid<Float as u9>; compute { return 0.0; } }",
+    );
+    assert!(
+        unknown.1.contains("`u9` is not an encoding"),
+        "{}",
+        unknown.1
+    );
+    assert!(unknown.1.contains("unorm8"), "{}", unknown.1);
+    let unfit = semantic(
+        "kernel k.a@1 { requires { field.write; } output r: Grid<Float as u8>; compute { return 0.0; } }",
+    );
+    assert!(unfit.1.contains("cannot be kept as `u8`"), "{}", unfit.1);
+    let folded = semantic(
+        "kernel k.r@1 { requires { field.read; field.write; } input a: Rows<Float>;
+            output r: Rows<Float as f16>;
+            compute { return sample(a); } merge(x, y) { return x + y; } }",
+    );
+    assert!(
+        folded.1.contains("folds into its output in place"),
+        "{}",
+        folded.1
+    );
+}

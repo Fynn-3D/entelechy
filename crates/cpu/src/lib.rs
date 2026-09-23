@@ -105,7 +105,7 @@ impl CpuBackend {
         // whole, rather than being gathered into a second buffer first.
         if let [port] = &module.manifest.outputs[..] {
             let handle = scope.create(port.ty.schema.clone(), domain)?;
-            return match scope.write_all(handle, &results) {
+            return match scope.write_values(handle, &results) {
                 Ok(()) => Ok(vec![handle]),
                 Err(error) => {
                     let _ = scope.release(handle);
@@ -125,7 +125,7 @@ impl CpuBackend {
             offset += words;
             let created = scope
                 .create(port.ty.schema.clone(), domain)
-                .and_then(|handle| scope.write_all(handle, &own).map(|()| handle));
+                .and_then(|handle| scope.write_values(handle, &own).map(|()| handle));
             match created {
                 Ok(handle) => outputs.push(handle),
                 Err(error) => {
@@ -144,7 +144,7 @@ fn output_strides(module: &Validated) -> Vec<usize> {
         .manifest
         .outputs
         .iter()
-        .map(|port| port.ty.schema.words())
+        .map(|port| port.ty.schema.value_words())
         .collect()
 }
 
@@ -183,7 +183,7 @@ fn reduce(
     drop(program);
     let port = &module.manifest.outputs[0];
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
-    if let Err(error) = scope.write_all(output, &level) {
+    if let Err(error) = scope.write_values(output, &level) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -225,7 +225,7 @@ fn prefix(
     // The output is the input's own count, which is what the walk just
     // wrote, element for element.
     let output = scope.create(port.ty.schema.clone(), domain)?;
-    if let Err(error) = scope.write_all(output, &values) {
+    if let Err(error) = scope.write_values(output, &values) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -441,11 +441,11 @@ pub fn trace(
         .outputs
         .iter()
         .take(if mode == Mode::Scan { 1 } else { usize::MAX })
-        .map(|port| port.ty.schema.words())
+        .map(|port| port.ty.schema.value_words())
         .sum();
     let stride = match mode {
         Mode::Scatter { .. } => {
-            address_words(domain) + module.manifest.outputs[0].ty.schema.words()
+            address_words(domain) + module.manifest.outputs[0].ty.schema.value_words()
         }
         _ => words,
     };
@@ -548,7 +548,7 @@ fn scan(
     drop(program);
     let port = &module.manifest.outputs[0];
     let output = scope.create(port.ty.schema.clone(), domain)?;
-    if let Err(error) = scope.write_all(output, &words) {
+    if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -564,7 +564,7 @@ fn scan(
         };
         let created = scope
             .create(port.ty.schema.clone(), extent)
-            .and_then(|handle| scope.write_all(handle, &words).map(|()| handle));
+            .and_then(|handle| scope.write_storage(handle, &words).map(|()| handle));
         match created {
             Ok(handle) => outputs.push(handle),
             Err(error) => {
@@ -595,7 +595,7 @@ fn scatter(
     let program = eval::Program::with(code.clone(), module, invocation, scope, sources)?;
     let pairs = compute(&program, &[address + stride])?;
     drop(program);
-    let mut words = scope.words(invocation.inputs[base])?.to_vec();
+    let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let port = &module.manifest.outputs[0];
     let scalars = port.ty.schema.scalars();
     for (index, pair) in pairs.chunks_exact(address + stride).enumerate() {
@@ -615,7 +615,7 @@ fn scatter(
         })?;
     }
     let output = scope.create(port.ty.schema.clone(), target)?;
-    if let Err(error) = scope.write_all(output, &words) {
+    if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
     }

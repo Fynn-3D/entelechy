@@ -166,7 +166,10 @@ layout) replaces that port's committed state, so the next evaluation's
 `<~` readers start from it. This is how a Field comes in from outside, a
 saved file for instance; the port must be state, read by some `<~`
 binding, and the count of words must match. A `read` after an evaluation
-and a `write` before the next make a save and a load.
+and a `write` before the next make a save and a load. The words are the
+Kernel's, one per scalar, whatever the port keeps: a Field kept narrow
+(`Grid<Vec4 as unorm8>`) is read widened and written narrowed by the
+Host's rule, and only the `field` format carries its packed bytes.
 
 A saved edit to a Kernel that is already running is prepared on a worker
 thread: `sync` reports `preparing` at once and `published` (or `rejected`)

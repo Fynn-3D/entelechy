@@ -95,7 +95,7 @@ fn export(args: &[String]) -> Result<String, String> {
                         };
                         // A rig's rows say which they are by their
                         // layout, as `docs/RIGS.md` has them.
-                        match (data.domain().shape(), data.schema().words()) {
+                        match (data.domain().shape(), data.schema().value_words()) {
                             (Shape::Rows, 8) if integer(0) => rig.push(input.clone()),
                             (Shape::Rows, 8) => vertices = Some(input.clone()),
                             (Shape::Rows, 3) => triangles = Some(input.clone()),
@@ -151,7 +151,7 @@ fn export(args: &[String]) -> Result<String, String> {
             }
             let (data, detail) = orla_session::Session::load_field(&inputs[0], None)
                 .map_err(|e| format!("{}: {e}", inputs[0].display()))?;
-            let channels = data.schema().words();
+            let channels = data.schema().value_words();
             if data.domain().shape() != Shape::Rows || channels > 2 || data.schema().is_pixel() {
                 return Err(format!(
                     "{}: not rows of one or two floats",
@@ -164,7 +164,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 .and_then(|(_, tail)| tail.strip_suffix(" Hz"))
                 .and_then(|hz| hz.parse::<u32>().ok());
             let rate = rate.or(file_rate).unwrap_or(48_000);
-            let samples: Vec<f32> = data.words().iter().map(|w| f32::from_bits(*w)).collect();
+            let samples: Vec<f32> = data.values().iter().map(|w| f32::from_bits(*w)).collect();
             let pcm = sound::Pcm {
                 samples: &samples,
                 channels,
@@ -183,7 +183,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 return Err("a score comes from one file".into());
             }
             let data = read_field(&inputs[0])?;
-            let words = data.schema().words();
+            let words = data.schema().value_words();
             if data.domain().shape() != Shape::Rows || words != 5 {
                 return Err(format!(
                     "{}: not rows of a note (start, duration, pitch, velocity, channel)",
@@ -191,7 +191,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 ));
             }
             let notes: Vec<midi::Note> = data
-                .words()
+                .values()
                 .chunks_exact(words)
                 .map(|note| midi::Note {
                     start: f32::from_bits(note[0]),
@@ -224,7 +224,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 return Err(format!("{}: not a grid", inputs[0].display()));
             }
             let pixels: Vec<[f32; 4]> = if data.schema().is_pixel() {
-                data.words()
+                data.values()
                     .chunks_exact(4)
                     .map(|p| {
                         [
@@ -235,8 +235,8 @@ fn export(args: &[String]) -> Result<String, String> {
                         ]
                     })
                     .collect()
-            } else if data.schema().words() == 1 {
-                data.words()
+            } else if data.schema().value_words() == 1 {
+                data.values()
                     .iter()
                     .map(|w| {
                         let v = f32::from_bits(*w);

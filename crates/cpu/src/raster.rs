@@ -34,8 +34,8 @@ pub fn rasterize(
     scope: &mut Scope<'_>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let (vertices, triangles) = check_rasterize(invocation, scope)?;
-    let vertex_words = scope.words(vertices)?.to_vec();
-    let triangle_words = scope.words(triangles)?.to_vec();
+    let vertex_words = scope.values(vertices)?.into_owned();
+    let triangle_words = scope.values(triangles)?.into_owned();
     let domain = invocation.domain;
     let words = rasterize_words(
         &vertex_words,
@@ -44,7 +44,7 @@ pub fn rasterize(
         domain.height(),
     );
     let output = scope.create(surface_schema(), domain)?;
-    if let Err(error) = scope.write_all(output, &words) {
+    if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -69,9 +69,9 @@ pub fn rasterize_cutout(
     scope: &mut Scope<'_>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let (vertices, triangles, mask, alpha) = check_rasterize_cutout(invocation, scope)?;
-    let vertex_words = scope.words(vertices)?.to_vec();
-    let triangle_words = scope.words(triangles)?.to_vec();
-    let mask_words = scope.words(mask)?.to_vec();
+    let vertex_words = scope.values(vertices)?.into_owned();
+    let triangle_words = scope.values(triangles)?.into_owned();
+    let mask_words = scope.values(mask)?.into_owned();
     let mask_size = scope.size(mask)?;
     let domain = invocation.domain;
     let words = rasterize_masked(
@@ -87,7 +87,7 @@ pub fn rasterize_cutout(
         }),
     );
     let output = scope.create(surface_schema(), domain)?;
-    if let Err(error) = scope.write_all(output, &words) {
+    if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
     }

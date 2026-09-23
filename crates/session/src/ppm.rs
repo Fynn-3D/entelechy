@@ -126,14 +126,14 @@ pub fn decode_field(bytes: &[u8]) -> Result<FieldData, PpmError> {
                     ]
                 })
                 .collect();
-            FieldData::from_words(Schema::pixel(), domain, words).map_err(PpmError::Host)
+            FieldData::from_storage(Schema::pixel(), domain, words).map_err(PpmError::Host)
         }
         "P5" => {
             let data = bytes
                 .get(cursor..cursor + count)
                 .ok_or_else(|| PpmError::Format("sample data is truncated".into()))?;
             let words = data.iter().map(|v| (*v as f32 / 255.0).to_bits()).collect();
-            FieldData::from_words(Schema::new(vec![Scalar::Float]), domain, words)
+            FieldData::from_storage(Schema::new(vec![Scalar::Float]), domain, words)
                 .map_err(PpmError::Host)
         }
         other => Err(PpmError::Format(format!("magic `{other}` is not P6 or P5"))),
@@ -190,13 +190,13 @@ mod tests {
         let gray = encode_gray(2, 2, &[0.0, 1.0, 0.5, 2.0]);
         let field = decode_field(&gray).unwrap();
         assert_eq!(field.domain(), Domain::Grid(2, 2));
-        assert_eq!(field.schema().words(), 1);
-        let samples: Vec<f32> = field.words().iter().map(|w| f32::from_bits(*w)).collect();
+        assert_eq!(field.schema().value_words(), 1);
+        let samples: Vec<f32> = field.storage().iter().map(|w| f32::from_bits(*w)).collect();
         assert_eq!(samples, [0.0, 1.0, 128.0 / 255.0, 1.0]);
         let image = Image::from_pixels(1, 1, vec![[1.0, 0.0, 0.5, 1.0]]).unwrap();
         let field = decode_field(&encode(&image)).unwrap();
         assert!(field.schema().is_pixel());
-        assert_eq!(f32::from_bits(field.words()[2]), 128.0 / 255.0);
+        assert_eq!(f32::from_bits(field.storage()[2]), 128.0 / 255.0);
         assert!(decode_field(b"P7 1 1 255 x").is_err());
     }
 }

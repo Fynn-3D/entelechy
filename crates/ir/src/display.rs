@@ -26,7 +26,12 @@ pub fn port_type_name(ty: &orla_abi::PortType, structs: &[StructDef]) -> String 
     if ty.is_image() {
         return "Image".to_owned();
     }
-    format!("{}<{}>", ty.shape, type_name(ty.element, structs))
+    let kept = match ty.schema.uniform_encoding() {
+        _ if ty.schema.is_wide() => String::new(),
+        Some(encoding) => format!(" as {encoding}"),
+        None => format!(" as {}", ty.schema),
+    };
+    format!("{}<{}{kept}>", ty.shape, type_name(ty.element, structs))
 }
 
 impl Manifest {

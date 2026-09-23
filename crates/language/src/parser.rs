@@ -546,8 +546,17 @@ impl Parser {
         if self.is_punct("<") {
             self.next();
             let element = self.type_name()?;
+            // How the Field keeps the element's scalars, when narrower
+            // than a word: `Grid<Vec4 as unorm8>`.
+            let kept = if self.is_keyword("as") {
+                self.next();
+                let encoding = self.ident("an encoding after `as`")?;
+                format!(" as {}", encoding.value)
+            } else {
+                String::new()
+            };
             self.expect_punct(">")?;
-            ty.value = format!("{}<{}>", ty.value, element.value);
+            ty.value = format!("{}<{}{kept}>", ty.value, element.value);
         }
         Ok(ty)
     }

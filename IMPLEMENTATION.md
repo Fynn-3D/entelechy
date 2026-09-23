@@ -65,6 +65,27 @@ What these packages do needed no engine feature; keep it that way.
   layout, never by spelling ([evaluator](crates/graph/src/evaluate.rs)).
   Every backend carries elements as words, so integers and booleans are
   exact everywhere.
+- A scalar may be kept narrower than a word (`Grid<Vec4 as unorm8>`):
+  the schema carries each scalar's [`Encoding`](crates/host/src/encoding.rs)
+  and byte offset, elements pack with nothing between, and every scalar
+  sits at a multiple of its size, so none crosses a word
+  ([schema](crates/host/src/lib.rs)). The widening and narrowing rule is
+  written once, in the Host, and held three ways: the interpreter calls
+  it, the JIT emits the same loads and calls it for halves, the GPU
+  emits the same integer arithmetic ([encoding tests](crates/host/src/encoding.rs)
+  over every half, [matrix](crates/matrix/src/lib.rs) `narrow` rows on
+  both backends, the GPU's stored bits compared exactly). A Kernel's
+  words and a Field's storage are different things in the API:
+  `values()` and `write_values` are the former, `storage()` and
+  `write_storage` the latter. Budgets, downloads and `.field` files
+  count storage; the protocol's words and the C ABI's are values, the
+  C ABI handing a narrow Field over widened in the session's memory.
+  Only a map or a scan writes a narrow output, and a narrow link is
+  never fused ([validator](crates/ir/src/validate.rs),
+  [planner](crates/graph/src/evaluate.rs),
+  [composition test](crates/scene/tests/composition.rs), the
+  [packed example](examples/packed/README.md) and its
+  [session test](crates/cli/tests/session.rs)).
 - The Host owns every Field; a slot may hold its words on a device as an
   object only the backend understands. The GPU binds resident inputs,
   uploads Host inputs once, and leaves outputs resident, so committed state
@@ -347,6 +368,13 @@ remove one without running it on the device.
   emitted `fmod` on a fused multiply-add.
 - A driver's fast math may fold `inf * 0`: a NaN made by arithmetic on
   the GPU is not promised; one that arrives in a Field is seen alike.
+- A storage buffer is written a 32-bit word at a time, so neighbouring
+  elements of a narrow output that share a word would race: those
+  outputs are declared `atomic<u32>`, cleared, and stored by `atomicOr`;
+  outputs whose elements fill whole words are stored a word at a time
+  ([wgsl](crates/gpu/src/wgsl.rs) `narrow_store_body`). The encodings are
+  integer arithmetic and bit-exact constants rather than `pack2x16float`
+  and division, which a driver's fast math may round its own way.
 - wgpu's error scopes are thread-local only with its `std` feature, which
   the GPU backend therefore enables.
 - Parameter and context uniforms are rewritten per node with

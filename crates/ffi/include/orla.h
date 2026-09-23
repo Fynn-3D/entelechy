@@ -46,7 +46,9 @@ enum OrlaShape { ORLA_ROWS = 0, ORLA_GRID = 1, ORLA_VOLUME = 2 };
 /* A Field as it lies in memory: `count` elements of `stride` 32-bit
  * words each, element after element (rows of every layer one after
  * another), every word a float, an int or a bool (0 or 1) as `schema`
- * spells it ("f,f,f,f" for pixels: RGBA floats). `pixels` is 1 when the
+ * spells it ("f,f,f,f" for pixels: RGBA floats). A Field the scene keeps
+ * narrower than words (`Grid<Vec4 as unorm8>`) is handed over widened,
+ * in the session's own memory, with the same lifetime. `pixels` is 1 when the
  * layout is a picture's, so the words are an RGBA32F image of
  * `width` by `height`. */
 typedef struct OrlaField {

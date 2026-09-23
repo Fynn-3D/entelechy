@@ -53,6 +53,8 @@ fn zero_of(ty: &str) -> Option<Value> {
     let element = ty
         .split_once('<')
         .and_then(|(_, rest)| rest.strip_suffix('>'))?;
+    // The value is the element's, however the Field keeps it.
+    let element = element.split(" as ").next().unwrap_or(element);
     match element {
         "Float" => Some(Value::Float(0.0)),
         "Int" => Some(Value::Int(0)),
@@ -568,7 +570,7 @@ impl Lowering<'_, '_> {
                 assets.push(Asset {
                     name: input.name.value.clone(),
                     path: base.join(&file.value),
-                    ty: input.ty.value.clone(),
+                    ty: resolved(&input.ty.value, &self.aliases),
                     bytes: false,
                 });
             }
@@ -582,7 +584,7 @@ impl Lowering<'_, '_> {
                 assets.push(Asset {
                     name: input.name.value.clone(),
                     path: base.join(&bytes.value),
-                    ty: input.ty.value.clone(),
+                    ty: resolved(&input.ty.value, &self.aliases),
                     bytes: true,
                 });
             }
@@ -611,7 +613,7 @@ impl Lowering<'_, '_> {
                 sequences.push((
                     input.name.value.clone(),
                     base.join(&frames.dir.value),
-                    input.ty.value.clone(),
+                    resolved(&input.ty.value, &self.aliases),
                     frames.rate,
                 ));
             }

@@ -660,7 +660,7 @@ output result <- copy.result;
     assert!(stderr.contains("loaded photo from"), "{stderr}");
     let (field, _) = Session::load_field(&dir.join("copy.field"), None).unwrap();
     assert_eq!(field.domain(), orla_runtime::Domain::Grid(2, 1));
-    assert_eq!(f32::from_bits(field.words()[0]), 1.0);
+    assert_eq!(f32::from_bits(field.storage()[0]), 1.0);
     assert_eq!(
         std::fs::read(dir.join("copy.ppm")).unwrap(),
         picture([255, 0, 0])
@@ -681,8 +681,8 @@ output result <- copy.result;
         "{detail}"
     );
     let (as_gray, _) = Session::load_field(&dir.join("photo.png"), Some("Grid<Float>")).unwrap();
-    assert_eq!(as_gray.schema().words(), 1);
-    assert!((f32::from_bits(as_gray.words()[0]) - 0.2126).abs() < 1e-5);
+    assert_eq!(as_gray.schema().value_words(), 1);
+    assert!((f32::from_bits(as_gray.storage()[0]) - 0.2126).abs() < 1e-5);
     let sound: Vec<u32> = [0.0f32, 0.5, -0.5, 0.25]
         .iter()
         .map(|v| v.to_bits())
@@ -710,7 +710,7 @@ output result <- copy.result;
         String::from_utf8_lossy(&output.stderr)
     );
     let (again, _) = Session::load_field(&dir.join("copy.png"), Some("Image")).unwrap();
-    assert_eq!(f32::from_bits(again.words()[0]), 1.0);
+    assert_eq!(f32::from_bits(again.storage()[0]), 1.0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1272,7 +1272,7 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
             .host()
             .data(handle)
             .unwrap()
-            .words()
+            .storage()
             .iter()
             .map(|w| f32::from_bits(*w))
             .collect::<Vec<_>>()
@@ -1390,7 +1390,7 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
             .host()
             .data(handle)
             .unwrap()
-            .words()
+            .storage()
             .to_vec()
     };
     let report = session.evaluate(&Context::default()).unwrap();
@@ -1720,4 +1720,49 @@ fn a_parents_param_reaches_a_placed_graphs_times() {
         "the parent's default reaches `times`: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn narrow_fields_land_live_and_leave_as_their_bytes() {
+    // The packed example: what its files hold lands narrow, what its
+    // Kernels write lives narrow, and a narrow output saved as a Field
+    // file is its bytes, read back the same.
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/packed/scene.osn");
+    let mut session = Session::open(&scene, None, 1 << 22);
+    session.set_fusion(false);
+    let events = session.sync();
+    assert!(events.contains(&Event::SceneLoaded), "{events:?}");
+    session.evaluate(&Context::default()).unwrap();
+    let host = session.runtime().host();
+    let words = |handle| host.data(handle).unwrap().storage().len();
+    let albedo = session.external("albedo").unwrap();
+    assert_eq!(
+        host.schema(albedo).unwrap().to_string(),
+        "f:unorm8,f:unorm8,f:unorm8,f:unorm8"
+    );
+    assert_eq!(words(albedo), 64 * 64, "a word a pixel, not four");
+    let tiles = session.external("tiles").unwrap();
+    assert_eq!(words(tiles), 64 / 4, "a byte a tile");
+    let node = |name: &str| {
+        session
+            .cached(&orla_graph::NodeId(name.into()), "result")
+            .unwrap()
+    };
+    assert_eq!(words(node("height")), 160 * 90 * 2 / 4);
+    assert_eq!(words(node("normal")), 160 * 90 * 3 / 4);
+    assert_eq!(words(node("light")), 160 * 90 * 8 / 4);
+    let normal = node("normal");
+
+    let dir = scratch("narrow-save");
+    let file = dir.join("normal.field");
+    session
+        .save(&orla_graph::NodeId("normal".into()), "result", &file)
+        .unwrap();
+    let bytes = std::fs::read(&file).unwrap();
+    let header = b"ORLAFIELD 1\nGrid 160 90 1 f:snorm8,f:snorm8,f:snorm8\n";
+    assert!(bytes.starts_with(header));
+    assert_eq!(bytes.len(), header.len() + 160 * 90 * 3);
+    let back = orla_runtime::file::decode(&bytes).unwrap();
+    let host = session.runtime().host();
+    assert_eq!(&back, host.data(normal).unwrap());
 }

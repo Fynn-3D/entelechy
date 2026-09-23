@@ -27,7 +27,7 @@ use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
-use orla_abi::Type;
+use orla_abi::{Encoding, Scalar, Type, encoding};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
 use orla_rules::matrix::{self, Arith};
 
@@ -49,6 +49,7 @@ struct Imports {
     powf: FuncId,
     atan2f: FuncId,
     fmodf: FuncId,
+    half: FuncId,
 }
 
 /// A module's native code: the JIT module holding it, the entry's
@@ -78,6 +79,21 @@ enum Kind {
 
 /// Compiles the module.
 pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, String> {
+    // A port keeps every scalar one way, which is what a port type can
+    // say; the code is generated for that one encoding.
+    for port in module
+        .manifest
+        .inputs
+        .iter()
+        .chain(&module.manifest.outputs)
+    {
+        if port.ty.schema.uniform_encoding().is_none() && !port.ty.schema.is_wide() {
+            return Err(format!(
+                "`{}` keeps its scalars in more than one encoding ({}); a port keeps them one way",
+                port.name, port.ty.schema
+            ));
+        }
+    }
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     for (name, address) in crate::symbols() {
         builder.symbol(name, address);
@@ -130,6 +146,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         powf: declare(&mut jit, "orla_jit_powf", &binary_sig)?,
         atan2f: declare(&mut jit, "orla_jit_atan2f", &binary_sig)?,
         fmodf: declare(&mut jit, "orla_jit_fmodf", &binary_sig)?,
+        half: declare(&mut jit, "orla_jit_half", &sig(&[i], &[i]))?,
     };
     // Every function takes the context, a pointer for its result's words
     // (a struct or a vector is more words than registers return), then
@@ -181,7 +198,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         .manifest
         .inputs
         .iter()
-        .map(|port| port.ty.schema.words())
+        .map(|port| port.ty.schema.value_words())
         .max()
         .unwrap_or(1)
         .max(1);
@@ -400,6 +417,8 @@ struct Fx<'a, 'b> {
     powf: FuncRef,
     atan2f: FuncRef,
     fmodf: FuncRef,
+    /// `orla_jit_half`, which widens a half float.
+    half: FuncRef,
     /// What every input's view says, read once before a map's run
     /// rather than at every element: the words, the bytes an element
     /// takes, the last `x` there is, and where the run's own row
@@ -445,6 +464,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         let powf = import(jit, &mut b, imports.powf);
         let atan2f = import(jit, &mut b, imports.atan2f);
         let fmodf = import(jit, &mut b, imports.fmodf);
+        let half = import(jit, &mut b, imports.half);
         let scratch = b.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             (max_stride * 4) as u32,
@@ -483,6 +503,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             powf,
             atan2f,
             fmodf,
+            half,
             settled_views: Vec::new(),
             scratch,
             flags: MemFlags::trusted(),
@@ -857,11 +878,10 @@ impl<'a, 'b> Fx<'a, 'b> {
                 .b
                 .ins()
                 .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
-            let stride = field(self, offsets::VIEW_STRIDE);
             let width = field(self, offsets::VIEW_WIDTH);
             let height = field(self, offsets::VIEW_HEIGHT);
             let depth = field(self, offsets::VIEW_DEPTH);
-            let element = self.b.ins().imul_imm(stride, 4);
+            let element = field(self, offsets::VIEW_BYTES);
             let last_x = self.b.ins().iadd_imm(width, -1);
             let last_y = self.b.ins().iadd_imm(height, -1);
             let last_z = self.b.ins().iadd_imm(depth, -1);
@@ -901,39 +921,11 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// Field exactly as `orla_jit_sample` and `orla_jit_read_rows` do.
     /// A read is a handful of loads, and the loop around it keeps the
     /// view's own loads in registers.
-    fn element_words(&mut self, input: u32, index: Value, tys: &[types::Type]) -> Vec<Value> {
-        let (words, element) = match self.settled_view(input) {
-            Some(view) => (view.words, view.element),
-            None => {
-                let view = self.view(input);
-                let words = self
-                    .b
-                    .ins()
-                    .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
-                let stride =
-                    self.b
-                        .ins()
-                        .load(types::I32, self.settled, view, offsets::VIEW_STRIDE);
-                (words, self.b.ins().imul_imm(stride, 4))
-            }
-        };
-        let bytes = self.b.ins().imul(index, element);
-        let offset = self.b.ins().uextend(self.ptr, bytes);
-        let at = self.b.ins().iadd(words, offset);
-        tys.iter()
-            .enumerate()
-            .map(|(k, t)| self.b.ins().load(*t, self.flags, at, (k * 4) as i32))
-            .collect()
-    }
-
-    /// A run of words inside an element of an input: the element's own
-    /// words, `within` bytes in. What a field or an array element of a
-    /// read comes to, without the rest of the element.
-    fn part_words(
+    fn element_words(
         &mut self,
         input: u32,
         index: Value,
-        within: Value,
+        ty: Type,
         tys: &[types::Type],
     ) -> Vec<Value> {
         let (words, element) = match self.settled_view(input) {
@@ -944,28 +936,143 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .b
                     .ins()
                     .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
-                let stride =
-                    self.b
-                        .ins()
-                        .load(types::I32, self.settled, view, offsets::VIEW_STRIDE);
-                (words, self.b.ins().imul_imm(stride, 4))
+                let bytes = self
+                    .b
+                    .ins()
+                    .load(types::I32, self.settled, view, offsets::VIEW_BYTES);
+                (words, bytes)
+            }
+        };
+        let bytes = self.b.ins().imul(index, element);
+        let offset = self.b.ins().uextend(self.ptr, bytes);
+        let at = self.b.ins().iadd(words, offset);
+        self.field_loads(input, at, ty, tys)
+    }
+
+    /// The Kernel's words of a read of `input` at `base`, one per scalar
+    /// of `ty`: whole-word loads when the input keeps its scalars wide,
+    /// and otherwise each scalar loaded at its size and widened by its
+    /// encoding's rule — the Host's, so the words are the interpreter's.
+    fn field_loads(
+        &mut self,
+        input: u32,
+        base: Value,
+        ty: Type,
+        tys: &[types::Type],
+    ) -> Vec<Value> {
+        let schema = &self.module.manifest.inputs[input as usize].ty.schema;
+        let encoding = schema.uniform_encoding().unwrap_or(Encoding::Word);
+        if encoding == Encoding::Word {
+            return tys
+                .iter()
+                .enumerate()
+                .map(|(k, t)| self.b.ins().load(*t, self.flags, base, (k * 4) as i32))
+                .collect();
+        }
+        let kinds: Vec<Scalar> = orla_ir::schema_of(ty, &self.module.structs)
+            .map(|schema| schema.scalars().to_vec())
+            .unwrap_or_default();
+        let size = encoding.bytes() as i32;
+        (0..tys.len())
+            .map(|k| {
+                let word = self.narrow_load(encoding, base, k as i32 * size);
+                if kinds.get(k) == Some(&Scalar::Bool) {
+                    let set = self.b.ins().icmp_imm(IntCC::NotEqual, word, 0);
+                    self.b.ins().uextend(types::I32, set)
+                } else {
+                    word
+                }
+            })
+            .collect()
+    }
+
+    /// One narrow scalar at `base + offset`, widened to the Kernel's word.
+    fn narrow_load(&mut self, encoding: Encoding, base: Value, offset: i32) -> Value {
+        let (i, f, flags) = (types::I32, types::F32, self.flags);
+        let unit = |fx: &mut Self, raw: Value, signed: bool, scale: f32| {
+            let x = if signed {
+                fx.b.ins().fcvt_from_sint(f, raw)
+            } else {
+                fx.b.ins().fcvt_from_uint(f, raw)
+            };
+            let scale = fx.f32c(scale);
+            fx.b.ins().fmul(x, scale)
+        };
+        match encoding {
+            Encoding::U8 => self.b.ins().uload8(i, flags, base, offset),
+            Encoding::I8 => self.b.ins().sload8(i, flags, base, offset),
+            Encoding::U16 => self.b.ins().uload16(i, flags, base, offset),
+            Encoding::I16 => self.b.ins().sload16(i, flags, base, offset),
+            Encoding::Unorm8 => {
+                let raw = self.b.ins().uload8(i, flags, base, offset);
+                unit(self, raw, false, encoding::UNORM8)
+            }
+            Encoding::Unorm16 => {
+                let raw = self.b.ins().uload16(i, flags, base, offset);
+                unit(self, raw, false, encoding::UNORM16)
+            }
+            Encoding::Snorm8 => {
+                let raw = self.b.ins().sload8(i, flags, base, offset);
+                let x = unit(self, raw, true, encoding::SNORM8);
+                let floor = self.f32c(-1.0);
+                self.b.ins().fmax(x, floor)
+            }
+            Encoding::F16 => {
+                let raw = self.b.ins().uload16(i, flags, base, offset);
+                let call = self.b.ins().call(self.half, &[raw]);
+                let bits = self.b.inst_results(call)[0];
+                self.b.ins().bitcast(f, MemFlags::new(), bits)
+            }
+            Encoding::Word => self.b.ins().load(i, flags, base, offset),
+        }
+    }
+
+    /// A run of words inside an element of an input: the element's own
+    /// words, `within` bytes in. What a field or an array element of a
+    /// read comes to, without the rest of the element.
+    fn part_words(
+        &mut self,
+        input: u32,
+        index: Value,
+        within: Value,
+        ty: Type,
+        tys: &[types::Type],
+    ) -> Vec<Value> {
+        let (words, element) = match self.settled_view(input) {
+            Some(view) => (view.words, view.element),
+            None => {
+                let view = self.view(input);
+                let words = self
+                    .b
+                    .ins()
+                    .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
+                let bytes = self
+                    .b
+                    .ins()
+                    .load(types::I32, self.settled, view, offsets::VIEW_BYTES);
+                (words, bytes)
             }
         };
         let bytes = self.b.ins().imul(index, element);
         let total = self.b.ins().iadd(bytes, within);
         let offset = self.b.ins().uextend(self.ptr, total);
         let at = self.b.ins().iadd(words, offset);
-        tys.iter()
-            .enumerate()
-            .map(|(k, t)| self.b.ins().load(*t, self.flags, at, (k * 4) as i32))
-            .collect()
+        self.field_loads(input, at, ty, tys)
     }
 
-    /// Where a path through an element leads, in bytes from its start:
-    /// the words known when the Kernel compiled, then each index
-    /// clamped into what it indexes and taken as its own width. The
-    /// last word is held inside the element, whatever the indices say.
-    fn part_offset(&mut self, input: u32, path: &[orla_ir::Step], words: usize) -> Value {
+    /// Where a path through an element leads, in bytes from its start at
+    /// `unit` bytes a scalar: the words known when the Kernel compiled,
+    /// then each index clamped into what it indexes and taken as its own
+    /// width. The last word is held inside the element, whatever the
+    /// indices say. The unit is what the element is read from: the
+    /// input's own memory, or its widened words in the scratch slot.
+    fn part_offset(
+        &mut self,
+        input: u32,
+        path: &[orla_ir::Step],
+        words: usize,
+        unit: i64,
+    ) -> Value {
         let element = self.module.manifest.inputs[input as usize].element();
         let layout = orla_ir::part_layout(&self.module.structs, element, path)
             .expect("a path validation walked");
@@ -982,12 +1089,12 @@ impl<'a, 'b> Fx<'a, 'b> {
         let stride = self.module.manifest.inputs[input as usize]
             .ty
             .schema
-            .words();
+            .value_words();
         let last = self.i32c(stride.saturating_sub(words) as i64);
         let held = self.b.ins().smin(offset, last);
         let zero = self.i32c(0);
         let inside = self.b.ins().smax(held, zero);
-        self.b.ins().imul_imm(inside, 4)
+        self.b.ins().imul_imm(inside, unit)
     }
 
     /// This element's own place in an input, clamped into it: what
@@ -1608,15 +1715,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                 // The run carries where this element is in every input,
                 // so a `sample` is the loads and nothing else.
                 if let Some(at) = self.settled_view(*input).and_then(|view| view.at) {
-                    return tys
-                        .iter()
-                        .enumerate()
-                        .map(|(k, t)| self.b.ins().load(*t, self.flags, at, (k * 4) as i32))
-                        .collect();
+                    return self.field_loads(*input, at, ty, &tys);
                 }
                 let (x, y, z, _) = self.coords.expect("entry point");
                 let index = self.sample_index(*input, x, y, z);
-                self.element_words(*input, index, &tys)
+                self.element_words(*input, index, ty, &tys)
             }
             Op::At(input, address) => {
                 let words = self.words(address);
@@ -1626,7 +1729,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                     Type::Int => {
                         let at = self.rows_index(*input, words[0]);
                         let tys = word_types(self.module, ty);
-                        return self.element_words(*input, at, &tys);
+                        return self.element_words(*input, at, ty, &tys);
                     }
                     Type::Vec2 => {
                         let zero = self.f32c(0.0);
@@ -1646,28 +1749,32 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Part { input, at, path } => {
                 let tys = word_types(self.module, ty);
-                let within = self.part_offset(*input, path, tys.len());
+                // Read from the input's own memory, a scalar is its
+                // encoding's size; read from the scratch slot, a word.
+                let unit = self.module.manifest.inputs[*input as usize]
+                    .ty
+                    .schema
+                    .uniform_encoding()
+                    .map_or(4, |encoding| encoding.bytes() as i64);
                 // This element's own, where there is no address: the
                 // run already carries where it is in every input, so
                 // the part is the loads at its offset and nothing else.
                 let Some(at) = at else {
+                    let within = self.part_offset(*input, path, tys.len(), unit);
                     if let Some(base) = self.settled_view(*input).and_then(|view| view.at) {
                         let offset = self.b.ins().uextend(self.ptr, within);
                         let base = self.b.ins().iadd(base, offset);
-                        return tys
-                            .iter()
-                            .enumerate()
-                            .map(|(k, t)| self.b.ins().load(*t, self.flags, base, (k * 4) as i32))
-                            .collect();
+                        return self.field_loads(*input, base, ty, &tys);
                     }
                     let (x, y, z, _) = self.coords.expect("entry point");
                     let index = self.sample_index(*input, x, y, z);
-                    return self.part_words(*input, index, within, &tys);
+                    return self.part_words(*input, index, within, ty, &tys);
                 };
                 let address = self.words(at);
                 if matches!(self.ty(at), Type::Int) {
+                    let within = self.part_offset(*input, path, tys.len(), unit);
                     let index = self.rows_index(*input, address[0]);
-                    return self.part_words(*input, index, within, &tys);
+                    return self.part_words(*input, index, within, ty, &tys);
                 }
                 // Over a grid or a volume the element is read as it
                 // always was, and the part is taken out of what came
@@ -1689,6 +1796,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                         );
                     }
                 }
+                let within = self.part_offset(*input, path, tys.len(), 4);
                 let bytes = self.b.ins().uextend(self.ptr, within);
                 let base = self.b.ins().iadd(out, bytes);
                 tys.iter()

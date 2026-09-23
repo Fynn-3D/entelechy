@@ -1249,7 +1249,15 @@ impl Evaluator {
                             .unwrap_or(0);
                         read == linked
                     });
-                if links.is_empty() || !only_readers {
+                // A narrow output rounds what passes through it; fused, the
+                // consumer would read the value before the rounding.
+                let narrow = links.iter().any(|link| {
+                    !producer_manifest.outputs[link.2 as usize]
+                        .ty
+                        .schema
+                        .is_wide()
+                });
+                if links.is_empty() || !only_readers || narrow {
                     continue;
                 }
                 // The consumer's first input decides its extent when it
@@ -1771,7 +1779,9 @@ impl Evaluator {
             })?;
         let domain = runtime.host().domain(current)?;
         let schema = runtime.host().schema(current)?.clone();
-        let expected = domain.count() * schema.words();
+        // The Kernel's words, one per scalar, narrowed where the port
+        // keeps them narrow.
+        let expected = domain.count() * schema.value_words();
         if words.len() != expected {
             return Err(EvaluateError::WordCount {
                 node: node.clone(),
@@ -1780,7 +1790,7 @@ impl Evaluator {
                 found: words.len(),
             });
         }
-        let data = FieldData::from_words(schema, domain, words)?;
+        let data = FieldData::from_values(schema, domain, &words)?;
         let handle = runtime.host_mut().adopt(data)?;
         if let Some(previous) = self.commit_put(key, handle)
             && !self.is_cached(previous)

@@ -68,7 +68,7 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
     );
     let (field, _) = orla_session::Session::load_field(&imported.file, None).unwrap();
     let left: Vec<f32> = field
-        .words()
+        .storage()
         .iter()
         .step_by(2)
         .map(|w| f32::from_bits(*w))
@@ -136,9 +136,9 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
         .unwrap();
         assert_eq!(before.domain(), after.domain(), "{name}");
         let worst = before
-            .words()
+            .storage()
             .iter()
-            .zip(after.words())
+            .zip(after.storage())
             .map(|(a, b)| (f32::from_bits(*a) - f32::from_bits(*b)).abs())
             .fold(0.0f32, f32::max);
         assert!(worst < 1e-5, "{name} drifted by {worst}");

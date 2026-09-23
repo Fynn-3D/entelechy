@@ -31,8 +31,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
             .iter()
             .map(|(schema, domain, words)| {
                 host.adopt(
-                    orla_abi::FieldData::from_words(schema.clone(), *domain, words.clone())
-                        .unwrap(),
+                    orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
                 )
                 .unwrap()
             })
@@ -81,15 +80,34 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
             continue;
         }
         for (which, (a, b)) in cpu.iter().zip(&out).enumerate() {
-            let reference = host.data(*a).unwrap().words().to_vec();
-            let scalars = host.schema(*a).unwrap().scalars().to_vec();
+            // Compared as the Kernel's words: what a device kept narrow is
+            // downloaded as kept and widened by the Host's rule.
+            let schema = host.schema(*a).unwrap().clone();
+            let count = host.domain(*a).unwrap().count();
+            let reference = host.data(*a).unwrap().values().into_owned();
+            let scalars = schema.scalars().to_vec();
             let candidate: Vec<u32> = match host.resident(*b).unwrap() {
-                Some(device) => Backend::download(&gpu, device, reference.len() * 4)
-                    .unwrap()
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect(),
-                None => host.data(*b).unwrap().words().to_vec(),
+                Some(device) => {
+                    let storage: Vec<u32> =
+                        Backend::download(&gpu, device, schema.storage_words(count) * 4)
+                            .unwrap()
+                            .chunks_exact(4)
+                            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                            .collect();
+                    // What a device kept narrow is the Host's rule applied
+                    // to the same words, so it is the same bits.
+                    if !schema.is_wide() {
+                        let kept = host.data(*a).unwrap().storage().to_vec();
+                        if storage != kept {
+                            failures.push(format!(
+                                "{}: output {which}: kept as {:08x?} against {:08x?}",
+                                case.name, storage, kept
+                            ));
+                        }
+                    }
+                    schema.unpack(&storage, count)
+                }
+                None => host.data(*b).unwrap().values().into_owned(),
             };
             if let Some(mismatch) =
                 orla_matrix::compare(&scalars, &reference, &candidate, 2e-4, 1e-3)

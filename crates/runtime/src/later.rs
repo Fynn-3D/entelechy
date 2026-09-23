@@ -244,9 +244,8 @@ fn run_on(
         .into_iter()
         .map(|handle| {
             if let Some(device) = host.resident(handle).map_err(abi)? {
-                let byte_len = host.domain(handle).map_err(abi)?.count()
-                    * host.schema(handle).map_err(abi)?.words()
-                    * 4;
+                let count = host.domain(handle).map_err(abi)?.count();
+                let byte_len = host.schema(handle).map_err(abi)?.storage_words(count) * 4;
                 let bytes = backend
                     .download(device, byte_len)
                     .map_err(ExecutionError::Device)?;

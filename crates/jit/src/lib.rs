@@ -26,14 +26,23 @@ use orla_rules::{Backend, NativeOp, Prepared};
 /// Elements per thread below which the run stays single-threaded.
 const PARALLEL_THRESHOLD: usize = 4096;
 
-/// One input as the compiled code sees it: its words and its extent.
+/// One input as the compiled code sees it: its memory and its extent.
 #[repr(C)]
 pub struct View {
+    /// The memory as kept, packed where the Field keeps scalars narrow.
     words: *const u32,
     width: u32,
     height: u32,
     depth: u32,
+    /// The Kernel's words per element.
     stride: u32,
+    /// Bytes an element takes in memory: `stride * 4` when it is wide.
+    bytes: u32,
+    /// Words of memory behind `words`.
+    len: usize,
+    /// The layout, when it keeps scalars narrow; null when the memory
+    /// holds the Kernel's words. What the helpers widen and narrow by.
+    schema: *const orla_abi::Schema,
 }
 
 /// Everything the compiled entry reads besides its own arguments: the
@@ -233,6 +242,10 @@ struct Shared {
     /// The memories' working copies, by input index; the views point into
     /// them.
     memories: Vec<(usize, Vec<u32>)>,
+    /// The layouts of the inputs kept narrow; the views point at them.
+    /// Boxed so a view's pointer stays good while the vector grows.
+    #[allow(clippy::vec_box)]
+    schemas: Vec<Box<orla_abi::Schema>>,
     template: Ctx,
 }
 
@@ -253,11 +266,15 @@ fn shared(
 ) -> Result<Shared, ExecutionError> {
     let mut views = Vec::with_capacity(invocation.inputs.len());
     let mut memories = Vec::new();
+    let mut schemas = Vec::new();
     for (index, handle) in invocation.inputs.iter().enumerate() {
         let port = &module.manifest.inputs[index];
-        let words = scope.words(*handle)?;
+        let words = scope.storage(*handle)?;
+        let len = words.len();
         let extent = scope.size(*handle)?;
-        let stride = scope.schema(*handle)?.words() as u32;
+        let layout = scope.schema(*handle)?;
+        let stride = layout.value_words() as u32;
+        let bytes = layout.element_bytes() as u32;
         let words = if module.manifest.memories.contains(&port.name) {
             let mut copy = words.to_vec();
             let pointer = copy.as_mut_ptr();
@@ -266,12 +283,24 @@ fn shared(
         } else {
             words.as_ptr()
         };
+        // A box does not move when the vector of them grows.
+        let schema = if layout.is_wide() {
+            std::ptr::null()
+        } else {
+            let boxed = Box::new(layout);
+            let pointer: *const orla_abi::Schema = &*boxed;
+            schemas.push(boxed);
+            pointer
+        };
         views.push(View {
             words,
             width: extent.width(),
             height: extent.height(),
             depth: extent.depth(),
             stride,
+            bytes,
+            len,
+            schema,
         });
     }
     let params: Vec<u32> = invocation.params.iter().flat_map(param_words).collect();
@@ -299,6 +328,7 @@ fn shared(
         views,
         params,
         memories,
+        schemas,
         template,
     })
 }
@@ -439,7 +469,7 @@ fn run(
         .manifest
         .outputs
         .iter()
-        .map(|port| port.ty.schema.words())
+        .map(|port| port.ty.schema.value_words())
         .collect();
     let stride: usize = strides.iter().sum();
     let count = domain.count();
@@ -450,10 +480,12 @@ fn run(
     // words are an allocation of their own, so making another Field
     // moves nothing. A Host that ever put every Field's words in one
     // place would have to give this its own reading of them.
-    if let [port] = &module.manifest.outputs[..] {
+    if let [port] = &module.manifest.outputs[..]
+        && port.ty.schema.is_wide()
+    {
         let handle = scope.create_for_fill(port.ty.schema.clone(), domain)?;
         let outcome = scope
-            .words_mut(handle)
+            .storage_mut(handle)
             .map_err(ExecutionError::from)
             .and_then(|words| compute_into(entry, &shared, domain, stride, words));
         return match outcome {
@@ -476,7 +508,7 @@ fn run(
         offset += words;
         let created = scope
             .create(port.ty.schema.clone(), domain)
-            .and_then(|handle| scope.write_all(handle, &own).map(|()| handle));
+            .and_then(|handle| scope.write_values(handle, &own).map(|()| handle));
         match created {
             Ok(handle) => outputs.push(handle),
             Err(error) => {
@@ -505,7 +537,7 @@ fn run_reduce(
     let domain = scope.size(invocation.inputs[0])?;
     let shared = shared(module, invocation, scope, domain)?;
     let port = &module.manifest.outputs[0];
-    let stride = port.ty.schema.words();
+    let stride = port.ty.schema.value_words();
     let mut level = compute(entry, &shared, domain, stride)?;
     let mut ctx = Ctx { ..shared.template };
     let mut count = domain.count();
@@ -534,7 +566,7 @@ fn run_reduce(
         count = count.div_ceil(2);
     }
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
-    if let Err(error) = scope.write_all(output, &level) {
+    if let Err(error) = scope.write_values(output, &level) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -555,7 +587,7 @@ fn run_prefix(
     let entry: Entry = unsafe { std::mem::transmute::<usize, Entry>(entry) };
     let domain = scope.size(invocation.inputs[0])?;
     let port = &module.manifest.outputs[0];
-    let stride = port.ty.schema.words();
+    let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, domain)?;
     let mut values = compute(entry, &shared, domain, stride)?;
     drop(shared);
@@ -575,7 +607,7 @@ fn run_prefix(
         }
     }
     let output = scope.create(port.ty.schema.clone(), domain)?;
-    if let Err(error) = scope.write_all(output, &values) {
+    if let Err(error) = scope.write_values(output, &values) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -598,11 +630,11 @@ fn run_scatter(
     let sources = invocation.domain;
     let address = orla_rules::address_words(target);
     let port = &module.manifest.outputs[0];
-    let stride = port.ty.schema.words();
+    let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, sources)?;
     let pairs = compute(entry, &shared, sources, address + stride)?;
     drop(shared);
-    let mut words = scope.words(invocation.inputs[base])?.to_vec();
+    let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let scalars = port.ty.schema.scalars();
     for (index, pair) in pairs.chunks_exact(address + stride).enumerate() {
         let Some(at) = orla_rules::scatter_index(target, &pair[..address]) else {
@@ -621,7 +653,7 @@ fn run_scatter(
         })?;
     }
     let output = scope.create(port.ty.schema.clone(), target)?;
-    if let Err(error) = scope.write_all(output, &words) {
+    if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -654,7 +686,7 @@ fn run_scan(
     let domain = orla_rules::check_scan(invocation, scope)?;
     let shared = shared(module, invocation, scope, domain)?;
     let port = &module.manifest.outputs[0];
-    let stride = port.ty.schema.words();
+    let stride = port.ty.schema.value_words();
     let count = domain.count();
     let mut ctx = Ctx { ..shared.template };
     let mut carried = vec![0u32; stride];
@@ -685,7 +717,7 @@ fn run_scan(
         carried.copy_from_slice(out);
     }
     let output = scope.create(port.ty.schema.clone(), domain)?;
-    if let Err(error) = scope.write_all(output, &words) {
+    if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
         return Err(error.into());
     }
@@ -695,7 +727,7 @@ fn run_scan(
         let created = scope.size(invocation.inputs[*input]).and_then(|extent| {
             scope
                 .create(port.ty.schema.clone(), extent)
-                .and_then(|handle| scope.write_all(handle, words).map(|()| handle))
+                .and_then(|handle| scope.write_storage(handle, words).map(|()| handle))
         });
         match created {
             Ok(handle) => outputs.push(handle),
@@ -716,6 +748,37 @@ fn run_scan(
 
 unsafe fn view<'a>(ctx: *const Ctx, input: u32) -> &'a View {
     unsafe { &*(*ctx).views.add(input as usize) }
+}
+
+/// Element `index` of a view as the Kernel's words, widened when it is
+/// kept narrow.
+unsafe fn copy_out(view: &View, index: usize, out: *mut u32) {
+    let stride = view.stride as usize;
+    if view.schema.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping(view.words.add(index * stride), out, stride) };
+        return;
+    }
+    let schema = unsafe { &*view.schema };
+    let storage = unsafe { std::slice::from_raw_parts(view.words, view.len) };
+    for k in 0..stride {
+        unsafe { *out.add(k) = schema.load(storage, index, k) };
+    }
+}
+
+/// The Kernel's words written as element `index` of a view's memory,
+/// narrowed when it is kept narrow.
+unsafe fn copy_in(view: &View, index: usize, value: *const u32) {
+    let stride = view.stride as usize;
+    let words = view.words.cast_mut();
+    if view.schema.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping(value, words.add(index * stride), stride) };
+        return;
+    }
+    let schema = unsafe { &*view.schema };
+    let storage = unsafe { std::slice::from_raw_parts_mut(words, view.len) };
+    for k in 0..stride {
+        schema.store(storage, index, k, unsafe { *value.add(k) });
+    }
 }
 
 fn clamp_axis(value: f32, limit: u32) -> u32 {
@@ -742,8 +805,7 @@ unsafe extern "C" fn orla_jit_read(
         clamp_axis(z, view.depth),
     );
     let index = ((cz * view.height + cy) * view.width + cx) as usize;
-    let stride = view.stride as usize;
-    unsafe { std::ptr::copy_nonoverlapping(view.words.add(index * stride), out, stride) };
+    unsafe { copy_out(view, index, out) };
 }
 
 /// `at` on rows: the index clamped into range.
@@ -751,8 +813,7 @@ unsafe extern "C" fn orla_jit_read_rows(ctx: *const Ctx, input: u32, i: i32, out
     let view = unsafe { view(ctx, input) };
     let count = view.width * view.height * view.depth;
     let index = i.clamp(0, count as i32 - 1) as usize;
-    let stride = view.stride as usize;
-    unsafe { std::ptr::copy_nonoverlapping(view.words.add(index * stride), out, stride) };
+    unsafe { copy_out(view, index, out) };
 }
 
 /// `sample`: this element's own coordinates, clamped into the input.
@@ -771,8 +832,7 @@ unsafe extern "C" fn orla_jit_sample(
         z.min(view.depth - 1),
     );
     let index = ((cz * view.height + cy) * view.width + cx) as usize;
-    let stride = view.stride as usize;
-    unsafe { std::ptr::copy_nonoverlapping(view.words.add(index * stride), out, stride) };
+    unsafe { copy_out(view, index, out) };
 }
 
 /// `at_linear`: the CPU interpreter's blend of the neighbouring elements.
@@ -814,10 +874,10 @@ unsafe extern "C" fn orla_jit_linear(
             continue;
         }
         let (cx, cy, cz) = corner;
-        let start = ((cz * height + cy) * width + cx) * stride;
-        for (k, slot) in sums.iter_mut().enumerate() {
-            let word = unsafe { *view.words.add(start + k) };
-            *slot += f32::from_bits(word) * weight;
+        let mut element = [0u32; 64];
+        unsafe { copy_out(view, (cz * height + cy) * width + cx, element.as_mut_ptr()) };
+        for (slot, word) in sums.iter_mut().zip(&element) {
+            *slot += f32::from_bits(*word) * weight;
         }
     }
     for (k, v) in sums.iter().enumerate() {
@@ -852,9 +912,7 @@ unsafe extern "C" fn orla_jit_put_rows(ctx: *const Ctx, input: u32, i: i32, valu
     if i < 0 || i as u32 >= count {
         return;
     }
-    let stride = view.stride as usize;
-    let words = view.words.cast_mut();
-    unsafe { std::ptr::copy_nonoverlapping(value, words.add(i as usize * stride), stride) };
+    unsafe { copy_in(view, i as usize, value) };
 }
 
 /// `put` into a grid or volume memory: an address outside it (NaN
@@ -878,9 +936,7 @@ unsafe extern "C" fn orla_jit_put(
         return;
     };
     let index = ((cz * view.height + cy) * view.width + cx) as usize;
-    let stride = view.stride as usize;
-    let words = view.words.cast_mut();
-    unsafe { std::ptr::copy_nonoverlapping(value, words.add(index * stride), stride) };
+    unsafe { copy_in(view, index, value) };
 }
 
 /// The float error flag: the first failure wins.
@@ -934,6 +990,12 @@ extern "C" fn orla_jit_fmodf(a: f32, b: f32) -> f32 {
     a % b
 }
 
+/// A half float's bits widened to a float's: the Host's own rule, so the
+/// compiled code reads a half as the interpreter does.
+extern "C" fn orla_jit_half(h: u32) -> u32 {
+    orla_abi::encoding::f16_to_f32(h)
+}
+
 /// The helpers by symbol name, for the JIT to import.
 pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
     vec![
@@ -962,6 +1024,7 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ("orla_jit_powf", orla_jit_powf as *const u8),
         ("orla_jit_atan2f", orla_jit_atan2f as *const u8),
         ("orla_jit_fmodf", orla_jit_fmodf as *const u8),
+        ("orla_jit_half", orla_jit_half as *const u8),
     ]
 }
 
@@ -984,7 +1047,7 @@ pub(crate) mod offsets {
     pub const ERROR_AT: i32 = std::mem::offset_of!(Ctx, error_at) as i32;
     pub const VIEW_SIZE: i64 = std::mem::size_of::<View>() as i64;
     pub const VIEW_WORDS: i32 = std::mem::offset_of!(View, words) as i32;
-    pub const VIEW_STRIDE: i32 = std::mem::offset_of!(View, stride) as i32;
+    pub const VIEW_BYTES: i32 = std::mem::offset_of!(View, bytes) as i32;
     pub const VIEW_WIDTH: i32 = std::mem::offset_of!(View, width) as i32;
     pub const VIEW_HEIGHT: i32 = std::mem::offset_of!(View, height) as i32;
     pub const VIEW_DEPTH: i32 = std::mem::offset_of!(View, depth) as i32;

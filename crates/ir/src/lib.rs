@@ -21,7 +21,7 @@ use std::str::FromStr;
 pub use fuse::{FuseError, InputUse, fuse, fuse_outputs, input_use, samples_only};
 pub use optimize::optimize;
 pub use orla_abi::{
-    Capabilities, Capability, PortType, Scalar, Schema, Shape, ShapeIndex, Type, Value,
+    Capabilities, Capability, Encoding, PortType, Scalar, Schema, Shape, ShapeIndex, Type, Value,
 };
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 

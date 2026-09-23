@@ -1534,7 +1534,7 @@ fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
     let report = evaluator
         .evaluate(&graph, &mut runtime, &none, &at(0.0), &defaults)
         .unwrap();
-    let words = |handle| runtime.host().data(handle).unwrap().words().to_vec();
+    let words = |handle| runtime.host().data(handle).unwrap().storage().to_vec();
     // Ten elements over a target of four: 3, 3, 2, 2.
     assert_eq!(words(report.output), vec![3, 3, 2, 2]);
     // Without a domain, once per element of the first input, the target.
@@ -1608,7 +1608,7 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
         .host()
         .data(reference.output)
         .unwrap()
-        .words()
+        .storage()
         .iter()
         .map(|word| f32::from_bits(*word))
         .collect();
@@ -1628,7 +1628,7 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
         .host()
         .data(report.output)
         .unwrap()
-        .words()
+        .storage()
         .iter()
         .map(|word| f32::from_bits(*word))
         .collect();
@@ -1895,7 +1895,7 @@ fn a_map_of_several_outputs_repeats_and_keeps_the_last_times_outputs() {
         report
             .outputs
             .iter()
-            .map(|(_, handle)| runtime.host().data(*handle).unwrap().words().to_vec())
+            .map(|(_, handle)| runtime.host().data(*handle).unwrap().storage().to_vec())
             .collect()
     };
     let mut plain = Evaluator::new();
@@ -1926,4 +1926,66 @@ fn a_map_of_several_outputs_repeats_and_keeps_the_last_times_outputs() {
     // Three steps of 1.5 from x, and the trail the last step read.
     let trail: Vec<i32> = expected[1].iter().map(|w| *w as i32).collect();
     assert_eq!(&trail[..4], &[30, 40, 50, 60]);
+}
+
+const PACK: &str = "kernel image.pack@1 { requires { field.read; field.write; } input source: Image; output result: Grid<Vec4 as unorm8>; compute { return sample(source); } }";
+const SHOW: &str = "kernel image.show@1 { requires { field.read; field.write; } input packed: Grid<Vec4 as unorm8>; output result: Image; compute { return sample(packed) * 2.0; } }";
+
+#[test]
+fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
+    // The gradient kept as bytes and read back: every pixel is its byte
+    // widened, so fusion, which would skip the rounding, does not happen.
+    let mut runtime = runtime();
+    load(&mut runtime, PACK);
+    load(&mut runtime, SHOW);
+    let graph = orla_scene::parse(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node pack: image.pack@1 { source <- source.result; }
+         node show: image.show@1 { packed <- pack.result; }
+         output result <- show.result;",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        report.executed,
+        ids(&["pack", "show"]),
+        "the gradient fuses into pack; pack does not fuse into show"
+    );
+    // Pixel (3, 1) of a 6 by 4 gradient: u = 3/5, v = 1/3, as bytes.
+    let byte = |x: f32| (x * 255.0).round_ties_even() * orla_runtime::encoding::UNORM8 * 2.0;
+    let pixel = runtime.host().read_pixel(report.output, 3, 1).unwrap();
+    assert_eq!(pixel, [byte(0.6), byte(1.0 / 3.0), 0.0, 2.0]);
+    let packed = evaluator.cached(&NodeId("pack".into()), "result").unwrap();
+    assert_eq!(
+        runtime.host().data(packed).unwrap().storage().len(),
+        24,
+        "twenty-four pixels of four bytes"
+    );
+
+    // A picture of floats is not a picture of bytes: the binding says so.
+    let wide = orla_scene::parse(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node show: image.show@1 { packed <- source.result; }
+         output result <- show.result;",
+    )
+    .unwrap();
+    let error = Evaluator::new()
+        .evaluate(
+            &wide,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("kept as unorm8"), "{error}");
 }

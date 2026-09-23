@@ -1,0 +1,83 @@
+// Every Field of the scene kept as narrow as what it holds: a height in
+// 16 bits, a normal in three signed bytes, a picture in four bytes, a tile
+// map in one byte a tile, and the light it accumulates in half floats.
+// The Kernels compute in Float and Int as ever; the port types say how
+// each Field is kept.
+
+type Height = Grid<Float as unorm16>;
+type Normals = Grid<Vec3 as snorm8>;
+type Radiance = Grid<Vec4 as f16>;
+
+// Rolling ground, 0 to 1, in 65536 steps.
+kernel packed.height@1 {
+    requires { field.write; }
+    param turn: Float = 0.0;
+    output result: Height;
+    compute {
+        let p = coord() / domain() * 6.2831853;
+        let h = 0.5 + 0.25 * sin(p.x * 2.0 + turn) * cos(p.y * 3.0) + 0.2 * sin(p.x * 5.0 + p.y * 4.0);
+        return h;
+    }
+}
+
+// The slope of the height, as a unit normal: three signed bytes, which is
+// what a normal needs and a quarter of what three floats take.
+kernel packed.normal@1 {
+    requires { field.read; field.write; }
+    input height: Height;
+    param relief: Float = 6.0;
+    output result: Normals;
+    compute {
+        let c = icoord();
+        let dx = at(height, c + ivec2(1, 0)) - at(height, c - ivec2(1, 0));
+        let dy = at(height, c + ivec2(0, 1)) - at(height, c - ivec2(0, 1));
+        return normalize(vec3(-dx * relief, -dy * relief, 1.0));
+    }
+}
+
+// Sunlight over the picture and the tile map, brighter than one where the
+// sun is full on, carried from frame to frame in half floats.
+kernel packed.light@1 {
+    requires { field.read; field.write; time.read; }
+    input albedo: Grid<Vec4 as unorm8>;
+    input normal: Normals;
+    input tiles: Rows<Int as u8>;
+    input previous: Radiance;
+    output result: Radiance;
+    compute {
+        let uv = coord() / domain();
+        let a = at_linear(albedo, uv * size(albedo));
+        let n = sample(normal);
+        let cell = int(uv * 8.0);
+        let tile = at(tiles, cell.y * 8 + cell.x);
+        let sun = normalize(vec3(cos(time()), sin(time()), 1.2));
+        let lit = a.rgb * max(dot(n, sun), 0.0) * (1.0 + float(tile) / 64.0) * 3.0;
+        return mix(sample(previous), vec4(lit, 1.0), 0.25);
+    }
+}
+
+// Radiance to a picture: Reinhard, per channel.
+kernel packed.tonemap@1 {
+    requires { field.read; field.write; }
+    input hdr: Radiance;
+    output result: Image;
+    compute {
+        let c = sample(hdr).rgb;
+        return vec4(c / (vec3(1.0, 1.0, 1.0) + c), 1.0);
+    }
+}
+
+// A picture to bake into albedo.png: warm and cool tiles with a border.
+kernel packed.albedo@1 {
+    requires { field.write; }
+    output result: Image;
+    compute {
+        let c = icoord();
+        let t = (c / ivec2(8, 8));
+        let warm = (t.x + t.y) % 2 == 0;
+        let edge = c.x % 8 == 0 || c.y % 8 == 0;
+        let base = if warm { vec3(0.82, 0.55, 0.32) } else { vec3(0.36, 0.52, 0.72) };
+        let shade = if edge { base * 0.6 } else { base };
+        return vec4(shade, 1.0);
+    }
+}

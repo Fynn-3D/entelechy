@@ -10,9 +10,51 @@ use super::code::*;
 
 /// An input the scope lent for the execution.
 pub(super) struct InputView<'s> {
+    /// The Field's memory as kept.
     pub(super) words: &'s [u32],
     pub(crate) domain: Domain,
+    /// The Kernel's words per element.
     pub(super) stride: usize,
+    /// The layout, when it keeps scalars narrower than a word: then a
+    /// read widens each scalar through it and a write narrows it. `None`
+    /// is memory that already holds the Kernel's words.
+    pub(super) narrow: Option<orla_abi::Schema>,
+}
+
+impl InputView<'_> {
+    /// Scalars `first..first + n` of element `index`, as the Kernel's
+    /// words, from `words` (the view's memory or a working copy of it).
+    #[inline]
+    pub(super) fn read(&self, words: &[u32], index: usize, first: usize, out: &mut [u32]) {
+        match &self.narrow {
+            None => {
+                let start = index * self.stride + first;
+                out.copy_from_slice(&words[start..start + out.len()]);
+            }
+            Some(schema) => {
+                for (k, slot) in out.iter_mut().enumerate() {
+                    *slot = schema.load(words, index, first + k);
+                }
+            }
+        }
+    }
+
+    /// Writes the Kernel's words as element `index` of `words`, narrowed
+    /// where the view keeps them narrow.
+    #[inline]
+    pub(super) fn write(&self, words: &mut [u32], index: usize, values: &[u32]) {
+        match &self.narrow {
+            None => {
+                let start = index * self.stride;
+                words[start..start + values.len()].copy_from_slice(values);
+            }
+            Some(schema) => {
+                for (k, value) in values.iter().enumerate() {
+                    schema.store(words, index, k, *value);
+                }
+            }
+        }
+    }
 }
 
 /// A module compiled for one invocation, shared by every thread that
@@ -173,10 +215,12 @@ impl<'s> Program<'s> {
     ) -> Result<Self, ExecutionError> {
         let mut inputs = Vec::with_capacity(invocation.inputs.len());
         for handle in &invocation.inputs {
+            let schema = scope.schema(*handle)?;
             inputs.push(InputView {
-                words: scope.words(*handle)?,
+                words: scope.storage(*handle)?,
                 domain: scope.size(*handle)?,
-                stride: scope.schema(*handle)?.words(),
+                stride: schema.value_words(),
+                narrow: (!schema.is_wide()).then_some(schema),
             });
         }
         let mut params = Vec::new();

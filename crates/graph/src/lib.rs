@@ -167,8 +167,9 @@ pub struct Asset {
     pub name: String,
     /// The file, resolved against the document's directory.
     pub path: PathBuf,
-    /// The type as written, which tells a picture file whether to come
-    /// in as pixels or as a `Grid<Float>`.
+    /// The type, aliases resolved: it tells a picture file whether to come
+    /// in as pixels or as a `Grid<Float>`, and how the Field keeps what
+    /// came in (`Grid<Vec4 as unorm8>`).
     pub ty: String,
     /// Whether the file comes in as its bytes, one to an element of a
     /// `Rows<Int>`, rather than as a Field of its own format.

@@ -26,7 +26,7 @@ fn both(
         .iter()
         .map(|(schema, domain, words)| {
             host.adopt(
-                orla_abi::FieldData::from_words(schema.clone(), *domain, words.clone()).unwrap(),
+                orla_abi::FieldData::from_storage(schema.clone(), *domain, words.clone()).unwrap(),
             )
             .unwrap()
         })
@@ -41,7 +41,7 @@ fn both(
     let cpu = CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu).unwrap().storage().to_vec();
     let prepared = jit
         .prepare(&module)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -49,7 +49,7 @@ fn both(
     let out = jit
         .execute(prepared.as_ref(), &module, &invocation, &mut scope)
         .unwrap()[0];
-    let jit_words = host.data(out).unwrap().words().to_vec();
+    let jit_words = host.data(out).unwrap().storage().to_vec();
     (cpu_words, jit_words)
 }
 
@@ -196,7 +196,7 @@ fn both_all(
         .iter()
         .map(|(schema, domain, words)| {
             host.adopt(
-                orla_abi::FieldData::from_words(schema.clone(), *domain, words.clone()).unwrap(),
+                orla_abi::FieldData::from_storage(schema.clone(), *domain, words.clone()).unwrap(),
             )
             .unwrap()
         })
@@ -213,7 +213,7 @@ fn both_all(
         .unwrap();
     let cpu_words: Vec<Vec<u32>> = cpu
         .iter()
-        .map(|handle| host.data(*handle).unwrap().words().to_vec())
+        .map(|handle| host.data(*handle).unwrap().storage().to_vec())
         .collect();
     let prepared = jit
         .prepare(&module)
@@ -224,7 +224,7 @@ fn both_all(
         .unwrap();
     let jit_words = out
         .iter()
-        .map(|handle| host.data(*handle).unwrap().words().to_vec())
+        .map(|handle| host.data(*handle).unwrap().storage().to_vec())
         .collect();
     (cpu_words, jit_words)
 }
@@ -282,7 +282,8 @@ fn a_scan_step_that_fails_names_its_element() {
     let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_words(ints, Domain::Rows(6), vec![2, 5, 1, 0, 3, 3]).unwrap(),
+            orla_abi::FieldData::from_storage(ints, Domain::Rows(6), vec![2, 5, 1, 0, 3, 3])
+                .unwrap(),
         )
         .unwrap();
     let invocation = Invocation {
@@ -395,7 +396,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     let mut host = Host::new(1 << 16);
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 ints.clone(),
                 Domain::Rows(4),
                 vec![0x4000_0000, 0x4000_0000, 1, 1],
@@ -426,7 +427,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     let mut host = Host::new(1 << 16);
     let rows = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 ints.clone(),
                 Domain::Rows(4),
                 vec![0x4000_0000, 0x3000_0000, 0x4000_0000, 1],
@@ -435,7 +436,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
         )
         .unwrap();
     let slots = host
-        .adopt(orla_abi::FieldData::from_words(ints, Domain::Rows(2), vec![0; 2]).unwrap())
+        .adopt(orla_abi::FieldData::from_storage(ints, Domain::Rows(2), vec![0; 2]).unwrap())
         .unwrap();
     let invocation = Invocation {
         inputs: vec![rows, slots],
@@ -516,7 +517,7 @@ fn a_failure_names_its_element_through_a_call_and_a_loop() {
         let prepared = backend.prepare(&module).unwrap();
         let mut scope = Scope::new(&mut host, all());
         let outcome = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope);
-        outcome.map(|outputs| scope.words(outputs[0]).unwrap().to_vec())
+        outcome.map(|outputs| scope.storage(outputs[0]).unwrap().to_vec())
     };
     // Element 4 divides by zero, three times over, inside a function
     // that is written out inside a loop: both backends blame element 4.

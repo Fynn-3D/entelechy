@@ -59,6 +59,28 @@ are three:
 are transparent, so a `Rows<Vec2>` wire connects to a `type Stereo =
 Rows<Vec2>;` port and any mismatch is reported by structure, never by name.
 
+A port may keep its element's scalars narrower than a word, after `as`:
+`Grid<Vec4 as unorm8>` is a picture of four bytes a pixel, `Rows<Int as
+u8>` a byte a row. The Kernel sees a `Vec4` and an `Int` as ever and
+computes in `Float` and `Int`; the Field widens a scalar when it is read
+and narrows it when it is written.
+
+| Encoding | Keeps | Narrowed by |
+|---|---|---|
+| `f16` | a float in half precision | to nearest, ties to even; too large is infinity |
+| `unorm8`, `unorm16` | a float in `0..=1` in 8 or 16 bits | clamped, NaN as 0, scaled and rounded to nearest, ties to even |
+| `snorm8` | a float in `-1..=1` in a signed byte | the same, and -128 reads as -1 |
+| `u8`, `i8`, `u16`, `i16` | an integer or a boolean | its low bits; read back zero- or sign-extended, a boolean as whether any bit is set |
+
+The rule is the Host's and every backend keeps it bit for bit. A picture
+file or `bytes` input declared narrow lands narrow; a narrow Field and a
+wide one are different layouts, and a wire between them is refused.
+Only a map or the steps of a scan write a narrow output (a scan's memory
+may be narrow too): a reduction, a prefix and a scatter fold into their
+output in place, in whole words. A narrow Field between two nodes is
+written and read, never fused away, since the rounding it does is part
+of the scene.
+
 The element may be a scalar, a vector, or a struct; its layout is the
 struct's scalars in order, integers and booleans exact. Inside `compute`,
 Expressions are `let` bindings and a result; a binding takes a name,

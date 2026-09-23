@@ -59,8 +59,7 @@ fn every_feature_under_every_mode_computes_the_same_words_optimized() {
                 .iter()
                 .map(|(schema, domain, words)| {
                     host.adopt(
-                        orla_abi::FieldData::from_words(schema.clone(), *domain, words.clone())
-                            .unwrap(),
+                        orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
                     )
                     .unwrap()
                 })
@@ -77,7 +76,7 @@ fn every_feature_under_every_mode_computes_the_same_words_optimized() {
                 .map_err(|e| e.to_string())?;
             Ok(outputs
                 .iter()
-                .map(|handle| host.data(*handle).unwrap().words().to_vec())
+                .map(|handle| host.data(*handle).unwrap().storage().to_vec())
                 .collect())
         };
         match (run(&plain), run(&optimized)) {

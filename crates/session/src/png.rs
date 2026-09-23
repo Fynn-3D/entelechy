@@ -229,7 +229,7 @@ pub fn decode_field(bytes: &[u8], gray: bool) -> Result<FieldData, PngError> {
             })
             .map(f32::to_bits)
             .collect();
-        FieldData::from_words(Schema::new(vec![Scalar::Float]), domain, words)
+        FieldData::from_storage(Schema::new(vec![Scalar::Float]), domain, words)
             .map_err(PngError::Host)
     } else {
         let words = pixels
@@ -243,7 +243,7 @@ pub fn decode_field(bytes: &[u8], gray: bool) -> Result<FieldData, PngError> {
                 [r.to_bits(), g.to_bits(), b.to_bits(), a.to_bits()]
             })
             .collect();
-        FieldData::from_words(Schema::pixel(), domain, words).map_err(PngError::Host)
+        FieldData::from_storage(Schema::pixel(), domain, words).map_err(PngError::Host)
     }
 }
 
@@ -316,9 +316,9 @@ mod tests {
     fn fields_come_out_as_asked_and_encoded_files_decode() {
         let pixels = decode_field(GRAY_SUB, false).unwrap();
         assert!(pixels.schema().is_pixel());
-        assert_eq!(f32::from_bits(pixels.words()[4]), 15.0 / 255.0);
+        assert_eq!(f32::from_bits(pixels.storage()[4]), 15.0 / 255.0);
         let gray = decode_field(RGB16X16, true).unwrap();
-        assert_eq!(gray.schema().words(), 1);
+        assert_eq!(gray.schema().value_words(), 1);
         let picture = vec![[1.0, 0.5, 0.0, 1.0], [0.0, 0.0, 1.0, 0.5]];
         let decoded = decode(&encode(2, 1, &picture)).unwrap();
         assert_eq!(decoded.channels, 4);

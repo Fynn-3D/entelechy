@@ -11,7 +11,11 @@ use orla_rules::Backend;
 
 /// Downloads a resident GPU output into Host memory and returns its pixels.
 fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::Handle) -> Vec<[f32; 4]> {
-    let byte_len = host.domain(handle).unwrap().count() * host.schema(handle).unwrap().words() * 4;
+    let byte_len = host
+        .schema(handle)
+        .unwrap()
+        .storage_words(host.domain(handle).unwrap().count())
+        * 4;
     let device = host
         .resident(handle)
         .unwrap()
@@ -523,14 +527,18 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     let host = runtime.host_mut();
     let vertex_rows = host
         .adopt(
-            orla_abi::FieldData::from_words(vertex_schema(), Domain::Rows(6), vertices.clone())
+            orla_abi::FieldData::from_storage(vertex_schema(), Domain::Rows(6), vertices.clone())
                 .unwrap(),
         )
         .unwrap();
     let triangle_rows = host
         .adopt(
-            orla_abi::FieldData::from_words(triangle_schema(), Domain::Rows(2), triangles.clone())
-                .unwrap(),
+            orla_abi::FieldData::from_storage(
+                triangle_schema(),
+                Domain::Rows(2),
+                triangles.clone(),
+            )
+            .unwrap(),
         )
         .unwrap();
     let raster = runtime
@@ -545,7 +553,7 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     };
     let surface = runtime.execute(&raster, &invocation).unwrap()[0];
     runtime.materialize(surface).unwrap();
-    let device = runtime.host().data(surface).unwrap().words().to_vec();
+    let device = runtime.host().data(surface).unwrap().storage().to_vec();
     assert_eq!(
         runtime.host().schema(surface).unwrap().to_string(),
         "f,f,f,f,f,f,i"
@@ -626,8 +634,11 @@ fn reductions_match_between_backends() {
     let mut scope = Scope::new(&mut host, all());
     let gpu_out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
-    let byte_len =
-        host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+    let byte_len = host
+        .schema(gpu_out)
+        .unwrap()
+        .storage_words(host.domain(gpu_out).unwrap().count())
+        * 4;
     let device = host.resident(gpu_out).unwrap().expect("resident");
     let bytes = Backend::download(&gpu, device, byte_len).unwrap();
     let gpu_stats: Vec<u32> = bytes
@@ -676,7 +687,7 @@ fn prefixes_match_between_backends() {
         let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
         let mut host = Host::new(1 << 24);
         let rows = host
-            .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(count), ints).unwrap())
+            .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(count), ints).unwrap())
             .unwrap();
         let (cpu_words, gpu_words) = on_both(&gpu, &mut host, &sum, rows, count);
         let mut running = 0i32;
@@ -709,7 +720,7 @@ fn prefixes_match_between_backends() {
         let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
         let mut host = Host::new(1 << 24);
         let rows = host
-            .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(count), words).unwrap())
+            .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(count), words).unwrap())
             .unwrap();
         let (cpu_words, gpu_words) = on_both(&gpu, &mut host, &worst, rows, count);
         assert_eq!(cpu_words, gpu_words, "max over {count}");
@@ -735,13 +746,16 @@ fn on_both(
     let cpu_out = orla_cpu::CpuBackend
         .execute(module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
     let prepared = Backend::prepare(gpu, module).unwrap();
     let mut scope = Scope::new(host, all());
     let gpu_out =
         Backend::execute(gpu, prepared.as_ref(), module, &invocation, &mut scope).unwrap()[0];
-    let byte_len =
-        host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+    let byte_len = host
+        .schema(gpu_out)
+        .unwrap()
+        .storage_words(host.domain(gpu_out).unwrap().count())
+        * 4;
     let device = host.resident(gpu_out).unwrap().expect("resident");
     let bytes = Backend::download(gpu, device, byte_len).unwrap();
     let gpu_words: Vec<u32> = bytes
@@ -770,7 +784,7 @@ fn scans_match_between_backends() {
     let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Float]);
     let mut host = Host::new(1 << 20);
     let rows = host
-        .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(count), words).unwrap())
+        .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(count), words).unwrap())
         .unwrap();
     let invocation = orla_abi::Invocation {
         inputs: vec![rows],
@@ -782,13 +796,16 @@ fn scans_match_between_backends() {
     let cpu_out = orla_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
     let prepared = Backend::prepare(&gpu, &module).unwrap();
     let mut scope = Scope::new(&mut host, all());
     let gpu_out =
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
-    let byte_len =
-        host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+    let byte_len = host
+        .schema(gpu_out)
+        .unwrap()
+        .storage_words(host.domain(gpu_out).unwrap().count())
+        * 4;
     let device = host.resident(gpu_out).unwrap().expect("resident");
     let bytes = Backend::download(&gpu, device, byte_len).unwrap();
     let gpu_words: Vec<u32> = bytes
@@ -856,7 +873,7 @@ fn linear_interpolation_matches_between_backends() {
     let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float; 3]);
     let mut host = Host::new(1 << 16);
     let points = host
-        .adopt(orla_abi::FieldData::from_words(schema, Domain::Rows(9), words).unwrap())
+        .adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(9), words).unwrap())
         .unwrap();
     let invocation = orla_abi::Invocation {
         inputs: vec![points],
@@ -868,7 +885,7 @@ fn linear_interpolation_matches_between_backends() {
     let cpu_out = orla_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
     let prepared = Backend::prepare(&gpu, &module).unwrap();
     let mut scope = Scope::new(&mut host, all());
     let gpu_out =
@@ -945,7 +962,7 @@ fn scatters_match_between_backends() {
         let mut host = Host::new(1 << 20);
         let drops = host
             .adopt(
-                orla_abi::FieldData::from_words(
+                orla_abi::FieldData::from_storage(
                     drop_schema.clone(),
                     Domain::Rows(count),
                     drop_words.clone(),
@@ -955,7 +972,7 @@ fn scatters_match_between_backends() {
             .unwrap();
         let canvas = host
             .adopt(
-                orla_abi::FieldData::from_words(
+                orla_abi::FieldData::from_storage(
                     cell_schema.clone(),
                     Domain::Grid(6, 4),
                     canvas_words.clone(),
@@ -973,14 +990,17 @@ fn scatters_match_between_backends() {
         let cpu_out = orla_cpu::CpuBackend
             .execute(&module, &invocation, &mut scope)
             .unwrap()[0];
-        let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+        let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
         let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
         let mut scope = Scope::new(&mut host, all());
         let gpu_out =
             Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
         assert_eq!(host.domain(gpu_out).unwrap(), Domain::Grid(6, 4));
-        let byte_len =
-            host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+        let byte_len = host
+            .schema(gpu_out)
+            .unwrap()
+            .storage_words(host.domain(gpu_out).unwrap().count())
+            * 4;
         let device = host.resident(gpu_out).unwrap().expect("resident");
         let bytes = Backend::download(&gpu, device, byte_len).unwrap();
         let gpu_words: Vec<u32> = bytes
@@ -1035,12 +1055,14 @@ fn scatters_match_between_backends() {
         let mut host = Host::new(1 << 20);
         let drops = host
             .adopt(
-                orla_abi::FieldData::from_words(drop_schema.clone(), Domain::Rows(count), words)
+                orla_abi::FieldData::from_storage(drop_schema.clone(), Domain::Rows(count), words)
                     .unwrap(),
             )
             .unwrap();
         let grid = host
-            .adopt(orla_abi::FieldData::from_words(schema, Domain::Grid(6, 4), grid_words).unwrap())
+            .adopt(
+                orla_abi::FieldData::from_storage(schema, Domain::Grid(6, 4), grid_words).unwrap(),
+            )
             .unwrap();
         let invocation = orla_abi::Invocation {
             inputs: vec![drops, grid],
@@ -1052,13 +1074,16 @@ fn scatters_match_between_backends() {
         let cpu_out = orla_cpu::CpuBackend
             .execute(&module, &invocation, &mut scope)
             .unwrap()[0];
-        let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+        let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
         let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
         let mut scope = Scope::new(&mut host, all());
         let gpu_out =
             Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap()[0];
-        let byte_len =
-            host.domain(gpu_out).unwrap().count() * host.schema(gpu_out).unwrap().words() * 4;
+        let byte_len = host
+            .schema(gpu_out)
+            .unwrap()
+            .storage_words(host.domain(gpu_out).unwrap().count())
+            * 4;
         let device = host.resident(gpu_out).unwrap().expect("resident");
         let bytes = Backend::download(&gpu, device, byte_len).unwrap();
         let gpu_words: Vec<u32> = bytes
@@ -1090,13 +1115,13 @@ fn scatters_match_between_backends() {
     let mut host = Host::new(1 << 24);
     let drops = host
         .adopt(
-            orla_abi::FieldData::from_words(drop_schema.clone(), Domain::Rows(many), many_words)
+            orla_abi::FieldData::from_storage(drop_schema.clone(), Domain::Rows(many), many_words)
                 .unwrap(),
         )
         .unwrap();
     let canvas = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 cell_schema.clone(),
                 Domain::Grid(6, 4),
                 canvas_words.clone(),
@@ -1114,7 +1139,7 @@ fn scatters_match_between_backends() {
     let cpu_out = orla_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
     let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
     let mut scope = Scope::new(&mut host, all());
     let gpu_out =
@@ -1139,7 +1164,7 @@ fn scatters_match_between_backends() {
         let mut host = Host::new(1 << 20);
         let drops = host
             .adopt(
-                orla_abi::FieldData::from_words(
+                orla_abi::FieldData::from_storage(
                     drop_schema.clone(),
                     Domain::Rows(count),
                     odd_words.clone(),
@@ -1149,7 +1174,7 @@ fn scatters_match_between_backends() {
             .unwrap();
         let grid = host
             .adopt(
-                orla_abi::FieldData::from_words(
+                orla_abi::FieldData::from_storage(
                     orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
                     Domain::Grid(6, 4),
                     (0..24).map(|_| 0.5f32.to_bits()).collect(),
@@ -1167,7 +1192,7 @@ fn scatters_match_between_backends() {
         let cpu_out = orla_cpu::CpuBackend
             .execute(&module, &invocation, &mut scope)
             .unwrap()[0];
-        let cpu_words = host.data(cpu_out).unwrap().words().to_vec();
+        let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
         let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
         let mut scope = Scope::new(&mut host, all());
         let gpu_out =
@@ -1203,7 +1228,7 @@ fn memories_match_between_backends() {
     let mut host = Host::new(1 << 20);
     let ticks = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 ints.clone(),
                 Domain::Rows(steps),
                 vec![0; steps as usize],
@@ -1212,11 +1237,11 @@ fn memories_match_between_backends() {
         )
         .unwrap();
     let screen = host
-        .adopt(orla_abi::FieldData::from_words(ints, Domain::Grid(16, 8), vec![0; 128]).unwrap())
+        .adopt(orla_abi::FieldData::from_storage(ints, Domain::Grid(16, 8), vec![0; 128]).unwrap())
         .unwrap();
     let tally = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 cells,
                 Domain::Rows(2),
                 vec![0, 0.0f32.to_bits(), 0, 0.0f32.to_bits()],
@@ -1241,7 +1266,7 @@ fn memories_match_between_backends() {
         Backend::execute(&gpu, prepared.as_ref(), &module, &invocation, &mut scope).unwrap();
     assert_eq!(gpu_outputs.len(), 3);
     for (which, (cpu_out, gpu_out)) in cpu_outputs.iter().zip(&gpu_outputs).enumerate() {
-        let cpu_words = host.data(*cpu_out).unwrap().words().to_vec();
+        let cpu_words = host.data(*cpu_out).unwrap().storage().to_vec();
         assert_eq!(
             host.domain(*gpu_out).unwrap(),
             host.domain(*cpu_out).unwrap()
@@ -1255,9 +1280,9 @@ fn memories_match_between_backends() {
             .collect();
         assert_eq!(cpu_words, gpu_words, "output {which} differs");
     }
-    let screen_words = host.data(cpu_outputs[1]).unwrap().words().to_vec();
+    let screen_words = host.data(cpu_outputs[1]).unwrap().storage().to_vec();
     assert!(screen_words.contains(&1), "the walk left marks");
-    let tally_words = host.data(cpu_outputs[2]).unwrap().words().to_vec();
+    let tally_words = host.data(cpu_outputs[2]).unwrap().storage().to_vec();
     assert_eq!(
         tally_words[0] + tally_words[2],
         steps,
@@ -1289,7 +1314,7 @@ fn integer_arithmetic_matches_between_backends() {
     let cpu = orla_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu).unwrap().storage().to_vec();
     let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
     let mut scope = Scope::new(&mut host, all());
     let out =
@@ -1318,10 +1343,12 @@ fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
     let mut host = Host::new(1 << 16);
     let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
     let ticks = host
-        .adopt(orla_abi::FieldData::from_words(ints.clone(), Domain::Rows(5), vec![0; 5]).unwrap())
+        .adopt(
+            orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(5), vec![0; 5]).unwrap(),
+        )
         .unwrap();
     let regs = host
-        .adopt(orla_abi::FieldData::from_words(ints, Domain::Rows(17), vec![0; 17]).unwrap())
+        .adopt(orla_abi::FieldData::from_storage(ints, Domain::Rows(17), vec![0; 17]).unwrap())
         .unwrap();
     let invocation = orla_abi::Invocation {
         inputs: vec![ticks, regs],
@@ -1406,7 +1433,7 @@ fn a_match_is_a_switch_on_the_gpu() {
     let cpu = orla_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu).unwrap().storage().to_vec();
     let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
     let mut scope = Scope::new(&mut host, all());
     let out =
@@ -1436,7 +1463,7 @@ fn a_merge_may_read_inputs_params_and_the_context() {
     let count = 37u32;
     let xs = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 floats.clone(),
                 Domain::Rows(count),
                 (0..count).map(|i| (i as f32 * 0.5).to_bits()).collect(),
@@ -1446,7 +1473,7 @@ fn a_merge_may_read_inputs_params_and_the_context() {
         .unwrap();
     let weights = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 floats,
                 Domain::Rows(count),
                 (0..count)
@@ -1469,7 +1496,7 @@ fn a_merge_may_read_inputs_params_and_the_context() {
     let cpu = orla_cpu::CpuBackend
         .execute(&module, &invocation, &mut scope)
         .unwrap()[0];
-    let cpu_words = host.data(cpu).unwrap().words().to_vec();
+    let cpu_words = host.data(cpu).unwrap().storage().to_vec();
     let prepared = Backend::prepare(&gpu, &module).unwrap_or_else(|error| panic!("{error}"));
     let mut scope = Scope::new(&mut host, all());
     let out =
@@ -1580,19 +1607,23 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
     let host = runtime.host_mut();
     let vertex_rows = host
         .adopt(
-            orla_abi::FieldData::from_words(vertex_schema(), Domain::Rows(8), vertices.clone())
+            orla_abi::FieldData::from_storage(vertex_schema(), Domain::Rows(8), vertices.clone())
                 .unwrap(),
         )
         .unwrap();
     let triangle_rows = host
         .adopt(
-            orla_abi::FieldData::from_words(triangle_schema(), Domain::Rows(4), triangles.clone())
-                .unwrap(),
+            orla_abi::FieldData::from_storage(
+                triangle_schema(),
+                Domain::Rows(4),
+                triangles.clone(),
+            )
+            .unwrap(),
         )
         .unwrap();
     let mask_grid = host
         .adopt(
-            orla_abi::FieldData::from_words(
+            orla_abi::FieldData::from_storage(
                 mask_schema(),
                 Domain::Grid(mask_w, mask_h),
                 mask.clone(),
@@ -1611,7 +1642,7 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
     };
     let surface = runtime.execute(&raster, &invocation).unwrap()[0];
     runtime.materialize(surface).unwrap();
-    let device = runtime.host().data(surface).unwrap().words().to_vec();
+    let device = runtime.host().data(surface).unwrap().storage().to_vec();
     let reference = rasterize_masked(
         &vertices,
         &triangles,

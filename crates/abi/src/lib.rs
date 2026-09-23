@@ -13,10 +13,10 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
-pub use orla_host::file;
 pub use orla_host::{
-    Domain, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
+    Domain, Encoding, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
 };
+pub use orla_host::{encoding, file};
 
 /// A named authority a Kernel may declare and be granted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -393,7 +393,7 @@ impl PortType {
 
     /// Whether this is the image port.
     pub fn is_image(&self) -> bool {
-        self.shape == Shape::Grid && self.element == Type::Vec4
+        self.shape == Shape::Grid && self.element == Type::Vec4 && self.schema.is_wide()
     }
 
     /// The value type that addresses one element: `Int`, `Vec2`, or `Vec3`.
@@ -405,9 +405,12 @@ impl PortType {
 impl fmt::Display for PortType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_image() {
-            f.write_str("Image")
-        } else {
-            write!(f, "{}<{}>", self.shape, self.element)
+            return f.write_str("Image");
+        }
+        match self.schema.uniform_encoding() {
+            _ if self.schema.is_wide() => write!(f, "{}<{}>", self.shape, self.element),
+            Some(encoding) => write!(f, "{}<{} as {encoding}>", self.shape, self.element),
+            None => write!(f, "{}<{} as {}>", self.shape, self.element, self.schema),
         }
     }
 }
@@ -719,17 +722,31 @@ impl<'a> Scope<'a> {
         Ok(self.host.schema(field)?.clone())
     }
 
-    /// One element of an input as words, by linear index. Requires
-    /// `field.read`. Fails while the Field is resident on a device.
-    pub fn element(&self, field: Handle, index: u32) -> Result<&[u32], AbiError> {
+    /// One element of an input as the Kernel's words, widened if it is
+    /// kept narrow, by linear index. Requires `field.read`. Fails while
+    /// the Field is resident on a device.
+    pub fn element(
+        &self,
+        field: Handle,
+        index: u32,
+    ) -> Result<std::borrow::Cow<'_, [u32]>, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.element(field, index)?)
     }
 
-    /// Every word of an input. Requires `field.read`.
-    pub fn words(&self, field: Handle) -> Result<&[u32], AbiError> {
+    /// Every element of an input as the Kernel's words, widened where it
+    /// is kept narrow. Requires `field.read`.
+    pub fn values(&self, field: Handle) -> Result<std::borrow::Cow<'_, [u32]>, AbiError> {
         self.require(Capability::FieldRead)?;
-        Ok(self.host.data(field)?.words())
+        Ok(self.host.data(field)?.values())
+    }
+
+    /// An input's memory as kept: the Kernel's words for a wide schema,
+    /// packed scalars for a narrow one ([`Schema::load`] reads them).
+    /// Requires `field.read`.
+    pub fn storage(&self, field: Handle) -> Result<&[u32], AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.data(field)?.storage())
     }
 
     /// The device object of a resident input, if any. Requires `field.read`.
@@ -766,19 +783,27 @@ impl<'a> Scope<'a> {
         Ok(self.host.create_for_fill(schema, domain)?)
     }
 
-    /// The words of a Field this scope created, to fill in place: what a
-    /// backend writes into when it would otherwise fill a buffer of its
-    /// own and copy it in. Requires `field.write`.
-    pub fn words_mut(&mut self, field: Handle) -> Result<&mut [u32], AbiError> {
+    /// The memory of a Field this scope created, as kept, to fill in
+    /// place: what a backend writes into when it would otherwise fill a
+    /// buffer of its own and copy it in. Requires `field.write`.
+    pub fn storage_mut(&mut self, field: Handle) -> Result<&mut [u32], AbiError> {
         self.require(Capability::FieldWrite)?;
-        Ok(self.host.words_mut(field)?)
+        Ok(self.host.storage_mut(field)?)
     }
 
-    /// Replaces every word of a Field this scope created. Requires
-    /// `field.write`.
-    pub fn write_all(&mut self, field: Handle, words: &[u32]) -> Result<(), AbiError> {
+    /// Replaces every element of a Field this scope created with the
+    /// Kernel's words, narrowed where the Field keeps them narrow.
+    /// Requires `field.write`.
+    pub fn write_values(&mut self, field: Handle, values: &[u32]) -> Result<(), AbiError> {
         self.require(Capability::FieldWrite)?;
-        Ok(self.host.write_words(field, words)?)
+        Ok(self.host.write_values(field, values)?)
+    }
+
+    /// Replaces the memory of a Field this scope created, as kept.
+    /// Requires `field.write`.
+    pub fn write_storage(&mut self, field: Handle, storage: &[u32]) -> Result<(), AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self.host.write_storage(field, storage)?)
     }
 
     /// Replaces one element of a Field this scope created. Requires
@@ -866,7 +891,7 @@ mod tests {
         scope
             .write_element(image, 1, &[0.5f32.to_bits(); 4])
             .unwrap();
-        assert_eq!(scope.element(image, 1).unwrap(), &[0.5f32.to_bits(); 4]);
+        assert_eq!(&*scope.element(image, 1).unwrap(), &[0.5f32.to_bits(); 4]);
         assert_eq!(scope.size(image).unwrap(), Domain::Grid(2, 2));
         assert_eq!(scope.schema(image).unwrap(), Schema::pixel());
         assert!(matches!(

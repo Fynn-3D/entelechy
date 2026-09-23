@@ -23,7 +23,7 @@
 //! scatter, a prefix, and a map writing four outputs by name, and
 //! returns what that mode returns.
 
-use orla_abi::{Context, Domain, InputState, Scalar, Schema, Value};
+use orla_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
 
 /// One Kernel of the matrix and everything it runs with.
 #[derive(Clone, Debug)]
@@ -577,6 +577,7 @@ pub fn cases() -> Vec<Case> {
             });
         }
     }
+    out.extend(narrow_cases());
     out
 }
 
@@ -604,7 +605,10 @@ pub fn compare(
         let same = match scalar {
             Scalar::Float => {
                 let (fa, fb) = (f32::from_bits(*a), f32::from_bits(*b));
-                (fa.is_nan() && fb.is_nan())
+                // Equal is equal, infinities included, whose difference is
+                // not a number.
+                fa == fb
+                    || (fa.is_nan() && fb.is_nan())
                     || (fa - fb).abs() <= absolute + relative * fa.abs().max(fb.abs())
             }
             _ => a == b,
@@ -625,4 +629,224 @@ pub fn compare(
         }
     }
     None
+}
+
+/// Floats that test a narrow encoding's rule: exact values, ties, values
+/// past the range on both sides, and for a half the subnormals and the
+/// infinities. No NaN: a device's arithmetic does not promise one.
+fn narrow_floats(count: usize) -> Vec<f32> {
+    let edges = [
+        0.0,
+        1.0,
+        -1.0,
+        0.5,
+        -0.5,
+        0.25,
+        127.5 / 255.0,
+        1.5 / 255.0,
+        2.0,
+        -3.0,
+        0.1,
+        1.0 / 3.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        2f32.powi(-20),
+        65504.0,
+        1.0 + 2f32.powi(-11),
+        -0.75,
+        0.999,
+        1e-9,
+    ];
+    (0..count)
+        .map(|i| edges[i % edges.len()] * if i >= edges.len() { 0.5 } else { 1.0 })
+        .collect()
+}
+
+/// Integers that test an integer encoding: its bounds, one past each, and
+/// what wraps.
+fn narrow_ints(count: usize) -> Vec<i32> {
+    let edges = [
+        0, 1, -1, 127, 128, -128, -129, 255, 256, 300, -300, 32767, 32768, -32768, 65535, 65536,
+    ];
+    (0..count)
+        .map(|i| edges[i % edges.len()] + (i / edges.len()) as i32)
+        .collect()
+}
+
+/// The narrow encodings under the reads and writes a Kernel does: every
+/// encoding read by `sample`, `at` over rows and over a grid, a part of an
+/// element, `at_linear` for the float ones, and written by a map (a copy,
+/// and a value computed from it) and by the steps of a scan into a
+/// memory. The inputs are given as the Kernel's words and kept narrow by
+/// the Host's rule; a backend is held to the interpreter on the words it
+/// reads back.
+pub fn narrow_cases() -> Vec<Case> {
+    let mut out = Vec::new();
+    let words = |values: &[f32]| values.iter().map(|v| v.to_bits()).collect::<Vec<u32>>();
+    for encoding in Encoding::NARROW {
+        let e = encoding.name();
+        let kept = |scalars: Vec<Scalar>| {
+            Schema::new(scalars)
+                .with_encoding(encoding)
+                .expect("the encoding fits")
+        };
+        if encoding.is_float() {
+            let map = format!(
+                "kernel matrix.narrow_{e}@1 {{
+    requires {{ field.read; field.write; }}
+    input rows: Rows<Float as {e}>;
+    input pairs: Rows<Vec2 as {e}>;
+    input grid: Grid<Vec4 as {e}>;
+    output kept: Rows<Float as {e}>;
+    output halved: Rows<Float as {e}>;
+    output widened: Rows<Vec4>;
+    output pair: Rows<Vec2 as {e}>;
+    compute {{
+        let i = element();
+        let r = sample(rows);
+        let far = at(rows, 15 - i);
+        let g = at(grid, vec2(float(i % 4), float(i / 4)));
+        let l = at_linear(grid, vec2(float(i % 4) + 0.25, 1.5));
+        let y = sample(pairs).y;
+        return {{ kept: far, halved: r * 0.5, widened: vec4(r, g.w, l.x, y), pair: vec2(y, r) }};
+    }}
+}}"
+            );
+            out.push(Case {
+                name: format!("narrow {e} in a map"),
+                source: map,
+                inputs: vec![
+                    (
+                        kept(vec![Scalar::Float]),
+                        Domain::Rows(16),
+                        words(&narrow_floats(16)),
+                    ),
+                    (
+                        kept(vec![Scalar::Float; 2]),
+                        Domain::Rows(16),
+                        words(
+                            &narrow_floats(32)[..]
+                                .iter()
+                                .rev()
+                                .copied()
+                                .collect::<Vec<_>>(),
+                        ),
+                    ),
+                    (
+                        kept(vec![Scalar::Float; 4]),
+                        Domain::Grid(4, 4),
+                        words(&narrow_floats(64)),
+                    ),
+                ],
+                params: Vec::new(),
+                domain: Domain::Rows(16),
+                context: context(),
+            });
+            let scan = format!(
+                "kernel matrix.narrow_{e}_scan@1 {{
+    requires {{ field.read; field.write; }}
+    input ticks: Rows<Int>;
+    memory ram: Rows<Float as {e}>;
+    output result: Rows<Float as {e}>;
+    scan with acc = 0.0 {{
+        let i = index();
+        put(ram, i % 8, at(ram, (i + 3) % 8) * 0.5);
+        return at(ram, i % 8);
+    }}
+}}"
+            );
+            out.push(Case {
+                name: format!("narrow {e} in a scan's memory"),
+                source: scan,
+                inputs: vec![
+                    (
+                        Schema::new(vec![Scalar::Int]),
+                        Domain::Rows(20),
+                        vec![0; 20],
+                    ),
+                    (
+                        kept(vec![Scalar::Float]),
+                        Domain::Rows(8),
+                        words(&narrow_floats(8)),
+                    ),
+                ],
+                params: Vec::new(),
+                domain: Domain::Rows(20),
+                context: context(),
+            });
+        } else {
+            let ints = |count: usize| {
+                narrow_ints(count)
+                    .into_iter()
+                    .map(|v| v as u32)
+                    .collect::<Vec<u32>>()
+            };
+            let map = format!(
+                "kernel matrix.narrow_{e}@1 {{
+    requires {{ field.read; field.write; }}
+    input rows: Rows<Int as {e}>;
+    input pairs: Rows<IVec2 as {e}>;
+    input flags: Rows<Bool as {e}>;
+    input grid: Grid<Int as {e}>;
+    output kept: Rows<Int as {e}>;
+    output widened: Rows<IVec3>;
+    output flag: Rows<Bool as {e}>;
+    compute {{
+        let i = element();
+        let r = sample(rows);
+        let far = at(rows, 15 - i);
+        let g = at(grid, vec2(float(i % 4), float(i / 4)));
+        let y = sample(pairs).y;
+        return {{ kept: add_wrap(far, 300 * i), widened: ivec3(r, g, y), flag: !sample(flags) || i == 3 }};
+    }}
+}}"
+            );
+            out.push(Case {
+                name: format!("narrow {e} in a map"),
+                source: map,
+                inputs: vec![
+                    (kept(vec![Scalar::Int]), Domain::Rows(16), ints(16)),
+                    (kept(vec![Scalar::Int; 2]), Domain::Rows(16), ints(32)),
+                    (
+                        kept(vec![Scalar::Bool]),
+                        Domain::Rows(16),
+                        (0..16).map(|i| u32::from(i % 3 == 0)).collect(),
+                    ),
+                    (kept(vec![Scalar::Int]), Domain::Grid(4, 4), ints(16)),
+                ],
+                params: Vec::new(),
+                domain: Domain::Rows(16),
+                context: context(),
+            });
+            let scan = format!(
+                "kernel matrix.narrow_{e}_scan@1 {{
+    requires {{ field.read; field.write; }}
+    input ticks: Rows<Int>;
+    memory ram: Rows<Int as {e}>;
+    output result: Rows<Int as {e}>;
+    scan with acc = 0 {{
+        let i = index();
+        put(ram, i % 8, add_wrap(at(ram, (i + 3) % 8), i * 37));
+        return add_wrap(acc, at(ram, i % 8));
+    }}
+}}"
+            );
+            out.push(Case {
+                name: format!("narrow {e} in a scan's memory"),
+                source: scan,
+                inputs: vec![
+                    (
+                        Schema::new(vec![Scalar::Int]),
+                        Domain::Rows(20),
+                        vec![0; 20],
+                    ),
+                    (kept(vec![Scalar::Int]), Domain::Rows(8), ints(8)),
+                ],
+                params: Vec::new(),
+                domain: Domain::Rows(20),
+                context: context(),
+            });
+        }
+    }
+    out
 }

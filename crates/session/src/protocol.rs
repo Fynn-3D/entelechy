@@ -1078,7 +1078,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                         schema
                     )));
                 }
-                data.words().to_vec()
+                data.values().into_owned()
             } else {
                 if bytes.len() % 4 != 0 {
                     return Err(failure("`data` must be whole 32-bit words"));
@@ -1164,7 +1164,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                 let bytes: Vec<u8> = if as_file {
                     orla_runtime::file::encode_data(data)
                 } else {
-                    data.words().iter().flat_map(|w| w.to_le_bytes()).collect()
+                    data.values().iter().flat_map(|w| w.to_le_bytes()).collect()
                 };
                 return Ok(json!({
                     "shape": domain.shape().to_string(),

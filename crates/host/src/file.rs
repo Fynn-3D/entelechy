@@ -1,11 +1,13 @@
 //! A Field as a file: how a Field leaves the Host and comes back. The
 //! format is the Host's own view of a Field and nothing more: a text
-//! header naming the shape, the extent, and the layout, then the words.
+//! header naming the shape, the extent, and the layout, then the elements
+//! as kept: a whole word per scalar, or fewer bytes where the layout keeps
+//! a scalar narrow (`f:unorm8`), little-endian, one element after another.
 //!
 //! ```text
 //! ORLAFIELD 1
 //! Grid 64 16 1 f,f,f,f
-//! <width * height * depth * words-per-element little-endian 32-bit words>
+//! <width * height * depth * bytes-per-element bytes>
 //! ```
 
 use std::fmt;
@@ -17,11 +19,11 @@ use crate::{Domain, FieldData, HostError, Schema, Shape};
 pub enum FileError {
     /// The header is missing or malformed.
     Header(String),
-    /// The words after the header are not the count the header promises.
+    /// The bytes after the header are not the count the header promises.
     Length {
-        /// Words the header promises.
+        /// Bytes the header promises.
         expected: usize,
-        /// Words the file holds.
+        /// Bytes the file holds.
         found: usize,
     },
     /// The Host refused the Field.
@@ -35,7 +37,7 @@ impl fmt::Display for FileError {
             Self::Length { expected, found } => {
                 write!(
                     f,
-                    "the header promises {expected} words, the file holds {found}"
+                    "the header promises {expected} bytes, the file holds {found}"
                 )
             }
             Self::Host(error) => write!(f, "{error}"),
@@ -47,8 +49,8 @@ impl std::error::Error for FileError {}
 
 const MAGIC: &str = "ORLAFIELD 1";
 
-/// Encodes a Field with its layout and extent.
-pub fn encode(schema: &Schema, domain: Domain, words: &[u32]) -> Vec<u8> {
+/// Encodes a Field with its layout and extent, from its storage.
+pub fn encode(schema: &Schema, domain: Domain, storage: &[u32]) -> Vec<u8> {
     let mut bytes = format!(
         "{MAGIC}\n{} {} {} {} {schema}\n",
         domain.shape(),
@@ -57,13 +59,19 @@ pub fn encode(schema: &Schema, domain: Domain, words: &[u32]) -> Vec<u8> {
         domain.depth()
     )
     .into_bytes();
-    bytes.extend(words.iter().flat_map(|word| word.to_le_bytes()));
+    let length = domain.count() * schema.element_bytes();
+    bytes.extend(
+        storage
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .take(length),
+    );
     bytes
 }
 
 /// Encodes Field data.
 pub fn encode_data(data: &FieldData) -> Vec<u8> {
-    encode(data.schema(), data.domain(), data.words())
+    encode(data.schema(), data.domain(), data.storage())
 }
 
 /// Decodes a Field file.
@@ -108,18 +116,22 @@ pub fn decode(bytes: &[u8]) -> Result<FieldData, FileError> {
         return Err(FileError::Header(format!("`{shape}` is not a shape")));
     };
     let body = &bytes[second + 1..];
-    let expected = domain.count() * schema.words();
-    if body.len() != expected * 4 {
+    let expected = domain.count() * schema.element_bytes();
+    if body.len() != expected {
         return Err(FileError::Length {
             expected,
-            found: body.len() / 4,
+            found: body.len(),
         });
     }
-    let words = body
-        .chunks_exact(4)
-        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+    let storage = body
+        .chunks(4)
+        .map(|w| {
+            let mut word = [0u8; 4];
+            word[..w.len()].copy_from_slice(w);
+            u32::from_le_bytes(word)
+        })
         .collect();
-    FieldData::from_words(schema, domain, words).map_err(FileError::Host)
+    FieldData::from_storage(schema, domain, storage).map_err(FileError::Host)
 }
 
 #[cfg(test)]
@@ -143,14 +155,39 @@ mod tests {
         let data = decode(&bytes).unwrap();
         assert_eq!(data.domain(), Domain::Volume(1, 3, 1));
         assert_eq!(data.schema(), &schema);
-        assert_eq!(data.words(), &words[..]);
+        assert_eq!(data.storage(), &words[..]);
         assert!(matches!(decode(b"PNG"), Err(FileError::Header(_))));
         assert!(matches!(
             decode(&bytes[..bytes.len() - 4]),
             Err(FileError::Length {
-                expected: 6,
-                found: 5
+                expected: 24,
+                found: 20
             })
         ));
+    }
+
+    #[test]
+    fn a_narrow_field_keeps_its_bytes_in_its_file() {
+        // Three elements of two unorm8 floats: six bytes, and the Field's
+        // two words of storage hold them with two bytes to spare.
+        let schema = Schema::new(vec![Scalar::Float; 2])
+            .with_encoding(crate::Encoding::Unorm8)
+            .unwrap();
+        let values: Vec<u32> = [0.0f32, 1.0, 0.5, 0.25, 1.0, 0.0]
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
+        let data = FieldData::from_values(schema.clone(), Domain::Rows(3), &values).unwrap();
+        assert_eq!(data.storage().len(), 2);
+        let bytes = encode_data(&data);
+        let header = b"ORLAFIELD 1\nRows 3 1 1 f:unorm8,f:unorm8\n";
+        assert!(bytes.starts_with(header));
+        assert_eq!(&bytes[header.len()..], &[0, 255, 128, 64, 255, 0]);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back, data);
+        assert_eq!(
+            back.element(1).unwrap()[1],
+            crate::Encoding::Unorm8.decode(Scalar::Float, 64)
+        );
     }
 }

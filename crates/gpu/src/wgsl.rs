@@ -7,6 +7,7 @@
 
 use std::fmt::Write;
 
+use orla_abi::{Encoding, Scalar, encoding};
 use orla_ir::{
     BinaryOp, Block, Combine, Function, Instruction, Intrinsic, Mode, Module, Op, Shape, Type,
     UnaryOp, Value, ValueId,
@@ -219,9 +220,15 @@ fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
     );
     if with_output {
         for k in 0..written_outputs(module) {
+            // Elements that share words are stored by atomic or.
+            let element = if output_shares_words(module, k) {
+                "atomic<u32>"
+            } else {
+                "u32"
+            };
             let _ = writeln!(
                 out,
-                "@group(0) @binding({}) var<storage, read_write> out{k}: array<u32>;",
+                "@group(0) @binding({}) var<storage, read_write> out{k}: array<{element}>;",
                 output_binding(module, k)
             );
         }
@@ -306,8 +313,14 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     );
     for (index, port) in manifest.inputs.iter().enumerate() {
         let element = port.element();
-        let stride = port.ty.schema.words();
-        let (expr, _) = load_expr(module, element, &format!("in{index}"), "b", 0);
+        // Words an element takes, or bytes when the input keeps it narrow.
+        let encoding = input_encoding(module, index);
+        let stride = if encoding == Encoding::Word {
+            port.ty.schema.value_words()
+        } else {
+            port.ty.schema.element_bytes()
+        };
+        let (expr, _) = load_expr(module, element, &format!("in{index}"), "b", 0, encoding);
         let _ = writeln!(
             out,
             "fn load_in{index}(index: u32) -> {} {{
@@ -452,6 +465,9 @@ fn urem_u32(a: u32, b: u32) -> u32 {{
     return a - udiv_u32(a, b) * b;
 }}"
     );
+    if any_narrow(module) {
+        emit_encodings(out);
+    }
     emit_mixers(out, module);
     for (index, port) in manifest.inputs.iter().enumerate() {
         emit_linear(out, module, index, port);
@@ -467,46 +483,35 @@ pub fn emit(module: &Module) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
     emit_preamble(&mut out, module, true);
-    if let Some(port) = manifest.outputs.first() {
-        // A scatter's map pass stores the entry's pairs, not elements.
-        let element = if matches!(manifest.mode, Mode::Scatter { .. }) {
-            result_type(&module.entry)
-        } else {
-            port.element()
-        };
-        let stride = type_words(module, element);
-        let mut stores = Vec::new();
-        store_lines(module, element, "v", 0, &mut stores);
-        let _ = writeln!(
-            out,
-            "fn store_out0(index: u32, v: {}) {{
-    let b = index * {stride}u;
-{}
-}}",
-            wgsl_type(element),
-            stores.join("\n")
-        );
-    }
-    // A map's further outputs, each stored into its own buffer.
+    // One store per output the pass writes: a map's every output, into
+    // its own buffer; a scatter's map pass stores the entry's pairs.
+    let scattering = matches!(manifest.mode, Mode::Scatter { .. });
     for (k, port) in manifest
         .outputs
         .iter()
         .enumerate()
         .take(written_outputs(module))
-        .skip(1)
     {
-        let element = port.element();
-        let stride = type_words(module, element);
-        let mut stores = Vec::new();
-        store_lines(module, element, "v", 0, &mut stores);
+        let element = if scattering {
+            result_type(&module.entry)
+        } else {
+            port.element()
+        };
+        let body = if !scattering && !port.ty.schema.is_wide() {
+            narrow_store_body(module, k, element)
+        } else {
+            let stride = type_words(module, element);
+            let mut stores = Vec::new();
+            store_lines(module, element, "v", 0, &mut stores);
+            format!(
+                "    let b = index * {stride}u;\n{}",
+                stores.join("\n").replace("out0[", &format!("out{k}["))
+            )
+        };
         let _ = writeln!(
             out,
-            "fn store_out{k}(index: u32, v: {}) {{
-    let b = index * {stride}u;
-{}
-}}",
-            wgsl_type(element),
-            stores.join("\n").replace("out0[", &format!("out{k}["))
+            "fn store_out{k}(index: u32, v: {}) {{\n{body}\n}}",
+            wgsl_type(element)
         );
     }
     for (index, function) in module.functions.iter().enumerate() {
@@ -756,7 +761,7 @@ fn scatter_header(module: &Module, target: Option<bool>, extra: &str) -> String 
     );
     let pair = result_type(&module.entry);
     let pair_stride = type_words(module, pair);
-    let (expr, _) = load_expr(module, pair, "pairs", "b", 0);
+    let (expr, _) = load_expr(module, pair, "pairs", "b", 0, Encoding::Word);
     let _ = writeln!(
         out,
         "fn load_pair(index: u32) -> {} {{
@@ -1025,7 +1030,7 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
     };
     let target = &module.manifest.inputs[base as usize];
     let element = target.element();
-    let stride = target.ty.schema.words();
+    let stride = target.ty.schema.value_words();
     let mut out = scatter_header(module, Some(true), &winners_binding(false));
     let mut words = Vec::new();
     value_words(module, element, "p.f1", &mut words);
@@ -1083,7 +1088,7 @@ pub fn emit_scatter_gather(module: &Module) -> String {
         return String::new();
     };
     let target = &module.manifest.inputs[base as usize];
-    let stride = target.ty.schema.words();
+    let stride = target.ty.schema.value_words();
     let slot = CONTEXT_HEAD + base as usize;
     let mut out = scatter_header(module, Some(false), &winners_binding(true));
     let mut words = Vec::new();
@@ -1123,7 +1128,7 @@ pub fn emit_scatter_keys(module: &Module, encode: bool) -> String {
         return String::new();
     };
     let target = &module.manifest.inputs[base as usize];
-    let stride = target.ty.schema.words();
+    let stride = target.ty.schema.value_words();
     let slot = CONTEXT_HEAD + base as usize;
     let mut out = scatter_header(module, Some(false), "");
     // The key transform is an involution, so one function serves both ways.
@@ -1224,10 +1229,10 @@ pub fn emit_scatter_fold(module: &Module) -> String {
     };
     let target = &module.manifest.inputs[base as usize];
     let element = target.element();
-    let stride = target.ty.schema.words();
+    let stride = target.ty.schema.value_words();
     let slot = CONTEXT_HEAD + base as usize;
     let mut out = scatter_header(module, Some(false), &sort_bindings(true));
-    let (expr, _) = load_expr(module, element, "out0", "b", 0);
+    let (expr, _) = load_expr(module, element, "out0", "b", 0, Encoding::Word);
     let _ = writeln!(
         out,
         "fn load_out0(index: u32) -> {} {{
@@ -1340,7 +1345,7 @@ pub fn emit_reduce(module: &Module) -> String {
         return String::new();
     };
     let element = merge.args[0];
-    let stride = module.manifest.outputs[0].ty.schema.words();
+    let stride = module.manifest.outputs[0].ty.schema.value_words();
     let (count_binding, in_binding, out_binding) = reduce_bindings(module);
     let mut out = String::new();
     // The same context, params and inputs as the map shader: `merge` is a
@@ -1358,7 +1363,7 @@ pub fn emit_reduce(module: &Module) -> String {
         out,
         "@group(0) @binding({out_binding}) var<storage, read_write> fold_out: array<u32>;"
     );
-    let (expr, _) = load_expr(module, element, "fold_in", "b", 0);
+    let (expr, _) = load_expr(module, element, "fold_in", "b", 0, Encoding::Word);
     let _ = writeln!(
         out,
         "fn load_level(index: u32) -> {} {{
@@ -1495,17 +1500,40 @@ fn emit_mixers(out: &mut String, module: &Module) {
 /// NaN never does), since a `put` outside is dropped.
 fn emit_memory_writer(out: &mut String, module: &Module, index: usize, port: &orla_ir::Port) {
     let element = port.element();
-    let stride = port.ty.schema.words();
     let slot = CONTEXT_HEAD + index;
-    let mut stores = Vec::new();
-    store_lines(module, element, "v", 0, &mut stores);
-    let body = stores.join("\n").replace("out0[", &format!("in{index}["));
+    let encoding = input_encoding(module, index);
+    let body = if encoding == Encoding::Word {
+        let stride = port.ty.schema.value_words();
+        let mut stores = Vec::new();
+        store_lines(module, element, "v", 0, &mut stores);
+        format!(
+            "    let b = index * {stride}u;\n{}",
+            stores.join("\n").replace("out0[", &format!("in{index}["))
+        )
+    } else {
+        // One invocation walks a scan, so a narrow scalar is written by
+        // reading its word, replacing its bytes and writing the word.
+        let schema = &port.ty.schema;
+        let mask = if encoding.bytes() == 1 {
+            "0xFFu"
+        } else {
+            "0xFFFFu"
+        };
+        let mut scalars = Vec::new();
+        scalar_paths(module, element, "v", &mut scalars);
+        let mut lines = vec![format!("    let b = index * {}u;", schema.element_bytes())];
+        for (s, (path, kind)) in scalars.iter().enumerate() {
+            let offset = schema.offsets()[s];
+            let raw = scalar_encode(encoding, *kind, path);
+            lines.push(format!(
+                "    {{ let at = b + {offset}u; let shift = (at & 3u) * 8u; in{index}[at >> 2u] = (in{index}[at >> 2u] & ~({mask} << shift)) | ({raw} << shift); }}"
+            ));
+        }
+        lines.join("\n")
+    };
     let _ = writeln!(
         out,
-        "fn store_in{index}(index: u32, v: {}) {{
-    let b = index * {stride}u;
-{body}
-}}",
+        "fn store_in{index}(index: u32, v: {}) {{\n{body}\n}}",
         wgsl_type(element)
     );
     let _ = match port.shape() {
@@ -1618,24 +1646,250 @@ fn emit_linear(out: &mut String, module: &Module, index: usize, port: &orla_ir::
     }
 }
 
-/// An expression loading a value of type `ty` from `buffer[base + offset..]`,
-/// and the words it consumes.
+/// How input `index` keeps its scalars: the one encoding of its port, or
+/// whole words.
+pub fn input_encoding(module: &Module, index: usize) -> Encoding {
+    module.manifest.inputs[index]
+        .ty
+        .schema
+        .uniform_encoding()
+        .unwrap_or(Encoding::Word)
+}
+
+/// How output `k` keeps its scalars.
+pub fn output_encoding(module: &Module, k: usize) -> Encoding {
+    module.manifest.outputs[k]
+        .ty
+        .schema
+        .uniform_encoding()
+        .unwrap_or(Encoding::Word)
+}
+
+/// Whether any port keeps its scalars narrow, so the shader needs the
+/// widening and narrowing helpers.
+fn any_narrow(module: &Module) -> bool {
+    let manifest = &module.manifest;
+    manifest
+        .inputs
+        .iter()
+        .chain(&manifest.outputs)
+        .any(|port| !port.ty.schema.is_wide())
+}
+
+/// Whether a narrow output shares words between elements, so its
+/// elements are stored by atomic or into a buffer cleared first; one
+/// whose elements fill whole words is stored a word at a time.
+pub fn output_shares_words(module: &Module, k: usize) -> bool {
+    let schema = &module.manifest.outputs[k].ty.schema;
+    !schema.is_wide() && !schema.element_bytes().is_multiple_of(4)
+}
+
+/// A `f32` constant by its bits, so the shader multiplies by exactly the
+/// Host's own value.
+fn f32_bits(value: f32) -> String {
+    format!("bitcast<f32>({:#010x}u)", value.to_bits())
+}
+
+/// The widening and narrowing rules of `orla_abi::encoding`, as integer
+/// arithmetic the shader compiler has no license to rewrite: a half
+/// float both ways, and a normalized float narrowed.
+fn emit_encodings(out: &mut String) {
+    let _ = writeln!(
+        out,
+        "fn half_to_f32(h: u32) -> u32 {{
+    let sign = (h & 0x8000u) << 16u;
+    let e = (h >> 10u) & 0x1Fu;
+    let m = h & 0x3FFu;
+    if (e == 0u) {{
+        if (m == 0u) {{ return sign; }}
+        let shift = 10u - firstLeadingBit(m);
+        return sign | ((113u - shift) << 23u) | (((m << shift) & 0x3FFu) << 13u);
+    }}
+    if (e == 0x1Fu) {{ return sign | 0x7F800000u | (m << 13u); }}
+    return sign | ((e + 112u) << 23u) | (m << 13u);
+}}
+fn f32_to_half(x: u32) -> u32 {{
+    let sign = (x >> 16u) & 0x8000u;
+    let exponent = i32((x >> 23u) & 0xFFu);
+    let mantissa = x & 0x7FFFFFu;
+    if (exponent == 255i) {{
+        return sign | 0x7C00u | select(0u, 0x200u | (mantissa >> 13u), mantissa != 0u);
+    }}
+    let e = exponent - 112i;
+    if (e >= 31i) {{ return sign | 0x7C00u; }}
+    var value = 0u;
+    var dropped = 0u;
+    var shift = 13u;
+    if (e <= 0i) {{
+        if (e < -10i) {{ return sign; }}
+        let full = mantissa | 0x800000u;
+        shift = u32(14i - e);
+        value = full >> shift;
+        dropped = full & ((1u << shift) - 1u);
+    }} else {{
+        value = (u32(e) << 10u) | (mantissa >> 13u);
+        dropped = mantissa & 0x1FFFu;
+    }}
+    let half = 1u << (shift - 1u);
+    let up = dropped > half || (dropped == half && (value & 1u) == 1u);
+    return sign | (value + select(0u, 1u, up));
+}}
+fn encode_unit(x: f32, low: f32, scale: f32) -> u32 {{
+    let nan = (bitcast<u32>(x) & 0x7FFFFFFFu) > 0x7F800000u;
+    let c = select(clamp(x, low, 1.0), 0.0, nan);
+    return bitcast<u32>(i32(round(c * scale)));
+}}"
+    );
+}
+
+/// An expression for scalar `k` (of kind `kind`) of a read at `base`:
+/// a whole word at word `base + k`, or, for a narrow encoding, the
+/// scalar's bytes at byte `base + k * size` widened by the Host's rule.
+fn scalar_load(encoding: Encoding, kind: Scalar, buffer: &str, base: &str, k: usize) -> String {
+    if encoding == Encoding::Word {
+        let word = format!("{buffer}[{base} + {k}u]");
+        return match kind {
+            Scalar::Float => format!("bitcast<f32>({word})"),
+            Scalar::Int => format!("bitcast<i32>({word})"),
+            Scalar::Bool => format!("({word} != 0u)"),
+        };
+    }
+    let size = encoding.bytes();
+    let at = format!("({base} + {}u)", k * size);
+    let mask = if size == 1 { "0xFFu" } else { "0xFFFFu" };
+    let raw = format!("(({buffer}[{at} >> 2u] >> (({at} & 3u) * 8u)) & {mask})");
+    if kind == Scalar::Bool {
+        return format!("({raw} != 0u)");
+    }
+    match encoding {
+        Encoding::U8 | Encoding::U16 => format!("bitcast<i32>({raw})"),
+        Encoding::I8 => format!("(bitcast<i32>({raw} << 24u) >> 24u)"),
+        Encoding::I16 => format!("(bitcast<i32>({raw} << 16u) >> 16u)"),
+        Encoding::Unorm8 => format!("(f32({raw}) * {})", f32_bits(encoding::UNORM8)),
+        Encoding::Unorm16 => format!("(f32({raw}) * {})", f32_bits(encoding::UNORM16)),
+        Encoding::Snorm8 => format!(
+            "max(f32(bitcast<i32>({raw} << 24u) >> 24u) * {}, -1.0)",
+            f32_bits(encoding::SNORM8)
+        ),
+        Encoding::F16 => format!("bitcast<f32>(half_to_f32({raw}))"),
+        Encoding::Word => unreachable!("answered above"),
+    }
+}
+
+/// An expression for the bits `value` (a scalar of kind `kind`) is kept
+/// as in a narrow encoding, in the low bytes.
+fn scalar_encode(encoding: Encoding, kind: Scalar, value: &str) -> String {
+    if kind == Scalar::Bool {
+        return format!("select(0u, 1u, {value})");
+    }
+    match encoding {
+        Encoding::U8 | Encoding::I8 => format!("(bitcast<u32>({value}) & 0xFFu)"),
+        Encoding::U16 | Encoding::I16 => format!("(bitcast<u32>({value}) & 0xFFFFu)"),
+        Encoding::Unorm8 => format!("encode_unit({value}, 0.0, 255.0)"),
+        Encoding::Unorm16 => format!("encode_unit({value}, 0.0, 65535.0)"),
+        Encoding::Snorm8 => format!("(encode_unit({value}, -1.0, 127.0) & 0xFFu)"),
+        Encoding::F16 => format!("f32_to_half(bitcast<u32>({value}))"),
+        Encoding::Word => format!("bitcast<u32>({value})"),
+    }
+}
+
+/// The scalars of a value of type `ty` at `path`, in layout order: an
+/// expression for each and its kind.
+fn scalar_paths(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Scalar)>) {
+    match ty {
+        Type::Float => out.push((path.to_owned(), Scalar::Float)),
+        Type::Int => out.push((path.to_owned(), Scalar::Int)),
+        Type::Bool => out.push((path.to_owned(), Scalar::Bool)),
+        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::IVec2 | Type::IVec3 => {
+            let (n, lane) = ty.lanes().unwrap_or((4, Type::Float));
+            let kind = if lane == Type::Int {
+                Scalar::Int
+            } else {
+                Scalar::Float
+            };
+            for component in ["x", "y", "z", "w"].iter().take(n as usize) {
+                out.push((format!("{path}.{component}"), kind));
+            }
+        }
+        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
+            let n = usize::from(ty.order().unwrap_or(0));
+            for c in 0..n {
+                for r in 0..n {
+                    out.push((format!("{path}[{c}][{r}]"), Scalar::Float));
+                }
+            }
+        }
+        Type::Struct(index) => {
+            let def = &module.structs[index as usize];
+            for (k, field) in def.fields.iter().enumerate() {
+                scalar_paths(
+                    module,
+                    field.ty,
+                    &format!("{path}{}", field_path(module, index, k)),
+                    out,
+                );
+            }
+        }
+    }
+}
+
+/// The body of a store of `v` (a value of type `ty`) as element `index`
+/// of output `k`, kept in a narrow encoding: whole words when elements
+/// fill whole words, an atomic or into a cleared buffer when they share
+/// them.
+fn narrow_store_body(module: &Module, k: usize, ty: Type) -> String {
+    let schema = &module.manifest.outputs[k].ty.schema;
+    let encoding = output_encoding(module, k);
+    let bytes = schema.element_bytes();
+    let mut scalars = Vec::new();
+    scalar_paths(module, ty, "v", &mut scalars);
+    let bits: Vec<(usize, String)> = scalars
+        .iter()
+        .enumerate()
+        .map(|(s, (path, kind))| (schema.offsets()[s], scalar_encode(encoding, *kind, path)))
+        .collect();
+    let mut lines = Vec::new();
+    if bytes.is_multiple_of(4) {
+        lines.push(format!("    let w = index * {}u;", bytes / 4));
+        for word in 0..bytes / 4 {
+            let parts: Vec<String> = bits
+                .iter()
+                .filter(|(offset, _)| offset / 4 == word)
+                .map(|(offset, raw)| format!("({raw} << {}u)", (offset % 4) * 8))
+                .collect();
+            lines.push(format!("    out{k}[w + {word}u] = {};", parts.join(" | ")));
+        }
+    } else {
+        lines.push(format!("    let b = index * {bytes}u;"));
+        for (offset, raw) in &bits {
+            lines.push(format!(
+                "    atomicOr(&out{k}[(b + {offset}u) >> 2u], {raw} << (((b + {offset}u) & 3u) * 8u));"
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+/// An expression loading a value of type `ty` from `buffer` at `base`,
+/// `offset` scalars in, and the scalars it consumes. `base` counts words
+/// when the buffer keeps whole words and bytes when it keeps `encoding`.
 fn load_expr(
     module: &Module,
     ty: Type,
     buffer: &str,
     base: &str,
     offset: usize,
+    encoding: Encoding,
 ) -> (String, usize) {
-    let word = |k: usize| format!("{buffer}[{base} + {k}u]");
+    let scalar = |kind: Scalar, k: usize| scalar_load(encoding, kind, buffer, base, k);
     match ty {
-        Type::Float => (format!("bitcast<f32>({})", word(offset)), 1),
-        Type::Int => (format!("bitcast<i32>({})", word(offset)), 1),
-        Type::Bool => (format!("({} != 0u)", word(offset)), 1),
+        Type::Float => (scalar(Scalar::Float, offset), 1),
+        Type::Int => (scalar(Scalar::Int, offset), 1),
+        Type::Bool => (scalar(Scalar::Bool, offset), 1),
         Type::Vec2 | Type::Vec3 | Type::Vec4 => {
             let n = ty.components().unwrap_or(4) as usize;
             let parts = (0..n)
-                .map(|k| format!("bitcast<f32>({})", word(offset + k)))
+                .map(|k| scalar(Scalar::Float, offset + k))
                 .collect::<Vec<_>>()
                 .join(", ");
             (format!("{}({parts})", wgsl_type(ty)), n)
@@ -1643,7 +1897,7 @@ fn load_expr(
         Type::IVec2 | Type::IVec3 => {
             let n = ty.int_components().unwrap_or(2) as usize;
             let parts = (0..n)
-                .map(|k| format!("bitcast<i32>({})", word(offset + k)))
+                .map(|k| scalar(Scalar::Int, offset + k))
                 .collect::<Vec<_>>()
                 .join(", ");
             (format!("{}({parts})", wgsl_type(ty)), n)
@@ -1651,7 +1905,7 @@ fn load_expr(
         Type::Mat2 | Type::Mat3 | Type::Mat4 => {
             let n = usize::from(ty.order().unwrap_or(0));
             let parts = (0..n * n)
-                .map(|k| format!("bitcast<f32>({})", word(offset + k)))
+                .map(|k| scalar(Scalar::Float, offset + k))
                 .collect::<Vec<_>>()
                 .join(", ");
             (format!("{}({parts})", wgsl_type(ty)), n * n)
@@ -1661,7 +1915,7 @@ fn load_expr(
             let mut parts = Vec::new();
             let mut used = 0;
             for field in &def.fields {
-                let (expr, n) = load_expr(module, field.ty, buffer, base, offset + used);
+                let (expr, n) = load_expr(module, field.ty, buffer, base, offset + used, encoding);
                 parts.push(expr);
                 used += n;
             }
@@ -2159,7 +2413,7 @@ impl Emitter<'_> {
                 // The words this part is made of and nothing else:
                 // where the path leads, held inside the element.
                 let manifest = &self.module.manifest;
-                let stride = manifest.inputs[*input as usize].ty.schema.words();
+                let stride = manifest.inputs[*input as usize].ty.schema.value_words();
                 let element = manifest.inputs[*input as usize].element();
                 let layout = orla_ir::part_layout(&self.module.structs, element, path)
                     .expect("a path validation walked");
@@ -2184,13 +2438,25 @@ impl Emitter<'_> {
                     },
                 };
                 let base = format!("b{}", id.0);
+                // In words, or in bytes where the input keeps its scalars
+                // narrow: the element's bytes, then the scalars'.
+                let encoding = input_encoding(self.module, *input as usize);
+                let (element_size, scalar_size) = if encoding == Encoding::Word {
+                    (stride, 1)
+                } else {
+                    (
+                        manifest.inputs[*input as usize].ty.schema.element_bytes(),
+                        encoding.bytes(),
+                    )
+                };
                 self.line(
                     depth,
                     &format!(
-                        "let {base} = index_in{input}({element}) * {stride}u + u32(clamp({offset}, 0i, {last}i));"
+                        "let {base} = index_in{input}({element}) * {element_size}u + u32(clamp({offset}, 0i, {last}i)) * {scalar_size}u;"
                     ),
                 );
-                let (expression, _) = load_expr(self.module, *ty, &format!("in{input}"), &base, 0);
+                let (expression, _) =
+                    load_expr(self.module, *ty, &format!("in{input}"), &base, 0, encoding);
                 expression
             }
             Op::AtLinear(input, index) => format!("linear_in{input}({})", v(index)),

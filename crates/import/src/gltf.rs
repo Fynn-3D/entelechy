@@ -1219,7 +1219,7 @@ mod tests {
         let read = |name: &str| {
             let bytes = std::fs::read(out.join(name)).unwrap();
             let data = file::decode(&bytes).unwrap();
-            (data.words().to_vec(), data.domain())
+            (data.values().to_vec(), data.domain())
         };
         // A skinned mesh is placed by its joints, so the node's own
         // translation of nine is not in the positions.
@@ -1283,14 +1283,14 @@ mod tests {
         assert_eq!(imported.bounds, ([0.0, 1.0, 0.0], [2.0, 3.0, 0.0]));
         let vertices = file::decode(&std::fs::read(&imported.files[0]).unwrap()).unwrap();
         let words: Vec<f32> = vertices
-            .words()
+            .values()
             .iter()
             .map(|w| f32::from_bits(*w))
             .collect();
         // Vertex 2: position (2, 3, 0), normal +z from the winding, uv (1, 0).
         assert_eq!(&words[16..24], &[2.0, 3.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
         let triangles = file::decode(&std::fs::read(&imported.files[1]).unwrap()).unwrap();
-        assert_eq!(triangles.words(), &[0, 1, 2, 0, 2, 3]);
+        assert_eq!(&*triangles.values(), &[0, 1, 2, 0, 2, 3]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

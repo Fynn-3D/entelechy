@@ -391,9 +391,12 @@ impl Player {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
             let host = self.session.runtime().host();
             let resident = host.resident(output).ok().flatten();
-            // Only a grid of pixels can be shown; anything else downloads
-            // and fails below with a clear message.
-            let presentable = host.schema(output).is_ok_and(|s| s.is_pixel())
+            // Only a grid of float pixels is drawn by the device as it lies;
+            // a picture kept narrow, or anything else, downloads (widened)
+            // and is drawn or refused below with a clear message.
+            let presentable = host
+                .schema(output)
+                .is_ok_and(|s| s.is_pixel() && s.is_wide())
                 && host.domain(output).is_ok_and(|d| d.depth() == 1);
             if let (true, Some(device), Ok((width, height))) =
                 (presentable, resident, host.image_size(output))
@@ -470,7 +473,7 @@ impl Player {
                     host.domain(*handle)
                         .is_ok_and(|d| d.shape() == orla_runtime::Shape::Rows)
                         && host.schema(*handle).is_ok_and(|s| {
-                            (1..=2).contains(&s.words())
+                            (1..=2).contains(&s.value_words())
                                 && s.scalars()
                                     .iter()
                                     .all(|c| *c == orla_runtime::Scalar::Float)
@@ -484,7 +487,7 @@ impl Player {
             let host = self.session.runtime().host();
             (
                 host.domain(handle).map(|d| d.count()).unwrap_or(0),
-                host.schema(handle).map(|s| s.words()).unwrap_or(0),
+                host.schema(handle).map(|s| s.value_words()).unwrap_or(0),
             )
         };
         if self.audio.is_none() {
@@ -507,7 +510,7 @@ impl Player {
             return;
         }
         let words: Vec<u32> = match self.session.runtime().host().data(handle) {
-            Ok(data) => data.words().to_vec(),
+            Ok(data) => data.values().to_vec(),
             Err(_) => return,
         };
         if let Some(audio) = &mut self.audio {

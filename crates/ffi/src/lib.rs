@@ -73,6 +73,9 @@ pub struct OrlaSession {
     report: CString,
     response: CString,
     schema: CString,
+    /// A narrow Field's words widened, which a caller reads instead of
+    /// the packed memory: the header promises 32-bit words.
+    widened: Vec<u32>,
 }
 
 thread_local! {
@@ -120,14 +123,24 @@ impl OrlaSession {
         let data = host.data(handle).map_err(|error| error.to_string())?;
         let domain = data.domain();
         let schema = data.schema();
-        self.schema = c_string(&schema.to_string());
+        // Whole words are read where they lie; a Field kept narrower is
+        // widened into the session's own buffer, so the header's promise
+        // (32-bit words, a layout of `f`, `i` and `b`) holds either way.
+        let words = if schema.is_wide() {
+            data.storage().as_ptr()
+        } else {
+            self.widened = data.values().into_owned();
+            self.widened.as_ptr()
+        };
+        let values = orla_abi::Schema::new(schema.scalars().to_vec());
+        self.schema = c_string(&values.to_string());
         *field = OrlaField {
-            words: data.words().as_ptr(),
+            words,
             width: domain.width(),
             height: domain.height(),
             depth: domain.depth(),
             count: domain.count() as u32,
-            stride: schema.words() as u32,
+            stride: schema.value_words() as u32,
             shape: match domain.shape() {
                 Shape::Rows => 0,
                 Shape::Grid => 1,
@@ -204,6 +217,7 @@ pub unsafe extern "C" fn orla_open(
             report: CString::default(),
             response: CString::default(),
             schema: CString::default(),
+            widened: Vec::new(),
         })),
         Ok(Err(message)) => set_error(message),
         Err(_) => set_error("a panic inside Orla while opening".to_owned()),

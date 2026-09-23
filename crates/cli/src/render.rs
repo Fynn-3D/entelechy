@@ -136,7 +136,7 @@ fn sound_channels(session: &Session, handle: Handle) -> Option<usize> {
         .scalars()
         .iter()
         .all(|c| *c == orla_runtime::Scalar::Float);
-    (rows && floats && (1..=2).contains(&schema.words())).then_some(schema.words())
+    (rows && floats && (1..=2).contains(&schema.value_words())).then_some(schema.value_words())
 }
 
 fn words_of(session: &mut Session, handle: Handle) -> Result<Vec<u32>, String> {
@@ -148,7 +148,7 @@ fn words_of(session: &mut Session, handle: Handle) -> Result<Vec<u32>, String> {
     Ok(host
         .data(handle)
         .map_err(|e| e.to_string())?
-        .words()
+        .values()
         .to_vec())
 }
 

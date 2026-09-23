@@ -166,6 +166,19 @@ pub fn fuse_outputs(
             "only map Kernels fuse; reductions and scans run on their own".into(),
         ));
     }
+    // A narrow output rounds what passes through it: fused, the consumer
+    // would read the value before the rounding, which is not the scene.
+    if let Some((_, output)) = links.iter().find(|(_, output)| {
+        !producer_manifest.outputs[*output as usize]
+            .ty
+            .schema
+            .is_wide()
+    }) {
+        return Err(FuseError::new(format!(
+            "output `{}` keeps its scalars narrow; what passes through it is rounded, and a fused read would not be",
+            producer_manifest.outputs[*output as usize].name
+        )));
+    }
     // Ports match by structure: shape and layout. Element types are
     // struct indices local to each module and mean nothing across them.
     for (input, output) in links {

@@ -32,8 +32,7 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
             .iter()
             .map(|(schema, domain, words)| {
                 host.adopt(
-                    orla_abi::FieldData::from_words(schema.clone(), *domain, words.clone())
-                        .unwrap(),
+                    orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap(),
                 )
                 .unwrap()
             })
@@ -77,8 +76,8 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
             continue;
         }
         for (which, (a, b)) in cpu.iter().zip(&out).enumerate() {
-            let reference = host.data(*a).unwrap().words().to_vec();
-            let candidate = host.data(*b).unwrap().words().to_vec();
+            let reference = host.data(*a).unwrap().values().into_owned();
+            let candidate = host.data(*b).unwrap().values().into_owned();
             let scalars = host.schema(*a).unwrap().scalars().to_vec();
             if let Some(mismatch) = orla_matrix::compare(&scalars, &reference, &candidate, 0.0, 0.0)
             {

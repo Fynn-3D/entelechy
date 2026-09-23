@@ -207,7 +207,7 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
     let host = runtime.host_mut();
     let vertices = host
         .adopt(
-            orla_runtime::FieldData::from_words(
+            orla_runtime::FieldData::from_storage(
                 orla_cpu::raster::vertex_schema(),
                 Domain::Rows(3),
                 words,
@@ -217,7 +217,7 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
         .unwrap();
     let triangles = host
         .adopt(
-            orla_runtime::FieldData::from_words(
+            orla_runtime::FieldData::from_storage(
                 orla_cpu::raster::triangle_schema(),
                 Domain::Rows(1),
                 vec![0, 1, 2],
@@ -232,7 +232,7 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
         context: Context::default(),
     };
     let surface = runtime.execute(&raster, &invocation).unwrap()[0];
-    let words = runtime.host().data(surface).unwrap().words();
+    let words = runtime.host().data(surface).unwrap().storage();
     // Bottom-right pixel is inside the triangle, top-left is not.
     let id = |x: usize, y: usize| words[(y * 8 + x) * 7 + 6] as i32;
     assert_eq!(id(7, 7), 0);

@@ -120,7 +120,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, WavError> {
         }
     }
     let schema = Schema::new(vec![Scalar::Float; kept]);
-    let field = FieldData::from_words(schema, Domain::Rows(frames as u32), words)
+    let field = FieldData::from_storage(schema, Domain::Rows(frames as u32), words)
         .map_err(WavError::Host)?;
     Ok(Decoded {
         field,
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(stereo.field.domain(), Domain::Rows(3));
         let back: Vec<f32> = stereo
             .field
-            .words()
+            .storage()
             .iter()
             .map(|w| f32::from_bits(*w))
             .collect();

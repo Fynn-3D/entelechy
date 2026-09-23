@@ -21,6 +21,10 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [material-ball](material-ball/README.md): a shaded sphere under an orbiting
   light, tone-mapped by a second Kernel; one self-contained file with both
   Kernels inline.
+- [packed](packed/README.md): every Field kept as narrow as what it holds:
+  a PNG as bytes, a tile map as a byte a tile, heights in 16 bits, normals
+  in three signed bytes, light carried in half floats, with `as` in the
+  port type and the Kernels computing in `Float` and `Int` as ever.
 - [deferred](deferred/README.md): deferred shading: one Kernel finds the
   surface under each pixel and writes its colour, normal and depth as three
   Fields, given by name; lighting and an outline from the depth are passes
