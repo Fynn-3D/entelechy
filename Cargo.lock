@@ -1723,13 +1723,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "orla-conformance"
+version = "0.1.0"
+dependencies = [
+ "orla-abi",
+]
+
+[[package]]
 name = "orla-cpu"
 version = "0.1.0"
 dependencies = [
  "orla-abi",
  "orla-compiler",
+ "orla-conformance",
  "orla-ir",
- "orla-matrix",
  "orla-rules",
 ]
 
@@ -1766,11 +1773,11 @@ version = "0.1.0"
 dependencies = [
  "orla-abi",
  "orla-compiler",
+ "orla-conformance",
  "orla-cpu",
  "orla-graph",
  "orla-ir",
  "orla-language",
- "orla-matrix",
  "orla-rules",
  "orla-runtime",
  "orla-scene",
@@ -1821,21 +1828,14 @@ dependencies = [
  "cranelift-native",
  "orla-abi",
  "orla-compiler",
+ "orla-conformance",
  "orla-cpu",
  "orla-ir",
- "orla-matrix",
  "orla-rules",
 ]
 
 [[package]]
 name = "orla-language"
-version = "0.1.0"
-dependencies = [
- "orla-abi",
-]
-
-[[package]]
-name = "orla-matrix"
 version = "0.1.0"
 dependencies = [
  "orla-abi",

@@ -67,13 +67,13 @@ Kernel too: the id the node gave it is written in and the node's `domain`
 left out, so an agent may fetch, edit, and republish any Kernel it sees.
 
 The same operations are reachable inside a process that loads Orla as a
-library: `orla_request` in [`orla.h`](../crates/ffi/include/orla.h) takes
+library: `orla_request` in [`orla.h`](../crates/interface/ffi/include/orla.h) takes
 one line and returns its answer, beside the C functions that evaluate
 and read Fields in place.
 
 Operations, fields, and results are listed in
-[the protocol module](../crates/protocol/src/lib.rs), which is the
-authoritative definition; [the end-to-end test](../crates/cli/tests/protocol.rs)
+[the protocol module](../crates/interface/protocol/src/lib.rs), which is the
+authoritative definition; [the end-to-end test](../crates/interface/orla/tests/protocol.rs)
 drives the binary as a client. Values cross as JSON numbers, booleans,
 and arrays, as the paragraph on values below says. Kernels published
 through the protocol are not owned by any document: a document that later

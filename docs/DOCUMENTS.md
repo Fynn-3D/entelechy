@@ -510,7 +510,7 @@ per target in source order, the same sequence the CPU adds in. An
 address outside the target is dropped, never clamped; NaN is outside. `sum`, `min`, and `max` need an element of
 numbers (a Bool takes `last`). The output has the target's shape, layout,
 and extent, so a scatter node takes no `domain`, and a scatter is never
-fused. The exact language is defined by [the frontend](../crates/language/src/lib.rs)
+fused. The exact language is defined by [the frontend](../crates/frontend/language/src/lib.rs)
 and its tests.
 
 A Kernel with `prefix` in place of `compute` is a prefix fold, the fifth
@@ -757,4 +757,4 @@ Application tests are `.replay` files: `scene <path>`, optional
 lines — a pixel, a field of an element (`expect step.result[0].score =
 1`), or how many elements an output holds (`expect count ground.result
 = 576`, which is what a `domain` came out as). See [the replay
-module](../crates/cli/src/replay.rs).
+module](../crates/interface/orla/src/replay.rs).

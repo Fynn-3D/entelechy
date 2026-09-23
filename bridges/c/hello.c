@@ -4,7 +4,7 @@
  * links the library.
  *
  *   cargo build --release -p orla-ffi
- *   cc bridges/c/hello.c -Icrates/ffi/include -Ltarget/release -lorla_ffi -o /tmp/orla-hello
+ *   cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lorla_ffi -o /tmp/orla-hello
  *   DYLD_LIBRARY_PATH=target/release /tmp/orla-hello examples/text/scene.osn      (macOS)
  *   LD_LIBRARY_PATH=target/release /tmp/orla-hello examples/text/scene.osn        (Linux)
  */

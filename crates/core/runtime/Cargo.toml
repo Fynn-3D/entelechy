@@ -1,0 +1,19 @@
+[package]
+name = "orla-runtime"
+description = "Orla Kernel Runtime: prepare, publish, execute, and atomically replace Kernel versions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-rules = { path = "../../core/rules" }
+orla-abi = { path = "../../core/abi" }
+orla-ir = { path = "../../core/ir" }
+
+[dev-dependencies]
+orla-compiler = { path = "../../frontend/compiler" }
+orla-cpu = { path = "../../backends/cpu" }
+
+[lints]
+workspace = true

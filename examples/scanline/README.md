@@ -24,7 +24,7 @@ protocol, one request a line, and this is what happened:
    repaired line in it.
 
 The application never restarted. The test in
-`crates/cli/tests/protocol.rs` runs this record against a copy of the
+`crates/interface/orla/tests/protocol.rs` runs this record against a copy of the
 example and holds every step to the above, so it stays true.
 
 To watch it yourself, on a copy, since `compose` rewrites the scene:

@@ -8,9 +8,9 @@ Read in this order; each document answers one question.
 | --- | --- | --- |
 | 1 | `AGENTS.md` | What Orla is and what the rules are |
 | 2 | `README.md` | What it looks like from outside |
-| 3 | `Orla Architecture Plan.md` | Which phase the work is in, and what accepts it |
-| 4 | `Orla — Minimal Core Architecture.md` | Where the boundaries are |
-| 5 | `Orla Typed Field Architecture.md` | Why there is one resource |
+| 3 | `ARCHITECTURE-PLAN.md` | Which phase the work is in, and what accepts it |
+| 4 | `CORE-ARCHITECTURE.md` | Where the boundaries are |
+| 5 | `TYPED-FIELD-ARCHITECTURE.md` | Why there is one resource |
 | 6 | `IMPLEMENTATION.md` | Where the code and its evidence are |
 | 7 | `PROCESS.md` | How to write, verify, commit and hand over |
 | 8 | `HANDOFF.md` | What this repository holds, and the next action |
@@ -37,7 +37,7 @@ Do not rely on previous-session memory.
 
 ## Documentation maintenance
 
-- `Orla Architecture Plan.md` and `Orla — Minimal Core Architecture.md` are
+- `ARCHITECTURE-PLAN.md` and `CORE-ARCHITECTURE.md` are
   Orla's architectural bibles. Preserve their original text verbatim. Do not
   edit, abridge, restructure, or append clarifications without an explicit user
   request to change those documents. General cleanup, consistency reviews, and
@@ -289,7 +289,7 @@ The safe path is the powerful path.
 
 ## Engineering Rules
 
-Follow `Orla Typed Field Architecture.md` for types, ports, resource storage and
+Follow `TYPED-FIELD-ARCHITECTURE.md` for types, ports, resource storage and
 execution. Numerical domains share typed Field storage and GPU residency; Image
 is a compatibility view with explicit sampling/presentation semantics. Do not add
 parallel resource lifecycles or execution engines for new element types, audio,
@@ -302,8 +302,11 @@ new Rust test code or a native rebuild to validate their work.
 Keep each demo in `examples/<demo>/`, with its project entry, `kernels/`, and
 authored `tests/`. Demo-specific documentation belongs in that directory. Follow
 `examples/README.md`; do not add flat examples or a redundant project manifest.
-Keep the runtime crates (host, abi, ir, language, compiler, rules, cpu,
-runtime, graph, scene, and the matrix that holds backends to them) free of
+The crates sit by layer in `crates/core`, `crates/frontend`,
+`crates/backends` and `crates/interface`. Core depends on core alone,
+frontend on core, and a backend on core alone, never on another backend;
+only the interface layer may depend on everything.
+Keep core, frontend, the interpreter and the conformance matrix free of
 external dependencies. Two backends take the one dependency their machine
 needs and keep it behind the `Backend` boundary: `orla-gpu` takes wgpu (and
 pollster to wait on it) to reach a device, and `orla-jit` takes Cranelift to

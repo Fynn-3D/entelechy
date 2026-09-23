@@ -50,12 +50,12 @@ declares them as `Point`, `Tri`, `Bound`, `Joint` and `Pose`.
 
 ## What holds it
 
-[`crates/cli/tests/rigs.rs`](../crates/cli/tests/rigs.rs) is the
+[`crates/interface/orla/tests/rigs.rs`](../crates/interface/orla/tests/rigs.rs) is the
 contract as a test: one table of layouts, checked against what `orla
 import` writes, against the rows this repository ships, and against the
 package by binding fresh rows to it and evaluating. The Blender bridge's
 push is held to the same table in
-[`crates/cli/tests/bridges.rs`](../crates/cli/tests/bridges.rs), which
+[`crates/interface/orla/tests/bridges.rs`](../crates/interface/orla/tests/bridges.rs), which
 also poses a pushed rig and its own glTF and checks they land in the
 same place.
 

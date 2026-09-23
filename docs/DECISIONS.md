@@ -31,10 +31,10 @@ result on every backend. The Graph owns relationships, the Kernel owns
 computation.
 
 **Where.** Node values and `times` go through the literal reader
-([`scene`](../crates/scene/src/lib.rs), test
+([`scene`](../crates/frontend/scene/src/lib.rs), test
 `a_scene_writes_values_and_never_computes_them`). A domain resolves
 through a private `Size` in
-[`graph/src/domain.rs`](../crates/graph/src/domain.rs), whose only way
+[`graph/src/domain.rs`](../crates/core/graph/src/domain.rs), whose only way
 out is a `Domain`.
 
 **What would change it.** A structural need a Kernel cannot meet: a
@@ -70,7 +70,7 @@ may be named for either, since a run that has passed is stopped before
 every element runs; it fails either way.
 
 **Where the rule lives.** Where work is counted is written into the IR,
-once: [`orla_ir::account`](../crates/ir/src/account.rs) follows every
+once: [`orla_ir::account`](../crates/core/ir/src/account.rs) follows every
 loop with a `Spend` of the iterations whose body ran, ends every element
 with a `Look`, and puts a `Look` first in the `until` of every loop that
 can run a lot. The runtime accounts a module as it hands it to a
@@ -89,11 +89,11 @@ bulk. A Kernel whose elements cannot run 1024 iterations, or pass their
 budget, is not counted at all. Measured against uncounted runs, the loop
 scenes cost what they did.
 
-**Where.** [`account`](../crates/ir/src/account.rs),
-[`Manifest::budget`](../crates/ir/src/lib.rs),
-[`Host::work`](../crates/host/src/lib.rs),
-[`Run`](../crates/rules/src/lib.rs) and
-[`Module::counts_work`](../crates/ir/src/lib.rs). Tests
+**Where.** [`account`](../crates/core/ir/src/account.rs),
+[`Manifest::budget`](../crates/core/ir/src/lib.rs),
+[`Host::work`](../crates/core/host/src/lib.rs),
+[`Run`](../crates/core/rules/src/lib.rs) and
+[`Module::counts_work`](../crates/core/ir/src/lib.rs). Tests
 `an_element_past_its_budget_fails_alike_on_every_backend` and
 `a_run_past_the_hosts_work_fails_alike_on_every_backend`.
 
@@ -106,7 +106,7 @@ unbounded iteration and cannot be split across evaluations.
 The Host knows one format of its own, `.field`, and raw bytes. Every
 other format a file comes in goes one of three ways:
 
-- **Read live** by [`orla-formats`](../crates/formats/src/lib.rs): PNG,
+- **Read live** by [`orla-formats`](../crates/interface/formats/src/lib.rs): PNG,
   PPM, PGM, WAV and MIDI. A scene's input names the file, and the
   session decodes it again whenever it changes.
 - **Bytes to a Kernel**: `input level: Rows<Int> = bytes "level.bin";`,
@@ -130,7 +130,7 @@ bringing it past the runtime's edge would grow a subsystem for it, which
 the typed-field architecture refuses. Keeping the live set closed keeps
 `orla-formats` from becoming where every format lands.
 
-**Where.** [`orla-formats`](../crates/formats/src/lib.rs) takes the Host
+**Where.** [`orla-formats`](../crates/interface/formats/src/lib.rs) takes the Host
 and nothing else; `orla-import` and `orla-export` depend on it and the
 Host, never on the session or a backend. `read`, `read_bytes` and
 `encode` are the only ways a session turns a file into a Field and back.

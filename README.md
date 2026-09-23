@@ -164,11 +164,11 @@ The roadmaps describe acceptance criteria, not a promise of universal support.
 
 ## Design references
 
-- [Typed Field architecture](Orla%20Typed%20Field%20Architecture.md): resource
+- [Typed Field architecture](TYPED-FIELD-ARCHITECTURE.md): resource
   convergence, domain extension boundaries, and cross-session acceptance rules.
 
-- [Architecture plan](Orla%20Architecture%20Plan.md): the broader system roadmap.
-- [Minimal core architecture](Orla%20%E2%80%94%20Minimal%20Core%20Architecture.md):
+- [Architecture plan](ARCHITECTURE-PLAN.md): the broader system roadmap.
+- [Minimal core architecture](CORE-ARCHITECTURE.md):
   the computational model and layer boundaries.
 - [Engineering principles](AGENTS.md): rules for preserving those boundaries.
 - [Document format](docs/DOCUMENTS.md): `.orla` libraries and `.osn` graphs.

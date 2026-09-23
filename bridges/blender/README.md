@@ -43,7 +43,7 @@ deforms.
 
 `test_rig.py` builds a rig, pushes it, poses a bone with Live on, and
 exports the same rig as glTF;
-`crates/cli/tests/bridges.rs` poses both and checks they put the arm in
+`crates/interface/orla/tests/bridges.rs` poses both and checks they put the arm in
 the same place, which is what "the two ways in agree" means when their
 vertices are in different orders:
 

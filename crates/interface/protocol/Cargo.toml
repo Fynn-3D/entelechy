@@ -1,0 +1,20 @@
+[package]
+name = "orla-protocol"
+description = "Orla creation protocol: JSON lines, over stdin or a WebSocket, that drive a live session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-session = { path = "../../interface/session" }
+orla-formats = { path = "../../interface/formats" }
+orla-compiler = { path = "../../frontend/compiler" }
+orla-graph = { path = "../../core/graph" }
+orla-ir = { path = "../../core/ir" }
+orla-language = { path = "../../frontend/language" }
+orla-runtime = { path = "../../core/runtime" }
+serde_json = "1"
+
+[lints]
+workspace = true

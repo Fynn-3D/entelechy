@@ -1,0 +1,28 @@
+[package]
+name = "orla-gpu"
+description = "GPU backend: emits WGSL from Orla IR and runs it as compute dispatches through wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-rules = { path = "../../core/rules" }
+orla-abi = { path = "../../core/abi" }
+orla-ir = { path = "../../core/ir" }
+# `std` keeps wgpu error scopes thread-local, so the preparation worker and
+# the executing thread never share one scope stack.
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal", "vulkan", "dx12"] }
+pollster = "0.4"
+
+[dev-dependencies]
+orla-runtime = { path = "../../core/runtime" }
+orla-scene = { path = "../../frontend/scene" }
+orla-cpu = { path = "../../backends/cpu" }
+orla-compiler = { path = "../../frontend/compiler" }
+orla-conformance = { path = "../../backends/conformance" }
+orla-graph = { path = "../../core/graph" }
+orla-language = { path = "../../frontend/language" }
+
+[lints]
+workspace = true

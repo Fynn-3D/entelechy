@@ -1,0 +1,32 @@
+[package]
+name = "orla"
+description = "Orla command line: check Kernels, run and watch Graph scenes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+default-run = "orla"
+
+[[bin]]
+name = "orla"
+path = "src/main.rs"
+
+[dependencies]
+orla-compiler = { path = "../../frontend/compiler" }
+orla-language = { path = "../../frontend/language" }
+orla-ir = { path = "../../core/ir" }
+orla-graph = { path = "../../core/graph" }
+orla-scene = { path = "../../frontend/scene" }
+orla-runtime = { path = "../../core/runtime" }
+orla-session = { path = "../../interface/session" }
+orla-formats = { path = "../../interface/formats" }
+orla-protocol = { path = "../../interface/protocol" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+orla-cpu = { path = "../../backends/cpu" }
+orla-graph = { path = "../../core/graph" }
+serde_json = "1"

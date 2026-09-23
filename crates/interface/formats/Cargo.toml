@@ -1,0 +1,13 @@
+[package]
+name = "orla-formats"
+description = "Orla file formats: PNG, PPM, WAV and base64, decoded to and encoded from Host Fields"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-host = { path = "../../core/host" }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 # Orla from C
 
 `hello.c` is a C program that loads Orla as a library in its own process
-through the C ABI in [`crates/ffi/include/orla.h`](../../crates/ffi/include/orla.h):
+through the C ABI in [`crates/interface/ffi/include/orla.h`](../../crates/interface/ffi/include/orla.h):
 it opens a scene, evaluates it, reads the picture where it lies in the
 Host's memory (RGBA floats, no copy), publishes a Kernel through the
 protocol, and reads the picture again. It knows nothing about how Orla
@@ -9,7 +9,7 @@ is built; it includes one header and links one library.
 
 ```sh
 cargo build --release -p orla-ffi
-cc bridges/c/hello.c -Icrates/ffi/include -Ltarget/release -lorla_ffi -o /tmp/orla-hello
+cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lorla_ffi -o /tmp/orla-hello
 DYLD_LIBRARY_PATH=target/release /tmp/orla-hello examples/text/scene.osn jit    # macOS
 LD_LIBRARY_PATH=target/release /tmp/orla-hello examples/text/scene.osn jit      # Linux
 ```

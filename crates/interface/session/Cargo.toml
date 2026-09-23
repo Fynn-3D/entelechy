@@ -1,0 +1,22 @@
+[package]
+name = "orla-session"
+description = "Orla session: a live scene over the runtimes, which every interface drives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-compiler = { path = "../../frontend/compiler" }
+orla-language = { path = "../../frontend/language" }
+orla-ir = { path = "../../core/ir" }
+orla-graph = { path = "../../core/graph" }
+orla-scene = { path = "../../frontend/scene" }
+orla-runtime = { path = "../../core/runtime" }
+orla-cpu = { path = "../../backends/cpu" }
+orla-gpu = { path = "../../backends/gpu" }
+orla-jit = { path = "../../backends/jit" }
+orla-formats = { path = "../../interface/formats" }
+
+[lints]
+workspace = true

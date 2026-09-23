@@ -4,7 +4,7 @@ two ways into Orla can be held against each other.
     blender -b --python bridges/blender/test_rig.py -- --out /tmp/orla-rig
 
 writes `<out>/pushed/` (the bridge's rows) and `<out>/arm.glb` (for
-`orla import`). `crates/cli/tests/bridges.rs` poses both and compares the
+`orla import`). `crates/interface/orla/tests/bridges.rs` poses both and compares the
 pictures; run by hand, the lines below say what was written.
 """
 

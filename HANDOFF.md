@@ -19,7 +19,7 @@ Verified surface, as of `main`:
 | --- | --- |
 | macOS, Apple M4, Metal | every round |
 | Interpreter, JIT, GPU | `examples/*/tests/*.replay` on all three |
-| 35 language features × 7 execution forms (the modes, and a map of several outputs), and 8 narrow encodings read and written | `crates/matrix`, JIT and GPU against the interpreter |
+| 35 language features × 7 execution forms (the modes, and a map of several outputs), and 8 narrow encodings read and written | `crates/backends/conformance`, JIT and GPU against the interpreter |
 | 8 features of `Double` and `Long` × 6 modes; 5 of `Long` alone in maps and reductions | the same: the JIT against the interpreter, the GPU for `Long` |
 | Keyboard, pointer | by hand |
 | Pad sticks, buttons, triggers | by replay (`stick`, `button` lines) |

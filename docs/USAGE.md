@@ -427,7 +427,7 @@ cargo run -- replay examples/life/tests/blinker.replay
 ```
 
 The file format is documented at the top of
-[the replay module](../crates/cli/src/replay.rs). Key codes follow the common
+[the replay module](../crates/interface/orla/src/replay.rs). Key codes follow the common
 browser codes: letters and digits by ASCII uppercase, space 32, enter 13,
 arrows 37 to 40.
 
@@ -465,7 +465,7 @@ language, outside the workspace, speaking only the public contracts.
 
 The same session is a library: `orla-ffi` builds `liborla_ffi`
 (a dynamic and a static library) behind the C header
-[`crates/ffi/include/orla.h`](../crates/ffi/include/orla.h), ten
+[`crates/interface/ffi/include/orla.h`](../crates/interface/ffi/include/orla.h), ten
 functions any language binds. A host opens a scene on a backend,
 evaluates it under its own input (time, pointer, buttons, keys, the
 window and its scale), and reads an output or a pinned node as a
@@ -476,7 +476,7 @@ answer, so params, publishing, composing and resets are there too.
 
 ```sh
 cargo build --release -p orla-ffi
-cc bridges/c/hello.c -Icrates/ffi/include -Ltarget/release -lorla_ffi -o hello
+cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lorla_ffi -o hello
 DYLD_LIBRARY_PATH=target/release ./hello examples/text/scene.osn jit
 ```
 
@@ -501,9 +501,9 @@ is watching.
 
 ## Where the contracts live
 
-- Language syntax: [the frontend](../crates/language/src/lib.rs) and its parser tests.
-- Capabilities and types: [the ABI](../crates/abi/src/lib.rs).
-- IR operations and validation rules: [the IR](../crates/ir/src/lib.rs) and
-  [its validator](../crates/ir/src/validate.rs).
-- Document format: [the contract](DOCUMENTS.md), [the frontend](../crates/language/src/lib.rs), and [scene lowering](../crates/scene/src/lib.rs).
-- Publication semantics: [the runtime](../crates/runtime/src/lib.rs).
+- Language syntax: [the frontend](../crates/frontend/language/src/lib.rs) and its parser tests.
+- Capabilities and types: [the ABI](../crates/core/abi/src/lib.rs).
+- IR operations and validation rules: [the IR](../crates/core/ir/src/lib.rs) and
+  [its validator](../crates/core/ir/src/validate.rs).
+- Document format: [the contract](DOCUMENTS.md), [the frontend](../crates/frontend/language/src/lib.rs), and [scene lowering](../crates/frontend/scene/src/lib.rs).
+- Publication semantics: [the runtime](../crates/core/runtime/src/lib.rs).

@@ -22,7 +22,7 @@ ran:
 
 Nothing here costs a frame that migrates nothing: the layout check is
 the one every evaluation already made. The test in
-`crates/cli/tests/protocol.rs` replays this record on a copy of the
+`crates/interface/orla/tests/protocol.rs` replays this record on a copy of the
 example.
 
 ```sh
