@@ -8,7 +8,7 @@
 | --- | --- |
 | Conversation is Chinese; source, comments, documents and commits are English. | Write artifacts in English whatever the request was written in. |
 | `main` is the line; a round of work is one branch, fast-forwarded back on the user's word. | Branch first, ask once at the end, never merge unasked. |
-| No remote is configured. | Commits are local; the CI workflow describes intent, not a run. |
+| `origin` is the private GitHub repository `Fynn-3D/orla`. | Push only on the user's word; the CI workflow runs when started by hand, until a release spans platforms. |
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
 | `../bak/orla` is the previous implementation, read-only. | Consult it; take nothing from it unchecked. |
 | Commit as the repository's configured identity. | `git config user.name` is already what the user wants. |

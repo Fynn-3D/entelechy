@@ -1,5 +1,7 @@
 name: Rust
-on: [push, pull_request]
+# Run by hand (Actions, "Run workflow") until Orla is released for more
+# than one platform; then it runs on every push again.
+on: workflow_dispatch
 jobs:
   verify:
     runs-on: ubuntu-latest
