@@ -25,6 +25,27 @@ inputs (`input mesh: Model = "assets/Cube.vertices.field";`) and the Host
 watches them, so with **Live** on, editing the mesh in Blender changes the
 window. This path needs no connection.
 
+**Rigs**: *Push rig* writes what a posed mesh needs, the same rows
+`orla import` writes out of a rigged glTF and the same ones the
+[`skin` package](../../packages/skin.orlapkg) reads: `<name>.vertices.field`
+(the mesh at rest, in its armature's space, since the joints place it),
+`<name>.weights.field` (the four heaviest vertex groups that name a bone,
+normalized), `<name>.skeleton.field` (each bone's parent and inverse bind
+matrix) and one `<name>.<action>.clip.field` per action, sampled at the
+scene's own frame rate. With **Live** on, a rigged object pushes only the
+pose it stands in — one clip of one frame, `<name>.pose.clip.field` —
+so posing a bone in Blender moves the mesh in the window without
+rewriting the mesh or the clips.
+
+`test_rig.py` builds a rig, pushes it, and exports the same rig as glTF;
+`crates/cli/tests/bridges.rs` poses both and checks they put the arm in
+the same place, which is what "the two ways in agree" means when their
+vertices are in different orders:
+
+```sh
+/Applications/Blender.app/Contents/MacOS/Blender -b --python bridges/blender/test_rig.py -- --out /tmp/orla-rig
+```
+
 **Session** talks to the running window: pull two nodes' rows out as a
 mesh (rows of 8 or 9 floats and rows of three ints, as the mesh and model
 examples produce; the triangles may also be a `.field` file when the scene

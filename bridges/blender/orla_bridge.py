@@ -68,11 +68,20 @@ def to_blender(v, axes):
     return (v[0], -v[2], v[1]) if axes == AXES_YUP else (v[0], v[1], v[2])
 
 
-def mesh_rows(obj, depsgraph=None, axes=AXES_YUP):
+def mesh_rows(obj, depsgraph=None, axes=AXES_YUP, matrix=None, corners=None):
     """The object's mesh as the runtime's rows: one vertex per triangle
     corner, position in world space, split normal, uv with v flipped to
     the top-left convention; and the triangles as indices. Returns
-    (vertex words, vertex count, triangle words, triangle count)."""
+    (vertex words, vertex count, triangle words, triangle count).
+
+    `matrix` replaces the object's own world matrix, which a rig uses to
+    push the mesh in its armature's space. Pass a list as `corners` and
+    it is filled with the original vertex each corner came from, which is
+    how the weights line up with these rows.
+
+    With no `depsgraph` the mesh comes as it is authored, before its
+    modifiers: a rigged mesh is pushed at rest, since its joints pose it.
+    """
     evaluated = obj.evaluated_get(depsgraph) if depsgraph else obj
     mesh = evaluated.to_mesh()
     try:
@@ -85,7 +94,7 @@ def mesh_rows(obj, depsgraph=None, axes=AXES_YUP):
         tri.calc_loop_triangles()
         if hasattr(tri, "calc_normals_split"):
             tri.calc_normals_split()
-        matrix = obj.matrix_world
+        matrix = obj.matrix_world if matrix is None else matrix
         normal_matrix = matrix.to_3x3().inverted_safe().transposed()
         uv_layer = tri.uv_layers.active
         # Smooth or flat as the mesh says: corner normals (4.1 and later),
@@ -101,6 +110,8 @@ def mesh_rows(obj, depsgraph=None, axes=AXES_YUP):
                 n = to_orla((normal_matrix @ Vector(raw)).normalized(), axes)
                 uv = uv_layer.data[loop].uv if uv_layer else (0.0, 0.0)
                 positions.extend([p[0], p[1], p[2], n[0], n[1], n[2], uv[0], 1.0 - uv[1]])
+                if corners is not None:
+                    corners.append(tri.loops[loop].vertex_index)
         count = len(tri.loop_triangles) * 3
         vertex_words = struct.pack(f"<{len(positions)}f", *positions)
         triangle_words = struct.pack(f"<{count}i", *range(count))
@@ -149,6 +160,186 @@ def push_object(obj, assets_dir, depsgraph=None, axes=AXES_YUP):
             image.save_render(path)
         finally:
             settings.file_format = previous
+        paths.append(path)
+    return paths
+
+
+# ------------------------------------------------------------------- rigs
+
+# Orla's rows are y-up, so a matrix written in Blender's z-up space is
+# read in the turned one: `C M C^-1`, with C the same turn `to_orla` is.
+def axis_change(axes):
+    from mathutils import Matrix
+
+    if axes != AXES_YUP:
+        return Matrix.Identity(4)
+    return Matrix(((1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1)))
+
+
+def turned(matrix, axes):
+    """A Blender matrix as Orla reads it."""
+    change = axis_change(axes)
+    return change @ matrix @ change.inverted()
+
+
+def armature_of(obj):
+    """The armature that deforms `obj`, if one does."""
+    for modifier in obj.modifiers:
+        if modifier.type == "ARMATURE" and modifier.object is not None:
+            return modifier.object
+    return None
+
+
+def bone_order(armature):
+    """The bones as rows, parents before children."""
+    order = []
+
+    def walk(bone):
+        order.append(bone)
+        for child in bone.children:
+            walk(child)
+
+    for bone in armature.data.bones:
+        if bone.parent is None:
+            walk(bone)
+    return order
+
+
+def skeleton_rows(armature, axes=AXES_YUP):
+    """Each joint's parent and inverse bind matrix, as the skeleton file
+    holds them. Returns (words, joints, [bone names])."""
+    bones = bone_order(armature)
+    place = {bone.name: index for index, bone in enumerate(bones)}
+    words = b""
+    for bone in bones:
+        parent = place.get(bone.parent.name, -1) if bone.parent else -1
+        bind = turned(bone.matrix_local, axes).inverted()
+        words += struct.pack("<i", parent)
+        # Column-major, as the ABI lays a Mat4 out.
+        words += struct.pack("<16f", *[bind[row][column] for column in range(4) for row in range(4)])
+    return words, len(bones), [bone.name for bone in bones]
+
+
+def weight_rows(obj, names, corners):
+    """What every corner of the pushed mesh hangs off: the four heaviest
+    groups that name a bone, normalized. Returns the words."""
+    place = {name: index for index, name in enumerate(names)}
+    groups = {group.index: group.name for group in obj.vertex_groups}
+    words = b""
+    for vertex_index in corners:
+        weighted = []
+        for element in obj.data.vertices[vertex_index].groups:
+            joint = place.get(groups.get(element.group, ""))
+            if joint is not None and element.weight > 0.0:
+                weighted.append((element.weight, joint))
+        weighted.sort(reverse=True)
+        weighted = weighted[:4]
+        total = sum(weight for weight, _ in weighted)
+        joints = [joint for _, joint in weighted] + [0] * (4 - len(weighted))
+        amounts = [weight / total for weight, _ in weighted] if total > 0.0 else []
+        amounts = amounts + [0.0] * (4 - len(amounts))
+        words += struct.pack("<4i", *joints) + struct.pack("<4f", *amounts)
+    return words
+
+
+def pose_rows(armature, names, axes=AXES_YUP):
+    """Every joint's local transform at the current frame, as a clip's
+    frame holds them: a translation, a rotation (x y z w) and a scale."""
+    words = b""
+    for name in names:
+        bone = armature.pose.bones[name]
+        local = bone.matrix if bone.parent is None else bone.parent.matrix.inverted() @ bone.matrix
+        at, turn, grow = turned(local, axes).decompose()
+        words += struct.pack("<10f", at[0], at[1], at[2], turn[1], turn[2], turn[3], turn[0], grow[0], grow[1], grow[2])
+    return words
+
+
+def action_curves(action):
+    """An action's curves, whether it keeps them itself (4.3 and before)
+    or in the channel bags of its slots (4.4 and after)."""
+    curves = list(getattr(action, "fcurves", []) or [])
+    if curves:
+        return curves
+    for layer in getattr(action, "layers", []):
+        for strip in getattr(layer, "strips", []):
+            for bag in getattr(strip, "channelbags", []):
+                curves.extend(bag.fcurves)
+    return curves
+
+
+def actions_of(armature):
+    """The actions that pose this armature: every one with a curve on a
+    pose bone, so a rig with several clips writes several."""
+    return [
+        action
+        for action in bpy.data.actions
+        if any(curve.data_path.startswith("pose.bones") for curve in action_curves(action))
+    ]
+
+
+def clip_rows(armature, names, action, axes=AXES_YUP):
+    """One action as a clip: every frame's joints together, sampled at
+    the scene's own rate. Returns (words, frames)."""
+    scene = bpy.context.scene
+    animation = armature.animation_data or armature.animation_data_create()
+    was, frame_was = animation.action, scene.frame_current
+    slot_was = getattr(animation, "action_slot", None)
+    animation.action = action
+    if hasattr(animation, "action_slot") and action.slots:
+        animation.action_slot = action.slots[0]
+    first, last = (int(round(v)) for v in action.frame_range)
+    words = b""
+    try:
+        for frame in range(first, last + 1):
+            scene.frame_set(frame)
+            words += pose_rows(armature, names, axes)
+    finally:
+        animation.action = was
+        if slot_was is not None and hasattr(animation, "action_slot"):
+            animation.action_slot = slot_was
+        scene.frame_set(frame_was)
+    return words, last - first + 1
+
+
+def push_rig(obj, assets_dir, axes=AXES_YUP, clips=True):
+    """Writes the rows a posed mesh needs: the mesh at rest in its
+    armature's space, what every vertex hangs off, the joints, and one
+    clip per action (or just the frame it stands on). Returns the paths."""
+    armature = armature_of(obj)
+    if armature is None:
+        raise ValueError(f"{obj.name} has no armature modifier")
+    os.makedirs(assets_dir, exist_ok=True)
+    name = bpy.path.clean_name(obj.name)
+    # The joints pose the mesh in the armature's own space, so that is
+    # the space the rest mesh is written in.
+    into_armature = armature.matrix_world.inverted() @ obj.matrix_world
+    corners = []
+    vertices, count, triangles, faces = mesh_rows(obj, None, axes, into_armature, corners)
+    paths = []
+    path = os.path.join(assets_dir, f"{name}.vertices.field")
+    write_field(path, "Rows", (count, 1, 1), "f,f,f,f,f,f,f,f", vertices)
+    paths.append(path)
+    path = os.path.join(assets_dir, f"{name}.triangles.field")
+    write_field(path, "Rows", (faces, 1, 1), "i,i,i", triangles)
+    paths.append(path)
+    skeleton, joints, names = skeleton_rows(armature, axes)
+    path = os.path.join(assets_dir, f"{name}.skeleton.field")
+    write_field(path, "Rows", (joints, 1, 1), "i," + ",".join(["f"] * 16), skeleton)
+    paths.append(path)
+    path = os.path.join(assets_dir, f"{name}.weights.field")
+    write_field(path, "Rows", (count, 1, 1), "i,i,i,i,f,f,f,f", weight_rows(obj, names, corners))
+    paths.append(path)
+    pose = "f," * 9 + "f"
+    if clips:
+        for action in actions_of(armature):
+            words, frames = clip_rows(armature, names, action, axes)
+            clip_name = bpy.path.clean_name(action.name).lower()
+            path = os.path.join(assets_dir, f"{name}.{clip_name}.clip.field")
+            write_field(path, "Rows", (frames * joints, 1, 1), pose, words)
+            paths.append(path)
+    else:
+        path = os.path.join(assets_dir, f"{name}.pose.clip.field")
+        write_field(path, "Rows", (joints, 1, 1), pose, pose_rows(armature, names, axes))
         paths.append(path)
     return paths
 
@@ -404,6 +595,29 @@ class ORLA_OT_push(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class ORLA_OT_push_rig(bpy.types.Operator):
+    bl_idname = "orla.push_rig"
+    bl_label = "Push rig to Orla"
+    bl_description = "Write the active object and its armature as the rows a scene poses: the mesh at rest, what every vertex hangs off, the joints, and one clip per action"
+
+    def execute(self, context):
+        obj = context.active_object
+        if obj is None or obj.type != "MESH":
+            self.report({"ERROR"}, "select a mesh object")
+            return {"CANCELLED"}
+        settings = context.scene.orla
+        if not settings.assets_dir:
+            self.report({"ERROR"}, "set the assets directory")
+            return {"CANCELLED"}
+        try:
+            paths = push_rig(obj, bpy.path.abspath(settings.assets_dir), settings.axes)
+        except ValueError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, "wrote " + ", ".join(os.path.basename(p) for p in paths))
+        return {"FINISHED"}
+
+
 class ORLA_OT_pull_mesh(bpy.types.Operator):
     bl_idname = "orla.pull_mesh"
     bl_label = "Pull mesh from Orla"
@@ -509,6 +723,7 @@ class ORLA_PT_panel(bpy.types.Panel):
         box.prop(settings, "assets_dir")
         box.prop(settings, "axes")
         box.operator("orla.push")
+        box.operator("orla.push_rig")
         box.prop(settings, "live")
         box = layout.box()
         box.label(text="Session: a running window")
@@ -545,12 +760,18 @@ def _on_depsgraph(scene, depsgraph):
         return
     _last_push = time.monotonic()
     try:
-        push_object(obj, bpy.path.abspath(settings.assets_dir), depsgraph, settings.axes)
+        # A rigged object pushes the pose it stands in: the mesh and the
+        # joints do not change while it is posed, so what a frame costs
+        # is one clip of one frame.
+        if armature_of(obj) is not None:
+            push_rig(obj, bpy.path.abspath(settings.assets_dir), settings.axes, clips=False)
+        else:
+            push_object(obj, bpy.path.abspath(settings.assets_dir), depsgraph, settings.axes)
     except Exception as error:
         print("orla bridge: push failed:", error)
 
 
-classes = (OrlaPreferences, OrlaSettings, ORLA_OT_push, ORLA_OT_pull_mesh, ORLA_OT_watch, ORLA_OT_pull_image, ORLA_OT_param, ORLA_OT_publish, ORLA_PT_panel)
+classes = (OrlaPreferences, OrlaSettings, ORLA_OT_push, ORLA_OT_push_rig, ORLA_OT_pull_mesh, ORLA_OT_watch, ORLA_OT_pull_image, ORLA_OT_param, ORLA_OT_publish, ORLA_PT_panel)
 
 
 def register():
