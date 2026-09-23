@@ -14,11 +14,8 @@ pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
         message,
     };
     Ok(match &expr.kind {
-        ExprKind::Int(value) => DomainExpr::Int(
-            i32::try_from(*value)
-                .map_err(|_| fail(format!("`{value}` is too large for a domain")))?,
-        ),
-        ExprKind::Float(value) => DomainExpr::Float(*value as f32),
+        ExprKind::Int(value) => DomainExpr::Int(*value),
+        ExprKind::Float(value) => DomainExpr::Float(*value),
         ExprKind::Name(name) => DomainExpr::Name(name.clone()),
         ExprKind::Neg(inner) => DomainExpr::Neg(Box::new(domain_expr(inner)?)),
         ExprKind::Binary(op, a, b) => {
@@ -259,6 +256,52 @@ mod tests {
             .resolve(&port, &param, &context, &element)
             .unwrap_err();
         assert!(error.to_string().contains("neither a parameter"), "{error}");
+        // Counts are exact and whole numbers never wrap: a count past
+        // what anything can hold fails where it is worked out, and the
+        // only thing that comes out is an extent.
+        let error = parse("count(faces) * 4611686018427387904")
+            .resolve(&port, &param, &context, &element)
+            .unwrap_err();
+        assert!(error.to_string().contains("overflows"), "{error}");
+        let error = parse("count(faces) * 3000000")
+            .resolve(&port, &param, &context, &element)
+            .unwrap_err();
+        assert!(error.to_string().contains("positive whole"), "{error}");
+        assert_eq!(
+            parse("size(map) / 3")
+                .resolve(&port, &param, &context, &element)
+                .unwrap(),
+            Domain::Grid(6, 5),
+            "a side divides like the count it is"
+        );
+        let error = parse("window() / 0.0")
+            .resolve(&port, &param, &context, &element)
+            .unwrap_err();
+        assert!(error.to_string().contains("divides by zero"), "{error}");
+        // What is not a number or a size sizes nothing.
+        let shaped = |name: &str| match name {
+            "on" => Some(Value::Bool(true)),
+            "tint" => Some(Value::Vec4([1.0; 4])),
+            "row" => Some(Value::IVec2([4, 2])),
+            _ => None,
+        };
+        for name in ["on", "tint"] {
+            let error = parse(name)
+                .resolve(&port, &shaped, &context, &element)
+                .unwrap_err();
+            assert!(error.to_string().contains("a count or a size"), "{error}");
+        }
+        assert_eq!(
+            parse("row * 2")
+                .resolve(&port, &shaped, &context, &element)
+                .unwrap(),
+            Domain::Grid(8, 4)
+        );
+        let vector = |_: &str, _: u32| Some(Value::Vec2([1.0, 2.0]));
+        let error = parse("value(live)")
+            .resolve(&port, &param, &context, &vector)
+            .unwrap_err();
+        assert!(error.to_string().contains("one number"), "{error}");
         let error = domain_expr(&orla_language::parse_literal("sin(2.0)").unwrap()).unwrap_err();
         assert!(error.to_string().contains("cannot size"), "{error}");
     }

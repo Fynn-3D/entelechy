@@ -605,7 +605,10 @@ output result <- display.result;      // named graph output; sub-graph outputs
    `param` reads its default in the type it declares, a struct or an
    array included (`param origin: Double = 500000.123456789;` holds the
    double nearest what is written), and a node's value keeps every digit
-   until it reaches the Kernel.
+   until it reaches the Kernel. A value is written, never worked out:
+   `gain = 0.5 * 2.0;` and `gain = n + 1;` are refused, and so is `times
+   = n + 1;`. Arithmetic on values belongs in a Kernel
+   ([why](DECISIONS.md#the-graph-computes-structure-never-values)).
 5. `domain = count;`, `domain = vec2(width, height);`, or
    `domain = vec3(width, height, depth);` sets a node's output extent in
    its output's shape; nodes with an input default to the extent of their
@@ -616,7 +619,12 @@ output result <- display.result;      // named graph output; sub-graph outputs
    graph's by name, numbers, `vec2`/`vec3`, `+ - * /`, `max`, `min`,
    `floor`, `ceil`, and the window as context: `window()` (its size in
    pixels) and `scale()` (its scale factor); it resolves when the node
-   binds, and its sides must come out positive and whole. `domain =
+   binds, and its sides must come out positive and whole. Counts and
+   sides are whole numbers, exact, dividing as an `Int` does, and a
+   count too large to hold is an error rather than a wrapped one; the
+   window, `scale()` and a `Float` parameter are measures, which may
+   carry a fraction until `floor` or `ceil` makes them whole. A `domain` computes an extent and
+   nothing else: a boolean, a colour or a struct sizes nothing. `domain =
    size(map) * tile;` draws a map at its tile size; `domain = 4 *
    count(faces);` sizes a subdivision; `domain = window();` fills the
    window at the window's resolution, and the node runs again at the new

@@ -19,6 +19,9 @@
 //! for. The Field is brought to the Host to read, which on a device is a
 //! wait, so the port is held to a row of scalars and to
 //! [`VALUE_MAX_ELEMENTS`] of them: it is for counts, not for data.
+//!
+//! Values come in and only an extent comes out: the Graph computes
+//! structure and never values (`docs/DECISIONS.md`).
 
 use std::fmt;
 
@@ -85,9 +88,9 @@ impl DomainOp {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DomainExpr {
     /// An integer literal.
-    Int(i32),
-    /// A float literal.
-    Float(f32),
+    Int(i64),
+    /// A float literal, exact as written.
+    Float(f64),
     /// A parameter of the node or of the graph.
     Name(String),
     /// `count(port)`: the number of elements the port is bound to.
@@ -212,9 +215,13 @@ impl DomainExpr {
     }
 
     /// Resolves the expression to an extent. `port` gives the extent an
-    /// input port is bound to, `param` the value of a parameter, and
-    /// `context` the window's size (`window`) or scale (`scale`), each
-    /// `None` when unknown.
+    /// input port is bound to, `param` the value of a parameter,
+    /// `context` the window's size (`window`) or scale (`scale`), and
+    /// `element` a number a Kernel wrote, each `None` when unknown.
+    ///
+    /// Values come in and only an extent comes out: the arithmetic is
+    /// over [`Size`], which holds counts and measures and nothing a Kernel
+    /// could be given, so the Graph computes structure and never values.
     pub fn resolve(
         &self,
         port: &dyn Fn(&str) -> Option<Domain>,
@@ -222,214 +229,334 @@ impl DomainExpr {
         context: &dyn Fn(&str) -> Option<Value>,
         element: &dyn Fn(&str, u32) -> Option<Value>,
     ) -> Result<Domain, DomainError> {
-        let value = self.value(port, param, context, element)?;
-        let fail = |message: String| DomainError { message };
-        let side = |v: f32| {
-            (v > 0.0 && v.fract() == 0.0 && v <= u32::MAX as f32)
-                .then_some(v as u32)
+        let size = self.size(&Inputs {
+            port,
+            param,
+            context,
+            element,
+        })?;
+        let side = |n: Number| {
+            let whole = match n {
+                Number::Whole(v) => Some(v),
+                Number::Measure(v) if v.fract() == 0.0 && v.abs() < 1e18 => Some(v as i64),
+                Number::Measure(_) => None,
+            };
+            whole
+                .filter(|v| (1..=i64::from(u32::MAX)).contains(v))
+                .map(|v| v as u32)
                 .ok_or_else(|| {
                     // Two cases are worth naming the remedy for: a count
                     // a Kernel works out reaches zero the frame it culls
                     // everything, and a side is fractional as soon as
                     // somebody drags a window's corner to an odd width or
                     // a Kernel writes a count as a `Float`.
-                    let hint = if v == 0.0 {
-                        "; a count that can reach zero wants `max(..., 1)`"
-                    } else if v.fract() != 0.0 {
-                        "; a side that comes out fractional wants `floor(...)`"
-                    } else {
-                        ""
+                    let hint = match n {
+                        _ if n.exact() == 0.0 => {
+                            "; a count that can reach zero wants `max(..., 1)`"
+                        }
+                        Number::Measure(v) if v.fract() != 0.0 => {
+                            "; a side that comes out fractional wants `floor(...)`"
+                        }
+                        _ => "",
                     };
-                    fail(format!(
-                        "`domain` resolves to {self}, whose sides must be positive whole numbers, found {v}{hint}"
-                    ))
+                    DomainError {
+                        message: format!(
+                            "`domain` resolves to {self}, whose sides must be positive whole numbers, found {n}{hint}"
+                        ),
+                    }
                 })
         };
-        Ok(match value {
-            Value::Int(count) => Domain::Rows(side(count as f32)?),
-            Value::Float(count) => Domain::Rows(side(count)?),
-            Value::Vec2([width, height]) => Domain::Grid(side(width)?, side(height)?),
-            Value::Vec3([width, height, depth]) => {
-                Domain::Volume(side(width)?, side(height)?, side(depth)?)
-            }
-            other => {
-                return Err(fail(format!(
-                    "`domain` must resolve to a count, a `vec2`, or a `vec3`, found {other}"
-                )));
-            }
+        Ok(match size {
+            Size::One(n) => Domain::Rows(side(n)?),
+            Size::Two([w, h]) => Domain::Grid(side(w)?, side(h)?),
+            Size::Three([w, h, d]) => Domain::Volume(side(w)?, side(h)?, side(d)?),
         })
     }
 
-    fn value(
-        &self,
-        port: &dyn Fn(&str) -> Option<Domain>,
-        param: &dyn Fn(&str) -> Option<Value>,
-        context: &dyn Fn(&str) -> Option<Value>,
-        element: &dyn Fn(&str, u32) -> Option<Value>,
-    ) -> Result<Value, DomainError> {
+    fn size(&self, inputs: &Inputs<'_>) -> Result<Size, DomainError> {
         let fail = |message: String| DomainError { message };
-        let extent = |domain: Domain| match domain {
-            Domain::Rows(n) => Value::Int(n as i32),
-            Domain::Grid(w, h) => Value::Vec2([w as f32, h as f32]),
-            Domain::Volume(w, h, d) => Value::Vec3([w as f32, h as f32, d as f32]),
-        };
         Ok(match self {
-            Self::Int(v) => Value::Int(*v),
-            Self::Float(v) => Value::Float(*v),
-            // A value written in a scene is exact; an extent is counted in
-            // floats and ints, which is what the arithmetic below takes.
-            Self::Name(name) => extent_number(param(name).ok_or_else(|| {
-                fail(format!(
-                    "`domain` names `{name}`, which is neither a parameter of the node nor of the graph"
-                ))
-            })?),
-            Self::Count(name) => Value::Int(
-                port(name)
+            Self::Int(v) => Size::One(Number::Whole(*v)),
+            Self::Float(v) => Size::One(Number::Measure(*v)),
+            Self::Name(name) => {
+                let value = (inputs.param)(name).ok_or_else(|| {
+                    fail(format!(
+                        "`domain` names `{name}`, which is neither a parameter of the node nor of the graph"
+                    ))
+                })?;
+                Size::of(&value).ok_or_else(|| {
+                    fail(format!(
+                        "`domain` names `{name}`, which is {value}: a count or a size is a number, or a vector of two or three"
+                    ))
+                })?
+            }
+            Self::Count(name) => Size::One(Number::Whole(
+                (inputs.port)(name)
                     .ok_or_else(|| fail(format!("`count({name})`: `{name}` is not a bound input")))?
-                    .count() as i32,
-            ),
-            Self::Size(name) => extent(
-                port(name)
-                    .ok_or_else(|| fail(format!("`size({name})`: `{name}` is not a bound input")))?,
-            ),
-            Self::Value(name, index) => element(name, *index).ok_or_else(|| {
-                fail(format!(
-                    "`value({name}, {index})`: `{name}` is not a bound input, or its Field has no element {index}"
-                ))
-            })?,
-            Self::Context(name) => context(name).ok_or_else(|| {
-                fail(format!(
-                    "`{name}()`: the evaluation has no window; the Player opens one, `run` takes `--window`, and a replay says `window w h`"
-                ))
-            })?,
+                    .count() as i64,
+            )),
+            Self::Size(name) => {
+                let whole = |v: u32| Number::Whole(i64::from(v));
+                match (inputs.port)(name)
+                    .ok_or_else(|| fail(format!("`size({name})`: `{name}` is not a bound input")))?
+                {
+                    Domain::Rows(n) => Size::One(whole(n)),
+                    Domain::Grid(w, h) => Size::Two([whole(w), whole(h)]),
+                    Domain::Volume(w, h, d) => Size::Three([whole(w), whole(h), whole(d)]),
+                }
+            }
+            Self::Value(name, index) => {
+                let value = (inputs.element)(name, *index).ok_or_else(|| {
+                    fail(format!(
+                        "`value({name}, {index})`: `{name}` is not a bound input, or its Field has no element {index}"
+                    ))
+                })?;
+                match Size::of(&value) {
+                    Some(Size::One(n)) => Size::One(n),
+                    _ => {
+                        return Err(fail(format!(
+                            "`value({name}, {index})` is {value}, where a count is one number"
+                        )));
+                    }
+                }
+            }
+            Self::Context(name) => {
+                let value = (inputs.context)(name).ok_or_else(|| {
+                    fail(format!(
+                        "`{name}()`: the evaluation has no window; the Player opens one, `run` takes `--window`, and a replay says `window w h`"
+                    ))
+                })?;
+                Size::of(&value).ok_or_else(|| fail(format!("`{name}()` is {value}")))?
+            }
             Self::Vector(parts) => {
-                let mut components = [0.0; 3];
-                for (slot, part) in components.iter_mut().zip(parts) {
-                    *slot = match part.value(port, param, context, element)? {
-                        Value::Int(v) => v as f32,
-                        Value::Float(v) => v,
+                let mut components = Vec::with_capacity(parts.len());
+                for part in parts {
+                    match part.size(inputs)? {
+                        Size::One(n) => components.push(n),
                         other => {
                             return Err(fail(format!(
                                 "a vector component must be a number, found {other}"
                             )));
                         }
-                    };
+                    }
                 }
-                if parts.len() == 2 {
-                    Value::Vec2([components[0], components[1]])
-                } else {
-                    Value::Vec3(components)
+                match components[..] {
+                    [x, y] => Size::Two([x, y]),
+                    [x, y, z] => Size::Three([x, y, z]),
+                    _ => unreachable!("accepted vectors have two or three components"),
                 }
             }
             Self::Call(name, args) => {
-                let values = args
+                let sizes = args
                     .iter()
-                    .map(|arg| arg.value(port, param, context, element))
+                    .map(|arg| arg.size(inputs))
                     .collect::<Result<Vec<_>, _>>()?;
-                match (name.as_str(), &values[..]) {
-                    ("floor", [v]) => map(v.clone(), f32::floor),
-                    ("ceil", [v]) => map(v.clone(), f32::ceil),
-                    ("max", [a, b]) => zip(a.clone(), b.clone(), f32::max, i32::max)?,
-                    ("min", [a, b]) => zip(a.clone(), b.clone(), f32::min, i32::min)?,
+                match (name.as_str(), &sizes[..]) {
+                    ("floor", [v]) => v.map(|n| n.rounded(f64::floor))?,
+                    ("ceil", [v]) => v.map(|n| n.rounded(f64::ceil))?,
+                    ("max", [a, b]) => a.zip(*b, |x, y| Ok(if y.above(x) { y } else { x }))?,
+                    ("min", [a, b]) => a.zip(*b, |x, y| Ok(if y.above(x) { x } else { y }))?,
                     _ => unreachable!("accepted calls have their arity"),
                 }
             }
-            Self::Neg(inner) => map(inner.value(port, param, context, element)?, |v| -v),
+            Self::Neg(inner) => inner.size(inputs)?.map(|n| match n {
+                Number::Whole(v) => v.checked_neg().map(Number::Whole).ok_or_else(overflow),
+                Number::Measure(v) => Ok(Number::Measure(-v)),
+            })?,
             Self::Binary(op, a, b) => {
-                let (a, b) = (
-                    a.value(port, param, context, element)?,
-                    b.value(port, param, context, element)?,
-                );
-                match op {
-                    DomainOp::Add => zip(a, b, |x, y| x + y, |x, y| x.wrapping_add(y))?,
-                    DomainOp::Sub => zip(a, b, |x, y| x - y, |x, y| x.wrapping_sub(y))?,
-                    DomainOp::Mul => zip(a, b, |x, y| x * y, |x, y| x.wrapping_mul(y))?,
-                    DomainOp::Div => {
-                        if let Value::Int(0) = b {
-                            return Err(fail("`domain` divides by zero".to_owned()));
-                        }
-                        zip(a, b, |x, y| x / y, |x, y| x.checked_div(y).unwrap_or(0))?
-                    }
-                }
+                let (a, b) = (a.size(inputs)?, b.size(inputs)?);
+                a.zip(b, |x, y| x.apply(*op, y))?
             }
         })
     }
 }
 
-/// A number as an extent counts it: a double as a float, a long as an
-/// int where it fits and a float where it does not.
-fn extent_number(value: Value) -> Value {
-    match value {
-        Value::Double(v) => Value::Float(v as f32),
-        Value::Long(v) => i32::try_from(v).map_or(Value::Float(v as f32), Value::Int),
-        Value::DVec2([x, y]) => Value::Vec2([x as f32, y as f32]),
-        Value::DVec3([x, y, z]) => Value::Vec3([x as f32, y as f32, z as f32]),
-        other => other,
-    }
+/// What a domain expression reads, by where it comes from.
+struct Inputs<'a> {
+    port: &'a dyn Fn(&str) -> Option<Domain>,
+    param: &'a dyn Fn(&str) -> Option<Value>,
+    context: &'a dyn Fn(&str) -> Option<Value>,
+    element: &'a dyn Fn(&str, u32) -> Option<Value>,
 }
 
-/// Applies a float function to every component; ints stay ints when the
-/// result is whole.
-fn map(value: Value, f: impl Fn(f32) -> f32) -> Value {
-    match value {
-        Value::Int(v) => {
-            let r = f(v as f32);
-            if r.fract() == 0.0 {
-                Value::Int(r as i32)
-            } else {
-                Value::Float(r)
+/// A number the Graph counts with: a whole number, exact, which is what
+/// counts, sides and integer parameters are; or a measure, which may have
+/// a fraction (a window's scale, a float parameter) and must come out
+/// whole before it sizes anything.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Number {
+    Whole(i64),
+    Measure(f64),
+}
+
+impl Number {
+    fn exact(self) -> f64 {
+        match self {
+            Self::Whole(v) => v as f64,
+            Self::Measure(v) => v,
+        }
+    }
+
+    /// Whether `self` is greater than `other`.
+    fn above(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Whole(a), Self::Whole(b)) => a > b,
+            (a, b) => a.exact() > b.exact(),
+        }
+    }
+
+    /// `floor` or `ceil`: a whole number, which a measure too large to
+    /// count is not.
+    fn rounded(self, f: fn(f64) -> f64) -> Result<Self, DomainError> {
+        match self {
+            Self::Whole(v) => Ok(Self::Whole(v)),
+            Self::Measure(v) => {
+                let r = f(v);
+                (r.is_finite() && r.abs() < 1e18)
+                    .then_some(Self::Whole(r as i64))
+                    .ok_or_else(|| DomainError {
+                        message: format!("`domain` rounds {v}, which is no count"),
+                    })
             }
         }
-        Value::Float(v) => Value::Float(f(v)),
-        Value::Vec2([x, y]) => Value::Vec2([f(x), f(y)]),
-        Value::Vec3([x, y, z]) => Value::Vec3([f(x), f(y), f(z)]),
-        other => other,
+    }
+
+    /// `self op other`: whole numbers stay whole and exact (dividing as
+    /// integers do, as `Int` does in a Kernel), and fail rather than
+    /// wrap; a measure on either side makes a measure.
+    fn apply(self, op: DomainOp, other: Self) -> Result<Self, DomainError> {
+        if other.exact() == 0.0 && op == DomainOp::Div {
+            return Err(DomainError {
+                message: "`domain` divides by zero".to_owned(),
+            });
+        }
+        Ok(match (self, other) {
+            (Self::Whole(a), Self::Whole(b)) => Self::Whole(
+                match op {
+                    DomainOp::Add => a.checked_add(b),
+                    DomainOp::Sub => a.checked_sub(b),
+                    DomainOp::Mul => a.checked_mul(b),
+                    DomainOp::Div => a.checked_div(b),
+                }
+                .ok_or_else(overflow)?,
+            ),
+            (a, b) => {
+                let (a, b) = (a.exact(), b.exact());
+                Self::Measure(match op {
+                    DomainOp::Add => a + b,
+                    DomainOp::Sub => a - b,
+                    DomainOp::Mul => a * b,
+                    DomainOp::Div => a / b,
+                })
+            }
+        })
     }
 }
 
-/// Combines two values componentwise: ints with ints stay ints, a scalar
-/// spreads over a vector, vectors combine with vectors of the same size.
-fn zip(
-    a: Value,
-    b: Value,
-    f: impl Fn(f32, f32) -> f32,
-    i: impl Fn(i32, i32) -> i32,
-) -> Result<Value, DomainError> {
-    let fail = || DomainError {
-        message: format!("`domain` cannot combine {a} with {b}"),
-    };
-    let scalar = |v: &Value| match v {
-        Value::Int(v) => Some(*v as f32),
-        Value::Float(v) => Some(*v),
-        _ => None,
-    };
-    Ok(match (&a, &b) {
-        (Value::Int(x), Value::Int(y)) => Value::Int(i(*x, *y)),
-        (Value::Vec2(x), Value::Vec2(y)) => Value::Vec2([f(x[0], y[0]), f(x[1], y[1])]),
-        (Value::Vec3(x), Value::Vec3(y)) => {
-            Value::Vec3([f(x[0], y[0]), f(x[1], y[1]), f(x[2], y[2])])
+impl fmt::Display for Number {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Whole(v) => write!(f, "{v}"),
+            Self::Measure(v) => write!(f, "{v}"),
         }
-        (Value::Vec2(x), s) if scalar(s).is_some() => {
-            let s = scalar(s).unwrap_or(0.0);
-            Value::Vec2([f(x[0], s), f(x[1], s)])
+    }
+}
+
+fn overflow() -> DomainError {
+    DomainError {
+        message: "`domain` overflows: a count past 2^63 sizes nothing".to_owned(),
+    }
+}
+
+/// What a domain expression computes: a count, or the sides of a grid or
+/// a volume.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Size {
+    One(Number),
+    Two([Number; 2]),
+    Three([Number; 3]),
+}
+
+impl Size {
+    /// A value as a size: a number, or a vector of two or three numbers.
+    /// Nothing else is one: a boolean, a colour, a matrix or a struct
+    /// sizes nothing.
+    fn of(value: &Value) -> Option<Self> {
+        let whole = |v: i64| Number::Whole(v);
+        let measure = |v: f64| Number::Measure(v);
+        Some(match value {
+            Value::Int(v) => Self::One(whole(i64::from(*v))),
+            Value::Long(v) => Self::One(whole(*v)),
+            Value::Float(v) => Self::One(measure(f64::from(*v))),
+            Value::Double(v) => Self::One(measure(*v)),
+            Value::IVec2(v) => Self::Two(v.map(|x| whole(i64::from(x)))),
+            Value::IVec3(v) => Self::Three(v.map(|x| whole(i64::from(x)))),
+            Value::LVec2(v) => Self::Two(v.map(whole)),
+            Value::LVec3(v) => Self::Three(v.map(whole)),
+            Value::Vec2(v) => Self::Two(v.map(|x| measure(f64::from(x)))),
+            Value::Vec3(v) => Self::Three(v.map(|x| measure(f64::from(x)))),
+            Value::DVec2(v) => Self::Two(v.map(measure)),
+            Value::DVec3(v) => Self::Three(v.map(measure)),
+            _ => return None,
+        })
+    }
+
+    fn parts(&self) -> &[Number] {
+        match self {
+            Self::One(n) => std::slice::from_ref(n),
+            Self::Two(v) => v,
+            Self::Three(v) => v,
         }
-        (s, Value::Vec2(y)) if scalar(s).is_some() => {
-            let s = scalar(s).unwrap_or(0.0);
-            Value::Vec2([f(s, y[0]), f(s, y[1])])
+    }
+
+    fn from_parts(parts: &[Number]) -> Self {
+        match *parts {
+            [n] => Self::One(n),
+            [x, y] => Self::Two([x, y]),
+            [x, y, z] => Self::Three([x, y, z]),
+            _ => unreachable!("a size has one to three parts"),
         }
-        (Value::Vec3(x), s) if scalar(s).is_some() => {
-            let s = scalar(s).unwrap_or(0.0);
-            Value::Vec3([f(x[0], s), f(x[1], s), f(x[2], s)])
+    }
+
+    fn map(&self, f: impl Fn(Number) -> Result<Number, DomainError>) -> Result<Self, DomainError> {
+        let parts = self
+            .parts()
+            .iter()
+            .map(|n| f(*n))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::from_parts(&parts))
+    }
+
+    /// Combines two sizes part by part: a number spreads over a vector,
+    /// and vectors combine with vectors of their own length.
+    fn zip(
+        &self,
+        other: Self,
+        f: impl Fn(Number, Number) -> Result<Number, DomainError>,
+    ) -> Result<Self, DomainError> {
+        let (a, b) = (self.parts(), other.parts());
+        let n = a.len().max(b.len());
+        if a.len() != b.len() && a.len() != 1 && b.len() != 1 {
+            return Err(DomainError {
+                message: format!("`domain` cannot combine {self} with {other}"),
+            });
         }
-        (s, Value::Vec3(y)) if scalar(s).is_some() => {
-            let s = scalar(s).unwrap_or(0.0);
-            Value::Vec3([f(s, y[0]), f(s, y[1]), f(s, y[2])])
+        let at = |parts: &[Number], k: usize| parts[if parts.len() == 1 { 0 } else { k }];
+        let parts = (0..n)
+            .map(|k| f(at(a, k), at(b, k)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::from_parts(&parts))
+    }
+}
+
+impl fmt::Display for Size {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::One(n) => write!(f, "{n}"),
+            Self::Two([x, y]) => write!(f, "vec2({x}, {y})"),
+            Self::Three([x, y, z]) => write!(f, "vec3({x}, {y}, {z})"),
         }
-        (x, y) => match (scalar(x), scalar(y)) {
-            (Some(x), Some(y)) => Value::Float(f(x, y)),
-            _ => return Err(fail()),
-        },
-    })
+    }
 }
 
 impl fmt::Display for DomainExpr {

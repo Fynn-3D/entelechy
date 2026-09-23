@@ -1609,4 +1609,30 @@ output result <- show.result;
         let unknown = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = n; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
         assert!(unknown.message.contains("not a param"), "{unknown}");
     }
+
+    /// The Graph computes structure and never values: a value a node is
+    /// given is written, never worked out, and so is how many times a
+    /// node runs. Arithmetic belongs in a Kernel, where it is typed,
+    /// traced and checked like the rest.
+    #[test]
+    fn a_scene_writes_values_and_never_computes_them() {
+        let graph = "param n: Int = 2;\nnode s: t.z@1 { domain = 1; }\n";
+        for member in [
+            "gain = 0.5 * 2.0;",
+            "gain = n + 1;",
+            "gain = -n;",
+            "gain = vec2(n, 1);",
+            "times = n + 1;",
+            "times = 2 * 2;",
+        ] {
+            let text = format!(
+                "{graph}node r: t.i@1 {{ {member} previous <- s.result; }}\noutput result <- r.result;"
+            );
+            let error = parse(&text).unwrap_err();
+            assert!(
+                error.message.contains("literal"),
+                "`{member}` was accepted or refused for another reason: {error}"
+            );
+        }
+    }
 }
