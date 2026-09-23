@@ -131,6 +131,18 @@ pub enum Event {
     },
     /// The scene document changed but does not parse; the previous graph stays.
     SceneRejected(String),
+    /// A node will run off the session's main backend, and why: what it
+    /// costs a frame to take its inputs there and its outputs back is
+    /// the scene's to know before it measures anything. Said once, when
+    /// the node's placement changes.
+    Routed {
+        /// The node.
+        node: String,
+        /// The backend that runs it.
+        backend: &'static str,
+        /// Why the main backend does not.
+        why: String,
+    },
 }
 
 impl fmt::Display for Event {
@@ -150,6 +162,9 @@ impl fmt::Display for Event {
             }
             Self::Text { name, chars } => write!(f, "text {name}: {chars} characters"),
             Self::SceneRejected(error) => write!(f, "scene rejected: {error}"),
+            Self::Routed { node, backend, why } => {
+                write!(f, "node `{node}` runs on {backend} ({why})")
+            }
         }
     }
 }
@@ -610,6 +625,8 @@ pub struct Session {
     sequences: BTreeMap<String, Sequence>,
     /// What went wrong selecting a frame, reported by the next sync.
     frame_events: Vec<Event>,
+    /// Where each node was last said to run, so a change is said once.
+    placed: BTreeMap<String, Option<String>>,
     /// Inputs written as text, with the text each holds.
     texts: BTreeMap<String, String>,
     /// The window a headless session reports when an evaluation names
@@ -785,6 +802,7 @@ impl Session {
             assets: BTreeMap::new(),
             sequences: BTreeMap::new(),
             frame_events: Vec::new(),
+            placed: BTreeMap::new(),
             texts: BTreeMap::new(),
             window: None,
         }
@@ -1217,8 +1235,49 @@ impl Session {
         self.sync_assets(&mut events);
         self.sync_sequences(&mut events);
         self.sync_texts(&mut events);
+        self.sync_placements(&mut events);
         events.append(&mut self.frame_events);
         events
+    }
+
+    /// Where every node of the scene runs: the backend, and why it is not
+    /// the main one when it is not. A node whose Kernel is not published
+    /// is left out.
+    pub fn placements(&self) -> Vec<(String, orla_runtime::Placement)> {
+        let Some(graph) = &self.graph else {
+            return Vec::new();
+        };
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let version = self.runtime.kernel(&node.kernel)?;
+                Some((node.id.to_string(), self.runtime.placement(&version)))
+            })
+            .collect()
+    }
+
+    /// Says which nodes run off the main backend, once each time that
+    /// changes.
+    fn sync_placements(&mut self, events: &mut Vec<Event>) {
+        let now = self.placements();
+        for (node, placement) in &now {
+            let before = self.placed.get(node);
+            if before == Some(&placement.routed) {
+                continue;
+            }
+            if let Some(why) = &placement.routed {
+                events.push(Event::Routed {
+                    node: node.clone(),
+                    backend: placement.backend,
+                    why: why.clone(),
+                });
+            }
+        }
+        self.placed = now
+            .into_iter()
+            .map(|(node, placement)| (node, placement.routed))
+            .collect();
     }
 
     /// Lists every `frames` input's directory anew, and forgets sequences

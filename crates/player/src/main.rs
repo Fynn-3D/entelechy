@@ -368,8 +368,34 @@ impl Player {
             Some(audio) => format!(" | sound {}", audio.describe()),
             None => String::new(),
         };
+        // The nodes that left the main backend this frame, and what the
+        // trip carried: what a device session pays that a profile would
+        // otherwise have to be asked for.
+        let routed: Vec<&orla_graph::Placed> = report
+            .placements
+            .iter()
+            .filter(|placed| placed.routed.is_some())
+            .collect();
+        let off = if routed.is_empty() {
+            String::new()
+        } else {
+            let carried: u64 = routed.iter().map(|p| p.uploaded + p.downloaded).sum();
+            let carried = carried
+                + report
+                    .placements
+                    .iter()
+                    .filter(|placed| placed.routed.is_none())
+                    .map(|p| p.uploaded)
+                    .sum::<u64>();
+            format!(
+                " | off {} {} ({})",
+                routed[0].backend,
+                routed.len(),
+                orla_session::bench::bytes_text(carried)
+            )
+        };
         let rest = format!(
-            "{} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | {} | downloads {}{sound} | t {:.1} s",
+            "{}{off} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | {} | downloads {}{sound} | t {:.1} s",
             self.session.runtime().backend_name(),
             context.window[0],
             context.window[1],

@@ -413,6 +413,12 @@ and a vector's component by its letter, `expect sum.result[0].a = 32`):
 ints and bools compare exactly, floats and vectors within the trailing
 tolerance. The second kind states what the application's state is rather
 than what its picture looks like, and nodes it names are kept materialized.
+`expect placed ring main` says a node stays on the session's main
+backend and `expect placed filter ordered` that it leaves it (on a GPU
+session, for a scan or a `Double`); where a session has one backend both
+read as `main`, so one replay holds on all three. `run`, `serve` and the
+Player say which nodes leave the main backend, and why, when the scene
+loads.
 
 ```sh
 cargo run -- replay examples/life/tests/blinker.replay

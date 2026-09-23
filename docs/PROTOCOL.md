@@ -161,7 +161,8 @@ migration and restarted from its initial source; `pending`, the `async`
 nodes whose run off the frame was going on, their readers taking the
 last output; and `landed`, those whose run landed before this
 evaluation's nodes ran. A `graph` answer shows a `<~` binding's
-migration as `migrate` and a node's `async`.
+migration as `migrate`, a node's `async`, and where each node runs, as
+`backend` and `routed` (why it is not the main backend, or null).
 
 `read` with `format: "field"` returns any Field as the Host's file format
 (what `run --save` writes and an `input` reads), and `write` with the same
@@ -195,5 +196,6 @@ and `graph` name each parameter's type.
 A saved edit to a Kernel that is already running is prepared on a worker
 thread: `sync` reports `preparing` at once and `published` (or `rejected`)
 on a later `sync`, and every `evaluate` in between runs the previous
-version. A Kernel nothing runs yet, and `publish` itself, prepare inline so
+version. `sync` reports `routed`, `{node, backend, why}`, when a node's
+placement off the main backend begins or changes, once. A Kernel nothing runs yet, and `publish` itself, prepare inline so
 the reply is final.

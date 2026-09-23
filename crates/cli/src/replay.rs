@@ -22,6 +22,10 @@
 //!                                   # with an optional trailing tolerance
 //! expect count ground.result = 6889 # how many elements a node's output holds,
 //!                                   # which is what a `domain` came out as
+//! expect placed ring main           # the node runs on the session's main
+//! expect placed filter ordered      # backend, or off it (a scan on a GPU
+//!                                   # session): the same line holds on every
+//!                                   # backend where nothing is routed
 //! ```
 //!
 //! An element expectation names the node's output as the Kernel declared
@@ -124,6 +128,19 @@ pub enum Step {
         port: String,
         /// Expected element count.
         count: usize,
+        /// Line number, for messages.
+        line: u32,
+    },
+    /// Check where a node runs: on the session's main backend, or off
+    /// it on the ordered one. A session without an ordered backend runs
+    /// everything on the main one, so `ordered` holds only where a second
+    /// backend exists (a GPU session); a replay run on the CPU or the JIT
+    /// checks it as `main`.
+    ExpectPlaced {
+        /// The node.
+        node: String,
+        /// Whether it should run off the main backend.
+        routed: bool,
         /// Line number, for messages.
         line: u32,
     },
@@ -283,6 +300,22 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     count: count.parse::<usize>().map_err(|_| {
                         error(format!("`{count}` is not a whole number of elements"))
                     })?,
+                    line,
+                });
+            }
+            ["expect", "placed", node, place] => {
+                let routed = match *place {
+                    "main" => false,
+                    "ordered" => true,
+                    other => {
+                        return Err(error(format!(
+                            "`expect placed` takes `main` or `ordered`, found `{other}`"
+                        )));
+                    }
+                };
+                steps.push(Step::ExpectPlaced {
+                    node: node.to_string(),
+                    routed,
                     line,
                 });
             }
@@ -481,6 +514,31 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                     }
                 }
             }
+            Step::ExpectPlaced { node, routed, line } => {
+                outcome.checks += 1;
+                let placements = session.placements();
+                let Some((_, placement)) = placements.iter().find(|(id, _)| id == node) else {
+                    return Err(format!(
+                        "line {line}: no node `{node}` with a published Kernel"
+                    ));
+                };
+                // Where there is no second backend, nothing can leave the
+                // main one: `ordered` is a claim about a session that has one.
+                let has_ordered = session.runtime().ordered_backend_name().is_some();
+                let expected = *routed && has_ordered;
+                if placement.routed.is_some() != expected {
+                    outcome.failures.push(match &placement.routed {
+                        Some(why) => format!(
+                            "line {line}: {node} runs on {}, off the main backend ({why})",
+                            placement.backend
+                        ),
+                        None => format!(
+                            "line {line}: {node} runs on the main backend ({})",
+                            placement.backend
+                        ),
+                    });
+                }
+            }
             Step::Expect {
                 x,
                 y,
@@ -626,6 +684,17 @@ mod tests {
         assert!(
             matches!(&replay.steps[1], Step::ExpectElement { path, values, .. } if path.is_empty() && values.len() == 3)
         );
+        let replay = parse(
+            "scene s\nexpect placed ring main\nexpect placed filter ordered\n",
+            Path::new("."),
+        )
+        .unwrap();
+        assert!(matches!(
+            &replay.steps[1],
+            Step::ExpectPlaced { node, routed: true, .. } if node == "filter"
+        ));
+        let error = parse("scene s\nexpect placed ring gpu\n", Path::new(".")).unwrap_err();
+        assert!(error.message.contains("`main` or `ordered`"), "{error}");
         let error = parse("frame 1\n", Path::new(".")).unwrap_err();
         assert!(error.message.contains("scene"), "{error}");
         let error = parse("scene s\nexpect 1 = 2\n", Path::new(".")).unwrap_err();

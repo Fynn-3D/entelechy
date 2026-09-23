@@ -141,7 +141,9 @@ integers. Their inputs come to the Host and their outputs upload when
 read ([test](crates/runtime/tests/mixed.rs)). A report says where every
 node ran, why when it left the main backend, and the bytes the trip
 carried ([`Runtime::placement`](crates/runtime/src/lib.rs),
-[traffic test](crates/gpu/tests/parity.rs)). On the device a `Long` is
+[traffic test](crates/gpu/tests/parity.rs)); a session says it when the
+scene loads, once per change ([routed test](crates/cli/tests/session.rs)),
+and a replay can pin it (`expect placed`). On the device a `Long` is
 WGSL's `i64`; naga's own 64-bit `/` and `%` go through `select`, which
 Metal cannot pick for a `long`, so the preamble writes its own division
 and nothing emitted for a `Long` may use `select`

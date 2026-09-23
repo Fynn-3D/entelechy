@@ -1828,3 +1828,80 @@ fn a_parameter_of_any_value_type_is_set_by_its_layout() {
         .unwrap_err();
     assert!(error.contains("param `style` is a Style"), "{error}");
 }
+
+/// The interpreter, declining every module that holds a `Double`: a
+/// device without doubles, for a session that has one to route around.
+struct NoDoubles(orla_cpu::CpuBackend);
+
+impl orla_runtime::Backend for NoDoubles {
+    fn name(&self) -> &'static str {
+        "device"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
+        module
+            .holds(orla_ir::Type::Double)
+            .then(|| "it holds a Double".to_owned())
+    }
+    fn prepare(
+        &self,
+        module: &orla_ir::Validated,
+    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+        self.0.prepare(module)
+    }
+    fn execute(
+        &self,
+        prepared: &dyn orla_runtime::Prepared,
+        module: &orla_ir::Validated,
+        invocation: &orla_runtime::Invocation,
+        scope: &mut orla_runtime::Scope<'_>,
+    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
+        orla_runtime::Backend::execute(&self.0, prepared, module, invocation, scope)
+    }
+}
+
+#[test]
+fn a_node_off_the_main_backend_is_said_when_the_scene_loads() {
+    let dir = scratch("routed");
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node wide: kernel { requires { field.write; } output result: Rows<Double>; domain = 4;
+            compute { return double(element()) * 0.1; } }
+node plain: kernel { requires { field.write; } output result: Rows<Float>; domain = 4;
+            compute { return float(element()); } }
+output result <- plain.result;
+",
+    )
+    .unwrap();
+    let runtime = orla_runtime::Runtime::with_backends(
+        1 << 20,
+        Box::new(NoDoubles(orla_cpu::CpuBackend)),
+        Some(Box::new(orla_cpu::CpuBackend)),
+    );
+    let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+    let events = session.sync();
+    let routed: Vec<String> = events
+        .iter()
+        .filter(|event| matches!(event, Event::Routed { .. }))
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        routed,
+        ["node `wide` runs on cpu (not on device: it holds a Double)"]
+    );
+    let placements = session.placements();
+    let plain = placements.iter().find(|(node, _)| node == "plain").unwrap();
+    assert_eq!(
+        (plain.1.backend, plain.1.routed.as_deref()),
+        ("device", None)
+    );
+    // Said once: a sync that changes nothing says nothing again.
+    assert!(
+        !session
+            .sync()
+            .iter()
+            .any(|event| matches!(event, Event::Routed { .. }))
+    );
+}

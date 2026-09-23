@@ -1,5 +1,10 @@
 scene ../scene.osn
 
+# Nothing here is computed by a device: on a GPU session every node runs
+# on the ordered backend, and elsewhere on the only one.
+expect placed ring ordered
+expect placed edges ordered
+
 # Half a million metres out: the part's edges in doubles are its size to
 # a few picometres, in floats they are nothing at all, and in whole
 # nanometres they are exact.

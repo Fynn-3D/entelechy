@@ -666,7 +666,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
             let graph = session
                 .graph()
                 .ok_or_else(|| failure("no scene is loaded"))?;
-            Ok(graph_json(graph, session.params()))
+            Ok(graph_json(graph, session.params(), &session.placements()))
         }
         "document" => {
             let text = std::fs::read_to_string(session.root())
@@ -1264,8 +1264,10 @@ fn manifest_json(
 fn graph_json(
     graph: &orla_graph::Graph,
     overrides: &std::collections::BTreeMap<String, Value>,
+    placements: &[(String, orla_runtime::Placement)],
 ) -> Json {
     let source = |source: &Source| source.to_string();
+    let placed = |node: &str| placements.iter().find(|(id, _)| id == node).map(|(_, p)| p);
     json!({
         "name": graph.name,
         "inputs": graph.externals,
@@ -1278,6 +1280,8 @@ fn graph_json(
         "nodes": graph.nodes.iter().map(|node| json!({
             "id": node.id.to_string(),
             "kernel": node.kernel.to_string(),
+            "backend": placed(&node.id.to_string()).map(|p| p.backend),
+            "routed": placed(&node.id.to_string()).and_then(|p| p.routed.clone()),
             "inputs": node.inputs.iter().map(|(port, binding)| (port.clone(), match binding {
                 Binding::Now(s) => json!({ "kind": "now", "source": source(s) }),
                 Binding::Previous { source: s, initial, migration } => json!({ "kind": "previous", "source": source(s), "initial": source(initial), "migrate": migration.as_ref().map(ToString::to_string) }),
@@ -1322,6 +1326,9 @@ fn events_json(events: &[Event]) -> Vec<Json> {
                 let mut json = positioned(error.clone());
                 json["kind"] = json!("scene_rejected");
                 json
+            }
+            Event::Routed { node, backend, why } => {
+                json!({ "kind": "routed", "node": node, "backend": backend, "why": why })
             }
         })
         .collect()
