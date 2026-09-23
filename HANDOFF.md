@@ -39,13 +39,15 @@ done
 
 ## Next
 
-Order what a scene draws: a counting sort over a few hundred thousand things —
-histogram a scatter with `sum`, ranks `prefix with sum`, placement a scatter.
+Play in a domain the platform has not been driven in yet, and fix what
+writing it turns up. `examples/neighbours` is the pattern to follow: a
+scene that needs something, written until it works, with what it found
+fixed under a test of its own.
 
 Done when:
 
 - `examples/<name>/` holds the scene, `kernels/`, README and replay;
-- the replay passes on the interpreter, the JIT and the GPU, pinning counts
-  with no tolerance where the work is integer;
+- the replay passes on the interpreter, the JIT and the GPU, pinning
+  whatever the scene claims with no tolerance where the work is integer;
 - anything it turns up in the engine is fixed with a test of its own;
 - the verification above is clean.

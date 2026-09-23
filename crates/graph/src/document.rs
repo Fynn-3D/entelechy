@@ -624,6 +624,15 @@ impl Lowering<'_, '_> {
                 default,
             });
         }
+        // The root's params, before anything placed under it is walked. A
+        // sub-graph's `times` names one of them through its placement and
+        // is structural, so it is resolved here rather than at run time;
+        // without this the lookup found an empty list and fell back to the
+        // sub-graph's own default, which is a scene's parameter silently
+        // doing nothing.
+        if placement.is_none() {
+            self.out.graph.params = params.clone();
+        }
         if let Some(placement) = placement {
             for input in placement.inputs.keys() {
                 if !externals.contains(input) {

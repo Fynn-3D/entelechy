@@ -41,5 +41,11 @@ use "picture.orlapkg";
   that puts each kept index where its rank says — and what comes back
   sizes and steers whatever does the work. Frustum culling, live
   particles, the lights that reach a tile: the shape is the same.
+- **sort** — the permutation that orders a row of integer keys, stable,
+  one pass a bit: a `prefix with sum` for the rank and a scatter for the
+  placement. What moves is the permutation, never the elements, so a
+  scene reads its own rows through it. `examples/neighbours` sorts
+  bodies by the grid cell they are in, which is what turns every pair
+  into the nine cells around one.
 - **pixelfx** — a coarse pixel grid and a four-colour palette, and the
   NES look made of both as a preset. The example of what a package is.

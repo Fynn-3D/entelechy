@@ -1672,3 +1672,43 @@ fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
     assert_eq!(orla::session::budget_of_megabytes(1), 256 * 1024);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A sub-graph's `times` may name a param the parent passes it, and the
+/// parent's own default must reach it: `times` is structural, resolved
+/// when the document is lowered, and a scene's parameter that silently
+/// did nothing is worse than one that is refused.
+#[test]
+fn a_parents_param_reaches_a_placed_graphs_times() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let dir = std::env::temp_dir().join(format!("orla-times-param-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("step.orla"),
+        "kernel t.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }\nkernel t.inc@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return sample(previous) + 1; } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("chain.osn"),
+        "use \"step.orla\";\nparam n: Int = 5;\ninput seed: Rows<Int>;\nnode step: t.inc@1 { times = n; carry previous <- result; previous <- seed; }\noutput result <- step.result;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"step.orla\";\nparam rounds: Int = 2;\nnode seed: t.zero@1 { domain = 4; }\nnode chain: graph \"chain.osn\" { seed <- seed.result; n = rounds; }\noutput result <- chain.result;\n",
+    )
+    .unwrap();
+    let output = Command::new(orla)
+        .arg("check")
+        .arg(dir.join("scene.osn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    // The parent says two, so two: not the five the sub-graph declares.
+    assert!(
+        stdout.contains("graph `scene` with 3 node(s)"),
+        "the parent's default reaches `times`: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
