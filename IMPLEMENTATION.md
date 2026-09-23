@@ -40,7 +40,7 @@ contract is enforced, and the constraints that are not visible from the code.
 | Player | [window loop](crates/player/src/main.rs), [audio](crates/player/src/audio.rs), [gamepad](crates/player/src/gamepad.rs) | presentation and blit tests |
 | Import and export | [import](crates/import/src/), [export](crates/export/src/) | [MIDI tests](crates/import/tests/midi.rs), [round trip](crates/export/tests/round_trip.rs) |
 | Bridges | [bridges](bridges/), each in its program's own language | [bridge tests](crates/cli/tests/bridges.rs), run when the program is present |
-| Feature matrix | [matrix](crates/matrix/src/lib.rs) | [on the JIT](crates/jit/tests/matrix.rs) bit for bit, [on the GPU](crates/gpu/tests/matrix.rs) ints exact and floats to rounding |
+| Feature matrix | [matrix](crates/matrix/src/lib.rs) | [on the JIT](crates/jit/tests/matrix.rs) bit for bit, [on the GPU](crates/gpu/tests/matrix.rs) ints exact and floats to rounding; the 64-bit rows on the JIT, the `Long` rows on both |
 
 ## Libraries, not primitives
 
@@ -65,6 +65,22 @@ What these packages do needed no engine feature; keep it that way.
   layout, never by spelling ([evaluator](crates/graph/src/evaluate.rs)).
   Every backend carries elements as words, so integers and booleans are
   exact everywhere.
+- A `Double` or a `Long` is two words, the low one first, everywhere a
+  word is the unit: the schema lists both (`d` and `l` in its text, and
+  a word without its partner is refused), a Value keeps an `f64` or an
+  `i64`, and no narrow encoding fits one ([schema](crates/host/src/lib.rs)).
+  The interpreter has instructions of its own for them
+  ([word code](crates/cpu/src/eval/code.rs)); the JIT holds each as one
+  `F64` or `I64` value and lays memory out by bytes
+  ([emission](crates/jit/src/codegen.rs)). A number written without a
+  width is exact until it meets one: the compiler adapts it where it
+  meets a 64-bit operand, argument, field or branch
+  ([`adapt`](crates/compiler/src/lower/mod.rs)); a value given from
+  outside converts by [`Number::as_kind`](crates/abi/src/lib.rs), a
+  float given to a double taken as the decimal it reads as. Held by
+  [values against Rust's own](crates/cpu/tests/wide.rs), the matrix's
+  64-bit rows, the [protocol round trip](crates/session/src/protocol.rs)
+  and the [precision example](examples/precision/README.md).
 - A scalar may be kept narrower than a word (`Grid<Vec4 as unorm8>`):
   the schema carries each scalar's [`Encoding`](crates/host/src/encoding.rs)
   and byte offset, elements pack with nothing between, and every scalar
@@ -118,8 +134,15 @@ rule of each is what the backends are held to
 
 A reduce, scan, scatter or async node is never fused. A runtime may run
 its scans on a second backend (`Runtime::with_backends`): a `gpu` session
-hands scans to the JIT, bringing their inputs to the Host and uploading
-their outputs when read ([test](crates/runtime/tests/mixed.rs)).
+hands scans to the JIT, and every module the GPU does not take
+([`Backend::takes`](crates/rules/src/backend.rs)): one holding a `Double`,
+or a `Long` outside a map or a reduction or on a device without 64-bit
+integers. Their inputs come to the Host and their outputs upload when
+read ([test](crates/runtime/tests/mixed.rs)). On the device a `Long` is
+WGSL's `i64`; naga's own 64-bit `/` and `%` go through `select`, which
+Metal cannot pick for a `long`, so the preamble writes its own division
+and nothing emitted for a `Long` may use `select`
+([WGSL](crates/gpu/src/wgsl.rs)).
 
 ### Fusion, repetition, native operations
 

@@ -73,8 +73,8 @@ and read Fields in place.
 Operations, fields, and results are listed in
 [the protocol module](../crates/session/src/protocol.rs), which is the
 authoritative definition; [the end-to-end test](../crates/cli/tests/protocol.rs)
-drives the binary as a client. Values cross as JSON numbers (integers become
-`Int`), booleans, and arrays of two, three, or four numbers. Kernels published
+drives the binary as a client. Values cross as JSON numbers, booleans,
+and arrays, as the paragraph on values below says. Kernels published
 through the protocol are not owned by any document: a document that later
 defines the same id republishes it from the file.
 
@@ -167,19 +167,24 @@ layout) replaces that port's committed state, so the next evaluation's
 saved file for instance; the port must be state, read by some `<~`
 binding, and the count of words must match. A `read` after an evaluation
 and a `write` before the next make a save and a load. The words are the
-Kernel's, one per scalar, whatever the port keeps: a Field kept narrow
+Kernel's, one per scalar (two for a `Double` or a `Long`, the low one
+first), whatever the port keeps: a Field kept narrow
 (`Grid<Vec4 as unorm8>`) is read widened and written narrowed by the
 Host's rule, and only the `field` format carries its packed bytes.
 
-A value in a request is JSON: a number (an integer is an `Int`, and
-stands in for a float), `true` or `false`, or an array of values in
+A value in a request is JSON: a number (an integer is an `Int`, a `Long`
+past 32 bits, and stands in for a float; a number with a fraction is
+exact until the parameter it is given to says its width), a string of
+digits for a `Long` past 2^53, which a JSON reader keeps exact where it
+would round a number, `true` or `false`, or an array of values in
 order, which the parameter it is given to takes in its own shape: a
 vector's components, a matrix's columns (`[[3, 0, 0, 0], [0, 3, 0, 0],
 [0, 0, 1, -1], [0, 0, 0, 0]]` for a `Mat4`), a struct's fields or an
 array's elements. A value of another layout is refused with the
 parameter's type; a parameter the scene does not declare keeps what it
-was given. Replies spell values the same way, and `kernel` and `graph`
-name each parameter's type.
+was given. Replies spell values the same way (a `Double` as the number
+that reads back as it, a `Long` past 2^53 as its digits), and `kernel`
+and `graph` name each parameter's type.
 
 A saved edit to a Kernel that is already running is prepared on a worker
 thread: `sync` reports `preparing` at once and `published` (or `rejected`)

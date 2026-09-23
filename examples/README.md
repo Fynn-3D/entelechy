@@ -25,6 +25,9 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   a PNG as bytes, a tile map as a byte a tile, heights in 16 bits, normals
   in three signed bytes, light carried in half floats, with `as` in the
   port type and the Kernels computing in `Float` and `Int` as ever.
+- [precision](precision/README.md): a ring and a part half a million
+  metres out, drawn and measured in doubles, in floats (a single point),
+  and in whole nanometres as longs; `Double` and `Long` in the language.
 - [deferred](deferred/README.md): deferred shading: one Kernel finds the
   surface under each pixel and writes its colour, normal and depth as three
   Fields, given by name; lighting and an outline from the depth are passes

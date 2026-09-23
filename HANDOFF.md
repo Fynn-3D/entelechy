@@ -20,6 +20,7 @@ Verified surface, as of `main`:
 | macOS, Apple M4, Metal | every round |
 | Interpreter, JIT, GPU | `examples/*/tests/*.replay` on all three |
 | 35 language features × 7 execution forms (the modes, and a map of several outputs), and 8 narrow encodings read and written | `crates/matrix`, JIT and GPU against the interpreter |
+| 8 features of `Double` and `Long` × 6 modes; 5 of `Long` alone in maps and reductions | the same: the JIT against the interpreter, the GPU for `Long` |
 | Keyboard, pointer | by hand |
 | Pad sticks, buttons, triggers | by replay (`stick`, `button` lines) |
 | Blender 5.2, headless Chrome, Godot 4.6, C ABI | `cargo test --workspace`, each skipped when its tool is absent |
@@ -39,9 +40,10 @@ done
 
 ## Next
 
-Drive a rig rather than play one. The three changes to the ABI the user
-asked for are done (several outputs, narrow storage, parameters of any
-value type); `f64` and `i64` wait on the user's word. `examples/skin`
+Drive a rig rather than play one. The ABI changes the user asked for
+are done (several outputs, narrow storage, parameters of any value
+type, `Double` and `Long`); robust geometry predicates over doubles
+are a later round, if the user wants them. `examples/skin`
 blends two clips by where the pointer is and `examples/crowd` poses
 sixty-four out of one rig; what a game needs next is a joint a Kernel
 writes — a head that follows a point, a foot held on the ground —

@@ -186,6 +186,34 @@ to a `Vec2` or `Vec3` and `int(v)` truncates a vector to one. `at`,
 converted, which is exact for every coordinate a Field can have, so
 the Field rules are one set (clamped reads, dropped writes).
 
+`Double` and `Long` are the 64-bit float and integer, with `DVec2` to
+`DVec4`, `LVec2` and `LVec3`, and `DMat2` to `DMat4`: `dvec3(..)`,
+`lvec2(..)` and `dmat4(..)` build them as their 32-bit kin do, taking
+numbers of any kind and shorter vectors, widened, and `double(x)` and
+`long(x)` convert, as `float(x)` and `int(x)` convert back (a long to an
+int keeps its low 32 bits). A `Double` never meets a `Float`, nor a
+`Long` an `Int`, without one of them; `x + f` of the two is refused and
+says which to write. A number written without a width takes the one it
+meets: beside a `Double` a written `0.1` is the double nearest a tenth,
+not the float's, beside a `Long` a written integer is a long, and an
+integer too big for an `Int` is a `Long` wherever it is written; `0.1d`
+and `8l` say it outright, and a number named by a `let` keeps the width
+it was named with. Each is two words, the low one first, in a Field, a
+parameter and the protocol, so an element of `Rows<DVec3>` is six words;
+a 64-bit scalar is never kept narrow. They take what their 32-bit kin
+take: on doubles every math builtin, `dot`, `cross`, `length`,
+`normalize`, the matrix products, `inverse` and the rest; on longs the
+arithmetic (an overflow and a zero divisor fail as an `Int`'s do), the
+bit operators and the shifts (the count modulo 64), `abs`, `sign`,
+`min`, `max`, `clamp`, `add_wrap`, `sub_wrap` and `mul_wrap`. The
+interpreter and the JIT compute them as Rust's own `f64` and `i64` do.
+A GPU computes a `Long` in a map or a reduction where the device has
+64-bit integers, and never a `Double` (few devices have one, and those
+at a fraction of a float's rate); a session on the GPU runs such a node
+on the JIT, and the scene does not see the difference.
+[`examples/precision`](../examples/precision/README.md) is what they are
+for.
+
 A function may take a math builtin's name (`step`, `mix`, `abs`) and
 then stands for it in its document; the Field, memory, context and
 construction builtins (`at`, `put`, `coord`, `vec2` and the rest) keep
@@ -198,7 +226,7 @@ The math builtins are `floor`, `ceil`, `round`, `trunc`, `sign`,
 `smoothstep`, `mod` (the remainder with the divisor's sign, for wrapping
 coordinates; `%` truncates), `radians`, `degrees`, `isnan`, `isinf`,
 `dot`, `cross`, `length`, `distance`, `normalize`, `reflect`, `refract`,
-and the conversions `float` and `int`; on `Int`s, `add_wrap`, `sub_wrap`
+and the conversions `float`, `int`, `double` and `long`; on `Int`s, `add_wrap`, `sub_wrap`
 and `mul_wrap` are the arithmetic modulo 2^32 (a machine's ALU), where
 `+ - *` report an overflow as a failure, and `popcount`, `clz`, `ctz`,
 `rotl`, `rotr`, `ult`, `udiv`, `urem`, `mulhi` and `umulhi` are the bit
@@ -221,7 +249,7 @@ is for. What every backend does agree on, and what
 the feature matrix holds them to: a positive divided by zero is an
 infinity, zero divided by zero is not a number, and nothing equals or
 orders against a not-a-number. An `Int` literal may be hexadecimal, `0xFF`, its 32 bits as
-written.
+written; more than eight digits, or an `l`, make it a `Long`'s 64.
 The componentwise ones take a `Float` or any vector; where two operands
 meet, a `Float` beside a vector broadcasts, so `clamp(v, 0.0, 1.0)` and
 `mix(a, b, 0.5)` read as they would anywhere.
@@ -551,7 +579,11 @@ output result <- display.result;      // named graph output; sub-graph outputs
 3. Every declared input port must be wired; a port the Kernel does not
    declare is an error; both are reported before anything runs.
 4. Values use `=`: numbers, `true`/`false`, negation, `vec2`/`vec3`/`vec4`.
-   An integer literal is accepted where a Float is expected.
+   An integer literal is accepted where a Float is expected. A graph
+   `param` of a plain type reads its default exact in that type, so
+   `param origin: Double = 500000.123456789;` holds the double nearest
+   what is written; a value given to a Kernel's `Double` elsewhere is
+   the decimal it reads as, and `d` keeps more digits than a float has.
 5. `domain = count;`, `domain = vec2(width, height);`, or
    `domain = vec3(width, height, depth);` sets a node's output extent in
    its output's shape; nodes with an input default to the extent of their
