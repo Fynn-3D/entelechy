@@ -277,6 +277,11 @@ pub fn fuse_outputs(
         params,
         memories: Vec::new(),
         outputs: consumer_manifest.outputs.clone(),
+        // One element runs both, so it may run what both may.
+        budget: consumer_manifest
+            .budget
+            .saturating_add(producer_manifest.budget)
+            .min(crate::MAX_BUDGET),
     };
 
     // Consumer ops: inputs after a fused one move down.

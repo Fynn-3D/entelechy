@@ -63,6 +63,7 @@ impl NativeOp {
                 id: self.id(),
                 mode: orla_ir::Mode::Map,
                 memories: Vec::new(),
+                budget: orla_ir::DEFAULT_BUDGET,
                 requires: [Capability::FieldRead, Capability::FieldWrite]
                     .into_iter()
                     .collect::<Capabilities>(),

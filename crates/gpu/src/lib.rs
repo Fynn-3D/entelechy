@@ -1231,6 +1231,7 @@ impl Backend for GpuBackend {
                 pair: Some(pair),
                 pile: Arc::clone(&self.failures),
                 width: domain.width(),
+                budget: module.manifest.budget,
             }) as Box<dyn Check>
         });
         Ok((outputs, check))
@@ -2209,6 +2210,8 @@ struct FailureCheck {
     /// The width of the domain the run mapped over, which turns the
     /// element's number into the reference's column and row.
     width: u32,
+    /// The budget the run had, for naming a failure past it.
+    budget: u32,
 }
 
 impl Check for FailureCheck {
@@ -2235,15 +2238,24 @@ impl Check for FailureCheck {
         }
         let word = u32::MAX - word;
         let element = word / 4;
-        let error = match word % 4 {
-            wgsl::FAILED_DIVISION => ArithmeticError::DivisionByZero,
-            _ => ArithmeticError::Overflow,
-        };
         let width = self.width.max(1);
-        Err(ExecutionError::Arithmetic {
-            x: element % width,
-            y: element / width,
-            error,
+        let (x, y) = (element % width, element / width);
+        Err(match word % 4 {
+            wgsl::FAILED_BUDGET => ExecutionError::Exhausted {
+                x,
+                y,
+                budget: self.budget,
+            },
+            wgsl::FAILED_DIVISION => ExecutionError::Arithmetic {
+                x,
+                y,
+                error: ArithmeticError::DivisionByZero,
+            },
+            _ => ExecutionError::Arithmetic {
+                x,
+                y,
+                error: ArithmeticError::Overflow,
+            },
         })
     }
 }

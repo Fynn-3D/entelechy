@@ -34,6 +34,8 @@ pub(crate) struct Machine<'p, 's> {
     /// Top of the stack: where the next call's frame begins.
     pub(super) sp: usize,
     pub(super) loops: Vec<i32>,
+    /// Loop iterations the running element has run, when counted.
+    pub(super) work: u32,
     pub(super) at: [u32; 3],
     pub(super) scratch: Vec<f32>,
 }
@@ -80,6 +82,7 @@ impl<'p, 's> Machine<'p, 's> {
             stack: vec![0; program.code.entry.frame * 2],
             sp: 0,
             loops: Vec::new(),
+            work: 0,
             at: [0; 3],
             scratch: Vec::new(),
         }
@@ -236,10 +239,21 @@ impl<'p, 's> Machine<'p, 's> {
 
     /// Opens the outermost frame of `words`.
     fn begin(&mut self, words: usize) {
+        self.work = 0;
         if self.stack.len() < words {
             self.stack.resize(words, 0);
         }
         self.sp = words;
+    }
+
+    /// The element that ran past its budget, as a failure names it.
+    fn exhausted(&self, budget: u32) -> ExecutionError {
+        let [x, y, z] = self.at;
+        ExecutionError::Exhausted {
+            x,
+            y: z * self.program.domain.height() + y,
+            budget,
+        }
     }
 
     fn arithmetic(&self, error: ArithmeticError) -> ExecutionError {
@@ -775,6 +789,15 @@ impl<'p, 's> Machine<'p, 's> {
                 };
                 self.loops.push(0);
                 for index in 0..times {
+                    // An iteration is work: past the budget, the element
+                    // stops here.
+                    if let Some(budget) = program.budget {
+                        self.work += 1;
+                        if self.work > budget {
+                            self.loops.pop();
+                            return Err(self.exhausted(budget));
+                        }
+                    }
                     *self.loops.last_mut().expect("loop is open") = index as i32;
                     if let Some((until, done)) = until {
                         self.run(until, fp)?;

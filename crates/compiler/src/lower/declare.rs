@@ -881,6 +881,20 @@ pub(super) fn manifest(
             ));
         }
     }
+    let budget = match &kernel.budget {
+        None => orla_ir::DEFAULT_BUDGET,
+        Some(declared) if (1..=orla_ir::MAX_BUDGET).contains(&declared.value) => declared.value,
+        Some(declared) => {
+            return Err(semantic(
+                declared.span,
+                format!(
+                    "a Kernel's budget is 1 to {} loop iterations an element, found {}",
+                    orla_ir::MAX_BUDGET,
+                    declared.value
+                ),
+            ));
+        }
+    };
     Ok(Manifest {
         id,
         mode,
@@ -889,6 +903,7 @@ pub(super) fn manifest(
         params,
         outputs,
         memories,
+        budget,
     })
 }
 

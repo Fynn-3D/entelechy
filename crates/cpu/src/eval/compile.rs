@@ -70,6 +70,9 @@ pub(crate) struct Program<'s> {
     /// for a reduction or a scan.
     pub(crate) domain: Domain,
     pub(super) context: orla_abi::Context,
+    /// The loop iterations an element may run, when the module's worst
+    /// case can pass it; `None` runs uncounted.
+    pub(super) budget: Option<u32>,
 }
 
 /// A module compiled to word code: what does not change from one
@@ -226,6 +229,7 @@ impl<'s> Program<'s> {
             params,
             domain,
             context: invocation.context,
+            budget: module.counts_work().then_some(module.manifest.budget),
         })
     }
 }

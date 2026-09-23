@@ -333,6 +333,16 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             ));
         }
     }
+    if !(1..=crate::MAX_BUDGET).contains(&module.manifest.budget) {
+        return Err(error(
+            "manifest",
+            format!(
+                "the budget is 1 to {} loop iterations an element, found {}",
+                crate::MAX_BUDGET,
+                module.manifest.budget
+            ),
+        ));
+    }
     let requires = &module.manifest.requires;
     if !outputs.is_empty() && !requires.contains(Capability::FieldWrite) {
         return Err(error(
@@ -1317,6 +1327,7 @@ mod tests {
                 name: "result".into(),
                 ty: PortType::image(),
             }],
+            budget: crate::DEFAULT_BUDGET,
         }
     }
 

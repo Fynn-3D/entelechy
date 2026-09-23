@@ -348,6 +348,7 @@ impl Parser {
         let mut domain_range = None;
         self.expect_punct("{")?;
         let mut requires = None;
+        let mut budget: Option<Spanned<u32>> = None;
         let mut inputs = Vec::new();
         let mut params = Vec::new();
         let mut outputs = Vec::new();
@@ -372,6 +373,27 @@ impl Parser {
                     }
                     self.next();
                     requires = Some(self.requires()?);
+                }
+                "budget" => {
+                    self.next();
+                    let (token, span) = self.next();
+                    let value = match token {
+                        Token::Int(value) | Token::Long(value) => u32::try_from(value).ok(),
+                        _ => None,
+                    }
+                    .ok_or_else(|| ParseError {
+                        span,
+                        message:
+                            "`budget` takes the loop iterations an element may run, a whole number"
+                                .to_owned(),
+                    })?;
+                    self.expect_punct(";")?;
+                    if budget.replace(Spanned { value, span }).is_some() {
+                        return Err(ParseError {
+                            span,
+                            message: "`budget` is declared twice".to_owned(),
+                        });
+                    }
                 }
                 "input" => {
                     self.next();
@@ -503,6 +525,7 @@ impl Parser {
             domain,
             domain_range,
             requires: requires.unwrap_or_default(),
+            budget,
             inputs,
             params,
             outputs,

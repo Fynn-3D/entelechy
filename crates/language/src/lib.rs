@@ -266,6 +266,9 @@ pub struct Kernel {
     pub domain_range: Option<Range<usize>>,
     /// Declared capability names.
     pub requires: Vec<Spanned<String>>,
+    /// `budget N;`: the loop iterations an element may run, when the
+    /// Kernel says; the default otherwise.
+    pub budget: Option<Spanned<u32>>,
     /// Inputs in declaration order.
     pub inputs: Vec<PortDecl>,
     /// Parameters in declaration order.
@@ -296,7 +299,7 @@ pub struct Kernel {
     /// element of the first input.
     pub scatter: Option<ScatterDecl>,
     /// `prefix with combine { ... }`: present for a prefix fold, whose
-    /// body is `compute` and whose每 element's value meets everything
+    /// body is `compute` and whose every element's value meets everything
     /// before it by the rule.
     pub prefix: Option<PrefixDecl>,
 }

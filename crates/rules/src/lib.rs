@@ -86,6 +86,16 @@ pub enum ExecutionError {
         /// What failed.
         error: ArithmeticError,
     },
+    /// The element at the given place ran more loop iterations than the
+    /// Kernel's budget, and stopped there.
+    Exhausted {
+        /// Element column.
+        x: u32,
+        /// Element row, rows of every layer counted through.
+        y: u32,
+        /// The budget it had.
+        budget: u32,
+    },
 }
 
 impl fmt::Display for ExecutionError {
@@ -115,6 +125,10 @@ impl fmt::Display for ExecutionError {
             Self::Abi(error) => write!(f, "{error}"),
             Self::Device(message) => write!(f, "device failed: {message}"),
             Self::Arithmetic { x, y, error } => write!(f, "at element ({x}, {y}): {error}"),
+            Self::Exhausted { x, y, budget } => write!(
+                f,
+                "at element ({x}, {y}): more than {budget} loop iterations, the Kernel's budget (`budget N;` sets another)"
+            ),
         }
     }
 }

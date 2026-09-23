@@ -1258,6 +1258,7 @@ fn manifest_json(
         "params": manifest.params.iter().map(|p| json!({ "name": p.name, "type": orla_ir::type_name(p.ty, structs), "default": value_json(&p.default) })).collect::<Vec<_>>(),
         "outputs": manifest.outputs.iter().map(|p| json!({ "name": p.name, "type": port(&p.ty) })).collect::<Vec<_>>(),
         "memories": manifest.memories,
+        "budget": manifest.budget,
     })
 }
 

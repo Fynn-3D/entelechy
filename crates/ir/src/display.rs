@@ -71,6 +71,9 @@ impl Manifest {
             writeln!(f, "  mode {}", self.mode)?;
         }
         writeln!(f, "  requires {}", self.requires)?;
+        if self.budget != crate::DEFAULT_BUDGET {
+            writeln!(f, "  budget {}", self.budget)?;
+        }
         for input in &self.inputs {
             if !self.memories.contains(&input.name) {
                 writeln!(

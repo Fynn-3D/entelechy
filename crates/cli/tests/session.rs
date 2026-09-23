@@ -1958,3 +1958,63 @@ output result <- m.result;
     );
     assert!(answers[0][0].is_ok() && answers[0][3].is_ok());
 }
+
+#[test]
+fn an_element_past_its_budget_fails_alike_on_every_backend() {
+    // Each element runs n + n * n iterations for its own n; with a budget
+    // of a thousand, element 32 is the first past it (31 runs 992).
+    let scenes = [
+        "node w: kernel { requires { field.write; } budget 1000; output result: Rows<Int>; domain = 64;
+            compute { let n = element(); return loop n with a = 0 { loop n with b = a { b + 1 } }; } }
+output result <- w.result;",
+        "node w: kernel { requires { field.write; } budget 1000; output result: Grid<Int>; domain = vec2(8, 8);
+            compute { let c = icoord(); let n = c.x + c.y * 8; return loop n with a = 0 { loop n with b = a { b + 1 } }; } }
+output result <- w.result;",
+        "node ticks: Rows<Int> { domain = 64; }
+node w: kernel { requires { field.read; field.write; } budget 1000; input t: Rows<Int> <- ticks.result; output result: Rows<Int>;
+            scan with s = 0 { let n = index(); return s + loop n with a = 0 { loop n with b = a { b + 1 } }; } }
+output result <- w.result;",
+        "node ticks: Rows<Int> { domain = 64; }
+node w: kernel { requires { field.read; field.write; } budget 50; input t: Rows<Int> <- ticks.result; output result: Rows<Int>;
+            compute { return 3; } merge(a, b) { return loop a with x = b { x + 1 }; } }
+output result <- w.result;",
+        // A loop bounded where it is written cannot pass the budget: it
+        // is never counted, and never fails.
+        "node w: kernel { requires { field.write; } budget 1000; output result: Rows<Int>; domain = 64;
+            compute { return loop 30 with a = 0 { loop 30 with b = a { b + 1 } }; } }
+output result <- w.result;",
+    ];
+    let dir = scratch("work-budget");
+    for (k, scene) in scenes.iter().enumerate() {
+        std::fs::write(dir.join("scene.osn"), scene).unwrap();
+        let mut answers = Vec::new();
+        for backend in ["cpu", "jit", "gpu"] {
+            let Ok(runtime) = Session::runtime_for(backend, 1 << 22) else {
+                continue;
+            };
+            let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+            let events = session.sync();
+            assert!(rejected(&events).is_empty(), "{:?}", rejected(&events));
+            let answer = session
+                .evaluate(&Context::default())
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            answers.push((backend, answer));
+        }
+        let (_, reference) = &answers[0];
+        for (backend, answer) in &answers {
+            assert_eq!(answer, reference, "scene {k} on {backend}");
+        }
+        match k {
+            0 => assert!(
+                reference
+                    .as_ref()
+                    .unwrap_err()
+                    .contains("at element (32, 0): more than 1000 loop iterations"),
+                "{reference:?}"
+            ),
+            4 => assert!(reference.is_ok(), "{reference:?}"),
+            _ => assert!(reference.is_err(), "scene {k}: {reference:?}"),
+        }
+    }
+}

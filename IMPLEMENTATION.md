@@ -269,6 +269,13 @@ Represented in the IR, and so on every backend:
   column-major, `IVec2/3`, structured `if`, bounded `loop` whose count is
   any `Int` read once and clamped to `MAX_LOOP_COUNT`, and `match` on an
   `Int` (the JIT uses a `br_table` over a dense range).
+- A Kernel's work is bounded: [`Manifest::budget`](crates/ir/src/lib.rs)
+  is the loop iterations one element may run, and
+  [`Module::counts_work`](crates/ir/src/lib.rs) counts only when the
+  static bound (`worst_work`) can pass it. The interpreter, the JIT and
+  the GPU count at the start of every iteration and fail with
+  `ExecutionError::Exhausted` at the same element
+  ([session test](crates/cli/tests/session.rs)).
 - Integer failures are the reference's on every backend. The GPU emits
   checked arithmetic for a module that can fail ([`can_fail`](crates/gpu/src/wgsl.rs)),
   each invocation recording its first failure into one word by

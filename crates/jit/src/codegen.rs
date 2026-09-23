@@ -35,6 +35,7 @@ use crate::offsets;
 /// Error codes stored in the context, as the CPU backend reports them.
 const DIVISION_BY_ZERO: i64 = 1;
 const OVERFLOW: i64 = 2;
+const EXHAUSTED: i64 = 3;
 
 /// The imported helpers, by function id.
 struct Imports {
@@ -464,6 +465,9 @@ struct Fx<'a, 'b> {
     /// an execution runs: marked read-only so the loads a loop repeats
     /// are hoisted out of it rather than done again every element.
     settled: MemFlags,
+    /// The loop iterations an element may run, when the module counts
+    /// them; see [`orla_ir::Module::counts_work`].
+    budget: Option<u32>,
 }
 
 impl<'a, 'b> Fx<'a, 'b> {
@@ -554,6 +558,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             scratch,
             flags: MemFlags::trusted(),
             settled: MemFlags::trusted().with_readonly(),
+            budget: module.counts_work().then_some(module.manifest.budget),
         }
     }
 
@@ -656,6 +661,13 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.seal_block(body_block);
         let x = self.b.ins().iadd(x0, taken);
         self.coords = Some((x, y, z, out));
+        // Every element starts its work anew.
+        if self.budget.is_some() {
+            let zero = self.i32c(0);
+            self.b
+                .ins()
+                .store(self.flags, zero, self.ctx, offsets::WORK);
+        }
         self.block(&function.body);
         let mut offset = 0i32;
         for result in &function.results {
@@ -1593,6 +1605,27 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let index = header_params[carried_types.len()];
                 self.loops.push((carried.clone(), index));
                 let carried_args: Vec<_> = carried.iter().map(|v| (*v).into()).collect();
+                // An iteration is work: past the budget, the element
+                // records it and leaves the loop, so it ends.
+                if let Some(budget) = self.budget {
+                    let work = self
+                        .b
+                        .ins()
+                        .load(types::I32, self.flags, self.ctx, offsets::WORK);
+                    let work = self.b.ins().iadd_imm(work, 1);
+                    self.b
+                        .ins()
+                        .store(self.flags, work, self.ctx, offsets::WORK);
+                    let over =
+                        self.b
+                            .ins()
+                            .icmp_imm(IntCC::UnsignedGreaterThan, work, i64::from(budget));
+                    self.fail_if(over, EXHAUSTED);
+                    let within = self.b.create_block();
+                    self.b.ins().brif(over, exit, &carried_args, within, &[]);
+                    self.b.switch_to_block(within);
+                    self.b.seal_block(within);
+                }
                 if let Some(until) = until {
                     self.block(&until.body);
                     let done_word = self.words(&until.result)[0];

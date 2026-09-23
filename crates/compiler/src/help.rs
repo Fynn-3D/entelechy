@@ -284,6 +284,12 @@ pub fn forms() -> Vec<Form> {
             "A Kernel: what it needs, its ports and parameters, and one of `compute`, `scan`, `scatter` or `prefix`.",
         ),
         form(
+            "budget",
+            "kernel",
+            "budget 100000;",
+            "The loop iterations one element may run (a step of a scan, a merge of a reduction), 16777216 unless declared; an element past it fails the evaluation on every backend, as an overflow does, and the running system keeps its last state. A Kernel whose loops cannot pass it is never counted.",
+        ),
+        form(
             "compute",
             "kernel",
             "compute { return value; }",

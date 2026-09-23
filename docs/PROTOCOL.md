@@ -56,7 +56,8 @@ versions each on their own, as `orla version` prints them.
 
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0 (a manifest's `memories` names the ports that
-are an input and an output at once; a port's `type` is written as the
+are an input and an output at once, and `budget` the loop iterations one
+element may run; a port's `type` is written as the
 Kernel writes it, `Grid<Cell>` and not the struct's number, though what
 binds to it is still decided by its layout and never by that name); `kernel` (named in the `kernel` field, since a
 request's own `id` is the envelope's) returns their contract where a

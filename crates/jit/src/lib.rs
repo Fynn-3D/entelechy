@@ -65,8 +65,12 @@ pub struct Ctx {
     width: u32,
     height: u32,
     depth: u32,
-    /// Zero, or the first integer failure: 1 division by zero, 2 overflow.
+    /// Zero, or the first failure: 1 division by zero, 2 overflow, 3
+    /// more loop iterations than the budget.
     error: u32,
+    /// Loop iterations the running element has run, when the module
+    /// counts them.
+    work: u32,
     /// The `x` the failure was seen at, which a map's entry writes as it
     /// leaves its run; the caller knows the rest of the coordinates.
     error_at: u32,
@@ -239,6 +243,8 @@ struct Shared {
     #[allow(clippy::vec_box)]
     schemas: Vec<Box<orla_abi::Schema>>,
     template: Ctx,
+    /// The loop iterations an element may run, for naming a failure.
+    budget: u32,
 }
 
 // The views point into the scope's Fields, borrowed for the run, and the
@@ -314,6 +320,7 @@ fn shared(
         height: domain.height(),
         depth: domain.depth(),
         error: 0,
+        work: 0,
         error_at: 0,
     };
     Ok(Shared {
@@ -322,6 +329,7 @@ fn shared(
         memories,
         schemas,
         template,
+        budget: module.manifest.budget,
     })
 }
 
@@ -378,6 +386,7 @@ fn compute_into(
         height: t.height,
         depth: t.depth,
         error: 0,
+        work: 0,
         error_at: 0,
     };
     // One call a run of elements that share a row: a `Rows` domain is
@@ -406,16 +415,12 @@ fn compute_into(
                 )
             };
             if ctx.error != 0 {
-                let error = if ctx.error == 1 {
-                    ArithmeticError::DivisionByZero
-                } else {
-                    ArithmeticError::Overflow
-                };
-                return Err(ExecutionError::Arithmetic {
-                    x: ctx.error_at,
-                    y: z * height + y,
-                    error,
-                });
+                return Err(failure(
+                    ctx.error,
+                    ctx.error_at,
+                    z * height + y,
+                    shared.budget,
+                ));
             }
             done += run;
         }
@@ -542,13 +547,11 @@ fn run_reduce(
             let out = next[pair * stride..].as_mut_ptr();
             // `merge` reads `stride` words at `a` and `b` and writes
             // `stride` words at `out`.
+            // A merge, a step and `init` each start their work anew.
+            ctx.work = 0;
             unsafe { merge(&mut ctx, a, b, out) };
             if ctx.error != 0 {
-                return Err(ExecutionError::Arithmetic {
-                    x: 0,
-                    y: 0,
-                    error: arithmetic(ctx.error),
-                });
+                return Err(failure(ctx.error, 0, 0, module.manifest.budget));
             }
         }
         if count % 2 == 1 {
@@ -653,11 +656,22 @@ fn run_scatter(
 }
 
 /// The failure a context's error code names.
-fn arithmetic(code: u32) -> ArithmeticError {
-    if code == 1 {
-        ArithmeticError::DivisionByZero
-    } else {
-        ArithmeticError::Overflow
+/// What the code a run left in the context says, at the element named:
+/// 1 a division by zero, 2 an overflow, 3 more loop iterations than the
+/// budget.
+fn failure(code: u32, x: u32, y: u32, budget: u32) -> ExecutionError {
+    match code {
+        1 => ExecutionError::Arithmetic {
+            x,
+            y,
+            error: ArithmeticError::DivisionByZero,
+        },
+        3 => ExecutionError::Exhausted { x, y, budget },
+        _ => ExecutionError::Arithmetic {
+            x,
+            y,
+            error: ArithmeticError::Overflow,
+        },
     }
 }
 
@@ -682,28 +696,24 @@ fn run_scan(
     let count = domain.count();
     let mut ctx = Ctx { ..shared.template };
     let mut carried = vec![0u32; stride];
+    let budget = module.manifest.budget;
     let failure = |ctx: &Ctx, index: u32| -> Result<(), ExecutionError> {
         if ctx.error == 0 {
             return Ok(());
         }
-        let error = if ctx.error == 1 {
-            ArithmeticError::DivisionByZero
-        } else {
-            ArithmeticError::Overflow
-        };
-        Err(ExecutionError::Arithmetic {
-            x: index,
-            y: 0,
-            error,
-        })
+        Err(failure(ctx.error, index, 0, budget))
     };
     // `init` writes exactly `stride` words; each step reads `stride` words
     // of the carried value and writes `stride` words of the next.
+    // A merge, a step and `init` each start their work anew.
+    ctx.work = 0;
     unsafe { init(&mut ctx, carried.as_mut_ptr()) };
     failure(&ctx, 0)?;
     let mut words = vec![0u32; count * stride];
     for index in 0..count {
         let out = &mut words[index * stride..(index + 1) * stride];
+        // A merge, a step and `init` each start their work anew.
+        ctx.work = 0;
         unsafe { entry(&mut ctx, index as u32, carried.as_ptr(), out.as_mut_ptr()) };
         failure(&ctx, index as u32)?;
         carried.copy_from_slice(out);
@@ -1095,6 +1105,7 @@ pub(crate) mod offsets {
     pub const DEPTH: i32 = std::mem::offset_of!(Ctx, depth) as i32;
     pub const ERROR: i32 = std::mem::offset_of!(Ctx, error) as i32;
     pub const ERROR_AT: i32 = std::mem::offset_of!(Ctx, error_at) as i32;
+    pub const WORK: i32 = std::mem::offset_of!(Ctx, work) as i32;
     pub const VIEW_SIZE: i64 = std::mem::size_of::<View>() as i64;
     pub const VIEW_WORDS: i32 = std::mem::offset_of!(View, words) as i32;
     pub const VIEW_BYTES: i32 = std::mem::offset_of!(View, bytes) as i32;

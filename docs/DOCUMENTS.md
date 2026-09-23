@@ -121,7 +121,16 @@ loop with a count of zero yields what it carries. A `break` among a
 loop body's statements, `if done { break x; }`, stops the loop after
 that iteration and gives that value, of the type the loop carries: the
 iterations after it do not run, and it belongs to the innermost loop
-around it. `Name { a: .., b: .. }` builds
+around it. A Kernel has a budget, the loop iterations one element may
+run, every loop's together (a step of a scan and a merge of a reduction
+are each an element): 16777216 unless the Kernel declares `budget N;`
+among its items, 1 to 2^30. An element that starts one iteration past it
+fails the evaluation on every backend, naming the element, as an
+integer overflow does below, and the running system keeps its last
+state. What an element runs is a count of iterations and not of time,
+so the same element fails on every backend and every machine; a Kernel
+whose loops cannot pass the budget, their counts all literals that
+multiply to within it, is never counted and pays nothing. `Name { a: .., b: .. }` builds
 a struct and `Name { ..base, a: .. }` copies one with some fields
 replaced.
 

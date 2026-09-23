@@ -34,19 +34,23 @@ pub const FAILURE_BINDING: u32 = 90;
 pub const FAILED_OVERFLOW: u32 = 1;
 /// A failure's code in the word: a division by zero.
 pub const FAILED_DIVISION: u32 = 2;
+/// A failure's code in the word: more loop iterations than the budget.
+pub const FAILED_BUDGET: u32 = 3;
 
 /// Whether any function of the module does integer arithmetic that can
 /// fail: `+ - *` past the ends of the range, `/ %` by zero, `-` of the
 /// least integer, `udiv` and `urem` by zero. Such a module's passes
 /// record their first failure; any other pays nothing for the checking.
 pub fn can_fail(module: &Module) -> bool {
-    module
-        .functions
-        .iter()
-        .chain([&module.entry])
-        .chain(module.merge.iter())
-        .chain(module.init.iter())
-        .any(|function| function.body.iter().any(fails_within))
+    // A module whose loops can pass its budget fails where they do.
+    module.counts_work()
+        || module
+            .functions
+            .iter()
+            .chain([&module.entry])
+            .chain(module.merge.iter())
+            .chain(module.init.iter())
+            .any(|function| function.body.iter().any(fails_within))
 }
 
 /// Whether an instruction, or any inside it, can fail.
@@ -595,7 +599,9 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     );
     // Where a failure is recorded: this invocation's element, set by
     // the pass's `main`, and the word the pass binds when it can fail.
-    out.push_str("var<private> current: u32;\nvar<private> failed_here: bool;\n");
+    out.push_str(
+        "var<private> current: u32;\nvar<private> failed_here: bool;\nvar<private> work: u32;\n",
+    );
     if can_fail(module) {
         // An invocation records its first failure only: the reference
         // stops at it, so a failure after it within the same element (a
@@ -813,6 +819,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     for (var i: u32 = 0u; i < n; i = i + 1u) {{
         storageBarrier();
         current = i;
+        work = 0u;
         carried = entry(vec3<f32>(f32(i), 0.0, 0.0), i, carried);
         store_out0(i, carried);
     }}
@@ -851,6 +858,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }}
     let element = (gid.z * h + y) * w + x;
     current = element;
+    work = 0u;
     let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
     {store}
 }}"
@@ -1678,6 +1686,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         var k = 0u;
         loop {{
             if (k >= pairs) {{ break; }}
+            work = 0u;
             held[k] = merge(held[2u * k], held[2u * k + 1u]);
             k = k + 1u;
         }}
@@ -2721,6 +2730,17 @@ impl Emitter<'_> {
                     ),
                 );
                 self.loops.push(*id);
+                // An iteration is work: past the budget, the element
+                // records it and leaves the loop, so it ends.
+                if self.module.counts_work() {
+                    self.line(
+                        depth + 1,
+                        &format!(
+                            "work = work + 1u; if (work > {}u) {{ fail({FAILED_BUDGET}u); break; }}",
+                            self.module.manifest.budget
+                        ),
+                    );
+                }
                 if let Some(until) = until {
                     let done = self.block(until, depth + 1);
                     self.line(depth + 1, &format!("if ({done}) {{ break; }}"));

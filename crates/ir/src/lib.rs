@@ -237,6 +237,11 @@ pub struct Manifest {
     /// which an ordered Kernel writes step by step with [`Op::Put`]. They
     /// come last in both lists, in one order.
     pub memories: Vec<String>,
+    /// The loop iterations one element may run, every loop's and every
+    /// nested one's counted: a step of a scan, a merge of a reduction,
+    /// an element of anything else. Past it the element fails, on every
+    /// backend alike; see [`Module::counts_work`].
+    pub budget: u32,
 }
 
 /// How a Kernel executes over its domain.
@@ -996,6 +1001,13 @@ pub struct Block {
 /// Largest iteration bound a `loop` may declare.
 pub const MAX_LOOP_COUNT: u32 = 65_536;
 
+/// The work budget a Kernel has when it declares none: loop iterations
+/// an element may run.
+pub const DEFAULT_BUDGET: u32 = 1 << 24;
+
+/// The largest work budget a Kernel may declare.
+pub const MAX_BUDGET: u32 = 1 << 30;
+
 /// One SSA operation. Host access is explicit and named.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
@@ -1288,6 +1300,34 @@ impl Function {
     }
 }
 
+/// The most loop iterations a block can run; `functions` holds each
+/// called function's own.
+fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
+    instructions.iter().fold(0u64, |sum, instruction| {
+        let work = match &instruction.op {
+            Op::Loop {
+                count, until, body, ..
+            } => {
+                let inner = block_work(&body.body, functions)
+                    .saturating_add(until.as_ref().map_or(0, |b| block_work(&b.body, functions)));
+                u64::from(*count).saturating_mul(inner.saturating_add(1))
+            }
+            Op::If {
+                then, otherwise, ..
+            } => block_work(&then.body, functions).max(block_work(&otherwise.body, functions)),
+            Op::Match {
+                arms, otherwise, ..
+            } => arms
+                .iter()
+                .map(|(_, block)| block_work(&block.body, functions))
+                .fold(block_work(&otherwise.body, functions), u64::max),
+            Op::Call(index, _) => functions.get(*index as usize).copied().unwrap_or(0),
+            _ => 0,
+        };
+        sum.saturating_add(work)
+    })
+}
+
 /// A complete compiled Kernel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
@@ -1310,6 +1350,32 @@ pub struct Module {
 }
 
 impl Module {
+    /// The most loop iterations one element can run, whatever its inputs:
+    /// every loop at its bound (a count known when the Kernel compiled,
+    /// or [`MAX_LOOP_COUNT`] for one read at run time), nested loops
+    /// multiplied, the longer arm of a branch, calls counted where they
+    /// are made. Saturates.
+    pub fn worst_work(&self) -> u64 {
+        let mut per_function: Vec<u64> = Vec::with_capacity(self.functions.len());
+        for function in &self.functions {
+            let work = block_work(&function.body, &per_function);
+            per_function.push(work);
+        }
+        std::iter::once(&self.entry)
+            .chain(&self.merge)
+            .chain(&self.init)
+            .map(|function| block_work(&function.body, &per_function))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Whether a backend counts this module's work as it runs: only when
+    /// its worst case can pass its budget. A module whose loops cannot
+    /// reach it, which is nearly every one, runs uncounted everywhere.
+    pub fn counts_work(&self) -> bool {
+        self.worst_work() > u64::from(self.manifest.budget)
+    }
+
     /// Whether the module holds a 64-bit value anywhere: a port, a
     /// parameter, a struct's field, or a value any function computes.
     /// A backend without 64-bit arithmetic asks this before it takes
