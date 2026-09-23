@@ -40,7 +40,7 @@ fn runtime() -> Runtime {
 
 #[test]
 fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
-    let graph = Graph::parse(DOCUMENT).unwrap();
+    let graph = orla_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
@@ -75,7 +75,7 @@ fn graphs_bind_nodes_to_kernel_ids_and_reuse_unchanged_results() {
 
 #[test]
 fn republishing_a_kernel_invalidates_only_its_dependents() {
-    let graph = Graph::parse(DOCUMENT).unwrap();
+    let graph = orla_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
@@ -117,7 +117,7 @@ fn republishing_a_kernel_invalidates_only_its_dependents() {
 
 #[test]
 fn parameter_and_structure_changes_are_tracked() {
-    let mut graph = Graph::parse(DOCUMENT).unwrap();
+    let mut graph = orla_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
@@ -176,7 +176,7 @@ fn parameter_and_structure_changes_are_tracked() {
 
 #[test]
 fn externals_feed_graph_inputs() {
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "input photo: Image;\nnode inv: image.invert@1 { source <- photo; }\noutput result <- inv.result;",
     )
     .unwrap();
@@ -218,7 +218,7 @@ fn externals_feed_graph_inputs() {
 
 #[test]
 fn failures_are_attributed_and_last_good_results_survive() {
-    let graph = Graph::parse(DOCUMENT).unwrap();
+    let graph = orla_scene::parse(DOCUMENT).unwrap();
     let mut runtime = runtime();
     let mut evaluator = Evaluator::new();
     let first = evaluator
@@ -253,9 +253,10 @@ fn failures_are_attributed_and_last_good_results_survive() {
     );
     assert!(runtime.host().read_pixel(first.output, 0, 0).is_ok());
 
-    let missing =
-        Graph::parse("node a: image.missing@1 { domain = vec2(1, 1); }\noutput r <- a.result;")
-            .unwrap();
+    let missing = orla_scene::parse(
+        "node a: image.missing@1 { domain = vec2(1, 1); }\noutput r <- a.result;",
+    )
+    .unwrap();
     let error = evaluator
         .evaluate(
             &missing,
@@ -273,23 +274,23 @@ fn failures_are_attributed_and_last_good_results_survive() {
 
 #[test]
 fn structural_errors_are_reported_before_execution() {
-    let cyclic = Graph::parse("node a: image.invert@1 { source <- b.result; }\nnode b: image.invert@1 { source <- a.result; }\noutput r <- a.result;").unwrap();
+    let cyclic = orla_scene::parse("node a: image.invert@1 { source <- b.result; }\nnode b: image.invert@1 { source <- a.result; }\noutput r <- a.result;").unwrap();
     assert!(matches!(cyclic.order(), Err(GraphError::Cycle(_))));
     let dangling =
-        Graph::parse("node a: image.invert@1 { source <- nowhere; }\noutput r <- a.result;")
+        orla_scene::parse("node a: image.invert@1 { source <- nowhere; }\noutput r <- a.result;")
             .unwrap();
     assert!(matches!(
         dangling.order(),
         Err(GraphError::UnknownSource { .. })
     ));
     // A name one letter out is named rather than searched for.
-    let near = Graph::parse(
+    let near = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(1, 1); }\nnode a: image.invert@1 { source <- sorce.result; }\noutput r <- a.result;",
     )
     .unwrap();
     let message = near.order().unwrap_err().to_string();
     assert!(message.ends_with("did you mean `source`?"), "{message}");
-    let typo_port = Graph::parse(
+    let typo_port = orla_scene::parse(
         "node a: image.gradient@1 { domain = vec2(1, 1); }\nnode b: image.grayscale@1 { sorce <- a.result; }\noutput r <- b.result;",
     )
     .unwrap();
@@ -304,9 +305,10 @@ fn structural_errors_are_reported_before_execution() {
         .unwrap_err()
         .to_string();
     assert!(message.ends_with("did you mean `source`?"), "{message}");
-    let typo_kernel =
-        Graph::parse("node a: image.gradiant@1 { domain = vec2(1, 1); }\noutput r <- a.result;")
-            .unwrap();
+    let typo_kernel = orla_scene::parse(
+        "node a: image.gradiant@1 { domain = vec2(1, 1); }\noutput r <- a.result;",
+    )
+    .unwrap();
     let message = Evaluator::new()
         .evaluate(
             &typo_kernel,
@@ -321,9 +323,10 @@ fn structural_errors_are_reported_before_execution() {
         message.ends_with("did you mean `image.gradient@1`?"),
         "{message}"
     );
-    let no_output = Graph::parse("node a: image.gradient@1 { domain = vec2(1, 1); }").unwrap();
+    let no_output = orla_scene::parse("node a: image.gradient@1 { domain = vec2(1, 1); }").unwrap();
     assert!(matches!(no_output.order(), Err(GraphError::NoOutput)));
-    let no_domain = Graph::parse("node a: image.gradient@1 { }\noutput r <- a.result;").unwrap();
+    let no_domain =
+        orla_scene::parse("node a: image.gradient@1 { }\noutput r <- a.result;").unwrap();
     let mut runtime = runtime();
     let error = Evaluator::new()
         .evaluate(
@@ -335,7 +338,7 @@ fn structural_errors_are_reported_before_execution() {
         )
         .unwrap_err();
     assert_eq!(error, EvaluateError::NoDomain(NodeId("a".into())));
-    let bad_port = Graph::parse(
+    let bad_port = orla_scene::parse(
         "node a: image.gradient@1 { domain = vec2(1, 1); gain = 2; }\noutput r <- a.result;",
     )
     .unwrap();
@@ -360,7 +363,7 @@ fn only_clock_reading_nodes_re_execute_when_time_advances() {
     runtime
         .load("kernel image.pulse@1 { requires { field.read; field.write; time.read; } input source: Image; output result: Image; compute { let c = sample(source); return vec4(c.r * fract(time()), c.g, c.b, c.a); } }")
         .unwrap();
-    let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
+    let graph = orla_scene::parse("node source: image.gradient@1 { domain = vec2(2, 2); }\nnode pulse: image.pulse@1 { source <- source.result; }\noutput r <- pulse.result;").unwrap();
     let mut evaluator = Evaluator::new();
     evaluator.set_fusion(false);
     let first = evaluator
@@ -417,8 +420,8 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
     let mut runtime = Runtime::new(1024);
     runtime.load(ZERO).unwrap();
     runtime.load(INCREMENT).unwrap();
-    let graph = Graph::parse(COUNTER).unwrap();
-    assert_eq!(Graph::parse(&graph.to_string()).unwrap(), graph);
+    let graph = orla_scene::parse(COUNTER).unwrap();
+    assert_eq!(orla_scene::parse(&graph.to_string()).unwrap(), graph);
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     for expected in 1..=3 {
@@ -484,7 +487,7 @@ fn a_failed_evaluation_commits_nothing() {
     runtime
         .load("kernel test.gate@1 { requires { field.read; field.write; } input source: Image; param d: Int = 1; output result: Image; compute { let q = 1 / d; return sample(source) * float(q); } }")
         .unwrap();
-    let mut graph = Graph::parse(&format!(
+    let mut graph = orla_scene::parse(&format!(
         "{COUNTER}node gate: test.gate@1 {{ source <- count.result; d = 1; }}\n"
     ))
     .unwrap();
@@ -551,13 +554,14 @@ fn a_failed_evaluation_commits_nothing() {
 
 #[test]
 fn feedback_edges_are_not_dependencies_and_must_name_nodes() {
-    let ring = Graph::parse("node a: test.increment@1 { previous <~ b.result from seed.result; }\nnode b: test.increment@1 { previous <~ a.result from seed.result; }\nnode seed: test.zero@1 { domain = vec2(1, 1); }\noutput r <- a.result;").unwrap();
+    let ring = orla_scene::parse("node a: test.increment@1 { previous <~ b.result from seed.result; }\nnode b: test.increment@1 { previous <~ a.result from seed.result; }\nnode seed: test.zero@1 { domain = vec2(1, 1); }\noutput r <- a.result;").unwrap();
     assert!(ring.order().is_ok(), "mutual feedback is not a cycle");
-    let error = Graph::parse("input photo: Image;\nnode a: test.increment@1 { previous <~ photo from photo; }\noutput r <- a.result;").unwrap_err();
+    let error = orla_scene::parse("input photo: Image;\nnode a: test.increment@1 { previous <~ photo from photo; }\noutput r <- a.result;").unwrap_err();
     assert!(error.message.contains("carry no state"), "{error}");
-    let error =
-        Graph::parse("node a: test.increment@1 { previous <~ a.result; }\noutput r <- a.result;")
-            .unwrap_err();
+    let error = orla_scene::parse(
+        "node a: test.increment@1 { previous <~ a.result; }\noutput r <- a.result;",
+    )
+    .unwrap_err();
     assert!(error.message.contains("`from`"), "{error}");
 }
 
@@ -567,7 +571,7 @@ fn input_reading_nodes_re_execute_when_input_changes() {
     runtime
         .load("kernel image.paint@1 { requires { field.read; field.write; input.read; } input source: Image; output result: Image; compute { let c = sample(source); let near = length(coord() - pointer()) < 1.5; let hit = if near && pointer_down() { 1.0 } else { 0.0 }; return vec4(hit, float(key(65)), c.b, c.a); } }")
         .unwrap();
-    let graph = Graph::parse("node source: image.gradient@1 { domain = vec2(4, 4); }\nnode paint: image.paint@1 { source <- source.result; }\noutput r <- paint.result;").unwrap();
+    let graph = orla_scene::parse("node source: image.gradient@1 { domain = vec2(4, 4); }\nnode paint: image.paint@1 { source <- source.result; }\noutput r <- paint.result;").unwrap();
     let mut evaluator = Evaluator::new();
     let mut context = Context::default();
     let first = evaluator
@@ -620,7 +624,7 @@ fn input_reading_nodes_re_execute_when_input_changes() {
 #[test]
 fn graph_params_feed_nodes_and_can_be_overridden() {
     let mut runtime = runtime();
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "param amount: Float = 1.0;\nnode source: image.gradient@1 { domain = vec2(2, 2); }\nnode gray: image.grayscale@1 { source <- source.result; amount = amount; }\noutput r <- gray.result;",
     )
     .unwrap();
@@ -696,7 +700,7 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
         .unwrap();
     // gradient -> gray -> inv -> blocks: gray and inv are pointwise; blocks
     // fetches, so it stays separate and absorbs nothing.
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node gray: image.grayscale@1 { source <- source.result; amount = 0.5; }
          node inv: image.invert@1 { source <- gray.result; }
@@ -806,7 +810,7 @@ fn outputs_state_sources_and_shared_producers_stay_materialized() {
     let mut runtime = runtime();
     runtime.load(ZERO).unwrap();
     runtime.load(INCREMENT).unwrap();
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node seed: test.zero@1 { domain = vec2(2, 2); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
          node a: image.invert@1 { source <- count.result; }
@@ -855,7 +859,7 @@ fn outputs_state_sources_and_shared_producers_stay_materialized() {
 fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
     let mut runtime = runtime();
     runtime.set_background(true);
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node gray: image.grayscale@1 { source <- source.result; amount = 0.5; }
          node inv: image.invert@1 { source <- gray.result; }
@@ -927,7 +931,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
     runtime
         .load("kernel test.show@1 { requires { field.read; field.write; } input total: Rows<Vec4>; output result: Image; compute { let t = at(total, 0); return t / 24.0; } }")
         .unwrap();
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node gray: image.grayscale@1 { source <- source.result; amount = 1.0; }
          node total: test.total@1 { source <- gray.result; }
@@ -971,7 +975,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
     }
 
     // A reduction with a domain is refused with the node named.
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node total: test.total@1 { source <- source.result; domain = 1; }
          output result <- total.result;",
@@ -999,7 +1003,7 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
     runtime
         .load("kernel test.prefix@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; scan with total = 0 { return total + sample(rows); } }")
         .unwrap();
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node ramp: test.ramp@1 { domain = 5; }
          node prefix: test.prefix@1 { rows <- ramp.result; }
          output result <- prefix.result;",
@@ -1030,7 +1034,7 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
     assert_eq!(totals, [1, 3, 6, 10, 15]);
 
     // A domain other than the input's is refused by the backend.
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node ramp: test.ramp@1 { domain = 5; }
          node prefix: test.prefix@1 { rows <- ramp.result; domain = 3; }
          output result <- prefix.result;",
@@ -1057,7 +1061,7 @@ fn a_write_replaces_committed_state_and_is_checked() {
     let mut runtime = Runtime::new(1024);
     runtime.load(ZERO).unwrap();
     runtime.load(INCREMENT).unwrap();
-    let graph = Graph::parse(COUNTER).unwrap();
+    let graph = orla_scene::parse(COUNTER).unwrap();
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     let count = NodeId("count".into());
@@ -1115,7 +1119,7 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
     let mut runtime = Runtime::new(1024);
     runtime.load(ZERO).unwrap();
     runtime.load(INCREMENT).unwrap();
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node seed: test.zero@1 { domain = vec2(2, 2); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
          node view: test.increment@1 { previous <- count.result; by = 100.0; }
@@ -1183,7 +1187,7 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
 #[test]
 fn a_domain_may_take_the_window_and_follows_it() {
     let mut runtime = runtime();
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node source: image.gradient@1 { domain = window() / scale(); }\noutput r <- source.result;",
     )
     .unwrap();
@@ -1256,7 +1260,7 @@ fn a_memory_fed_back_persists_across_evaluations() {
     runtime
         .load("kernel test.count@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let v = at(ram, 0) + 1; put(ram, 0, v); return v; } }")
         .unwrap();
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node ticks: test.ticks@1 { domain = 3; }
 node zero: test.zero@1 { domain = 2; }
 node machine: test.count@1 { ticks <- ticks.result; ram <~ machine.ram from zero.result; }
@@ -1338,8 +1342,8 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     ] {
         runtime.load(source).unwrap();
     }
-    let graph = Graph::parse(TALLY_SCENE).unwrap();
-    assert_eq!(Graph::parse(&graph.to_string()).unwrap(), graph);
+    let graph = orla_scene::parse(TALLY_SCENE).unwrap();
+    assert_eq!(orla_scene::parse(&graph.to_string()).unwrap(), graph);
     assert!(graph.to_string().contains("migrate tally.upgrade@1"));
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
@@ -1373,7 +1377,8 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     // Back to the old layout with a migration that gives the wrong one:
     // the evaluation fails, the state stays, and the old Kernel reads it
     // again once it is back.
-    let wrong = Graph::parse(&TALLY_SCENE.replace("tally.upgrade@1", "tally.wrong@1")).unwrap();
+    let wrong =
+        orla_scene::parse(&TALLY_SCENE.replace("tally.upgrade@1", "tally.wrong@1")).unwrap();
     runtime.load(TALLY_STEP_V1).unwrap();
     let error = evaluate(&mut evaluator, &mut runtime, &wrong).unwrap_err();
     assert!(
@@ -1394,7 +1399,7 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
 
     // Without a migration named, a changed layout restarts the state
     // from its initial source, and says so.
-    let plain = Graph::parse(&TALLY_SCENE.replace(" migrate tally.upgrade@1", "")).unwrap();
+    let plain = orla_scene::parse(&TALLY_SCENE.replace(" migrate tally.upgrade@1", "")).unwrap();
     runtime.load(TALLY_STEP_V1).unwrap();
     let report = evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
     assert_eq!(tally(&runtime, report.output), vec![1]);
@@ -1425,7 +1430,7 @@ output result <- final.result;
 
 #[test]
 fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
-    let graph = Graph::parse(OFF_FRAME).unwrap();
+    let graph = orla_scene::parse(OFF_FRAME).unwrap();
     assert!(graph.to_string().contains("async = true;"));
     let mut runtime = runtime();
     runtime.load(COUNT).unwrap();
@@ -1504,7 +1509,7 @@ const SPREAD: &str = "kernel test.spread@1 { requires { field.read; field.write;
 
 #[test]
 fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "node zeros: test.zeros@1 { domain = 4; }\nnode spread: test.spread@1 { target <- zeros.result; domain = 10; }\nnode plain: test.spread@1 { target <- zeros.result; }\noutput result <- spread.result;\noutput plain <- plain.result;\n",
     )
     .unwrap();
@@ -1533,22 +1538,23 @@ fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
 #[test]
 fn a_filled_field_says_what_it_cannot_hold_and_what_it_needs() {
     // A Field of something a parameter cannot hold is a Kernel's work.
-    let error = Graph::parse(
+    let error = orla_scene::parse(
         "node cells: Grid<Cell> { domain = vec2(2, 2); }\noutput result <- cells.result;\n",
     )
     .unwrap_err()
     .to_string();
     assert!(error.contains("a Kernel fills it"), "{error}");
     // And one without an extent says so.
-    let error = Graph::parse("node zeros: Rows<Float> { }\noutput result <- zeros.result;\n")
+    let error = orla_scene::parse("node zeros: Rows<Float> { }\noutput result <- zeros.result;\n")
         .unwrap_err()
         .to_string();
     assert!(error.contains("needs a `domain`"), "{error}");
     // A filled Field is a Kernel of the document, so it takes a session.
-    let error =
-        Graph::parse("node zeros: Rows<Float> { domain = 3; }\noutput result <- zeros.result;\n")
-            .unwrap_err()
-            .to_string();
+    let error = orla_scene::parse(
+        "node zeros: Rows<Float> { domain = 3; }\noutput result <- zeros.result;\n",
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("through a session"), "{error}");
 }
 
@@ -1568,7 +1574,7 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
     let source = "node seed: test.seed@1 { domain = vec2(4, 3); }
          node step: test.step@1 { times = 5; carry previous <- result; previous <- seed.result; by = 2.0; }
          output result <- step.result;";
-    let graph = Graph::parse(source).unwrap();
+    let graph = orla_scene::parse(source).unwrap();
 
     // Without fusion every time is its own execution, which is the
     // reference this is held to.
@@ -1633,7 +1639,7 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
     // The same run written out by hand joins in the same way, and a
     // step something else reads is a step that has to be made, so the
     // run stops there and starts again after it.
-    let watched = Graph::parse(
+    let watched = orla_scene::parse(
         "node seed: test.seed@1 { domain = vec2(4, 3); }
          node one: test.step@1 { previous <- seed.result; by = 2.0; }
          node two: test.step@1 { previous <- one.result; by = 2.0; }
@@ -1674,7 +1680,7 @@ fn a_kernel_decides_how_many_elements_the_next_node_runs() {
     // The one domain term that reads data: `rows` is as long as the
     // number `live` put in a Field this frame, so the graph places less
     // work when a Kernel says there is less to do.
-    let graph = Graph::parse(DECIDED).unwrap();
+    let graph = orla_scene::parse(DECIDED).unwrap();
     let mut runtime = Runtime::new(1 << 16);
     for source in [TALLY, RUN] {
         runtime.load(source).unwrap();
@@ -1726,7 +1732,7 @@ fn a_kernel_decides_how_many_elements_the_next_node_runs() {
 
 #[test]
 fn a_domain_that_reads_a_field_still_fuses_with_its_producer() {
-    let graph = Graph::parse(
+    let graph = orla_scene::parse(
         "
 node live: test.tally@1 { domain = 1; }
 node rows: test.run@1 { live <- live.result; domain = value(live) * 3; }

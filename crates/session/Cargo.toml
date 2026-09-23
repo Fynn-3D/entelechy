@@ -11,6 +11,7 @@ orla-compiler = { path = "../compiler" }
 orla-language = { path = "../language" }
 orla-ir = { path = "../ir" }
 orla-graph = { path = "../graph" }
+orla-scene = { path = "../scene" }
 orla-runtime = { path = "../runtime" }
 orla-cpu = { path = "../cpu" }
 orla-gpu = { path = "../gpu" }

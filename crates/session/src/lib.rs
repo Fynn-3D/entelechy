@@ -1436,7 +1436,7 @@ impl Session {
             .to_path_buf();
         let mut loader = |path: &Path| read_document(path);
         let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
-        let lowered = match Graph::load_with_params(
+        let lowered = match orla_scene::load_with_params(
             &document,
             &text,
             &name,

@@ -7,6 +7,8 @@
 //! the Host on its behalf through a `Scope` built from the capabilities the
 //! Kernel declared. No capability means no access.
 
+pub mod names;
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;

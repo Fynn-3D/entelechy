@@ -189,21 +189,15 @@ fn check(args: &[String]) -> Result<(), String> {
         let mut loader = |path: &Path| orla_session::read_document(path);
         let mut declare =
             |base: &Path, uses: &[orla_language::Use]| orla_session::declarations_for(base, uses);
-        let lowered = match orla_graph::Graph::load_with(
-            &document,
-            &text,
-            name,
-            base,
-            &mut loader,
-            &mut declare,
-        ) {
-            Ok(lowered) => lowered,
-            Err(error) => {
-                failures += 1;
-                println!("{file}:{error}");
-                continue;
-            }
-        };
+        let lowered =
+            match orla_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
+                Ok(lowered) => lowered,
+                Err(error) => {
+                    failures += 1;
+                    println!("{file}:{error}");
+                    continue;
+                }
+            };
         let mut document = document;
         if let Ok((structs, types, functions)) =
             orla_session::declarations_for(base, &document.uses)

@@ -493,5 +493,5 @@ is watching.
 - Capabilities and types: [the ABI](../crates/abi/src/lib.rs).
 - IR operations and validation rules: [the IR](../crates/ir/src/lib.rs) and
   [its validator](../crates/ir/src/validate.rs).
-- Document format: [the contract](DOCUMENTS.md), [the frontend](../crates/language/src/lib.rs), and [graph lowering](../crates/graph/src/document.rs).
+- Document format: [the contract](DOCUMENTS.md), [the frontend](../crates/language/src/lib.rs), and [scene lowering](../crates/scene/src/lib.rs).
 - Publication semantics: [the runtime](../crates/runtime/src/lib.rs).

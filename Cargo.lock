@@ -1700,6 +1700,7 @@ dependencies = [
  "orla-ir",
  "orla-language",
  "orla-runtime",
+ "orla-scene",
  "orla-session",
  "serde_json",
 ]
@@ -1762,6 +1763,7 @@ dependencies = [
  "orla-matrix",
  "orla-rules",
  "orla-runtime",
+ "orla-scene",
  "pollster",
  "wgpu",
 ]
@@ -1771,9 +1773,7 @@ name = "orla-graph"
 version = "0.1.0"
 dependencies = [
  "orla-abi",
- "orla-compiler",
  "orla-ir",
- "orla-language",
  "orla-runtime",
 ]
 
@@ -1822,6 +1822,9 @@ dependencies = [
 [[package]]
 name = "orla-language"
 version = "0.1.0"
+dependencies = [
+ "orla-abi",
+]
 
 [[package]]
 name = "orla-matrix"
@@ -1867,6 +1870,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "orla-scene"
+version = "0.1.0"
+dependencies = [
+ "orla-abi",
+ "orla-compiler",
+ "orla-graph",
+ "orla-ir",
+ "orla-language",
+ "orla-runtime",
+]
+
+[[package]]
 name = "orla-session"
 version = "0.1.0"
 dependencies = [
@@ -1878,6 +1893,7 @@ dependencies = [
  "orla-jit",
  "orla-language",
  "orla-runtime",
+ "orla-scene",
  "serde_json",
 ]
 

@@ -1,5 +1,17 @@
-//! Lowering of parsed `.osn` documents into the Graph model, with
+#![warn(missing_docs)]
+//! Scene documents: a parsed `.osn` lowered into the Graph model, with
 //! sub-graphs flattened in place.
+//!
+//! This is the frontend half of composition. The Graph Runtime
+//! (`orla-graph`) evaluates a [`Graph`] and never sees source; this crate
+//! reads what was written — nodes, wiring, domains, `times`, placed
+//! sub-graphs, inline Kernels — checks it where it was written, and
+//! hands the loader the inline Kernels to publish. Where the files come
+//! from is the caller's: every function takes a [`Loader`] or refuses.
+
+mod domain;
+
+pub use domain::domain_expr;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -14,9 +26,8 @@ use orla_language::{
     Span, Spanned,
 };
 
-use crate::{
-    Asset, Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
-    literal_text,
+use orla_graph::{
+    Asset, Binding, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source, literal_text,
 };
 
 /// The port type an alias stands for, following aliases as far as they
@@ -205,7 +216,7 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
 /// A node's `domain` as written: a literal resolves now, an expression
 /// over the node's inputs and parameters resolves when the node binds.
 fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> {
-    let domain = DomainExpr::from_expr(expr).map_err(|e| error(expr.span, e.message))?;
+    let domain = domain_expr(expr)?;
     if domain.is_constant() {
         let literal = domain
             .resolve(&|_| None, &|_| None, &|_| None, &|_, _| None)
@@ -257,7 +268,7 @@ fn written_at(path: &Path, span: orla_language::Span) -> String {
     format!("{}:{}:{}", path.display(), span.line, span.column)
 }
 
-pub(crate) fn lower(
+fn lower(
     document: &Document,
     text: &str,
     name: &str,
@@ -1112,6 +1123,129 @@ fn literal_expr(value: Value, span: Span) -> Expr {
     Expr { kind, span }
 }
 
+/// Parses a `.osn` document that references published Kernels only.
+/// Loaders that also publish inline Kernels or place sub-graphs use
+/// [`load`].
+pub fn parse(text: &str) -> Result<Graph, DocumentError> {
+    let document = orla_language::parse_document(text).map_err(DocumentError::from)?;
+    let mut loader = |path: &std::path::Path| -> Result<String, String> {
+        Err(format!(
+            "sub-graph `{}` cannot be loaded here",
+            path.display()
+        ))
+    };
+    let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    let lowered = lower(
+        &document,
+        text,
+        "graph",
+        std::path::Path::new("."),
+        &mut loader,
+        &mut none,
+        &BTreeMap::new(),
+    )?;
+    if let Some(inline) = lowered.inline.first() {
+        return Err(DocumentError {
+            span: inline
+                .kernel
+                .id
+                .as_ref()
+                .map(|id| id.span)
+                .unwrap_or_default(),
+            message: format!(
+                "node `{}` carries an inline kernel; load this document through a session",
+                inline.node
+            ),
+        });
+    }
+    Ok(lowered.graph)
+}
+
+/// Lowers a parsed document that places no sub-graphs into a Graph named
+/// `name`, reporting inline Kernels for the loader to publish. Anonymous
+/// inline Kernels are named by [`anonymous_id`].
+pub fn from_document(
+    document: &orla_language::Document,
+    name: &str,
+) -> Result<Lowered, DocumentError> {
+    let mut loader = |path: &std::path::Path| -> Result<String, String> {
+        Err(format!(
+            "sub-graph `{}` cannot be loaded here; use orla_scene::load with a loader",
+            path.display()
+        ))
+    };
+    let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    lower(
+        document,
+        "",
+        name,
+        std::path::Path::new("."),
+        &mut loader,
+        &mut none,
+        &BTreeMap::new(),
+    )
+}
+
+/// Lowers a parsed document into a Graph, loading the sub-graphs it
+/// places through `loader` (paths are resolved against `base`) and
+/// flattening them in place: their nodes are prefixed with the placing
+/// node's name, their inputs rewired to the parent's bindings, their
+/// params set from the parent's values.
+pub fn load(
+    document: &orla_language::Document,
+    text: &str,
+    name: &str,
+    base: &std::path::Path,
+    loader: &mut Loader<'_>,
+) -> Result<Lowered, DocumentError> {
+    let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
+    lower(
+        document,
+        text,
+        name,
+        base,
+        loader,
+        &mut none,
+        &BTreeMap::new(),
+    )
+}
+
+/// Loads like [`load`] and also resolves every document's `use`
+/// items to shared struct and type declarations through `declare`,
+/// which every Kernel of that document then sees.
+pub fn load_with(
+    document: &orla_language::Document,
+    text: &str,
+    name: &str,
+    base: &std::path::Path,
+    loader: &mut Loader<'_>,
+    declare: &mut Declare<'_>,
+) -> Result<Lowered, DocumentError> {
+    lower(
+        document,
+        text,
+        name,
+        base,
+        loader,
+        declare,
+        &BTreeMap::new(),
+    )
+}
+
+/// As [`load_with`], with parameter overrides that a node's
+/// `times` may read, so the caller's values size the graph.
+pub fn load_with_params(
+    document: &orla_language::Document,
+    text: &str,
+    name: &str,
+    base: &std::path::Path,
+    loader: &mut Loader<'_>,
+    declare: &mut Declare<'_>,
+    overrides: &BTreeMap<String, Value>,
+) -> Result<Lowered, DocumentError> {
+    lower(document, text, name, base, loader, declare, overrides)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1137,7 +1271,7 @@ output result <- blocks.result;
 
     #[test]
     fn documents_round_trip() {
-        let graph = Graph::parse(DOCUMENT).unwrap();
+        let graph = parse(DOCUMENT).unwrap();
         assert_eq!(graph.externals, ["photo"]);
         assert_eq!(graph.params[0].default, Value::Float(0.5));
         assert_eq!(
@@ -1157,7 +1291,7 @@ output result <- blocks.result;
             Some(DomainSpec::Literal(Domain::Grid(64, 32)))
         );
         let text = graph.to_string();
-        assert_eq!(Graph::parse(&text).unwrap(), graph);
+        assert_eq!(parse(&text).unwrap(), graph);
     }
 
     #[test]
@@ -1182,8 +1316,7 @@ output result <- blocks.result;
              output result <- named.result;";
         let document = orla_language::parse_document(source).unwrap();
         let mut none = |path: &Path| -> Result<String, String> { Err(path.display().to_string()) };
-        let lowered =
-            Graph::load(&document, source, "My-Scene", Path::new("."), &mut none).unwrap();
+        let lowered = load(&document, source, "My-Scene", Path::new("."), &mut none).unwrap();
         // The text is publishable as it is: the node's id written in, the
         // node's domain left out, and it parses on its own.
         assert!(
@@ -1237,7 +1370,7 @@ output result <- blocks.result;
             assert_eq!(path, Path::new("root/shared/display.osn"));
             Ok(display.to_owned())
         };
-        let lowered = Graph::load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
+        let lowered = load(&root, "", "main", Path::new("root"), &mut loader).unwrap();
         let graph = &lowered.graph;
         let ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.0.as_str()).collect();
         assert_eq!(
@@ -1295,20 +1428,19 @@ output result <- blocks.result;
 
     #[test]
     fn errors_name_the_position() {
-        let error = Graph::parse("node a: Bad {\n}\noutput r <- a.r;").unwrap_err();
+        let error = parse("node a: Bad {\n}\noutput r <- a.r;").unwrap_err();
         assert_eq!(error.span.line, 1);
-        let error =
-            Graph::parse("node a: t.k@1 { x <- y; x <- z; }\noutput r <- a.r;").unwrap_err();
+        let error = parse("node a: t.k@1 { x <- y; x <- z; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("bound twice"), "{error}");
-        let error = Graph::parse("node a: t.k@1 { domain = true; }\noutput r <- a.r;").unwrap_err();
+        let error = parse("node a: t.k@1 { domain = true; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("`domain` is a count"), "{error}");
-        let error = Graph::parse("node a: kernel { requires { field.write; } input s: Image; output result: Image; compute { return sample(s); } }\noutput r <- a.result;").unwrap_err();
+        let error = parse("node a: kernel { requires { field.write; } input s: Image; output result: Image; compute { return sample(s); } }\noutput r <- a.result;").unwrap_err();
         assert!(error.message.contains("must be wired"), "{error}");
-        let error = Graph::parse("node a: t.k@1 { y = 1.0 + 2.0; }\noutput r <- a.r;").unwrap_err();
+        let error = parse("node a: t.k@1 { y = 1.0 + 2.0; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("literal"), "{error}");
-        let error = Graph::parse("node a: t.k@1 { y = nope; }\noutput r <- a.r;").unwrap_err();
+        let error = parse("node a: t.k@1 { y = nope; }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("not a param"), "{error}");
-        let error = Graph::parse("node a: graph \"x.osn\" { }\noutput r <- a.r;").unwrap_err();
+        let error = parse("node a: graph \"x.osn\" { }\noutput r <- a.r;").unwrap_err();
         assert!(error.message.contains("cannot load"), "{error}");
     }
 }
@@ -1331,7 +1463,7 @@ output result <- show.result;
 
     #[test]
     fn times_expands_a_node_and_carries_between_times() {
-        let graph = Graph::parse(REPEATED).unwrap();
+        let graph = parse(REPEATED).unwrap();
         assert_eq!(ids(&graph), ["seed", "step/1", "step/2", "show"]);
         assert_eq!(graph.times_params, ["level"]);
         let first = &graph.nodes[1];
@@ -1363,7 +1495,7 @@ output result <- show.result;
         let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
         let mut loader: Box<Loader<'_>> = Box::new(|_| Err("no files".into()));
         let overrides = BTreeMap::from([("level".to_owned(), Value::Int(4))]);
-        let lowered = Graph::load_with_params(
+        let lowered = load_with_params(
             &document,
             REPEATED,
             "g",
@@ -1378,7 +1510,7 @@ output result <- show.result;
             ["seed", "step/1", "step/2", "step/3", "step/4", "show"]
         );
         let overrides = BTreeMap::from([("level".to_owned(), Value::Int(1))]);
-        let lowered = Graph::load_with_params(
+        let lowered = load_with_params(
             &document,
             REPEATED,
             "g",
@@ -1393,18 +1525,18 @@ output result <- show.result;
 
     #[test]
     fn times_and_carry_are_checked() {
-        let zero = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 0; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        let zero = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 0; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
         assert!(zero.message.contains("at least 1"), "{zero}");
-        let unbound = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 2; carry previous <- result; }\noutput result <- r.result;").unwrap_err();
+        let unbound = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 2; carry previous <- result; }\noutput result <- r.result;").unwrap_err();
         assert!(
             unbound
                 .message
                 .contains("needs a binding for the first time"),
             "{unbound}"
         );
-        let orphan = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { carry previous <- result; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        let orphan = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { carry previous <- result; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
         assert!(orphan.message.contains("needs `times"), "{orphan}");
-        let unknown = Graph::parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = n; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        let unknown = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = n; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
         assert!(unknown.message.contains("not a param"), "{unknown}");
     }
 }

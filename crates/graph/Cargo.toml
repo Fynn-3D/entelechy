@@ -10,8 +10,6 @@ rust-version.workspace = true
 orla-runtime = { path = "../runtime" }
 orla-ir = { path = "../ir" }
 orla-abi = { path = "../abi" }
-orla-language = { path = "../language" }
-orla-compiler = { path = "../compiler" }
 
 [lints]
 workspace = true

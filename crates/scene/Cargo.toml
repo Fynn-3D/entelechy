@@ -1,0 +1,20 @@
+[package]
+name = "orla-scene"
+description = "Orla scene documents: .osn lowered into the Graph model, sub-graphs flattened, inline Kernels handed to the loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-abi = { path = "../abi" }
+orla-ir = { path = "../ir" }
+orla-language = { path = "../language" }
+orla-compiler = { path = "../compiler" }
+orla-graph = { path = "../graph" }
+
+[dev-dependencies]
+orla-runtime = { path = "../runtime" }
+
+[lints]
+workspace = true

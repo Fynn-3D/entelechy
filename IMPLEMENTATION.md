@@ -12,7 +12,7 @@ what it says; the test is the claim, this is the index to it.
 | `.orla` compiles | [compiler tests](crates/compiler/tests/compile.rs) |
 | Kernel calls Host only through ABI | [scope tests](crates/abi/src/lib.rs), [denied execution](crates/cpu/tests/execute.rs), [validator capability checks](crates/ir/src/validate.rs) |
 | Kernel hot-swaps without restart | [hot swap tests](crates/runtime/tests/hot_swap.rs), [session tests](crates/cli/tests/session.rs) |
-| Graph references KernelID | [composition tests](crates/graph/tests/composition.rs), [example scene](examples/grayscale/scene.osn) |
+| Graph references KernelID | [composition tests](crates/scene/tests/composition.rs), [example scene](examples/grayscale/scene.osn) |
 
 ## Layers
 
@@ -28,7 +28,8 @@ what it says; the test is the claim, this is the index to it.
 | JIT backend | [jit](crates/jit/src/lib.rs), [Cranelift emission](crates/jit/src/codegen.rs) | [parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs), every replay on `jit` |
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs), [rasterizer](crates/gpu/src/raster.rs), [presenter](crates/gpu/src/present.rs) | [parity](crates/gpu/tests/parity.rs), [matrix](crates/gpu/tests/matrix.rs); both skip without an adapter |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs), [off-frame runs](crates/runtime/src/later.rs) | [hot swap](crates/runtime/tests/hot_swap.rs), [async](crates/runtime/tests/later.rs), [mixed clocks](crates/runtime/tests/mixed.rs) |
-| Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs), [domain](crates/graph/src/domain.rs) | [composition tests](crates/graph/tests/composition.rs) |
+| Scene documents | [scene](crates/scene/src/lib.rs), [domain expressions](crates/scene/src/domain.rs) | [lowering tests](crates/scene/src/lib.rs) |
+| Graph Runtime | [graph](crates/graph/src/lib.rs), [evaluator](crates/graph/src/evaluate.rs), [domain](crates/graph/src/domain.rs) | [composition tests](crates/scene/tests/composition.rs), written as documents |
 | Interface | [cli](crates/cli/src/main.rs), [session](crates/session/src/lib.rs) (what the Player, the C ABI, import and export open too), [replay](crates/cli/src/replay.rs), [bench](crates/session/src/bench.rs), [render](crates/cli/src/render.rs) | [session tests](crates/cli/tests/session.rs), every example replay on three backends |
 | Creation protocol | [protocol](crates/session/src/protocol.rs), [contract](docs/PROTOCOL.md) | [client test](crates/cli/tests/protocol.rs); [an agent's record](examples/scanline/agent.jsonl) replayed |
 | C ABI | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
@@ -43,7 +44,7 @@ what it says; the test is the claim, this is the index to it.
 | Five execution modes: map, reduce, scan, scatter, prefix | [`Mode`](crates/ir/src/lib.rs), [declaration](crates/compiler/src/lower/declare.rs) | the matrix's six mode wrappers; the contracts below |
 | The language's own features | [contract](docs/DOCUMENTS.md), [parser](crates/language/src/parser.rs), [lowering](crates/compiler/src/lower/) | 35 feature rows of the matrix, on two backends against the reference |
 | Optimizer rewrites: inlining, hoisting, folding, narrowing, running a literal loop | [optimize](crates/ir/src/optimize.rs) | [every matrix case word for word against the unoptimized IR](crates/cpu/tests/optimizer.rs) |
-| Fusion, and repetition where fusion refuses | [fuse](crates/ir/src/fuse.rs), [planner](crates/graph/src/evaluate.rs) | [fusion tests](crates/ir/tests/fusion.rs), [composition](crates/graph/tests/composition.rs) |
+| Fusion, and repetition where fusion refuses | [fuse](crates/ir/src/fuse.rs), [planner](crates/graph/src/evaluate.rs) | [fusion tests](crates/ir/tests/fusion.rs), [composition](crates/scene/tests/composition.rs) |
 | Stream compaction: which ones, not just how many | [compact package](packages/compact.orlapkg/kernels/compact.orla) | [culled replay](examples/culled/tests/culled.replay) — the same picture with the culling on and off |
 | A domain a Kernel decides | [`value(port)`](crates/graph/src/domain.rs), [binding](crates/graph/src/evaluate.rs) `domain_values` | [decided](examples/decided/tests/decided.replay) and [surface](examples/surface/tests/surface.replay) replays |
 | Rasterizing: the near plane, the cutout, the contract | [rules](crates/rules/src/raster.rs), [reference](crates/cpu/src/raster.rs), [device](crates/gpu/src/raster.rs) | [near-plane replay](examples/mesh/tests/near.replay), [parity](crates/gpu/tests/parity.rs) |
@@ -149,7 +150,7 @@ what it says; the test is the claim, this is the index to it.
   ([IR](crates/ir/src/lib.rs), [validator](crates/ir/src/validate.rs),
   [compiler](crates/compiler/src/lower/mod.rs), [CPU](crates/cpu/src/eval/compile.rs),
   [WGSL](crates/gpu/src/wgsl.rs), [parity](crates/gpu/tests/parity.rs),
-  [feedback test](crates/graph/tests/composition.rs)). With the integer
+  [feedback test](crates/scene/tests/composition.rs)). With the integer
   bit operators, this is what a machine needs: random-access RAM written
   step by step, persisting across frames through `<~`; the
   [CHIP-8 example](examples/chip8/README.md) is one, every opcode, its
@@ -227,7 +228,7 @@ what it says; the test is the claim, this is the index to it.
   graph output, a state source, nor pinned, is inlined into that consumer
   by [`fuse`](crates/ir/src/fuse.rs) and executed as one detached Kernel
   version. Results are bit-identical on the CPU
-  ([IR test](crates/ir/tests/fusion.rs), [graph tests](crates/graph/tests/composition.rs));
+  ([IR test](crates/ir/tests/fusion.rs), [graph tests](crates/scene/tests/composition.rs));
   absorbed nodes are not materialized until pinned.
 
 - Iteration fusion is the same idea without inlining: a node placed several
@@ -241,7 +242,7 @@ what it says; the test is the claim, this is the index to it.
   does by recording the passes into one encoder with two buffers taking
   turns ([gpu](crates/gpu/src/lib.rs)), and otherwise the runtime runs the
   group N times and releases what is between
-  ([graph test](crates/graph/tests/composition.rs)). Where the Kernel only
+  ([graph test](crates/scene/tests/composition.rs)). Where the Kernel only
   `sample`s its input, ordinary fusion gets there first and inlines every
   time into one Kernel; repetition is what a Kernel that reads its
   neighbours gets instead.
@@ -311,7 +312,7 @@ what it says; the test is the claim, this is the index to it.
   the evaluation commits atomically at its end; a failed evaluation commits
   nothing; a republished Kernel inherits the state; `reset_state` returns to
   the initial sources ([evaluator](crates/graph/src/evaluate.rs),
-  [feedback tests](crates/graph/tests/composition.rs),
+  [feedback tests](crates/scene/tests/composition.rs),
   [Life example](examples/life/README.md)).
 
 - State migration (the plan's section 24): a `<~` binding may name a
@@ -322,7 +323,7 @@ what it says; the test is the claim, this is the index to it.
   its output against the port) or, with none named, restarts the port
   from its initial source, reporting either; a migration that fails
   leaves the state as it was ([evaluator](crates/graph/src/evaluate.rs)
-  `reconcile_state`, [composition test](crates/graph/tests/composition.rs),
+  `reconcile_state`, [composition test](crates/scene/tests/composition.rs),
   [an agent's record](examples/migrate/agent.jsonl)). The check is the
   layout comparison every evaluation already made; nothing is added to a
   frame that migrates nothing.
@@ -331,8 +332,8 @@ what it says; the test is the claim, this is the index to it.
   document lowering expands it into `name/1..N` chained through the
   carried ports, with `name.port` meaning the last; `N` may be a graph
   param, which the session then treats as structural and lowers the
-  document again when it changes ([document](crates/graph/src/document.rs),
-  [tests](crates/graph/src/document.rs), [session test](crates/cli/tests/session.rs)).
+  document again when it changes ([document](crates/scene/src/lib.rs),
+  [tests](crates/scene/src/lib.rs), [session test](crates/cli/tests/session.rs)).
   The fluid's Jacobi solve, the SLG's relaxation passes and the mesh
   example's subdivision level are written that way.
 
@@ -340,7 +341,7 @@ what it says; the test is the claim, this is the index to it.
   which document lowering turns into a one-parameter Kernel (`value`, the
   element's zero by default, resolved through the used documents'
   aliases), so a scene's starting values are lines rather than Kernels
-  ([document](crates/graph/src/document.rs)).
+  ([document](crates/scene/src/lib.rs)).
 
 - An evaluation can be demanded: `Evaluator::evaluate_for` runs the named
   nodes, what they read, every `<~` source, and never-produced outputs, and
@@ -352,7 +353,7 @@ what it says; the test is the claim, this is the index to it.
   theirs) contribute their top-level structs and type aliases to every
   Kernel the document holds, resolved by the session and `check` through
   a `declare` callback the graph loader applies to the root and each
-  sub-graph ([graph](crates/graph/src/document.rs),
+  sub-graph ([scene](crates/scene/src/lib.rs),
   [session](crates/session/src/lib.rs)). A changed library republishes
   the Kernels that inherit from it and re-reads the root; two different
   declarations of one name are refused with both files named
@@ -366,11 +367,11 @@ what it says; the test is the claim, this is the index to it.
 
 - Documents: one grammar for `.orla` libraries and `.osn` graphs
   ([contract](docs/DOCUMENTS.md), [frontend](crates/language/src/lib.rs),
-  [graph lowering](crates/graph/src/document.rs),
+  [scene lowering](crates/scene/src/lib.rs),
   [session loader](crates/session/src/lib.rs)). Nodes reference Kernels by
   id or carry them inline; the loader publishes inline Kernels and follows
   `use`. Proof: [parser tests](crates/language/src/parser.rs),
-  [lowering tests](crates/graph/src/document.rs),
+  [lowering tests](crates/scene/src/lib.rs),
   [session tests](crates/cli/tests/session.rs), and the
   [self-contained material ball](examples/material-ball/scene.osn).
 
@@ -608,7 +609,7 @@ what it says; the test is the claim, this is the index to it.
   ([parity](crates/gpu/tests/parity.rs)). `orla check` compiles the
   Kernels of every document a scene uses, not only the scene's own. `time()` needs `time.read`;
   only nodes that declare it re-execute when time advances
-  ([clock caching test](crates/graph/tests/composition.rs)).
+  ([clock caching test](crates/scene/tests/composition.rs)).
 
 - The builtins were completed where a shader language or a machine
   expects them: `trunc`, `exp2`, `log2`, `sinh`, `cosh`, `tanh`, `fma`
@@ -683,7 +684,7 @@ what it says; the test is the claim, this is the index to it.
   is drawn every evaluation and the extent is part of a node's cache
   key, a resize re-executes the nodes it sizes and nothing else
   ([domain](crates/graph/src/domain.rs), [evaluator](crates/graph/src/evaluate.rs),
-  [graph test](crates/graph/tests/composition.rs)). The Player hands its
+  [graph test](crates/scene/tests/composition.rs)). The Player hands its
   window over each frame, `run` takes `--window`, and a replay declares
   one ([replay](crates/cli/src/replay.rs)); the voxel editor and the
   showcase fill the window at its resolution with their bars laid out in
@@ -725,7 +726,7 @@ what it says; the test is the claim, this is the index to it.
   [tests](crates/cli/tests/session.rs)). Text is an input too: `input
   title: Rows<Int> = text "ORLA";` is the characters' codes as rows the
   session writes from the document and rewrites when it changes
-  ([document](crates/graph/src/document.rs), [session test](crates/cli/tests/session.rs)),
+  ([document](crates/scene/src/lib.rs), [session test](crates/cli/tests/session.rs)),
   which the [text example](examples/text/README.md) lays out and draws.
 
 - Text needs no primitive: a label is `Rows<Glyph>` (code, origin,
@@ -871,7 +872,7 @@ what it says; the test is the claim, this is the index to it.
   version until then; the evaluator runs a group's nodes separately until
   its fused version arrives, which changes no pixel
   ([runtime test](crates/runtime/tests/hot_swap.rs),
-  [graph test](crates/graph/tests/composition.rs),
+  [graph test](crates/scene/tests/composition.rs),
   [session test](crates/cli/tests/session.rs)). wgpu's error scopes are
   thread-local only with its `std` feature, which the GPU backend therefore
   enables ([parity test](crates/gpu/tests/parity.rs)).

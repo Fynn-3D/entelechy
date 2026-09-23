@@ -65,7 +65,7 @@ pub enum EvaluateError {
         /// The port or parameter.
         port: String,
         /// The port or parameter it was probably meant to be; see
-        /// [`orla_language::nearest`].
+        /// [`orla_abi::names::nearest`].
         near: Option<String>,
     },
     /// A parameter override has the wrong type.
@@ -418,7 +418,7 @@ pub struct PlanEntry {
 }
 
 /// `; did you mean `x`?` where there is one; see
-/// [`orla_language::nearest`], which found it.
+/// [`orla_abi::names::nearest`], which found it.
 fn suggest(near: &Option<String>) -> String {
     match near {
         Some(name) => format!("; did you mean `{name}`?"),
@@ -887,7 +887,7 @@ impl Evaluator {
                         // What that node does write, so a port named
                         // slightly wrong is named.
                         let near = self.cache.get(node).and_then(|cached| {
-                            orla_language::nearest(
+                            orla_abi::names::nearest(
                                 port,
                                 cached.output_names.iter().map(String::as_str),
                             )
@@ -1115,7 +1115,7 @@ impl Evaluator {
                     .kernels()
                     .map(|version| version.id().to_string())
                     .collect();
-                let near = orla_language::nearest(&wanted, published.iter().map(String::as_str))
+                let near = orla_abi::names::nearest(&wanted, published.iter().map(String::as_str))
                     .map(str::to_owned);
                 EvaluateError::UnknownKernel {
                     node: node.id.clone(),
@@ -1821,7 +1821,7 @@ impl Evaluator {
                 return Err(EvaluateError::UnknownPort {
                     node: node.id.clone(),
                     port: port.clone(),
-                    near: orla_language::nearest(port, known).map(str::to_owned),
+                    near: orla_abi::names::nearest(port, known).map(str::to_owned),
                 });
             }
         }
@@ -1910,7 +1910,7 @@ impl Evaluator {
                             EvaluateError::UnknownPort {
                                 node: node.id.clone(),
                                 port: name.clone(),
-                                near: orla_language::nearest(name, known).map(str::to_owned),
+                                near: orla_abi::names::nearest(name, known).map(str::to_owned),
                             }
                         })?,
                 ),

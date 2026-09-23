@@ -334,7 +334,7 @@ fn chains_and_state_stay_resident_until_observed() {
     runtime
         .load("kernel test.blur@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { let c = coord(); return (fetch(source, c) + fetch(source, c + vec2(1.0, 0.0))) * 0.5; } }")
         .unwrap();
-    let graph = orla_graph::Graph::parse(
+    let graph = orla_scene::parse(
         "node seed: test.zero@1 { domain = vec2(8, 8); }
          node count: test.increment@1 { previous <~ count.result from seed.result; }
          node soft: test.blur@1 { source <- count.result; }
@@ -393,7 +393,7 @@ fn fields_flow_through_the_gpu_exactly() {
     runtime
         .load("kernel test.draw@1 { requires { field.read; field.write; } input particles: Rows<Particle>; output result: Image; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let p = at(particles, int(coord().x)); return vec4(p.position.x, p.position.y, float(p.life), float(p.alive)); } }")
         .unwrap();
-    let graph = orla_graph::Graph::parse(
+    let graph = orla_scene::parse(
         "node seed: test.seed@1 { domain = 8; }
          node step: test.step@1 { previous <~ step.result from seed.result; }
          node draw: test.draw@1 { source <- step.result; domain = vec2(8, 1); }

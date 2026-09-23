@@ -9,12 +9,11 @@
 //! context, or upstream results changed, and commits state between
 //! evaluations.
 //!
-//! Graphs are written in `.osn` documents, parsed by the language frontend
-//! and lowered here by [`Graph::from_document`]. Inline Kernels are reported
-//! back to the loader for publication; the Graph itself binds every node by
-//! id and never holds Kernel bodies.
+//! Graphs are written in `.osn` documents, which `orla-scene` parses and
+//! lowers into this model; the Graph Runtime never sees source. Inline
+//! Kernels are reported back to the loader for publication; the Graph
+//! itself binds every node by id and never holds Kernel bodies.
 
-mod document;
 mod domain;
 mod evaluate;
 
@@ -22,7 +21,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
-pub use document::{Declare, DocumentError, InlineKernel, Loader, Lowered, anonymous_id};
 pub use domain::{DomainError, DomainExpr, DomainOp, DomainSpec};
 pub use evaluate::{EvaluateError, Evaluator, PlanEntry, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
@@ -278,129 +276,6 @@ impl fmt::Display for GraphError {
 impl std::error::Error for GraphError {}
 
 impl Graph {
-    /// Parses a `.osn` document that references published Kernels only.
-    /// Loaders that also publish inline Kernels or place sub-graphs use
-    /// [`Graph::load`].
-    pub fn parse(text: &str) -> Result<Self, DocumentError> {
-        let document = orla_language::parse_document(text).map_err(DocumentError::from)?;
-        let mut loader = |path: &std::path::Path| -> Result<String, String> {
-            Err(format!(
-                "sub-graph `{}` cannot be loaded here",
-                path.display()
-            ))
-        };
-        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
-        let lowered = document::lower(
-            &document,
-            text,
-            "graph",
-            std::path::Path::new("."),
-            &mut loader,
-            &mut none,
-            &BTreeMap::new(),
-        )?;
-        if let Some(inline) = lowered.inline.first() {
-            return Err(DocumentError {
-                span: inline
-                    .kernel
-                    .id
-                    .as_ref()
-                    .map(|id| id.span)
-                    .unwrap_or_default(),
-                message: format!(
-                    "node `{}` carries an inline kernel; load this document through a session",
-                    inline.node
-                ),
-            });
-        }
-        Ok(lowered.graph)
-    }
-
-    /// Lowers a parsed document that places no sub-graphs into a Graph named
-    /// `name`, reporting inline Kernels for the loader to publish. Anonymous
-    /// inline Kernels are named by [`anonymous_id`].
-    pub fn from_document(
-        document: &orla_language::Document,
-        name: &str,
-    ) -> Result<Lowered, DocumentError> {
-        let mut loader = |path: &std::path::Path| -> Result<String, String> {
-            Err(format!(
-                "sub-graph `{}` cannot be loaded here; use Graph::load with a loader",
-                path.display()
-            ))
-        };
-        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
-        document::lower(
-            document,
-            "",
-            name,
-            std::path::Path::new("."),
-            &mut loader,
-            &mut none,
-            &BTreeMap::new(),
-        )
-    }
-
-    /// Lowers a parsed document into a Graph, loading the sub-graphs it
-    /// places through `loader` (paths are resolved against `base`) and
-    /// flattening them in place: their nodes are prefixed with the placing
-    /// node's name, their inputs rewired to the parent's bindings, their
-    /// params set from the parent's values.
-    pub fn load(
-        document: &orla_language::Document,
-        text: &str,
-        name: &str,
-        base: &std::path::Path,
-        loader: &mut Loader<'_>,
-    ) -> Result<Lowered, DocumentError> {
-        let mut none: Box<Declare<'_>> = Box::new(|_, _| Ok((Vec::new(), Vec::new(), Vec::new())));
-        document::lower(
-            document,
-            text,
-            name,
-            base,
-            loader,
-            &mut none,
-            &BTreeMap::new(),
-        )
-    }
-
-    /// Loads like [`Graph::load`] and also resolves every document's `use`
-    /// items to shared struct and type declarations through `declare`,
-    /// which every Kernel of that document then sees.
-    pub fn load_with(
-        document: &orla_language::Document,
-        text: &str,
-        name: &str,
-        base: &std::path::Path,
-        loader: &mut Loader<'_>,
-        declare: &mut Declare<'_>,
-    ) -> Result<Lowered, DocumentError> {
-        document::lower(
-            document,
-            text,
-            name,
-            base,
-            loader,
-            declare,
-            &BTreeMap::new(),
-        )
-    }
-
-    /// As [`Graph::load_with`], with parameter overrides that a node's
-    /// `times` may read, so the caller's values size the graph.
-    pub fn load_with_params(
-        document: &orla_language::Document,
-        text: &str,
-        name: &str,
-        base: &std::path::Path,
-        loader: &mut Loader<'_>,
-        declare: &mut Declare<'_>,
-        overrides: &BTreeMap<String, Value>,
-    ) -> Result<Lowered, DocumentError> {
-        document::lower(document, text, name, base, loader, declare, overrides)
-    }
-
     /// The first declared output.
     pub fn primary_output(&self) -> Option<&(String, Source)> {
         self.outputs.first()
@@ -464,11 +339,11 @@ impl Graph {
                         // Every node and external there is, so a name
                         // one letter out is named.
                         let near = match source {
-                            Source::Node { node, .. } => orla_language::nearest(
+                            Source::Node { node, .. } => orla_abi::names::nearest(
                                 &node.0,
                                 self.nodes.iter().map(|n| n.id.0.as_str()),
                             ),
-                            Source::External(name) => orla_language::nearest(
+                            Source::External(name) => orla_abi::names::nearest(
                                 name,
                                 self.externals.iter().map(String::as_str),
                             ),
@@ -619,7 +494,7 @@ impl fmt::Display for Graph {
 }
 
 /// Renders a value in the literal grammar shared with `.orla`.
-pub(crate) fn literal_text(value: &Value) -> String {
+pub fn literal_text(value: &Value) -> String {
     match value {
         Value::Float(v) => format!("{v:?}"),
         Value::Int(v) => v.to_string(),

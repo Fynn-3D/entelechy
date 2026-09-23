@@ -17,6 +17,7 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "m
 pollster = "0.4"
 
 [dev-dependencies]
+orla-scene = { path = "../scene" }
 orla-cpu = { path = "../cpu" }
 orla-compiler = { path = "../compiler" }
 orla-matrix = { path = "../matrix" }
