@@ -5,8 +5,14 @@ use crate::{ParseError, Span};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Token {
     Ident(String),
-    Int(i32),
-    Float(f32),
+    /// An integer as written; which width it is, the compiler decides.
+    Int(i64),
+    /// A float as written, kept exact until a width is decided.
+    Float(f64),
+    /// A float written with `d`: a `Double`.
+    Double(f64),
+    /// An integer written with `l`: a `Long`.
+    Long(i64),
     Str(String),
     Punct(&'static str),
     Eof,
@@ -18,6 +24,8 @@ impl Token {
             Self::Ident(name) => format!("`{name}`"),
             Self::Int(value) => format!("`{value}`"),
             Self::Float(value) => format!("`{value:?}`"),
+            Self::Double(value) => format!("`{value:?}d`"),
+            Self::Long(value) => format!("`{value}l`"),
             Self::Str(value) => format!("`\"{value}\"`"),
             Self::Punct(punct) => format!("`{punct}`"),
             Self::Eof => "end of file".to_owned(),
@@ -111,20 +119,44 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             });
             continue;
         }
+        // A suffix after a number: `d` for a `Double`, `l` for a `Long`,
+        // when no other letter follows it.
+        let suffix = |at: usize, letters: &[char]| {
+            chars.get(at).copied().filter(|c| {
+                letters.contains(c)
+                    && !chars
+                        .get(at + 1)
+                        .is_some_and(|next| next.is_ascii_alphanumeric() || *next == '_')
+            })
+        };
         if c == '0' && chars.get(index + 1) == Some(&'x') {
-            // A hexadecimal `Int`: its 32 bits as written, so `0x80000000`
-            // is the sign bit.
+            // A hexadecimal integer: its bits as written, so `0x80000000`
+            // is an `Int`'s sign bit; more than eight digits, or an `l`,
+            // make a `Long`.
             advance(2, &mut index, &mut byte);
             while index < chars.len() && chars[index].is_ascii_hexdigit() {
                 advance(1, &mut index, &mut byte);
             }
             let text = &source[start..byte];
-            let value = u32::from_str_radix(&text[2..], 16).map_err(|_| ParseError {
-                span,
-                message: format!("`{text}` is not a 32-bit hexadecimal literal"),
-            })?;
+            let digits = &text[2..];
+            let long = suffix(index, &['l']).is_some();
+            if long {
+                advance(1, &mut index, &mut byte);
+            }
+            let token = match u64::from_str_radix(digits, 16) {
+                Ok(bits) if long || digits.len() > 8 => Token::Long(bits as i64),
+                Ok(bits) if bits <= u64::from(u32::MAX) => {
+                    Token::Int(i64::from(bits as u32 as i32))
+                }
+                _ => {
+                    return Err(ParseError {
+                        span,
+                        message: format!("`{text}` is not a 32- or 64-bit hexadecimal literal"),
+                    });
+                }
+            };
             tokens.push(Lexeme {
-                token: Token::Int(value as i32),
+                token,
                 span,
                 start,
                 end: byte,
@@ -146,16 +178,33 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
                 }
             }
             let text = &source[start..byte];
-            let token = if is_float {
-                Token::Float(text.parse().map_err(|_| ParseError {
+            let written = suffix(index, &['d', 'l']);
+            if written.is_some() {
+                advance(1, &mut index, &mut byte);
+            }
+            let float = |text: &str| {
+                text.parse::<f64>().map_err(|_| ParseError {
                     span,
                     message: format!("`{text}` is not a valid float literal"),
-                })?)
-            } else {
-                Token::Int(text.parse().map_err(|_| ParseError {
+                })
+            };
+            let integer = |text: &str| {
+                text.parse::<i64>().map_err(|_| ParseError {
                     span,
-                    message: format!("`{text}` does not fit in a 32-bit integer"),
-                })?)
+                    message: format!("`{text}` does not fit in a 64-bit integer"),
+                })
+            };
+            let token = match (written, is_float) {
+                (Some('d'), _) => Token::Double(float(text)?),
+                (Some(_), true) => {
+                    return Err(ParseError {
+                        span,
+                        message: format!("`{text}l`: a `Long` is a whole number"),
+                    });
+                }
+                (Some(_), false) => Token::Long(integer(text)?),
+                (None, true) => Token::Float(float(text)?),
+                (None, false) => Token::Int(integer(text)?),
             };
             tokens.push(Lexeme {
                 token,

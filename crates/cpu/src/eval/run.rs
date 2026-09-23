@@ -3,7 +3,7 @@
 
 use orla_abi::Domain;
 use orla_ir::{BinaryOp, Intrinsic};
-use orla_rules::matrix::{self, Floats};
+use orla_rules::matrix::{self, Doubles, Floats};
 
 use crate::{ArithmeticError, ExecutionError};
 
@@ -41,6 +41,28 @@ pub(crate) struct Machine<'p, 's> {
 
 pub(super) fn f(word: u32) -> f32 {
     f32::from_bits(word)
+}
+
+/// The 64 bits of two words at `at`, the low one first.
+#[inline]
+pub(super) fn wide(s: &[u32], at: usize) -> u64 {
+    u64::from(s[at]) | u64::from(s[at + 1]) << 32
+}
+
+#[inline]
+pub(super) fn put_wide(s: &mut [u32], at: usize, bits: u64) {
+    s[at] = bits as u32;
+    s[at + 1] = (bits >> 32) as u32;
+}
+
+#[inline]
+pub(super) fn d(s: &[u32], at: usize) -> f64 {
+    f64::from_bits(wide(s, at))
+}
+
+#[inline]
+pub(super) fn l(s: &[u32], at: usize) -> i64 {
+    wide(s, at) as i64
 }
 
 impl<'p, 's> Machine<'p, 's> {
@@ -273,7 +295,291 @@ impl<'p, 's> Machine<'p, 's> {
                 let k = (s[fp + index] as i32).clamp(0, *count as i32 - 1) as usize;
                 s.copy_within(fp + base + k * n..fp + base + (k + 1) * n, fp + dst);
             }
-            Instr::MatMul { kind, dst, a, b, n } => {
+            Instr::MatMul {
+                kind,
+                dst,
+                a,
+                b,
+                n,
+                wide: true,
+            } => {
+                let doubles = |at: usize, count: usize| -> Vec<f64> {
+                    (0..count).map(|k| d(s, fp + at + 2 * k)).collect()
+                };
+                let square = n * n;
+                let out = match kind {
+                    MatMul::MatMat => matrix::mul_mat_mat(
+                        &mut Doubles,
+                        *n,
+                        &doubles(*a, square),
+                        &doubles(*b, square),
+                    ),
+                    MatMul::MatVec => matrix::mul_mat_vec(
+                        &mut Doubles,
+                        *n,
+                        &doubles(*a, square),
+                        &doubles(*b, *n),
+                    ),
+                    MatMul::VecMat => matrix::mul_vec_mat(
+                        &mut Doubles,
+                        *n,
+                        &doubles(*a, *n),
+                        &doubles(*b, square),
+                    ),
+                };
+                for (k, v) in out.iter().enumerate() {
+                    put_wide(s, fp + dst + 2 * k, v.to_bits());
+                }
+            }
+            Instr::Matrix {
+                op,
+                dst,
+                src,
+                n,
+                wide: true,
+            } => {
+                let m: Vec<f64> = (0..n * n).map(|k| d(s, fp + src + 2 * k)).collect();
+                let out = match op {
+                    Intrinsic::Transpose => matrix::transpose(*n, &m),
+                    Intrinsic::Inverse => matrix::inverse(&mut Doubles, *n, &m),
+                    _ => vec![matrix::determinant(&mut Doubles, *n, &m)],
+                };
+                for (k, v) in out.iter().enumerate() {
+                    put_wide(s, fp + dst + 2 * k, v.to_bits());
+                }
+            }
+            Instr::DMap1 { f: op, dst, src, n } => {
+                for i in 0..*n {
+                    let v = op(d(s, fp + src + 2 * i));
+                    put_wide(s, fp + dst + 2 * i, v.to_bits());
+                }
+            }
+            Instr::DMap2 {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                n,
+            } => {
+                for i in 0..*n {
+                    let v = op(d(s, fp + a + 2 * i * sa), d(s, fp + b + 2 * i * sb));
+                    put_wide(s, fp + dst + 2 * i, v.to_bits());
+                }
+            }
+            Instr::DMap3 {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                c,
+                sc,
+                n,
+            } => {
+                for i in 0..*n {
+                    let v = op(
+                        d(s, fp + a + 2 * i * sa),
+                        d(s, fp + b + 2 * i * sb),
+                        d(s, fp + c + 2 * i * sc),
+                    );
+                    put_wide(s, fp + dst + 2 * i, v.to_bits());
+                }
+            }
+            Instr::DCmp { op, dst, a, b } => {
+                let (a, b) = (d(s, fp + a), d(s, fp + b));
+                let holds = match op {
+                    BinaryOp::Less => a < b,
+                    BinaryOp::LessEqual => a <= b,
+                    BinaryOp::Greater => a > b,
+                    _ => a >= b,
+                };
+                s[fp + dst] = holds as u32;
+            }
+            Instr::DEq {
+                dst,
+                a,
+                b,
+                n,
+                negate,
+            } => {
+                let equal = (0..*n).all(|i| d(s, fp + a + 2 * i) == d(s, fp + b + 2 * i));
+                s[fp + dst] = (equal != *negate) as u32;
+            }
+            Instr::DVector { op, dst, a, b, n } => {
+                let lane = |at: usize, i: usize| d(s, fp + at + 2 * i);
+                let dot = |x: usize, y: usize| {
+                    (0..*n).fold(0.0f64, |sum, i| sum + lane(x, i) * lane(y, i))
+                };
+                let out: Vec<f64> = match op {
+                    DVector::Dot => vec![dot(*a, *b)],
+                    DVector::Length => vec![dot(*a, *a).sqrt()],
+                    DVector::Cross => {
+                        let (x, y) = (
+                            [lane(*a, 0), lane(*a, 1), lane(*a, 2)],
+                            [lane(*b, 0), lane(*b, 1), lane(*b, 2)],
+                        );
+                        vec![
+                            x[1] * y[2] - x[2] * y[1],
+                            x[2] * y[0] - x[0] * y[2],
+                            x[0] * y[1] - x[1] * y[0],
+                        ]
+                    }
+                    DVector::Normalize => {
+                        let length = dot(*a, *a).sqrt();
+                        (0..*n)
+                            .map(|i| {
+                                if length > 0.0 {
+                                    lane(*a, i) / length
+                                } else {
+                                    0.0
+                                }
+                            })
+                            .collect()
+                    }
+                    DVector::Reflect => {
+                        let scale = 2.0 * dot(*b, *a);
+                        (0..*n).map(|i| lane(*a, i) - scale * lane(*b, i)).collect()
+                    }
+                };
+                for (k, v) in out.iter().enumerate() {
+                    put_wide(s, fp + dst + 2 * k, v.to_bits());
+                }
+            }
+            Instr::LBin {
+                op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                n,
+            } => {
+                for i in 0..*n {
+                    let (a, b) = (
+                        l(&self.stack, fp + a + 2 * i * sa),
+                        l(&self.stack, fp + b + 2 * i * sb),
+                    );
+                    let result = match op {
+                        BinaryOp::Add => a.checked_add(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Sub => a.checked_sub(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Mul => a.checked_mul(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Div if b == 0 => Err(ArithmeticError::DivisionByZero),
+                        BinaryOp::Div => a.checked_div(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::Rem if b == 0 => Err(ArithmeticError::DivisionByZero),
+                        BinaryOp::Rem => a.checked_rem(b).ok_or(ArithmeticError::Overflow),
+                        BinaryOp::BitAnd => Ok(a & b),
+                        BinaryOp::BitOr => Ok(a | b),
+                        BinaryOp::BitXor => Ok(a ^ b),
+                        // The count modulo 64.
+                        BinaryOp::Shl => Ok(a.wrapping_shl(b as u32)),
+                        BinaryOp::Shr => Ok(a.wrapping_shr(b as u32)),
+                        BinaryOp::Ushr => Ok((a as u64).wrapping_shr(b as u32) as i64),
+                        _ => unreachable!("compiled from an arithmetic operator"),
+                    };
+                    let v = result.map_err(|e| self.arithmetic(e))?;
+                    put_wide(&mut self.stack, fp + dst + 2 * i, v as u64);
+                }
+            }
+            Instr::LNeg { dst, src, n } => {
+                for i in 0..*n {
+                    let v = l(&self.stack, fp + src + 2 * i)
+                        .checked_neg()
+                        .ok_or(ArithmeticError::Overflow)
+                        .map_err(|e| self.arithmetic(e))?;
+                    put_wide(&mut self.stack, fp + dst + 2 * i, v as u64);
+                }
+            }
+            Instr::LMap1 { f: op, dst, src, n } => {
+                for i in 0..*n {
+                    let v = op(l(s, fp + src + 2 * i));
+                    put_wide(s, fp + dst + 2 * i, v as u64);
+                }
+            }
+            Instr::LMap2 {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                n,
+            } => {
+                for i in 0..*n {
+                    let v = op(l(s, fp + a + 2 * i * sa), l(s, fp + b + 2 * i * sb));
+                    put_wide(s, fp + dst + 2 * i, v as u64);
+                }
+            }
+            Instr::LMap3 {
+                f: op,
+                dst,
+                a,
+                sa,
+                b,
+                sb,
+                c,
+                sc,
+                n,
+            } => {
+                for i in 0..*n {
+                    let v = op(
+                        l(s, fp + a + 2 * i * sa),
+                        l(s, fp + b + 2 * i * sb),
+                        l(s, fp + c + 2 * i * sc),
+                    );
+                    put_wide(s, fp + dst + 2 * i, v as u64);
+                }
+            }
+            Instr::LCmp { op, dst, a, b } => {
+                let (a, b) = (l(s, fp + a), l(s, fp + b));
+                let holds = match op {
+                    BinaryOp::Less => a < b,
+                    BinaryOp::LessEqual => a <= b,
+                    BinaryOp::Greater => a > b,
+                    _ => a >= b,
+                };
+                s[fp + dst] = holds as u32;
+            }
+            Instr::Convert {
+                from,
+                to,
+                dst,
+                src,
+                n,
+            } => {
+                for i in 0..*n {
+                    let at = fp + src + i * from.words();
+                    // Every kind is first the widest of its sort: a float
+                    // as an `f64`, an integer as an `i64`.
+                    let (float, integer) = match from {
+                        Lane::Float => (f64::from(f(s[at])), None),
+                        Lane::Double => (d(s, at), None),
+                        Lane::Int => (0.0, Some(i64::from(s[at] as i32))),
+                        Lane::Bool => (0.0, Some(i64::from(s[at] != 0))),
+                        Lane::Long => (0.0, Some(l(s, at))),
+                    };
+                    let out = fp + dst + i * to.words();
+                    match (to, integer) {
+                        (Lane::Float, Some(v)) => s[out] = (v as f32).to_bits(),
+                        (Lane::Float, None) => s[out] = (float as f32).to_bits(),
+                        (Lane::Double, Some(v)) => put_wide(s, out, (v as f64).to_bits()),
+                        (Lane::Double, None) => put_wide(s, out, float.to_bits()),
+                        // A float truncates toward zero, saturating, and
+                        // a NaN is zero, as `as` does; a long wraps.
+                        (Lane::Int, Some(v)) => s[out] = v as i32 as u32,
+                        (Lane::Int, None) => s[out] = float as i32 as u32,
+                        (Lane::Long, Some(v)) => put_wide(s, out, v as u64),
+                        (Lane::Long, None) => put_wide(s, out, float as i64 as u64),
+                        (Lane::Bool, Some(v)) => s[out] = u32::from(v != 0),
+                        (Lane::Bool, None) => s[out] = u32::from(float != 0.0),
+                    }
+                }
+            }
+            Instr::MatMul {
+                kind, dst, a, b, n, ..
+            } => {
                 let floats = |at: usize, count: usize| -> Vec<f32> {
                     s[fp + at..fp + at + count].iter().map(|w| f(*w)).collect()
                 };
@@ -296,7 +602,9 @@ impl<'p, 's> Machine<'p, 's> {
                     s[fp + dst + k] = v.to_bits();
                 }
             }
-            Instr::Matrix { op, dst, src, n } => {
+            Instr::Matrix {
+                op, dst, src, n, ..
+            } => {
                 let m: Vec<f32> = s[fp + src..fp + src + n * n]
                     .iter()
                     .map(|w| f(*w))

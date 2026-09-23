@@ -129,6 +129,7 @@ fn wgsl_type(ty: Type) -> String {
         Type::Mat3 => "mat3x3<f32>".into(),
         Type::Mat4 => "mat4x4<f32>".into(),
         Type::Struct(index) => format!("S{index}"),
+        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -212,6 +213,7 @@ fn literal(value: &Value) -> String {
         // The validator refuses a constant record: a struct or an array
         // is built by `Construct`.
         Value::Record(_) => unreachable!("a constant of the IR is never a record"),
+        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -613,6 +615,7 @@ pub fn type_words(module: &Module, ty: Type) -> usize {
             .iter()
             .map(|field| type_words(module, field.ty))
             .sum(),
+        other => other.words().unwrap_or(1),
     }
 }
 
@@ -734,6 +737,7 @@ fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Typ
                 value_words(module, field.ty, &path, out);
             }
         }
+        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -1465,6 +1469,7 @@ fn all_floats(module: &Module, ty: Type) -> bool {
             .fields
             .iter()
             .all(|field| all_floats(module, field.ty)),
+        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -1767,6 +1772,7 @@ fn scalar_load(encoding: Encoding, kind: Scalar, buffer: &str, base: &str, k: us
             Scalar::Float => format!("bitcast<f32>({word})"),
             Scalar::Int => format!("bitcast<i32>({word})"),
             Scalar::Bool => format!("({word} != 0u)"),
+            other => unreachable!("the GPU refuses a module holding a {other:?}"),
         };
     }
     let size = encoding.bytes();
@@ -1845,6 +1851,7 @@ fn scalar_paths(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Sc
                 );
             }
         }
+        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -1949,6 +1956,7 @@ fn compose(
             }
             (format!("S{index}({})", parts.join(", ")), used)
         }
+        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -2022,6 +2030,7 @@ fn store_lines(
             }
             used
         }
+        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -2140,6 +2149,7 @@ impl Emitter<'_> {
                         Scalar::Float => format!("bitcast<f32>({word})"),
                         Scalar::Int => format!("bitcast<i32>({word})"),
                         Scalar::Bool => format!("({word} != 0u)"),
+                        other => unreachable!("the GPU refuses a module holding a {other:?}"),
                     }
                 };
                 compose(self.module, ty, 0, &word).0

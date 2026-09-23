@@ -43,6 +43,28 @@ impl Arith for Floats {
     }
 }
 
+/// Doubles, for the interpreter's matrices of them.
+pub struct Doubles;
+
+impl Arith for Doubles {
+    type V = f64;
+    fn add(&mut self, a: f64, b: f64) -> f64 {
+        a + b
+    }
+    fn sub(&mut self, a: f64, b: f64) -> f64 {
+        a - b
+    }
+    fn mul(&mut self, a: f64, b: f64) -> f64 {
+        a * b
+    }
+    fn div(&mut self, a: f64, b: f64) -> f64 {
+        a / b
+    }
+    fn neg(&mut self, a: f64) -> f64 {
+        -a
+    }
+}
+
 /// The formulas as text: every operation parenthesised, for a shader.
 pub struct Text;
 

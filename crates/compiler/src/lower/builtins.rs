@@ -22,46 +22,51 @@ impl Builder<'_> {
         args: &[Expr],
         span: Span,
     ) -> Result<ValueId, CompileError> {
-        let ids = args
+        let mut ids = args
             .iter()
             .map(|arg| self.value(arg))
             .collect::<Result<Vec<_>, _>>()?;
+        self.adapt_all(&mut ids);
         let types: Vec<Type> = ids.iter().map(|id| self.ty(*id)).collect();
-        let float_like = |t: Type| matches!(t, Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4);
-        let vector = |t: Type| t.components().is_some();
+        // A float of either width, or a vector of them.
+        let float_like = |t: Type| t.is_float_kind() && t.order().is_none();
+        let vector = |t: Type| t.lanes().is_some() && float_like(t);
         let list = types
             .iter()
             .map(|ty| ty.to_string())
             .collect::<Vec<_>>()
             .join(", ");
         let refused = semantic(span, format!("`{name}` cannot be applied to ({list})"));
+        // The scalar kind of the first argument, which the constants the
+        // composition needs are made in.
+        let kind = types
+            .first()
+            .and_then(|ty| ty.scalar())
+            .unwrap_or(Type::Float);
         match (name, types.as_slice()) {
             ("saturate", [a]) if float_like(*a) => {
-                let zero = self.constant(0.0);
-                let one = self.constant(1.0);
+                let zero = self.number(kind, 0.0);
+                let one = self.number(kind, 1.0);
                 Ok(self.emit(*a, Op::Intrinsic(Intrinsic::Clamp, vec![ids[0], zero, one])))
             }
             ("distance", [a, b]) if a == b && vector(*a) => {
                 let difference = self.emit(*a, Op::Binary(BinaryOp::Sub, ids[0], ids[1]));
-                Ok(self.emit(
-                    Type::Float,
-                    Op::Intrinsic(Intrinsic::Length, vec![difference]),
-                ))
+                Ok(self.emit(kind, Op::Intrinsic(Intrinsic::Length, vec![difference])))
             }
             ("radians", [a]) if float_like(*a) => {
-                let scale = self.constant(std::f32::consts::PI / 180.0);
+                let scale = self.number(kind, std::f64::consts::PI / 180.0);
                 Ok(self.emit(*a, Op::Binary(BinaryOp::Mul, ids[0], scale)))
             }
             ("degrees", [a]) if float_like(*a) => {
-                let scale = self.constant(180.0 / std::f32::consts::PI);
+                let scale = self.number(kind, 180.0 / std::f64::consts::PI);
                 Ok(self.emit(*a, Op::Binary(BinaryOp::Mul, ids[0], scale)))
             }
             ("inversesqrt", [a]) if float_like(*a) => {
                 let root = self.emit(*a, Op::Intrinsic(Intrinsic::Sqrt, vec![ids[0]]));
-                let one = self.constant(1.0);
+                let one = self.number(kind, 1.0);
                 Ok(self.emit(*a, Op::Binary(BinaryOp::Div, one, root)))
             }
-            ("mod", [a, b]) if float_like(*a) && (a == b || *b == Type::Float) => {
+            ("mod", [a, b]) if float_like(*a) && (a == b || *b == kind) => {
                 // x - y * floor(x / y): the remainder that takes y's sign.
                 // At an exact multiple it is a knife-edge, 0 or nearly y,
                 // as floor is at an integer; backends may fall either way.
@@ -70,18 +75,21 @@ impl Builder<'_> {
                 let product = self.emit(*a, Op::Binary(BinaryOp::Mul, floored, ids[1]));
                 Ok(self.emit(*a, Op::Binary(BinaryOp::Sub, ids[0], product)))
             }
-            ("isnan", [Type::Float]) => {
+            ("isnan", [Type::Float | Type::Double]) => {
                 Ok(self.emit(Type::Bool, Op::Binary(BinaryOp::NotEqual, ids[0], ids[0])))
             }
-            ("isinf", [Type::Float]) => {
-                let magnitude = self.emit(Type::Float, Op::Intrinsic(Intrinsic::Abs, vec![ids[0]]));
-                let largest = self.constant(f32::MAX);
+            ("isinf", [a @ (Type::Float | Type::Double)]) => {
+                let magnitude = self.emit(*a, Op::Intrinsic(Intrinsic::Abs, vec![ids[0]]));
+                let largest = match a {
+                    Type::Double => self.number(kind, f64::MAX),
+                    _ => self.constant(f32::MAX),
+                };
                 Ok(self.emit(
                     Type::Bool,
                     Op::Binary(BinaryOp::Greater, magnitude, largest),
                 ))
             }
-            ("refract", [i, n, Type::Float]) if i == n && vector(*i) => {
+            ("refract", [i, n, Type::Float]) if i == n && i.components().is_some() => {
                 // k = 1 - eta^2 (1 - dot(n, i)^2); below zero, the zero
                 // vector; else eta i - (eta dot(n, i) + sqrt(k)) n.
                 let (incident, normal, eta) = (ids[0], ids[1], ids[2]);
@@ -181,6 +189,7 @@ impl Builder<'_> {
                 }
                 let value = self.value(&args[2])?;
                 let element = port_ty.element;
+                let value = self.adapt(value, element);
                 if self.ty(value) != element {
                     return Err(semantic(
                         args[2].span,
@@ -396,84 +405,75 @@ impl Builder<'_> {
                 }
                 Ok(self.emit(Type::Int, Op::Index))
             }
-            "vec2" | "vec3" | "vec4" => {
-                let ty = match name {
-                    "vec2" => Type::Vec2,
-                    "vec3" => Type::Vec3,
-                    _ => Type::Vec4,
+            "vec2" | "vec3" | "vec4" | "ivec2" | "ivec3" | "dvec2" | "dvec3" | "dvec4"
+            | "lvec2" | "lvec3" => {
+                let (kind, wanted) = match name {
+                    "vec2" => (Type::Float, 2),
+                    "vec3" => (Type::Float, 3),
+                    "vec4" => (Type::Float, 4),
+                    "ivec2" => (Type::Int, 2),
+                    "ivec3" => (Type::Int, 3),
+                    "dvec2" => (Type::Double, 2),
+                    "dvec3" => (Type::Double, 3),
+                    "dvec4" => (Type::Double, 4),
+                    "lvec2" => (Type::Long, 2),
+                    _ => (Type::Long, 3),
+                };
+                let ty = Type::vector(kind, wanted).unwrap_or(kind);
+                // What a component may be made from, converted: an `Int`
+                // widens into a float vector, and a 64-bit vector takes
+                // its 32-bit kin's components too. Narrowing is written
+                // out, with `float()` or `int()`.
+                let takes = |from: Type| match kind {
+                    Type::Float => matches!(from, Type::Float | Type::Int),
+                    Type::Int => from == Type::Int,
+                    Type::Double => {
+                        matches!(from, Type::Double | Type::Float | Type::Int | Type::Long)
+                    }
+                    _ => matches!(from, Type::Long | Type::Int),
                 };
                 // Components from scalars and shorter vectors, in order,
                 // as many as the vector has: `vec4(v3, 1.0)`, `vec3(1.0,
                 // v2)`. An Int component widens; a cell address needs no
                 // `float()` at every use.
-                let wanted = ty.components().unwrap_or(0) as usize;
+                let wanted = usize::from(wanted);
                 let mut parts = Vec::with_capacity(wanted);
                 let mut given = Vec::with_capacity(args.len());
                 for arg in args {
                     let part = self.value(arg)?;
+                    let part = self.adapt(part, kind);
                     let part_ty = self.ty(part);
                     given.push(part_ty.to_string());
-                    match part_ty {
-                        Type::Float => parts.push(part),
-                        Type::Int => parts.push(
-                            self.emit(Type::Float, Op::Intrinsic(Intrinsic::ToFloat, vec![part])),
-                        ),
-                        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
-                            for k in 0..part_ty.components().unwrap_or(0) {
-                                parts.push(self.emit(Type::Float, Op::Extract(part, u32::from(k))));
-                            }
+                    let (from, count) = match part_ty.shape() {
+                        Some((from, count)) if part_ty.order().is_none() && takes(from) => {
+                            (from, count)
                         }
-                        other => {
-                            return Err(semantic(
-                                arg.span,
-                                format!(
-                                    "`{name}` components must be Float, Int or a shorter vector, found {other}"
+                        _ => {
+                            let found = self.describe(part_ty);
+                            let message = match kind {
+                                Type::Float => format!(
+                                    "`{name}` components must be Float, Int or a shorter vector, found {found}"
                                 ),
-                            ));
-                        }
-                    }
-                }
-                if parts.len() != wanted {
-                    return Err(semantic(
-                        span,
-                        format!(
-                            "`{name}` takes {wanted} components, found {} in ({})",
-                            parts.len(),
-                            given.join(", ")
-                        ),
-                    ));
-                }
-                Ok(self.emit(ty, Op::Construct(parts)))
-            }
-            "ivec2" | "ivec3" => {
-                let ty = if name == "ivec2" {
-                    Type::IVec2
-                } else {
-                    Type::IVec3
-                };
-                let wanted = ty.int_components().unwrap_or(0) as usize;
-                let mut parts = Vec::with_capacity(wanted);
-                let mut given = Vec::with_capacity(args.len());
-                for arg in args {
-                    let part = self.value(arg)?;
-                    let part_ty = self.ty(part);
-                    given.push(part_ty.to_string());
-                    match part_ty {
-                        Type::Int => parts.push(part),
-                        Type::IVec2 | Type::IVec3 => {
-                            for k in 0..part_ty.int_components().unwrap_or(0) {
-                                parts.push(self.emit(Type::Int, Op::Extract(part, u32::from(k))));
-                            }
-                        }
-                        other => {
-                            return Err(semantic(
-                                arg.span,
-                                format!(
-                                    "`{name}` components must be Int or a shorter integer vector, found {}; a Float truncates with int()",
-                                    self.describe(other)
+                                Type::Int => format!(
+                                    "`{name}` components must be Int or a shorter integer vector, found {found}; a Float truncates with int()"
                                 ),
-                            ));
+                                Type::Double => format!(
+                                    "`{name}` components must be numbers or shorter vectors of them, found {found}"
+                                ),
+                                _ => format!(
+                                    "`{name}` components must be Long, Int or a shorter integer vector, found {found}; a float truncates with long()"
+                                ),
+                            };
+                            return Err(semantic(arg.span, message));
                         }
+                    };
+                    for k in 0..count {
+                        let component = if count == 1 {
+                            part
+                        } else {
+                            self.emit(from, Op::Extract(part, u32::from(k)))
+                        };
+                        parts.push(self.converted(component, kind));
                     }
                 }
                 if parts.len() != wanted {
@@ -511,27 +511,35 @@ impl Builder<'_> {
                     None => float,
                 })
             }
-            "mat2" | "mat3" | "mat4" => {
-                let ty = match name {
-                    "mat2" => Type::Mat2,
-                    "mat3" => Type::Mat3,
-                    _ => Type::Mat4,
+            "mat2" | "mat3" | "mat4" | "dmat2" | "dmat3" | "dmat4" => {
+                let (kind, order) = match name {
+                    "mat2" => (Type::Float, 2),
+                    "mat3" => (Type::Float, 3),
+                    "mat4" => (Type::Float, 4),
+                    "dmat2" => (Type::Double, 2),
+                    "dmat3" => (Type::Double, 3),
+                    _ => (Type::Double, 4),
                 };
-                let order = ty.order().unwrap_or(0) as usize;
-                let column = ty.column().unwrap_or(Type::Float);
+                let column = Type::vector(kind, order).unwrap_or(kind);
+                let ty = column.matrix_of().unwrap_or(column);
+                let order = usize::from(order);
                 if args.len() == 1 {
-                    // One Float: that value down the diagonal.
+                    // One number: that value down the diagonal.
                     let diagonal = self.value(&args[0])?;
-                    if self.ty(diagonal) != Type::Float {
+                    let diagonal = self.adapt(diagonal, kind);
+                    if self.ty(diagonal) != kind {
                         return Err(semantic(
                             args[0].span,
                             format!(
-                                "`{name}` takes {order} {column} columns, or one Float for the diagonal; found {}",
+                                "`{name}` takes {order} {column} columns, or one {kind} for the diagonal; found {}",
                                 self.describe(self.ty(diagonal))
                             ),
                         ));
                     }
-                    let zero = self.constant(0.0);
+                    let zero = match kind {
+                        Type::Double => self.emit(Type::Double, Op::Const(Value::Double(0.0))),
+                        _ => self.constant(0.0),
+                    };
                     let columns = (0..order)
                         .map(|c| {
                             let parts = (0..order)
@@ -577,6 +585,7 @@ impl Builder<'_> {
                     let mut ids = Vec::with_capacity(args.len());
                     for (arg, expected) in args.iter().zip(expected) {
                         let id = self.value(arg)?;
+                        let id = self.adapt(id, expected);
                         if self.ty(id) != expected {
                             return Err(semantic(
                                 arg.span,
@@ -610,10 +619,11 @@ impl Builder<'_> {
                     return self.composed(name, args, span);
                 }
                 if let Some(intrinsic) = Intrinsic::from_name(name) {
-                    let ids = args
+                    let mut ids = args
                         .iter()
                         .map(|arg| self.value(arg))
                         .collect::<Result<Vec<_>, _>>()?;
+                    self.adapt_all(&mut ids);
                     let types = ids.iter().map(|id| self.ty(*id)).collect::<Vec<_>>();
                     let ty = intrinsic.result_type(&types).ok_or_else(|| {
                         let list = types

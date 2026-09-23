@@ -21,7 +21,8 @@ use std::str::FromStr;
 pub use fuse::{FuseError, InputUse, fuse, fuse_outputs, input_use, samples_only};
 pub use optimize::optimize;
 pub use orla_abi::{
-    Capabilities, Capability, Encoding, PortType, Scalar, Schema, Shape, ShapeIndex, Type, Value,
+    Capabilities, Capability, Encoding, Number, PortType, Scalar, Schema, Shape, ShapeIndex, Type,
+    Value,
 };
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
@@ -126,26 +127,31 @@ impl Port {
     }
 }
 
+/// The kind of word a value type's scalars are kept as.
+pub fn scalar_kind(ty: Type) -> Option<Scalar> {
+    Some(match ty.scalar()? {
+        Type::Float => Scalar::Float,
+        Type::Int => Scalar::Int,
+        Type::Bool => Scalar::Bool,
+        Type::Double => Scalar::Double,
+        Type::Long => Scalar::Long,
+        _ => return None,
+    })
+}
+
 /// The storage layout of a value type: vectors and structs flattened to
 /// scalars in declaration order. `None` for unknown structs.
 pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
     fn push(ty: Type, structs: &[StructDef], out: &mut Vec<Scalar>) -> Option<()> {
         match ty {
-            Type::Float => out.push(Scalar::Float),
-            Type::Int => out.push(Scalar::Int),
-            Type::Bool => out.push(Scalar::Bool),
-            Type::Vec2 => out.extend([Scalar::Float; 2]),
-            Type::Vec3 => out.extend([Scalar::Float; 3]),
-            Type::Vec4 => out.extend([Scalar::Float; 4]),
-            Type::IVec2 => out.extend([Scalar::Int; 2]),
-            Type::IVec3 => out.extend([Scalar::Int; 3]),
-            Type::Mat2 => out.extend([Scalar::Float; 4]),
-            Type::Mat3 => out.extend([Scalar::Float; 9]),
-            Type::Mat4 => out.extend([Scalar::Float; 16]),
             Type::Struct(index) => {
                 for field in &structs.get(index as usize)?.fields {
                     push(field.ty, structs, out)?;
                 }
+            }
+            other => {
+                let words = other.words()?;
+                out.extend(std::iter::repeat_n(scalar_kind(other)?, words));
             }
         }
         Some(())
@@ -182,6 +188,16 @@ pub fn template(ty: Type, structs: &[StructDef]) -> Value {
         Type::Mat2 => Value::Mat2([0.0; 4]),
         Type::Mat3 => Value::Mat3([0.0; 9]),
         Type::Mat4 => Value::Mat4([0.0; 16]),
+        Type::Double => Value::Double(0.0),
+        Type::Long => Value::Long(0),
+        Type::DVec2 => Value::DVec2([0.0; 2]),
+        Type::DVec3 => Value::DVec3([0.0; 3]),
+        Type::DVec4 => Value::DVec4([0.0; 4]),
+        Type::LVec2 => Value::LVec2([0; 2]),
+        Type::LVec3 => Value::LVec3([0; 3]),
+        Type::DMat2 => Value::DMat2([0.0; 4]),
+        Type::DMat3 => Value::DMat3([0.0; 9]),
+        Type::DMat4 => Value::DMat4([0.0; 16]),
         Type::Struct(index) => Value::Record(
             structs[index as usize]
                 .fields
@@ -193,7 +209,9 @@ pub fn template(ty: Type, structs: &[StructDef]) -> Value {
 }
 
 /// `value` as a value of type `ty`, when its layout is the type's (an
-/// integer standing in for a float); `None` when it is another layout.
+/// integer standing in for a float, a number of one width for the other:
+/// [`Number::as_kind`](orla_abi::Number::as_kind)); `None` when it is
+/// another layout.
 pub fn value_as(value: &Value, ty: Type, structs: &[StructDef]) -> Option<Value> {
     value.shaped_like(&template(ty, structs))
 }
@@ -384,91 +402,64 @@ pub enum BinaryOp {
 
 impl BinaryOp {
     /// Result type of `a op b`, or `None` when the operands cannot combine.
-    /// Arithmetic: vectors combine componentwise with vectors of the same
-    /// size or with a float on either side; integers only with integers.
-    /// Matrices add and subtract with matrices of their order, scale by a
-    /// float, and multiply as matrices: `Mat * Mat`, `Mat * Vec` (a
-    /// column), `Vec * Mat` (a row). Comparisons take two scalars of one
-    /// type and give `Bool`; equality also compares `Bool`s, whole
-    /// vectors and whole matrices. `&&` and `||` take `Bool`s. The bit
-    /// operators and shifts take two `Int`s. Integer vectors take the
-    /// arithmetic, bit and shift operators componentwise with each other
-    /// or with an `Int` on either side, and compare whole with `==`.
+    /// Both sides are of one scalar kind: a `Float` never meets a
+    /// `Double`, nor an `Int` a `Long`, without a conversion. Arithmetic:
+    /// vectors combine componentwise with vectors of the same size or with
+    /// a scalar of their kind on either side. Matrices add and subtract
+    /// with matrices of their order, scale by a scalar, and multiply as
+    /// matrices: `Mat * Mat`, `Mat * Vec` (a column), `Vec * Mat` (a row).
+    /// Comparisons take two scalars of one type and give `Bool`; equality
+    /// also compares `Bool`s, whole vectors and whole matrices. `&&` and
+    /// `||` take `Bool`s. The bit operators and shifts take integers of
+    /// either width, and integer vectors, with a scalar broadcasting.
     pub fn result_type(self, a: Type, b: Type) -> Option<Type> {
-        if a.int_components().is_some() || b.int_components().is_some() {
-            let vector = if a.int_components().is_some() { a } else { b };
-            let scalar = if vector == a { b } else { a };
-            return match self {
-                Self::Add
-                | Self::Sub
-                | Self::Mul
-                | Self::Div
-                | Self::Rem
-                | Self::BitAnd
-                | Self::BitOr
-                | Self::BitXor
-                | Self::Shl
-                | Self::Shr
-                | Self::Ushr
-                    if scalar == vector || scalar == Type::Int =>
-                {
-                    Some(vector)
-                }
-                Self::Equal | Self::NotEqual if a == b => Some(Type::Bool),
-                _ => None,
-            };
+        let kind = a.scalar()?;
+        if b.scalar()? != kind {
+            return None;
         }
-        if a.order().is_some() || b.order().is_some() {
-            return match self {
-                Self::Add | Self::Sub if a == b => Some(a),
-                Self::Mul if a == b => Some(a),
-                Self::Mul if a.column() == Some(b) => Some(b),
-                Self::Mul if b.column() == Some(a) => Some(a),
-                Self::Mul if a == Type::Float => Some(b),
-                Self::Mul if b == Type::Float => Some(a),
-                Self::Equal | Self::NotEqual if a == b => Some(Type::Bool),
-                _ => None,
-            };
-        }
+        let integer = matches!(kind, Type::Int | Type::Long);
+        let float = matches!(kind, Type::Float | Type::Double);
+        // Same shape, or a scalar beside the other.
+        let broadcast = || {
+            if a == b || b == kind {
+                Some(a)
+            } else if a == kind {
+                Some(b)
+            } else {
+                None
+            }
+        };
         match self {
-            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr | Self::Ushr => {
-                match (a, b) {
-                    (Type::Int, Type::Int) => Some(Type::Int),
+            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem
+                if a.order().is_some() || b.order().is_some() =>
+            {
+                match self {
+                    Self::Add | Self::Sub | Self::Mul if a == b => Some(a),
+                    Self::Mul if a.column() == Some(b) => Some(b),
+                    Self::Mul if b.column() == Some(a) => Some(a),
+                    Self::Mul if a == kind => Some(b),
+                    Self::Mul if b == kind => Some(a),
                     _ => None,
                 }
             }
-            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem => match (a, b) {
-                (Type::Float, Type::Float) => Some(Type::Float),
-                (Type::Int, Type::Int) => Some(Type::Int),
-                (Type::Vec2, Type::Vec2)
-                | (Type::Vec2, Type::Float)
-                | (Type::Float, Type::Vec2) => Some(Type::Vec2),
-                (Type::Vec3, Type::Vec3)
-                | (Type::Vec3, Type::Float)
-                | (Type::Float, Type::Vec3) => Some(Type::Vec3),
-                (Type::Vec4, Type::Vec4)
-                | (Type::Vec4, Type::Float)
-                | (Type::Float, Type::Vec4) => Some(Type::Vec4),
-                _ => None,
-            },
-            Self::Less | Self::LessEqual | Self::Greater | Self::GreaterEqual => match (a, b) {
-                (Type::Float, Type::Float) | (Type::Int, Type::Int) => Some(Type::Bool),
-                _ => None,
-            },
-            // Vectors compare whole: equal when every component is.
-            Self::Equal | Self::NotEqual => match (a, b) {
-                (Type::Float, Type::Float)
-                | (Type::Int, Type::Int)
-                | (Type::Bool, Type::Bool)
-                | (Type::Vec2, Type::Vec2)
-                | (Type::Vec3, Type::Vec3)
-                | (Type::Vec4, Type::Vec4) => Some(Type::Bool),
-                _ => None,
-            },
-            Self::And | Self::Or => match (a, b) {
-                (Type::Bool, Type::Bool) => Some(Type::Bool),
-                _ => None,
-            },
+            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem if integer || float => {
+                broadcast()
+            }
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr | Self::Ushr
+                if integer =>
+            {
+                broadcast()
+            }
+            Self::Less | Self::LessEqual | Self::Greater | Self::GreaterEqual
+                if a == b && a == kind && (integer || float) =>
+            {
+                Some(Type::Bool)
+            }
+            // Vectors and matrices compare whole: equal when every
+            // component is.
+            Self::Equal | Self::NotEqual if a == b => Some(Type::Bool),
+            Self::And | Self::Or if a == Type::Bool && b == Type::Bool => Some(Type::Bool),
+            _ => None,
         }
     }
 
@@ -510,21 +501,9 @@ pub enum UnaryOp {
 impl UnaryOp {
     /// Result type, or `None` when the operand does not fit.
     pub fn result_type(self, a: Type) -> Option<Type> {
-        match (self, a) {
-            (
-                Self::Neg,
-                Type::Float
-                | Type::Int
-                | Type::Vec2
-                | Type::Vec3
-                | Type::Vec4
-                | Type::IVec2
-                | Type::IVec3
-                | Type::Mat2
-                | Type::Mat3
-                | Type::Mat4,
-            ) => Some(a),
-            (Self::Not, Type::Bool) => Some(Type::Bool),
+        match (self, a.scalar()?) {
+            (Self::Neg, Type::Float | Type::Int | Type::Double | Type::Long) => Some(a),
+            (Self::Not, Type::Bool) if a == Type::Bool => Some(Type::Bool),
             _ => None,
         }
     }
@@ -580,6 +559,11 @@ pub enum Intrinsic {
     ToFloat,
     /// Convert `Float` (truncating toward zero) or `Bool` (as 0 or 1) to `Int`.
     ToInt,
+    /// Convert any number, or a `Bool` as 0 or 1, to `Double`.
+    ToDouble,
+    /// Convert any number (a float truncating toward zero), or a `Bool`
+    /// as 0 or 1, to `Long`.
+    ToLong,
     /// Dot product of two vectors of the same size.
     Dot,
     /// Cross product of two `Vec3`.
@@ -645,7 +629,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 53] = [
+    pub const ALL: [(Intrinsic, &'static str); 55] = [
         (Intrinsic::Floor, "floor"),
         (Intrinsic::Ceil, "ceil"),
         (Intrinsic::Round, "round"),
@@ -669,6 +653,8 @@ impl Intrinsic {
         (Intrinsic::MulWrap, "mul_wrap"),
         (Intrinsic::ToFloat, "float"),
         (Intrinsic::ToInt, "int"),
+        (Intrinsic::ToDouble, "double"),
+        (Intrinsic::ToLong, "long"),
         (Intrinsic::Dot, "dot"),
         (Intrinsic::Cross, "cross"),
         (Intrinsic::Length, "length"),
@@ -738,9 +724,17 @@ impl Intrinsic {
             Self::AddWrap => "a + b modulo 2^32 on Ints: never a failure, unlike +.",
             Self::SubWrap => "a - b modulo 2^32 on Ints: never a failure, unlike -.",
             Self::MulWrap => "The low 32 bits of a * b on Ints: never a failure, unlike *.",
-            Self::ToFloat => "An Int, or a Bool as 0 or 1, as a Float; an IVec as a Vec.",
+            Self::ToFloat => {
+                "An Int, a Double, a Long, or a Bool as 0 or 1, as a Float; a vector or matrix componentwise."
+            }
             Self::ToInt => {
-                "A Float truncated toward zero, or a Bool as 0 or 1, as an Int; a Vec2 or Vec3 as an IVec, componentwise."
+                "A float truncated toward zero, a Long wrapped to 32 bits, or a Bool as 0 or 1, as an Int; a vector componentwise."
+            }
+            Self::ToDouble => {
+                "A Float, an Int, a Long, or a Bool as 0 or 1, as a Double; a vector or matrix componentwise."
+            }
+            Self::ToLong => {
+                "A float truncated toward zero, an Int, or a Bool as 0 or 1, as a Long; a vector componentwise."
             }
             Self::Dot => "The dot product of two vectors of one size.",
             Self::Cross => "The cross product of two Vec3.",
@@ -822,9 +816,18 @@ impl Intrinsic {
     /// Result type for the given argument types, or `None` if the call is
     /// ill-typed.
     pub fn result_type(self, args: &[Type]) -> Option<Type> {
-        let float_like =
-            |ty: Type| matches!(ty, Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4);
-        let vector = |ty: Type| ty.components().is_some();
+        // A float of either width, or a vector of them.
+        let float_like = |ty: Type| ty.is_float_kind() && ty.order().is_none();
+        // An integer of either width, or a vector of them.
+        let int_like = |ty: Type| ty.is_int_kind();
+        let vector = |ty: Type| ty.lanes().is_some();
+        let scalar = |ty: Type| ty.scalar().unwrap_or(ty);
+        // What a conversion to `to` gives: the argument's shape in `to`'s
+        // kind, from any other kind.
+        let convert = |to: Type| match args {
+            [a] if a.scalar().is_some_and(|from| from != to) => a.with_scalar(to),
+            _ => None,
+        };
         match (self, args) {
             (
                 Self::Floor
@@ -841,55 +844,57 @@ impl Intrinsic {
                 | Self::Acos
                 | Self::Atan
                 | Self::Exp
-                | Self::Log,
+                | Self::Log
+                | Self::Trunc
+                | Self::Exp2
+                | Self::Log2
+                | Self::Sinh
+                | Self::Cosh
+                | Self::Tanh,
                 [a],
             ) if float_like(*a) => Some(*a),
-            (Self::Abs | Self::Sign, [Type::Int | Type::IVec2 | Type::IVec3]) => Some(args[0]),
+            (Self::Abs | Self::Sign, [a]) if int_like(*a) => Some(*a),
+            (Self::Min | Self::Max, [a, b]) if a == b && (float_like(*a) || int_like(*a)) => {
+                Some(*a)
+            }
             (Self::Min | Self::Max, [a, b])
-                if a == b
-                    && (float_like(*a) || *a == Type::Int || a.int_components().is_some()) =>
+                if vector(*a) && *b == scalar(*a) && (float_like(*a) || int_like(*a)) =>
             {
                 Some(*a)
             }
-            (Self::Min | Self::Max, [a, Type::Float]) if vector(*a) => Some(*a),
-            (Self::Min | Self::Max, [a, Type::Int]) if a.int_components().is_some() => Some(*a),
-            (Self::AddWrap | Self::SubWrap | Self::MulWrap, [Type::Int, Type::Int]) => {
-                Some(Type::Int)
+            (Self::AddWrap | Self::SubWrap | Self::MulWrap, [a, b])
+                if a == b && matches!(a, Type::Int | Type::Long) =>
+            {
+                Some(*a)
+            }
+            (Self::Clamp, [a, b, c]) if a == b && b == c && (float_like(*a) || int_like(*a)) => {
+                Some(*a)
             }
             (Self::Clamp, [a, b, c])
-                if a == b
-                    && b == c
-                    && (float_like(*a) || *a == Type::Int || a.int_components().is_some()) =>
+                if vector(*a) && b == c && *b == scalar(*a) && (float_like(*a) || int_like(*a)) =>
             {
                 Some(*a)
             }
-            (Self::Clamp, [a, Type::Float, Type::Float]) if vector(*a) => Some(*a),
-            (Self::Clamp, [a, Type::Int, Type::Int]) if a.int_components().is_some() => Some(*a),
-            (Self::Mix, [a, b, c]) if a == b && (*c == Type::Float || c == a) && float_like(*a) => {
+            (Self::Mix, [a, b, c]) if a == b && (*c == scalar(*a) || c == a) && float_like(*a) => {
                 Some(*a)
             }
-            (Self::ToFloat, [Type::Int | Type::Bool]) => Some(Type::Float),
-            (Self::ToFloat, [Type::IVec2 | Type::IVec3]) => args[0].other_kind(),
-            (Self::ToInt, [Type::Float | Type::Bool]) => Some(Type::Int),
-            (Self::ToInt, [Type::Vec2 | Type::Vec3]) => args[0].other_kind(),
-            (Self::Dot, [a, b]) if a == b && vector(*a) => Some(Type::Float),
-            (Self::Cross, [Type::Vec3, Type::Vec3]) => Some(Type::Vec3),
-            (Self::Length, [a]) if vector(*a) => Some(Type::Float),
-            (Self::Normalize, [a]) if vector(*a) => Some(*a),
-            (Self::Reflect, [a, b]) if a == b && vector(*a) => Some(*a),
-            (Self::Pow, [a, b]) if (a == b || *b == Type::Float) && float_like(*a) => Some(*a),
-            (Self::Step, [a, b]) if (a == b || *a == Type::Float) && float_like(*b) => Some(*b),
+            (Self::ToFloat, _) => convert(Type::Float),
+            (Self::ToInt, _) => convert(Type::Int),
+            (Self::ToDouble, _) => convert(Type::Double),
+            (Self::ToLong, _) => convert(Type::Long),
+            (Self::Dot, [a, b]) if a == b && vector(*a) && float_like(*a) => Some(scalar(*a)),
+            (Self::Cross, [a, b]) if a == b && matches!(a, Type::Vec3 | Type::DVec3) => Some(*a),
+            (Self::Length, [a]) if vector(*a) && float_like(*a) => Some(scalar(*a)),
+            (Self::Normalize, [a]) if vector(*a) && float_like(*a) => Some(*a),
+            (Self::Reflect, [a, b]) if a == b && vector(*a) && float_like(*a) => Some(*a),
+            (Self::Pow, [a, b]) if (a == b || *b == scalar(*a)) && float_like(*a) => Some(*a),
+            (Self::Step, [a, b]) if (a == b || *a == scalar(*b)) && float_like(*b) => Some(*b),
             (Self::Smoothstep, [a, b, c])
-                if a == b && (b == c || *a == Type::Float) && float_like(*c) =>
+                if a == b && (b == c || *a == scalar(*c)) && float_like(*c) =>
             {
                 Some(*c)
             }
-            (Self::Atan2, [Type::Float, Type::Float]) => Some(Type::Float),
-            (Self::Trunc | Self::Exp2 | Self::Log2 | Self::Sinh | Self::Cosh | Self::Tanh, [a])
-                if float_like(*a) =>
-            {
-                Some(*a)
-            }
+            (Self::Atan2, [a, b]) if a == b && matches!(a, Type::Float | Type::Double) => Some(*a),
             (Self::Fma, [a, b, c]) if a == b && b == c && float_like(*a) => Some(*a),
             (Self::Popcount | Self::Clz | Self::Ctz, [Type::Int]) => Some(Type::Int),
             (
@@ -898,7 +903,7 @@ impl Intrinsic {
             ) => Some(Type::Int),
             (Self::Ult, [Type::Int, Type::Int]) => Some(Type::Bool),
             (Self::Transpose | Self::Inverse, [m]) if m.order().is_some() => Some(*m),
-            (Self::Determinant, [m]) if m.order().is_some() => Some(Type::Float),
+            (Self::Determinant, [m]) if m.order().is_some() => Some(scalar(*m)),
             _ => None,
         }
     }
@@ -944,11 +949,7 @@ pub fn words(structs: &[StructDef], ty: Type) -> usize {
             .iter()
             .map(|field| words(structs, field.ty))
             .sum(),
-        other => other
-            .order()
-            .map(|order| usize::from(order) * usize::from(order))
-            .or_else(|| other.lanes().map(|(n, _)| usize::from(n)))
-            .unwrap_or(1),
+        other => other.words().unwrap_or(1),
     }
 }
 
@@ -1307,6 +1308,35 @@ impl Function {
     }
 }
 
+impl Function {
+    /// Whether any value the function computes, argument or instruction,
+    /// matches `holds`.
+    pub fn any_type(&self, holds: &dyn Fn(Type) -> bool) -> bool {
+        fn walk(instructions: &[Instruction], holds: &dyn Fn(Type) -> bool) -> bool {
+            instructions.iter().any(|instruction| {
+                holds(instruction.ty)
+                    || match &instruction.op {
+                        Op::If {
+                            then, otherwise, ..
+                        } => walk(&then.body, holds) || walk(&otherwise.body, holds),
+                        Op::Match {
+                            arms, otherwise, ..
+                        } => {
+                            arms.iter().any(|(_, block)| walk(&block.body, holds))
+                                || walk(&otherwise.body, holds)
+                        }
+                        Op::Loop { until, body, .. } => {
+                            until.as_ref().is_some_and(|block| walk(&block.body, holds))
+                                || walk(&body.body, holds)
+                        }
+                        _ => false,
+                    }
+            })
+        }
+        self.args.iter().any(|ty| holds(*ty)) || walk(&self.body, holds)
+    }
+}
+
 /// A complete compiled Kernel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
@@ -1326,6 +1356,34 @@ pub struct Module {
     /// In [`Mode::Scan`], the carried value before the first element:
     /// `() -> T`. Present exactly when the mode is `Scan`.
     pub init: Option<Function>,
+}
+
+impl Module {
+    /// Whether the module holds a 64-bit value anywhere: a port, a
+    /// parameter, a struct's field, or a value any function computes.
+    /// A backend without 64-bit arithmetic asks this before it takes
+    /// the module.
+    pub fn holds_64bit(&self) -> bool {
+        let wide = |ty: Type| ty.is_64bit();
+        let manifest = &self.manifest;
+        manifest
+            .inputs
+            .iter()
+            .chain(&manifest.outputs)
+            .any(|port| port.ty.schema.scalars().iter().any(|s| s.words() == 2))
+            || manifest.params.iter().any(|param| wide(param.ty))
+            || self
+                .structs
+                .iter()
+                .any(|def| def.fields.iter().any(|field| wide(field.ty)))
+            || self
+                .functions
+                .iter()
+                .chain(std::iter::once(&self.entry))
+                .chain(&self.merge)
+                .chain(&self.init)
+                .any(|function| function.any_type(&wide))
+    }
 }
 
 #[cfg(test)]

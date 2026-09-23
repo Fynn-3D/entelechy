@@ -1,0 +1,76 @@
+// Drawing where a survey puts things: half a million metres east and
+// four million north of the origin, which is where a site plan in a
+// national grid lives. A float keeps about seven digits, so out there
+// it cannot tell two points a few centimetres apart; a double keeps
+// about sixteen, and a nanometre is still a nanometre.
+
+// A corner of a part, in metres, and the same corner in whole
+// nanometres: exact, and what robust geometry computes with.
+struct Corner { at: DVec2; nm: LVec2; }
+
+// An edge measured three ways.
+struct Edge { wide: Double; narrow: Float; nm: Long; }
+
+// A ring half a millimetre across around `origin`, ten micrometres a
+// pixel: the right half asks each pixel in doubles, the left half the
+// same question in floats, from the same world coordinates.
+kernel precision.ring@1 {
+    requires { field.write; }
+    param origin: DVec2 = dvec2(500000.123456789, 4000000.987654321);
+    param radius: Double = 0.0004;
+    param pixel: Double = 0.00001;
+    output result: Image;
+    compute {
+        let c = coord();
+        let half = domain() * 0.5;
+        // Where this pixel is in the world, in metres, as a drawing keeps it.
+        let world = origin + dvec2(c - half) * pixel;
+        let wide = length(world - origin) - radius;
+        // In floats every pixel of the view is the same point: the
+        // nearest float to the centre, a few centimetres off it.
+        let narrow = double(length(float(world) - float(origin))) - radius;
+        let left = c.x < half.x;
+        let d = if left { narrow } else { wide };
+        let inside = vec3(1.0, 0.55, 0.1);
+        let outside = vec3(0.08, 0.1, 0.14);
+        let line = float(abs(d) < pixel * 1.5);
+        let fill = if d < 0.0 { inside } else { outside };
+        let divider = float(abs(c.x - half.x) < 1.0);
+        let colour = mix(mix(fill, vec3(1.0, 1.0, 1.0), line * 0.8), vec3(0.9, 0.9, 0.9), divider);
+        return vec4(colour, 1.0);
+    }
+}
+
+// The corners of a part two and a half millimetres by one point two,
+// placed at `origin` in nanometres; the metres are derived from them.
+kernel precision.corners@1 {
+    requires { field.write; }
+    param origin: LVec2 = lvec2(500000123456789, 4000000987654321);
+    param size: LVec2 = lvec2(2500000, 1200000);
+    output result: Rows<Corner>;
+    compute {
+        let i = element();
+        let step = lvec2(long(i == 1 || i == 2), long(i >= 2));
+        let nm = origin + step * size;
+        return Corner { at: double(nm) * 0.000000001, nm: nm };
+    }
+}
+
+// Each edge of the part, from a corner to the next: its length in
+// doubles, in floats from the same coordinates, and in nanometres.
+kernel precision.edges@1 {
+    requires { field.read; field.write; }
+    input corners: Rows<Corner>;
+    output result: Rows<Edge>;
+    compute {
+        let i = element();
+        let a = at(corners, i);
+        let b = at(corners, (i + 1) % 4);
+        let step = b.nm - a.nm;
+        return Edge {
+            wide: length(b.at - a.at),
+            narrow: length(float(b.at) - float(a.at)),
+            nm: abs(step.x) + abs(step.y),
+        };
+    }
+}

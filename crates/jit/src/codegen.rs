@@ -50,6 +50,11 @@ struct Imports {
     atan2f: FuncId,
     fmodf: FuncId,
     half: FuncId,
+    /// The same math on doubles.
+    unary64: Vec<(Intrinsic, FuncId)>,
+    pow: FuncId,
+    atan2: FuncId,
+    fmod: FuncId,
 }
 
 /// A module's native code: the JIT module holding it, the entry's
@@ -118,6 +123,8 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
     let unary_sig = sig(&[f], &[f]);
     let binary_sig = sig(&[f, f], &[f]);
+    let unary64_sig = sig(&[types::F64], &[types::F64]);
+    let binary64_sig = sig(&[types::F64, types::F64], &[types::F64]);
     let imports = Imports {
         read: declare(&mut jit, "orla_jit_read", &read_sig)?,
         linear: declare(&mut jit, "orla_jit_linear", &read_sig)?,
@@ -147,6 +154,27 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         atan2f: declare(&mut jit, "orla_jit_atan2f", &binary_sig)?,
         fmodf: declare(&mut jit, "orla_jit_fmodf", &binary_sig)?,
         half: declare(&mut jit, "orla_jit_half", &sig(&[i], &[i]))?,
+        unary64: [
+            (Intrinsic::Sin, "orla_jit_sin"),
+            (Intrinsic::Cos, "orla_jit_cos"),
+            (Intrinsic::Tan, "orla_jit_tan"),
+            (Intrinsic::Asin, "orla_jit_asin"),
+            (Intrinsic::Acos, "orla_jit_acos"),
+            (Intrinsic::Atan, "orla_jit_atan"),
+            (Intrinsic::Exp, "orla_jit_exp"),
+            (Intrinsic::Log, "orla_jit_log"),
+            (Intrinsic::Exp2, "orla_jit_exp2"),
+            (Intrinsic::Log2, "orla_jit_log2"),
+            (Intrinsic::Sinh, "orla_jit_sinh"),
+            (Intrinsic::Cosh, "orla_jit_cosh"),
+            (Intrinsic::Tanh, "orla_jit_tanh"),
+        ]
+        .into_iter()
+        .map(|(intrinsic, name)| declare(&mut jit, name, &unary64_sig).map(|id| (intrinsic, id)))
+        .collect::<Result<Vec<_>, _>>()?,
+        pow: declare(&mut jit, "orla_jit_pow", &binary64_sig)?,
+        atan2: declare(&mut jit, "orla_jit_atan2", &binary64_sig)?,
+        fmod: declare(&mut jit, "orla_jit_fmod", &binary64_sig)?,
     };
     // Every function takes the context, a pointer for its result's words
     // (a struct or a vector is more words than registers return), then
@@ -289,25 +317,50 @@ impl Arith for Ops<'_, '_> {
     }
 }
 
-/// The Cranelift type of each word of a value of `ty`.
+/// The Cranelift type of each scalar of a value of `ty`, in layout
+/// order: a 32-bit scalar is one word, and a `Double` or a `Long` one
+/// 64-bit value that memory keeps as two words, the low one first
+/// (little-endian, as every target the JIT builds for is).
 fn word_types(module: &Module, ty: Type) -> Vec<types::Type> {
     match ty {
-        Type::Float => vec![types::F32],
-        Type::Int | Type::Bool => vec![types::I32],
-        Type::Vec2 => vec![types::F32; 2],
-        Type::Vec3 => vec![types::F32; 3],
-        Type::Vec4 => vec![types::F32; 4],
-        Type::IVec2 => vec![types::I32; 2],
-        Type::IVec3 => vec![types::I32; 3],
-        Type::Mat2 => vec![types::F32; 4],
-        Type::Mat3 => vec![types::F32; 9],
-        Type::Mat4 => vec![types::F32; 16],
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
             .flat_map(|field| word_types(module, field.ty))
             .collect(),
+        other => {
+            let (scalar, n) = other.shape().unwrap_or((Type::Float, 1));
+            let lane = match scalar {
+                Type::Float => types::F32,
+                Type::Double => types::F64,
+                Type::Long => types::I64,
+                _ => types::I32,
+            };
+            vec![lane; usize::from(n)]
+        }
     }
+}
+
+/// Where each scalar of `tys` begins in memory, in bytes.
+fn byte_offsets(tys: &[types::Type]) -> Vec<i32> {
+    let mut at = 0;
+    tys.iter()
+        .map(|t| {
+            let here = at;
+            at += t.bytes() as i32;
+            here
+        })
+        .collect()
+}
+
+/// Bytes the scalars of `tys` take in memory.
+fn byte_size(tys: &[types::Type]) -> usize {
+    tys.iter().map(|t| t.bytes() as usize).sum()
+}
+
+/// Whether a type holds a 64-bit scalar anywhere.
+fn holds_wide(module: &Module, ty: Type) -> bool {
+    word_types(module, ty).iter().any(|t| t.bits() == 64)
 }
 
 /// Word offset of a struct's field.
@@ -419,6 +472,10 @@ struct Fx<'a, 'b> {
     fmodf: FuncRef,
     /// `orla_jit_half`, which widens a half float.
     half: FuncRef,
+    unary64: Vec<(Intrinsic, FuncRef)>,
+    pow: FuncRef,
+    atan2: FuncRef,
+    fmod: FuncRef,
     /// What every input's view says, read once before a map's run
     /// rather than at every element: the words, the bytes an element
     /// takes, the last `x` there is, and where the run's own row
@@ -465,6 +522,14 @@ impl<'a, 'b> Fx<'a, 'b> {
         let atan2f = import(jit, &mut b, imports.atan2f);
         let fmodf = import(jit, &mut b, imports.fmodf);
         let half = import(jit, &mut b, imports.half);
+        let unary64 = imports
+            .unary64
+            .iter()
+            .map(|(intrinsic, id)| (*intrinsic, import(jit, &mut b, *id)))
+            .collect();
+        let pow = import(jit, &mut b, imports.pow);
+        let atan2 = import(jit, &mut b, imports.atan2);
+        let fmod = import(jit, &mut b, imports.fmod);
         let scratch = b.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             (max_stride * 4) as u32,
@@ -504,6 +569,10 @@ impl<'a, 'b> Fx<'a, 'b> {
             atan2f,
             fmodf,
             half,
+            unary64,
+            pow,
+            atan2,
+            fmod,
             settled_views: Vec::new(),
             scratch,
             flags: MemFlags::trusted(),
@@ -531,11 +600,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let zero = self.i32c(0);
                 self.coords = Some((params[1], zero, zero, params[3]));
                 let carried_types = word_types(self.module, result_type(function));
-                let carried = carried_types
-                    .iter()
-                    .enumerate()
-                    .map(|(k, t)| self.b.ins().load(*t, self.flags, params[2], (k * 4) as i32))
-                    .collect();
+                let carried = self.loads(&carried_types, self.flags, params[2], 0);
                 self.scan = Some((carried, params[1]));
                 params[3]
             }
@@ -551,11 +616,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             Kind::Merge => {
                 // Each argument's words are loaded from its pointer.
                 for (arg, pointer) in function.args.iter().zip([params[1], params[2]]) {
-                    let words = word_types(self.module, *arg)
-                        .iter()
-                        .enumerate()
-                        .map(|(k, t)| self.b.ins().load(*t, self.flags, pointer, (k * 4) as i32))
-                        .collect();
+                    let tys = word_types(self.module, *arg);
+                    let words = self.loads(&tys, self.flags, pointer, 0);
                     self.args.push(words);
                 }
                 params[3]
@@ -566,7 +628,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         for result in &function.results {
             for word in self.values[result.0 as usize].clone() {
                 self.b.ins().store(self.flags, word, out, offset);
-                offset += 4;
+                offset += self.b.func.dfg.value_type(word).bytes() as i32;
             }
         }
         self.b.ins().return_(&[]);
@@ -622,7 +684,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         for result in &function.results {
             for word in self.values[result.0 as usize].clone() {
                 self.b.ins().store(self.flags, word, out, offset);
-                offset += 4;
+                offset += self.b.func.dfg.value_type(word).bytes() as i32;
             }
         }
         // A failure stops the run where it happened, so the element the
@@ -674,6 +736,12 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// literal, or a construction or extraction of known words.
     fn note_constant(&mut self, instruction: &Instruction) {
         let id = instruction.id.0;
+        // What a table keeps is words, and a 64-bit scalar's lane is not
+        // one: such a value is built in registers instead.
+        if holds_wide(self.module, instruction.ty) || instruction_reads_wide(self, &instruction.op)
+        {
+            return;
+        }
         let words = match &instruction.op {
             Op::Const(value) => Some(value.words()),
             // A float vector from Int literals widens them; the words
@@ -777,6 +845,42 @@ impl<'a, 'b> Fx<'a, 'b> {
             .store(self.flags, next, self.ctx, offsets::ERROR);
     }
 
+    /// `float`, `int`, `double` or `long` where a 64-bit kind is on
+    /// either side, componentwise.
+    fn conversion(
+        &mut self,
+        intrinsic: Intrinsic,
+        args: &[orla_ir::ValueId],
+        words: &[Value],
+    ) -> Vec<Value> {
+        let from = self.ty(&args[0]).scalar().unwrap_or(Type::Float);
+        let to = match intrinsic {
+            Intrinsic::ToFloat => types::F32,
+            Intrinsic::ToInt => types::I32,
+            Intrinsic::ToDouble => types::F64,
+            _ => types::I64,
+        };
+        words.iter().map(|v| self.convert(*v, from, to)).collect()
+    }
+
+    /// A scalar of kind `from` as one of Cranelift type `to`: a float
+    /// truncates toward zero and saturates (a NaN is zero), a long wraps
+    /// to an int, and a `Bool` is 0 or 1.
+    fn convert(&mut self, v: Value, from: Type, to: types::Type) -> Value {
+        let have = self.b.func.dfg.value_type(v);
+        let float = matches!(from, Type::Float | Type::Double);
+        match (float, to.is_float()) {
+            (true, true) if have == to => v,
+            (true, true) if to == types::F64 => self.b.ins().fpromote(to, v),
+            (true, true) => self.b.ins().fdemote(to, v),
+            (true, false) => self.b.ins().fcvt_to_sint_sat(to, v),
+            (false, true) => self.b.ins().fcvt_from_sint(to, v),
+            (false, false) if have == to => v,
+            (false, false) if to.bits() > have.bits() => self.b.ins().sextend(to, v),
+            (false, false) => self.b.ins().ireduce(to, v),
+        }
+    }
+
     fn is_nan(&mut self, v: Value) -> Value {
         self.b.ins().fcmp(FloatCC::Unordered, v, v)
     }
@@ -833,7 +937,7 @@ impl<'a, 'b> Fx<'a, 'b> {
     }
 
     fn dot(&mut self, a: &[Value], b: &[Value]) -> Value {
-        let mut sum = self.f32c(0.0);
+        let mut sum = self.fconst(a[0], 0.0);
         for (x, y) in a.iter().zip(b) {
             let product = self.b.ins().fmul(*x, *y);
             sum = self.b.ins().fadd(sum, product);
@@ -841,13 +945,48 @@ impl<'a, 'b> Fx<'a, 'b> {
         sum
     }
 
-    /// Loads `n` words of the given types from the scratch slot.
+    /// Loads scalars of the given types from the scratch slot.
     fn load_scratch(&mut self, tys: &[types::Type]) -> Vec<Value> {
         let base = self.b.ins().stack_addr(self.ptr, self.scratch, 0);
+        self.loads(tys, self.flags, base, 0)
+    }
+
+    /// Scalars of the given types laid end to end at `base + offset`.
+    fn loads(
+        &mut self,
+        tys: &[types::Type],
+        flags: MemFlags,
+        base: Value,
+        offset: i32,
+    ) -> Vec<Value> {
         tys.iter()
-            .enumerate()
-            .map(|(k, ty)| self.b.ins().load(*ty, self.flags, base, (k * 4) as i32))
+            .zip(byte_offsets(tys))
+            .map(|(t, at)| self.b.ins().load(*t, flags, base, offset + at))
             .collect()
+    }
+
+    /// Stores values end to end at `base`, each at its own size.
+    fn stores(&mut self, words: &[Value], flags: MemFlags, base: Value) {
+        let mut at = 0i32;
+        for word in words {
+            self.b.ins().store(flags, *word, base, at);
+            at += self.b.func.dfg.value_type(*word).bytes() as i32;
+        }
+    }
+
+    /// A float constant of `like`'s width.
+    fn fconst(&mut self, like: Value, v: f64) -> Value {
+        if self.b.func.dfg.value_type(like) == types::F64 {
+            self.b.ins().f64const(v)
+        } else {
+            self.b.ins().f32const(v as f32)
+        }
+    }
+
+    /// An integer constant of `like`'s width.
+    fn iconst(&mut self, like: Value, v: i64) -> Value {
+        let t = self.b.func.dfg.value_type(like);
+        self.b.ins().iconst(t, v)
     }
 
     fn scratch_addr(&mut self) -> Value {
@@ -955,11 +1094,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         let schema = &self.module.manifest.inputs[input as usize].ty.schema;
         let encoding = schema.uniform_encoding().unwrap_or(Encoding::Word);
         if encoding == Encoding::Word {
-            return tys
-                .iter()
-                .enumerate()
-                .map(|(k, t)| self.b.ins().load(*t, self.flags, base, (k * 4) as i32))
-                .collect();
+            return self.loads(tys, self.flags, base, 0);
         }
         let kinds: Vec<Scalar> = orla_ir::schema_of(ty, &self.module.structs)
             .map(|schema| schema.scalars().to_vec())
@@ -1165,49 +1300,40 @@ impl<'a, 'b> Fx<'a, 'b> {
         let id = instruction.id;
         match &instruction.op {
             Op::Const(value) => {
-                // A constant is its words, each a float or an integer as
-                // the type lays it out.
-                let kinds = word_types(self.module, ty);
+                // A constant is its scalars, each as the type lays it out.
+                let _ = ty;
                 value
-                    .words()
+                    .numbers()
                     .into_iter()
-                    .zip(kinds)
-                    .map(|(word, kind)| {
-                        if kind == types::F32 {
-                            self.f32c(f32::from_bits(word))
-                        } else {
-                            self.i32c(word as i32 as i64)
-                        }
+                    .map(|number| match number {
+                        orla_ir::Number::Float(v) => self.f32c(v),
+                        orla_ir::Number::Int(v) => self.i32c(i64::from(v)),
+                        orla_ir::Number::Bool(v) => self.i32c(i64::from(v)),
+                        orla_ir::Number::Double(v) => self.b.ins().f64const(v),
+                        orla_ir::Number::Long(v) => self.b.ins().iconst(types::I64, v),
                     })
                     .collect()
             }
             Op::Param(index) => {
                 let offset: usize = self.module.manifest.params[..*index as usize]
                     .iter()
-                    .map(|p| word_types(self.module, p.ty).len())
+                    .map(|p| byte_size(&word_types(self.module, p.ty)))
                     .sum();
                 let base = self
                     .b
                     .ins()
                     .load(self.ptr, self.settled, self.ctx, offsets::PARAMS);
-                word_types(self.module, ty)
-                    .iter()
-                    .enumerate()
-                    .map(|(k, t)| {
-                        self.b
-                            .ins()
-                            .load(*t, self.flags, base, ((offset + k) * 4) as i32)
-                    })
-                    .collect()
+                let tys = word_types(self.module, ty);
+                self.loads(&tys, self.flags, base, offset as i32)
             }
             Op::Arg(index) => self.args[*index as usize].clone(),
             Op::Unary(UnaryOp::Neg, a) => {
                 let words = self.words(a);
-                if self.ty(a) == Type::Int || self.ty(a).int_components().is_some() {
+                if self.ty(a).is_int_kind() {
                     words
                         .iter()
                         .map(|w| {
-                            let zero = self.i32c(0);
+                            let zero = self.iconst(*w, 0);
                             let (v, overflow) = self.b.ins().ssub_overflow(zero, *w);
                             self.fail_if(overflow, OVERFLOW);
                             v
@@ -1224,10 +1350,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Binary(op, a, b) => self.binary(*op, a, b),
             Op::Construct(parts) => {
-                if matches!(ty, Type::Struct(_))
-                    || ty.order().is_some()
-                    || ty.int_components().is_some()
-                {
+                // A float vector's components may widen from integers;
+                // anything else is its parts' scalars end to end.
+                if ty.components().is_none() {
                     parts.iter().flat_map(|part| self.words(part)).collect()
                 } else {
                     parts
@@ -1276,7 +1401,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                         .map_or(1, usize::from),
                 };
                 let tys = word_types(self.module, ty);
-                let n = tys.len();
                 let (base, flags) = if let Some(pointer) = self.pointers.get(&array.0) {
                     (*pointer, self.flags.with_readonly())
                 } else if self.constants.contains_key(&array.0)
@@ -1294,13 +1418,14 @@ impl<'a, 'b> Fx<'a, 'b> {
                     (address, self.flags)
                 } else {
                     let words = self.words(array);
+                    let array_types = word_types(self.module, self.ty(array));
                     let slot = self.b.create_sized_stack_slot(StackSlotData::new(
                         StackSlotKind::ExplicitSlot,
-                        (words.len().max(1) * 4) as u32,
-                        2,
+                        byte_size(&array_types).max(4) as u32,
+                        3,
                     ));
-                    for (k, word) in words.iter().enumerate() {
-                        self.b.ins().stack_store(*word, slot, (k * 4) as i32);
+                    for (word, at) in words.iter().zip(byte_offsets(&array_types)) {
+                        self.b.ins().stack_store(*word, slot, at);
                     }
                     let address = self.b.ins().stack_addr(self.ptr, slot, 0);
                     if let Some(block) = self.b.current_block() {
@@ -1313,7 +1438,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let last = self.i32c(count as i64 - 1);
                 let low = self.b.ins().smax(raw, zero);
                 let clamped = self.b.ins().smin(low, last);
-                let scaled = self.b.ins().imul_imm(clamped, (n * 4) as i64);
+                let scaled = self.b.ins().imul_imm(clamped, byte_size(&tys) as i64);
                 let offset = self.b.ins().uextend(self.ptr, scaled);
                 let address = self.b.ins().iadd(base, offset);
                 if flags.readonly()
@@ -1321,18 +1446,15 @@ impl<'a, 'b> Fx<'a, 'b> {
                 {
                     self.pointers.insert(id.0, address);
                 }
-                tys.iter()
-                    .enumerate()
-                    .map(|(k, t)| self.b.ins().load(*t, flags, address, (k * 4) as i32))
-                    .collect()
+                self.loads(&tys, flags, address, 0)
             }
             Op::Call(callee, args) => {
                 // The callee writes its result's words to a slot of ours.
                 let tys = word_types(self.module, ty);
                 let slot = self.b.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
-                    (tys.len().max(1) * 4) as u32,
-                    2,
+                    byte_size(&tys).max(4) as u32,
+                    3,
                 ));
                 let out = self.b.ins().stack_addr(self.ptr, slot, 0);
                 let mut passed = vec![self.ctx, out];
@@ -1340,10 +1462,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                     passed.extend(self.words(arg));
                 }
                 self.b.ins().call(self.calls[*callee as usize], &passed);
-                tys.iter()
-                    .enumerate()
-                    .map(|(k, t)| self.b.ins().load(*t, self.flags, out, (k * 4) as i32))
-                    .collect()
+                self.loads(&tys, self.flags, out, 0)
             }
             Op::Intrinsic(intrinsic, args) => self.intrinsic(*intrinsic, args),
             Op::If {
@@ -1758,7 +1877,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 // run already carries where it is in every input, so
                 // the part is the loads at its offset and nothing else.
                 let Some(at) = at else {
-                    let within = self.part_offset(*input, path, tys.len(), unit);
+                    let within = self.part_offset(*input, path, byte_size(&tys) / 4, unit);
                     if let Some(base) = self.settled_view(*input).and_then(|view| view.at) {
                         let offset = self.b.ins().uextend(self.ptr, within);
                         let base = self.b.ins().iadd(base, offset);
@@ -1770,7 +1889,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 };
                 let address = self.words(at);
                 if matches!(self.ty(at), Type::Int) {
-                    let within = self.part_offset(*input, path, tys.len(), unit);
+                    let within = self.part_offset(*input, path, byte_size(&tys) / 4, unit);
                     let index = self.rows_index(*input, address[0]);
                     return self.part_words(*input, index, within, ty, &tys);
                 }
@@ -1794,13 +1913,10 @@ impl<'a, 'b> Fx<'a, 'b> {
                         );
                     }
                 }
-                let within = self.part_offset(*input, path, tys.len(), 4);
+                let within = self.part_offset(*input, path, byte_size(&tys) / 4, 4);
                 let bytes = self.b.ins().uextend(self.ptr, within);
                 let base = self.b.ins().iadd(out, bytes);
-                tys.iter()
-                    .enumerate()
-                    .map(|(k, t)| self.b.ins().load(*t, self.flags, base, (k * 4) as i32))
-                    .collect()
+                self.loads(&tys, self.flags, base, 0)
             }
             Op::AtLinear(input, position) => {
                 let words = self.words(position);
@@ -1825,9 +1941,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 // value written.
                 let words = self.words(value);
                 let slot = self.scratch_addr();
-                for (k, word) in words.iter().enumerate() {
-                    self.b.ins().store(self.flags, *word, slot, (k * 4) as i32);
-                }
+                self.stores(&words, self.flags, slot);
                 let index = self.i32c(*input as i64);
                 let address_words = self.words(address);
                 match self.ty(address) {
@@ -1855,16 +1969,15 @@ impl<'a, 'b> Fx<'a, 'b> {
     fn binary(&mut self, op: BinaryOp, a: &orla_ir::ValueId, b: &orla_ir::ValueId) -> Vec<Value> {
         let (ta, tb) = (self.ty(a), self.ty(b));
         let (wa, wb) = (self.words(a), self.words(b));
-        let int_like =
-            ta == Type::Int || ta.int_components().is_some() || tb.int_components().is_some();
+        let int_like = ta.is_int_kind() || tb.is_int_kind();
         if op == BinaryOp::Mul && (ta.order().is_some() || tb.order().is_some()) {
             let mut ops = Ops(&mut self.b);
             return match (ta.order(), tb.order()) {
                 (Some(n), Some(_)) => matrix::mul_mat_mat(&mut ops, usize::from(n), &wa, &wb),
-                (Some(n), None) if tb != Type::Float => {
+                (Some(n), None) if tb.lanes().is_some() => {
                     matrix::mul_mat_vec(&mut ops, usize::from(n), &wa, &wb)
                 }
-                (None, Some(n)) if ta != Type::Float => {
+                (None, Some(n)) if ta.lanes().is_some() => {
                     matrix::mul_vec_mat(&mut ops, usize::from(n), &wa, &wb)
                 }
                 _ => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().fmul(x, y)),
@@ -1888,12 +2001,17 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.zip2(&wa, &wb, |fx, x, y| {
                     let zero = fx.b.ins().icmp_imm(IntCC::Equal, y, 0);
                     fx.fail_if(zero, DIVISION_BY_ZERO);
-                    let is_min = fx.b.ins().icmp_imm(IntCC::Equal, x, i32::MIN as i64);
+                    let min = if fx.b.func.dfg.value_type(x) == types::I64 {
+                        i64::MIN
+                    } else {
+                        i64::from(i32::MIN)
+                    };
+                    let is_min = fx.b.ins().icmp_imm(IntCC::Equal, x, min);
                     let minus_one = fx.b.ins().icmp_imm(IntCC::Equal, y, -1);
                     let overflow = fx.b.ins().band(is_min, minus_one);
                     fx.fail_if(overflow, OVERFLOW);
                     let unsafe_ = fx.b.ins().bor(zero, overflow);
-                    let one = fx.i32c(1);
+                    let one = fx.iconst(y, 1);
                     let divisor = fx.b.ins().select(unsafe_, one, y);
                     if op == BinaryOp::Div {
                         fx.b.ins().sdiv(x, divisor)
@@ -1911,11 +2029,16 @@ impl<'a, 'b> Fx<'a, 'b> {
                 })
             }
             BinaryOp::Rem => self.zip2(&wa, &wb, |fx, x, y| {
-                let call = fx.b.ins().call(fx.fmodf, &[x, y]);
+                let fmod = if fx.b.func.dfg.value_type(x) == types::F64 {
+                    fx.fmod
+                } else {
+                    fx.fmodf
+                };
+                let call = fx.b.ins().call(fmod, &[x, y]);
                 fx.b.inst_results(call)[0]
             }),
             BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
-                let cond = if ta == Type::Int {
+                let cond = if ta.is_int_kind() {
                     let cc = match op {
                         BinaryOp::Less => IntCC::SignedLessThan,
                         BinaryOp::LessEqual => IntCC::SignedLessThanOrEqual,
@@ -1937,10 +2060,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             BinaryOp::Equal | BinaryOp::NotEqual => {
                 let mut all: Option<Value> = None;
                 for (x, y) in wa.iter().zip(&wb) {
-                    let same = if (matches!(ta, Type::Int | Type::Bool)
-                        || ta.int_components().is_some())
-                        && tb == ta
-                    {
+                    let same = if (ta.is_int_kind() || ta == Type::Bool) && tb == ta {
                         self.b.ins().icmp(IntCC::Equal, *x, *y)
                     } else {
                         self.b.ins().fcmp(FloatCC::Equal, *x, *y)
@@ -1964,7 +2084,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             BinaryOp::BitOr => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().bor(x, y)),
             BinaryOp::BitXor => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().bxor(x, y)),
             BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => self.zip2(&wa, &wb, |fx, x, y| {
-                let count = fx.b.ins().band_imm(y, 31);
+                // The count modulo the width: 32, or 64 for a long.
+                let bits = i64::from(fx.b.func.dfg.value_type(x).bits());
+                let count = fx.b.ins().band_imm(y, bits - 1);
                 match op {
                     BinaryOp::Shl => fx.b.ins().ishl(x, count),
                     BinaryOp::Shr => fx.b.ins().sshr(x, count),
@@ -1976,9 +2098,7 @@ impl<'a, 'b> Fx<'a, 'b> {
 
     fn intrinsic(&mut self, intrinsic: Intrinsic, args: &[orla_ir::ValueId]) -> Vec<Value> {
         let w: Vec<Vec<Value>> = args.iter().map(|a| self.words(a)).collect();
-        let is_int = |fx: &Self, k: usize| {
-            fx.ty(&args[k]) == Type::Int || fx.ty(&args[k]).int_components().is_some()
-        };
+        let is_int = |fx: &Self, k: usize| fx.ty(&args[k]).is_int_kind();
         let map1 = |fx: &mut Self, f: &mut dyn FnMut(&mut Self, Value) -> Value| -> Vec<Value> {
             w[0].iter().map(|v| f(fx, *v)).collect()
         };
@@ -2008,18 +2128,18 @@ impl<'a, 'b> Fx<'a, 'b> {
             Intrinsic::Sign if is_int(self, 0) => map1(self, &mut |fx, v| {
                 let pos = fx.b.ins().icmp_imm(IntCC::SignedGreaterThan, v, 0);
                 let neg = fx.b.ins().icmp_imm(IntCC::SignedLessThan, v, 0);
-                let one = fx.i32c(1);
-                let minus = fx.i32c(-1);
-                let zero = fx.i32c(0);
+                let one = fx.iconst(v, 1);
+                let minus = fx.iconst(v, -1);
+                let zero = fx.iconst(v, 0);
                 let low = fx.b.ins().select(neg, minus, zero);
                 fx.b.ins().select(pos, one, low)
             }),
             Intrinsic::Sign => map1(self, &mut |fx, v| {
-                let zero = fx.f32c(0.0);
+                let zero = fx.fconst(v, 0.0);
                 let pos = fx.b.ins().fcmp(FloatCC::GreaterThan, v, zero);
                 let neg = fx.b.ins().fcmp(FloatCC::LessThan, v, zero);
-                let one = fx.f32c(1.0);
-                let minus = fx.f32c(-1.0);
+                let one = fx.fconst(v, 1.0);
+                let minus = fx.fconst(v, -1.0);
                 let low = fx.b.ins().select(neg, minus, zero);
                 fx.b.ins().select(pos, one, low)
             }),
@@ -2068,8 +2188,12 @@ impl<'a, 'b> Fx<'a, 'b> {
             | Intrinsic::Sinh
             | Intrinsic::Cosh
             | Intrinsic::Tanh => {
-                let func = self
-                    .unary
+                let table = if self.ty(&args[0]).is_64bit() {
+                    &self.unary64
+                } else {
+                    &self.unary
+                };
+                let func = table
                     .iter()
                     .find(|(i, _)| *i == intrinsic)
                     .map(|(_, f)| *f)
@@ -2086,6 +2210,10 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.zip2(&w[0], &w[1], |fx, x, y| fx.b.ins().smax(x, y))
             }
             Intrinsic::AddWrap => vec![self.b.ins().iadd(w[0][0], w[1][0])],
+            Intrinsic::ToFloat | Intrinsic::ToInt if self.ty(&args[0]).is_64bit() => {
+                self.conversion(intrinsic, args, &w[0])
+            }
+            Intrinsic::ToDouble | Intrinsic::ToLong => self.conversion(intrinsic, args, &w[0]),
             Intrinsic::SubWrap => vec![self.b.ins().isub(w[0][0], w[1][0])],
             Intrinsic::MulWrap => vec![self.b.ins().imul(w[0][0], w[1][0])],
             Intrinsic::Min => self.zip2(&w[0], &w[1], |fx, x, y| fx.fmin(x, y)),
@@ -2137,7 +2265,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             Intrinsic::Normalize => {
                 let d = self.dot(&w[0], &w[0]);
                 let length = self.b.ins().sqrt(d);
-                let zero = self.f32c(0.0);
+                let zero = self.fconst(d, 0.0);
                 let positive = self.b.ins().fcmp(FloatCC::GreaterThan, length, zero);
                 w[0].iter()
                     .map(|v| {
@@ -2147,29 +2275,34 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .collect()
             }
             Intrinsic::Pow => self.zip2(&w[0], &w[1], |fx, x, y| {
-                let call = fx.b.ins().call(fx.powf, &[x, y]);
+                let pow = if fx.b.func.dfg.value_type(x) == types::F64 {
+                    fx.pow
+                } else {
+                    fx.powf
+                };
+                let call = fx.b.ins().call(pow, &[x, y]);
                 fx.b.inst_results(call)[0]
             }),
             Intrinsic::Step => self.zip2(&w[0], &w[1], |fx, edge, x| {
                 let ge = fx.b.ins().fcmp(FloatCC::GreaterThanOrEqual, x, edge);
-                let one = fx.f32c(1.0);
-                let zero = fx.f32c(0.0);
+                let one = fx.fconst(x, 1.0);
+                let zero = fx.fconst(x, 0.0);
                 fx.b.ins().select(ge, one, zero)
             }),
             Intrinsic::Smoothstep => self.zip3(&w[0], &w[1], &w[2], |fx, low, high, x| {
                 let num = fx.b.ins().fsub(x, low);
                 let den = fx.b.ins().fsub(high, low);
                 let t = fx.b.ins().fdiv(num, den);
-                let zero = fx.f32c(0.0);
-                let one = fx.f32c(1.0);
+                let zero = fx.fconst(t, 0.0);
+                let one = fx.fconst(t, 1.0);
                 // The same clamp `clamp` is: a comparison lets a NaN
                 // through and these do not, and a Kernel that writes
                 // `clamp` and one that writes `smoothstep` must not
                 // disagree about that.
                 let t = fx.fmax(t, zero);
                 let t = fx.fmin(t, one);
-                let two = fx.f32c(2.0);
-                let three = fx.f32c(3.0);
+                let two = fx.fconst(t, 2.0);
+                let three = fx.fconst(t, 3.0);
                 let tt = fx.b.ins().fmul(t, t);
                 let twice = fx.b.ins().fmul(two, t);
                 let rest = fx.b.ins().fsub(three, twice);
@@ -2177,7 +2310,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             }),
             Intrinsic::Reflect => {
                 let d = self.dot(&w[1], &w[0]);
-                let two = self.f32c(2.0);
+                let two = self.fconst(d, 2.0);
                 let scale = self.b.ins().fmul(two, d);
                 self.zip2(&w[0], &w[1], |fx, i, n| {
                     let scaled = fx.b.ins().fmul(scale, n);
@@ -2185,9 +2318,23 @@ impl<'a, 'b> Fx<'a, 'b> {
                 })
             }
             Intrinsic::Atan2 => {
-                let call = self.b.ins().call(self.atan2f, &[w[0][0], w[1][0]]);
+                let atan2 = if self.ty(&args[0]) == Type::Double {
+                    self.atan2
+                } else {
+                    self.atan2f
+                };
+                let call = self.b.ins().call(atan2, &[w[0][0], w[1][0]]);
                 vec![self.b.inst_results(call)[0]]
             }
         }
+    }
+}
+
+/// Whether an extraction reads out of a value holding a 64-bit scalar,
+/// whose words a table would misplace.
+fn instruction_reads_wide(fx: &Fx<'_, '_>, op: &Op) -> bool {
+    match op {
+        Op::Extract(source, _) => holds_wide(fx.module, fx.ty(source)),
+        _ => false,
     }
 }

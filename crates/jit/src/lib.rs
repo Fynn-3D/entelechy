@@ -967,6 +967,48 @@ unary_math! {
     orla_jit_tanhf => tanh,
 }
 
+macro_rules! unary_math64 {
+    ($($name:ident => $method:ident),* $(,)?) => {
+        $(
+            /// Rust's `f64` math, so the JIT rounds as the interpreter does.
+            extern "C" fn $name(x: f64) -> f64 {
+                x.$method()
+            }
+        )*
+    };
+}
+
+unary_math64! {
+    orla_jit_sin => sin,
+    orla_jit_cos => cos,
+    orla_jit_tan => tan,
+    orla_jit_asin => asin,
+    orla_jit_acos => acos,
+    orla_jit_atan => atan,
+    orla_jit_exp => exp,
+    orla_jit_log => ln,
+    orla_jit_exp2 => exp2,
+    orla_jit_log2 => log2,
+    orla_jit_sinh => sinh,
+    orla_jit_cosh => cosh,
+    orla_jit_tanh => tanh,
+}
+
+/// `pow` on doubles.
+extern "C" fn orla_jit_pow(x: f64, y: f64) -> f64 {
+    x.powf(y)
+}
+
+/// `atan2` on doubles.
+extern "C" fn orla_jit_atan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+
+/// `%` on doubles: the remainder, truncated.
+extern "C" fn orla_jit_fmod(a: f64, b: f64) -> f64 {
+    a % b
+}
+
 /// `pow` on floats.
 extern "C" fn orla_jit_powf(x: f32, y: f32) -> f32 {
     x.powf(y)
@@ -1017,6 +1059,22 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ("orla_jit_atan2f", orla_jit_atan2f as *const u8),
         ("orla_jit_fmodf", orla_jit_fmodf as *const u8),
         ("orla_jit_half", orla_jit_half as *const u8),
+        ("orla_jit_sin", orla_jit_sin as *const u8),
+        ("orla_jit_cos", orla_jit_cos as *const u8),
+        ("orla_jit_tan", orla_jit_tan as *const u8),
+        ("orla_jit_asin", orla_jit_asin as *const u8),
+        ("orla_jit_acos", orla_jit_acos as *const u8),
+        ("orla_jit_atan", orla_jit_atan as *const u8),
+        ("orla_jit_exp", orla_jit_exp as *const u8),
+        ("orla_jit_log", orla_jit_log as *const u8),
+        ("orla_jit_exp2", orla_jit_exp2 as *const u8),
+        ("orla_jit_log2", orla_jit_log2 as *const u8),
+        ("orla_jit_sinh", orla_jit_sinh as *const u8),
+        ("orla_jit_cosh", orla_jit_cosh as *const u8),
+        ("orla_jit_tanh", orla_jit_tanh as *const u8),
+        ("orla_jit_pow", orla_jit_pow as *const u8),
+        ("orla_jit_atan2", orla_jit_atan2 as *const u8),
+        ("orla_jit_fmod", orla_jit_fmod as *const u8),
     ]
 }
 

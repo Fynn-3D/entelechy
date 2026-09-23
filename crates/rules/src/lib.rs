@@ -200,9 +200,42 @@ pub fn combine_words(
     element: &mut [u32],
     value: &[u32],
 ) -> Result<(), ArithmeticError> {
-    for ((slot, incoming), scalar) in element.iter_mut().zip(value).zip(scalars) {
-        let (a, b) = (*slot, *incoming);
-        *slot = match (combine, scalar) {
+    let mut k = 0;
+    while k < element.len().min(value.len()).min(scalars.len()) {
+        let scalar = scalars[k];
+        if scalar.words() == 2 {
+            let pair = |words: &[u32]| u64::from(words[k]) | u64::from(words[k + 1]) << 32;
+            let (a, b) = (pair(element), pair(value));
+            let combined = match (combine, scalar) {
+                (Combine::Last, _) => b,
+                (Combine::Sum, Scalar::Double) => (f64::from_bits(a) + f64::from_bits(b)).to_bits(),
+                (Combine::Sum, _) => (a as i64)
+                    .checked_add(b as i64)
+                    .ok_or(ArithmeticError::Overflow)? as u64,
+                (Combine::Min, Scalar::Double) => {
+                    if double_order_key(b) < double_order_key(a) {
+                        b
+                    } else {
+                        a
+                    }
+                }
+                (Combine::Min, _) => (a as i64).min(b as i64) as u64,
+                (Combine::Max, Scalar::Double) => {
+                    if double_order_key(b) > double_order_key(a) {
+                        b
+                    } else {
+                        a
+                    }
+                }
+                (Combine::Max, _) => (a as i64).max(b as i64) as u64,
+            };
+            element[k] = combined as u32;
+            element[k + 1] = (combined >> 32) as u32;
+            k += 2;
+            continue;
+        }
+        let (a, b) = (element[k], value[k]);
+        element[k] = match (combine, scalar) {
             (Combine::Last, _) => b,
             (Combine::Sum, Scalar::Float) => (f32::from_bits(a) + f32::from_bits(b)).to_bits(),
             (Combine::Sum, _) => (a as i32)
@@ -225,8 +258,19 @@ pub fn combine_words(
             }
             (Combine::Max, _) => (a as i32).max(b as i32) as u32,
         };
+        k += 1;
     }
     Ok(())
+}
+
+/// The order [`float_order_key`] is, for doubles.
+pub fn double_order_key(bits: u64) -> i64 {
+    let bits = bits as i64;
+    if bits >= 0 {
+        bits
+    } else {
+        bits ^ 0x7fff_ffff_ffff_ffff
+    }
 }
 
 /// Checks that an invocation matches the manifest: input and parameter

@@ -97,12 +97,13 @@ impl Encoding {
     }
 
     /// Whether a scalar of this kind may be kept this way: floats by
-    /// the float encodings, integers and booleans by the integer ones.
+    /// the float encodings, integers and booleans by the integer ones. A
+    /// 64-bit scalar is kept whole.
     pub fn fits(self, scalar: Scalar) -> bool {
         match self {
             Self::Word => true,
             _ if self.is_float() => scalar == Scalar::Float,
-            _ => scalar != Scalar::Float,
+            _ => matches!(scalar, Scalar::Int | Scalar::Bool),
         }
     }
 

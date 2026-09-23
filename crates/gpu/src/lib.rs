@@ -742,7 +742,17 @@ impl Backend for GpuBackend {
         self
     }
 
+    fn takes(&self, module: &Validated) -> bool {
+        !module.holds_64bit()
+    }
+
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        if module.holds_64bit() {
+            return Err(format!(
+                "`{}` holds a Double or a Long, which this device does not compute; a session with an ordered backend runs it there",
+                module.manifest.id
+            ));
+        }
         // A port keeps every scalar one way, and only a map or a scan
         // writes an output narrow: the other modes fold into their
         // output in place, at full width.

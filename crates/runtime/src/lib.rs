@@ -366,7 +366,7 @@ impl Runtime {
             .spawn(move || {
                 for job in inbox {
                     let chosen = match &ordered {
-                        Some(ordered) if job.module.manifest.mode == orla_ir::Mode::Scan => ordered,
+                        Some(ordered) if goes_ordered(backend.as_ref(), &job.module) => ordered,
                         _ => &backend,
                     };
                     let result = prepare_on(chosen.as_ref(), job.module, job.source);
@@ -572,12 +572,19 @@ impl Runtime {
     }
 
     /// The backend a module is prepared on and executes on: the ordered
-    /// one for a scan when there is one, else the main one.
+    /// one, when there is one, for a scan and for what the main one does
+    /// not take; else the main one.
     fn backend_for(&self, module: &Validated) -> &dyn Backend {
         match &self.ordered {
-            Some(ordered) if module.manifest.mode == orla_ir::Mode::Scan => ordered.as_ref(),
+            Some(ordered) if goes_ordered(self.backend.as_ref(), module) => ordered.as_ref(),
             _ => self.backend.as_ref(),
         }
+    }
+
+    /// Whether a module runs on the ordered backend: there is one, and
+    /// the module is a scan or one the main backend does not take.
+    fn routed(&self, module: &Validated) -> bool {
+        self.ordered.is_some() && goes_ordered(self.backend.as_ref(), module)
     }
 
     /// What the device took over the last execution, by its own clock,
@@ -708,7 +715,7 @@ impl Runtime {
         // A backend that runs the whole thing itself keeps every Field
         // between the times to itself, which is the point of asking.
         if let Body::Kernel { module, prepared } = &version.body
-            && !(self.ordered.is_some() && module.manifest.mode == orla_ir::Mode::Scan)
+            && !self.routed(module)
         {
             let granted = version.manifest().requires.clone();
             let backend = Arc::clone(&self.backend);
@@ -768,10 +775,11 @@ impl Runtime {
         self.last_measured = None;
         match &version.body {
             Body::Kernel { module, prepared } => {
-                let ordered = self.ordered.is_some() && module.manifest.mode == orla_ir::Mode::Scan;
+                let ordered = self.routed(module);
                 if ordered {
-                    // The scan reads through Host memory: whatever the
-                    // main backend left resident comes back first.
+                    // The ordered backend reads through Host memory:
+                    // whatever the main one left resident comes back
+                    // first.
                     for handle in &invocation.inputs {
                         self.materialize(*handle)?;
                     }
@@ -823,4 +831,10 @@ pub(crate) fn held_to(
         manifest.id,
         manifest.outputs.len()
     )))
+}
+
+/// Whether a module belongs on the ordered backend rather than `main`:
+/// a scan, or a module `main` does not take.
+fn goes_ordered(main: &dyn Backend, module: &Validated) -> bool {
+    module.manifest.mode == orla_ir::Mode::Scan || !main.takes(module)
 }

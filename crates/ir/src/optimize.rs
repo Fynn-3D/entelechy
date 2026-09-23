@@ -1020,8 +1020,7 @@ fn defined(body: &[Instruction]) -> HashSet<u32> {
 const LOOP_BUDGET: u32 = 20_000;
 
 fn can_fail(ty: Type, op: &Op) -> bool {
-    let integer = matches!(ty, Type::Int | Type::IVec2 | Type::IVec3);
-    integer && matches!(op, Op::Binary(..) | Op::Intrinsic(..))
+    ty.is_int_kind() && matches!(op, Op::Binary(..) | Op::Intrinsic(..))
 }
 
 fn operands(op: &Op) -> Vec<ValueId> {

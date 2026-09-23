@@ -1108,14 +1108,14 @@ impl Parser {
     fn arm_value(&mut self) -> Result<(i32, Span), ParseError> {
         let negative = self.eat_punct("-");
         match self.next() {
-            (Token::Int(value), span) => Ok((
-                if negative {
-                    value.wrapping_neg()
-                } else {
-                    value
-                },
-                span,
-            )),
+            (Token::Int(value), span) => {
+                let value = if negative { -value } else { value };
+                let value = i32::try_from(value).map_err(|_| ParseError {
+                    span,
+                    message: format!("a `match` arm takes an `Int`, and {value} does not fit"),
+                })?;
+                Ok((value, span))
+            }
             (token, span) => Err(ParseError {
                 span,
                 message: format!(
@@ -1457,6 +1457,20 @@ impl Parser {
                 self.next();
                 Ok(Expr {
                     kind: ExprKind::Int(value),
+                    span,
+                })
+            }
+            Token::Double(value) => {
+                self.next();
+                Ok(Expr {
+                    kind: ExprKind::Double(value),
+                    span,
+                })
+            }
+            Token::Long(value) => {
+                self.next();
+                Ok(Expr {
+                    kind: ExprKind::Long(value),
                     span,
                 })
             }

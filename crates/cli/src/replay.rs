@@ -523,28 +523,23 @@ fn check_element(
     path: &[String],
     values: &[String],
 ) -> Result<Option<String>, String> {
-    use orla_ir::Type;
+    use orla_ir::{Number, Type};
     let node_id = orla_graph::NodeId(node.to_owned());
     let (ty, words) = session.element_field(&node_id, port, index, path)?;
-    let words = &words[..];
-    let components = match ty {
-        Type::Float | Type::Int | Type::Bool => 1,
-        Type::Vec2 => 2,
-        Type::Vec3 => 3,
-        Type::Vec4 | Type::Mat2 => 4,
-        Type::IVec2 => 2,
-        Type::IVec3 => 3,
-        Type::Mat3 => 9,
-        Type::Mat4 => 16,
-        Type::Struct(_) => {
-            return Err("name a field of the struct; whole structs are not compared".into());
-        }
-    };
-    let exact = matches!(ty, Type::Int | Type::Bool | Type::IVec2 | Type::IVec3);
+    if matches!(ty, Type::Struct(_)) {
+        return Err("name a field of the struct; whole structs are not compared".into());
+    }
+    let numbers = orla_ir::template(ty, &[])
+        .rebuilt(&mut words.iter().copied())
+        .numbers();
+    let components = numbers.len();
+    let exact = numbers
+        .iter()
+        .all(|n| matches!(n, Number::Int(_) | Number::Long(_) | Number::Bool(_)));
     let tolerance = match values.len() {
         n if n == components => 0.01,
         n if n == components + 1 && !exact => values[components]
-            .parse::<f32>()
+            .parse::<f64>()
             .map_err(|_| format!("tolerance `{}` is not a number", values[components]))?,
         _ => {
             return Err(format!(
@@ -557,26 +552,31 @@ fn check_element(
             ));
         }
     };
-    let actual: Vec<String> = words
+    let actual: Vec<String> = numbers
         .iter()
-        .map(|w| match ty {
-            Type::Int | Type::IVec2 | Type::IVec3 => (*w as i32).to_string(),
-            Type::Bool => (*w != 0).to_string(),
-            _ => format!("{}", f32::from_bits(*w)),
+        .map(|n| match n {
+            Number::Float(v) => format!("{v}"),
+            Number::Double(v) => format!("{v}"),
+            Number::Int(v) => v.to_string(),
+            Number::Long(v) => v.to_string(),
+            Number::Bool(v) => v.to_string(),
         })
         .collect();
-    let matches = words.iter().zip(values).all(|(w, expected)| match ty {
-        Type::Int | Type::IVec2 | Type::IVec3 => {
-            expected.parse::<i32>().is_ok_and(|e| e == *w as i32)
-        }
-        Type::Bool => match expected.as_str() {
-            "true" => *w != 0,
-            "false" => *w == 0,
+    let near = |expected: &str, v: f64| {
+        expected
+            .parse::<f64>()
+            .is_ok_and(|e| (e - v).abs() <= tolerance)
+    };
+    let matches = numbers.iter().zip(values).all(|(n, expected)| match n {
+        Number::Int(v) => expected.parse::<i64>().is_ok_and(|e| e == i64::from(*v)),
+        Number::Long(v) => expected.parse::<i64>().is_ok_and(|e| e == *v),
+        Number::Bool(v) => match expected.as_str() {
+            "true" => *v,
+            "false" => !*v,
             _ => false,
         },
-        _ => expected
-            .parse::<f32>()
-            .is_ok_and(|e| (e - f32::from_bits(*w)).abs() <= tolerance),
+        Number::Float(v) => near(expected, f64::from(*v)),
+        Number::Double(v) => near(expected, *v),
     });
     Ok((!matches).then(|| {
         format!(

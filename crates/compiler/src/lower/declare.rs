@@ -66,20 +66,51 @@ pub(crate) fn literal(expr: &Expr) -> Result<Value, CompileError> {
 }
 
 /// Evaluates a literal of any value a Kernel can hold, before it has a
-/// type: numbers (integers stay `Int`), booleans, `vec2`..`vec4`,
+/// type: numbers (integers stay `Int`, and those too big for one are a
+/// `Long`; `d` and `l` say `Double` and `Long`), booleans, `vec2`..`vec4`,
 /// `ivec2` and `ivec3`, `mat2`..`mat4` from their columns or one value
-/// down the diagonal, `[a, b]` and `[v; N]`, and `Name { field: .. }`,
-/// whose fields `fields_of` lists in declaration order. An array or a
-/// struct is a record of its members in order; a type shapes it after
+/// down the diagonal, their `d` and `l` kin (`dvec3`, `lvec2`, `dmat4`),
+/// `[a, b]` and `[v; N]`, and `Name { field: .. }`, whose fields
+/// `fields_of` lists in declaration order. An array or a struct is a
+/// record of its members in order; a type shapes it after
 /// ([`orla_ir::value_as`]).
 pub(crate) fn literal_in(
     expr: &Expr,
     fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
 ) -> Result<Value, CompileError> {
+    literal_with(expr, fields_of, false)
+}
+
+/// Evaluates a literal that a type will shape, keeping every written
+/// float exact (a `Double`) until the type says what width it is: `0.1`
+/// given to a `Double` is the double nearest a tenth, not the float's.
+pub(crate) fn literal_exact(
+    expr: &Expr,
+    fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> Result<Value, CompileError> {
+    literal_with(expr, fields_of, true)
+}
+
+/// An integer as written: an `Int` where it fits, else a `Long`.
+pub(crate) fn integer(value: i64) -> Value {
+    i32::try_from(value).map_or(Value::Long(value), Value::Int)
+}
+
+fn literal_with(
+    expr: &Expr,
+    fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
+    exact: bool,
+) -> Result<Value, CompileError> {
     let fail = |message: String| semantic(expr.span, message);
+    let literal_in = |expr: &Expr, fields_of: &dyn Fn(&str) -> Option<Vec<String>>| {
+        literal_with(expr, fields_of, exact)
+    };
     match &expr.kind {
-        ExprKind::Float(value) => Ok(Value::Float(*value)),
-        ExprKind::Int(value) => Ok(Value::Int(*value)),
+        ExprKind::Float(value) if exact => Ok(Value::Double(*value)),
+        ExprKind::Float(value) => Ok(Value::Float(*value as f32)),
+        ExprKind::Int(value) => Ok(integer(*value)),
+        ExprKind::Double(value) => Ok(Value::Double(*value)),
+        ExprKind::Long(value) => Ok(Value::Long(*value)),
         ExprKind::Bool(value) => Ok(Value::Bool(*value)),
         ExprKind::Neg(inner) => {
             let value = literal_in(inner, fields_of)?;
@@ -144,9 +175,11 @@ pub(crate) fn literal_in(
             Ok(Value::Record(members))
         }
         ExprKind::Call(name, args) => {
+            // A constructor of doubles takes its numbers exact.
+            let exact = exact || name.starts_with("dvec") || name.starts_with("dmat");
             let values = args
                 .iter()
-                .map(|arg| literal_in(arg, fields_of))
+                .map(|arg| literal_with(arg, fields_of, exact))
                 .collect::<Result<Vec<_>, _>>()?;
             constructed(name, &values).ok_or_else(|| {
                 fail(format!(
@@ -163,95 +196,150 @@ pub(crate) fn literal_in(
 
 /// A literal negated component by component; a boolean is not.
 fn negated(value: &Value) -> Option<Value> {
-    let floats = |v: &[f32]| v.iter().map(|x| -x).collect::<Vec<f32>>();
-    let ints = |v: &[i32]| {
-        v.iter()
-            .map(|x| x.checked_neg())
-            .collect::<Option<Vec<i32>>>()
-    };
+    fn floats<T: std::ops::Neg<Output = T> + Copy, const N: usize>(v: &[T; N]) -> [T; N] {
+        v.map(|x| -x)
+    }
+    fn ints<T: num::CheckedNeg + Copy + Default, const N: usize>(v: &[T; N]) -> Option<[T; N]> {
+        let mut out = [T::default(); N];
+        for (slot, x) in out.iter_mut().zip(v) {
+            *slot = x.checked_neg()?;
+        }
+        Some(out)
+    }
     Some(match value {
         Value::Float(v) => Value::Float(-v),
         Value::Int(v) => Value::Int(v.checked_neg()?),
+        Value::Double(v) => Value::Double(-v),
+        Value::Long(v) => Value::Long(v.checked_neg()?),
         Value::Bool(_) => return None,
-        Value::Vec2(v) => Value::Vec2(floats(v).try_into().ok()?),
-        Value::Vec3(v) => Value::Vec3(floats(v).try_into().ok()?),
-        Value::Vec4(v) => Value::Vec4(floats(v).try_into().ok()?),
-        Value::IVec2(v) => Value::IVec2(ints(v)?.try_into().ok()?),
-        Value::IVec3(v) => Value::IVec3(ints(v)?.try_into().ok()?),
-        Value::Mat2(v) => Value::Mat2(floats(v).try_into().ok()?),
-        Value::Mat3(v) => Value::Mat3(floats(v).try_into().ok()?),
-        Value::Mat4(v) => Value::Mat4(floats(v).try_into().ok()?),
+        Value::Vec2(v) => Value::Vec2(floats(v)),
+        Value::Vec3(v) => Value::Vec3(floats(v)),
+        Value::Vec4(v) => Value::Vec4(floats(v)),
+        Value::IVec2(v) => Value::IVec2(ints(v)?),
+        Value::IVec3(v) => Value::IVec3(ints(v)?),
+        Value::Mat2(v) => Value::Mat2(floats(v)),
+        Value::Mat3(v) => Value::Mat3(floats(v)),
+        Value::Mat4(v) => Value::Mat4(floats(v)),
+        Value::DVec2(v) => Value::DVec2(floats(v)),
+        Value::DVec3(v) => Value::DVec3(floats(v)),
+        Value::DVec4(v) => Value::DVec4(floats(v)),
+        Value::LVec2(v) => Value::LVec2(ints(v)?),
+        Value::LVec3(v) => Value::LVec3(ints(v)?),
+        Value::DMat2(v) => Value::DMat2(floats(v)),
+        Value::DMat3(v) => Value::DMat3(floats(v)),
+        Value::DMat4(v) => Value::DMat4(floats(v)),
         Value::Record(members) => {
             Value::Record(members.iter().map(negated).collect::<Option<Vec<_>>>()?)
         }
     })
 }
 
+/// Integers that negate without overflowing, or say they would.
+mod num {
+    pub(super) trait CheckedNeg: Sized {
+        fn checked_neg(self) -> Option<Self>;
+    }
+    impl CheckedNeg for i32 {
+        fn checked_neg(self) -> Option<Self> {
+            i32::checked_neg(self)
+        }
+    }
+    impl CheckedNeg for i64 {
+        fn checked_neg(self) -> Option<Self> {
+            i64::checked_neg(self)
+        }
+    }
+}
+
 /// A constructor applied to literal arguments: `vec3(1, 0, 0)` with its
 /// integers widened, `ivec2(3, 4)`, `mat3(c0, c1, c2)` from columns and
-/// `mat3(1.0)` down the diagonal.
+/// `mat3(1.0)` down the diagonal, and the same of doubles (`dvec3`,
+/// `dmat4`) and longs (`lvec2`).
 fn constructed(name: &str, args: &[Value]) -> Option<Value> {
-    let float = |value: &Value| match value {
-        Value::Float(v) => Some(*v),
-        Value::Int(v) => Some(*v as f32),
-        _ => None,
+    use orla_ir::{Number, Scalar};
+    let (scalar, n, matrix) = match name {
+        "vec2" => (Scalar::Float, 2, false),
+        "vec3" => (Scalar::Float, 3, false),
+        "vec4" => (Scalar::Float, 4, false),
+        "ivec2" => (Scalar::Int, 2, false),
+        "ivec3" => (Scalar::Int, 3, false),
+        "dvec2" => (Scalar::Double, 2, false),
+        "dvec3" => (Scalar::Double, 3, false),
+        "dvec4" => (Scalar::Double, 4, false),
+        "lvec2" => (Scalar::Long, 2, false),
+        "lvec3" => (Scalar::Long, 3, false),
+        "mat2" => (Scalar::Float, 2, true),
+        "mat3" => (Scalar::Float, 3, true),
+        "mat4" => (Scalar::Float, 4, true),
+        "dmat2" => (Scalar::Double, 2, true),
+        "dmat3" => (Scalar::Double, 3, true),
+        "dmat4" => (Scalar::Double, 4, true),
+        _ => return None,
     };
-    let int = |value: &Value| match value {
-        Value::Int(v) => Some(*v),
-        _ => None,
+    let kind = match scalar {
+        Scalar::Float => Type::Float,
+        Scalar::Int => Type::Int,
+        Scalar::Double => Type::Double,
+        _ => Type::Long,
     };
-    let floats = |n: usize| -> Option<Vec<f32>> {
-        (args.len() == n).then(|| args.iter().map(float).collect())?
-    };
-    let ints = |n: usize| -> Option<Vec<i32>> {
-        (args.len() == n).then(|| args.iter().map(int).collect())?
-    };
-    let matrix = |n: usize| -> Option<Vec<f32>> {
-        if let [diagonal] = args {
-            let d = float(diagonal)?;
-            return Some(
-                (0..n * n)
-                    .map(|k| if k % (n + 1) == 0 { d } else { 0.0 })
-                    .collect(),
-            );
+    // A float given for an integer is not a literal of one.
+    let number = |value: &Value| -> Option<Number> {
+        let [number] = value.numbers()[..] else {
+            return None;
+        };
+        let integral = matches!(number, Number::Int(_) | Number::Long(_));
+        if matches!(scalar, Scalar::Int | Scalar::Long) && !integral {
+            return None;
         }
+        number.as_kind(scalar)
+    };
+    let numbers: Vec<Number> = if !matrix {
         if args.len() != n {
             return None;
         }
+        args.iter().map(number).collect::<Option<_>>()?
+    } else if let [diagonal] = args {
+        let d = number(diagonal)?;
+        let zero = Number::Int(0).as_kind(scalar)?;
+        (0..n * n)
+            .map(|k| if k % (n + 1) == 0 { d } else { zero })
+            .collect()
+    } else {
+        if args.len() != n {
+            return None;
+        }
+        let column = Type::vector(kind, n as u8)?;
         let mut entries = Vec::with_capacity(n * n);
-        for column in args {
-            let words = column.words();
-            let is_column = column.ty()
-                == Some(match n {
-                    2 => Type::Vec2,
-                    3 => Type::Vec3,
-                    _ => Type::Vec4,
-                });
-            if !is_column {
+        for part in args {
+            if part.ty() != Some(column) {
                 return None;
             }
-            entries.extend(words.into_iter().map(f32::from_bits));
+            entries.extend(part.numbers());
         }
-        Some(entries)
+        entries
     };
-    Some(match name {
-        "vec2" => Value::Vec2(floats(2)?.try_into().ok()?),
-        "vec3" => Value::Vec3(floats(3)?.try_into().ok()?),
-        "vec4" => Value::Vec4(floats(4)?.try_into().ok()?),
-        "ivec2" => Value::IVec2(ints(2)?.try_into().ok()?),
-        "ivec3" => Value::IVec3(ints(3)?.try_into().ok()?),
-        "mat2" => Value::Mat2(matrix(2)?.try_into().ok()?),
-        "mat3" => Value::Mat3(matrix(3)?.try_into().ok()?),
-        "mat4" => Value::Mat4(matrix(4)?.try_into().ok()?),
-        _ => return None,
-    })
+    let ty = if matrix {
+        column_matrix(kind, n)?
+    } else {
+        Type::vector(kind, n as u8)?
+    };
+    let mut words = Vec::new();
+    for number in numbers {
+        number.push_words(&mut words);
+    }
+    Some(orla_ir::template(ty, &[]).rebuilt(&mut words.into_iter()))
+}
+
+/// The matrix of order `n` of `kind`.
+fn column_matrix(kind: Type, n: usize) -> Option<Type> {
+    Type::vector(kind, n as u8)?.matrix_of()
 }
 
 /// The builtins a function cannot be named after: the Field, memory,
 /// context and construction ones, whose forms the language owns. The
 /// math builtins are ordinary calls, and a function of one's name
 /// stands for it in its document.
-pub(super) const RESERVED_BUILTINS: [&str; 34] = [
+pub(super) const RESERVED_BUILTINS: [&str; 44] = [
     "put",
     "sample",
     "at",
@@ -284,8 +372,18 @@ pub(super) const RESERVED_BUILTINS: [&str; 34] = [
     "mat2",
     "mat3",
     "mat4",
+    "dvec2",
+    "dvec3",
+    "dvec4",
+    "lvec2",
+    "lvec3",
+    "dmat2",
+    "dmat3",
+    "dmat4",
     "float",
     "int",
+    "double",
+    "long",
 ];
 
 /// The letters that name components, two ways.
@@ -306,21 +404,11 @@ pub(super) fn component_index(letter: char) -> Option<(u8, bool)> {
 /// Whether a type is numbers all the way down: floats and ints, no Bool.
 pub(super) fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
     match ty {
-        Type::Float
-        | Type::Int
-        | Type::Vec2
-        | Type::Vec3
-        | Type::Vec4
-        | Type::IVec2
-        | Type::IVec3
-        | Type::Mat2
-        | Type::Mat3
-        | Type::Mat4 => true,
-        Type::Bool => false,
         Type::Struct(index) => structs[*index as usize]
             .fields
             .iter()
             .all(|field| numeric(&field.ty, structs)),
+        other => other.scalar() != Some(Type::Bool),
     }
 }
 
@@ -328,18 +416,11 @@ pub(super) fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
 /// depends on the order it is folded in.
 pub(super) fn holds_float(ty: &Type, structs: &[StructDef]) -> bool {
     match ty {
-        Type::Float
-        | Type::Vec2
-        | Type::Vec3
-        | Type::Vec4
-        | Type::Mat2
-        | Type::Mat3
-        | Type::Mat4 => true,
-        Type::Int | Type::IVec2 | Type::IVec3 | Type::Bool => false,
         Type::Struct(index) => structs[*index as usize]
             .fields
             .iter()
             .any(|field| holds_float(&field.ty, structs)),
+        other => other.is_float_kind(),
     }
 }
 
@@ -820,8 +901,9 @@ pub(super) fn constant(
             .find(|def| def.name == name && !def.is_array())
             .map(|def| def.fields.iter().map(|field| field.name.clone()).collect())
     };
-    let value = literal_in(expr, &fields_of)?;
+    let value = literal_exact(expr, &fields_of)?;
     orla_ir::value_as(&value, ty, structs).ok_or_else(|| {
+        let value = literal_in(expr, &fields_of).unwrap_or(value);
         semantic(expr.span, {
             let name = describe(ty, structs);
             let article = if name.starts_with(['A', 'E', 'I', 'O', 'U']) {

@@ -40,6 +40,40 @@ pub(super) type F1 = fn(f32) -> f32;
 pub(super) type F2 = fn(f32, f32) -> f32;
 pub(super) type F3 = fn(f32, f32, f32) -> f32;
 
+pub(super) type D1 = fn(f64) -> f64;
+pub(super) type D2 = fn(f64, f64) -> f64;
+pub(super) type D3 = fn(f64, f64, f64) -> f64;
+
+/// What a scalar is, for a conversion between kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Lane {
+    Float,
+    Int,
+    Bool,
+    Double,
+    Long,
+}
+
+impl Lane {
+    /// Words a scalar of this kind takes.
+    pub(super) fn words(self) -> usize {
+        match self {
+            Self::Double | Self::Long => 2,
+            _ => 1,
+        }
+    }
+}
+
+/// The vector operations on doubles that are not componentwise.
+#[derive(Clone, Copy)]
+pub(super) enum DVector {
+    Dot,
+    Cross,
+    Length,
+    Normalize,
+    Reflect,
+}
+
 /// The shapes a `*` on matrices takes.
 #[derive(Clone, Copy)]
 pub(super) enum MatMul {
@@ -85,18 +119,127 @@ pub(super) enum Instr {
         count: usize,
         n: usize,
     },
-    /// A matrix product of order `n`: `a * b`, the shapes by `kind`.
+    /// A matrix product of order `n`: `a * b`, the shapes by `kind`,
+    /// of doubles when `wide`.
     MatMul {
         kind: MatMul,
         dst: usize,
         a: usize,
         b: usize,
         n: usize,
+        wide: bool,
     },
     /// `transpose`, `determinant` or `inverse` of the order `n` matrix at
-    /// `src`.
+    /// `src`, of doubles when `wide`.
     Matrix {
         op: Intrinsic,
+        dst: usize,
+        src: usize,
+        n: usize,
+        wide: bool,
+    },
+    /// The 64-bit operations: `n` lanes of two words each, the low word
+    /// first; strides count lanes, zero for a scalar broadcast.
+    DMap1 {
+        f: D1,
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    DMap2 {
+        f: D2,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    DMap3 {
+        f: D3,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        c: usize,
+        sc: usize,
+        n: usize,
+    },
+    DCmp {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    DEq {
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+        negate: bool,
+    },
+    DVector {
+        op: DVector,
+        dst: usize,
+        a: usize,
+        b: usize,
+        n: usize,
+    },
+    /// Arithmetic, bit operations and shifts on longs; the arithmetic
+    /// fails on overflow as an `Int`'s does, and a shift takes its count
+    /// modulo 64.
+    LBin {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    LNeg {
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    LMap1 {
+        f: fn(i64) -> i64,
+        dst: usize,
+        src: usize,
+        n: usize,
+    },
+    LMap2 {
+        f: fn(i64, i64) -> i64,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        n: usize,
+    },
+    LMap3 {
+        f: fn(i64, i64, i64) -> i64,
+        dst: usize,
+        a: usize,
+        sa: usize,
+        b: usize,
+        sb: usize,
+        c: usize,
+        sc: usize,
+        n: usize,
+    },
+    LCmp {
+        op: BinaryOp,
+        dst: usize,
+        a: usize,
+        b: usize,
+    },
+    /// `n` scalars of one kind as another: what `float`, `int`,
+    /// `double` and `long` do where a 64-bit kind is on either side.
+    Convert {
+        from: Lane,
+        to: Lane,
         dst: usize,
         src: usize,
         n: usize,

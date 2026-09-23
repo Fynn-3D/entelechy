@@ -501,10 +501,16 @@ pub struct Expr {
 /// Expression forms.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExprKind {
-    /// A float literal such as `1.0`.
-    Float(f32),
-    /// An integer literal such as `8`.
-    Int(i32),
+    /// A float literal such as `1.0`, exact as written: a `Float`, or a
+    /// `Double` where one is wanted.
+    Float(f64),
+    /// An integer literal such as `8`: an `Int`, or a `Long` where one
+    /// is wanted or where it does not fit in 32 bits.
+    Int(i64),
+    /// A float literal written with `d`, such as `0.1d`: a `Double`.
+    Double(f64),
+    /// An integer literal written with `l`, such as `8l`: a `Long`.
+    Long(i64),
     /// `true` or `false`.
     Bool(bool),
     /// A reference to an input, parameter, argument, or binding.

@@ -101,15 +101,7 @@ impl Shared {
     fn words_of(&self, ty: Type) -> usize {
         match ty {
             Type::Struct(index) => self.structs[index as usize].words,
-            Type::Vec2 => 2,
-            Type::Vec3 => 3,
-            Type::Vec4 => 4,
-            Type::IVec2 => 2,
-            Type::IVec3 => 3,
-            Type::Mat2 => 4,
-            Type::Mat3 => 9,
-            Type::Mat4 => 16,
-            Type::Float | Type::Int | Type::Bool => 1,
+            other => other.words().unwrap_or(1),
         }
     }
 }
@@ -135,12 +127,7 @@ impl<'s> Program<'s> {
                 field_offsets.push(words);
                 words += match field.ty {
                     Type::Struct(index) => structs[index as usize].words,
-                    Type::Vec2 | Type::IVec2 => 2,
-                    Type::Vec3 | Type::IVec3 => 3,
-                    Type::Vec4 | Type::Mat2 => 4,
-                    Type::Mat3 => 9,
-                    Type::Mat4 => 16,
-                    _ => 1,
+                    other => other.words().unwrap_or(1),
                 };
             }
             structs.push(StructLayout {
@@ -512,6 +499,10 @@ impl FunctionCompiler<'_> {
             loc
         };
         Some(match &instruction.op {
+            Op::Const(value) if value.words().len() > 4 => Instr::Words {
+                dst: define(self).at,
+                words: value.words(),
+            },
             Op::Const(value) => {
                 let dst = define(self);
                 let (words, n) = value_words(value);
@@ -536,7 +527,21 @@ impl FunctionCompiler<'_> {
             Op::Unary(UnaryOp::Neg, a) => {
                 let dst = define(self);
                 let src = self.loc(a).at;
-                if ty == Type::Int || ty.int_components().is_some() {
+                let lanes = lanes_of(ty);
+                if ty.scalar() == Some(Type::Double) {
+                    Instr::DMap1 {
+                        f: |v| -v,
+                        dst: dst.at,
+                        src,
+                        n: lanes,
+                    }
+                } else if ty.scalar() == Some(Type::Long) {
+                    Instr::LNeg {
+                        dst: dst.at,
+                        src,
+                        n: lanes,
+                    }
+                } else if ty == Type::Int || ty.int_components().is_some() {
                     Instr::INeg {
                         dst: dst.at,
                         src,
@@ -563,10 +568,10 @@ impl FunctionCompiler<'_> {
                 let (la, lb) = (self.loc(a), self.loc(b));
                 let product = match (op, ta.order(), tb.order()) {
                     (BinaryOp::Mul, Some(n), Some(_)) => Some((MatMul::MatMat, n)),
-                    (BinaryOp::Mul, Some(n), None) if tb != Type::Float => {
+                    (BinaryOp::Mul, Some(n), None) if tb.lanes().is_some() => {
                         Some((MatMul::MatVec, n))
                     }
-                    (BinaryOp::Mul, None, Some(n)) if ta != Type::Float => {
+                    (BinaryOp::Mul, None, Some(n)) if ta.lanes().is_some() => {
                         Some((MatMul::VecMat, n))
                     }
                     _ => None,
@@ -578,7 +583,11 @@ impl FunctionCompiler<'_> {
                         a: la.at,
                         b: lb.at,
                         n: usize::from(n),
+                        wide: ta.is_64bit(),
                     });
+                }
+                if ta.is_64bit() {
+                    return Some(self.binary64(*op, a, b, ty, dst));
                 }
                 match op {
                     BinaryOp::BitAnd
@@ -728,9 +737,7 @@ impl FunctionCompiler<'_> {
                 }
             }
             Op::Construct(parts)
-                if (matches!(ty, Type::Struct(_))
-                    || ty.order().is_some()
-                    || ty.int_components().is_some())
+                if ty.components().is_none()
                     && parts
                         .iter()
                         .all(|part| self.constants.contains_key(&part.0)) =>
@@ -756,10 +763,9 @@ impl FunctionCompiler<'_> {
             }
             Op::Construct(parts) => {
                 let dst = define(self);
-                if matches!(ty, Type::Struct(_))
-                    || ty.order().is_some()
-                    || ty.int_components().is_some()
-                {
+                // A float vector's components may widen from integers;
+                // anything else is its parts' words end to end.
+                if ty.components().is_none() {
                     Instr::Gather {
                         dst: dst.at,
                         parts: parts.iter().map(|part| self.loc(part)).collect(),
@@ -786,7 +792,9 @@ impl FunctionCompiler<'_> {
                     Type::Struct(index) => {
                         self.shared.structs[index as usize].field_offsets[*component as usize]
                     }
-                    other => *component as usize * other.order().map_or(1, usize::from),
+                    // A component or a column: that many of the part's
+                    // words in.
+                    _ => *component as usize * self.shared.words_of(ty),
                 };
                 self.locs[slot] = Loc {
                     at: base.at + offset,
@@ -826,7 +834,7 @@ impl FunctionCompiler<'_> {
             }
             Op::Intrinsic(intrinsic, call_args) => {
                 let dst = define(self);
-                self.intrinsic(*intrinsic, call_args, dst)
+                self.intrinsic(*intrinsic, call_args, dst, ty)
             }
             Op::If {
                 condition,
@@ -1024,14 +1032,9 @@ impl FunctionCompiler<'_> {
     /// literal, or a table built from known words.
     fn note_constant(&mut self, instruction: &Instruction) {
         let words = match &instruction.op {
-            Op::Const(value) => {
-                let (words, n) = value_words(value);
-                Some(words[..n].to_vec())
-            }
+            Op::Const(value) => Some(value.words()),
             Op::Construct(parts)
-                if (matches!(instruction.ty, Type::Struct(_))
-                    || instruction.ty.order().is_some()
-                    || instruction.ty.int_components().is_some())
+                if instruction.ty.components().is_none()
                     && parts
                         .iter()
                         .all(|part| self.constants.contains_key(&part.0)) =>
@@ -1066,7 +1069,26 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    fn intrinsic(&self, intrinsic: Intrinsic, args: &[ValueId], dst: Loc) -> Instr {
+    fn intrinsic(&self, intrinsic: Intrinsic, args: &[ValueId], dst: Loc, ty: Type) -> Instr {
+        let wide = args.iter().any(|arg| self.ty(arg).is_64bit());
+        let conversion = matches!(
+            intrinsic,
+            Intrinsic::ToFloat | Intrinsic::ToInt | Intrinsic::ToDouble | Intrinsic::ToLong
+        );
+        if conversion {
+            let (from, to) = (self.ty(&args[0]), ty);
+            if from.is_64bit() || to.is_64bit() {
+                return Instr::Convert {
+                    from: lane(from),
+                    to: lane(to),
+                    dst: dst.at,
+                    src: self.loc(&args[0]).at,
+                    n: lanes_of(from),
+                };
+            }
+        } else if wide {
+            return self.intrinsic64(intrinsic, args, dst, ty);
+        }
         let n = dst.n;
         let loc = |i: usize| self.loc(&args[i]).at;
         let is_int = |i: usize| {
@@ -1119,7 +1141,11 @@ impl FunctionCompiler<'_> {
                 dst: dst.at,
                 src: loc(0),
                 n: usize::from(self.ty(&args[0]).order().unwrap_or(1)),
+                wide: false,
             },
+            Intrinsic::ToDouble | Intrinsic::ToLong => {
+                unreachable!("a conversion to a 64-bit kind is a `Convert`")
+            }
             Intrinsic::Floor => map1(f32::floor),
             Intrinsic::Ceil => map1(f32::ceil),
             Intrinsic::Round => map1(f32::round_ties_even),
@@ -1260,6 +1286,235 @@ impl FunctionCompiler<'_> {
             },
             Intrinsic::Mulhi => imap2(|a, b| ((a as i64 * b as i64) >> 32) as i32),
             Intrinsic::Umulhi => imap2(|a, b| ((a as u32 as u64 * b as u32 as u64) >> 32) as i32),
+        }
+    }
+}
+
+/// Lanes of a value: its scalars, however many words each takes.
+fn lanes_of(ty: Type) -> usize {
+    ty.shape().map_or(1, |(_, n)| usize::from(n))
+}
+
+/// The kind of a value's scalars, for a conversion.
+fn lane(ty: Type) -> Lane {
+    match ty.scalar() {
+        Some(Type::Int) => Lane::Int,
+        Some(Type::Bool) => Lane::Bool,
+        Some(Type::Double) => Lane::Double,
+        Some(Type::Long) => Lane::Long,
+        _ => Lane::Float,
+    }
+}
+
+impl FunctionCompiler<'_> {
+    /// The stride of an operand of a 64-bit operation over `lanes`
+    /// lanes: zero when a scalar broadcasts beside a vector.
+    fn lane_stride(&self, id: &ValueId, lanes: usize) -> usize {
+        if lanes_of(self.ty(id)) == 1 && lanes > 1 {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// `a op b` on doubles or longs (the validator has seen that both are
+    /// of one kind).
+    fn binary64(&self, op: BinaryOp, a: &ValueId, b: &ValueId, ty: Type, dst: Loc) -> Instr {
+        let ta = self.ty(a);
+        let (la, lb) = (self.loc(a).at, self.loc(b).at);
+        let lanes = lanes_of(ty);
+        let (sa, sb) = (self.lane_stride(a, lanes), self.lane_stride(b, lanes));
+        let double = ta.scalar() == Some(Type::Double);
+        match op {
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual
+                if double =>
+            {
+                Instr::DCmp {
+                    op,
+                    dst: dst.at,
+                    a: la,
+                    b: lb,
+                }
+            }
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+                Instr::LCmp {
+                    op,
+                    dst: dst.at,
+                    a: la,
+                    b: lb,
+                }
+            }
+            BinaryOp::Equal | BinaryOp::NotEqual if double => Instr::DEq {
+                dst: dst.at,
+                a: la,
+                b: lb,
+                n: lanes_of(ta),
+                negate: op == BinaryOp::NotEqual,
+            },
+            // Integers are equal when their words are.
+            BinaryOp::Equal | BinaryOp::NotEqual => Instr::IEq {
+                dst: dst.at,
+                a: la,
+                b: lb,
+                n: self.loc(a).n,
+                negate: op == BinaryOp::NotEqual,
+            },
+            _ if double => Instr::DMap2 {
+                f: match op {
+                    BinaryOp::Add => |a, b| a + b,
+                    BinaryOp::Sub => |a, b| a - b,
+                    BinaryOp::Mul => |a, b| a * b,
+                    BinaryOp::Div => |a, b| a / b,
+                    _ => |a, b| a % b,
+                },
+                dst: dst.at,
+                a: la,
+                sa,
+                b: lb,
+                sb,
+                n: lanes,
+            },
+            _ => Instr::LBin {
+                op,
+                dst: dst.at,
+                a: la,
+                sa,
+                b: lb,
+                sb,
+                n: lanes,
+            },
+        }
+    }
+
+    /// An intrinsic whose arguments hold doubles or longs.
+    fn intrinsic64(&self, intrinsic: Intrinsic, args: &[ValueId], dst: Loc, ty: Type) -> Instr {
+        let lanes = lanes_of(ty);
+        let loc = |i: usize| self.loc(&args[i]).at;
+        let stride = |i: usize| self.lane_stride(&args[i], lanes);
+        let long = self.ty(&args[0]).scalar() == Some(Type::Long);
+        let map1 = |f: D1| Instr::DMap1 {
+            f,
+            dst: dst.at,
+            src: loc(0),
+            n: lanes,
+        };
+        let map2 = |f: D2| Instr::DMap2 {
+            f,
+            dst: dst.at,
+            a: loc(0),
+            sa: stride(0),
+            b: loc(1),
+            sb: stride(1),
+            n: lanes,
+        };
+        let map3 = |f: D3| Instr::DMap3 {
+            f,
+            dst: dst.at,
+            a: loc(0),
+            sa: stride(0),
+            b: loc(1),
+            sb: stride(1),
+            c: loc(2),
+            sc: stride(2),
+            n: lanes,
+        };
+        let lmap1 = |f: fn(i64) -> i64| Instr::LMap1 {
+            f,
+            dst: dst.at,
+            src: loc(0),
+            n: lanes,
+        };
+        let lmap2 = |f: fn(i64, i64) -> i64| Instr::LMap2 {
+            f,
+            dst: dst.at,
+            a: loc(0),
+            sa: stride(0),
+            b: loc(1),
+            sb: stride(1),
+            n: lanes,
+        };
+        let vector = |op: DVector| Instr::DVector {
+            op,
+            dst: dst.at,
+            a: loc(0),
+            b: if args.len() > 1 { loc(1) } else { loc(0) },
+            n: lanes_of(self.ty(&args[0])),
+        };
+        match intrinsic {
+            Intrinsic::Transpose | Intrinsic::Determinant | Intrinsic::Inverse => Instr::Matrix {
+                op: intrinsic,
+                dst: dst.at,
+                src: loc(0),
+                n: usize::from(self.ty(&args[0]).order().unwrap_or(1)),
+                wide: true,
+            },
+            Intrinsic::Abs if long => lmap1(i64::wrapping_abs),
+            Intrinsic::Sign if long => lmap1(i64::signum),
+            Intrinsic::Min if long => lmap2(i64::min),
+            Intrinsic::Max if long => lmap2(i64::max),
+            Intrinsic::AddWrap => lmap2(i64::wrapping_add),
+            Intrinsic::SubWrap => lmap2(i64::wrapping_sub),
+            Intrinsic::MulWrap => lmap2(i64::wrapping_mul),
+            Intrinsic::Clamp if long => Instr::LMap3 {
+                f: |v, low, high| v.max(low).min(high),
+                dst: dst.at,
+                a: loc(0),
+                sa: stride(0),
+                b: loc(1),
+                sb: stride(1),
+                c: loc(2),
+                sc: stride(2),
+                n: lanes,
+            },
+            Intrinsic::Floor => map1(f64::floor),
+            Intrinsic::Ceil => map1(f64::ceil),
+            Intrinsic::Round => map1(f64::round_ties_even),
+            Intrinsic::Sign => map1(|v| {
+                if v > 0.0 {
+                    1.0
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }),
+            Intrinsic::Fract => map1(|v| v - v.floor()),
+            Intrinsic::Abs => map1(f64::abs),
+            Intrinsic::Sqrt => map1(f64::sqrt),
+            Intrinsic::Sin => map1(f64::sin),
+            Intrinsic::Cos => map1(f64::cos),
+            Intrinsic::Tan => map1(f64::tan),
+            Intrinsic::Asin => map1(f64::asin),
+            Intrinsic::Acos => map1(f64::acos),
+            Intrinsic::Atan => map1(f64::atan),
+            Intrinsic::Exp => map1(f64::exp),
+            Intrinsic::Log => map1(f64::ln),
+            Intrinsic::Trunc => map1(f64::trunc),
+            Intrinsic::Exp2 => map1(f64::exp2),
+            Intrinsic::Log2 => map1(f64::log2),
+            Intrinsic::Sinh => map1(f64::sinh),
+            Intrinsic::Cosh => map1(f64::cosh),
+            Intrinsic::Tanh => map1(f64::tanh),
+            Intrinsic::Min => map2(f64::min),
+            Intrinsic::Max => map2(f64::max),
+            Intrinsic::Pow => map2(f64::powf),
+            Intrinsic::Atan2 => map2(f64::atan2),
+            Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
+            #[allow(clippy::manual_clamp)]
+            Intrinsic::Clamp => map3(|v, low, high| v.max(low).min(high)),
+            Intrinsic::Mix => map3(|a, b, t| a + (b - a) * t),
+            Intrinsic::Fma => map3(|a, b, c| a.mul_add(b, c)),
+            Intrinsic::Smoothstep => map3(|low, high, x| {
+                #[allow(clippy::manual_clamp)]
+                let t = ((x - low) / (high - low)).max(0.0).min(1.0);
+                t * t * (3.0 - 2.0 * t)
+            }),
+            Intrinsic::Dot => vector(DVector::Dot),
+            Intrinsic::Cross => vector(DVector::Cross),
+            Intrinsic::Length => vector(DVector::Length),
+            Intrinsic::Normalize => vector(DVector::Normalize),
+            Intrinsic::Reflect => vector(DVector::Reflect),
+            other => unreachable!("`{}` takes no 64-bit value", other.name()),
         }
     }
 }

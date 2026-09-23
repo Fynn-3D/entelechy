@@ -17,7 +17,7 @@ mod declare;
 mod expr;
 
 use declare::{RESERVED_BUILTINS, aliases, manifest, port_type, structs};
-pub(crate) use declare::{literal, literal_in};
+pub(crate) use declare::{literal, literal_exact, literal_in};
 
 fn semantic(span: Span, message: impl Into<String>) -> CompileError {
     CompileError::Semantic {
@@ -258,6 +258,9 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             ));
         }
         let mut result = builder.block(&kernel.compute)?;
+        if shared.record.is_none() && !matches!(manifest.mode, Mode::Scatter { .. }) {
+            result = builder.adapt(result, expected);
+        }
         let mut split: Option<Vec<ValueId>> = None;
         let actual = builder.ty(result);
         if let Mode::Scatter { base, .. } = manifest.mode {
@@ -380,6 +383,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             builder.args.push((decl.a.value.clone(), expected));
             builder.args.push((decl.b.value.clone(), expected));
             let result = builder.block(&decl.body)?;
+            let result = builder.adapt(result, expected);
             let actual = builder.ty(result);
             if actual != expected {
                 return Err(semantic(
@@ -399,6 +403,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         Some(carry) => {
             let mut builder = Builder::new(&shared, false, "init", Vec::new());
             let result = builder.value(&carry.init)?;
+            let result = builder.adapt(result, expected);
             let actual = builder.ty(result);
             if actual != expected {
                 return Err(semantic(
@@ -505,6 +510,7 @@ fn lower_function(
         }
     };
     let result = builder.block(&declaration.body)?;
+    let result = builder.adapt(result, ret);
     let actual = builder.ty(result);
     if actual != ret {
         return Err(semantic(
@@ -569,6 +575,10 @@ struct Builder<'a> {
     each: Vec<(u32, usize)>,
     /// Every `let`, in source order, with its value: what a trace shows.
     bindings: Vec<(ValueId, String)>,
+    /// The numbers written without a width that nothing has named yet,
+    /// exact as written (a float as a `Double`, an integer as a `Long`):
+    /// each becomes a `Double` or a `Long` where it meets one.
+    literals: std::collections::HashMap<u32, orla_ir::Number>,
 }
 
 impl<'a> Builder<'a> {
@@ -588,6 +598,116 @@ impl<'a> Builder<'a> {
             loops: Vec::new(),
             each: Vec::new(),
             bindings: Vec::new(),
+            literals: std::collections::HashMap::new(),
+        }
+    }
+
+    /// A number written without a width: a `Float` or an `Int` (a
+    /// `Long` when it does not fit in 32 bits), until it meets a wider
+    /// kind.
+    fn written(&mut self, number: orla_ir::Number) -> ValueId {
+        let (ty, value) = match number {
+            orla_ir::Number::Double(v) => (Type::Float, orla_ir::Value::Float(v as f32)),
+            orla_ir::Number::Long(v) => match i32::try_from(v) {
+                Ok(v) => (Type::Int, orla_ir::Value::Int(v)),
+                Err(_) => (Type::Long, orla_ir::Value::Long(v)),
+            },
+            _ => unreachable!("only numbers are written"),
+        };
+        let id = self.emit(ty, Op::Const(value));
+        self.literals.insert(id.0, number);
+        id
+    }
+
+    /// `id` as a value of `want`, when it is a number written without a
+    /// width and `want` is the 64-bit kind it can be: `0.1` beside a
+    /// `Double` is the double nearest a tenth. Anything else is left as
+    /// it is, for the caller's check to name.
+    fn adapt(&mut self, id: ValueId, want: Type) -> ValueId {
+        if self.ty(id) == want {
+            return id;
+        }
+        let Some(value) = self.adapted(id, want) else {
+            return id;
+        };
+        for buffer in self.buffers.iter_mut().rev() {
+            if let Some(instruction) = buffer.iter_mut().rev().find(|i| i.id == id) {
+                instruction.ty = want;
+                instruction.op = Op::Const(value);
+                self.types[id.0 as usize] = want;
+                self.literals.remove(&id.0);
+                return id;
+            }
+        }
+        id
+    }
+
+    /// What a written number is as a value of `want`, when it can be one.
+    fn adapted(&self, id: ValueId, want: Type) -> Option<orla_ir::Value> {
+        use orla_ir::{Number, Value};
+        match (self.literals.get(&id.0)?, want) {
+            (Number::Double(v), Type::Double) => Some(Value::Double(*v)),
+            (Number::Long(v), Type::Double) => Some(Value::Double(*v as f64)),
+            (Number::Long(v), Type::Long) => Some(Value::Long(*v)),
+            _ => None,
+        }
+    }
+
+    /// The branches of an `if` or a `match` in one width: a branch that
+    /// gives a written number takes the 64-bit kind another gives.
+    fn adapt_branches(&mut self, blocks: &mut [&mut IrBlock]) {
+        let Some(want) = blocks
+            .iter()
+            .map(|block| self.ty(block.result))
+            .find(|ty| matches!(ty, Type::Double | Type::Long))
+        else {
+            return;
+        };
+        for block in blocks.iter_mut() {
+            let id = block.result;
+            if self.ty(id) == want {
+                continue;
+            }
+            let Some(value) = self.adapted(id, want) else {
+                continue;
+            };
+            if let Some(instruction) = block.body.iter_mut().rev().find(|i| i.id == id) {
+                instruction.ty = want;
+                instruction.op = Op::Const(value);
+                self.types[id.0 as usize] = want;
+                self.literals.remove(&id.0);
+            }
+        }
+    }
+
+    /// A scalar converted to `kind`, when it is another kind: what a
+    /// constructor makes of a component.
+    fn converted(&mut self, id: ValueId, kind: Type) -> ValueId {
+        let from = self.ty(id);
+        if from == kind {
+            return id;
+        }
+        let intrinsic = match kind {
+            Type::Float => Intrinsic::ToFloat,
+            Type::Int => Intrinsic::ToInt,
+            Type::Double => Intrinsic::ToDouble,
+            _ => Intrinsic::ToLong,
+        };
+        self.emit(kind, Op::Intrinsic(intrinsic, vec![id]))
+    }
+
+    /// Adapts the written numbers among `ids` to the 64-bit kind of the
+    /// first of them that has one.
+    fn adapt_all(&mut self, ids: &mut [ValueId]) {
+        let Some(kind) = ids
+            .iter()
+            .filter_map(|id| self.ty(*id).scalar())
+            .find(|scalar| scalar.is_64bit())
+        else {
+            return;
+        };
+        for id in ids {
+            *id = self.adapt(*id, kind);
         }
     }
 
@@ -733,6 +853,8 @@ impl<'a> Builder<'a> {
                     ));
                 }
                 let id = self.value(value)?;
+                // A name fixes a number's width: every use sees one value.
+                self.literals.remove(&id.0);
                 if name.value != "_" {
                     self.bindings.push((id, name.value.clone()));
                 }
@@ -861,6 +983,7 @@ impl<'a> Builder<'a> {
             match resolve_type(ty, self.shared.structs) {
                 Ok(expected) => {
                     let id = self.value(arg)?;
+                    let id = self.adapt(id, expected);
                     if self.ty(id) != expected {
                         return Err(semantic(
                             arg.span,

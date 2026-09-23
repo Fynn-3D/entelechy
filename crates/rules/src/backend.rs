@@ -151,6 +151,15 @@ pub trait Backend: Send + Sync {
     /// presents a resident image directly.
     fn as_any(&self) -> &dyn Any;
 
+    /// Whether this backend runs `module` at all. One that cannot, a GPU
+    /// without 64-bit arithmetic say, answers false, and a runtime with a
+    /// second backend prepares the module there; one without says why
+    /// when the module is prepared here.
+    fn takes(&self, module: &Validated) -> bool {
+        let _ = module;
+        true
+    }
+
     /// Builds backend state for a validated module.
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
 

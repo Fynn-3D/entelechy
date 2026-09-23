@@ -346,21 +346,11 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
 /// Whether a type is numbers all the way down: floats and ints, no Bool.
 fn numeric(structs: &[StructDef], ty: Type) -> bool {
     match ty {
-        Type::Float
-        | Type::Int
-        | Type::Vec2
-        | Type::Vec3
-        | Type::Vec4
-        | Type::IVec2
-        | Type::IVec3
-        | Type::Mat2
-        | Type::Mat3
-        | Type::Mat4 => true,
-        Type::Bool => false,
         Type::Struct(index) => structs[index as usize]
             .fields
             .iter()
             .all(|field| numeric(structs, field.ty)),
+        other => other.scalar() != Some(Type::Bool),
     }
 }
 

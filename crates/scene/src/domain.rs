@@ -14,8 +14,11 @@ pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
         message,
     };
     Ok(match &expr.kind {
-        ExprKind::Int(value) => DomainExpr::Int(*value),
-        ExprKind::Float(value) => DomainExpr::Float(*value),
+        ExprKind::Int(value) => DomainExpr::Int(
+            i32::try_from(*value)
+                .map_err(|_| fail(format!("`{value}` is too large for a domain")))?,
+        ),
+        ExprKind::Float(value) => DomainExpr::Float(*value as f32),
         ExprKind::Name(name) => DomainExpr::Name(name.clone()),
         ExprKind::Neg(inner) => DomainExpr::Neg(Box::new(domain_expr(inner)?)),
         ExprKind::Binary(op, a, b) => {

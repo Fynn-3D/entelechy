@@ -600,6 +600,213 @@ pub fn cases() -> Vec<Case> {
     out
 }
 
+/// The 64-bit features: a name, `let`s over the wide environment, and
+/// the `Wide` they yield. The environment is `i: Int`, `x: Double` and
+/// `n: Long` from the element, the inputs `rows: Rows<Double>` and `ids:
+/// Rows<Long>`, the params `big`, `origin`, `scale`, `frame` and
+/// `steps`, and two functions. A GPU takes none of these; the rows hold
+/// the JIT to the interpreter, and say what the GPU refuses.
+pub fn wide_features() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        (
+            "double arithmetic",
+            "let far = 500000.123456789 + x; let diff = (far - 500000.0) * 1000.0; let q = diff / 3.0 + diff % 0.7 - (-x) + 2 * x; let near = far - 0.1 > 500000.0;",
+            "Wide { d: q, l: long(diff), w: dvec3(diff, x, -x) * 0.5 - origin * scale, b: q > 1.0 && q != x && near, i: int(q) }",
+        ),
+        (
+            "long arithmetic",
+            "let a = big * n + 7 - n * n * 1000000007l; let q = a / 97l + a % 97 + (0l - a) / 5; let bits = (((a << 20) ^ (a >> 3)) | (n & 5l)) & 0xFFFFFFFFFFl; let u = a >>> 40; let wrapped = (add_wrap(9223372036854775807l, n) >>> 60) + (sub_wrap(-9223372036854775807l, n) >>> 60) + (mul_wrap(big, big) >>> 40); let e = 5000000000 + n; let s = (n << 63) >>> 63;",
+            "Wide { d: double(a) * 0.5, l: q + bits + u + wrapped + e + s + steps[i % 3] + abs(-n) + sign(a) + min(a, 3l) + max(n, 2l) + clamp(a, -5l, 5l), w: dvec3(double(q), 0.0, 1.0), b: a > big && a != 0l && n <= 40, i: int(a % 1000l) }",
+        ),
+        (
+            "double vectors and matrices",
+            "let p = origin + dvec3(x, 1.0, 2.0) * scale; let local = p - origin; let n3 = normalize(local); let c = cross(local, dvec3(0.0, 0.0, 1.0)); let m = spin(x) * dmat2(2.0); let r = frame * local; let t = transpose(dmat3(dvec3(x + 2.0, 1.0, 0.0), dvec3(0.0, x + 2.0, 1.0), dvec3(1.0, 0.0, x + 2.0))); let inv = inverse(t) * t; let det = determinant(t) + determinant(m); let dm4 = inverse(dmat4(dvec4(2.0, 0.0, 0.0, 0.0), dvec4(0.0, 3.0, 0.0, 0.0), dvec4(0.0, 0.0, 4.0, 0.0), dvec4(x, 1.0, 2.0, 1.0)))[3]; let sw = local.zyx + dvec3(local.xy, 1.0); let col = t[i % 3]; let mv = local * t; let neg = -m; let scaled = 2.0 * t * 0.5 + t - t;",
+            "Wide { d: dot(local, n3) + length(c) + det + inv[1][1] + dm4.x + m[1][0] + sw.x + col[i % 3] + mv.y + neg[0].y + scaled[2][2] + dot(dvec2(x, 1.0), dvec2(1.0, x)) + distance(p, origin), l: 0l, w: reflect(n3, dvec3(0.0, 1.0, 0.0)) + r + c + lerp(local, sw, 0.25), b: local == local && n3 != c && t == transpose(transpose(t)), i: int(t == t) + int(m != m) * 2 }",
+        ),
+        (
+            "double math",
+            "let t = sin(x) + cos(x) * tan(x * 0.1) + asin(fract(x * 0.13)) + acos(fract(x * 0.17)) + atan(x) + atan2(x, 3.0) + exp(x * 0.1) + log(x + 1.0) + pow(x + 1.0, 1.5) + sqrt(x) + exp2(x * 0.5) + log2(x + 1.0) + sinh(x * 0.2) + cosh(x * 0.2) + tanh(x) + floor(x) + ceil(x) + round(x) + trunc(-x) + sign(x - 5.0) + abs(x - 6.0) + min(x, 3.0) + max(x, 4.0) + clamp(x, 1.0, 2.0) + mix(x, 2.0, 0.25) + step(0.5, x) + smoothstep(0.0, 2.0, x) + fma(x, 2.0, 1.0) + mod(x, 0.71) + radians(x) + degrees(x) + inversesqrt(x + 1.0) + saturate(x - 2.0);",
+            "Wide { d: t, l: long(t * 1000.0), w: sin(dvec3(x, 2.0 * x, 3.0 * x)) + pow(dvec3(x + 1.0, 2.0, 3.0), dvec3(1.5, 0.5, 2.0)) + clamp(dvec3(x, -x, 0.5), 0.0, 1.0) + floor(dvec3(x, -x, 2.5)) + min(dvec3(x, 1.0, 2.0), 1.5) + mix(dvec3(x, 0.0, 1.0), dvec3(1.0, 1.0, 1.0), dvec3(0.5, 0.25, 0.0)), b: isnan(t) || isinf(t), i: int(t) }",
+        ),
+        (
+            "long vectors",
+            "let a = lvec2(n, big) + lvec2(1l, 2l) * 3; let b = lvec3(a, -n) % lvec3(7l, 11l, 13l); let c = (a << lvec2(3l, 40l)) ^ lvec2(n, n); let widened = lvec2(ivec2(i, -i)) + lvec2(1, 2); let parts = a.yx - lvec2(1l, 1l); let clamped = clamp(lvec3(n, -n, big), -10l, 10l) + clamp(lvec3(n, n, n), lvec3(0l, 1l, 2l), lvec3(3l, 4l, 5l));",
+            "Wide { d: double(a.y), l: a.x + b.x + b.y + b.z + c.x + (c.y >>> 30) + widened.y + abs(lvec2(-n, n)).x + min(a, lvec2(5l, 6l)).y + max(a, 4l).x + parts.x + clamped.x + clamped.z + sign(lvec2(-n, 0l)).x + a[i % 2], w: dvec3(double(b.x), double(c.x), 0.0), b: a == a && b != lvec3(0l, 0l, 0l), i: int(b.z) }",
+        ),
+        (
+            "64-bit conversions",
+            "let f = float(x); let dd = double(f) + double(i) + double(n) + double(i > 3); let back = int(dd) + int(big) + int(x * 1.5) + int(n); let lng = long(x * 1000.0) + long(i) + long(i > 2) + long(f) + long(-x); let vv = float(dvec3(x, 1.0, 2.0)); let dv = double(vec3(f, 1.0, 2.0)) + double(ivec3(i, -i, 1)); let iv = int(dvec2(x, -x)); let lv = long(vec2(f, -f)) + long(dvec2(x, 2.5)) + long(ivec2(i, 3)); let mm = float(dmat2(x)); let dm = double(mat2(f)); let zero = x - x; let nan = zero / zero; let edge = int(1.0 / zero) / 4 + int(nan) + int(double(big) * 1000000000000.0) / 4 + int(-1.0 / zero) / 4; let ledge = long(1.0 / zero) / 8 + long(nan) + long(-1.0 / zero) / 8;",
+            "Wide { d: dd + double(vv.x) + dv.y + double(mm[0][0]) + dm[1][1], l: lng + long(iv.x) + lv.y + lv.x + ledge, w: dv, b: f > 1.0, i: back + edge }",
+        ),
+        (
+            "64-bit structs, arrays and params",
+            "let s = Site { at: dvec2(x, -x) + origin.xy, id: n * big }; let arr = [x, x * 2.0, 3.0d]; let longs = [n, big, -n]; let picked = arr[i % 3] + arr[i + 10] + double(longs[i % 3]) + double(steps[i % 3]); let moved = Site { ..s, id: s.id + 1l }; let table = [1.5d, 2.25d, -0.125d]; let each_one = [each 3 { double(index()) * x }];",
+            "Wide { d: picked + s.at.y - origin.y + moved.at.x + table[i % 3] + table[i - 40] + each_one[i % 3], l: moved.id + longs[i % 3] + longs[i + 10], w: dvec3(s.at, 1.0) - dvec3(origin.xy, 0.0), b: s.id > 0l, i: int(s.id % 1000l) }",
+        ),
+        (
+            "64-bit field reads and control",
+            "let r = at(rows, i % 16) + at(rows, i + 100) + at(rows, -5); let id = at(ids, i % 16) * 3l; let pick = if r > 0.5 { r * 2.0 } else { -r }; let arm = match i % 3 { 0 => id, 1 => -id, _ => 7l }; let walked = loop 5 with acc = x { acc * 0.5 + r }; let counted = loop 4 with acc = n { if acc > 100l { break acc; } acc * 3l };",
+            "Wide { d: r + pick + walked, l: id + arm + counted, w: dvec3(r, at(rows, 3), walked), b: r > 0.0, i: int(id % 100l) }",
+        ),
+    ]
+}
+
+const WIDE_HEAD: &str = "requires { field.read; field.write; }
+    struct Wide { d: Double; l: Long; w: DVec3; b: Bool; i: Int; }
+    struct Site { at: DVec2; id: Long; }
+    param big: Long = 5000000000l;
+    param origin: DVec3 = dvec3(500000.125, -4000000.0625, 12.5);
+    param scale: Double = 0.001;
+    param frame: DMat3 = dmat3(1.0);
+    param steps: [Long; 3] = [1l, -2l, 3l];
+    fn lerp(a: DVec3, b: DVec3, t: Double) -> DVec3 { return a + (b - a) * t; }
+    fn spin(a: Double) -> DMat2 { return dmat2(dvec2(cos(a), sin(a)), dvec2(-sin(a), cos(a))); }
+";
+
+const WIDE_ENV: &str = "let x = double(i) * 0.37 + 0.1; let n = long(i);";
+
+/// The 64-bit modes: a name, a wrapper, and whether its first input is a
+/// row of ticks (a scan's, which maps over it) or the target of a
+/// scatter follows the inputs.
+fn wide_modes() -> Vec<(&'static str, Wrapper)> {
+    fn map_rows(lets: &str, out: &str) -> String {
+        format!(
+            "kernel wide.map_rows@1 {{ {WIDE_HEAD} input rows: Rows<Double>; input ids: Rows<Long>;
+    output result: Rows<Wide>;
+    compute {{ let i = element(); {WIDE_ENV} {lets} return {out}; }} }}"
+        )
+    }
+    fn map_grid(lets: &str, out: &str) -> String {
+        format!(
+            "kernel wide.map_grid@1 {{ {WIDE_HEAD} input rows: Rows<Double>; input ids: Rows<Long>;
+    output result: Grid<Wide>; output lane: Grid<DVec3>;
+    compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; {WIDE_ENV} {lets} let out = {out}; return {{ lane: out.w * 2.0, result: out }}; }} }}"
+        )
+    }
+    fn reduce(lets: &str, out: &str) -> String {
+        format!(
+            "kernel wide.reduce@1 {{ {WIDE_HEAD} input rows: Rows<Double>; input ids: Rows<Long>;
+    output result: Rows<Wide>;
+    compute {{ let i = element(); {WIDE_ENV} {lets} return {out}; }}
+    merge(a, b) {{ return Wide {{ d: a.d + b.d, l: add_wrap(a.l, b.l), w: a.w + b.w, b: a.b || b.b, i: (a.i & 0xFFFF) + (b.i & 0xFFFF) }}; }} }}"
+        )
+    }
+    fn scan(lets: &str, out: &str) -> String {
+        format!(
+            "kernel wide.scan@1 {{ {WIDE_HEAD} input ticks: Rows<Int>; input rows: Rows<Double>; input ids: Rows<Long>;
+    output result: Rows<Wide>;
+    scan with acc = Wide {{ d: 0.0, l: 0l, w: dvec3(0.0, 0.0, 0.0), b: false, i: 0 }} {{
+        let i = index(); {WIDE_ENV} {lets} let out = {out};
+        return Wide {{ d: out.d + acc.d * 0.5, l: add_wrap(out.l, acc.l), w: out.w + acc.w * 0.5, b: out.b != acc.b, i: add_wrap(out.i, acc.i) }};
+    }} }}"
+        )
+    }
+    fn scatter(lets: &str, out: &str) -> String {
+        format!(
+            "kernel wide.scatter@1 {{ {WIDE_HEAD} input rows: Rows<Double>; input ids: Rows<Long>; input target: Rows<Acc>;
+    struct Acc {{ d: Double; l: Long; w: DVec3; }}
+    struct Pair {{ at: Int; value: Acc; }}
+    output result: Rows<Acc>;
+    scatter into target with sum {{ let i = element(); {WIDE_ENV} {lets} let out = {out}; return Pair {{ at: (i * 7) % 5, value: Acc {{ d: out.d, l: out.l % 1000000l, w: out.w }} }}; }} }}"
+        )
+    }
+    fn prefix(lets: &str, out: &str) -> String {
+        format!(
+            "kernel wide.prefix@1 {{ {WIDE_HEAD} input rows: Rows<Double>; input ids: Rows<Long>;
+    struct Run {{ d: Double; l: Long; w: DVec3; }}
+    output result: Rows<Run>;
+    prefix with max {{ let i = element(); {WIDE_ENV} {lets} let out = {out}; return Run {{ d: out.d, l: out.l, w: out.w }}; }} }}"
+        )
+    }
+    vec![
+        ("map over rows", map_rows as Wrapper),
+        ("map over a grid", map_grid),
+        ("reduce", reduce),
+        ("scan", scan),
+        ("scatter", scatter),
+        ("prefix", prefix),
+    ]
+}
+
+fn wide_rows() -> (Schema, Domain, Vec<u32>) {
+    let values =
+        (0..16).map(|i| Value::Double((f64::from(i) * 0.21).sin() * 500000.0 + 0.123456789));
+    (
+        Schema::new(vec![Scalar::Double; 2]),
+        Domain::Rows(16),
+        values.flat_map(|v| v.words()).collect(),
+    )
+}
+
+fn wide_ids() -> (Schema, Domain, Vec<u32>) {
+    let values = (0..16i64).map(|i| Value::Long(i * 3_000_000_019 - 20_000_000_000));
+    (
+        Schema::new(vec![Scalar::Long; 2]),
+        Domain::Rows(16),
+        values.flat_map(|v| v.words()).collect(),
+    )
+}
+
+fn wide_params() -> Vec<Value> {
+    vec![
+        Value::Long(5_000_000_001),
+        // Not the defaults, so a backend that read the defaults shows.
+        Value::DVec3([500000.1234567, -4000000.0625, 12.5]),
+        Value::Double(0.0011),
+        Value::DMat3([1.0, 0.5, 0.0, -0.5, 1.0, 0.0, 0.25, 0.0, 1.0]),
+        Value::Record(vec![Value::Long(4), Value::Long(-5), Value::Long(6)]),
+    ]
+}
+
+/// Every 64-bit feature under every mode it runs in.
+pub fn wide_cases() -> Vec<Case> {
+    let mut out = Vec::new();
+    for (feature, lets, result) in wide_features() {
+        for (mode, wrap) in wide_modes() {
+            let (inputs, domain) = match mode {
+                "map over rows" => (vec![wide_rows(), wide_ids()], Domain::Rows(COUNT)),
+                "map over a grid" => (vec![wide_rows(), wide_ids()], Domain::Grid(16, 3)),
+                "scan" => (
+                    vec![
+                        (
+                            Schema::new(vec![Scalar::Int]),
+                            Domain::Rows(COUNT),
+                            vec![0; COUNT as usize],
+                        ),
+                        wide_rows(),
+                        wide_ids(),
+                    ],
+                    Domain::Rows(COUNT),
+                ),
+                "scatter" => {
+                    let mut acc = vec![Scalar::Double; 2];
+                    acc.extend([Scalar::Long; 2]);
+                    acc.extend([Scalar::Double; 6]);
+                    (
+                        vec![
+                            wide_rows(),
+                            wide_ids(),
+                            (Schema::new(acc), Domain::Rows(5), vec![0; 5 * 10]),
+                        ],
+                        Domain::Rows(5),
+                    )
+                }
+                "reduce" => (vec![wide_rows(), wide_ids()], Domain::Rows(1)),
+                _ => (vec![wide_rows(), wide_ids()], Domain::Rows(16)),
+            };
+            out.push(Case {
+                name: format!("{feature} in {mode}"),
+                source: wrap(lets, result),
+                inputs,
+                params: wide_params(),
+                domain,
+                context: context(),
+            });
+        }
+    }
+    out
+}
+
 /// Compares two outputs word by word under a layout: an Int or Bool word
 /// must match exactly, a Float word within `relative` of the larger
 /// magnitude plus `absolute` (NaN matches NaN). Returns the first
@@ -619,33 +826,56 @@ pub fn compare(
         ));
     }
     let stride = scalars.len().max(1);
-    for (index, (a, b)) in reference.iter().zip(candidate).enumerate() {
+    let wide = |words: &[u32], index: usize| {
+        u64::from(words[index]) | u64::from(words.get(index + 1).copied().unwrap_or(0)) << 32
+    };
+    let mut index = 0;
+    while index < reference.len() {
         let scalar = scalars[index % stride];
+        let (a, b) = (reference[index], candidate[index]);
+        let (wa, wb) = (wide(reference, index), wide(candidate, index));
+        // Equal is equal, infinities included, whose difference is not
+        // a number.
+        let near = |fa: f64, fb: f64, relative: f64, absolute: f64| {
+            fa == fb
+                || (fa.is_nan() && fb.is_nan())
+                || (fa - fb).abs() <= absolute + relative * fa.abs().max(fb.abs())
+        };
         let same = match scalar {
-            Scalar::Float => {
-                let (fa, fb) = (f32::from_bits(*a), f32::from_bits(*b));
-                // Equal is equal, infinities included, whose difference is
-                // not a number.
-                fa == fb
-                    || (fa.is_nan() && fb.is_nan())
-                    || (fa - fb).abs() <= absolute + relative * fa.abs().max(fb.abs())
-            }
+            Scalar::Float => near(
+                f64::from(f32::from_bits(a)),
+                f64::from(f32::from_bits(b)),
+                f64::from(relative),
+                f64::from(absolute),
+            ),
+            // A double is held to the same rule a float is, scaled to
+            // its own precision.
+            Scalar::Double => near(
+                f64::from_bits(wa),
+                f64::from_bits(wb),
+                f64::from(relative) * 1e-9,
+                f64::from(absolute) * 1e-9,
+            ),
+            Scalar::Long => wa == wb,
             _ => a == b,
         };
         if !same {
-            let shown = |w: u32| match scalar {
+            let shown = |w: u32, wide: u64| match scalar {
                 Scalar::Float => format!("{}", f32::from_bits(w)),
                 Scalar::Int => format!("{}", w as i32),
                 Scalar::Bool => format!("{}", w != 0),
+                Scalar::Double => format!("{}", f64::from_bits(wide)),
+                Scalar::Long => format!("{}", wide as i64),
             };
             return Some(format!(
                 "element {} word {} ({scalar:?}): {} against {}",
                 index / stride,
                 index % stride,
-                shown(*a),
-                shown(*b)
+                shown(a, wa),
+                shown(b, wb)
             ));
         }
+        index += scalar.words();
     }
     None
 }

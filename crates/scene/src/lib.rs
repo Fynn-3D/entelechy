@@ -62,6 +62,11 @@ fn zero_of(ty: &str) -> Option<Value> {
         "Vec2" => Some(Value::Vec2([0.0; 2])),
         "Vec3" => Some(Value::Vec3([0.0; 3])),
         "Vec4" => Some(Value::Vec4([0.0; 4])),
+        "Double" => Some(Value::Double(0.0)),
+        "Long" => Some(Value::Long(0)),
+        "DVec2" => Some(Value::DVec2([0.0; 2])),
+        "DVec3" => Some(Value::DVec3([0.0; 3])),
+        "DVec4" => Some(Value::DVec4([0.0; 4])),
         _ => None,
     }
 }
@@ -637,7 +642,11 @@ impl Lowering<'_, '_> {
         }
         let mut params = Vec::new();
         for decl in &document.params {
-            let default = literal(&decl.default, &self.known_structs())?;
+            let default = typed_literal(
+                &decl.default,
+                &resolved(&decl.ty.value, &self.aliases),
+                &self.known_structs(),
+            )?;
             if params
                 .iter()
                 .any(|p: &GraphParam| p.name == decl.name.value)
@@ -1134,6 +1143,25 @@ fn literal(expr: &Expr, known: &[(String, Vec<String>)]) -> Result<Value, Docume
             .map(|(_, fields)| fields.clone())
     };
     orla_compiler::literal_in(expr, &fields_of).map_err(|e| error(expr.span, e.to_string()))
+}
+
+/// A literal written for a param of type `ty`: exact where the type is
+/// a plain one, so `param origin: Double = 500000.123456789;` holds the
+/// double nearest what is written, not a float's nearest.
+fn typed_literal(
+    expr: &Expr,
+    ty: &str,
+    known: &[(String, Vec<String>)],
+) -> Result<Value, DocumentError> {
+    let Ok(ty) = ty.parse::<orla_ir::Type>() else {
+        return literal(expr, known);
+    };
+    let exact = orla_compiler::literal_exact(expr, &|_| None)
+        .map_err(|e| error(expr.span, e.to_string()))?;
+    match orla_ir::value_as(&exact, ty, &[]) {
+        Some(value) => Ok(value),
+        None => literal(expr, known),
+    }
 }
 
 /// A literal expression carrying a value, for rewriting param defaults:

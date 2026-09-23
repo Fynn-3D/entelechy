@@ -13,8 +13,21 @@ impl Builder<'_> {
     /// Lowers an expression that must produce a plain value (not an image).
     pub(super) fn value(&mut self, expr: &Expr) -> Result<ValueId, CompileError> {
         match &expr.kind {
-            ExprKind::Float(value) => Ok(self.emit(Type::Float, Op::Const(Value::Float(*value)))),
-            ExprKind::Int(value) => Ok(self.emit(Type::Int, Op::Const(Value::Int(*value)))),
+            ExprKind::Float(value) => Ok(self.written(orla_ir::Number::Double(*value))),
+            ExprKind::Int(value) => Ok(self.written(orla_ir::Number::Long(*value))),
+            ExprKind::Double(value) => {
+                Ok(self.emit(Type::Double, Op::Const(Value::Double(*value))))
+            }
+            ExprKind::Long(value) => Ok(self.emit(Type::Long, Op::Const(Value::Long(*value)))),
+            // A written number negated is a written number: `-0.1` beside
+            // a `Double` is the double nearest minus a tenth.
+            ExprKind::Neg(inner) if matches!(inner.kind, ExprKind::Float(_) | ExprKind::Int(_)) => {
+                Ok(match inner.kind {
+                    ExprKind::Float(value) => self.written(orla_ir::Number::Double(-value)),
+                    ExprKind::Int(value) => self.written(orla_ir::Number::Long(-value)),
+                    _ => unreachable!("matched above"),
+                })
+            }
             ExprKind::Bool(value) => Ok(self.emit(Type::Bool, Op::Const(Value::Bool(*value)))),
             ExprKind::Name(name) => self.name(name, expr.span),
             ExprKind::Neg(inner) => self.unary(UnaryOp::Neg, "-", inner, expr.span),
@@ -97,11 +110,27 @@ impl Builder<'_> {
                 };
                 let left = self.value(left)?;
                 let right = self.value(right)?;
+                let mut pair = [left, right];
+                self.adapt_all(&mut pair);
+                let [left, right] = pair;
                 let (a, b) = (self.ty(left), self.ty(right));
                 let ty = op.result_type(a, b).ok_or_else(|| {
+                    // Two widths of one kind meet through a conversion.
+                    let widths = [a.scalar(), b.scalar()];
+                    let hint = if widths.contains(&Some(Type::Float))
+                        && widths.contains(&Some(Type::Double))
+                    {
+                        "; a float and a double meet through `double(..)` or `float(..)`"
+                    } else if widths.contains(&Some(Type::Int))
+                        && widths.contains(&Some(Type::Long))
+                    {
+                        "; an int and a long meet through `long(..)` or `int(..)`"
+                    } else {
+                        ""
+                    };
                     semantic(
                         expr.span,
-                        format!("cannot apply `{}` to {a} and {b}", op.symbol()),
+                        format!("cannot apply `{}` to {a} and {b}{hint}", op.symbol()),
                     )
                 })?;
                 Ok(self.emit(ty, Op::Binary(op, left, right)))
@@ -176,13 +205,9 @@ impl Builder<'_> {
                 if letters.len() == 1 {
                     return Ok(self.emit(lane, Op::Extract(inner, u32::from(letters[0].0))));
                 }
-                let result = match (lane, letters.len()) {
-                    (Type::Float, 2) => Type::Vec2,
-                    (Type::Float, 3) => Type::Vec3,
-                    (Type::Float, 4) => Type::Vec4,
-                    (Type::Int, 2) => Type::IVec2,
-                    (Type::Int, 3) => Type::IVec3,
-                    _ => {
+                let result = match Type::vector(lane, letters.len() as u8) {
+                    Some(result) => result,
+                    None => {
                         return Err(semantic(
                             expr.span,
                             format!(
@@ -341,6 +366,7 @@ impl Builder<'_> {
                     }
                     let id = self.value(value)?;
                     let expected = self.structs()[index].fields[position].ty;
+                    let id = self.adapt(id, expected);
                     if self.ty(id) != expected {
                         return Err(semantic(
                             value.span,
@@ -414,6 +440,7 @@ impl Builder<'_> {
                     }
                     let id = self.value(value)?;
                     let expected = manifest.outputs[position].element();
+                    let id = self.adapt(id, expected);
                     if self.ty(id) != expected {
                         return Err(semantic(
                             value.span,
@@ -458,8 +485,9 @@ impl Builder<'_> {
                     ));
                 }
                 let id = self.reserve(Type::Bool);
-                let then_block = self.nested(then)?;
-                let otherwise_block = self.nested(otherwise)?;
+                let mut then_block = self.nested(then)?;
+                let mut otherwise_block = self.nested(otherwise)?;
+                self.adapt_branches(&mut [&mut then_block, &mut otherwise_block]);
                 let (a, b) = (self.ty(then_block.result), self.ty(otherwise_block.result));
                 if a != b {
                     return Err(semantic(
@@ -499,8 +527,7 @@ impl Builder<'_> {
                 let id = self.reserve(Type::Int);
                 let mut seen: std::collections::BTreeMap<i32, Span> =
                     std::collections::BTreeMap::new();
-                let mut lowered = Vec::with_capacity(arms.len());
-                let mut ty: Option<(Type, Span)> = None;
+                let mut blocks = Vec::with_capacity(arms.len());
                 for arm in arms {
                     for value in &arm.values {
                         if seen.insert(value.value, value.span).is_some() {
@@ -510,7 +537,17 @@ impl Builder<'_> {
                             ));
                         }
                     }
-                    let block = self.nested(&arm.body)?;
+                    blocks.push(self.nested(&arm.body)?);
+                }
+                let mut otherwise_block = self.nested(otherwise)?;
+                {
+                    let mut all: Vec<&mut IrBlock> = blocks.iter_mut().collect();
+                    all.push(&mut otherwise_block);
+                    self.adapt_branches(&mut all);
+                }
+                let mut lowered = Vec::with_capacity(arms.len());
+                let mut ty: Option<(Type, Span)> = None;
+                for (arm, block) in arms.iter().zip(blocks) {
                     let arm_ty = self.ty(block.result);
                     if let Some((first, _)) = ty
                         && first != arm_ty
@@ -527,7 +564,6 @@ impl Builder<'_> {
                     ty = Some((arm_ty, arm.body.result.span));
                     lowered.push((arm.values.iter().map(|v| v.value).collect(), block));
                 }
-                let otherwise_block = self.nested(otherwise)?;
                 let otherwise_ty = self.ty(otherwise_block.result);
                 if let Some((first, _)) = ty
                     && first != otherwise_ty
@@ -775,6 +811,7 @@ impl Builder<'_> {
         match &expr.kind {
             ExprKind::Break(value) => {
                 let id = self.value(value)?;
+                let id = self.adapt(id, carried);
                 if self.ty(id) != carried {
                     return Err(semantic(
                         value.span,
@@ -888,6 +925,14 @@ impl Builder<'_> {
     /// A float constant.
     pub(super) fn constant(&mut self, value: f32) -> ValueId {
         self.emit(Type::Float, Op::Const(orla_ir::Value::Float(value)))
+    }
+
+    /// A constant of a float kind: a `Float`, or a `Double` exact.
+    pub(super) fn number(&mut self, kind: Type, value: f64) -> ValueId {
+        match kind {
+            Type::Double => self.emit(Type::Double, Op::Const(orla_ir::Value::Double(value))),
+            _ => self.constant(value as f32),
+        }
     }
 
     pub(super) fn unary(

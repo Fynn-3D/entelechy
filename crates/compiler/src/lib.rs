@@ -107,6 +107,16 @@ pub fn literal(expr: &orla_language::Expr) -> Result<orla_ir::Value, CompileErro
     lower::literal(expr)
 }
 
+/// Evaluates a literal that a type will shape, keeping every written
+/// float exact until the type says its width: [`literal_in`] for a place
+/// that knows its type.
+pub fn literal_exact(
+    expr: &orla_language::Expr,
+    fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> Result<orla_ir::Value, CompileError> {
+    lower::literal_exact(expr, fields_of)
+}
+
 /// Evaluates a literal of any value a Kernel can hold, before it has a
 /// type: a struct literal's fields in the order `fields_of` lists them
 /// for its name, an array or a struct as a record of its members.

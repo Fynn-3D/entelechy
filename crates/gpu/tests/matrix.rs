@@ -124,3 +124,27 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
         failures.join("\n")
     );
 }
+
+#[test]
+fn a_64_bit_feature_is_not_taken_and_says_why() {
+    let Some(gpu) = GpuBackend::new().ok() else {
+        return;
+    };
+    for case in orla_matrix::wide_cases() {
+        let module = compile(&case.source).unwrap();
+        assert!(!gpu.takes(&module), "{}: taken", case.name);
+        let Err(error) = Backend::prepare(&gpu, &module) else {
+            panic!("{}: prepared", case.name);
+        };
+        assert!(
+            error.contains("a Double or a Long"),
+            "{}: {error}",
+            case.name
+        );
+    }
+    // Everything else it takes.
+    for case in orla_matrix::cases() {
+        let module = compile(&case.source).unwrap();
+        assert!(gpu.takes(&module), "{}: not taken", case.name);
+    }
+}

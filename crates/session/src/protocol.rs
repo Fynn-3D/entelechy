@@ -411,20 +411,18 @@ pub fn report_json(session: &Session, report: &orla_graph::Report) -> Json {
 /// Words a value of `ty` takes.
 fn words_of(module: &Validated, ty: Type) -> usize {
     match ty {
-        Type::Float | Type::Int | Type::Bool => 1,
-        Type::Vec2 => 2,
-        Type::Vec3 => 3,
-        Type::Vec4 | Type::Mat2 => 4,
-        Type::IVec2 => 2,
-        Type::IVec3 => 3,
-        Type::Mat3 => 9,
-        Type::Mat4 => 16,
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
             .map(|field| words_of(module, field.ty))
             .sum(),
+        other => other.words().unwrap_or(1),
     }
+}
+
+/// A value of a type that is not a struct, from its words.
+fn plain_value(ty: Type, words: &[u32]) -> Value {
+    orla_ir::template(ty, &[]).rebuilt(&mut words.iter().copied())
 }
 
 /// A type's name as the source spells it: a struct by its name.
@@ -480,6 +478,7 @@ pub fn words_json(module: &Validated, ty: Type, words: &[u32]) -> Json {
             }
             Json::Object(object)
         }
+        other => value_json(&plain_value(other, words)),
     }
 }
 
@@ -553,6 +552,7 @@ pub fn words_text(module: &Validated, ty: Type, words: &[u32]) -> String {
                 .collect();
             format!("{} {{ {} }}", def.name, fields.join(", "))
         }
+        other => plain_value(other, words).to_string(),
     }
 }
 
@@ -1347,10 +1347,31 @@ fn events_json(events: &[Event]) -> Vec<Json> {
 
 /// Values cross the protocol as JSON numbers and booleans, a vector as
 /// an array of its components, a matrix as an array of its columns, and a
-/// struct or an array as an array of its members.
+/// struct or an array as an array of its members. A double is the JSON
+/// number that reads back as it; a long is a number while a double holds
+/// it exactly (up to 2^53), and a string of its digits beyond, which is
+/// what JSON's readers keep exact.
 pub fn value_json(value: &Value) -> Json {
     let columns = |v: &[f32], n: usize| json!(v.chunks(n).collect::<Vec<_>>());
+    let dcolumns = |v: &[f64], n: usize| json!(v.chunks(n).collect::<Vec<_>>());
+    let long = |v: i64| {
+        if v.unsigned_abs() <= 1 << 53 {
+            json!(v)
+        } else {
+            json!(v.to_string())
+        }
+    };
     match value {
+        Value::Double(v) => json!(v),
+        Value::Long(v) => long(*v),
+        Value::DVec2(v) => json!(v),
+        Value::DVec3(v) => json!(v),
+        Value::DVec4(v) => json!(v),
+        Value::LVec2(v) => json!(v.iter().map(|x| long(*x)).collect::<Vec<_>>()),
+        Value::LVec3(v) => json!(v.iter().map(|x| long(*x)).collect::<Vec<_>>()),
+        Value::DMat2(v) => dcolumns(v, 2),
+        Value::DMat3(v) => dcolumns(v, 3),
+        Value::DMat4(v) => dcolumns(v, 4),
         Value::Float(v) => json!(v),
         Value::Int(v) => json!(v),
         Value::Bool(v) => json!(v),
@@ -1366,20 +1387,24 @@ pub fn value_json(value: &Value) -> Json {
     }
 }
 
-/// Reads a value: integers become `Int`, other numbers `Float`, booleans
-/// `Bool`, and an array the record of its items, which the parameter it
-/// is given to shapes: `[1, 2.5]` a `Vec2`, `[3, 4]` an `IVec2` or a
-/// `Vec2`, `[[1, 0], [0, 1]]` a `Mat2`, `[[0, 1, 0], 2]` a struct of a
-/// `Vec3` and a `Float`.
+/// Reads a value: integers become `Int` (a `Long` beyond 32 bits, and a
+/// string of digits is one too), other numbers are kept exact until the
+/// parameter they are given to says their width, booleans are `Bool`,
+/// and an array is the record of its items, which the parameter shapes:
+/// `[1, 2.5]` a `Vec2`, `[3, 4]` an `IVec2` or a `Vec2`, `[[1, 0], [0,
+/// 1]]` a `Mat2`, `[[0, 1, 0], 2]` a struct of a `Vec3` and a `Float`.
 pub fn value_from_json(json: &Json) -> Result<Value, Json> {
     match json {
         Json::Bool(v) => Ok(Value::Bool(*v)),
         Json::Number(n) => {
-            if let Some(i) = n.as_i64().filter(|i| i32::try_from(*i).is_ok()) {
-                Ok(Value::Int(i as i32))
+            if let Some(i) = n.as_i64() {
+                Ok(i32::try_from(i).map_or(Value::Long(i), Value::Int))
             } else {
-                Ok(Value::Float(n.as_f64().unwrap_or(0.0) as f32))
+                Ok(Value::Double(n.as_f64().unwrap_or(0.0)))
             }
+        }
+        Json::String(digits) if digits.parse::<i64>().is_ok() => {
+            Ok(Value::Long(digits.parse().unwrap_or(0)))
         }
         Json::Array(items) if !items.is_empty() => Ok(Value::Record(
             items
@@ -1481,11 +1506,35 @@ mod tests {
             Value::IVec2([3, -4]),
             Value::Mat2([1.0, 0.0, 0.5, 1.0]),
             Value::Record(vec![Value::Vec3([0.0, 1.0, 0.0]), Value::Int(2)]),
+            Value::Double(500000.123456789),
+            Value::Double(0.1),
+            Value::Long(5),
+            Value::Long(-(1 << 60) - 3),
+            Value::DVec3([0.1, -4000000.987654321, 2.0]),
+            Value::LVec2([1 << 62, -7]),
+            Value::DMat2([1.0, 0.1, -0.1, 1.0]),
+            Value::Record(vec![Value::DVec2([0.25, 0.5]), Value::Long(1 << 40)]),
         ] {
             // JSON is untyped; what the value is read as is its shape.
             let back = value_from_json(&value_json(&value)).unwrap();
             assert_eq!(back.shaped_like(&value), Some(value));
         }
+        // A long a double cannot hold travels as its digits.
+        assert_eq!(
+            value_json(&Value::Long((1 << 53) + 1)),
+            json!("9007199254740993")
+        );
+        assert_eq!(
+            value_json(&Value::Long(1 << 53)),
+            json!(9007199254740992i64)
+        );
+        // A number with a fraction is exact until a width is asked of it.
+        assert_eq!(
+            value_from_json(&json!(0.1))
+                .unwrap()
+                .shaped_like(&Value::Float(0.0)),
+            Some(Value::Float(0.1))
+        );
         assert!(value_from_json(&json!("no")).is_err());
     }
 

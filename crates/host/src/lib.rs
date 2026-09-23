@@ -8,10 +8,11 @@
 //! a Kernel, it does not belong in this crate.
 //!
 //! There is one kind of resource: a Field, which is a [`Domain`] of elements
-//! laid out by a [`Schema`]: a Kernel sees one 32-bit word per scalar,
-//! and a Field may keep a scalar narrower ([`Encoding`]). An image is the
-//! Field whose domain is a grid and whose elements are four floats; the
-//! pixel helpers here are views of that case, not a second store.
+//! laid out by a [`Schema`]: a Kernel sees one 32-bit word per scalar (two
+//! for a 64-bit one), and a Field may keep a scalar narrower
+//! ([`Encoding`]). An image is the Field whose domain is a grid and whose
+//! elements are four floats; the pixel helpers here are views of that
+//! case, not a second store.
 
 pub mod encoding;
 pub mod file;
@@ -42,9 +43,11 @@ impl fmt::Display for Handle {
 /// One RGBA pixel with linear float components.
 pub type Pixel = [f32; 4];
 
-/// What one scalar of an element is to a Kernel: a float, an integer or
-/// a boolean, each computed in one 32-bit word. How it is kept in memory
-/// is its [`Encoding`], which may be narrower.
+/// What one word of an element is to a Kernel: a float, an integer or a
+/// boolean, each computed in one 32-bit word, or a word of a 64-bit
+/// float or integer, which is two words, the low one first. How a word
+/// is kept in memory is its [`Encoding`], which may be narrower for the
+/// 32-bit kinds and is always a whole word for the 64-bit ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scalar {
     /// An `f32`.
@@ -53,6 +56,10 @@ pub enum Scalar {
     Int,
     /// A `0` or `1`.
     Bool,
+    /// One of the two words of an `f64`; they come in pairs, low first.
+    Double,
+    /// One of the two words of an `i64`; they come in pairs, low first.
+    Long,
 }
 
 impl Scalar {
@@ -61,6 +68,26 @@ impl Scalar {
             Self::Float => "f",
             Self::Int => "i",
             Self::Bool => "b",
+            Self::Double => "d",
+            Self::Long => "l",
+        }
+    }
+
+    /// Words a scalar of this kind takes: two for the 64-bit kinds.
+    pub fn words(self) -> usize {
+        match self {
+            Self::Double | Self::Long => 2,
+            _ => 1,
+        }
+    }
+
+    fn noun(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Float => ("float", "floats"),
+            Self::Int => ("integer", "integers"),
+            Self::Bool => ("boolean", "booleans"),
+            Self::Double => ("double", "doubles"),
+            Self::Long => ("long", "longs"),
         }
     }
 }
@@ -104,15 +131,22 @@ impl Schema {
         let mut offsets = Vec::with_capacity(scalars.len());
         let mut bytes = 0;
         let mut widest = 1;
+        let mut k = 0;
+        while k < scalars.len() {
+            let scalar = scalars[k];
+            if scalar.words() == 2 && scalars.get(k + 1) != Some(&scalar) {
+                return Err(format!(
+                    "a {} is two words, and word {k} has no partner",
+                    scalar.noun().0
+                ));
+            }
+            k += scalar.words();
+        }
         for (scalar, encoding) in scalars.iter().zip(&encodings) {
             if !encoding.fits(*scalar) {
                 return Err(format!(
                     "a {} cannot be kept as `{encoding}`",
-                    match scalar {
-                        Scalar::Float => "float",
-                        Scalar::Int => "integer",
-                        Scalar::Bool => "boolean",
-                    }
+                    scalar.noun().0
                 ));
             }
             let size = encoding.bytes();
@@ -268,15 +302,12 @@ impl Schema {
                 _ => runs.push((*scalar, 1)),
             }
         }
+        for (scalar, count) in &mut runs {
+            *count /= scalar.words();
+        }
         let counted = |scalar: Scalar, count: usize| {
-            let name = match (scalar, count) {
-                (Scalar::Float, 1) => "float",
-                (Scalar::Float, _) => "floats",
-                (Scalar::Int, 1) => "integer",
-                (Scalar::Int, _) => "integers",
-                (Scalar::Bool, 1) => "boolean",
-                (Scalar::Bool, _) => "booleans",
-            };
+            let (one, many) = scalar.noun();
+            let name = if count == 1 { one } else { many };
             let how_many = match count {
                 1 => "one".to_owned(),
                 2 => "two".to_owned(),
@@ -305,9 +336,10 @@ impl Schema {
 impl std::str::FromStr for Schema {
     type Err = String;
 
-    /// Parses the spelling `Display` writes: scalars as `f`, `i`, `b`,
-    /// separated by commas, each followed by `:` and its encoding when it
-    /// is narrower than a word (`f:unorm8`).
+    /// Parses the spelling `Display` writes: scalars as `f`, `i`, `b`, `d`,
+    /// `l`, separated by commas, each followed by `:` and its encoding when
+    /// it is narrower than a word (`f:unorm8`). A `d` or an `l` is one
+    /// 64-bit scalar, which is two words.
     fn from_str(text: &str) -> Result<Self, String> {
         let mut scalars = Vec::new();
         let mut encodings = Vec::new();
@@ -316,18 +348,24 @@ impl std::str::FromStr for Schema {
                 Some((letter, kept)) => (letter, Some(kept)),
                 None => (part.trim(), None),
             };
-            scalars.push(match letter {
+            let scalar = match letter {
                 "f" => Scalar::Float,
                 "i" => Scalar::Int,
                 "b" => Scalar::Bool,
-                other => return Err(format!("`{other}` is not a scalar (f, i, or b)")),
-            });
-            encodings.push(match kept {
+                "d" => Scalar::Double,
+                "l" => Scalar::Long,
+                other => return Err(format!("`{other}` is not a scalar (f, i, b, d, or l)")),
+            };
+            let encoding = match kept {
                 None => Encoding::Word,
                 Some(name) => {
                     Encoding::parse(name).ok_or_else(|| format!("`{name}` is not an encoding"))?
                 }
-            });
+            };
+            for _ in 0..scalar.words() {
+                scalars.push(scalar);
+                encodings.push(encoding);
+            }
         }
         Self::encoded(scalars, encodings)
     }
@@ -335,14 +373,17 @@ impl std::str::FromStr for Schema {
 
 impl fmt::Display for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, (scalar, encoding)) in self.scalars.iter().zip(&self.encodings).enumerate() {
-            if index > 0 {
+        let mut k = 0;
+        while k < self.scalars.len() {
+            let (scalar, encoding) = (self.scalars[k], self.encodings[k]);
+            if k > 0 {
                 f.write_str(",")?;
             }
             f.write_str(scalar.letter())?;
-            if *encoding != Encoding::Word {
+            if encoding != Encoding::Word {
                 write!(f, ":{encoding}")?;
             }
+            k += scalar.words();
         }
         Ok(())
     }
@@ -1483,5 +1524,32 @@ mod tests {
             .is_err(),
             "a half at byte one"
         );
+    }
+
+    #[test]
+    fn a_64_bit_scalar_is_two_words_written_as_one_letter() {
+        let schema: Schema = "d,l,f".parse().unwrap();
+        assert_eq!(
+            schema.scalars(),
+            &[
+                Scalar::Double,
+                Scalar::Double,
+                Scalar::Long,
+                Scalar::Long,
+                Scalar::Float
+            ]
+        );
+        assert_eq!(schema.value_words(), 5);
+        assert_eq!(schema.element_bytes(), 20);
+        assert_eq!(schema.to_string(), "d,l,f");
+        assert_eq!(schema.describe(), "one double, one long and one float");
+        // A word without its partner is no scalar, and a 64-bit scalar
+        // is kept whole.
+        assert!(Schema::encoded(vec![Scalar::Double], vec![Encoding::Word]).is_err());
+        assert!(
+            Schema::encoded(vec![Scalar::Double, Scalar::Long], vec![Encoding::Word; 2]).is_err()
+        );
+        assert!("d:f16".parse::<Schema>().is_err());
+        assert!("l:u8".parse::<Schema>().is_err());
     }
 }

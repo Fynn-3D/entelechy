@@ -25,19 +25,7 @@ pub struct Builtin {
     pub entry_only: bool,
 }
 
-const PLAIN: [Type; 11] = [
-    Type::Float,
-    Type::Int,
-    Type::Bool,
-    Type::Vec2,
-    Type::Vec3,
-    Type::Vec4,
-    Type::IVec2,
-    Type::IVec3,
-    Type::Mat2,
-    Type::Mat3,
-    Type::Mat4,
-];
+const PLAIN: [Type; 21] = Type::NAMED;
 
 /// The signatures of an intrinsic, found by asking its typing rule about
 /// every combination of the plain types.
@@ -96,7 +84,10 @@ pub fn builtins() -> Vec<Builtin> {
         .iter()
         .map(|(intrinsic, name)| Builtin {
             name,
-            kind: if matches!(intrinsic, Intrinsic::ToFloat | Intrinsic::ToInt) {
+            kind: if matches!(
+                intrinsic,
+                Intrinsic::ToFloat | Intrinsic::ToInt | Intrinsic::ToDouble | Intrinsic::ToLong
+            ) {
                 "conversion"
             } else {
                 "math"
@@ -164,6 +155,14 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("mat2", "construction", &["mat2(c0: Vec2, c1: Vec2) -> Mat2", "mat2(diagonal: Float) -> Mat2"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
         fixed("mat3", "construction", &["mat3(c0: Vec3, c1: Vec3, c2: Vec3) -> Mat3", "mat3(diagonal: Float) -> Mat3"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
         fixed("mat4", "construction", &["mat4(c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4) -> Mat4", "mat4(diagonal: Float) -> Mat4"], "A matrix from its columns, or with one value down the diagonal and zeros elsewhere; m[i] is a column, m * v applies it.", None, false),
+        fixed("dvec2", "construction", &["dvec2(x: Double, y: Double) -> DVec2"], "A vector of doubles from components or shorter vectors, any number widened; a written number is taken exact, so dvec2(0.1, 0.2) holds the doubles nearest a tenth and a fifth.", None, false),
+        fixed("dvec3", "construction", &["dvec3(x: Double, y: Double, z: Double) -> DVec3", "dvec3(xy: DVec2, z: Double) -> DVec3", "dvec3(v: Vec3) -> DVec3"], "A vector of doubles from components or shorter vectors, any number widened; a written number is taken exact.", None, false),
+        fixed("dvec4", "construction", &["dvec4(x: Double, y: Double, z: Double, w: Double) -> DVec4", "dvec4(xyz: DVec3, w: Double) -> DVec4", "dvec4(v: Vec4) -> DVec4"], "A vector of doubles from components or shorter vectors, any number widened; a written number is taken exact.", None, false),
+        fixed("lvec2", "construction", &["lvec2(x: Long, y: Long) -> LVec2", "lvec2(v: IVec2) -> LVec2"], "A vector of longs from components or shorter integer vectors, an Int widened.", None, false),
+        fixed("lvec3", "construction", &["lvec3(x: Long, y: Long, z: Long) -> LVec3", "lvec3(xy: LVec2, z: Long) -> LVec3", "lvec3(v: IVec3) -> LVec3"], "A vector of longs from components or shorter integer vectors, an Int widened.", None, false),
+        fixed("dmat2", "construction", &["dmat2(c0: DVec2, c1: DVec2) -> DMat2", "dmat2(diagonal: Double) -> DMat2"], "A matrix of doubles from its columns, or with one value down the diagonal; m[i] is a column, m * v applies it.", None, false),
+        fixed("dmat3", "construction", &["dmat3(c0: DVec3, c1: DVec3, c2: DVec3) -> DMat3", "dmat3(diagonal: Double) -> DMat3"], "A matrix of doubles from its columns, or with one value down the diagonal; m[i] is a column, m * v applies it.", None, false),
+        fixed("dmat4", "construction", &["dmat4(c0: DVec4, c1: DVec4, c2: DVec4, c3: DVec4) -> DMat4", "dmat4(diagonal: Double) -> DMat4"], "A matrix of doubles from its columns, or with one value down the diagonal; m[i] is a column, m * v applies it.", None, false),
     ]);
     out
 }
