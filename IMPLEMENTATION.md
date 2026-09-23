@@ -41,7 +41,7 @@ the workspace, is checked by [a test](crates/interface/orla/tests/layers.rs).
 | Kernel Runtime | [runtime](crates/core/runtime/src/lib.rs), [off-frame runs](crates/core/runtime/src/later.rs); takes validated IR and the backend it is given | [hot swap](crates/core/runtime/tests/hot_swap.rs), [async](crates/core/runtime/tests/later.rs), [mixed clocks](crates/core/runtime/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain expressions](crates/frontend/scene/src/domain.rs) | [lowering tests](crates/frontend/scene/src/lib.rs) |
 | Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/frontend/scene/tests/composition.rs), written as documents |
-| Session | [session](crates/interface/session/src/lib.rs): [scene](crates/interface/session/src/scene.rs), [kernel ledger](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs.rs), [source resolution](crates/interface/session/src/sources.rs), [observation](crates/interface/session/src/observe.rs); [bench](crates/interface/session/src/bench.rs), [file formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/orla/tests/session.rs) |
+| Session | [session](crates/interface/session/src/session.rs): [scene](crates/interface/session/src/scene.rs), [kernel ledger](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs.rs), [source resolution](crates/interface/session/src/sources.rs), [observation](crates/interface/session/src/observe.rs); [bench](crates/interface/session/src/bench.rs), [file formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/orla/tests/session.rs) |
 | Creation protocol | [protocol](crates/interface/protocol/src/lib.rs), [WebSocket](crates/interface/protocol/src/websocket.rs), [contract](docs/PROTOCOL.md) | [client test](crates/interface/orla/tests/protocol.rs); [a live agent](crates/interface/orla/tests/agent.rs) repairs, publishes and composes from the answers alone; the op table held to the server ([contract test](crates/interface/protocol/src/lib.rs)); [an agent's record](examples/scanline/agent.jsonl) replayed |
 | Command line | [orla](crates/interface/orla/src/main.rs), [replay](crates/interface/orla/src/replay.rs), [render](crates/interface/orla/src/render.rs), [packages](crates/interface/orla/src/package.rs), [scaffold](crates/interface/orla/src/scaffold.rs) | every example replay on three backends |
 | C ABI | [ffi](crates/interface/ffi/src/lib.rs), [header](crates/interface/ffi/include/orla.h) | [ABI tests](crates/interface/ffi/tests/abi.rs), [header held to the exports](crates/interface/ffi/tests/header.rs), [C example](bridges/c/hello.c) |
@@ -214,7 +214,7 @@ and nothing emitted for a `Long` may use `select`
   session through the scene lowering's `declare` callback; a changed
   library republishes the Kernels that inherit from it; one name declared
   twice is refused with both files named, and a `use` cycle is reported
-  as a cycle ([session](crates/interface/session/src/lib.rs),
+  as a cycle ([source resolution](crates/interface/session/src/sources.rs),
   [session test](crates/interface/orla/tests/session.rs)).
 - Packages: a directory with `package.osn`; a scene's `use` expands to
   what the manifest uses once its versions fit, and files are
@@ -229,7 +229,7 @@ and nothing emitted for a `Long` may use `select`
   given by position takes the parameter's shape. That one rule serves
   a Kernel's default ([compiler](crates/frontend/compiler/src/lower/declare.rs)
   `literal_in`), a scene's literal, a graph parameter set by a replay
-  or the protocol ([session](crates/interface/session/src/lib.rs) `set_param`),
+  or the protocol ([scene](crates/interface/session/src/scene.rs) `set_param`),
   and the binding of a node ([evaluator](crates/core/graph/src/evaluate.rs)).
   The interpreter and the JIT read a parameter's words where the params
   are laid end to end; the GPU keeps them as `vec4<u32>` slots, each
@@ -386,7 +386,7 @@ Represented in the IR, and so on every backend:
   validated IR; compiling is the caller's step before `prepare_module`,
   so a Kernel that does not compile never reaches the registry
   ([hot swap](crates/core/runtime/tests/hot_swap.rs)). Which backend runs is the
-  session's choice ([session](crates/interface/session/src/lib.rs)).
+  session's choice ([session](crates/interface/session/src/session.rs) `runtime_for`).
 - `prepare` does the expensive work, so `publish` is a pointer swap
   ([`Backend`](crates/core/rules/src/backend.rs)). `prepare_later` moves it to one
   worker; `run`, `replay` and `check` prepare inline for determinism, and

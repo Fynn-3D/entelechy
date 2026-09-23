@@ -65,16 +65,6 @@ impl Scene {
         self.graph.as_ref()
     }
 
-    /// The graph, taken out for a call that writes the runtime while it
-    /// reads the graph; give it back with [`Scene::restore`].
-    pub(crate) fn take_graph(&mut self) -> Option<Graph> {
-        self.graph.take()
-    }
-
-    pub(crate) fn restore(&mut self, graph: Graph) {
-        self.graph = Some(graph);
-    }
-
     pub(crate) fn params(&self) -> &BTreeMap<String, Value> {
         &self.params
     }
