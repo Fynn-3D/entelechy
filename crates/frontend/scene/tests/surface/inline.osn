@@ -1,0 +1,30 @@
+// Kernels written in place: anonymous, wired where their inputs are
+// declared, taking a graph parameter as a default; and one named, which
+// other nodes may place by its id.
+param decay: Float = 0.9;
+
+node source: image.gradient@1 {
+    domain = vec2(16, 16);
+}
+
+node trail: kernel {
+    requires { field.read; field.write; }
+    input current: Image <- source.result;
+    input previous: Image <~ trail.result from source.result;
+    param fade: Float = decay;
+    output result: Image;
+    compute { return sample(current) + sample(previous) * fade; }
+}
+
+node glow: kernel fx.glow@1 {
+    requires { field.read; field.write; }
+    input source: Image <- trail.result;
+    output result: Image;
+    compute { return sample(source) * 2.0; }
+}
+
+node lit: fx.glow@1 {
+    source <- glow.result;
+}
+
+output result <- lit.result;

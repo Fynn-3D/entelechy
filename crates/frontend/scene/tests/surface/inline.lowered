@@ -1,0 +1,39 @@
+language 1
+// inline
+param decay: Float = 0.9;
+
+node source: image.gradient@1 {
+    domain = vec2(16, 16);
+}
+
+node trail: inline.trail@1 {
+    current <- source.result;
+    previous <~ trail.result from source.result;
+    fade = decay;
+}
+
+node glow: fx.glow@1 {
+    source <- trail.result;
+}
+
+node lit: fx.glow@1 {
+    source <- glow.result;
+}
+
+output result <- lit.result;
+// inline trail inline.trail@1 from inline
+//   kernel inline.trail@1 {
+//       requires { field.read; field.write; }
+//       input current: Image;
+//       input previous: Image;
+//       param fade: Float = 0.9;
+//       output result: Image;
+//       compute { return sample(current) + sample(previous) * fade; }
+//   }
+// inline glow fx.glow@1 from inline
+//   kernel fx.glow@1 {
+//       requires { field.read; field.write; }
+//       input source: Image;
+//       output result: Image;
+//       compute { return sample(source) * 2.0; }
+//   }

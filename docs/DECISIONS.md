@@ -141,10 +141,11 @@ dependency (it leaves for `orla-import`).
 
 ## A public contract grows; it breaks only with its version
 
-Five things are written against by programs and sources Orla does not
+Six things are written against by programs and sources Orla does not
 see: the protocol an agent speaks, the C ABI, the capabilities a Kernel
-declares, the `.field` file, and what a Kernel may call and write. Each
-may grow. What was valid against it stays valid, or its version changes.
+declares, the `.field` file, what a Kernel may call and write, and what
+a scene document may say. Each may grow. What was valid against it
+stays valid, or its version changes.
 
 | Contract | Held by |
 | --- | --- |
@@ -153,6 +154,7 @@ may grow. What was valid against it stays valid, or its version changes.
 | Capabilities | [`contract.rs`](../crates/core/abi/tests/contract.rs): the set, pinned to `ABI_VERSION` |
 | `.field` | [`format.rs`](../crates/core/host/tests/format.rs): every scalar and a spread of encodings pinned byte for byte, and every file in the repository still read |
 | Language surface | [`surface.txt`](../crates/frontend/compiler/tests/surface.txt) at `LANGUAGE_VERSION`, held by [`surface.rs`](../crates/frontend/compiler/tests/surface.rs) |
+| Scene documents | [`surface/`](../crates/frontend/scene/tests/surface/): documents writing every form a scene has, each beside the Graph it lowers to at `LANGUAGE_VERSION`, held by [`surface.rs`](../crates/frontend/scene/tests/surface.rs) |
 
 **Why.** A contract that changes by accident breaks someone who is not
 in the room: a Blender scene saved last month, a Kernel an agent wrote
@@ -160,10 +162,13 @@ yesterday, a C program built against last week's header. A test that
 fails on any difference makes every change a decision, and the version
 says which kind it was.
 
-**Where.** The tests above. The language's surface is the one recorded
-as data: a new builtin or signature, or a capability no longer needed,
-is recorded with `ORLA_BLESS=1`; dropping or tightening anything a
-source could write is refused until `LANGUAGE_VERSION` is raised.
+**Where.** The tests above. The language's surface and the scene
+documents are the ones recorded as data. A new document in the scene
+corpus is recorded with `ORLA_BLESS=1`; one that lowers differently is
+refused until `LANGUAGE_VERSION` is raised. For the language: a new
+builtin or signature, or a capability no longer needed, is recorded
+with `ORLA_BLESS=1`; dropping or tightening anything a source could
+write is refused until `LANGUAGE_VERSION` is raised.
 
 **What would change it.** A contract that has no outside reader after
 all, which then need not be held; or a second version of one living

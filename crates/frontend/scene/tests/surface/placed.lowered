@@ -1,0 +1,62 @@
+language 1
+// placed
+param levels: Int = 4;
+param exposure: Float = 1.2;
+
+node source: image.gradient@1 {
+    domain = vec2(32, 32);
+}
+
+node relax/1: solve.jacobi@1 {
+    field <- source.result;
+}
+
+node relax/2: solve.jacobi@1 {
+    field <- relax/1.result;
+}
+
+node relax/3: solve.jacobi@1 {
+    field <- relax/2.result;
+}
+
+node relax/4: solve.jacobi@1 {
+    field <- relax/3.result;
+}
+
+node relax/5: solve.jacobi@1 {
+    field <- relax/4.result;
+}
+
+node halvings/1: solve.halve@1 {
+    source <- relax/5.result;
+}
+
+node halvings/2: solve.halve@1 {
+    source <- halvings/1.result;
+}
+
+node halvings/3: solve.halve@1 {
+    source <- halvings/2.result;
+}
+
+node halvings/4: solve.halve@1 {
+    source <- halvings/3.result;
+}
+
+node display.tone: image.tonemap@1 {
+    source <- halvings/4.result;
+    exposure = exposure;
+}
+
+node twice/1.tone: image.tonemap@1 {
+    source <- source.result;
+    exposure = 1.0;
+}
+
+node twice/2.tone: image.tonemap@1 {
+    source <- twice/1.tone.result;
+    exposure = 1.0;
+}
+
+output result <- display.tone.result;
+// sizes levels

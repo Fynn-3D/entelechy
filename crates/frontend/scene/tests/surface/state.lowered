@@ -1,0 +1,16 @@
+language 1
+// state
+
+node seed: life.seed@1 {
+    domain = vec2(64, 48);
+}
+
+node life: life.step@1 {
+    cells <~ life.result from seed.result;
+}
+
+node tally: count.step@2 {
+    state <~ tally.result from seed.result migrate count.migrate@1;
+}
+
+output result <- life.result;

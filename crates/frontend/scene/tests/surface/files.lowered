@@ -1,0 +1,22 @@
+language 1
+// files
+input atlas: Image;
+input narrow: Image;
+input song: Image;
+input title: Rows<Int> = text "ORLA";
+input level: Image;
+input clip: Image;
+
+node show: image.show@1 {
+    atlas <- atlas;
+    clip <- clip;
+    level <- level;
+    title <- title;
+}
+
+output result <- show.result;
+// file atlas atlas.ppm Image
+// file narrow photo.png Grid<Vec4 as unorm8>
+// file song song.wav Rows<Float>
+// file level level.bin Rows<Int> bytes
+// frames clip clip Image 30

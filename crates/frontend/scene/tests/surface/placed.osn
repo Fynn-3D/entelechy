@@ -1,0 +1,33 @@
+// Another graph placed as a node, and nodes and graphs placed many
+// times, each time fed by the last.
+param levels: Int = 4;
+param exposure: Float = 1.2;
+
+node source: image.gradient@1 {
+    domain = vec2(32, 32);
+}
+
+node relax: solve.jacobi@1 {
+    field <- source.result;
+    times = 5;
+    carry field <- result;
+}
+
+node halvings: solve.halve@1 {
+    source <- relax.result;
+    times = levels;
+    carry source <- result;
+}
+
+node display: graph "parts/display.osn" {
+    source <- halvings.result;
+    exposure = exposure;
+}
+
+node twice: graph "parts/display.osn" {
+    source <- source.result;
+    times = 2;
+    carry source <- result;
+}
+
+output result <- display.result;

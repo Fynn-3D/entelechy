@@ -1,0 +1,71 @@
+// Extents: literal, and computed from what comes in, from a number a
+// Kernel wrote, from the window; a Field node; a native operation; a
+// node run off the frame.
+param tile: Int = 8;
+param width: Float = 3.5;
+
+node map: level.map@1 {
+    domain = vec2(20, 15);
+}
+
+node rows: level.rows@1 {
+    domain = 65;
+}
+
+node volume: level.volume@1 {
+    domain = vec3(4, 4, 4);
+}
+
+node drawn: level.draw@1 {
+    map <- map.result;
+    domain = size(map) * tile;
+}
+
+node faces: level.faces@1 {
+    source <- rows.result;
+    domain = 4 * count(source);
+}
+
+node detail: level.detail@1 {
+    domain = 1;
+}
+
+node ground: level.ground@1 {
+    detail <- detail.result;
+    domain = value(detail) * value(detail, 1);
+}
+
+node bounded: level.ground@1 {
+    detail <- detail.result;
+    domain = max(min(floor(width) + ceil(width), 64), 1);
+}
+
+node screen: level.screen@1 {
+    domain = window();
+}
+
+node sharp: level.screen@1 {
+    domain = window() * scale();
+}
+
+node zeros: Rows<Float> {
+    domain = 65;
+}
+
+node halves: Rows<Float> {
+    domain = 65;
+    value = 0.5;
+}
+
+node raster: native.rasterize@1 {
+    vertices <- faces.result;
+    triangles <- rows.result;
+    domain = vec2(64, 64);
+}
+
+node machine: thumb.step@1 {
+    ram <~ machine.ram from zeros.result;
+    async = true;
+}
+
+output result <- drawn.result;
