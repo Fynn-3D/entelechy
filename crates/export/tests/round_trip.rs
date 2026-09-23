@@ -87,3 +87,61 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A rig goes out and comes back: the mesh, what every vertex hangs
+/// off and the joints bit for bit, and the clips to the rounding a
+/// quaternion takes when it is sampled again.
+#[test]
+fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
+    let dir = scratch("rig");
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/skin/assets");
+    let out = dir.join("arm.glb");
+    let path = |name: &str| assets.join(format!("arm.{name}.field"));
+    orla_export::gltf::export_rig(
+        &path("vertices"),
+        &path("triangles"),
+        None,
+        &[&path("weights"), &path("skeleton")],
+        &[&path("swing.clip"), &path("curl.clip")],
+        30.0,
+        &out,
+    )
+    .unwrap();
+    let back = dir.join("back");
+    let imported = orla_import::gltf::import(&out, &back, 30.0).unwrap();
+    assert_eq!(imported.joints, 2);
+    assert_eq!(
+        imported.clips,
+        vec![("swing".to_owned(), 33), ("curl".to_owned(), 33)]
+    );
+    assert!(imported.notes.is_empty(), "{:?}", imported.notes);
+
+    // The rows that pass through untouched do so exactly.
+    for name in ["vertices", "triangles", "weights", "skeleton"] {
+        assert_eq!(
+            std::fs::read(path(name)).unwrap(),
+            std::fs::read(back.join(format!("arm.{name}.field"))).unwrap(),
+            "{name} survived the round trip bit for bit"
+        );
+    }
+    // The clips are sampled again on the way back, so they come within
+    // a rounding of where they were.
+    for name in ["swing", "curl"] {
+        let before =
+            orla_runtime::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())
+                .unwrap();
+        let after = orla_runtime::file::decode(
+            &std::fs::read(back.join(format!("arm.{name}.clip.field"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(before.domain(), after.domain(), "{name}");
+        let worst = before
+            .words()
+            .iter()
+            .zip(after.words())
+            .map(|(a, b)| (f32::from_bits(*a) - f32::from_bits(*b)).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-5, "{name} drifted by {worst}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

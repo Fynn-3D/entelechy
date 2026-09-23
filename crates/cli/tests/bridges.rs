@@ -313,3 +313,69 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The way back out: a rig's rows become a GLB, and Blender opens it
+/// with its bones, its weights and its clips. Between this and the two
+/// ways in, the loop someone actually works in is closed — rig in
+/// Blender, run in Orla, open what Orla writes.
+#[test]
+fn a_rig_orla_wrote_opens_in_blender() {
+    let Some(blender) = tool(&[
+        "/Applications/Blender.app/Contents/MacOS/Blender",
+        "blender",
+    ]) else {
+        eprintln!("skipped: no Blender on this machine");
+        return;
+    };
+    let exporter = Path::new(env!("CARGO_BIN_EXE_orla"))
+        .parent()
+        .unwrap()
+        .join("orla-export");
+    if !exporter.exists() {
+        eprintln!("skipped: orla-export is not built beside orla");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("orla-rig-out-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let assets = root().join("examples/skin/assets");
+    let glb = dir.join("arm.glb");
+    let rows: Vec<PathBuf> = [
+        "vertices",
+        "triangles",
+        "weights",
+        "skeleton",
+        "swing.clip",
+        "curl.clip",
+    ]
+    .iter()
+    .map(|name| assets.join(format!("arm.{name}.field")))
+    .collect();
+    let wrote = Command::new(&exporter)
+        .args(&rows)
+        .arg("--out")
+        .arg(&glb)
+        .args(["--rate", "30"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&wrote.stdout).to_string();
+    assert!(
+        wrote.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&wrote.stderr)
+    );
+    assert!(said.contains("a skin and 2 clip(s)"), "{said}");
+
+    let mut command = Command::new(blender);
+    command
+        .current_dir(root())
+        .args(["-b", "--python", "bridges/blender/test_back.py", "--"])
+        .arg("--glb")
+        .arg(&glb);
+    passed(
+        command,
+        "the rig Orla wrote",
+        "opened: 1734 vertices, 2 bones",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

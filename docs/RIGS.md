@@ -62,14 +62,28 @@ same place.
 A tool of your own writes these five files and is done; there is nothing
 else to register, and no format to teach the runtime.
 
+## The way back out
+
+`orla-export` writes the same five rows as a GLB: the mesh and its
+triangles, a skin whose joints carry the rest pose the inverse binds
+imply, and one animation a clip, sampled at `--rate`. A rig that came in
+goes back out — the mesh, the weights and the skeleton bit for bit, the
+clips to the rounding a quaternion takes when it is read again — and
+Blender opens it with its bones, its vertex groups and its actions.
+
+```sh
+orla-export examples/skin/assets/arm.*.field --out arm.glb --rate 30
+```
+
+The rows say which they are by their layout, so there are no flags for
+which file is which.
+
 ## What does not come in yet
 
 `orla import` takes the first skin of a model and leaves the rest, and
 says so. Morph targets, a second material's texture and anything else
 these five rows do not hold are named in its notes rather than dropped
-in silence. The way back out is a mesh, not a rig: `orla-export` writes
-vertices, triangles and a texture as a GLB, and a rig exported from Orla
-would need a skin and animations written there too.
+in silence.
 
 ## More than one of them
 

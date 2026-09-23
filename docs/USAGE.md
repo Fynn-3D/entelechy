@@ -377,7 +377,9 @@ cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
 
 `orla-export` is the way out: it writes the Host's files as formats other
 software opens. Vertex rows, triangle rows and a PNG become a GLB that
-Blender and three.js load as it is; rows of one or two floats become a WAV
+Blender and three.js load as it is, and a [rig's](RIGS.md) weights,
+skeleton and clip rows beside them write a skin and an animation apiece,
+`--rate` naming the frames a second the clips hold (30 by default); rows of one or two floats become a WAV
 (`--rate` names the frames per second of a `.field`, 48000 by default; a
 compressed copy is ffmpeg's job on the WAV); a grid of pixels or floats
 becomes a PNG; rows of notes become a standard MIDI file (`--beats`

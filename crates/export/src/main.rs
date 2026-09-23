@@ -14,7 +14,10 @@ usage:
   orla-export <file>... --out <target> [--rate <hz>]
       To .glb: a vertices .field (rows of position, normal, uv), a triangles
       .field (rows of three ints), and a .png for the base colour if you have
-      one. To .wav: a .field of one or two floats per row; --rate says its
+      .field and, when it has one, a PNG; a rig's weights, skeleton and clip
+      .fields beside them write a skin and an animation apiece, --rate naming
+      the frames a second the clips were sampled at (30 by default).
+      To .wav: a .field of one or two floats per row; --rate says its
       frames per second, 48000 by default (ffmpeg makes an MP3 or OGG of the
       WAV). To .png: a .field grid of pixels or floats, or a .ppm or .pgm.
       To .mid: a .field of notes as the importer reads them (start, duration,
@@ -80,17 +83,27 @@ fn export(args: &[String]) -> Result<String, String> {
             let mut vertices = None;
             let mut triangles = None;
             let mut texture = None;
+            let mut rig: Vec<PathBuf> = Vec::new();
+            let mut clips: Vec<PathBuf> = Vec::new();
             for input in &inputs {
                 match extension(input).as_str() {
                     "png" => texture = Some(input.clone()),
                     "field" => {
                         let data = read_field(input)?;
+                        let integer = |k: usize| {
+                            data.schema().scalars().get(k) == Some(&orla_runtime::Scalar::Int)
+                        };
+                        // A rig's rows say which they are by their
+                        // layout, as `docs/RIGS.md` has them.
                         match (data.domain().shape(), data.schema().words()) {
+                            (Shape::Rows, 8) if integer(0) => rig.push(input.clone()),
                             (Shape::Rows, 8) => vertices = Some(input.clone()),
                             (Shape::Rows, 3) => triangles = Some(input.clone()),
+                            (Shape::Rows, 17) => rig.push(input.clone()),
+                            (Shape::Rows, 10) => clips.push(input.clone()),
                             _ => {
                                 return Err(format!(
-                                    "{}: neither vertex rows nor triangle rows",
+                                    "{}: no part of a mesh or a rig",
                                     input.display()
                                 ));
                             }
@@ -108,8 +121,29 @@ fn export(args: &[String]) -> Result<String, String> {
                 vertices.ok_or("a GLB needs a vertices .field (rows of eight floats)")?;
             let triangles =
                 triangles.ok_or("a GLB needs a triangles .field (rows of three ints)")?;
-            gltf::export(&vertices, &triangles, texture.as_deref(), &out)?;
-            Ok(format!("wrote {}", out.display()))
+            let rig_paths: Vec<&Path> = rig.iter().map(PathBuf::as_path).collect();
+            let clip_paths: Vec<&Path> = clips.iter().map(PathBuf::as_path).collect();
+            gltf::export_rig(
+                &vertices,
+                &triangles,
+                texture.as_deref(),
+                &rig_paths,
+                &clip_paths,
+                // A clip's own rate, 30 a second unless said, as
+                // `orla import` samples them.
+                rate.unwrap_or(30) as f32,
+                &out,
+            )?;
+            let extra = if rig_paths.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", with a skin and {} clip(s) at {} frames a second",
+                    clip_paths.len(),
+                    rate.unwrap_or(30)
+                )
+            };
+            Ok(format!("wrote {}{extra}", out.display()))
         }
         "wav" => {
             if inputs.len() != 1 {
