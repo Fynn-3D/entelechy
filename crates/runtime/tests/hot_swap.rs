@@ -276,3 +276,74 @@ fn prepare(
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.prepare_module(module, source)
 }
+
+/// A backend that loses the last Field it makes: a broken contract the
+/// runtime must refuse to pass on.
+struct Lossy;
+
+impl orla_runtime::Backend for Lossy {
+    fn name(&self) -> &'static str {
+        "lossy"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn prepare(
+        &self,
+        module: &orla_runtime::Validated,
+    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+        orla_runtime::Backend::prepare(&orla_cpu::CpuBackend, module)
+    }
+
+    fn execute(
+        &self,
+        prepared: &dyn orla_runtime::Prepared,
+        module: &orla_runtime::Validated,
+        invocation: &Invocation,
+        scope: &mut orla_runtime::Scope<'_>,
+    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
+        let mut outputs = orla_runtime::Backend::execute(
+            &orla_cpu::CpuBackend,
+            prepared,
+            module,
+            invocation,
+            scope,
+        )?;
+        if let Some(lost) = outputs.pop() {
+            let _ = scope.release(lost);
+        }
+        Ok(outputs)
+    }
+}
+
+#[test]
+fn a_backend_that_answers_with_the_wrong_count_of_fields_is_refused() {
+    let mut runtime = orla_runtime::Runtime::with_backend(1 << 12, Box::new(Lossy));
+    let version = load(
+        &mut runtime,
+        "kernel test.two@1 { requires { field.write; } output a: Image; output b: Grid<Float>; compute { return { a: vec4(1.0, 0.0, 0.0, 1.0), b: 2.0 }; } }",
+    );
+    let before = runtime.host().live();
+    let error = runtime
+        .execute(
+            &version,
+            &Invocation {
+                inputs: vec![],
+                params: vec![],
+                domain: Domain::Grid(2, 2),
+                context: Context::default(),
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("declares 2 output(s)"),
+        "{error}"
+    );
+    assert_eq!(
+        runtime.host().live(),
+        before,
+        "what it did give is released"
+    );
+}

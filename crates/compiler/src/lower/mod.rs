@@ -131,10 +131,40 @@ fn describe(ty: Type, structs: &[StructDef]) -> String {
     orla_ir::type_name(ty, structs)
 }
 
+/// Registers the record of a map's outputs when there are several: a
+/// struct named after them, `{ color, depth }`, whose fields are their
+/// elements in declaration order. Its layout is theirs one after another,
+/// which is the words every backend writes an element as.
+fn outputs_record(manifest: &Manifest, structs: &Structs) -> Option<u32> {
+    if manifest.outputs.len() < 2 || manifest.mode != Mode::Map {
+        return None;
+    }
+    let names: Vec<&str> = manifest
+        .outputs
+        .iter()
+        .map(|port| port.name.as_str())
+        .collect();
+    let fields = manifest
+        .outputs
+        .iter()
+        .map(|port| Field {
+            name: port.name.clone(),
+            ty: port.element(),
+        })
+        .collect();
+    let mut table = structs.borrow_mut();
+    table.push(StructDef::record(
+        format!("{{ {} }}", names.join(", ")),
+        fields,
+    ));
+    Some((table.len() - 1) as u32)
+}
+
 pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, CompileError> {
     let structs = structs(kernel)?;
     let aliases = aliases(kernel, &structs)?;
     let manifest = manifest(kernel, id, &structs, &aliases)?;
+    let record = outputs_record(&manifest, &structs);
     // Functions: one with a Field parameter is a template, instantiated
     // per port it is called with; the others lower in order, so a
     // function calls only what is defined above it.
@@ -151,6 +181,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             .iter()
             .map(|f| f.name.value.clone())
             .collect(),
+        record,
     };
     let mut shared = shared;
     for declaration in &kernel.functions {
@@ -227,6 +258,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             ));
         }
         let mut result = builder.block(&kernel.compute)?;
+        let mut split: Option<Vec<ValueId>> = None;
         let actual = builder.ty(result);
         if let Mode::Scatter { base, .. } = manifest.mode {
             // The body yields a pair: an address into the target and a
@@ -295,6 +327,33 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                     ),
                 ));
             }
+        } else if let Some(record) = shared.record {
+            // Several outputs: the body gives their record, and the entry
+            // gives each output its field, in declaration order.
+            if actual != Type::Struct(record) {
+                let named: Vec<String> = manifest
+                    .outputs
+                    .iter()
+                    .map(|port| format!("{}: ..", port.name))
+                    .collect();
+                return Err(semantic(
+                    kernel.compute.result.span,
+                    format!(
+                        "a Kernel with several outputs gives them by name, `{{ {} }}`, but the body gives {}",
+                        named.join(", "),
+                        describe(actual, &structs.borrow())
+                    ),
+                ));
+            }
+            let results = manifest
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(position, port)| {
+                    builder.emit(port.element(), Op::Extract(result, position as u32))
+                })
+                .collect();
+            split = Some(results);
         } else if actual != expected {
             return Err(semantic(
                 kernel.compute.result.span,
@@ -306,7 +365,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
                 ),
             ));
         }
-        builder.finish(vec![result])
+        builder.finish(split.unwrap_or_else(|| vec![result]))
     };
     let merge = match &kernel.merge {
         None => None,
@@ -383,6 +442,10 @@ struct Shared<'a> {
     /// Every function name the Kernel declares, in order, so a call to
     /// one that is not lowered yet can say why.
     declared: Vec<String>,
+    /// The record of a map's outputs, when it declares several: a struct
+    /// whose fields are the outputs' elements in declaration order, which
+    /// `{ name: .., ... }` builds and `compute` gives.
+    record: Option<u32>,
 }
 
 /// Lowers a function body. `fields` binds its Field parameters to input

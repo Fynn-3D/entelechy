@@ -1076,3 +1076,91 @@ fn a_break_stops_its_own_loop_and_gives_its_value() {
         "{message}"
     );
 }
+
+#[test]
+fn a_map_writes_several_outputs_given_by_name() {
+    // Given out of order, through an `if` whose arms are records, one
+    // of them a guard's `return`: the entry gives one value per output,
+    // in declaration order.
+    let module = compile(
+        "kernel shade.split@1 {
+            requires { field.write; }
+            output color: Image;
+            output depth: Grid<Float>;
+            output hit: Grid<Bool>;
+            compute {
+                let uv = coord() / domain();
+                if uv.x < 0.5 {
+                    return { depth: uv.x, hit: true, color: vec4(uv, 0.0, 1.0) };
+                }
+                let r = { color: vec4(0.0, 0.0, 0.0, 1.0), depth: 1.0, hit: false };
+                if uv.y < 0.5 { { hit: r.hit, depth: r.depth, color: r.color } } else { r }
+            }
+        }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let names: Vec<&str> = module
+        .manifest
+        .outputs
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(names, ["color", "depth", "hit"]);
+    assert_eq!(module.entry.results.len(), 3);
+}
+
+#[test]
+fn several_outputs_are_a_maps_and_are_checked() {
+    let reduce = semantic(
+        "kernel s.r@1 { requires { field.read; field.write; } input a: Rows<Float>;
+            output sum: Rows<Float>; output most: Rows<Float>;
+            compute { return sample(a); } merge(x, y) { return x + y; } }",
+    );
+    assert!(
+        reduce.1.contains("a reduction folds one element"),
+        "{}",
+        reduce.1
+    );
+    assert!(reduce.1.contains("one struct"), "{}", reduce.1);
+    let scan = semantic(
+        "kernel s.s@1 { requires { field.read; field.write; } input a: Rows<Float>;
+            output y: Rows<Float>; output z: Rows<Float>;
+            scan with acc = 0.0 { return acc + sample(a); } }",
+    );
+    assert!(scan.1.contains("a scan carries one value"), "{}", scan.1);
+    let shapes = semantic(
+        "kernel s.m@1 { requires { field.write; } output a: Image; output b: Rows<Float>;
+            compute { return { a: vec4(1.0, 1.0, 1.0, 1.0), b: 1.0 }; } }",
+    );
+    assert!(shapes.1.contains("share a shape"), "{}", shapes.1);
+    let bare = semantic(
+        "kernel s.m@1 { requires { field.write; } output a: Image; output b: Grid<Float>;
+            compute { return vec4(1.0, 1.0, 1.0, 1.0); } }",
+    );
+    assert!(bare.1.contains("`{ a: .., b: .. }`"), "{}", bare.1);
+    let missing = semantic(
+        "kernel s.m@1 { requires { field.write; } output a: Image; output b: Grid<Float>;
+            compute { return { a: vec4(1.0, 1.0, 1.0, 1.0) }; } }",
+    );
+    assert!(missing.1.contains("`b` is missing"), "{}", missing.1);
+    let twice = semantic(
+        "kernel s.m@1 { requires { field.write; } output a: Image; output b: Grid<Float>;
+            compute { return { a: vec4(1.0, 1.0, 1.0, 1.0), b: 1.0, a: vec4(0.0, 0.0, 0.0, 1.0) }; } }",
+    );
+    assert!(twice.1.contains("given twice"), "{}", twice.1);
+    let unknown = semantic(
+        "kernel s.m@1 { requires { field.write; } output color: Image; output b: Grid<Float>;
+            compute { return { colour: vec4(1.0, 1.0, 1.0, 1.0), b: 1.0 }; } }",
+    );
+    assert!(unknown.1.contains("did you mean `color`"), "{}", unknown.1);
+    let typed = semantic(
+        "kernel s.m@1 { requires { field.write; } output a: Image; output b: Grid<Float>;
+            compute { return { a: vec4(1.0, 1.0, 1.0, 1.0), b: 1 }; } }",
+    );
+    assert!(typed.1.contains("output `b` needs a Float"), "{}", typed.1);
+    let single = semantic(
+        "kernel s.m@1 { requires { field.write; } output a: Image;
+            compute { return { a: vec4(1.0, 1.0, 1.0, 1.0) }; } }",
+    );
+    assert!(single.1.contains("one output"), "{}", single.1);
+}

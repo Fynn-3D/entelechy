@@ -89,7 +89,7 @@ rule of each is what the backends are held to
 
 | Mode | Determinism rule | Not obvious |
 | --- | --- | --- |
-| map | per element | the only mode the JIT compiles natively as a parallel loop |
+| map | per element | the only mode that may write several outputs: `compute` gives them by name as a record, the entry gives one value per output, and each lands in a Field of its own over the one domain ([lowering](crates/compiler/src/lower/mod.rs)); the GPU binds the further outputs after the inputs and the entry stores each itself ([WGSL](crates/gpu/src/wgsl.rs)) |
 | reduce (`merge`) | a fixed pairwise tree, an odd last element carried up, [whatever the thread count](crates/rules/src/reduce.rs) | the GPU folds sixteen at a time, which reaches the same expressions as four levels; the CPU and JIT walk one level at a time on purpose. A `merge` may read Fields, params and time: the fold pass carries the map pass's bindings |
 | scan (`scan with`) | element order, one thread / one invocation | a memory port is input and output at once; the bound Field is copied, never written, so a failed evaluation commits nothing. `init` may not `put`, checked over the call graph |
 | scatter (`scatter into … with`) | as if the pairs were applied in source order; outside addresses drop | the GPU applies order-free rules with atomics (floats as one total order of keys, `last` as the greatest source index) and a float `sum` by a bitonic sort of pairs, the CPU's sequence exactly. A scatter may set its own `domain`; its output keeps the target's extent |
@@ -109,7 +109,15 @@ their outputs when read ([test](crates/runtime/tests/mixed.rs)).
   share one entry in the fused table, reused in order, or two arms of an
   `if` yield different struct indices and the module does not validate.
   A `Part` read of a fused input is written out as the extracts it
-  stands for.
+  stands for. A producer of several outputs fuses whole, each linked
+  input taking the value of its output, when every reader of every
+  output is the one consumer; otherwise it runs and writes them all
+  ([`fuse_outputs`](crates/ir/src/fuse.rs), [planner](crates/graph/src/evaluate.rs),
+  [composition tests](crates/scene/tests/composition.rs)).
+- A backend answers with one Field per declared output or not at all:
+  the runtime releases what a backend gave and fails the execution when
+  the count differs ([`held_to`](crates/runtime/src/lib.rs),
+  [test](crates/runtime/tests/hot_swap.rs)).
 - Repetition is fusion without inlining: the same Kernel placed over its
   own output, same generation, params, bindings and domain, nothing else
   reading between, is one group ([planner](crates/graph/src/evaluate.rs));

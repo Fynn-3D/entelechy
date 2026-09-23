@@ -1,0 +1,26 @@
+scene ../scene.osn
+
+# One Kernel wrote the G-buffer: the blue sphere's colour, its normal
+# and its distance at one pixel, the sky's far depth at another.
+frame 0.0
+expect count gbuffer.normal = 57600
+expect gbuffer.albedo[11050] = 0.3 0.6 0.85 1.0
+expect gbuffer.normal[11050] = 0.1523 0.7999 -0.5805 0.001
+expect gbuffer.depth[11050] = 5.1728 0.001
+expect gbuffer.depth[3200] = 100.0
+
+# The passes over it: sky, a lit sphere, the floor, the red sphere, and
+# the outline where the blue sphere ends in front of the floor.
+expect edges.result[19327] = 1.0
+expect edges.result[19330] = 0.0
+expect 160 20 = 0.550 0.700 0.900
+expect 170 60 = 0.182 0.364 0.516
+expect 40 160 = 0.292 0.301 0.334
+expect 100 90 = 0.327 0.115 0.077
+expect 127 60 = 0.058 0.060 0.067
+
+# The camera turns: the same sphere from another side, further from
+# the sun.
+param turn 1.0
+frame 0.1
+expect 170 60 = 0.158 0.316 0.447

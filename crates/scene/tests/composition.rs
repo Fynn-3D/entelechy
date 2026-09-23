@@ -1798,3 +1798,132 @@ fn load(
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
+
+const SPLIT: &str = "kernel shade.split@1 { requires { field.read; field.write; } input source: Image; output color: Image; output depth: Grid<Float>; output glow: Grid<Float>; compute { let c = sample(source); return { depth: c.r * 0.5, glow: c.g, color: vec4(c.b, c.g, c.r, 1.0) }; } }";
+const COMBINE: &str = "kernel shade.combine@1 { requires { field.read; field.write; } input d: Grid<Float>; input c: Image; output result: Image; compute { let v = sample(d); return sample(c) + vec4(v, v, v, 0.0); } }";
+
+/// Evaluates `document` with fusion on and off and gives the fused
+/// report with the pixels of both, so a test says what fused and holds
+/// it to the unfused picture.
+fn fused_and_plain(document: &str) -> (orla_graph::Report, Vec<[f32; 4]>, Vec<[f32; 4]>) {
+    let mut runtime = runtime();
+    load(&mut runtime, SPLIT);
+    load(&mut runtime, COMBINE);
+    let graph = orla_scene::parse(document).unwrap_or_else(|error| panic!("{error}"));
+    let mut plain = Evaluator::new();
+    plain.set_fusion(false);
+    let reference = plain
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(reference.fused.is_empty());
+    let expected = pixels(&runtime, reference.output);
+    plain.clear(&mut runtime);
+    let mut fused = Evaluator::new();
+    let report = fused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let actual = pixels(&runtime, report.output);
+    (report, actual, expected)
+}
+
+#[test]
+fn a_producer_of_several_outputs_fuses_whole_into_its_only_reader() {
+    // `combine` reads two of `split`'s three outputs and nothing else
+    // reads any of them: the three nodes run as one Kernel and no output
+    // of `split` is ever written.
+    let (report, actual, expected) = fused_and_plain(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node split: shade.split@1 { source <- source.result; }
+         node show: shade.combine@1 { c <- split.color; d <- split.depth; }
+         output result <- show.result;",
+    );
+    assert_eq!(actual, expected, "bit-identical");
+    assert_eq!(report.executed, ids(&["show"]));
+    assert_eq!(
+        report.fused,
+        vec![(NodeId("show".into()), ids(&["split", "source"]))]
+    );
+}
+
+#[test]
+fn a_producer_of_several_outputs_with_another_reader_stays_whole() {
+    // `glow` is a graph output too: `split` must write its Fields, so it
+    // runs on its own, and the picture is the same either way.
+    let (report, actual, expected) = fused_and_plain(
+        "node source: image.gradient@1 { domain = vec2(6, 4); }
+         node split: shade.split@1 { source <- source.result; }
+         node show: shade.combine@1 { c <- split.color; d <- split.depth; }
+         output result <- show.result;
+         output glow <- split.glow;",
+    );
+    assert_eq!(actual, expected, "bit-identical");
+    assert_eq!(report.executed, ids(&["split", "show"]));
+    assert_eq!(report.outputs.len(), 2);
+}
+
+#[test]
+fn a_map_of_several_outputs_repeats_and_keeps_the_last_times_outputs() {
+    let mut runtime = runtime();
+    load(
+        &mut runtime,
+        "kernel test.walk@1 { requires { field.read; field.write; } input previous: Grid<Float>; output result: Grid<Float>; output trail: Grid<Int>; compute { let v = at(previous, icoord()); return { trail: int(v * 10.0), result: v + 1.5 }; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.seed@1 { requires { field.write; } output result: Grid<Float>; compute { return coord().x; } }",
+    );
+    let graph = orla_scene::parse(
+        "node seed: test.seed@1 { domain = vec2(4, 3); }
+         node walk: test.walk@1 { times = 3; carry previous <- result; previous <- seed.result; }
+         output result <- walk.result;
+         output trail <- walk.trail;",
+    )
+    .unwrap();
+    let words = |runtime: &Runtime, report: &orla_graph::Report| -> Vec<Vec<u32>> {
+        report
+            .outputs
+            .iter()
+            .map(|(_, handle)| runtime.host().data(*handle).unwrap().words().to_vec())
+            .collect()
+    };
+    let mut plain = Evaluator::new();
+    plain.set_fusion(false);
+    let reference = plain
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    let expected = words(&runtime, &reference);
+    plain.clear(&mut runtime);
+    let mut joined = Evaluator::new();
+    let report = joined
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(words(&runtime, &report), expected);
+    assert_eq!(report.executed, ids(&["seed", "walk/3"]));
+    // Three steps of 1.5 from x, and the trail the last step read.
+    let trail: Vec<i32> = expected[1].iter().map(|w| *w as i32).collect();
+    assert_eq!(&trail[..4], &[30, 40, 50, 60]);
+}

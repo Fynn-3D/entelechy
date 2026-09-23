@@ -378,6 +378,70 @@ impl Builder<'_> {
                 }
                 Ok(self.emit(ty, Op::Construct(parts)))
             }
+            ExprKind::Record(fields) => {
+                let manifest = self.shared.manifest;
+                let Some(record) = self.shared.record else {
+                    let why = match manifest.outputs.len() {
+                        0 | 1 => "this Kernel has one output, and gives its value".to_owned(),
+                        _ => format!(
+                            "several outputs are a map's, and this Kernel is a {}",
+                            manifest.mode.name()
+                        ),
+                    };
+                    return Err(semantic(
+                        expr.span,
+                        format!("`{{ name: .. }}` gives a Kernel's outputs by name; {why}"),
+                    ));
+                };
+                let names: Vec<&str> = manifest.outputs.iter().map(|p| p.name.as_str()).collect();
+                let mut given: Vec<Option<ValueId>> = vec![None; names.len()];
+                for (field, value) in fields {
+                    let Some(position) = names.iter().position(|name| *name == field.value) else {
+                        return Err(semantic(
+                            field.span,
+                            format!(
+                                "`{}` is not an output of this Kernel{}",
+                                field.value,
+                                orla_language::did_you_mean(&field.value, names.iter().copied())
+                            ),
+                        ));
+                    };
+                    if given[position].is_some() {
+                        return Err(semantic(
+                            field.span,
+                            format!("output `{}` is given twice", field.value),
+                        ));
+                    }
+                    let id = self.value(value)?;
+                    let expected = manifest.outputs[position].element();
+                    if self.ty(id) != expected {
+                        return Err(semantic(
+                            value.span,
+                            format!(
+                                "output `{}` needs a {} per element, found {}",
+                                field.value,
+                                self.describe(expected),
+                                self.describe(self.ty(id))
+                            ),
+                        ));
+                    }
+                    given[position] = Some(id);
+                }
+                let mut parts = Vec::with_capacity(names.len());
+                for (position, slot) in given.into_iter().enumerate() {
+                    let Some(id) = slot else {
+                        return Err(semantic(
+                            expr.span,
+                            format!(
+                                "every output is given once; `{}` is missing",
+                                names[position]
+                            ),
+                        ));
+                    };
+                    parts.push(id);
+                }
+                Ok(self.emit(Type::Struct(record), Op::Construct(parts)))
+            }
             ExprKind::If {
                 condition,
                 then,

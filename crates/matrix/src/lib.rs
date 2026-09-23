@@ -19,8 +19,9 @@
 //! `rows`, `ints` and `cells`, `sampled` (the element's own sample of an
 //! input of the output's shape), the params `k`, `n`, `flag` and `v`,
 //! and three functions. A mode's wrapper puts the snippet in a map over
-//! rows, a map over a grid, a reduction, a scan with a memory, and a
-//! scatter, and returns what that mode returns.
+//! rows, a map over a grid, a reduction, a scan with a memory, a
+//! scatter, a prefix, and a map writing four outputs by name, and
+//! returns what that mode returns.
 
 use orla_abi::{Context, Domain, InputState, Scalar, Schema, Value};
 
@@ -281,6 +282,7 @@ pub fn modes() -> Vec<(&'static str, Wrapper)> {
         ("scan", scan),
         ("scatter", scatter),
         ("prefix", prefix),
+        ("map into several outputs", map_several),
     ]
 }
 
@@ -326,6 +328,18 @@ fn map_grid(lets: &str, out: &str) -> String {
     input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
     output result: Grid<Out>;
     compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; {GRID_ENV} {lets} let out = {out}; return out; }} }}"
+    )
+}
+
+/// A map writing four outputs from one element: the whole `Out`, a
+/// vector, an integer and a flag, given by name in another order than
+/// they are declared, so a backend is held to each Field it writes.
+fn map_several(lets: &str, out: &str) -> String {
+    format!(
+        "kernel matrix.map_several@1 {{ {HEAD}
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
+    output result: Grid<Out>; output lane: Grid<Vec3>; output bits: Grid<Int>; output seen: Grid<Bool>;
+    compute {{ let c0 = icoord(); let i = c0.x + c0.y * idomain().x; {GRID_ENV} {lets} let out = {out}; return {{ lane: out.v * 2.0 + vec3(x, 0.0, 1.0), seen: out.b != (i % 2 == 0), result: out, bits: out.i ^ 5 }}; }} }}"
     )
 }
 
@@ -504,6 +518,10 @@ pub fn cases() -> Vec<Case> {
                     Domain::Rows(COUNT),
                 ),
                 "map over a grid" => (
+                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
+                    Domain::Grid(16, 3),
+                ),
+                "map into several outputs" => (
                     vec![rows(), ints(), cells(), parts_input(), patches_input()],
                     Domain::Grid(16, 3),
                 ),

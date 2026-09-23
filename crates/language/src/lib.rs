@@ -533,6 +533,9 @@ pub enum ExprKind {
         /// Listed fields.
         fields: Vec<(Spanned<String>, Expr)>,
     },
+    /// `{ name: expr, ... }`: a Kernel's outputs by name, each once, which
+    /// is what the `compute` of a Kernel with several outputs gives.
+    Record(Vec<(Spanned<String>, Expr)>),
     /// Negation.
     Neg(Box<Expr>),
     /// Logical not.

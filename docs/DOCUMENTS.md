@@ -41,7 +41,7 @@ to a file.
 
 Every port carries a Field: elements of one type in one shape. A Kernel
 may declare as many ports as it likes; a device binds them all at once,
-so a GPU backend refuses a Kernel whose inputs and output come to more
+so a GPU backend refuses a Kernel whose inputs and outputs come to more
 than its adapter allows (twenty-nine on an Apple M4, and the refusal
 says the numbers), where the interpreter and the JIT have no limit. The
 shapes are the dense lattices a Kernel can be mapped over, and there
@@ -255,6 +255,36 @@ which instance was being compiled. A function calls only what is
 declared above it, so it never calls itself: a Kernel runs where there
 is no stack, and a `loop` with the work as its carried value is the
 form for repetition. `sample` stays in `compute`, where the element's own address is.
+
+A map may write several outputs, each a Field of its own over the one
+domain, so they share a shape:
+
+```text
+kernel shade.surface@1 {
+    requires { field.write; }
+    output albedo: Image;
+    output normal: Grid<Vec3>;
+    output depth: Grid<Float>;
+    compute {
+        let hit = cast(eye, ray());
+        if hit.t < 0.0 {
+            return { albedo: sky, normal: vec3(0.0, 0.0, 0.0), depth: 100.0 };
+        }
+        { albedo: vec4(hit.albedo, 1.0), normal: hit.normal, depth: hit.t }
+    }
+}
+```
+
+`compute` gives them by name, `{ albedo: .., normal: .., depth: .. }`,
+every output once, in any order; that record is a value like any other,
+so an `if` or a `match` may give one from each arm and a `let` may hold
+one (`r.depth` reads a field of it). A graph reads each output as
+`node.albedo`, `node.depth`. Only a map writes several: a reduction, a
+scan and a prefix fold or carry one element and a scatter writes one
+target, and there several results are one struct. When one consumer is
+the only reader of every output of a map and reads them all by
+`sample`, the two fuse whole, and none of the outputs is written; while
+anything else reads one, the map runs on its own and writes them all.
 
 A Kernel with a `merge` is a reduction, the one execution mode besides
 the map:

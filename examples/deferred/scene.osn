@@ -1,0 +1,10 @@
+use "kernels/";
+
+param turn: Float = 0.3;
+
+node gbuffer: deferred.surface@1 { turn = turn; domain = vec2(320, 180); }
+node lit: deferred.light@1 { albedo <- gbuffer.albedo; normal <- gbuffer.normal; }
+node edges: deferred.outline@1 { depth <- gbuffer.depth; }
+node final: deferred.compose@1 { lit <- lit.result; edge <- edges.result; }
+
+output result <- final.result;

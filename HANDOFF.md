@@ -19,7 +19,7 @@ Verified surface, as of `main`:
 | --- | --- |
 | macOS, Apple M4, Metal | every round |
 | Interpreter, JIT, GPU | `examples/*/tests/*.replay` on all three |
-| 35 language features × 6 execution modes | `crates/matrix`, JIT and GPU against the interpreter |
+| 35 language features × 7 execution forms (the modes, and a map of several outputs) | `crates/matrix`, JIT and GPU against the interpreter |
 | Keyboard, pointer | by hand |
 | Pad sticks, buttons, triggers | by replay (`stick`, `button` lines) |
 | Blender 5.2, headless Chrome, Godot 4.6, C ABI | `cargo test --workspace`, each skipped when its tool is absent |
@@ -39,19 +39,25 @@ done
 
 ## Next
 
-Drive a rig rather than play one. `examples/skin` blends two clips by
-where the pointer is and `examples/crowd` poses sixty-four out of one
-rig; what a game needs next is a joint a Kernel writes — a head that
-follows a point, a foot held on the ground — between the sample and the
-palette, and root motion: a clip whose root travels, the travel taken
-out of the pose and carried by the scene's own state.
+Narrow storage, the second of three changes to the ABI the user asked
+for (several outputs is done; parameter types that are matrices,
+integer vectors and structs come third; the rig work after them). Every
+scalar of a Field is a 32-bit word, so a byte read with `bytes` costs
+four and a pixel sixteen. Give the schema narrow scalars — 8- and
+16-bit integers, normalized bytes, half floats — stored packed in the
+Host, on the device and in `.field` files, widened when a Kernel reads
+them and narrowed when it writes, so Kernels still compute in `Int` and
+`Float`. The spelling of a narrow element in a port type is the user's
+call; ask before settling it.
 
 Done when:
 
-- an example holds a rig whose pose is partly authored and partly
-  computed, with its `kernels/`, scene, README and replay;
-- the replay passes on the interpreter, the JIT and the GPU, pinning the
-  joint matrices at two moments;
-- anything it turns up in the engine or in the `skin` package is fixed
-  with a test of its own;
+- a port may name a narrow element and a PNG or a `bytes` input lands
+  packed;
+- a Field's size in the Host, on the device, in a `.field` file and
+  over the protocol is its packed size;
+- how a value is narrowed (rounding, clamping) is one rule in
+  `orla-rules`, and the interpreter, the JIT and the GPU agree on it bit
+  for bit, held by rows of the feature matrix;
+- an example and its replay pass on all three backends;
 - the verification above is clean.

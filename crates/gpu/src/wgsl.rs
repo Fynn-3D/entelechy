@@ -21,6 +21,27 @@ pub const OUTPUT_BINDING: u32 = 2;
 /// Binding index of the first input storage buffer; input `i` is at
 /// `INPUT_BINDING + i`.
 pub const INPUT_BINDING: u32 = 3;
+
+/// How many outputs the main pass writes: a map's every output, each to a
+/// buffer of its own; one for the other modes, whose single output is
+/// what their later passes work on.
+pub fn written_outputs(module: &Module) -> usize {
+    match module.manifest.mode {
+        Mode::Map => module.manifest.outputs.len().max(1),
+        _ => 1,
+    }
+}
+
+/// Binding index of output `k`: the first at [`OUTPUT_BINDING`], the
+/// others after the inputs, so no input moves when a map has several.
+pub fn output_binding(module: &Module, k: usize) -> u32 {
+    if k == 0 {
+        OUTPUT_BINDING
+    } else {
+        INPUT_BINDING + (module.manifest.inputs.len() + k - 1) as u32
+    }
+}
+
 /// Workgroup edge length in the first two dimensions.
 pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
@@ -197,10 +218,13 @@ fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
         "@group(0) @binding({PARAMS_BINDING}) var<uniform> params: array<vec4<f32>, {params_len}>;"
     );
     if with_output {
-        let _ = writeln!(
-            out,
-            "@group(0) @binding({OUTPUT_BINDING}) var<storage, read_write> out0: array<u32>;"
-        );
+        for k in 0..written_outputs(module) {
+            let _ = writeln!(
+                out,
+                "@group(0) @binding({}) var<storage, read_write> out{k}: array<u32>;",
+                output_binding(module, k)
+            );
+        }
     }
     for (index, port) in manifest.inputs.iter().enumerate() {
         // A memory is written by the steps, so its binding is read-write.
@@ -463,6 +487,28 @@ pub fn emit(module: &Module) -> String {
             stores.join("\n")
         );
     }
+    // A map's further outputs, each stored into its own buffer.
+    for (k, port) in manifest
+        .outputs
+        .iter()
+        .enumerate()
+        .take(written_outputs(module))
+        .skip(1)
+    {
+        let element = port.element();
+        let stride = type_words(module, element);
+        let mut stores = Vec::new();
+        store_lines(module, element, "v", 0, &mut stores);
+        let _ = writeln!(
+            out,
+            "fn store_out{k}(index: u32, v: {}) {{
+    let b = index * {stride}u;
+{}
+}}",
+            wgsl_type(element),
+            stores.join("\n").replace("out0[", &format!("out{k}["))
+        );
+    }
     for (index, function) in module.functions.iter().enumerate() {
         emit_function(&mut out, module, function, &format!("f{index}"), false);
         out.push('\n');
@@ -498,6 +544,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         );
         return out;
     }
+    // A map of several outputs stores them from the entry itself.
+    let store = if written_outputs(module) > 1 {
+        "entry(coord, element);"
+    } else {
+        "store_out0(element, entry(coord, element));"
+    };
     let _ = writeln!(
         out,
         "
@@ -518,7 +570,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }}
     let element = (gid.z * h + y) * w + x;
     let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
-    store_out0(element, entry(coord, element));
+    {store}
 }}"
     );
     out
@@ -1695,8 +1747,15 @@ fn emit_function(out: &mut String, module: &Module, function: &Function, name: &
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let ret = result_type(function);
-    let _ = writeln!(out, "fn {name}({args}) -> {} {{", wgsl_type(ret));
+    // A map's entry with several outputs stores each where it goes: WGSL
+    // returns one value, and there is nothing to gain by packing them.
+    let stores = entry && written_outputs(module) > 1;
+    if stores {
+        let _ = writeln!(out, "fn {name}({args}) {{");
+    } else {
+        let ret = result_type(function);
+        let _ = writeln!(out, "fn {name}({args}) -> {} {{", wgsl_type(ret));
+    }
     let mut emitter = Emitter {
         out,
         module,
@@ -1704,7 +1763,13 @@ fn emit_function(out: &mut String, module: &Module, function: &Function, name: &
         loops: Vec::new(),
     };
     emitter.instructions(&function.body, 1);
-    let _ = writeln!(out, "    return v{};", function.results[0].0);
+    if stores {
+        for (k, result) in function.results.iter().enumerate() {
+            let _ = writeln!(out, "    store_out{k}(element, v{});", result.0);
+        }
+    } else {
+        let _ = writeln!(out, "    return v{};", function.results[0].0);
+    }
     let _ = writeln!(out, "}}");
 }
 

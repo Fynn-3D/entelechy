@@ -1186,25 +1186,17 @@ impl Evaluator {
                 overrides,
                 context,
             );
-            let ports: Vec<(String, Binding)> = groups[position]
-                .node
-                .inputs
-                .iter()
-                .map(|(port, binding)| (port.clone(), binding.clone()))
-                .collect();
-            for (port, binding) in ports {
+            // Each binding names a producer to try; one fed through
+            // several ports is tried once, with all of them.
+            let bindings: Vec<Binding> = groups[position].node.inputs.values().cloned().collect();
+            for binding in bindings {
                 let Binding::Now(Source::Node {
-                    node: producer_id,
-                    port: producer_port,
+                    node: producer_id, ..
                 }) = binding
                 else {
                     continue;
                 };
-                if readers
-                    .get(&(producer_id.clone(), producer_port.clone()))
-                    .copied()
-                    != Some(1)
-                    || self.pinned.contains(&producer_id)
+                if self.pinned.contains(&producer_id)
                     || absorbed_into.contains_key(&producer_id)
                     || groups[position].node.is_async
                     || nodes
@@ -1218,15 +1210,52 @@ impl Evaluator {
                 };
                 let producer_domain = domains.get(&producer_id).copied();
                 let consumer = &groups[position];
-                let Some(input_index) = consumer
-                    .version
-                    .manifest()
-                    .inputs
+                // Every port of this consumer the producer feeds, as
+                // (port, consumer input, producer output). The producer
+                // fuses only when these are all its readers: a map of
+                // several outputs goes in whole or not at all.
+                let consumer_manifest = consumer.version.manifest();
+                let producer_manifest = groups[producer_position].version.manifest();
+                let mut links: Vec<(String, u32, u32)> = Vec::new();
+                for (name, bound) in &consumer.node.inputs {
+                    let Binding::Now(Source::Node { node, port: from }) = bound else {
+                        continue;
+                    };
+                    if node != &producer_id {
+                        continue;
+                    }
+                    let input = consumer_manifest
+                        .inputs
+                        .iter()
+                        .position(|i| &i.name == name);
+                    let output = producer_manifest
+                        .outputs
+                        .iter()
+                        .position(|o| &o.name == from);
+                    let (Some(input), Some(output)) = (input, output) else {
+                        continue;
+                    };
+                    links.push((name.clone(), input as u32, output as u32));
+                }
+                let only_readers = producer_manifest
+                    .outputs
                     .iter()
-                    .position(|input| input.name == port)
-                else {
+                    .enumerate()
+                    .all(|(k, out)| {
+                        let linked = links.iter().filter(|link| link.2 == k as u32).count();
+                        let read = readers
+                            .get(&(producer_id.clone(), out.name.clone()))
+                            .copied()
+                            .unwrap_or(0);
+                        read == linked
+                    });
+                if links.is_empty() || !only_readers {
                     continue;
-                };
+                }
+                // The consumer's first input decides its extent when it
+                // sets none; whether that input is one of these matters
+                // below.
+                let reads_first = links.iter().any(|link| link.1 == 0);
                 // A consumer with no `domain` of its own runs over its
                 // first input's extent, so when that input is the
                 // producer the two are the same extent whatever it
@@ -1238,7 +1267,7 @@ impl Evaluator {
                     (Some(a), Some(b)) if a == b => None,
                     (None, None)
                         if consumer.node.domain.is_none()
-                            && input_index == 0
+                            && reads_first
                             && matches!(
                                 groups[producer_position].node.domain,
                                 Some(DomainSpec::Expr(_))
@@ -1266,18 +1295,20 @@ impl Evaluator {
                 {
                     continue;
                 }
-                if !orla_ir::samples_only(consumer_module, input_index as u32)
-                    || groups[producer_position].version.manifest().outputs.len() != 1
+                if !links
+                    .iter()
+                    .all(|link| orla_ir::samples_only(consumer_module, link.1))
                 {
                     continue;
                 }
                 let producer = &groups[producer_position];
                 let mut parts = consumer.parts.clone();
                 parts.extend(producer.parts.iter().cloned());
+                let pairs: Vec<(u32, u32)> = links.iter().map(|link| (link.1, link.2)).collect();
                 let fuse = || {
-                    orla_ir::fuse(
+                    orla_ir::fuse_outputs(
                         consumer_module,
-                        input_index as u32,
+                        &pairs,
                         producer_module,
                         &producer.node.id.0,
                     )
@@ -1292,7 +1323,9 @@ impl Evaluator {
                 let producer = &groups[producer_position];
                 let prefix = producer.node.id.0.clone();
                 let mut inputs = consumer.node.inputs.clone();
-                inputs.remove(&port);
+                for (linked, _, _) in &links {
+                    inputs.remove(linked);
+                }
                 for (name, binding) in &producer.node.inputs {
                     inputs.insert(format!("{prefix}/{name}"), binding.clone());
                 }
@@ -1452,6 +1485,19 @@ impl Evaluator {
         }
         // Every port of the one before must be a port of this one too.
         if previous.node.inputs.len() != next.node.inputs.len() {
+            return None;
+        }
+        // A map of several outputs repeats only when the one it chains is
+        // all anyone reads of the times before the last: the run keeps
+        // the last time's outputs and nothing in between.
+        let (_, carried) = chained?;
+        let unread = manifest.outputs.iter().enumerate().all(|(k, port)| {
+            k == carried
+                || readers
+                    .get(&(previous.node.id.clone(), port.name.clone()))
+                    .is_none_or(|count| *count == 0)
+        });
+        if !unread {
             return None;
         }
         chained

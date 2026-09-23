@@ -82,7 +82,17 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
         return Err(error("manifest", "only a scan Kernel has an `init`"));
     }
     match (module.manifest.mode, &module.merge) {
-        (Mode::Map, None) => {}
+        (Mode::Map, None) => {
+            // Every output is written over the one domain.
+            if let Some(first) = outputs.first()
+                && outputs.iter().any(|port| port.shape() != first.shape())
+            {
+                return Err(error(
+                    "manifest",
+                    "a map writes all its outputs over one domain, so they share a shape",
+                ));
+            }
+        }
         (Mode::Map | Mode::Scan | Mode::Scatter { .. } | Mode::Prefix { .. }, Some(_)) => {
             return Err(error("manifest", "only a reduce Kernel has a `merge`"));
         }
@@ -1307,6 +1317,37 @@ mod tests {
             merge: None,
             init: None,
         }
+    }
+
+    #[test]
+    fn a_map_gives_one_value_per_output_over_one_shape() {
+        let mut module = sample_module(&[Capability::FieldRead, Capability::FieldWrite]);
+        module.manifest.outputs.push(Port {
+            name: "depth".into(),
+            ty: PortType {
+                element: Type::Float,
+                shape: Shape::Grid,
+                schema: schema_of(Type::Float, &[]).unwrap(),
+            },
+        });
+        module.entry.body.push(instruction(
+            1,
+            Type::Float,
+            Op::Const(orla_abi::Value::Float(0.5)),
+        ));
+        module.entry.results = vec![ValueId(0), ValueId(1)];
+        assert!(validate(module.clone()).is_ok());
+
+        // One value short of the outputs.
+        let mut short = module.clone();
+        short.entry.results = vec![ValueId(0)];
+        let error = validate(short).unwrap_err();
+        assert!(error.message.contains("returns 1 values"), "{error}");
+
+        // Outputs of two shapes are two domains, which a map is not.
+        module.manifest.outputs[1].ty.shape = Shape::Rows;
+        let error = validate(module).unwrap_err();
+        assert!(error.message.contains("share a shape"), "{error}");
     }
 
     #[test]

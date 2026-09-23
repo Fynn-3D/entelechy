@@ -67,6 +67,15 @@ fn every_feature_under_every_mode_matches_the_interpreter() {
                 continue;
             }
         };
+        if cpu.len() != out.len() {
+            failures.push(format!(
+                "{}: {} output(s) against the interpreter's {}",
+                case.name,
+                out.len(),
+                cpu.len()
+            ));
+            continue;
+        }
         for (which, (a, b)) in cpu.iter().zip(&out).enumerate() {
             let reference = host.data(*a).unwrap().words().to_vec();
             let candidate = host.data(*b).unwrap().words().to_vec();

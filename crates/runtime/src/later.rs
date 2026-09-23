@@ -237,8 +237,9 @@ fn run_on(
     let granted = version.manifest().requires.clone();
     let outputs = {
         let mut scope = Scope::new(host, granted);
-        backend.execute(prepared.as_ref(), module, invocation, &mut scope)?
+        backend.execute(prepared.as_ref(), module, invocation, &mut scope)
     };
+    let outputs = crate::held_to(version.manifest(), host, outputs)?;
     outputs
         .into_iter()
         .map(|handle| {

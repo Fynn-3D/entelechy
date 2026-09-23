@@ -1,7 +1,7 @@
 use orla_abi::{Capability, Context, Domain, Host, Invocation, Scope, Value};
 use orla_compiler::compile;
 use orla_cpu::CpuBackend;
-use orla_ir::{fuse, samples_only};
+use orla_ir::{fuse, fuse_outputs, samples_only};
 
 fn granted() -> orla_abi::Capabilities {
     Capability::ALL.into_iter().collect()
@@ -166,4 +166,62 @@ fn a_whole_element_the_consumer_passes_on_keeps_its_own_struct() {
         })
         .collect();
     assert_eq!(rows, [[0, 0, 0], [1, 2, 3], [0, 0, 0], [3, 4, 5]]);
+}
+
+const SPLIT: &str = "kernel shade.split@1 { requires { field.write; } param bias: Float = 0.25; output color: Image; output hit: Grid<Hit>; output glow: Grid<Float>; struct Hit { t: Float; id: Int; } compute { let uv = coord() / domain(); let hit = Hit { t: uv.x * 3.0 + bias, id: int(coord().y) }; if uv.x < 0.5 { return { color: vec4(uv.x, uv.y, bias, 1.0), hit: hit, glow: 1.0 }; } { glow: 0.0, hit: Hit { t: hit.t, id: -hit.id }, color: vec4(0.0, uv.y, 1.0, 1.0) } } }";
+const SHOW: &str = "kernel shade.show@1 { requires { field.read; field.write; } input other: Image; input h: Grid<Hit>; input c: Image; output result: Image; struct Hit { t: Float; id: Int; } compute { let t = sample(h).t; let id = float(sample(h).id); return sample(c) * t + sample(other) + vec4(id, 0.0, 0.0, 0.0); } }";
+
+#[test]
+fn a_producer_of_several_outputs_fuses_whole_and_changes_no_bit() {
+    let split = compile(SPLIT).unwrap_or_else(|error| panic!("{error}"));
+    let show = compile(SHOW).unwrap_or_else(|error| panic!("{error}"));
+    // `h` reads `hit` and `c` reads `color`; `glow` has no reader.
+    let fused = fuse_outputs(&show, &[(1, 1), (2, 0)], &split, "split")
+        .unwrap_or_else(|error| panic!("{error}"));
+    let inputs: Vec<&str> = fused
+        .manifest
+        .inputs
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(inputs, ["other"]);
+    let params: Vec<&str> = fused
+        .manifest
+        .params
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(params, ["split/bias"]);
+
+    let mut host = Host::new(1 << 16);
+    let other = host
+        .adopt_image(
+            orla_abi::Image::from_pixels(
+                5,
+                4,
+                (0..20).map(|i| [i as f32 * 0.1, 0.5, 0.25, 0.0]).collect(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let produce = Invocation {
+        inputs: vec![],
+        params: vec![Value::Float(0.5)],
+        domain: Domain::Grid(5, 4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let made = CpuBackend.execute(&split, &produce, &mut scope).unwrap();
+    assert_eq!(made.len(), 3, "one Field per output");
+    let separate = run(&show, vec![other, made[1], made[0]], vec![], &mut host);
+    let together = run(&fused, vec![other], vec![Value::Float(0.5)], &mut host);
+    assert_eq!(separate, together, "fusion must not change a single bit");
+
+    // Two links to one input, or a link to an output that is not there,
+    // are refused rather than guessed at.
+    assert!(fuse_outputs(&show, &[(1, 1), (1, 0)], &split, "split").is_err());
+    assert!(fuse_outputs(&show, &[(1, 3)], &split, "split").is_err());
+    // A link whose layouts differ is the scene's mismatch, not fusion's.
+    let wrong = fuse_outputs(&show, &[(2, 1)], &split, "split").unwrap_err();
+    assert!(wrong.mismatch, "{wrong}");
 }

@@ -534,14 +534,39 @@ pub(super) fn manifest(
             "writing an output needs `field.write`; add it to `requires`",
         ));
     }
-    if kernel.outputs.len() != 1 {
-        return Err(semantic(
-            kernel.id.as_ref().map(|id| id.span).unwrap_or_default(),
-            format!(
-                "a kernel declares exactly one output in this language version, found {}",
-                kernel.outputs.len()
-            ),
-        ));
+    // Several outputs are what a map writes per element, each to a Field
+    // of its own over the one domain. The other modes fold, carry or
+    // place one element; several results there are one struct.
+    if let Some(second) = kernel.outputs.get(1) {
+        if mode != Mode::Map {
+            let (what, form) = match mode {
+                Mode::Reduce => ("a reduction folds one element", "its output's element"),
+                Mode::Scan => ("a scan carries one value", "the carried value"),
+                Mode::Prefix { .. } => ("a prefix folds one element", "its output's element"),
+                _ => ("a scatter writes into one target", "the target's element"),
+            };
+            return Err(semantic(
+                second.name.span,
+                format!(
+                    "{what}, so it has one output; several results belong in one struct as {form}, or in a map, which may write several outputs"
+                ),
+            ));
+        }
+        let shape = outputs[0].shape();
+        for (decl, port) in kernel.outputs.iter().zip(&outputs).skip(1) {
+            if port.shape() != shape {
+                return Err(semantic(
+                    decl.ty.span,
+                    format!(
+                        "a map writes all its outputs over one domain, so they share a shape; `{}` is a `{}` and `{}` a `{}`",
+                        outputs[0].name,
+                        shape.name(),
+                        port.name,
+                        port.shape().name()
+                    ),
+                ));
+            }
+        }
     }
     let params = kernel
         .params

@@ -1011,8 +1011,45 @@ impl Parser {
     }
 
     fn block(&mut self) -> Result<Block, ParseError> {
+        // A block that is a record of outputs, `{ color: c, depth: d }`,
+        // gives that record: a statement never begins with `name:`.
+        if self.at_record() {
+            let result = self.record_literal()?;
+            return Ok(Block {
+                lets: Vec::new(),
+                result,
+            });
+        }
         self.expect_punct("{")?;
         self.block_body()
+    }
+
+    /// Whether a `{` here opens a record of outputs: `{ name:`.
+    fn at_record(&self) -> bool {
+        let token = |offset: usize| self.tokens.get(self.position + offset).map(|l| &l.token);
+        matches!(token(0), Some(Token::Punct("{")))
+            && matches!(token(1), Some(Token::Ident(name)) if !RESERVED.contains(&name.as_str()))
+            && matches!(token(2), Some(Token::Punct(":")))
+    }
+
+    /// `{ name: expr, ... }`, a Kernel's outputs by name.
+    fn record_literal(&mut self) -> Result<Expr, ParseError> {
+        let span = self.expect_punct("{")?;
+        let mut fields = Vec::new();
+        while !self.is_punct("}") {
+            let field = self.ident("an output name")?;
+            self.expect_punct(":")?;
+            let value = self.expr()?;
+            fields.push((field, value));
+            if !self.eat_punct(",") {
+                break;
+            }
+        }
+        self.expect_punct("}")?;
+        Ok(Expr {
+            kind: ExprKind::Record(fields),
+            span,
+        })
     }
 
     /// A block's statements, to its closing brace. An `if` with no
@@ -1579,6 +1616,7 @@ impl Parser {
                     })
                 }
             }
+            Token::Punct("{") if self.at_record() => self.record_literal(),
             Token::Punct("(") => {
                 self.next();
                 let inner = self.expr()?;

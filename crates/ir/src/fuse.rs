@@ -114,30 +114,52 @@ pub fn samples_only(module: &Module, input: u32) -> bool {
     use_.sampled && !use_.addressed
 }
 
-/// Fuses `producer` into `consumer` at the consumer's `input`. The fused
-/// manifest keeps the consumer's other inputs and params, then the
-/// producer's, renamed with `prefix` and a slash (`prefix/name`).
+/// Fuses `producer` into `consumer` at the consumer's `input`, which reads
+/// the producer's first output: [`fuse_outputs`] with one link.
 pub fn fuse(
     consumer: &Module,
     input: u32,
     producer: &Module,
     prefix: &str,
 ) -> Result<Validated, FuseError> {
+    fuse_outputs(consumer, &[(input, 0)], producer, prefix)
+}
+
+/// Fuses `producer` into `consumer` where the consumer reads it: each link
+/// is `(input, output)`, a consumer input bound to one of the producer's
+/// outputs, and every sample of that input becomes the producer's value
+/// for that output. A map of several outputs whose every reader is this
+/// consumer fuses whole, its outputs never written; one nobody reads is
+/// computed and dropped. The fused manifest keeps the consumer's other
+/// inputs and params, then the producer's, renamed with `prefix` and a
+/// slash (`prefix/name`).
+pub fn fuse_outputs(
+    consumer: &Module,
+    links: &[(u32, u32)],
+    producer: &Module,
+    prefix: &str,
+) -> Result<Validated, FuseError> {
     let consumer_manifest = &consumer.manifest;
     let producer_manifest = &producer.manifest;
-    if input as usize >= consumer_manifest.inputs.len() {
-        return Err(FuseError::new(format!("consumer has no input {input}")));
+    if links.is_empty() {
+        return Err(FuseError::new("fusion needs a link".into()));
     }
-    if !samples_only(consumer, input) {
-        return Err(FuseError::new(format!(
-            "consumer reads input `{}` by address or size, not only by sample",
-            consumer_manifest.inputs[input as usize].name
-        )));
-    }
-    if producer_manifest.outputs.len() != 1 {
-        return Err(FuseError::new(
-            "producer must have exactly one output".into(),
-        ));
+    for (index, (input, output)) in links.iter().enumerate() {
+        if *input as usize >= consumer_manifest.inputs.len() {
+            return Err(FuseError::new(format!("consumer has no input {input}")));
+        }
+        if *output as usize >= producer_manifest.outputs.len() {
+            return Err(FuseError::new(format!("producer has no output {output}")));
+        }
+        if links[..index].iter().any(|(earlier, _)| earlier == input) {
+            return Err(FuseError::new(format!("input {input} is linked twice")));
+        }
+        if !samples_only(consumer, *input) {
+            return Err(FuseError::new(format!(
+                "consumer reads input `{}` by address or size, not only by sample",
+                consumer_manifest.inputs[*input as usize].name
+            )));
+        }
     }
     if consumer.manifest.mode != Mode::Map || producer.manifest.mode != Mode::Map {
         return Err(FuseError::new(
@@ -146,17 +168,22 @@ pub fn fuse(
     }
     // Ports match by structure: shape and layout. Element types are
     // struct indices local to each module and mean nothing across them.
-    let (written, read) = (
-        &producer_manifest.outputs[0].ty,
-        &consumer_manifest.inputs[input as usize].ty,
-    );
-    if written.shape != read.shape || written.schema != read.schema {
-        return Err(FuseError {
-            message: format!("producer writes {written} but the consumer reads {read}"),
-            mismatch: true,
-        });
+    for (input, output) in links {
+        let (written, read) = (
+            &producer_manifest.outputs[*output as usize].ty,
+            &consumer_manifest.inputs[*input as usize].ty,
+        );
+        if written.shape != read.shape || written.schema != read.schema {
+            return Err(FuseError {
+                message: format!("producer writes {written} but the consumer reads {read}"),
+                mismatch: true,
+            });
+        }
     }
-    let consumer_inputs = consumer_manifest.inputs.len() as u32;
+    // The linked inputs leave the consumer; every input after one moves
+    // down by as many as leave before it.
+    let removed: Vec<u32> = links.iter().map(|(input, _)| *input).collect();
+    let kept_inputs = (consumer_manifest.inputs.len() - removed.len()) as u32;
     let consumer_params = consumer_manifest.params.len() as u32;
     let consumer_functions = consumer.functions.len() as u32;
     let rename = |name: &str| format!("{prefix}/{name}");
@@ -208,7 +235,7 @@ pub fn fuse(
         .inputs
         .iter()
         .enumerate()
-        .filter(|(index, _)| *index as u32 != input)
+        .filter(|(index, _)| !removed.contains(&(*index as u32)))
         .map(|(_, port)| port.clone())
         .collect();
     inputs.extend(producer_manifest.inputs.iter().map(|port| Port {
@@ -238,9 +265,10 @@ pub fn fuse(
         outputs: consumer_manifest.outputs.clone(),
     };
 
-    // Consumer ops: inputs after the fused one move down by one.
+    // Consumer ops: inputs after a fused one move down.
+    let removed_below = removed.clone();
     let consumer_ops = move |op: &Op| -> Op {
-        let index = |i: u32| if i > input { i - 1 } else { i };
+        let index = |i: u32| i - removed_below.iter().filter(|gone| **gone < i).count() as u32;
         match op {
             Op::Sample(i) => Op::Sample(index(*i)),
             Op::At(i, c) => Op::At(index(*i), *c),
@@ -259,7 +287,7 @@ pub fn fuse(
     // Producer ops: inputs, params, functions, and structs move after the
     // consumer's.
     let producer_ops = move |op: &Op| -> Op {
-        let index = |i: u32| i + consumer_inputs - 1;
+        let index = |i: u32| i + kept_inputs;
         match op {
             Op::Sample(i) => Op::Sample(index(*i)),
             Op::At(i, c) => Op::At(index(*i), *c),
@@ -282,12 +310,12 @@ pub fn fuse(
         .functions
         .iter()
         .map(|function| {
-            let mut renumber = Renumber::new(&consumer_ops, &identity, None);
+            let mut renumber = Renumber::new(&consumer_ops, &identity, BTreeMap::new());
             renumber.function(function)
         })
         .collect();
     functions.extend(producer.functions.iter().map(|function| {
-        let mut renumber = Renumber::new(&producer_ops, &shift_struct, None);
+        let mut renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
         // `function` already shifted the argument types along with the
         // instruction types; shifting them again would point past the
         // struct table.
@@ -298,17 +326,22 @@ pub fn fuse(
 
     // The entry: the producer's body first, then the consumer's with its
     // sample of the fused input replaced by the producer's result.
-    let mut entry_renumber = Renumber::new(&producer_ops, &shift_struct, None);
+    let mut entry_renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
     let mut body = entry_renumber.block(&producer.entry.body);
-    let produced = entry_renumber.map(producer.entry.results[0]);
-    let mut consumer_renumber = Renumber::new(&consumer_ops, &identity, Some((input, produced)));
+    // Each linked input reads the producer's value for its output. A
+    // path into it is walked against that output's element, in the
+    // fused table's numbering.
+    let replace = links
+        .iter()
+        .map(|(input, output)| {
+            let produced = entry_renumber.map(producer.entry.results[*output as usize]);
+            let element = shift_struct(producer_manifest.outputs[*output as usize].element());
+            (*input, (produced, element))
+        })
+        .collect();
+    let mut consumer_renumber = Renumber::new(&consumer_ops, &identity, replace);
     consumer_renumber.next = entry_renumber.next;
-    // The path is walked against what the producer made, which is the
-    // producer's own element type in the fused table's numbering.
-    consumer_renumber.parts = Some((
-        &structs,
-        shift_struct(producer_manifest.outputs[0].element()),
-    ));
+    consumer_renumber.structs = Some(&structs);
     body.extend(consumer_renumber.block(&consumer.entry.body));
     let results = consumer
         .entry
@@ -360,18 +393,19 @@ struct Renumber<'a> {
     ids: BTreeMap<u32, u32>,
     ops: &'a dyn Fn(&Op) -> Op,
     types: &'a dyn Fn(Type) -> Type,
-    replace: Option<(u32, ValueId)>,
-    /// What the replaced input's element is and the structs to read a
-    /// path against: a part of a sample becomes the extracts and
-    /// subscripts it stands for, since the value is then in hand.
-    parts: Option<(&'a [StructDef], Type)>,
+    /// Inputs whose samples become values in hand, and each value's
+    /// element type, which a path into it is walked against.
+    replace: BTreeMap<u32, (ValueId, Type)>,
+    /// The structs to read such a path against: a part of a sample
+    /// becomes the extracts and subscripts it stands for.
+    structs: Option<&'a [StructDef]>,
 }
 
 impl<'a> Renumber<'a> {
     fn new(
         ops: &'a dyn Fn(&Op) -> Op,
         types: &'a dyn Fn(Type) -> Type,
-        replace: Option<(u32, ValueId)>,
+        replace: BTreeMap<u32, (ValueId, Type)>,
     ) -> Self {
         Self {
             next: 0,
@@ -379,7 +413,7 @@ impl<'a> Renumber<'a> {
             ops,
             types,
             replace,
-            parts: None,
+            structs: None,
         }
     }
 
@@ -413,8 +447,8 @@ impl<'a> Renumber<'a> {
     fn block(&mut self, instructions: &[Instruction]) -> Vec<Instruction> {
         let mut out = Vec::with_capacity(instructions.len());
         for instruction in instructions {
-            if let (Some((input, replacement)), Op::Sample(i)) = (self.replace, &instruction.op)
-                && *i == input
+            if let Op::Sample(i) = &instruction.op
+                && let Some((replacement, _)) = self.replace.get(i)
             {
                 self.ids.insert(instruction.id.0, replacement.0);
                 continue;
@@ -422,16 +456,13 @@ impl<'a> Renumber<'a> {
             // A part of that sample: the producer's result is a value
             // here, so the way to the part is the extracts and
             // subscripts it stands for, and nothing is read.
-            if let (
-                Some((input, replacement)),
-                Op::Part {
-                    input: i,
-                    at: None,
-                    path,
-                },
-            ) = (self.replace, &instruction.op)
-                && *i == input
-                && let Some((structs, element)) = self.parts
+            if let Op::Part {
+                input: i,
+                at: None,
+                path,
+            } = &instruction.op
+                && let Some(&(replacement, element)) = self.replace.get(i)
+                && let Some(structs) = self.structs
             {
                 let mut source = replacement;
                 let mut ty = element;

@@ -724,7 +724,7 @@ impl Runtime {
             };
             if let Some(outputs) = answered {
                 self.last_measured = backend.last_device_time();
-                return outputs;
+                return held_to(version.manifest(), &mut self.host, outputs);
             }
         }
         let (input, output) = chain;
@@ -785,7 +785,7 @@ impl Runtime {
                     backend.execute(prepared.as_ref(), module, invocation, &mut scope)
                 };
                 self.last_measured = backend.last_device_time();
-                outputs
+                held_to(version.manifest(), &mut self.host, outputs)
             }
             Body::Native(op) => {
                 let backend = Arc::clone(&self.backend);
@@ -794,8 +794,32 @@ impl Runtime {
                     backend.execute_native(*op, invocation, &mut scope)
                 };
                 self.last_measured = backend.last_device_time();
-                outputs
+                held_to(version.manifest(), &mut self.host, outputs)
             }
         }
     }
+}
+
+/// What a backend handed back, held to the manifest: one Field per
+/// declared output, in order. A backend that answers with another count
+/// has broken its contract; what it made is released and the execution
+/// fails, rather than a reader indexing past what exists.
+pub(crate) fn held_to(
+    manifest: &Manifest,
+    host: &mut Host,
+    outputs: Result<Vec<Handle>, ExecutionError>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    let outputs = outputs?;
+    if outputs.len() == manifest.outputs.len() {
+        return Ok(outputs);
+    }
+    for handle in &outputs {
+        let _ = host.release(*handle);
+    }
+    Err(ExecutionError::Device(format!(
+        "the backend gave {} Field(s) for `{}`, which declares {} output(s)",
+        outputs.len(),
+        manifest.id,
+        manifest.outputs.len()
+    )))
 }

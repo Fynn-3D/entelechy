@@ -21,6 +21,10 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [material-ball](material-ball/README.md): a shaded sphere under an orbiting
   light, tone-mapped by a second Kernel; one self-contained file with both
   Kernels inline.
+- [deferred](deferred/README.md): deferred shading: one Kernel finds the
+  surface under each pixel and writes its colour, normal and depth as three
+  Fields, given by name; lighting and an outline from the depth are passes
+  over them, fused into one.
 - [raymarch](raymarch/README.md): a signed-distance scene marched with `loop`
   and shaded with `if`, displayed through the shared tone-mapping sub-graph
   with `exposure` as a graph parameter; interactive on the GPU backend,

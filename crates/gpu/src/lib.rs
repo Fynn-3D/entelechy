@@ -748,15 +748,16 @@ impl Backend for GpuBackend {
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         // A Kernel's ports are buffers the device binds at once: one for
-        // the output, one for each input, and a scatter's target is one
-        // of the inputs. Saying so here is the difference between a
-        // Kernel that is too wide for this device and a page of the
-        // driver's validation.
-        let wanted = module.manifest.inputs.len() + 1;
+        // each output the pass writes, one for each input, and a
+        // scatter's target is one of the inputs. Saying so here is the
+        // difference between a Kernel that is too wide for this device
+        // and a page of the driver's validation.
+        let written = wgsl::written_outputs(module);
+        let wanted = module.manifest.inputs.len() + written;
         let allowed = self.device.limits().max_storage_buffers_per_shader_stage as usize;
         if wanted > allowed {
             return Err(format!(
-                "`{}` binds {wanted} Fields at once ({} input(s) and its output) and this device binds at most {allowed}; the interpreter and the JIT have no such limit",
+                "`{}` binds {wanted} Fields at once ({} input(s) and {written} output(s)) and this device binds at most {allowed}; the interpreter and the JIT have no such limit",
                 module.manifest.id,
                 module.manifest.inputs.len()
             ));
@@ -777,6 +778,9 @@ impl Backend for GpuBackend {
         for (index, port) in module.manifest.inputs.iter().enumerate() {
             let memory = module.manifest.memories.contains(&port.name);
             entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, !memory));
+        }
+        for k in 1..written {
+            entries.push(storage_entry(wgsl::output_binding(module, k), false));
         }
         let layout = self
             .device
@@ -1017,6 +1021,7 @@ impl Backend for GpuBackend {
             input_buffers,
             memory_outputs,
             output_buffer,
+            further_outputs,
             output_words,
             element_count,
         } = staged;
@@ -1078,6 +1083,7 @@ impl Backend for GpuBackend {
             module,
             output_domain,
             final_buffer,
+            further_outputs,
             memory_outputs,
             Some(self.spare.clone()),
         )
@@ -1239,6 +1245,8 @@ struct Staged {
     /// A memory's copy, written by the steps, to adopt as that output.
     memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
     output_buffer: wgpu::Buffer,
+    /// A map's outputs after the first, in the manifest's order.
+    further_outputs: Vec<wgpu::Buffer>,
     output_words: usize,
     element_count: usize,
 }
@@ -1268,6 +1276,7 @@ fn adopt_outputs(
     module: &Validated,
     output_domain: orla_abi::Domain,
     final_buffer: wgpu::Buffer,
+    further_outputs: Vec<wgpu::Buffer>,
     memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
     spare: Option<Spare>,
 ) -> Result<Vec<Handle>, ExecutionError> {
@@ -1278,10 +1287,25 @@ fn adopt_outputs(
     });
     let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
     let mut outputs = vec![output];
-    for (index, buffer, extent) in memory_outputs {
-        let port = &module.manifest.inputs[index];
+    // A map's further outputs over the same domain, then the memories,
+    // which is the manifest's order.
+    let further = module
+        .manifest
+        .outputs
+        .iter()
+        .skip(1)
+        .zip(further_outputs)
+        .map(|(port, buffer)| (port.ty.schema.clone(), output_domain, buffer));
+    let memories = memory_outputs.into_iter().map(|(index, buffer, extent)| {
+        (
+            module.manifest.inputs[index].ty.schema.clone(),
+            extent,
+            buffer,
+        )
+    });
+    for (schema, extent, buffer) in further.chain(memories) {
         let adopted = scope.adopt_resident(
-            port.ty.schema.clone(),
+            schema,
             extent,
             Box::new(DeviceImage {
                 buffer,
@@ -1336,6 +1360,7 @@ impl GpuBackend {
             mut input_buffers,
             memory_outputs: _,
             output_buffer,
+            further_outputs: _,
             output_words,
             element_count,
         } = staged;
@@ -1407,6 +1432,7 @@ impl GpuBackend {
             module,
             domain,
             reads,
+            Vec::new(),
             Vec::new(),
             Some(self.spare.clone()),
         )
@@ -1518,6 +1544,29 @@ impl GpuBackend {
                 resource: buffer.as_entire_binding(),
             });
         }
+        // A map's further outputs, each a buffer of its own words.
+        let further_outputs: Vec<wgpu::Buffer> = module
+            .manifest
+            .outputs
+            .iter()
+            .take(wgsl::written_outputs(module))
+            .skip(1)
+            .map(|port| {
+                self.spare.take(
+                    &self.device,
+                    (element_count * port.ty.schema.words() * 4) as u64,
+                    wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                )
+            })
+            .collect();
+        for (k, buffer) in further_outputs.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::output_binding(module, k + 1),
+                resource: buffer.as_entire_binding(),
+            });
+        }
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("orla kernel"),
             layout: &pipeline.layout,
@@ -1556,6 +1605,7 @@ impl GpuBackend {
             input_buffers,
             memory_outputs,
             output_buffer,
+            further_outputs,
             output_words,
             element_count,
         })

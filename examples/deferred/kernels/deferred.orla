@@ -1,0 +1,104 @@
+// Deferred shading: the surface is found once per pixel and written as a
+// G-buffer, three Fields from one Kernel; lighting and outlines are
+// passes over those Fields.
+
+struct Hit { t: Float; normal: Vec3; albedo: Vec3; }
+
+// The nearest of three spheres and a floor along a ray, or `t` < 0.
+fn cast(origin: Vec3, dir: Vec3) -> Hit {
+    let none = Hit { t: -1.0, normal: vec3(0.0, 1.0, 0.0), albedo: vec3(0.0, 0.0, 0.0) };
+    let centres = [vec3(-1.3, 0.7, 0.0), vec3(0.0, 1.0, 0.8), vec3(1.4, 0.55, -0.3)];
+    let radii = [0.7, 1.0, 0.55];
+    let colours = [vec3(0.85, 0.3, 0.2), vec3(0.3, 0.6, 0.85), vec3(0.9, 0.8, 0.3)];
+    let spheres = loop 3 with best = none {
+        let k = index();
+        let oc = origin - centres[k];
+        let b = dot(oc, dir);
+        let c = dot(oc, oc) - radii[k] * radii[k];
+        let h = b * b - c;
+        let t = -b - sqrt(max(h, 0.0));
+        if h > 0.0 && t > 0.0 && (best.t < 0.0 || t < best.t) {
+            Hit { t: t, normal: normalize(origin + dir * t - centres[k]), albedo: colours[k] }
+        } else {
+            best
+        }
+    };
+    // The floor, y = 0, in a checker.
+    let tf = -origin.y / dir.y;
+    let p = origin + dir * tf;
+    let check = (int(floor(p.x)) + int(floor(p.z))) & 1;
+    let tile = if check == 0 { vec3(0.75, 0.75, 0.72) } else { vec3(0.35, 0.36, 0.4) };
+    if dir.y < 0.0 && (spheres.t < 0.0 || tf < spheres.t) {
+        return Hit { t: tf, normal: vec3(0.0, 1.0, 0.0), albedo: tile };
+    }
+    return spheres;
+}
+
+kernel deferred.surface@1 {
+    requires { field.write; }
+    param turn: Float = 0.3;
+    output albedo: Image;
+    output normal: Grid<Vec3>;
+    output depth: Grid<Float>;
+    compute {
+        let size = domain();
+        let uv = (coord() + vec2(0.5, 0.5) - size * 0.5) / size.y;
+        let eye = vec3(sin(turn) * 5.0, 1.6, -cos(turn) * 5.0);
+        let forward = normalize(vec3(0.0, 0.7, 0.0) - eye);
+        let right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
+        let up = cross(forward, right);
+        let dir = normalize(forward * 1.4 + right * uv.x - up * uv.y);
+        let hit = cast(eye, dir);
+        if hit.t < 0.0 {
+            // Sky: no surface, depth at the far plane.
+            return { albedo: vec4(0.55, 0.7, 0.9, 0.0), normal: vec3(0.0, 0.0, 0.0), depth: 100.0 };
+        }
+        { albedo: vec4(hit.albedo, 1.0), normal: hit.normal, depth: hit.t }
+    }
+}
+
+// Lambert and a little ambient from what the G-buffer holds; the sky's
+// alpha of zero says there is nothing to light.
+kernel deferred.light@1 {
+    requires { field.read; field.write; }
+    input albedo: Image;
+    input normal: Grid<Vec3>;
+    param sun: Vec3 = vec3(-0.5, 0.8, -0.4);
+    output result: Image;
+    compute {
+        let a = sample(albedo);
+        let n = sample(normal);
+        let lit = a.rgb * (0.25 + 0.75 * max(dot(n, normalize(sun)), 0.0));
+        return if a.a > 0.0 { vec4(lit, 1.0) } else { vec4(a.rgb, 1.0) };
+    }
+}
+
+// An edge where the surface breaks: this reads the depth at the
+// neighbours, by address, which is why the G-buffer is written rather
+// than fused away. The inverse of depth runs straight across a plane on
+// the screen, so its second difference is zero on every surface here and
+// large only where one surface ends in front of another.
+kernel deferred.outline@1 {
+    requires { field.read; field.write; }
+    input depth: Grid<Float>;
+    param jump: Float = 0.1;
+    output result: Grid<Float>;
+    compute {
+        let c = icoord();
+        let w = 1.0 / at(depth, c);
+        let across = 1.0 / at(depth, c + ivec2(1, 0)) + 1.0 / at(depth, c - ivec2(1, 0)) - 2.0 * w;
+        let down = 1.0 / at(depth, c + ivec2(0, 1)) + 1.0 / at(depth, c - ivec2(0, 1)) - 2.0 * w;
+        return if abs(across) + abs(down) > jump * w { 1.0 } else { 0.0 };
+    }
+}
+
+kernel deferred.compose@1 {
+    requires { field.read; field.write; }
+    input lit: Image;
+    input edge: Grid<Float>;
+    output result: Image;
+    compute {
+        let c = sample(lit);
+        return vec4(c.rgb * (1.0 - 0.8 * sample(edge)), 1.0);
+    }
+}
