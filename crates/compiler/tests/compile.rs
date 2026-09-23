@@ -258,12 +258,17 @@ fn structs_are_checked_by_name_and_field() {
     ));
     assert!(message.contains("no field `z`"), "{message}");
     let (_, message) = semantic(&format!(
-        "{prefix} compute {{ let h = Hit {{ t: 1, id: 2 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
+        "{prefix} compute {{ let h = Hit {{ t: element(), id: 2 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
     ));
     assert!(
         message.contains("`Hit.t` expects Float, found Int"),
         "{message}"
     );
+    // A written integer has no width, and a float field takes it.
+    compile(&format!(
+        "{prefix} compute {{ let h = Hit {{ t: 1, id: 2 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
+    ))
+    .unwrap();
     let (_, message) = semantic(&format!(
         "{prefix} compute {{ let h = Hit {{ t: 1.0, id: 2 }}; return vec4(h.w, 0.0, 0.0, 1.0); }} }}"
     ));
@@ -799,7 +804,9 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
         "{head}let m = mat2(vec3(1.0, 2.0, 3.0), vec2(0.0, 1.0)); return m[0].x; }} }}"
     ));
     assert_eq!(message, "`mat2` takes Vec2 columns, found Vec3");
-    let (_, message) = semantic(&format!("{head}let m = mat3(1); return m[0].x; }} }}"));
+    let (_, message) = semantic(&format!(
+        "{head}let m = mat3(element()); return m[0].x; }} }}"
+    ));
     assert_eq!(
         message,
         "`mat3` takes 3 Vec3 columns, or one Float for the diagonal; found Int"
@@ -1157,7 +1164,7 @@ fn several_outputs_are_a_maps_and_are_checked() {
     assert!(unknown.1.contains("did you mean `color`"), "{}", unknown.1);
     let typed = semantic(
         "kernel s.m@1 { requires { field.write; } output a: Image; output b: Grid<Float>;
-            compute { return { a: vec4(1.0, 1.0, 1.0, 1.0), b: 1 }; } }",
+            compute { return { a: vec4(1.0, 1.0, 1.0, 1.0), b: element() }; } }",
     );
     assert!(typed.1.contains("output `b` needs a Float"), "{}", typed.1);
     let single = semantic(

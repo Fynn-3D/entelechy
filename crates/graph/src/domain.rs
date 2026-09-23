@@ -276,11 +276,13 @@ impl DomainExpr {
         Ok(match self {
             Self::Int(v) => Value::Int(*v),
             Self::Float(v) => Value::Float(*v),
-            Self::Name(name) => param(name).ok_or_else(|| {
+            // A value written in a scene is exact; an extent is counted in
+            // floats and ints, which is what the arithmetic below takes.
+            Self::Name(name) => extent_number(param(name).ok_or_else(|| {
                 fail(format!(
                     "`domain` names `{name}`, which is neither a parameter of the node nor of the graph"
                 ))
-            })?,
+            })?),
             Self::Count(name) => Value::Int(
                 port(name)
                     .ok_or_else(|| fail(format!("`count({name})`: `{name}` is not a bound input")))?
@@ -351,6 +353,18 @@ impl DomainExpr {
                 }
             }
         })
+    }
+}
+
+/// A number as an extent counts it: a double as a float, a long as an
+/// int where it fits and a float where it does not.
+fn extent_number(value: Value) -> Value {
+    match value {
+        Value::Double(v) => Value::Float(v as f32),
+        Value::Long(v) => i32::try_from(v).map_or(Value::Float(v as f32), Value::Int),
+        Value::DVec2([x, y]) => Value::Vec2([x as f32, y as f32]),
+        Value::DVec3([x, y, z]) => Value::Vec3([x as f32, y as f32, z as f32]),
+        other => other,
     }
 }
 

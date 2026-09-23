@@ -216,3 +216,39 @@ fn a_value_given_is_taken_in_the_width_it_is_given_to() {
         "dmat2(dvec2(1.0, 0.0), dvec2(0.0, 1.0))"
     );
 }
+
+#[test]
+fn written_numbers_are_exact_until_they_meet_a_width_whole() {
+    // Arithmetic between written numbers is done exact; a vector, an
+    // array or a branch of written numbers takes the width it meets as
+    // a whole; a written integer is a float where one is wanted.
+    let source = "kernel wide.x@1 {
+        requires { field.write; }
+        struct Poly { pts: [Double; 2]; w: DVec2; }
+        struct Out { sum: Double; third: Double; picked: Double; poly: Poly; moved: DVec3; scaled: Float; }
+        fn shift(v: DVec3) -> DVec3 { return v + dvec3(1.0, 1.0, 1.0); }
+        output result: Rows<Out>;
+        compute {
+            let x = double(element()) + 0.5;
+            let row = [x, 0.1, 1.0 / 3.0];
+            let picked = if element() == 0 { x } else { -0.25 };
+            let f = float(element()) + 1.0;
+            return Out {
+                sum: x * (0.1 + 0.2),
+                third: row[2],
+                picked: picked,
+                poly: Poly { pts: [0.1, -0.2], w: vec2(0.3, 0.7) },
+                moved: shift(vec3(0.1, 0.2, 0.3)),
+                scaled: f * 2,
+            };
+        }
+    }";
+    let words = run(source, Vec::new(), 1).unwrap();
+    let d = doubles(&words[..20]);
+    assert_eq!(d[0], 0.5 * (0.1 + 0.2));
+    assert_eq!(d[1], 1.0 / 3.0);
+    assert_eq!(d[2], 0.5);
+    assert_eq!(&d[3..7], &[0.1, -0.2, 0.3, 0.7]);
+    assert_eq!(&d[7..10], &[0.1 + 1.0, 0.2 + 1.0, 0.3 + 1.0]);
+    assert_eq!(f32::from_bits(words[20]), 2.0);
+}

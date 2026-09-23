@@ -642,11 +642,14 @@ impl Lowering<'_, '_> {
         }
         let mut params = Vec::new();
         for decl in &document.params {
-            let default = typed_literal(
-                &decl.default,
-                &resolved(&decl.ty.value, &self.aliases),
-                &self.known_structs(),
-            )?;
+            // Read in the type the param declares: exact, and shaped by
+            // the structs the document declares or uses.
+            let ty = orla_language::Spanned {
+                value: resolved(&decl.ty.value, &self.aliases),
+                span: decl.ty.span,
+            };
+            let default = orla_compiler::literal_of_type(&decl.default, &ty, &self.structs)
+                .map_err(|e| error(decl.default.span, e.to_string()))?;
             if params
                 .iter()
                 .any(|p: &GraphParam| p.name == decl.name.value)
@@ -1135,6 +1138,8 @@ impl Lowering<'_, '_> {
 
 /// A literal as a scene writes it: any value a Kernel can hold, a struct
 /// literal naming one of `known` (a struct the document declares or uses).
+/// A number is kept exact (a written float as a `Double`), since the
+/// width is the Kernel's param's to say when the value reaches it.
 fn literal(expr: &Expr, known: &[(String, Vec<String>)]) -> Result<Value, DocumentError> {
     let fields_of = |name: &str| {
         known
@@ -1142,26 +1147,7 @@ fn literal(expr: &Expr, known: &[(String, Vec<String>)]) -> Result<Value, Docume
             .find(|(struct_name, _)| struct_name == name)
             .map(|(_, fields)| fields.clone())
     };
-    orla_compiler::literal_in(expr, &fields_of).map_err(|e| error(expr.span, e.to_string()))
-}
-
-/// A literal written for a param of type `ty`: exact where the type is
-/// a plain one, so `param origin: Double = 500000.123456789;` holds the
-/// double nearest what is written, not a float's nearest.
-fn typed_literal(
-    expr: &Expr,
-    ty: &str,
-    known: &[(String, Vec<String>)],
-) -> Result<Value, DocumentError> {
-    let Ok(ty) = ty.parse::<orla_ir::Type>() else {
-        return literal(expr, known);
-    };
-    let exact = orla_compiler::literal_exact(expr, &|_| None)
-        .map_err(|e| error(expr.span, e.to_string()))?;
-    match orla_ir::value_as(&exact, ty, &[]) {
-        Some(value) => Ok(value),
-        None => literal(expr, known),
-    }
+    orla_compiler::literal_exact(expr, &fields_of).map_err(|e| error(expr.span, e.to_string()))
 }
 
 /// A literal expression carrying a value, for rewriting param defaults:
@@ -1318,6 +1304,40 @@ node blocks: image.pixelate@1 {
 }
 output result <- blocks.result;
 ";
+
+    #[test]
+    fn a_written_number_keeps_its_digits_until_a_width_is_named() {
+        let graph = parse(
+            "struct Site { at: DVec2; id: Long; }
+param origin: Double = 500000.123456789;
+param site: Site = Site { at: dvec2(0.1, -4000000.987654321), id: 5000000000 };
+param rows: [Double; 2] = [0.1, 0.2];
+param scale: Float = 0.1;
+node a: k.a@1 { x = 0.001; }
+output result <- a.result;
+",
+        )
+        .unwrap();
+        let defaults: Vec<&Value> = graph.params.iter().map(|p| &p.default).collect();
+        assert_eq!(defaults[0], &Value::Double(500000.123456789));
+        assert_eq!(
+            defaults[1],
+            &Value::Record(vec![
+                Value::DVec2([0.1, -4000000.987654321]),
+                Value::Long(5_000_000_000)
+            ])
+        );
+        assert_eq!(
+            defaults[2],
+            &Value::Record(vec![Value::Double(0.1), Value::Double(0.2)])
+        );
+        assert_eq!(defaults[3], &Value::Float(0.1));
+        // A node's value has no width until the Kernel's param says it,
+        // and it reads back as written.
+        let value = &graph.nodes[0].params["x"];
+        assert_eq!(value, &ParamValue::Literal(Value::Double(0.001)));
+        assert!(graph.to_string().contains("x = 0.001;"), "{graph}");
+    }
 
     #[test]
     fn documents_round_trip() {

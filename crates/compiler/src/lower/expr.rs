@@ -19,15 +19,6 @@ impl Builder<'_> {
                 Ok(self.emit(Type::Double, Op::Const(Value::Double(*value))))
             }
             ExprKind::Long(value) => Ok(self.emit(Type::Long, Op::Const(Value::Long(*value)))),
-            // A written number negated is a written number: `-0.1` beside
-            // a `Double` is the double nearest minus a tenth.
-            ExprKind::Neg(inner) if matches!(inner.kind, ExprKind::Float(_) | ExprKind::Int(_)) => {
-                Ok(match inner.kind {
-                    ExprKind::Float(value) => self.written(orla_ir::Number::Double(-value)),
-                    ExprKind::Int(value) => self.written(orla_ir::Number::Long(-value)),
-                    _ => unreachable!("matched above"),
-                })
-            }
             ExprKind::Bool(value) => Ok(self.emit(Type::Bool, Op::Const(Value::Bool(*value)))),
             ExprKind::Name(name) => self.name(name, expr.span),
             ExprKind::Neg(inner) => self.unary(UnaryOp::Neg, "-", inner, expr.span),
@@ -110,6 +101,12 @@ impl Builder<'_> {
                 };
                 let left = self.value(left)?;
                 let right = self.value(right)?;
+                // Written numbers meet as their exact values.
+                if let Some(folded) = self.fold_written(op, left, right) {
+                    return Ok(folded);
+                }
+                // What was written, for a refusal to name.
+                let written = (self.ty(left), self.ty(right));
                 let mut pair = [left, right];
                 self.adapt_all(&mut pair);
                 let [left, right] = pair;
@@ -119,26 +116,28 @@ impl Builder<'_> {
                 {
                     return Ok(product);
                 }
-                let (a, b) = (self.ty(left), self.ty(right));
-                let ty = op.result_type(a, b).ok_or_else(|| {
-                    // Two widths of one kind meet through a conversion.
-                    let widths = [a.scalar(), b.scalar()];
-                    let hint = if widths.contains(&Some(Type::Float))
-                        && widths.contains(&Some(Type::Double))
-                    {
-                        "; a float and a double meet through `double(..)` or `float(..)`"
-                    } else if widths.contains(&Some(Type::Int))
-                        && widths.contains(&Some(Type::Long))
-                    {
-                        "; an int and a long meet through `long(..)` or `int(..)`"
-                    } else {
-                        ""
-                    };
-                    semantic(
-                        expr.span,
-                        format!("cannot apply `{}` to {a} and {b}{hint}", op.symbol()),
-                    )
-                })?;
+                let ty = op
+                    .result_type(self.ty(left), self.ty(right))
+                    .ok_or_else(|| {
+                        let (a, b) = written;
+                        // Two widths of one kind meet through a conversion.
+                        let widths = [a.scalar(), b.scalar()];
+                        let hint = if widths.contains(&Some(Type::Float))
+                            && widths.contains(&Some(Type::Double))
+                        {
+                            "; a float and a double meet through `double(..)` or `float(..)`"
+                        } else if widths.contains(&Some(Type::Int))
+                            && widths.contains(&Some(Type::Long))
+                        {
+                            "; an int and a long meet through `long(..)` or `int(..)`"
+                        } else {
+                            ""
+                        };
+                        semantic(
+                            expr.span,
+                            format!("cannot apply `{}` to {a} and {b}{hint}", op.symbol()),
+                        )
+                    })?;
                 Ok(self.emit(ty, Op::Binary(op, left, right)))
             }
             ExprKind::Member(inner, member) => {
@@ -235,6 +234,7 @@ impl Builder<'_> {
                 for element in elements {
                     ids.push(self.value(element)?);
                 }
+                self.unify(&ids, &mut []);
                 let first = self.ty(ids[0]);
                 for (id, element) in ids.iter().zip(elements) {
                     if self.ty(*id) != first {
@@ -493,7 +493,8 @@ impl Builder<'_> {
                 let id = self.reserve(Type::Bool);
                 let mut then_block = self.nested(then)?;
                 let mut otherwise_block = self.nested(otherwise)?;
-                self.adapt_branches(&mut [&mut then_block, &mut otherwise_block]);
+                let results = [then_block.result, otherwise_block.result];
+                self.unify(&results, &mut [&mut then_block, &mut otherwise_block]);
                 let (a, b) = (self.ty(then_block.result), self.ty(otherwise_block.result));
                 if a != b {
                     return Err(semantic(
@@ -547,9 +548,12 @@ impl Builder<'_> {
                 }
                 let mut otherwise_block = self.nested(otherwise)?;
                 {
+                    let mut results: Vec<ValueId> =
+                        blocks.iter().map(|block| block.result).collect();
+                    results.push(otherwise_block.result);
                     let mut all: Vec<&mut IrBlock> = blocks.iter_mut().collect();
                     all.push(&mut otherwise_block);
-                    self.adapt_branches(&mut all);
+                    self.unify(&results, &mut all);
                 }
                 let mut lowered = Vec::with_capacity(arms.len());
                 let mut ty: Option<(Type, Span)> = None;
@@ -949,6 +953,13 @@ impl Builder<'_> {
         span: Span,
     ) -> Result<ValueId, CompileError> {
         let inner = self.value(inner)?;
+        // A written number negated is a written number: `-0.1` beside a
+        // `Double` is the double nearest minus a tenth.
+        if op == UnaryOp::Neg
+            && let Some(negated) = self.negate_written(inner)
+        {
+            return Ok(negated);
+        }
         let ty = self.ty(inner);
         let result = op
             .result_type(ty)

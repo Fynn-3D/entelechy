@@ -499,5 +499,19 @@ impl fmt::Display for Graph {
 
 /// Renders a value in the literal grammar shared with `.orla`.
 pub fn literal_text(value: &Value) -> String {
-    value.to_string()
+    // A number a scene wrote is exact and has no width until a Kernel's
+    // param gives it one, so it reads back as written, without `d`.
+    match value {
+        Value::Double(v) => format!("{v:?}"),
+        Value::Long(v) => v.to_string(),
+        Value::Record(members) => format!(
+            "[{}]",
+            members
+                .iter()
+                .map(literal_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        other => other.to_string(),
+    }
 }

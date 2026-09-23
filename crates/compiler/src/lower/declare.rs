@@ -17,8 +17,13 @@ use crate::CompileError;
 use super::{Structs, describe, resolve_type, semantic};
 
 pub(super) fn structs(kernel: &Kernel) -> Result<Structs, CompileError> {
+    struct_table(&kernel.structs)
+}
+
+/// The struct table the declarations make, in order.
+pub(super) fn struct_table(decls: &[orla_language::StructDecl]) -> Result<Structs, CompileError> {
     let structs: Structs = RefCell::new(Vec::new());
-    for decl in &kernel.structs {
+    for decl in decls {
         if structs
             .borrow()
             .iter()
@@ -885,6 +890,20 @@ pub(super) fn manifest(
         outputs,
         memories,
     })
+}
+
+/// A literal given for a value of the type `ty` names, over the structs
+/// `decls` declare: read exact and shaped into the type, so a double
+/// anywhere in it keeps every digit written.
+pub(crate) fn literal_of_type(
+    expr: &Expr,
+    ty: &Spanned<String>,
+    decls: &[orla_language::StructDecl],
+) -> Result<Value, CompileError> {
+    let table = struct_table(decls)?;
+    let ty = resolve_type(ty, &table)?;
+    let structs = table.into_inner();
+    constant(expr, ty, &structs)
 }
 
 /// Evaluates a parameter default at compile time, as a value of `ty`:

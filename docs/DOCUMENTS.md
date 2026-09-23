@@ -194,12 +194,20 @@ numbers of any kind and shorter vectors, widened, and `double(x)` and
 `long(x)` convert, as `float(x)` and `int(x)` convert back (a long to an
 int keeps its low 32 bits). A `Double` never meets a `Float`, nor a
 `Long` an `Int`, without one of them; `x + f` of the two is refused and
-says which to write. A number written without a width takes the one it
-meets: beside a `Double` a written `0.1` is the double nearest a tenth,
-not the float's, beside a `Long` a written integer is a long, and an
-integer too big for an `Int` is a `Long` wherever it is written; `0.1d`
-and `8l` say it outright, and a number named by a `let` keeps the width
-it was named with. Each is two words, the low one first, in a Field, a
+says which to write. A number written without a width is exact until it
+meets one, as a constant is in Go: arithmetic between written numbers
+is done on their exact values (`0.1 + 0.2`, `1.0 / 3.0`, `2 * 1000000007`),
+and the result is still a written number; beside a `Double` a written
+`0.1` is the double nearest a tenth, not the float's, beside a `Long` a
+written integer is a long, beside a `Float` a written integer is a
+float, and an integer too big for an `Int` is a `Long` wherever it is
+written. A vector, a matrix or an array built of written numbers alone
+(`vec3(0.1, 0.2, 0.3)`, `[0.5, 0.25]`) takes the width it meets as a
+whole, given to a `DVec3` or a `[Double; 2]`, beside one in an
+operation, or among the branches of an `if` or the elements of an
+array. Where nothing names a width a written float is a `Float` and a
+written integer an `Int`; `0.1d` and `8l` say it outright, and a value
+named by a `let` keeps the width it was named with. Each is two words, the low one first, in a Field, a
 parameter and the protocol, so an element of `Rows<DVec3>` is six words;
 a 64-bit scalar is never kept narrow. They take what their 32-bit kin
 take: on doubles every math builtin, `dot`, `cross`, `length`,
@@ -580,11 +588,12 @@ output result <- display.result;      // named graph output; sub-graph outputs
 3. Every declared input port must be wired; a port the Kernel does not
    declare is an error; both are reported before anything runs.
 4. Values use `=`: numbers, `true`/`false`, negation, `vec2`/`vec3`/`vec4`.
-   An integer literal is accepted where a Float is expected. A graph
-   `param` of a plain type reads its default exact in that type, so
-   `param origin: Double = 500000.123456789;` holds the double nearest
-   what is written; a value given to a Kernel's `Double` elsewhere is
-   the decimal it reads as, and `d` keeps more digits than a float has.
+   An integer literal is accepted where a Float is expected. A number
+   is kept exact until a Kernel's param gives it a width: a graph
+   `param` reads its default in the type it declares, a struct or an
+   array included (`param origin: Double = 500000.123456789;` holds the
+   double nearest what is written), and a node's value keeps every digit
+   until it reaches the Kernel.
 5. `domain = count;`, `domain = vec2(width, height);`, or
    `domain = vec3(width, height, depth);` sets a node's output extent in
    its output's shape; nodes with an input default to the extent of their

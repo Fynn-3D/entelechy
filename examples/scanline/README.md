@@ -8,9 +8,9 @@ protocol, one request a line, and this is what happened:
 1. `status`, `kernels`, `help coord`: it looked at the scene, the
    Kernels there, and the contract of a builtin it meant to use.
 2. `evaluate`, `read`: it took the picture as it was.
-3. `prepare` a scanline Kernel written with `coord().y % 2`: refused at
-   line 9, column 20, "cannot apply `%` to Float and Int"; nothing was
-   published.
+3. `prepare` a scanline Kernel testing the row's low bit with
+   `coord().y & 1`: refused at line 9, column 20, "cannot apply `&` to
+   Float and Int", since a coordinate is a float; nothing was published.
 4. `help icoord`, `prepare` again with `icoord().y % 2`: accepted, still
    unpublished; `publish` with `expect: "absent"`: `scanline.effect@1`
    exists now, in the running session.

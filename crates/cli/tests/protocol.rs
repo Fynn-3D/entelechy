@@ -734,10 +734,10 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
             .any(|k| k["id"] == "picture.draw@1")
     );
     assert_eq!(ok(2)["name"], "coord");
-    // The first proposal is refused where it is wrong: a Float `%` an Int
+    // The first proposal is refused where it is wrong: a Float `&` an Int
     // on line 9, at the expression.
     let error = &responses[5]["error"];
-    assert_eq!(error["message"], "cannot apply `%` to Float and Int");
+    assert_eq!(error["message"], "cannot apply `&` to Float and Int");
     assert_eq!(
         (error["line"].as_u64(), error["column"].as_u64()),
         (Some(9), Some(20))

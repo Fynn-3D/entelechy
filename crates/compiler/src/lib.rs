@@ -107,6 +107,17 @@ pub fn literal(expr: &orla_language::Expr) -> Result<orla_ir::Value, CompileErro
     lower::literal(expr)
 }
 
+/// A literal given for a value of the type `ty` names (`Double`,
+/// `[DVec2; 4]`, a struct), over the struct declarations a document
+/// makes or uses: read exact and shaped into that type.
+pub fn literal_of_type(
+    expr: &orla_language::Expr,
+    ty: &orla_language::Spanned<String>,
+    structs: &[orla_language::StructDecl],
+) -> Result<orla_ir::Value, CompileError> {
+    lower::literal_of_type(expr, ty, structs)
+}
+
 /// Evaluates a literal that a type will shape, keeping every written
 /// float exact until the type says its width: [`literal_in`] for a place
 /// that knows its type.
