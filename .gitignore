@@ -1,6 +1,7 @@
 /target/
 .DS_Store
 /output.ppm
+output.ppm
 __pycache__/
 *.pyc
 /bridges/godot/.godot/
