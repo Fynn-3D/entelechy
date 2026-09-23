@@ -137,84 +137,107 @@ impl fmt::Display for Capabilities {
 /// would no longer bind.
 pub const ABI_VERSION: u32 = 1;
 
-/// Types that cross the Kernel boundary.
+/// Types that cross the Kernel boundary, by structure: a scalar of one
+/// kind, a vector of two to four of them, a square matrix of a float
+/// kind, or a Kernel's own struct. The kinds are the Host's
+/// ([`Scalar`]): a `Float`, an `Int`, a `Bool`, a `Double` or a `Long`.
+/// Every type a name spells has a constant of that name (`Type::Vec3`,
+/// `Type::DMat4`), which matches as a pattern too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
-    /// 32-bit float.
-    Float,
-    /// 32-bit signed integer.
-    Int,
-    /// A truth value.
-    Bool,
-    /// Two floats.
-    Vec2,
-    /// Three floats.
-    Vec3,
-    /// Four floats.
-    Vec4,
-    /// Two integers: a grid coordinate, a cell address.
-    IVec2,
-    /// Three integers: a volume coordinate.
-    IVec3,
-    /// Two columns of two floats, column-major.
-    Mat2,
-    /// Three columns of three floats, column-major.
-    Mat3,
-    /// Four columns of four floats, column-major.
-    Mat4,
-    /// 64-bit float: two words, the low one first.
-    Double,
-    /// 64-bit signed integer: two words, the low one first.
-    Long,
-    /// Two doubles.
-    DVec2,
-    /// Three doubles.
-    DVec3,
-    /// Four doubles.
-    DVec4,
-    /// Two longs.
-    LVec2,
-    /// Three longs.
-    LVec3,
-    /// Two columns of two doubles, column-major.
-    DMat2,
-    /// Three columns of three doubles, column-major.
-    DMat3,
-    /// Four columns of four doubles, column-major.
-    DMat4,
+    /// One scalar.
+    Scalar(Scalar),
+    /// Two to four components of one kind; see [`Type::vector`] for the
+    /// ones that exist.
+    Vector(Scalar, u8),
+    /// A square matrix of a float kind, its order columns of as many
+    /// components, stored column by column.
+    Matrix(Scalar, u8),
     /// A Kernel-defined record, by index into the module's struct table.
     /// Structs are internal to a Kernel: they never cross the ABI as
     /// parameters or ports.
     Struct(u32),
 }
 
+#[allow(non_upper_case_globals)]
+impl Type {
+    /// 32-bit float.
+    pub const Float: Type = Type::Scalar(Scalar::Float);
+    /// 32-bit signed integer.
+    pub const Int: Type = Type::Scalar(Scalar::Int);
+    /// A truth value.
+    pub const Bool: Type = Type::Scalar(Scalar::Bool);
+    /// 64-bit float: two words, the low one first.
+    pub const Double: Type = Type::Scalar(Scalar::Double);
+    /// 64-bit signed integer: two words, the low one first.
+    pub const Long: Type = Type::Scalar(Scalar::Long);
+    /// Two floats.
+    pub const Vec2: Type = Type::Vector(Scalar::Float, 2);
+    /// Three floats.
+    pub const Vec3: Type = Type::Vector(Scalar::Float, 3);
+    /// Four floats.
+    pub const Vec4: Type = Type::Vector(Scalar::Float, 4);
+    /// Two integers: a grid coordinate, a cell address.
+    pub const IVec2: Type = Type::Vector(Scalar::Int, 2);
+    /// Three integers: a volume coordinate.
+    pub const IVec3: Type = Type::Vector(Scalar::Int, 3);
+    /// Two doubles.
+    pub const DVec2: Type = Type::Vector(Scalar::Double, 2);
+    /// Three doubles.
+    pub const DVec3: Type = Type::Vector(Scalar::Double, 3);
+    /// Four doubles.
+    pub const DVec4: Type = Type::Vector(Scalar::Double, 4);
+    /// Two longs.
+    pub const LVec2: Type = Type::Vector(Scalar::Long, 2);
+    /// Three longs.
+    pub const LVec3: Type = Type::Vector(Scalar::Long, 3);
+    /// Two columns of two floats.
+    pub const Mat2: Type = Type::Matrix(Scalar::Float, 2);
+    /// Three columns of three floats.
+    pub const Mat3: Type = Type::Matrix(Scalar::Float, 3);
+    /// Four columns of four floats.
+    pub const Mat4: Type = Type::Matrix(Scalar::Float, 4);
+    /// Two columns of two doubles.
+    pub const DMat2: Type = Type::Matrix(Scalar::Double, 2);
+    /// Three columns of three doubles.
+    pub const DMat3: Type = Type::Matrix(Scalar::Double, 3);
+    /// Four columns of four doubles.
+    pub const DMat4: Type = Type::Matrix(Scalar::Double, 4);
+
+    /// Every type a name spells, with its name: what a source writes and
+    /// a diagnostic suggests.
+    pub const NAMED: [(Self, &'static str); 21] = [
+        (Self::Float, "Float"),
+        (Self::Int, "Int"),
+        (Self::Bool, "Bool"),
+        (Self::Vec2, "Vec2"),
+        (Self::Vec3, "Vec3"),
+        (Self::Vec4, "Vec4"),
+        (Self::IVec2, "IVec2"),
+        (Self::IVec3, "IVec3"),
+        (Self::Mat2, "Mat2"),
+        (Self::Mat3, "Mat3"),
+        (Self::Mat4, "Mat4"),
+        (Self::Double, "Double"),
+        (Self::Long, "Long"),
+        (Self::DVec2, "DVec2"),
+        (Self::DVec3, "DVec3"),
+        (Self::DVec4, "DVec4"),
+        (Self::LVec2, "LVec2"),
+        (Self::LVec3, "LVec3"),
+        (Self::DMat2, "DMat2"),
+        (Self::DMat3, "DMat3"),
+        (Self::DMat4, "DMat4"),
+    ];
+}
+
 impl Type {
     /// Stable spelling used in `.orla` sources; structs print by index.
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Float => "Float",
-            Self::Int => "Int",
-            Self::Bool => "Bool",
-            Self::Vec2 => "Vec2",
-            Self::Vec3 => "Vec3",
-            Self::Vec4 => "Vec4",
-            Self::IVec2 => "IVec2",
-            Self::IVec3 => "IVec3",
-            Self::Mat2 => "Mat2",
-            Self::Mat3 => "Mat3",
-            Self::Mat4 => "Mat4",
-            Self::Double => "Double",
-            Self::Long => "Long",
-            Self::DVec2 => "DVec2",
-            Self::DVec3 => "DVec3",
-            Self::DVec4 => "DVec4",
-            Self::LVec2 => "LVec2",
-            Self::LVec3 => "LVec3",
-            Self::DMat2 => "DMat2",
-            Self::DMat3 => "DMat3",
-            Self::DMat4 => "DMat4",
-            Self::Struct(_) => "struct",
-        }
+        Self::NAMED
+            .iter()
+            .find(|(ty, _)| *ty == self)
+            .map_or("struct", |(_, name)| name)
     }
 
     /// What a value of this type is made of, and how many: the scalar
@@ -222,21 +245,9 @@ impl Type {
     /// itself once. `None` for a struct.
     pub fn shape(self) -> Option<(Type, u8)> {
         Some(match self {
-            Self::Float | Self::Int | Self::Bool | Self::Double | Self::Long => (self, 1),
-            Self::Vec2 => (Self::Float, 2),
-            Self::Vec3 => (Self::Float, 3),
-            Self::Vec4 | Self::Mat2 => (Self::Float, 4),
-            Self::Mat3 => (Self::Float, 9),
-            Self::Mat4 => (Self::Float, 16),
-            Self::IVec2 => (Self::Int, 2),
-            Self::IVec3 => (Self::Int, 3),
-            Self::DVec2 => (Self::Double, 2),
-            Self::DVec3 => (Self::Double, 3),
-            Self::DVec4 | Self::DMat2 => (Self::Double, 4),
-            Self::DMat3 => (Self::Double, 9),
-            Self::DMat4 => (Self::Double, 16),
-            Self::LVec2 => (Self::Long, 2),
-            Self::LVec3 => (Self::Long, 3),
+            Self::Scalar(kind) => (Self::Scalar(kind), 1),
+            Self::Vector(kind, n) => (Self::Scalar(kind), n),
+            Self::Matrix(kind, n) => (Self::Scalar(kind), n * n),
             Self::Struct(_) => return None,
         })
     }
@@ -244,122 +255,124 @@ impl Type {
     /// The scalar type a value of this type is made of: itself for a
     /// scalar, the components' for a vector or a matrix.
     pub fn scalar(self) -> Option<Type> {
-        self.shape().map(|(scalar, _)| scalar)
+        self.kind().map(Self::Scalar)
+    }
+
+    /// The kind of scalar a value of this type is made of.
+    pub fn kind(self) -> Option<Scalar> {
+        match self {
+            Self::Scalar(kind) | Self::Vector(kind, _) | Self::Matrix(kind, _) => Some(kind),
+            Self::Struct(_) => None,
+        }
     }
 
     /// Whether this is a 64-bit scalar, or a vector or matrix of them.
     pub fn is_64bit(self) -> bool {
-        matches!(self.scalar(), Some(Self::Double | Self::Long))
+        matches!(self.kind(), Some(Scalar::Double | Scalar::Long))
     }
 
     /// Whether this is a float of either width, or a vector or matrix of
     /// them.
     pub fn is_float_kind(self) -> bool {
-        matches!(self.scalar(), Some(Self::Float | Self::Double))
+        matches!(self.kind(), Some(Scalar::Float | Scalar::Double))
     }
 
     /// Whether this is an integer of either width, or a vector of them.
     pub fn is_int_kind(self) -> bool {
-        matches!(self.scalar(), Some(Self::Int | Self::Long))
+        matches!(self.kind(), Some(Scalar::Int | Scalar::Long))
     }
 
     /// Words a value of this type takes: two per 64-bit scalar. `None`
     /// for a struct, whose words its table knows.
     pub fn words(self) -> Option<usize> {
-        let (scalar, n) = self.shape()?;
-        let width = if scalar.is_64bit() { 2 } else { 1 };
-        Some(usize::from(n) * width)
+        let (_, n) = self.shape()?;
+        Some(usize::from(n) * self.kind()?.words())
     }
 
     /// The type of this shape made of `scalar` instead: `Vec3` of
     /// `Double` is `DVec3`, `Double` of `Int` is `Int`. `None` when there
     /// is no such type (`Vec4` of `Int`).
     pub fn with_scalar(self, scalar: Type) -> Option<Type> {
-        if let Some(n) = self.order() {
-            return Self::matrix_of_order(scalar, n);
+        let Self::Scalar(kind) = scalar else {
+            return None;
+        };
+        match self {
+            Self::Scalar(_) => Some(scalar),
+            Self::Vector(_, n) => Self::vector(scalar, n),
+            Self::Matrix(_, n) => Self::matrix(kind, n),
+            Self::Struct(_) => None,
         }
-        let (_, n) = self.shape()?;
-        Self::vector(scalar, n)
     }
 
     /// The vector of `n` components of `scalar`, or the scalar itself
-    /// when `n` is one.
+    /// when `n` is one; `None` for one that does not exist. Floats and
+    /// doubles come in twos to fours, integers and longs in twos and
+    /// threes, and booleans alone.
     pub fn vector(scalar: Type, n: u8) -> Option<Type> {
-        Some(match (scalar, n) {
-            (Self::Float | Self::Int | Self::Bool | Self::Double | Self::Long, 1) => scalar,
-            (Self::Float, 2) => Self::Vec2,
-            (Self::Float, 3) => Self::Vec3,
-            (Self::Float, 4) => Self::Vec4,
-            (Self::Int, 2) => Self::IVec2,
-            (Self::Int, 3) => Self::IVec3,
-            (Self::Double, 2) => Self::DVec2,
-            (Self::Double, 3) => Self::DVec3,
-            (Self::Double, 4) => Self::DVec4,
-            (Self::Long, 2) => Self::LVec2,
-            (Self::Long, 3) => Self::LVec3,
-            _ => return None,
-        })
+        let Self::Scalar(kind) = scalar else {
+            return None;
+        };
+        match (kind, n) {
+            (_, 1) => Some(scalar),
+            (Scalar::Float | Scalar::Double, 2..=4) | (Scalar::Int | Scalar::Long, 2..=3) => {
+                Some(Self::Vector(kind, n))
+            }
+            _ => None,
+        }
     }
 
-    fn matrix_of_order(scalar: Type, n: u8) -> Option<Type> {
-        Some(match (scalar, n) {
-            (Self::Float, 2) => Self::Mat2,
-            (Self::Float, 3) => Self::Mat3,
-            (Self::Float, 4) => Self::Mat4,
-            (Self::Double, 2) => Self::DMat2,
-            (Self::Double, 3) => Self::DMat3,
-            (Self::Double, 4) => Self::DMat4,
-            _ => return None,
-        })
+    /// The square matrix of order `n` of a float kind, if it exists.
+    pub fn matrix(kind: Scalar, n: u8) -> Option<Type> {
+        (matches!(kind, Scalar::Float | Scalar::Double) && (2..=4).contains(&n))
+            .then_some(Self::Matrix(kind, n))
     }
 
     /// The order of a square matrix type: its columns, each a vector of
     /// as many floats or doubles.
     pub fn order(self) -> Option<u8> {
         match self {
-            Self::Mat2 | Self::DMat2 => Some(2),
-            Self::Mat3 | Self::DMat3 => Some(3),
-            Self::Mat4 | Self::DMat4 => Some(4),
+            Self::Matrix(_, n) => Some(n),
             _ => None,
         }
     }
 
     /// The column type of a matrix type.
     pub fn column(self) -> Option<Type> {
-        Self::vector(self.scalar()?, self.order()?)
-    }
-
-    /// The matrix type whose columns are this vector type.
-    pub fn matrix_of(self) -> Option<Type> {
-        let (n, scalar) = self.lanes()?;
-        Self::matrix_of_order(scalar, n)
-    }
-
-    /// Number of float components for 32-bit float vector types.
-    pub fn components(self) -> Option<u8> {
         match self {
-            Self::Vec2 => Some(2),
-            Self::Vec3 => Some(3),
-            Self::Vec4 => Some(4),
+            Self::Matrix(kind, n) => Some(Self::Vector(kind, n)),
             _ => None,
         }
     }
 
-    /// Number of integer components for 32-bit integer vector types.
+    /// The matrix type whose columns are this vector type.
+    pub fn matrix_of(self) -> Option<Type> {
+        match self {
+            Self::Vector(kind, n) => Self::matrix(kind, n),
+            _ => None,
+        }
+    }
+
+    /// Number of components of a 32-bit float vector.
+    pub fn components(self) -> Option<u8> {
+        match self {
+            Self::Vector(Scalar::Float, n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// Number of components of a 32-bit integer vector.
     pub fn int_components(self) -> Option<u8> {
         match self {
-            Self::IVec2 => Some(2),
-            Self::IVec3 => Some(3),
+            Self::Vector(Scalar::Int, n) => Some(n),
             _ => None,
         }
     }
 
     /// Number of components of a vector of any kind, and their type.
     pub fn lanes(self) -> Option<(u8, Type)> {
-        match self.shape()? {
-            (_, 1) => None,
-            _ if self.order().is_some() => None,
-            (scalar, n) => Some((n, scalar)),
+        match self {
+            Self::Vector(kind, n) => Some((n, Self::Scalar(kind))),
+            _ => None,
         }
     }
 
@@ -367,10 +380,8 @@ impl Type {
     /// and the other way round: what `float` and `int` convert between.
     pub fn other_kind(self) -> Option<Type> {
         match self {
-            Self::Vec2 => Some(Self::IVec2),
-            Self::Vec3 => Some(Self::IVec3),
-            Self::IVec2 => Some(Self::Vec2),
-            Self::IVec3 => Some(Self::Vec3),
+            Self::Vector(Scalar::Float, n) => Self::vector(Self::Int, n),
+            Self::Vector(Scalar::Int, n) => Self::vector(Self::Float, n),
             _ => None,
         }
     }
@@ -403,41 +414,14 @@ impl fmt::Display for UnknownType {
 
 impl std::error::Error for UnknownType {}
 
-impl Type {
-    /// Every type a name may spell, for a diagnostic that wants to
-    /// suggest the one that was meant.
-    pub const NAMED: [Self; 21] = [
-        Self::Float,
-        Self::Int,
-        Self::Bool,
-        Self::Vec2,
-        Self::Vec3,
-        Self::Vec4,
-        Self::IVec2,
-        Self::IVec3,
-        Self::Mat2,
-        Self::Mat3,
-        Self::Mat4,
-        Self::Double,
-        Self::Long,
-        Self::DVec2,
-        Self::DVec3,
-        Self::DVec4,
-        Self::LVec2,
-        Self::LVec3,
-        Self::DMat2,
-        Self::DMat3,
-        Self::DMat4,
-    ];
-}
-
 impl FromStr for Type {
     type Err = UnknownType;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         Self::NAMED
-            .into_iter()
-            .find(|ty| ty.name() == name)
+            .iter()
+            .find(|(_, spelled)| *spelled == name)
+            .map(|(ty, _)| *ty)
             .ok_or_else(|| UnknownType(name.to_owned()))
     }
 }

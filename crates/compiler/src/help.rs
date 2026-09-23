@@ -25,7 +25,10 @@ pub struct Builtin {
     pub entry_only: bool,
 }
 
-const PLAIN: [Type; 21] = Type::NAMED;
+/// Every type a name spells.
+fn plain() -> impl Iterator<Item = Type> + Clone {
+    Type::NAMED.iter().map(|(ty, _)| *ty)
+}
 
 /// The signatures of an intrinsic, found by asking its typing rule about
 /// every combination of the plain types.
@@ -37,9 +40,9 @@ fn intrinsic_signatures(intrinsic: Intrinsic, name: &str) -> Vec<String> {
         combos = combos
             .iter()
             .flat_map(|prefix| {
-                PLAIN.iter().map(move |ty| {
+                plain().map(move |ty| {
                     let mut next = prefix.clone();
-                    next.push(*ty);
+                    next.push(ty);
                     next
                 })
             })
@@ -101,6 +104,22 @@ pub fn builtins() -> Vec<Builtin> {
     out.extend([
         fixed("saturate", "math", &["saturate(x: Float) -> Float", "saturate(x: Vec2) -> Vec2", "saturate(x: Vec3) -> Vec3", "saturate(x: Vec4) -> Vec4"],
             "x held between 0 and 1, componentwise: clamp(x, 0.0, 1.0).", None, false),
+        fixed("dot", "math", &["dot(a: Vec2, b: Vec2) -> Float", "dot(a: Vec3, b: Vec3) -> Float", "dot(a: Vec4, b: Vec4) -> Float", "dot(a: DVec3, b: DVec3) -> Double"],
+            "The dot product of two vectors of one size: the componentwise product, summed first to last.", None, false),
+        fixed("cross", "math", &["cross(a: Vec3, b: Vec3) -> Vec3", "cross(a: DVec3, b: DVec3) -> DVec3"],
+            "The cross product of two three-component vectors.", None, false),
+        fixed("length", "math", &["length(v: Vec2) -> Float", "length(v: Vec3) -> Float", "length(v: Vec4) -> Float", "length(v: DVec3) -> Double"],
+            "The Euclidean length of a vector: sqrt(dot(v, v)).", None, false),
+        fixed("normalize", "math", &["normalize(v: Vec2) -> Vec2", "normalize(v: Vec3) -> Vec3", "normalize(v: Vec4) -> Vec4", "normalize(v: DVec3) -> DVec3"],
+            "The unit vector in v's direction; the zero vector stays zero.", None, false),
+        fixed("reflect", "math", &["reflect(incident: Vec3, normal: Vec3) -> Vec3", "reflect(incident: Vec2, normal: Vec2) -> Vec2", "reflect(incident: DVec3, normal: DVec3) -> DVec3"],
+            "incident reflected off the surface with unit normal normal: incident - 2 * dot(normal, incident) * normal.", None, false),
+        fixed("transpose", "math", &["transpose(m: Mat2) -> Mat2", "transpose(m: Mat3) -> Mat3", "transpose(m: Mat4) -> Mat4", "transpose(m: DMat4) -> DMat4"],
+            "The matrix with its rows and columns exchanged.", None, false),
+        fixed("determinant", "math", &["determinant(m: Mat2) -> Float", "determinant(m: Mat3) -> Float", "determinant(m: Mat4) -> Float", "determinant(m: DMat4) -> Double"],
+            "The determinant of a square matrix, expanded along the first row.", None, false),
+        fixed("inverse", "math", &["inverse(m: Mat2) -> Mat2", "inverse(m: Mat3) -> Mat3", "inverse(m: Mat4) -> Mat4", "inverse(m: DMat4) -> DMat4"],
+            "The matrix that multiplies m to the identity: its adjugate over its determinant; a singular m gives no finite numbers.", None, false),
         fixed("distance", "math", &["distance(a: Vec2, b: Vec2) -> Float", "distance(a: Vec3, b: Vec3) -> Float", "distance(a: Vec4, b: Vec4) -> Float"],
             "The length of a - b.", None, false),
         fixed("radians", "math", &["radians(x: Float) -> Float", "radians(x: Vec2) -> Vec2", "radians(x: Vec3) -> Vec3", "radians(x: Vec4) -> Vec4"],

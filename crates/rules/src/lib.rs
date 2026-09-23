@@ -9,7 +9,6 @@
 //! by these.
 
 pub mod backend;
-pub mod matrix;
 pub mod raster;
 pub mod reduce;
 

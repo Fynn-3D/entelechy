@@ -790,7 +790,9 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
     ))
     .unwrap();
     assert_eq!(ok.manifest.outputs[0].element(), Type::Float);
-    assert!(ok.to_string().contains("transpose("), "{ok}");
+    // A matrix builtin is its formula in the IR, which has no such
+    // operation.
+    assert!(!ok.to_string().contains("transpose("), "{ok}");
     assert!(ok.to_string().contains("subscript"), "{ok}");
 
     let (_, message) = semantic(&format!(

@@ -167,10 +167,11 @@ applies a matrix to a column vector, `v * m` to a row vector, `m * m`
 composes, `m * f` and `f * m` scale, `+` and `-` take two matrices of
 one order, `-m` negates and `==` compares whole matrices; `transpose`,
 `determinant` and `inverse` are the builtins (a singular matrix's
-inverse holds no finite numbers). The GPU runs them as WGSL's own
-matrices; the interpreter and the JIT compute one formula in one order,
-so their words agree bit for bit, and the inverse on the GPU is that
-formula printed as a shader function.
+inverse holds no finite numbers). The products and these builtins, like
+`dot`, `cross`, `length`, `normalize` and `reflect`, are written into
+the compiled Kernel as the arithmetic they are, one formula in one
+order, so every backend computes the same one and the interpreter and
+the JIT agree on its words bit for bit.
 
 Integer vectors `IVec2` and `IVec3` are cells and offsets: `ivec2(x,
 y)` from `Int`s, `icoord()` this element's cell, `isize(f)` a Field's

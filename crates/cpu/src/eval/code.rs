@@ -1,7 +1,7 @@
 //! The word code: what a function compiles to. Offsets are relative
 //! to the running frame; a value is a run of words there.
 
-use orla_ir::{BinaryOp, Intrinsic};
+use orla_ir::BinaryOp;
 
 use crate::ArithmeticError;
 
@@ -64,24 +64,6 @@ impl Lane {
     }
 }
 
-/// The vector operations on doubles that are not componentwise.
-#[derive(Clone, Copy)]
-pub(super) enum DVector {
-    Dot,
-    Cross,
-    Length,
-    Normalize,
-    Reflect,
-}
-
-/// The shapes a `*` on matrices takes.
-#[derive(Clone, Copy)]
-pub(super) enum MatMul {
-    MatMat,
-    MatVec,
-    VecMat,
-}
-
 /// One compiled instruction. Offsets are relative to the running frame;
 /// `n` is a width in words; `sa`, `sb`, `sc` are operand strides, zero
 /// for a scalar broadcast beside a vector.
@@ -118,25 +100,6 @@ pub(super) enum Instr {
         index: usize,
         count: usize,
         n: usize,
-    },
-    /// A matrix product of order `n`: `a * b`, the shapes by `kind`,
-    /// of doubles when `wide`.
-    MatMul {
-        kind: MatMul,
-        dst: usize,
-        a: usize,
-        b: usize,
-        n: usize,
-        wide: bool,
-    },
-    /// `transpose`, `determinant` or `inverse` of the order `n` matrix at
-    /// `src`, of doubles when `wide`.
-    Matrix {
-        op: Intrinsic,
-        dst: usize,
-        src: usize,
-        n: usize,
-        wide: bool,
     },
     /// The 64-bit operations: `n` lanes of two words each, the low word
     /// first; strides count lanes, zero for a scalar broadcast.
@@ -178,13 +141,6 @@ pub(super) enum Instr {
         b: usize,
         n: usize,
         negate: bool,
-    },
-    DVector {
-        op: DVector,
-        dst: usize,
-        a: usize,
-        b: usize,
-        n: usize,
     },
     /// Arithmetic, bit operations and shifts on longs; the arithmetic
     /// fails on overflow as an `Int`'s does, and a shift takes its count
@@ -397,33 +353,6 @@ pub(super) enum Instr {
     ToInt {
         dst: usize,
         src: usize,
-        n: usize,
-    },
-    Dot {
-        dst: usize,
-        a: usize,
-        b: usize,
-        n: usize,
-    },
-    Cross {
-        dst: usize,
-        a: usize,
-        b: usize,
-    },
-    Length {
-        dst: usize,
-        a: usize,
-        n: usize,
-    },
-    Normalize {
-        dst: usize,
-        a: usize,
-        n: usize,
-    },
-    Reflect {
-        dst: usize,
-        incident: usize,
-        normal: usize,
         n: usize,
     },
     Atan2 {

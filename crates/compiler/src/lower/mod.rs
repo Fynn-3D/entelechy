@@ -13,8 +13,10 @@ use orla_language::{Block, Expr, ExprKind, FnDecl, Kernel, Span, Spanned};
 use crate::CompileError;
 
 mod builtins;
+mod composite;
 mod declare;
 mod expr;
+mod matrix;
 
 use declare::{RESERVED_BUILTINS, aliases, manifest, port_type, structs};
 pub(crate) use declare::{literal, literal_exact, literal_in};
@@ -28,7 +30,7 @@ fn semantic(span: Span, message: impl Into<String>) -> CompileError {
 
 fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
     Type::from_str(&name.value).map_err(|error| {
-        let known: Vec<&str> = Type::NAMED.iter().map(|ty| ty.name()).collect();
+        let known: Vec<&str> = Type::NAMED.iter().map(|(_, name)| *name).collect();
         semantic(
             name.span,
             format!("{error}{}", orla_language::did_you_mean(&name.value, known)),
@@ -659,7 +661,7 @@ impl<'a> Builder<'a> {
         let Some(want) = blocks
             .iter()
             .map(|block| self.ty(block.result))
-            .find(|ty| matches!(ty, Type::Double | Type::Long))
+            .find(|ty| matches!(*ty, Type::Double | Type::Long))
         else {
             return;
         };

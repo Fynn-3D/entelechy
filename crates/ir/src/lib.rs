@@ -205,6 +205,7 @@ pub fn template(ty: Type, structs: &[StructDef]) -> Value {
                 .map(|field| template(field.ty, structs))
                 .collect(),
         ),
+        other => unreachable!("{other:?} is no type a source can write"),
     }
 }
 
@@ -406,8 +407,9 @@ impl BinaryOp {
     /// `Double`, nor an `Int` a `Long`, without a conversion. Arithmetic:
     /// vectors combine componentwise with vectors of the same size or with
     /// a scalar of their kind on either side. Matrices add and subtract
-    /// with matrices of their order, scale by a scalar, and multiply as
-    /// matrices: `Mat * Mat`, `Mat * Vec` (a column), `Vec * Mat` (a row).
+    /// with matrices of their order and scale by a scalar; their products
+    /// are not an operation of the IR but the formulas the compiler writes
+    /// for them.
     /// Comparisons take two scalars of one type and give `Bool`; equality
     /// also compares `Bool`s, whole vectors and whole matrices. `&&` and
     /// `||` take `Bool`s. The bit operators and shifts take integers of
@@ -430,13 +432,14 @@ impl BinaryOp {
             }
         };
         match self {
+            // A matrix adds and subtracts with its own type and scales by
+            // a scalar; a product of matrices is a formula the compiler
+            // writes out.
             Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem
                 if a.order().is_some() || b.order().is_some() =>
             {
                 match self {
-                    Self::Add | Self::Sub | Self::Mul if a == b => Some(a),
-                    Self::Mul if a.column() == Some(b) => Some(b),
-                    Self::Mul if b.column() == Some(a) => Some(a),
+                    Self::Add | Self::Sub if a == b => Some(a),
                     Self::Mul if a == kind => Some(b),
                     Self::Mul if b == kind => Some(a),
                     _ => None,
@@ -564,14 +567,6 @@ pub enum Intrinsic {
     /// Convert any number (a float truncating toward zero), or a `Bool`
     /// as 0 or 1, to `Long`.
     ToLong,
-    /// Dot product of two vectors of the same size.
-    Dot,
-    /// Cross product of two `Vec3`.
-    Cross,
-    /// Euclidean length of a vector.
-    Length,
-    /// Unit vector in the same direction; the zero vector stays zero.
-    Normalize,
     /// `pow(base, exponent)` componentwise; a `Float` exponent broadcasts.
     Pow,
     /// `e^x` componentwise.
@@ -581,8 +576,6 @@ pub enum Intrinsic {
     Step,
     /// `smoothstep(low, high, x)` componentwise; `Float` edges broadcast.
     Smoothstep,
-    /// `reflect(incident, normal)` for vectors of the same size.
-    Reflect,
     /// `atan2(y, x)` on floats.
     Atan2,
     /// The integer part, toward zero, componentwise.
@@ -619,17 +612,11 @@ pub enum Intrinsic {
     Mulhi,
     /// `umulhi(a, b)`: the high 32 bits of the unsigned 64-bit product.
     Umulhi,
-    /// The matrix with rows and columns exchanged.
-    Transpose,
-    /// The determinant of a matrix, a `Float`.
-    Determinant,
-    /// The inverse of a matrix; a singular matrix gives no finite numbers.
-    Inverse,
 }
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 55] = [
+    pub const ALL: [(Intrinsic, &'static str); 47] = [
         (Intrinsic::Floor, "floor"),
         (Intrinsic::Ceil, "ceil"),
         (Intrinsic::Round, "round"),
@@ -655,15 +642,10 @@ impl Intrinsic {
         (Intrinsic::ToInt, "int"),
         (Intrinsic::ToDouble, "double"),
         (Intrinsic::ToLong, "long"),
-        (Intrinsic::Dot, "dot"),
-        (Intrinsic::Cross, "cross"),
-        (Intrinsic::Length, "length"),
-        (Intrinsic::Normalize, "normalize"),
         (Intrinsic::Pow, "pow"),
         (Intrinsic::Exp, "exp"),
         (Intrinsic::Step, "step"),
         (Intrinsic::Smoothstep, "smoothstep"),
-        (Intrinsic::Reflect, "reflect"),
         (Intrinsic::Atan2, "atan2"),
         (Intrinsic::Trunc, "trunc"),
         (Intrinsic::Exp2, "exp2"),
@@ -682,9 +664,6 @@ impl Intrinsic {
         (Intrinsic::Urem, "urem"),
         (Intrinsic::Mulhi, "mulhi"),
         (Intrinsic::Umulhi, "umulhi"),
-        (Intrinsic::Transpose, "transpose"),
-        (Intrinsic::Determinant, "determinant"),
-        (Intrinsic::Inverse, "inverse"),
     ];
 
     /// Source spelling.
@@ -736,18 +715,11 @@ impl Intrinsic {
             Self::ToLong => {
                 "A float truncated toward zero, an Int, or a Bool as 0 or 1, as a Long; a vector componentwise."
             }
-            Self::Dot => "The dot product of two vectors of one size.",
-            Self::Cross => "The cross product of two Vec3.",
-            Self::Length => "The Euclidean length of a vector.",
-            Self::Normalize => "The unit vector in v's direction; the zero vector stays zero.",
             Self::Pow => "base raised to exponent, componentwise; a Float exponent broadcasts.",
             Self::Exp => "e raised to x, componentwise.",
             Self::Step => "1 where x >= edge, else 0, componentwise; a Float edge broadcasts.",
             Self::Smoothstep => {
                 "0 below low, 1 above high, a smooth curve between, componentwise; Float edges broadcast."
-            }
-            Self::Reflect => {
-                "incident reflected off the surface with unit normal normal: incident - 2 * dot(normal, incident) * normal."
             }
             Self::Atan2 => "The angle of the point (x, y) from the x axis, in -pi..pi.",
             Self::Trunc => "The integer part of x, toward zero, componentwise.",
@@ -771,36 +743,22 @@ impl Intrinsic {
             }
             Self::Mulhi => "The high 32 bits of the signed 64-bit product of a and b.",
             Self::Umulhi => "The high 32 bits of the unsigned 64-bit product of a and b.",
-            Self::Transpose => "The matrix with its rows and columns exchanged.",
-            Self::Determinant => "The determinant of a square matrix.",
-            Self::Inverse => {
-                "The matrix that multiplies m to the identity; a singular m gives no finite numbers."
-            }
         }
     }
 
     /// The names of the arguments, for `help`.
     pub fn argument_names(self) -> &'static [&'static str] {
         match self {
-            Self::Min
-            | Self::Max
-            | Self::AddWrap
-            | Self::SubWrap
-            | Self::MulWrap
-            | Self::Dot
-            | Self::Cross => &["a", "b"],
+            Self::Min | Self::Max | Self::AddWrap | Self::SubWrap | Self::MulWrap => &["a", "b"],
             Self::Clamp => &["x", "low", "high"],
             Self::Mix => &["a", "b", "t"],
             Self::Pow => &["base", "exponent"],
             Self::Step => &["edge", "x"],
             Self::Smoothstep => &["low", "high", "x"],
-            Self::Reflect => &["incident", "normal"],
             Self::Atan2 => &["y", "x"],
             Self::Fma => &["a", "b", "c"],
             Self::Rotl | Self::Rotr => &["x", "n"],
             Self::Ult | Self::Udiv | Self::Urem | Self::Mulhi | Self::Umulhi => &["a", "b"],
-            Self::Length | Self::Normalize => &["v"],
-            Self::Transpose | Self::Determinant | Self::Inverse => &["m"],
             _ => &["x"],
         }
     }
@@ -863,7 +821,7 @@ impl Intrinsic {
                 Some(*a)
             }
             (Self::AddWrap | Self::SubWrap | Self::MulWrap, [a, b])
-                if a == b && matches!(a, Type::Int | Type::Long) =>
+                if a == b && matches!(*a, Type::Int | Type::Long) =>
             {
                 Some(*a)
             }
@@ -882,11 +840,6 @@ impl Intrinsic {
             (Self::ToInt, _) => convert(Type::Int),
             (Self::ToDouble, _) => convert(Type::Double),
             (Self::ToLong, _) => convert(Type::Long),
-            (Self::Dot, [a, b]) if a == b && vector(*a) && float_like(*a) => Some(scalar(*a)),
-            (Self::Cross, [a, b]) if a == b && matches!(a, Type::Vec3 | Type::DVec3) => Some(*a),
-            (Self::Length, [a]) if vector(*a) && float_like(*a) => Some(scalar(*a)),
-            (Self::Normalize, [a]) if vector(*a) && float_like(*a) => Some(*a),
-            (Self::Reflect, [a, b]) if a == b && vector(*a) && float_like(*a) => Some(*a),
             (Self::Pow, [a, b]) if (a == b || *b == scalar(*a)) && float_like(*a) => Some(*a),
             (Self::Step, [a, b]) if (a == b || *a == scalar(*b)) && float_like(*b) => Some(*b),
             (Self::Smoothstep, [a, b, c])
@@ -894,7 +847,7 @@ impl Intrinsic {
             {
                 Some(*c)
             }
-            (Self::Atan2, [a, b]) if a == b && matches!(a, Type::Float | Type::Double) => Some(*a),
+            (Self::Atan2, [a, b]) if a == b && matches!(*a, Type::Float | Type::Double) => Some(*a),
             (Self::Fma, [a, b, c]) if a == b && b == c && float_like(*a) => Some(*a),
             (Self::Popcount | Self::Clz | Self::Ctz, [Type::Int]) => Some(Type::Int),
             (
@@ -902,8 +855,6 @@ impl Intrinsic {
                 [Type::Int, Type::Int],
             ) => Some(Type::Int),
             (Self::Ult, [Type::Int, Type::Int]) => Some(Type::Bool),
-            (Self::Transpose | Self::Inverse, [m]) if m.order().is_some() => Some(*m),
-            (Self::Determinant, [m]) if m.order().is_some() => Some(scalar(*m)),
             _ => None,
         }
     }

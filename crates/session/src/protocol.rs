@@ -438,25 +438,6 @@ pub fn type_name(module: &Validated, ty: Type) -> String {
 /// structs as objects by field name.
 pub fn words_json(module: &Validated, ty: Type, words: &[u32]) -> Json {
     match ty {
-        Type::Float => json!(f32::from_bits(words[0])),
-        Type::Int => json!(words[0] as i32),
-        Type::Bool => json!(words[0] != 0),
-        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
-            json!(words.iter().map(|w| f32::from_bits(*w)).collect::<Vec<_>>())
-        }
-        Type::IVec2 | Type::IVec3 => json!(words.iter().map(|w| *w as i32).collect::<Vec<_>>()),
-        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
-            let n = usize::from(ty.order().unwrap_or(0));
-            json!(
-                words
-                    .chunks(n)
-                    .map(|column| column
-                        .iter()
-                        .map(|w| f32::from_bits(*w))
-                        .collect::<Vec<_>>())
-                    .collect::<Vec<_>>()
-            )
-        }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
             let mut cursor = 0;

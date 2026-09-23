@@ -117,55 +117,22 @@ fn struct_decl(module: &Module, index: usize) -> String {
 
 fn wgsl_type(ty: Type) -> String {
     match ty {
-        Type::Float => "f32".into(),
-        Type::Int => "i32".into(),
-        Type::Bool => "bool".into(),
-        Type::Vec2 => "vec2<f32>".into(),
-        Type::Vec3 => "vec3<f32>".into(),
-        Type::Vec4 => "vec4<f32>".into(),
-        Type::IVec2 => "vec2<i32>".into(),
-        Type::IVec3 => "vec3<i32>".into(),
-        Type::Mat2 => "mat2x2<f32>".into(),
-        Type::Mat3 => "mat3x3<f32>".into(),
-        Type::Mat4 => "mat4x4<f32>".into(),
-        Type::Long => "i64".into(),
-        Type::LVec2 => "vec2<i64>".into(),
-        Type::LVec3 => "vec3<i64>".into(),
+        Type::Scalar(kind) => scalar_type(kind).into(),
+        Type::Vector(kind, n) => format!("vec{n}<{}>", scalar_type(kind)),
+        Type::Matrix(kind, n) => format!("mat{n}x{n}<{}>", scalar_type(kind)),
         Type::Struct(index) => format!("S{index}"),
-        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
-/// Whether any function of the module takes the inverse of a matrix of
-/// the given type.
-fn inverts(module: &Module, ty: Type) -> bool {
-    fn walk(instructions: &[Instruction], ty: Type) -> bool {
-        instructions
-            .iter()
-            .any(|instruction| match &instruction.op {
-                Op::Intrinsic(Intrinsic::Inverse, _) => instruction.ty == ty,
-                Op::If {
-                    then, otherwise, ..
-                } => walk(&then.body, ty) || walk(&otherwise.body, ty),
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    arms.iter().any(|(_, block)| walk(&block.body, ty)) || walk(&otherwise.body, ty)
-                }
-                Op::Loop { until, body, .. } => {
-                    until.as_ref().is_some_and(|block| walk(&block.body, ty))
-                        || walk(&body.body, ty)
-                }
-                _ => false,
-            })
+/// The WGSL scalar a kind is; a `Double` never reaches a shader.
+fn scalar_type(kind: Scalar) -> &'static str {
+    match kind {
+        Scalar::Float => "f32",
+        Scalar::Int => "i32",
+        Scalar::Bool => "bool",
+        Scalar::Long => "i64",
+        Scalar::Double => unreachable!("the GPU refuses a module holding a Double"),
     }
-    module
-        .functions
-        .iter()
-        .chain([&module.entry])
-        .chain(module.merge.iter())
-        .chain(module.init.iter())
-        .any(|function| walk(&function.body, ty))
 }
 
 /// `f(m[0]), f(m[1]), ...` over a matrix's columns, for the builtins
@@ -497,18 +464,6 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
             ),
         };
     }
-    for ty in [Type::Vec2, Type::Vec3, Type::Vec4] {
-        let name = wgsl_type(ty);
-        let _ = writeln!(
-            out,
-            "fn safe_normalize_{}(v: {name}) -> {name} {{
-    let l = length(v);
-    if (l > 0.0) {{ return v / l; }}
-    return {name}(0.0);
-}}",
-            ty.components().unwrap_or(0)
-        );
-    }
     // The truncated remainder exactly: WGSL's `%` rounds the quotient
     // before truncating it, so 7.5 % 0.3 comes out 0 where the CPU has
     // 0.3 - epsilon; the fused multiply-add keeps the remainder exact
@@ -524,28 +479,6 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     return select(r, r + sign(x) * abs(y), wrong);
 }}",
             ty.components().unwrap_or(1)
-        );
-    }
-    // The inverse of a matrix, which WGSL lacks: the adjugate over the
-    // determinant, in the order the interpreter and the JIT compute it.
-    // Only for the orders the Kernel inverts: the unrolled 4x4 costs the
-    // shader compiler a quarter of a second.
-    for ty in [Type::Mat2, Type::Mat3, Type::Mat4] {
-        if !inverts(module, ty) {
-            continue;
-        }
-        let name = wgsl_type(ty);
-        let n = usize::from(ty.order().unwrap_or(0));
-        let entries: Vec<String> = (0..n * n)
-            .map(|k| format!("m[{}][{}]", k / n, k % n))
-            .collect();
-        let inverse = orla_rules::matrix::inverse(&mut orla_rules::matrix::Text, n, &entries);
-        let _ = writeln!(
-            out,
-            "fn inverse_{n}(m: {name}) -> {name} {{
-    return {name}({});
-}}",
-            inverse.join(", ")
         );
     }
     // Integer division and remainder through a dividend the compiler
@@ -718,15 +651,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 /// Words a value of a type takes in a buffer.
 pub fn type_words(module: &Module, ty: Type) -> usize {
     match ty {
-        Type::Float | Type::Int | Type::Bool => 1,
-        Type::Vec2 => 2,
-        Type::Vec3 => 3,
-        Type::Vec4 => 4,
-        Type::IVec2 => 2,
-        Type::IVec3 => 3,
-        Type::Mat2 => 4,
-        Type::Mat3 => 9,
-        Type::Mat4 => 16,
         Type::Struct(index) => module.structs[index as usize]
             .fields
             .iter()
@@ -832,29 +756,19 @@ pub fn scatter_plan(module: &Module) -> ScatterPlan {
 /// order, each with its scalar type.
 fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Type)>) {
     match ty {
-        Type::Float | Type::Int => out.push((format!("bitcast<u32>({path})"), ty)),
-        Type::Bool => out.push((format!("select(0u, 1u, {path})"), Type::Bool)),
-        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::IVec2 | Type::IVec3 => {
-            let (n, lane) = ty.lanes().unwrap_or((4, Type::Float));
-            for component in ["x", "y", "z", "w"].iter().take(n as usize) {
-                out.push((format!("bitcast<u32>({path}.{component})"), lane));
-            }
-        }
-        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
-            let n = usize::from(ty.order().unwrap_or(0));
-            for c in 0..n {
-                for r in 0..n {
-                    out.push((format!("bitcast<u32>({path}[{c}][{r}])"), Type::Float));
-                }
-            }
-        }
         Type::Struct(index) => {
             for (k, field) in module.structs[index as usize].fields.iter().enumerate() {
                 let path = format!("{path}{}", field_path(module, index, k));
                 value_words(module, field.ty, &path, out);
             }
         }
-        other => unreachable!("the GPU refuses a module holding {other}"),
+        other => {
+            for (expr, kind) in scalar_parts(other, path) {
+                for word in stored_words(kind, &expr) {
+                    out.push((word, Type::Scalar(kind)));
+                }
+            }
+        }
     }
 }
 
@@ -1935,28 +1849,6 @@ fn scalar_encode(encoding: Encoding, kind: Scalar, value: &str) -> String {
 /// expression for each and its kind.
 fn scalar_paths(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Scalar)>) {
     match ty {
-        Type::Float => out.push((path.to_owned(), Scalar::Float)),
-        Type::Int => out.push((path.to_owned(), Scalar::Int)),
-        Type::Bool => out.push((path.to_owned(), Scalar::Bool)),
-        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::IVec2 | Type::IVec3 => {
-            let (n, lane) = ty.lanes().unwrap_or((4, Type::Float));
-            let kind = if lane == Type::Int {
-                Scalar::Int
-            } else {
-                Scalar::Float
-            };
-            for component in ["x", "y", "z", "w"].iter().take(n as usize) {
-                out.push((format!("{path}.{component}"), kind));
-            }
-        }
-        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
-            let n = usize::from(ty.order().unwrap_or(0));
-            for c in 0..n {
-                for r in 0..n {
-                    out.push((format!("{path}[{c}][{r}]"), Scalar::Float));
-                }
-            }
-        }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
             for (k, field) in def.fields.iter().enumerate() {
@@ -1968,7 +1860,35 @@ fn scalar_paths(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Sc
                 );
             }
         }
-        other => unreachable!("the GPU refuses a module holding {other}"),
+        other => out.extend(scalar_parts(other, path)),
+    }
+}
+
+/// The scalars of a value that is not a struct, at `path`, in layout
+/// order: itself, a vector's components, a matrix's entries column by
+/// column; each an expression and its kind.
+fn scalar_parts(ty: Type, path: &str) -> Vec<(String, Scalar)> {
+    const LETTERS: [&str; 4] = ["x", "y", "z", "w"];
+    match ty {
+        Type::Scalar(kind) => vec![(path.to_owned(), kind)],
+        Type::Vector(kind, n) => LETTERS
+            .iter()
+            .take(usize::from(n))
+            .map(|letter| (format!("{path}.{letter}"), kind))
+            .collect(),
+        Type::Matrix(kind, n) => (0..n)
+            .flat_map(|c| (0..n).map(move |r| (format!("{path}[{c}][{r}]"), kind)))
+            .collect(),
+        Type::Struct(_) => unreachable!("a struct's scalars are its fields'"),
+    }
+}
+
+/// The words a scalar is stored as: a whole word, or two for a long.
+fn stored_words(kind: Scalar, expr: &str) -> Vec<String> {
+    match kind {
+        Scalar::Bool => vec![format!("select(0u, 1u, {expr})")],
+        Scalar::Long => vec![format!("long_low({expr})"), format!("long_high({expr})")],
+        _ => vec![format!("bitcast<u32>({expr})")],
     }
 }
 
@@ -2034,43 +1954,24 @@ fn compose(
     offset: usize,
     scalar: &dyn Fn(Scalar, usize) -> String,
 ) -> (String, usize) {
+    // Each scalar from its words, `offset` in: one, or two for a long.
+    let parts = |kind: Scalar, count: usize| -> (String, usize) {
+        let width = kind.words();
+        let parts = (0..count)
+            .map(|k| scalar(kind, offset + k * width))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (parts, count * width)
+    };
     match ty {
-        Type::Float => (scalar(Scalar::Float, offset), 1),
-        Type::Int => (scalar(Scalar::Int, offset), 1),
-        Type::Bool => (scalar(Scalar::Bool, offset), 1),
-        Type::Vec2 | Type::Vec3 | Type::Vec4 => {
-            let n = ty.components().unwrap_or(4) as usize;
-            let parts = (0..n)
-                .map(|k| scalar(Scalar::Float, offset + k))
-                .collect::<Vec<_>>()
-                .join(", ");
-            (format!("{}({parts})", wgsl_type(ty)), n)
+        Type::Scalar(kind) => (scalar(kind, offset), kind.words()),
+        Type::Vector(kind, n) => {
+            let (list, used) = parts(kind, usize::from(n));
+            (format!("{}({list})", wgsl_type(ty)), used)
         }
-        Type::IVec2 | Type::IVec3 => {
-            let n = ty.int_components().unwrap_or(2) as usize;
-            let parts = (0..n)
-                .map(|k| scalar(Scalar::Int, offset + k))
-                .collect::<Vec<_>>()
-                .join(", ");
-            (format!("{}({parts})", wgsl_type(ty)), n)
-        }
-        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
-            let n = usize::from(ty.order().unwrap_or(0));
-            let parts = (0..n * n)
-                .map(|k| scalar(Scalar::Float, offset + k))
-                .collect::<Vec<_>>()
-                .join(", ");
-            (format!("{}({parts})", wgsl_type(ty)), n * n)
-        }
-        // A long is two words, the low one first.
-        Type::Long => (scalar(Scalar::Long, offset), 2),
-        Type::LVec2 | Type::LVec3 => {
-            let n = ty.lanes().map_or(2, |(n, _)| usize::from(n));
-            let parts = (0..n)
-                .map(|k| scalar(Scalar::Long, offset + 2 * k))
-                .collect::<Vec<_>>()
-                .join(", ");
-            (format!("{}({parts})", wgsl_type(ty)), 2 * n)
+        Type::Matrix(kind, n) => {
+            let (list, used) = parts(kind, usize::from(n) * usize::from(n));
+            (format!("{}({list})", wgsl_type(ty)), used)
         }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
@@ -2083,7 +1984,6 @@ fn compose(
             }
             (format!("S{index}({})", parts.join(", ")), used)
         }
-        other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
@@ -2109,62 +2009,6 @@ fn store_lines(
     out: &mut Vec<String>,
 ) -> usize {
     match ty {
-        Type::Float => {
-            out.push(format!("    out0[b + {offset}u] = bitcast<u32>({path});"));
-            1
-        }
-        Type::Int => {
-            out.push(format!("    out0[b + {offset}u] = bitcast<u32>({path});"));
-            1
-        }
-        Type::Bool => {
-            out.push(format!("    out0[b + {offset}u] = select(0u, 1u, {path});"));
-            1
-        }
-        Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::IVec2 | Type::IVec3 => {
-            let n = ty.lanes().map_or(4, |(n, _)| n as usize);
-            for (k, component) in ["x", "y", "z", "w"].iter().take(n).enumerate() {
-                out.push(format!(
-                    "    out0[b + {}u] = bitcast<u32>({path}.{component});",
-                    offset + k
-                ));
-            }
-            n
-        }
-        Type::Mat2 | Type::Mat3 | Type::Mat4 => {
-            let n = usize::from(ty.order().unwrap_or(0));
-            for c in 0..n {
-                for r in 0..n {
-                    out.push(format!(
-                        "    out0[b + {}u] = bitcast<u32>({path}[{c}][{r}]);",
-                        offset + c * n + r
-                    ));
-                }
-            }
-            n * n
-        }
-        Type::Long => {
-            out.push(format!("    out0[b + {offset}u] = long_low({path});"));
-            out.push(format!(
-                "    out0[b + {}u] = long_high({path});",
-                offset + 1
-            ));
-            2
-        }
-        Type::LVec2 | Type::LVec3 => {
-            let n = ty.lanes().map_or(2, |(n, _)| usize::from(n));
-            for (k, component) in ["x", "y", "z"].iter().take(n).enumerate() {
-                let at = offset + 2 * k;
-                out.push(format!(
-                    "    out0[b + {at}u] = long_low({path}.{component});"
-                ));
-                out.push(format!(
-                    "    out0[b + {}u] = long_high({path}.{component});",
-                    at + 1
-                ));
-            }
-            2 * n
-        }
         Type::Struct(index) => {
             let def = &module.structs[index as usize];
             let mut used = 0;
@@ -2179,7 +2023,16 @@ fn store_lines(
             }
             used
         }
-        other => unreachable!("the GPU refuses a module holding {other}"),
+        other => {
+            let mut used = 0;
+            for (expr, kind) in scalar_parts(other, path) {
+                for word in stored_words(kind, &expr) {
+                    out.push(format!("    out0[b + {}u] = {word};", offset + used));
+                    used += 1;
+                }
+            }
+            used
+        }
     }
 }
 
@@ -2255,6 +2108,24 @@ pub(crate) fn result_type(function: &Function) -> Type {
         None
     }
     find(&function.body, function.results[0]).unwrap_or(Type::Float)
+}
+
+/// Whether a block is short plain arithmetic, which costs less computed
+/// than branched around: no loop, branch, call or write.
+fn speculable(block: &Block) -> bool {
+    block.body.len() <= 16
+        && block.body.iter().all(|instruction| {
+            !matches!(
+                instruction.op,
+                Op::Loop { .. } | Op::If { .. } | Op::Match { .. } | Op::Put(..) | Op::Call(..)
+            )
+        })
+}
+
+/// Whether WGSL's `select` chooses between two values of a type: a
+/// scalar or a vector, and never a 64-bit one.
+fn selectable(ty: Type) -> bool {
+    matches!(ty, Type::Scalar(_) | Type::Vector(..)) && !ty.is_64bit()
 }
 
 struct Emitter<'a> {
@@ -2527,6 +2398,20 @@ impl Emitter<'_> {
                 self.line(depth, &format!("let v{}: {ty_name} = {};", id.0, v(value)));
                 return;
             }
+            // Two short arms of plain arithmetic are both computed and
+            // one is chosen: a branch costs a device more than the few
+            // operations it would skip, and nothing a device computes
+            // fails. A long is never chosen by `select`, which Metal
+            // cannot pick for one.
+            Op::If {
+                condition,
+                then,
+                otherwise,
+            } if speculable(then) && speculable(otherwise) && selectable(*ty) => {
+                let chosen = self.block(then, depth);
+                let other = self.block(otherwise, depth);
+                format!("select({other}, {chosen}, {})", v(condition))
+            }
             Op::If {
                 condition,
                 then,
@@ -2747,9 +2632,6 @@ impl Emitter<'_> {
                 (_, Type::IVec3) => format!("to_int3({list})"),
                 _ => format!("to_int({list})"),
             },
-            Intrinsic::Normalize => {
-                format!("safe_normalize_{}({list})", ty.components().unwrap_or(0))
-            }
             Intrinsic::Pow => format!("pow({}, {})", v(&args[0]), splat(&args[1], ty)),
             // The angle at the origin, which a device's own does not
             // give; see `atan2_ref` in the preamble.
@@ -2773,7 +2655,6 @@ impl Emitter<'_> {
             Intrinsic::Rotl => format!("rotl_i32({list})"),
             Intrinsic::Rotr => format!("rotr_i32({list})"),
             Intrinsic::Ult => format!("(u32({}) < u32({}))", v(&args[0]), v(&args[1])),
-            Intrinsic::Inverse => format!("inverse_{}({list})", ty.order().unwrap_or(0)),
             Intrinsic::Udiv => format!("i32(udiv_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
             Intrinsic::Urem => format!("i32(urem_u32(u32({}), u32({})))", v(&args[0]), v(&args[1])),
             Intrinsic::Mulhi => format!("mulhi_i32({list})"),

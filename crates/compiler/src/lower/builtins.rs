@@ -13,6 +13,19 @@ use crate::CompileError;
 
 use super::{Builder, result_type, semantic};
 
+/// The builtins that are formulas over the arithmetic, written into the
+/// IR as it; see [`composite`](super::composite).
+pub(super) const FORMULAS: [&str; 8] = [
+    "dot",
+    "cross",
+    "length",
+    "normalize",
+    "reflect",
+    "transpose",
+    "determinant",
+    "inverse",
+];
+
 impl Builder<'_> {
     /// The builtins that are spellings of other operations: lowered to
     /// those operations, so every backend has them by construction.
@@ -51,7 +64,7 @@ impl Builder<'_> {
             }
             ("distance", [a, b]) if a == b && vector(*a) => {
                 let difference = self.emit(*a, Op::Binary(BinaryOp::Sub, ids[0], ids[1]));
-                Ok(self.emit(kind, Op::Intrinsic(Intrinsic::Length, vec![difference])))
+                Ok(self.length(difference))
             }
             ("radians", [a]) if float_like(*a) => {
                 let scale = self.number(kind, std::f64::consts::PI / 180.0);
@@ -80,7 +93,7 @@ impl Builder<'_> {
             }
             ("isinf", [a @ (Type::Float | Type::Double)]) => {
                 let magnitude = self.emit(*a, Op::Intrinsic(Intrinsic::Abs, vec![ids[0]]));
-                let largest = match a {
+                let largest = match *a {
                     Type::Double => self.number(kind, f64::MAX),
                     _ => self.constant(f32::MAX),
                 };
@@ -93,10 +106,7 @@ impl Builder<'_> {
                 // k = 1 - eta^2 (1 - dot(n, i)^2); below zero, the zero
                 // vector; else eta i - (eta dot(n, i) + sqrt(k)) n.
                 let (incident, normal, eta) = (ids[0], ids[1], ids[2]);
-                let d = self.emit(
-                    Type::Float,
-                    Op::Intrinsic(Intrinsic::Dot, vec![normal, incident]),
-                );
+                let d = self.dot(normal, incident);
                 let one = self.constant(1.0);
                 let dd = self.emit(Type::Float, Op::Binary(BinaryOp::Mul, d, d));
                 let rest = self.emit(Type::Float, Op::Binary(BinaryOp::Sub, one, dd));
@@ -617,6 +627,21 @@ impl Builder<'_> {
                         | "refract"
                 ) {
                     return self.composed(name, args, span);
+                }
+                if FORMULAS.contains(&name) {
+                    let mut ids = args
+                        .iter()
+                        .map(|arg| self.value(arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    self.adapt_all(&mut ids);
+                    return self.formula(name, &ids).ok_or_else(|| {
+                        let list = ids
+                            .iter()
+                            .map(|id| self.ty(*id).to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        semantic(span, format!("`{name}` cannot be applied to ({list})"))
+                    });
                 }
                 if let Some(intrinsic) = Intrinsic::from_name(name) {
                     let mut ids = args

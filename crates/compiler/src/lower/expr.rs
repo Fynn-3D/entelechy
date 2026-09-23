@@ -113,6 +113,12 @@ impl Builder<'_> {
                 let mut pair = [left, right];
                 self.adapt_all(&mut pair);
                 let [left, right] = pair;
+                // A product of matrices is its formula.
+                if op == BinaryOp::Mul
+                    && let Some(product) = self.matrix_product(left, right)
+                {
+                    return Ok(product);
+                }
                 let (a, b) = (self.ty(left), self.ty(right));
                 let ty = op.result_type(a, b).ok_or_else(|| {
                     // Two widths of one kind meet through a conversion.

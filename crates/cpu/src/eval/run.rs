@@ -2,8 +2,7 @@
 //! memories' working copies, and what a trace records.
 
 use orla_abi::Domain;
-use orla_ir::{BinaryOp, Intrinsic};
-use orla_rules::matrix::{self, Doubles, Floats};
+use orla_ir::BinaryOp;
 
 use crate::{ArithmeticError, ExecutionError};
 
@@ -295,59 +294,6 @@ impl<'p, 's> Machine<'p, 's> {
                 let k = (s[fp + index] as i32).clamp(0, *count as i32 - 1) as usize;
                 s.copy_within(fp + base + k * n..fp + base + (k + 1) * n, fp + dst);
             }
-            Instr::MatMul {
-                kind,
-                dst,
-                a,
-                b,
-                n,
-                wide: true,
-            } => {
-                let doubles = |at: usize, count: usize| -> Vec<f64> {
-                    (0..count).map(|k| d(s, fp + at + 2 * k)).collect()
-                };
-                let square = n * n;
-                let out = match kind {
-                    MatMul::MatMat => matrix::mul_mat_mat(
-                        &mut Doubles,
-                        *n,
-                        &doubles(*a, square),
-                        &doubles(*b, square),
-                    ),
-                    MatMul::MatVec => matrix::mul_mat_vec(
-                        &mut Doubles,
-                        *n,
-                        &doubles(*a, square),
-                        &doubles(*b, *n),
-                    ),
-                    MatMul::VecMat => matrix::mul_vec_mat(
-                        &mut Doubles,
-                        *n,
-                        &doubles(*a, *n),
-                        &doubles(*b, square),
-                    ),
-                };
-                for (k, v) in out.iter().enumerate() {
-                    put_wide(s, fp + dst + 2 * k, v.to_bits());
-                }
-            }
-            Instr::Matrix {
-                op,
-                dst,
-                src,
-                n,
-                wide: true,
-            } => {
-                let m: Vec<f64> = (0..n * n).map(|k| d(s, fp + src + 2 * k)).collect();
-                let out = match op {
-                    Intrinsic::Transpose => matrix::transpose(*n, &m),
-                    Intrinsic::Inverse => matrix::inverse(&mut Doubles, *n, &m),
-                    _ => vec![matrix::determinant(&mut Doubles, *n, &m)],
-                };
-                for (k, v) in out.iter().enumerate() {
-                    put_wide(s, fp + dst + 2 * k, v.to_bits());
-                }
-            }
             Instr::DMap1 { f: op, dst, src, n } => {
                 for i in 0..*n {
                     let v = op(d(s, fp + src + 2 * i));
@@ -407,46 +353,6 @@ impl<'p, 's> Machine<'p, 's> {
             } => {
                 let equal = (0..*n).all(|i| d(s, fp + a + 2 * i) == d(s, fp + b + 2 * i));
                 s[fp + dst] = (equal != *negate) as u32;
-            }
-            Instr::DVector { op, dst, a, b, n } => {
-                let lane = |at: usize, i: usize| d(s, fp + at + 2 * i);
-                let dot = |x: usize, y: usize| {
-                    (0..*n).fold(0.0f64, |sum, i| sum + lane(x, i) * lane(y, i))
-                };
-                let out: Vec<f64> = match op {
-                    DVector::Dot => vec![dot(*a, *b)],
-                    DVector::Length => vec![dot(*a, *a).sqrt()],
-                    DVector::Cross => {
-                        let (x, y) = (
-                            [lane(*a, 0), lane(*a, 1), lane(*a, 2)],
-                            [lane(*b, 0), lane(*b, 1), lane(*b, 2)],
-                        );
-                        vec![
-                            x[1] * y[2] - x[2] * y[1],
-                            x[2] * y[0] - x[0] * y[2],
-                            x[0] * y[1] - x[1] * y[0],
-                        ]
-                    }
-                    DVector::Normalize => {
-                        let length = dot(*a, *a).sqrt();
-                        (0..*n)
-                            .map(|i| {
-                                if length > 0.0 {
-                                    lane(*a, i) / length
-                                } else {
-                                    0.0
-                                }
-                            })
-                            .collect()
-                    }
-                    DVector::Reflect => {
-                        let scale = 2.0 * dot(*b, *a);
-                        (0..*n).map(|i| lane(*a, i) - scale * lane(*b, i)).collect()
-                    }
-                };
-                for (k, v) in out.iter().enumerate() {
-                    put_wide(s, fp + dst + 2 * k, v.to_bits());
-                }
             }
             Instr::LBin {
                 op,
@@ -575,47 +481,6 @@ impl<'p, 's> Machine<'p, 's> {
                         (Lane::Bool, Some(v)) => s[out] = u32::from(v != 0),
                         (Lane::Bool, None) => s[out] = u32::from(float != 0.0),
                     }
-                }
-            }
-            Instr::MatMul {
-                kind, dst, a, b, n, ..
-            } => {
-                let floats = |at: usize, count: usize| -> Vec<f32> {
-                    s[fp + at..fp + at + count].iter().map(|w| f(*w)).collect()
-                };
-                let square = n * n;
-                let out = match kind {
-                    MatMul::MatMat => matrix::mul_mat_mat(
-                        &mut Floats,
-                        *n,
-                        &floats(*a, square),
-                        &floats(*b, square),
-                    ),
-                    MatMul::MatVec => {
-                        matrix::mul_mat_vec(&mut Floats, *n, &floats(*a, square), &floats(*b, *n))
-                    }
-                    MatMul::VecMat => {
-                        matrix::mul_vec_mat(&mut Floats, *n, &floats(*a, *n), &floats(*b, square))
-                    }
-                };
-                for (k, v) in out.iter().enumerate() {
-                    s[fp + dst + k] = v.to_bits();
-                }
-            }
-            Instr::Matrix {
-                op, dst, src, n, ..
-            } => {
-                let m: Vec<f32> = s[fp + src..fp + src + n * n]
-                    .iter()
-                    .map(|w| f(*w))
-                    .collect();
-                let out = match op {
-                    Intrinsic::Transpose => matrix::transpose(*n, &m),
-                    Intrinsic::Inverse => matrix::inverse(&mut Floats, *n, &m),
-                    _ => vec![matrix::determinant(&mut Floats, *n, &m)],
-                };
-                for (k, v) in out.iter().enumerate() {
-                    s[fp + dst + k] = v.to_bits();
                 }
             }
             Instr::Vector { dst, parts } => {
@@ -848,45 +713,6 @@ impl<'p, 's> Machine<'p, 's> {
             Instr::ToInt { dst, src, n } => {
                 for i in 0..*n {
                     s[fp + dst + i] = (f(s[fp + src + i]) as i32) as u32;
-                }
-            }
-            Instr::Dot { dst, a, b, n } => {
-                let v = (0..*n).fold(0.0f32, |sum, i| sum + f(s[fp + a + i]) * f(s[fp + b + i]));
-                s[fp + dst] = v.to_bits();
-            }
-            Instr::Cross { dst, a, b } => {
-                let a = [f(s[fp + a]), f(s[fp + a + 1]), f(s[fp + a + 2])];
-                let b = [f(s[fp + b]), f(s[fp + b + 1]), f(s[fp + b + 2])];
-                s[fp + dst] = (a[1] * b[2] - a[2] * b[1]).to_bits();
-                s[fp + dst + 1] = (a[2] * b[0] - a[0] * b[2]).to_bits();
-                s[fp + dst + 2] = (a[0] * b[1] - a[1] * b[0]).to_bits();
-            }
-            Instr::Length { dst, a, n } => {
-                let v = (0..*n).fold(0.0f32, |sum, i| sum + f(s[fp + a + i]) * f(s[fp + a + i]));
-                s[fp + dst] = v.sqrt().to_bits();
-            }
-            Instr::Normalize { dst, a, n } => {
-                let length = (0..*n)
-                    .fold(0.0f32, |sum, i| sum + f(s[fp + a + i]) * f(s[fp + a + i]))
-                    .sqrt();
-                for i in 0..*n {
-                    let v = f(s[fp + a + i]);
-                    s[fp + dst + i] = if length > 0.0 { v / length } else { 0.0 }.to_bits();
-                }
-            }
-            Instr::Reflect {
-                dst,
-                incident,
-                normal,
-                n,
-            } => {
-                let scale = 2.0
-                    * (0..*n).fold(0.0f32, |sum, i| {
-                        sum + f(s[fp + normal + i]) * f(s[fp + incident + i])
-                    });
-                for i in 0..*n {
-                    s[fp + dst + i] =
-                        (f(s[fp + incident + i]) - scale * f(s[fp + normal + i])).to_bits();
                 }
             }
             Instr::Atan2 { dst, y, x } => s[fp + dst] = f(s[fp + y]).atan2(f(s[fp + x])).to_bits(),

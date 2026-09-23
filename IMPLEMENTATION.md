@@ -266,9 +266,20 @@ Represented in the IR, and so on every backend:
 - Structs, fixed arrays (`subscript` clamps a run-time index), `Mat2/3/4`
   column-major, `IVec2/3`, structured `if`, bounded `loop` whose count is
   any `Int` read once and clamped to `MAX_LOOP_COUNT`, and `match` on an
-  `Int` (the JIT uses a `br_table` over a dense range). Matrix formulas
-  live once in [`orla_rules::matrix`](crates/rules/src/matrix.rs) over a
-  trait, so CPU and JIT agree bit for bit.
+  `Int` (the JIT uses a `br_table` over a dense range).
+- Types are structural in the ABI: a scalar of a kind, a vector, a
+  matrix or a struct, with a constant for every name a source writes
+  ([`Type`](crates/abi/src/lib.rs)).
+- The builtins that are formulas over the arithmetic are not operations
+  of the IR: products of matrices, `dot`, `cross`, `length`,
+  `normalize`, `reflect`, `transpose`, `determinant` and `inverse` are
+  written into it by the compiler as the arithmetic they are
+  ([formulas](crates/compiler/src/lower/composite.rs),
+  [determinant and inverse](crates/compiler/src/lower/matrix.rs)), so a
+  backend implements none of them and all three compute one formula in
+  one order. The GPU chooses between two short arms of plain arithmetic
+  with `select` rather than a branch ([WGSL](crates/gpu/src/wgsl.rs)),
+  which is what keeps `normalize` as fast as the device's own.
 - A table (an array known at compile time) is read-only data on the JIT
   and one `Words` instruction on the interpreter.
 - Capabilities are compile-time diagnostics with positions; the validator

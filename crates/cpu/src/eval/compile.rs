@@ -566,26 +566,6 @@ impl FunctionCompiler<'_> {
                 let dst = define(self);
                 let (ta, tb) = (self.ty(a), self.ty(b));
                 let (la, lb) = (self.loc(a), self.loc(b));
-                let product = match (op, ta.order(), tb.order()) {
-                    (BinaryOp::Mul, Some(n), Some(_)) => Some((MatMul::MatMat, n)),
-                    (BinaryOp::Mul, Some(n), None) if tb.lanes().is_some() => {
-                        Some((MatMul::MatVec, n))
-                    }
-                    (BinaryOp::Mul, None, Some(n)) if ta.lanes().is_some() => {
-                        Some((MatMul::VecMat, n))
-                    }
-                    _ => None,
-                };
-                if let Some((kind, n)) = product {
-                    return Some(Instr::MatMul {
-                        kind,
-                        dst: dst.at,
-                        a: la.at,
-                        b: lb.at,
-                        n: usize::from(n),
-                        wide: ta.is_64bit(),
-                    });
-                }
                 if ta.is_64bit() {
                     return Some(self.binary64(*op, a, b, ty, dst));
                 }
@@ -1136,13 +1116,6 @@ impl FunctionCompiler<'_> {
             n,
         };
         match intrinsic {
-            Intrinsic::Transpose | Intrinsic::Determinant | Intrinsic::Inverse => Instr::Matrix {
-                op: intrinsic,
-                dst: dst.at,
-                src: loc(0),
-                n: usize::from(self.ty(&args[0]).order().unwrap_or(1)),
-                wide: false,
-            },
             Intrinsic::ToDouble | Intrinsic::ToLong => {
                 unreachable!("a conversion to a 64-bit kind is a `Convert`")
             }
@@ -1204,27 +1177,6 @@ impl FunctionCompiler<'_> {
                 src: loc(0),
                 n,
             },
-            Intrinsic::Dot => Instr::Dot {
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-                n: self.loc(&args[0]).n,
-            },
-            Intrinsic::Cross => Instr::Cross {
-                dst: dst.at,
-                a: loc(0),
-                b: loc(1),
-            },
-            Intrinsic::Length => Instr::Length {
-                dst: dst.at,
-                a: loc(0),
-                n: self.loc(&args[0]).n,
-            },
-            Intrinsic::Normalize => Instr::Normalize {
-                dst: dst.at,
-                a: loc(0),
-                n,
-            },
             Intrinsic::Pow => map2(f32::powf),
             Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
             Intrinsic::Smoothstep => map3(|low, high, x| {
@@ -1236,12 +1188,6 @@ impl FunctionCompiler<'_> {
                 let t = ((x - low) / (high - low)).max(0.0).min(1.0);
                 t * t * (3.0 - 2.0 * t)
             }),
-            Intrinsic::Reflect => Instr::Reflect {
-                dst: dst.at,
-                incident: loc(0),
-                normal: loc(1),
-                n,
-            },
             Intrinsic::Atan2 => Instr::Atan2 {
                 dst: dst.at,
                 y: loc(0),
@@ -1433,21 +1379,7 @@ impl FunctionCompiler<'_> {
             sb: stride(1),
             n: lanes,
         };
-        let vector = |op: DVector| Instr::DVector {
-            op,
-            dst: dst.at,
-            a: loc(0),
-            b: if args.len() > 1 { loc(1) } else { loc(0) },
-            n: lanes_of(self.ty(&args[0])),
-        };
         match intrinsic {
-            Intrinsic::Transpose | Intrinsic::Determinant | Intrinsic::Inverse => Instr::Matrix {
-                op: intrinsic,
-                dst: dst.at,
-                src: loc(0),
-                n: usize::from(self.ty(&args[0]).order().unwrap_or(1)),
-                wide: true,
-            },
             Intrinsic::Abs if long => lmap1(i64::wrapping_abs),
             Intrinsic::Sign if long => lmap1(i64::signum),
             Intrinsic::Min if long => lmap2(i64::min),
@@ -1509,11 +1441,6 @@ impl FunctionCompiler<'_> {
                 let t = ((x - low) / (high - low)).max(0.0).min(1.0);
                 t * t * (3.0 - 2.0 * t)
             }),
-            Intrinsic::Dot => vector(DVector::Dot),
-            Intrinsic::Cross => vector(DVector::Cross),
-            Intrinsic::Length => vector(DVector::Length),
-            Intrinsic::Normalize => vector(DVector::Normalize),
-            Intrinsic::Reflect => vector(DVector::Reflect),
             other => unreachable!("`{}` takes no 64-bit value", other.name()),
         }
     }

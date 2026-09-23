@@ -29,7 +29,6 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
 use orla_abi::{Encoding, Scalar, Type, encoding};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
-use orla_rules::matrix::{self, Arith};
 
 use crate::offsets;
 
@@ -293,28 +292,6 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         init,
         merge,
     })
-}
-
-/// The matrix formulas' arithmetic, as instructions.
-struct Ops<'a, 'b>(&'a mut FunctionBuilder<'b>);
-
-impl Arith for Ops<'_, '_> {
-    type V = Value;
-    fn add(&mut self, a: Value, b: Value) -> Value {
-        self.0.ins().fadd(a, b)
-    }
-    fn sub(&mut self, a: Value, b: Value) -> Value {
-        self.0.ins().fsub(a, b)
-    }
-    fn mul(&mut self, a: Value, b: Value) -> Value {
-        self.0.ins().fmul(a, b)
-    }
-    fn div(&mut self, a: Value, b: Value) -> Value {
-        self.0.ins().fdiv(a, b)
-    }
-    fn neg(&mut self, a: Value) -> Value {
-        self.0.ins().fneg(a)
-    }
 }
 
 /// The Cranelift type of each scalar of a value of `ty`, in layout
@@ -934,15 +911,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                 f(self, x, y, z)
             })
             .collect()
-    }
-
-    fn dot(&mut self, a: &[Value], b: &[Value]) -> Value {
-        let mut sum = self.fconst(a[0], 0.0);
-        for (x, y) in a.iter().zip(b) {
-            let product = self.b.ins().fmul(*x, *y);
-            sum = self.b.ins().fadd(sum, product);
-        }
-        sum
     }
 
     /// Loads scalars of the given types from the scratch slot.
@@ -1970,19 +1938,6 @@ impl<'a, 'b> Fx<'a, 'b> {
         let (ta, tb) = (self.ty(a), self.ty(b));
         let (wa, wb) = (self.words(a), self.words(b));
         let int_like = ta.is_int_kind() || tb.is_int_kind();
-        if op == BinaryOp::Mul && (ta.order().is_some() || tb.order().is_some()) {
-            let mut ops = Ops(&mut self.b);
-            return match (ta.order(), tb.order()) {
-                (Some(n), Some(_)) => matrix::mul_mat_mat(&mut ops, usize::from(n), &wa, &wb),
-                (Some(n), None) if tb.lanes().is_some() => {
-                    matrix::mul_mat_vec(&mut ops, usize::from(n), &wa, &wb)
-                }
-                (None, Some(n)) if ta.lanes().is_some() => {
-                    matrix::mul_vec_mat(&mut ops, usize::from(n), &wa, &wb)
-                }
-                _ => self.zip2(&wa, &wb, |fx, x, y| fx.b.ins().fmul(x, y)),
-            };
-        }
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul if int_like => {
                 self.zip2(&wa, &wb, |fx, x, y| {
@@ -2103,18 +2058,6 @@ impl<'a, 'b> Fx<'a, 'b> {
             w[0].iter().map(|v| f(fx, *v)).collect()
         };
         match intrinsic {
-            Intrinsic::Transpose => {
-                let n = usize::from(self.ty(&args[0]).order().unwrap_or(1));
-                matrix::transpose(n, &w[0])
-            }
-            Intrinsic::Determinant => {
-                let n = usize::from(self.ty(&args[0]).order().unwrap_or(1));
-                vec![matrix::determinant(&mut Ops(&mut self.b), n, &w[0])]
-            }
-            Intrinsic::Inverse => {
-                let n = usize::from(self.ty(&args[0]).order().unwrap_or(1));
-                matrix::inverse(&mut Ops(&mut self.b), n, &w[0])
-            }
             Intrinsic::Floor => map1(self, &mut |fx, v| fx.b.ins().floor(v)),
             Intrinsic::Ceil => map1(self, &mut |fx, v| fx.b.ins().ceil(v)),
             Intrinsic::Round => map1(self, &mut |fx, v| fx.b.ins().nearest(v)),
@@ -2243,37 +2186,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                     })
                 }
             }
-            Intrinsic::Dot => vec![self.dot(&w[0], &w[1])],
-            Intrinsic::Cross => {
-                let (a, b) = (&w[0], &w[1]);
-                let x1 = self.b.ins().fmul(a[1], b[2]);
-                let x2 = self.b.ins().fmul(a[2], b[1]);
-                let y1 = self.b.ins().fmul(a[2], b[0]);
-                let y2 = self.b.ins().fmul(a[0], b[2]);
-                let z1 = self.b.ins().fmul(a[0], b[1]);
-                let z2 = self.b.ins().fmul(a[1], b[0]);
-                vec![
-                    self.b.ins().fsub(x1, x2),
-                    self.b.ins().fsub(y1, y2),
-                    self.b.ins().fsub(z1, z2),
-                ]
-            }
-            Intrinsic::Length => {
-                let d = self.dot(&w[0], &w[0]);
-                vec![self.b.ins().sqrt(d)]
-            }
-            Intrinsic::Normalize => {
-                let d = self.dot(&w[0], &w[0]);
-                let length = self.b.ins().sqrt(d);
-                let zero = self.fconst(d, 0.0);
-                let positive = self.b.ins().fcmp(FloatCC::GreaterThan, length, zero);
-                w[0].iter()
-                    .map(|v| {
-                        let scaled = self.b.ins().fdiv(*v, length);
-                        self.b.ins().select(positive, scaled, zero)
-                    })
-                    .collect()
-            }
             Intrinsic::Pow => self.zip2(&w[0], &w[1], |fx, x, y| {
                 let pow = if fx.b.func.dfg.value_type(x) == types::F64 {
                     fx.pow
@@ -2308,15 +2220,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let rest = fx.b.ins().fsub(three, twice);
                 fx.b.ins().fmul(tt, rest)
             }),
-            Intrinsic::Reflect => {
-                let d = self.dot(&w[1], &w[0]);
-                let two = self.fconst(d, 2.0);
-                let scale = self.b.ins().fmul(two, d);
-                self.zip2(&w[0], &w[1], |fx, i, n| {
-                    let scaled = fx.b.ins().fmul(scale, n);
-                    fx.b.ins().fsub(i, scaled)
-                })
-            }
             Intrinsic::Atan2 => {
                 let atan2 = if self.ty(&args[0]) == Type::Double {
                     self.atan2
