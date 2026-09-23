@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use orla::session::{Event, Session};
 use orla_graph::EvaluateError;
 use orla_runtime::Context;
+use orla_session::{Event, Session};
 
 fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/grayscale")
@@ -670,7 +670,11 @@ output result <- copy.result;
     // goes out as a file any viewer opens; WAV comes in as rows with its
     // rate reported.
     let pixels = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
-    std::fs::write(dir.join("photo.png"), orla::png::encode(2, 1, &pixels)).unwrap();
+    std::fs::write(
+        dir.join("photo.png"),
+        orla_session::png::encode(2, 1, &pixels),
+    )
+    .unwrap();
     let (as_pixels, detail) = Session::load_field(&dir.join("photo.png"), Some("Image")).unwrap();
     assert!(
         as_pixels.schema().is_pixel() && detail.contains("Grid 2"),
@@ -683,7 +687,11 @@ output result <- copy.result;
         .iter()
         .map(|v| v.to_bits())
         .collect();
-    std::fs::write(dir.join("hit.wav"), orla::wav::encode(&sound, 2, 22050)).unwrap();
+    std::fs::write(
+        dir.join("hit.wav"),
+        orla_session::wav::encode(&sound, 2, 22050),
+    )
+    .unwrap();
     let (rows, detail) = Session::load_field(&dir.join("hit.wav"), Some("Rows<Vec2>")).unwrap();
     assert_eq!(rows.domain(), orla_runtime::Domain::Rows(2));
     assert!(detail.ends_with("at 22050 Hz"), "{detail}");
@@ -1107,12 +1115,13 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
     assert!(stderr.contains("rendered 0.05 s of sound"), "{stderr}");
     for index in 0..3 {
         let bytes = std::fs::read(orla::render::picture_path(&out, index)).unwrap();
-        let picture = orla::png::decode(&bytes).unwrap();
+        let picture = orla_session::png::decode(&bytes).unwrap();
         assert_eq!((picture.width, picture.height), (320, 240));
     }
     assert!(!out.join("0003.png").exists());
     let sound =
-        orla::wav::decode(&std::fs::read(out.join(orla::render::SOUND_NAME)).unwrap()).unwrap();
+        orla_session::wav::decode(&std::fs::read(out.join(orla::render::SOUND_NAME)).unwrap())
+            .unwrap();
     assert_eq!(sound.rate, 48_000);
     assert_eq!(
         sound.field.domain().count(),
@@ -1178,7 +1187,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
         let pixels = vec![*colour; 4];
         std::fs::write(
             dir.join(format!("clip/{index}.png")),
-            orla::png::encode(2, 2, &pixels),
+            orla_session::png::encode(2, 2, &pixels),
         )
         .unwrap();
     }
@@ -1190,7 +1199,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_WORDS,
+        orla_session::DEFAULT_BUDGET_WORDS,
     );
     let events = session.sync();
     assert!(
@@ -1213,7 +1222,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     // A frame dropped in is seen at the next sync and takes its turn.
     std::fs::write(
         dir.join("clip/2.png"),
-        orla::png::encode(2, 2, &[[0.0, 0.0, 1.0, 1.0]; 4]),
+        orla_session::png::encode(2, 2, &[[0.0, 0.0, 1.0, 1.0]; 4]),
     )
     .unwrap();
     let events = session.sync();
@@ -1253,7 +1262,7 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_WORDS,
+        orla_session::DEFAULT_BUDGET_WORDS,
     );
     session.sync();
     let read = |session: &mut Session, handle| {
@@ -1314,7 +1323,7 @@ fn a_name_a_kernel_cannot_find_names_the_file_that_declares_it() {
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_WORDS,
+        orla_session::DEFAULT_BUDGET_WORDS,
     );
     let events = session.sync();
     let reported = rejected(&events).join("\n");
@@ -1367,7 +1376,7 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
     let mut session = Session::open(
         &dir.join("scene.osn"),
         None,
-        orla::session::DEFAULT_BUDGET_WORDS,
+        orla_session::DEFAULT_BUDGET_WORDS,
     );
     let events = session.sync();
     assert!(
@@ -1652,7 +1661,7 @@ fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
     let scene = dir.join("scene.osn");
 
     // Two mebibytes hold neither of them.
-    let mut small = Session::open(&scene, None, orla::session::budget_of_megabytes(2));
+    let mut small = Session::open(&scene, None, orla_session::budget_of_megabytes(2));
     small.sync();
     let refused = small.evaluate(&Context::default()).unwrap_err().to_string();
     assert!(
@@ -1661,7 +1670,7 @@ fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
     );
 
     // Sixty-four hold both, and the words are the ones the Kernel wrote.
-    let mut enough = Session::open(&scene, None, orla::session::budget_of_megabytes(64));
+    let mut enough = Session::open(&scene, None, orla_session::budget_of_megabytes(64));
     enough.sync();
     let report = enough.evaluate(&Context::default()).unwrap();
     let image = enough.runtime().host().image(report.output).unwrap();
@@ -1669,7 +1678,7 @@ fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
     assert_eq!(image.pixels()[100][0], 50.0, "half of that pixel's own x");
 
     // Mebibytes are words four to one.
-    assert_eq!(orla::session::budget_of_megabytes(1), 256 * 1024);
+    assert_eq!(orla_session::budget_of_megabytes(1), 256 * 1024);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

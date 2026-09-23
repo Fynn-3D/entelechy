@@ -15,5 +15,5 @@ pub struct Pcm<'a> {
 /// 16-bit PCM WAV.
 pub fn wav(pcm: &Pcm<'_>) -> Vec<u8> {
     let words: Vec<u32> = pcm.samples.iter().map(|v| v.to_bits()).collect();
-    orla::wav::encode(&words, pcm.channels, pcm.rate)
+    orla_session::wav::encode(&words, pcm.channels, pcm.rate)
 }

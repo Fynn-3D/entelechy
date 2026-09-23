@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use orla::session::{Event, Session};
 use orla_runtime::Context;
+use orla_session::{Event, Session};
 
 const USAGE: &str = "\
 usage:
@@ -92,7 +92,7 @@ usage:
       line on stdout, and on every connection to --listen, where a client's
       quit ends only its connection. --window is what evaluations that name
       no window see (the protocol's `window` op changes it). See
-      crates/cli/src/protocol.rs.";
+      crates/session/src/protocol.rs.";
 
 fn usage_error(message: &str) -> Result<(), String> {
     Err(format!("{message}\n{USAGE}"))
@@ -117,7 +117,7 @@ fn main() -> ExitCode {
                 orla_runtime::ABI_VERSION,
                 orla_language::LANGUAGE_VERSION,
                 orla_ir::IR_VERSION,
-                orla::session::PACKAGE_VERSION
+                orla_session::PACKAGE_VERSION
             );
             Ok(())
         }
@@ -186,9 +186,9 @@ fn check(args: &[String]) -> Result<(), String> {
             .and_then(|stem| stem.to_str())
             .unwrap_or("scene");
         let base = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
-        let mut loader = |path: &Path| orla::session::read_document(path);
+        let mut loader = |path: &Path| orla_session::read_document(path);
         let mut declare =
-            |base: &Path, uses: &[orla_language::Use]| orla::session::declarations_for(base, uses);
+            |base: &Path, uses: &[orla_language::Use]| orla_session::declarations_for(base, uses);
         let lowered = match orla_graph::Graph::load_with(
             &document,
             &text,
@@ -206,7 +206,7 @@ fn check(args: &[String]) -> Result<(), String> {
         };
         let mut document = document;
         if let Ok((structs, types, functions)) =
-            orla::session::declarations_for(base, &document.uses)
+            orla_session::declarations_for(base, &document.uses)
         {
             document.inherit(&structs, &types, &functions);
         }
@@ -241,7 +241,7 @@ fn check(args: &[String]) -> Result<(), String> {
         }
         // The documents it uses, with their own declarations: a scene is
         // not checked until its libraries are.
-        match orla::session::used_documents(base, &document.uses) {
+        match orla_session::used_documents(base, &document.uses) {
             Ok(used) => {
                 let mut compiled = 0;
                 for path in &used {
@@ -257,7 +257,7 @@ fn check(args: &[String]) -> Result<(), String> {
                         continue; // reported by `used_documents`
                     };
                     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-                    match orla::session::declarations_within(Some(path), dir, &used_document.uses) {
+                    match orla_session::declarations_within(Some(path), dir, &used_document.uses) {
                         Ok((structs, types, functions)) => {
                             used_document.inherit(&structs, &types, &functions)
                         }
@@ -328,7 +328,7 @@ fn memory_words(text: &str) -> Result<usize, String> {
     if megabytes == 0 {
         return Err("--memory needs at least one mebibyte".into());
     }
-    Ok(orla::session::budget_of_megabytes(megabytes))
+    Ok(orla_session::budget_of_megabytes(megabytes))
 }
 
 struct RunOptions {
@@ -373,7 +373,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
         backend: "jit".into(),
         fusion: true,
         saves: Vec::new(),
-        memory: orla::session::DEFAULT_BUDGET_WORDS,
+        memory: orla_session::DEFAULT_BUDGET_WORDS,
         render: orla::render::Options {
             frames: 0,
             rate: 60.0,
@@ -412,7 +412,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
             }
             "--out" => options.render.out = PathBuf::from(value("--out")?),
             "--window" => {
-                options.render.window = Some(orla::parse_window(&value("--window")?)?);
+                options.render.window = Some(orla_session::parse_window(&value("--window")?)?);
             }
             "--no-fusion" => options.fusion = false,
             "--backend" => options.backend = value("--backend")?,
@@ -526,7 +526,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         fusion: true,
         window: None,
         profile: false,
-        memory: orla::session::DEFAULT_BUDGET_WORDS,
+        memory: orla_session::DEFAULT_BUDGET_WORDS,
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -538,7 +538,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         };
         match arg.as_str() {
             "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
-            "--window" => options.window = Some(orla::parse_window(&value("--window")?)?),
+            "--window" => options.window = Some(orla_session::parse_window(&value("--window")?)?),
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
             "--no-fusion" => options.fusion = false,
@@ -714,7 +714,7 @@ fn new_scene(args: &[String]) -> Result<(), String> {
 /// `orla bench`: the same frames, several times, on one backend or all
 /// of them.
 fn measure(args: &[String]) -> Result<(), String> {
-    let mut options = orla::bench::Options::default();
+    let mut options = orla_session::bench::Options::default();
     let mut backends: Vec<String> = Vec::new();
     let mut scene: Option<PathBuf> = None;
     let mut index = 0;
@@ -752,7 +752,7 @@ fn measure(args: &[String]) -> Result<(), String> {
             "--library" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--json" => options.json = Some(PathBuf::from(value("--json")?)),
             "--compare" => options.compare = Some(PathBuf::from(value("--compare")?)),
-            "--window" => options.window = Some(orla::parse_window(&value("--window")?)?),
+            "--window" => options.window = Some(orla_session::parse_window(&value("--window")?)?),
             "--param" => {
                 let binding = value("--param")?;
                 let (name, text) = binding
@@ -783,7 +783,7 @@ fn measure(args: &[String]) -> Result<(), String> {
     if backends.iter().any(|name| name == "all") {
         backends = ["cpu", "jit", "gpu"]
             .iter()
-            .filter(|name| Session::runtime_for(name, orla::session::DEFAULT_BUDGET_WORDS).is_ok())
+            .filter(|name| Session::runtime_for(name, orla_session::DEFAULT_BUDGET_WORDS).is_ok())
             .map(|name| (*name).to_owned())
             .collect();
     }
@@ -791,16 +791,16 @@ fn measure(args: &[String]) -> Result<(), String> {
         options.backends = backends;
     }
     let before = match &options.compare {
-        Some(path) => Some(orla::bench::read(path)?),
+        Some(path) => Some(orla_session::bench::read(path)?),
         None => None,
     };
-    let measured = orla::bench::bench(&options)?;
+    let measured = orla_session::bench::bench(&options)?;
     print!(
         "{}",
-        orla::bench::table(&options, &measured, before.as_deref())
+        orla_session::bench::table(&options, &measured, before.as_deref())
     );
     if let Some(path) = &options.json {
-        std::fs::write(path, orla::bench::json(&options, &measured))
+        std::fs::write(path, orla_session::bench::json(&options, &measured))
             .map_err(|e| format!("{}: {e}", path.display()))?;
         eprintln!("wrote {}", path.display());
     }
@@ -811,7 +811,7 @@ fn graph(args: &[String]) -> Result<(), String> {
     let mut library = None;
     let mut scene = None;
     let mut fusion = true;
-    let mut memory = orla::session::DEFAULT_BUDGET_WORDS;
+    let mut memory = orla_session::DEFAULT_BUDGET_WORDS;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -887,7 +887,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut scene = None;
     let mut listen = None;
     let mut window = None;
-    let mut memory = orla::session::DEFAULT_BUDGET_WORDS;
+    let mut memory = orla_session::DEFAULT_BUDGET_WORDS;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -907,7 +907,7 @@ fn serve(args: &[String]) -> Result<(), String> {
                 let text = iter
                     .next()
                     .ok_or_else(|| "--window needs <w>x<h> or <w>x<h>@<scale>".to_string())?;
-                window = Some(orla::parse_window(text)?);
+                window = Some(orla_session::parse_window(text)?);
             }
             "--listen" => {
                 listen = Some(
@@ -938,12 +938,13 @@ fn serve(args: &[String]) -> Result<(), String> {
     session.set_background(true);
     let (sink, requests) = std::sync::mpsc::channel();
     if let Some(address) = &listen {
-        let bound = orla::protocol::listen(address, sink.clone()).map_err(|e| e.to_string())?;
+        let bound =
+            orla_session::protocol::listen(address, sink.clone()).map_err(|e| e.to_string())?;
         eprintln!("listening on {bound}");
     }
-    orla::protocol::stdin_into(sink);
+    orla_session::protocol::stdin_into(sink);
     for incoming in requests {
-        if orla::protocol::answer(&mut session, incoming) {
+        if orla_session::protocol::answer(&mut session, incoming) {
             break;
         }
     }
@@ -952,7 +953,7 @@ fn serve(args: &[String]) -> Result<(), String> {
 
 fn replay(args: &[String]) -> Result<(), String> {
     let mut backend = "jit".to_string();
-    let mut memory = orla::session::DEFAULT_BUDGET_WORDS;
+    let mut memory = orla_session::DEFAULT_BUDGET_WORDS;
     let mut files = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -1163,26 +1164,26 @@ fn trace(args: &[String]) -> Result<(), String> {
     println!("{node} ({kernel}), {place}, as the evaluation after time {time} runs it");
     for value in &traced.bindings {
         let shown = if value.ran {
-            orla::protocol::words_text(module, value.ty, &value.words)
+            orla_session::protocol::words_text(module, value.ty, &value.words)
         } else {
             "- (not run)".to_owned()
         };
         println!(
             "  {}: {} = {shown}",
             value.name,
-            orla::protocol::type_name(module, value.ty)
+            orla_session::protocol::type_name(module, value.ty)
         );
     }
     let show = |value: &orla_cpu::TraceValue, indent: &str, arrow: &str| {
         let shown = if value.ran {
-            orla::protocol::words_text(module, value.ty, &value.words)
+            orla_session::protocol::words_text(module, value.ty, &value.words)
         } else {
             "- (not run)".to_owned()
         };
         println!(
             "{indent}{arrow}{}: {} = {shown}",
             value.name,
-            orla::protocol::type_name(module, value.ty)
+            orla_session::protocol::type_name(module, value.ty)
         );
     };
     for (number, call) in traced.calls.iter().enumerate() {

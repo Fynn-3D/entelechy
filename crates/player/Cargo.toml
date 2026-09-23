@@ -11,7 +11,7 @@ name = "orla-player"
 path = "src/main.rs"
 
 [dependencies]
-orla = { path = "../cli" }
+orla-session = { path = "../session" }
 orla-runtime = { path = "../runtime" }
 orla-gpu = { path = "../gpu" }
 orla-graph = { path = "../graph" }

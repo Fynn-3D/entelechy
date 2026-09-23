@@ -506,7 +506,7 @@ pub fn export_rig(
     let png = match texture {
         Some(path) => {
             let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            orla::png::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            orla_session::png::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
             Some(bytes)
         }
         None => None,

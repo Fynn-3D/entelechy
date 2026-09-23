@@ -66,7 +66,7 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
         "{name}: {} frames",
         imported.frames
     );
-    let (field, _) = orla::session::Session::load_field(&imported.file, None).unwrap();
+    let (field, _) = orla_session::Session::load_field(&imported.file, None).unwrap();
     let left: Vec<f32> = field
         .words()
         .iter()

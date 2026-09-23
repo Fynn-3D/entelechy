@@ -91,7 +91,7 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("sound");
     let file = out_dir.join(format!("{stem}.wav"));
-    std::fs::write(&file, orla::wav::encode(&words, channels, rate))
+    std::fs::write(&file, orla_session::wav::encode(&words, channels, rate))
         .map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(Imported {
         file,
@@ -126,7 +126,7 @@ mod tests {
             "{name}: {} frames",
             imported.frames
         );
-        let (field, detail) = orla::session::Session::load_field(&imported.file, None).unwrap();
+        let (field, detail) = orla_session::Session::load_field(&imported.file, None).unwrap();
         assert!(detail.ends_with("at 22050 Hz"), "{detail}");
         assert_eq!(field.schema().words(), channels);
         let left: Vec<f32> = field

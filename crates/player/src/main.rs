@@ -6,7 +6,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use orla::session::Session;
 use orla_gpu::GpuBackend;
 use orla_gpu::present::{Overlay, Presenter};
 use orla_player::audio::Audio;
@@ -14,6 +13,7 @@ use orla_player::gamepad::Gamepad;
 use orla_player::hud::{self, Panel, Stats};
 use orla_player::{Placement, key_code, to_output};
 use orla_runtime::{Context, InputState};
+use orla_session::Session;
 use serde_json::Value as Json;
 use std::sync::mpsc::{Receiver, channel};
 use winit::application::ApplicationHandler;
@@ -74,7 +74,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         serve: false,
         listen: None,
         params: Vec::new(),
-        memory: orla::session::DEFAULT_BUDGET_WORDS,
+        memory: orla_session::DEFAULT_BUDGET_WORDS,
         no_audio: false,
     };
     let mut scene = None;
@@ -96,7 +96,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 if megabytes == 0 {
                     return Err("--memory needs at least one mebibyte".into());
                 }
-                options.memory = orla::session::budget_of_megabytes(megabytes);
+                options.memory = orla_session::budget_of_megabytes(megabytes);
             }
             "--serve" => options.serve = true,
             "--listen" => {
@@ -121,7 +121,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     .ok_or_else(|| "--scale needs a positive integer".to_string())?;
             }
             "--window" => {
-                let ([w, h], _) = orla::parse_window(&value("--window")?)?;
+                let ([w, h], _) = orla_session::parse_window(&value("--window")?)?;
                 options.window = Some((w as u32, h as u32));
             }
             "--input" => {
@@ -168,7 +168,7 @@ struct Player {
     /// How the last frame reached the window, for the F10 line.
     path: &'static str,
     /// Protocol requests arriving from stdin or a socket, when serving.
-    requests: Option<Receiver<orla::protocol::Incoming>>,
+    requests: Option<Receiver<orla_session::protocol::Incoming>>,
     /// The node whose image is shown instead of the graph output.
     preview: Option<orla_graph::NodeId>,
     /// The sound card, opened when a scene has a sound-shaped output.
@@ -288,20 +288,22 @@ impl Player {
         let Some(requests) = &self.requests else {
             return;
         };
-        let pending: Vec<orla::protocol::Incoming> =
+        let pending: Vec<orla_session::protocol::Incoming> =
             std::iter::from_fn(|| requests.try_recv().ok()).collect();
         for incoming in pending {
-            let (response, quit) = match orla::protocol::parse_request(&incoming.line) {
+            let (response, quit) = match orla_session::protocol::parse_request(&incoming.line) {
                 Ok((id, request))
                     if request.get("op").and_then(Json::as_str) == Some("evaluate") =>
                 {
                     let result = match self.frame() {
-                        Some(report) => Ok(orla::protocol::report_json(&self.session, &report)),
+                        Some(report) => {
+                            Ok(orla_session::protocol::report_json(&self.session, &report))
+                        }
                         None => Err(serde_json::json!({ "message": self.status })),
                     };
-                    (orla::protocol::envelope(&id, result), false)
+                    (orla_session::protocol::envelope(&id, result), false)
                 }
-                _ => orla::protocol::respond_line(&mut self.session, &incoming.line),
+                _ => orla_session::protocol::respond_line(&mut self.session, &incoming.line),
             };
             incoming.reply.send(response);
             // A quit on standard input closes the window; on a socket it
@@ -793,7 +795,7 @@ fn main() -> ExitCode {
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {
-            match orla::protocol::listen(address, sender.clone()) {
+            match orla_session::protocol::listen(address, sender.clone()) {
                 Ok(bound) => eprintln!("listening on {bound}"),
                 Err(error) => {
                     eprintln!("error: cannot listen on {address}: {error}");
@@ -801,7 +803,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        orla::protocol::stdin_into(sender);
+        orla_session::protocol::stdin_into(sender);
         player.requests = Some(receiver);
         eprintln!("serving the creation protocol on stdin/stdout");
     }

@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use orla_runtime::{Context, Handle, Shape};
 
-use crate::session::Session;
-use crate::{png, wav};
+use orla_session::Session;
+use orla_session::{png, wav};
 
 /// How to render.
 #[derive(Clone, Debug)]

@@ -1696,12 +1696,11 @@ version = "0.1.0"
 dependencies = [
  "orla-compiler",
  "orla-cpu",
- "orla-gpu",
  "orla-graph",
  "orla-ir",
- "orla-jit",
  "orla-language",
  "orla-runtime",
+ "orla-session",
  "serde_json",
 ]
 
@@ -1735,9 +1734,9 @@ dependencies = [
 name = "orla-export"
 version = "0.1.0"
 dependencies = [
- "orla",
  "orla-import",
  "orla-runtime",
+ "orla-session",
  "serde_json",
 ]
 
@@ -1745,9 +1744,9 @@ dependencies = [
 name = "orla-ffi"
 version = "0.1.0"
 dependencies = [
- "orla",
  "orla-abi",
  "orla-graph",
+ "orla-session",
 ]
 
 [[package]]
@@ -1786,9 +1785,9 @@ version = "0.1.0"
 name = "orla-import"
 version = "0.1.0"
 dependencies = [
- "orla",
  "orla-export",
  "orla-runtime",
+ "orla-session",
  "serde_json",
  "symphonia",
 ]
@@ -1837,12 +1836,12 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "gilrs",
- "orla",
  "orla-compiler",
  "orla-gpu",
  "orla-graph",
  "orla-language",
  "orla-runtime",
+ "orla-session",
  "serde_json",
  "softbuffer",
  "winit",
@@ -1865,6 +1864,21 @@ dependencies = [
  "orla-cpu",
  "orla-ir",
  "orla-rules",
+]
+
+[[package]]
+name = "orla-session"
+version = "0.1.0"
+dependencies = [
+ "orla-compiler",
+ "orla-cpu",
+ "orla-gpu",
+ "orla-graph",
+ "orla-ir",
+ "orla-jit",
+ "orla-language",
+ "orla-runtime",
+ "serde_json",
 ]
 
 [[package]]

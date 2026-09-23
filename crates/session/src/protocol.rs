@@ -40,7 +40,7 @@ use orla_runtime::{Context, Expect, Generation, InputState, KernelId, Manifest, 
 use serde_json::{Value as Json, json};
 
 use crate::ppm;
-use crate::session::{Event, Session};
+use crate::{Event, Session};
 
 /// Serves requests from `input` until EOF or `quit`, writing responses to
 /// `output`.
@@ -645,7 +645,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     };
     match op {
         "status" => Ok(json!({
-            "versions": { "api": orla_runtime::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": crate::session::PACKAGE_VERSION },
+            "versions": { "api": orla_runtime::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": crate::PACKAGE_VERSION },
             "backend": session.runtime().backend_name(),
             "scene": session.root().display().to_string(),
             "watched": session.watched().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
@@ -842,8 +842,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
                     let target = test.get("target").and_then(Json::as_str).ok_or_else(|| {
                         failure("`until` names a `target`, as `node.port[0].field`")
                     })?;
-                    let (node, port, index, path) =
-                        crate::session::parse_target(target).map_err(failure)?;
+                    let (node, port, index, path) = crate::parse_target(target).map_err(failure)?;
                     let (kind, bound) = ["below", "above", "equals"]
                         .iter()
                         .find_map(|kind| {

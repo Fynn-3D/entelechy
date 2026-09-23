@@ -29,8 +29,8 @@ what it says; the test is the claim, this is the index to it.
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs), [rasterizer](crates/gpu/src/raster.rs), [presenter](crates/gpu/src/present.rs) | [parity](crates/gpu/tests/parity.rs), [matrix](crates/gpu/tests/matrix.rs); both skip without an adapter |
 | Kernel Runtime | [runtime](crates/runtime/src/lib.rs), [off-frame runs](crates/runtime/src/later.rs) | [hot swap](crates/runtime/tests/hot_swap.rs), [async](crates/runtime/tests/later.rs), [mixed clocks](crates/runtime/tests/mixed.rs) |
 | Graph Runtime | [graph](crates/graph/src/lib.rs), [document](crates/graph/src/document.rs), [evaluator](crates/graph/src/evaluate.rs), [domain](crates/graph/src/domain.rs) | [composition tests](crates/graph/tests/composition.rs) |
-| Interface | [cli](crates/cli/src/main.rs), [session](crates/cli/src/session.rs), [replay](crates/cli/src/replay.rs), [bench](crates/cli/src/bench.rs), [render](crates/cli/src/render.rs) | [session tests](crates/cli/tests/session.rs), every example replay on three backends |
-| Creation protocol | [protocol](crates/cli/src/protocol.rs), [contract](docs/PROTOCOL.md) | [client test](crates/cli/tests/protocol.rs); [an agent's record](examples/scanline/agent.jsonl) replayed |
+| Interface | [cli](crates/cli/src/main.rs), [session](crates/session/src/lib.rs) (what the Player, the C ABI, import and export open too), [replay](crates/cli/src/replay.rs), [bench](crates/session/src/bench.rs), [render](crates/cli/src/render.rs) | [session tests](crates/cli/tests/session.rs), every example replay on three backends |
+| Creation protocol | [protocol](crates/session/src/protocol.rs), [contract](docs/PROTOCOL.md) | [client test](crates/cli/tests/protocol.rs); [an agent's record](examples/scanline/agent.jsonl) replayed |
 | C ABI | [ffi](crates/ffi/src/lib.rs), [header](crates/ffi/include/orla.h) | [ABI tests](crates/ffi/tests/abi.rs), [C example](bridges/c/hello.c) |
 | Player | [window loop](crates/player/src/main.rs), [audio](crates/player/src/audio.rs), [gamepad](crates/player/src/gamepad.rs) | presentation and blit tests; [material ball](examples/material-ball/README.md) |
 | Import and export | [import](crates/import/src/), [export](crates/export/src/) | [MIDI tests](crates/import/tests/midi.rs), the [score](examples/score/README.md) and [clip](examples/clip/README.md) replays |
@@ -51,9 +51,9 @@ what it says; the test is the claim, this is the index to it.
 | A rig: a skeleton, its clips, and the mesh that follows | [skin package](packages/skin.orlapkg/kernels/skin.orla), [glTF skins and animations](crates/import/src/gltf.rs), [the Blender bridge's push](bridges/blender/orla_bridge.py) | [import tests](crates/import/src/gltf.rs) (a hand-written rig: parents, inverse binds, a slerped clip), [skin replay](examples/skin/tests/skin.replay) and [crowd replay](examples/crowd/tests/crowd.replay) on three backends (one rig, and sixty-four out of it with a mask and an additive layer), and [the two ways in posing alike](crates/cli/tests/bridges.rs) |
 | Mip levels as a library, not a primitive | [picture package](packages/picture.orlapkg/kernels/mip.orla), [strip](packages/picture.orlapkg/graphs/mip.osn) | [mipmap replay](examples/mipmap/tests/ground.replay) |
 | Async nodes | [off-frame runs](crates/runtime/src/later.rs), [evaluator](crates/graph/src/evaluate.rs) | [runtime tests](crates/runtime/tests/later.rs), [async replay](examples/async/tests/async.replay) |
-| Packages and versions | [packages](packages/README.md), [pack and unpack](crates/cli/src/package.rs), [by name](crates/cli/src/session.rs) `in_package` | [session tests](crates/cli/tests/session.rs), [package replay](examples/package/tests/package.replay) |
-| Files in and out: PNG, PPM, PGM, WAV, glTF, MIDI, bytes, frames, text | [host files](crates/host/src/file.rs), [png](crates/cli/src/png.rs), [wav](crates/cli/src/wav.rs), [import](crates/import/src/), [export](crates/export/src/) | [session tests](crates/cli/tests/session.rs), the [level](examples/level/tests/level.replay), [clip](examples/clip/tests/clip.replay) and [score](examples/score/tests/score.replay) replays |
-| Measuring a scene, and a profile that adds up | [bench](crates/cli/src/bench.rs), [runtime](crates/runtime/src/lib.rs) `last_measured`, `measurement_floor`, [device clock](crates/gpu/src/lib.rs) | [session tests](crates/cli/tests/session.rs), [protocol tests](crates/cli/tests/protocol.rs), [mixed clocks](crates/runtime/tests/mixed.rs) |
+| Packages and versions | [packages](packages/README.md), [pack and unpack](crates/cli/src/package.rs), [by name](crates/session/src/lib.rs) `in_package` | [session tests](crates/cli/tests/session.rs), [package replay](examples/package/tests/package.replay) |
+| Files in and out: PNG, PPM, PGM, WAV, glTF, MIDI, bytes, frames, text | [host files](crates/host/src/file.rs), [png](crates/session/src/png.rs), [wav](crates/session/src/wav.rs), [import](crates/import/src/), [export](crates/export/src/) | [session tests](crates/cli/tests/session.rs), the [level](examples/level/tests/level.replay), [clip](examples/clip/tests/clip.replay) and [score](examples/score/tests/score.replay) replays |
+| Measuring a scene, and a profile that adds up | [bench](crates/session/src/bench.rs), [runtime](crates/runtime/src/lib.rs) `last_measured`, `measurement_floor`, [device clock](crates/gpu/src/lib.rs) | [session tests](crates/cli/tests/session.rs), [protocol tests](crates/cli/tests/protocol.rs), [mixed clocks](crates/runtime/tests/mixed.rs) |
 | A scene to start from | [scaffold](crates/cli/src/scaffold.rs) | [session tests](crates/cli/tests/session.rs): made, checked, replayed |
 | Bridges to other programs | [bridges](bridges/) in each program's own language | [bridge tests](crates/cli/tests/bridges.rs), run when node, Chrome or Godot is present |
 
@@ -353,7 +353,7 @@ what it says; the test is the claim, this is the index to it.
   Kernel the document holds, resolved by the session and `check` through
   a `declare` callback the graph loader applies to the root and each
   sub-graph ([graph](crates/graph/src/document.rs),
-  [session](crates/cli/src/session.rs)). A changed library republishes
+  [session](crates/session/src/lib.rs)). A changed library republishes
   the Kernels that inherit from it and re-reads the root; two different
   declarations of one name are refused with both files named
   ([session test](crates/cli/tests/session.rs)).
@@ -367,7 +367,7 @@ what it says; the test is the claim, this is the index to it.
 - Documents: one grammar for `.orla` libraries and `.osn` graphs
   ([contract](docs/DOCUMENTS.md), [frontend](crates/language/src/lib.rs),
   [graph lowering](crates/graph/src/document.rs),
-  [session loader](crates/cli/src/session.rs)). Nodes reference Kernels by
+  [session loader](crates/session/src/lib.rs)). Nodes reference Kernels by
   id or carry them inline; the loader publishes inline Kernels and follows
   `use`. Proof: [parser tests](crates/language/src/parser.rs),
   [lowering tests](crates/graph/src/document.rs),
@@ -402,7 +402,7 @@ what it says; the test is the claim, this is the index to it.
 
 - A Field comes in from outside through the protocol's `write`, which
   replaces a state port's committed value with words in its layout
-  ([evaluator](crates/graph/src/evaluate.rs), [protocol](crates/cli/src/protocol.rs)).
+  ([evaluator](crates/graph/src/evaluate.rs), [protocol](crates/session/src/protocol.rs)).
 
 ### Domain
 
@@ -673,7 +673,7 @@ what it says; the test is the claim, this is the index to it.
   (`stick left 0.5 -0.25`, `button south down`) and the protocol takes
   `"sticks": [[lx, ly], [rx, ry], [lt, rt]]`, so what a pad does is
   testable without one ([replay](crates/cli/src/replay.rs),
-  [protocol](crates/cli/src/protocol.rs), [feature matrix](crates/matrix/src/lib.rs)
+  [protocol](crates/session/src/protocol.rs), [feature matrix](crates/matrix/src/lib.rs)
   `context`).
 
 - The window is context too, a device fact like the sound card's rate:
@@ -718,10 +718,10 @@ what it says; the test is the claim, this is the index to it.
   input asks), `.pgm` a `Grid<Float>`, `.wav` rows of one or two floats
   with the rate reported, `.field` any Field in the Host's own format
   ([file](crates/host/src/file.rs)). PNG and WAV are decoded and encoded
-  with no dependency ([inflate](crates/cli/src/inflate.rs),
-  [png](crates/cli/src/png.rs), [wav](crates/cli/src/wav.rs)), checked
+  with no dependency ([inflate](crates/session/src/inflate.rs),
+  [png](crates/session/src/png.rs), [wav](crates/session/src/wav.rs)), checked
   against reference vectors; `run --save` and the protocol's `read`
-  produce them ([session](crates/cli/src/session.rs),
+  produce them ([session](crates/session/src/lib.rs),
   [tests](crates/cli/tests/session.rs)). Text is an input too: `input
   title: Rows<Int> = text "ORLA";` is the characters' codes as rows the
   session writes from the document and rewrites when it changes
@@ -793,15 +793,15 @@ what it says; the test is the claim, this is the index to it.
   authority: `prepare` never publishes, `publish` checks an expected
   generation, `compose` rewrites the scene document so the file stays the
   source of truth, and diagnostics carry line and column
-  ([protocol](crates/cli/src/protocol.rs)).
+  ([protocol](crates/session/src/protocol.rs)).
 
 - The protocol has a socket transport: `--listen <host:port>` on
   `orla serve` and the Player feeds every connection's lines to the one
   session with per-connection replies, a socket's `quit` ending only its
-  connection ([protocol](crates/cli/src/protocol.rs),
+  connection ([protocol](crates/session/src/protocol.rs),
   [test](crates/cli/tests/protocol.rs)). A connection that opens with an
   HTTP upgrade speaks WebSocket frames instead, the handshake and framing
-  of RFC 6455 written out with no dependency ([websocket](crates/cli/src/websocket.rs),
+  of RFC 6455 written out with no dependency ([websocket](crates/session/src/websocket.rs),
   [client test](crates/cli/tests/protocol.rs)). `bridges/blender` is the
   first bridge: a Blender add-on in Blender's own Python that writes
   meshes as the Host's files and talks to a running window over the
@@ -940,7 +940,7 @@ what it says; the test is the claim, this is the index to it.
   with the JIT this way, so ordered work is native code and the picture
   stays on the device; the mixed runtime is tested with two recording
   backends ([runtime](crates/runtime/src/lib.rs),
-  [test](crates/runtime/tests/mixed.rs), [session](crates/cli/src/session.rs)).
+  [test](crates/runtime/tests/mixed.rs), [session](crates/session/src/lib.rs)).
 
 - The GPU divides integers through a dividend the shader compiler
   cannot narrow: a one read from the context (`wgsl::OPAQUE_ONE`) is
@@ -982,8 +982,8 @@ what it says; the test is the claim, this is the index to it.
   and traces on the interpreter without committing; `orla trace` prints
   it, the protocol's `trace` answers it as JSON, and the evaluation
   report times every executed node (`run --profile`)
-  ([trace](crates/cpu/src/lib.rs), [session](crates/cli/src/session.rs),
-  [protocol](crates/cli/src/protocol.rs)).
+  ([trace](crates/cpu/src/lib.rs), [session](crates/session/src/lib.rs),
+  [protocol](crates/session/src/protocol.rs)).
 
 ### The optimizer
 
@@ -1113,7 +1113,7 @@ what it says; the test is the claim, this is the index to it.
 - A profile's numbers are the node's, and they add up
   ([`Runtime::execute`](crates/runtime/src/lib.rs),
   [`measurement_floor`](crates/runtime/src/lib.rs),
-  [`node_times`](crates/cli/src/bench.rs)): a native operation was never
+  [`node_times`](crates/session/src/bench.rs)): a native operation was never
   measured — the runtime set `last_measured` only in the Kernel branch,
   so a rasterize was printed with whatever its neighbour had left
   standing, and it never waited for its own submission, so the work it

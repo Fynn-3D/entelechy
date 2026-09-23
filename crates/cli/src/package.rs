@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::session::{PACKAGE_VERSION, package_manifest};
+use orla_session::{PACKAGE_VERSION, package_manifest};
 
 const MAGIC: &[u8] = b"ORLAPKG\n";
 

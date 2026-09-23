@@ -43,7 +43,7 @@ fn main() -> ExitCode {
 }
 
 fn read_field(path: &Path) -> Result<FieldData, String> {
-    orla::session::Session::load_field(path, None)
+    orla_session::Session::load_field(path, None)
         .map(|(data, _)| data)
         .map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -149,7 +149,7 @@ fn export(args: &[String]) -> Result<String, String> {
             if inputs.len() != 1 {
                 return Err("a sound comes from one file".into());
             }
-            let (data, detail) = orla::session::Session::load_field(&inputs[0], None)
+            let (data, detail) = orla_session::Session::load_field(&inputs[0], None)
                 .map_err(|e| format!("{}: {e}", inputs[0].display()))?;
             let channels = data.schema().words();
             if data.domain().shape() != Shape::Rows || channels > 2 || data.schema().is_pixel() {
@@ -251,7 +251,7 @@ fn export(args: &[String]) -> Result<String, String> {
             };
             std::fs::write(
                 &out,
-                orla::png::encode(domain.width(), domain.height(), &pixels),
+                orla_session::png::encode(domain.width(), domain.height(), &pixels),
             )
             .map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(format!(

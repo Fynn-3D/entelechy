@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use orla_runtime::Context;
 
-use crate::session::Session;
+use crate::Session;
 
 /// How to measure.
 #[derive(Clone, Debug)]
@@ -66,7 +66,7 @@ impl Default for Options {
             params: Vec::new(),
             inputs: Vec::new(),
             fusion: true,
-            memory: crate::session::DEFAULT_BUDGET_WORDS,
+            memory: crate::DEFAULT_BUDGET_WORDS,
             nodes: false,
             json: None,
             compare: None,
@@ -300,9 +300,7 @@ fn open(options: &Options, backend: &str) -> Result<Session, String> {
     let rejected: Vec<String> = events
         .iter()
         .filter_map(|event| match event {
-            crate::session::Event::Rejected { path, error } => {
-                Some(format!("{}:{error}", path.display()))
-            }
+            crate::Event::Rejected { path, error } => Some(format!("{}:{error}", path.display())),
             _ => None,
         })
         .collect();

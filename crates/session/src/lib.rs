@@ -6,6 +6,22 @@
 //! republishes only the Kernels whose text changed, keeping a running
 //! version whenever a replacement is rejected. Source resolution lives here,
 //! not in the runtimes.
+//!
+//! This crate is what every interface drives: the command line, the
+//! Player, the C ABI, the importer and the exporter each open a
+//! [`Session`] and speak the [`protocol`] to it, and none of them
+//! depends on another. The file formats a session reads and writes
+//! travel with it.
+
+#![warn(missing_docs)]
+
+pub mod bench;
+pub mod inflate;
+pub mod png;
+pub mod ppm;
+pub mod protocol;
+pub mod wav;
+pub mod websocket;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -19,7 +35,32 @@ use orla_runtime::{
     Value,
 };
 
-use crate::{png, ppm, wav};
+/// Parses a window given on a command line: `<w>x<h>` or `<w>x<h>@<scale>`,
+/// returning the size in pixels and the scale factor (one when absent).
+pub fn parse_window(text: &str) -> Result<([f32; 2], f32), String> {
+    let (size, scale) = match text.split_once('@') {
+        Some((size, scale)) => (
+            size,
+            scale
+                .parse::<f32>()
+                .ok()
+                .filter(|s| *s > 0.0)
+                .ok_or_else(|| "--window's scale must be a positive number".to_string())?,
+        ),
+        None => (text, 1.0),
+    };
+    let (w, h) = size
+        .split_once('x')
+        .ok_or_else(|| "--window needs <w>x<h> or <w>x<h>@<scale>".to_string())?;
+    let side = |text: &str| {
+        text.parse::<u32>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| n as f32)
+            .ok_or_else(|| "--window's sides must be positive integers".to_string())
+    };
+    Ok(([side(w)?, side(h)?], scale))
+}
 
 /// How many words a session's Host may hold at once unless it is told
 /// otherwise: two gibibytes of them. A budget is a net and not a

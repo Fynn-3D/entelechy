@@ -219,7 +219,7 @@ output stirred <- stir.result;
     )
     .unwrap();
     let words = |values: &[f32]| {
-        orla::protocol::base64(
+        orla_session::protocol::base64(
             &values
                 .iter()
                 .flat_map(|v| v.to_bits().to_le_bytes())
@@ -247,7 +247,8 @@ output stirred <- stir.result;
             json!({ "id": 14, "op": "quit" }),
         ],
     );
-    let file = orla::protocol::unbase64(responses[12]["ok"]["data"].as_str().unwrap()).unwrap();
+    let file =
+        orla_session::protocol::unbase64(responses[12]["ok"]["data"].as_str().unwrap()).unwrap();
     assert!(
         file.starts_with(b"ORLAFIELD 1\nRows 2 1 1 f\n"),
         "{:?}",
@@ -257,14 +258,14 @@ output stirred <- stir.result;
         &scene,
         &[
             json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
-            json!({ "id": 2, "op": "write", "node": "count", "format": "field", "data": orla::protocol::base64(&file) }),
+            json!({ "id": 2, "op": "write", "node": "count", "format": "field", "data": orla_session::protocol::base64(&file) }),
             json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
             json!({ "id": 4, "op": "read", "node": "count" }),
-            json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla::protocol::base64(&orla_runtime::file::encode(&"f".parse().unwrap(), orla_runtime::Domain::Rows(3), &[0, 0, 0])) }),
+            json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla_session::protocol::base64(&orla_runtime::file::encode(&"f".parse().unwrap(), orla_runtime::Domain::Rows(3), &[0, 0, 0])) }),
             json!({ "id": 6, "op": "quit" }),
         ],
     );
-    let back: Vec<f32> = orla::protocol::unbase64(again[3]["ok"]["data"].as_str().unwrap())
+    let back: Vec<f32> = orla_session::protocol::unbase64(again[3]["ok"]["data"].as_str().unwrap())
         .unwrap()
         .chunks_exact(4)
         .map(|w| f32::from_le_bytes([w[0], w[1], w[2], w[3]]))
@@ -286,7 +287,7 @@ output stirred <- stir.result;
         let response = &responses[index];
         assert!(response.get("error").is_none(), "{response}");
         let data = response["ok"]["data"].as_str().unwrap();
-        orla::protocol::unbase64(data)
+        orla_session::protocol::unbase64(data)
             .unwrap()
             .chunks_exact(4)
             .map(|w| f32::from_le_bytes([w[0], w[1], w[2], w[3]]))
@@ -543,7 +544,7 @@ output result <- fill.result;
     assert_eq!(responses[2]["ok"]["outputs"][0]["height"], 4);
     let bytes = {
         let data = responses[3]["ok"]["data"].as_str().unwrap();
-        orla::protocol::unbase64(data).unwrap()
+        orla_session::protocol::unbase64(data).unwrap()
     };
     let first = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
     let second = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
@@ -758,7 +759,7 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
     // strength, 0.5 then 0.8.
     let pixels = |index: usize| -> (usize, usize, Vec<f32>) {
         let image = ok(index);
-        let bytes = orla::protocol::unbase64(image["data"].as_str().unwrap()).unwrap();
+        let bytes = orla_session::protocol::unbase64(image["data"].as_str().unwrap()).unwrap();
         let floats = bytes
             .chunks(4)
             .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -833,7 +834,7 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
         &responses[index]["ok"]
     };
     let state = |index: usize| -> Vec<i32> {
-        orla::protocol::unbase64(ok(index)["data"].as_str().unwrap())
+        orla_session::protocol::unbase64(ok(index)["data"].as_str().unwrap())
             .unwrap()
             .chunks(4)
             .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))

@@ -16,8 +16,8 @@ use std::ffi::{CStr, CString, c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use orla::session::{Event, Session};
 use orla_abi::{Context, Handle, InputState, Shape};
+use orla_session::{Event, Session};
 
 /// The version of the header's contract, `ORLA_ABI_VERSION`.
 pub const ABI_VERSION: u32 = 1;
@@ -181,7 +181,7 @@ pub unsafe extern "C" fn orla_open(
         };
         let backend = unsafe { text(backend) }.unwrap_or("jit");
         let library = unsafe { text(library) }.map(Path::new);
-        let runtime = Session::runtime_for(backend, orla::session::DEFAULT_BUDGET_WORDS)?;
+        let runtime = Session::runtime_for(backend, orla_session::DEFAULT_BUDGET_WORDS)?;
         let mut session = Session::open_with(Path::new(scene), library, runtime);
         let events = session.sync();
         if session.graph().is_none() {
@@ -281,7 +281,8 @@ pub unsafe extern "C" fn orla_evaluate(
         };
         match s.session.evaluate(&context) {
             Ok(report) => {
-                s.report = c_string(&orla::protocol::report_json(&s.session, &report).to_string());
+                s.report =
+                    c_string(&orla_session::protocol::report_json(&s.session, &report).to_string());
                 0
             }
             Err(error) => s.fail(error.to_string()),
@@ -397,7 +398,7 @@ pub unsafe extern "C" fn orla_request(
     let line = unsafe { text(line) }.unwrap_or("").to_owned();
     guarded(session, |s| {
         s.clear();
-        let (response, _quit) = orla::protocol::respond_line(&mut s.session, &line);
+        let (response, _quit) = orla_session::protocol::respond_line(&mut s.session, &line);
         s.response = c_string(&response);
         0
     });

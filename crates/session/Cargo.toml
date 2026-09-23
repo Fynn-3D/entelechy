@@ -1,0 +1,21 @@
+[package]
+name = "orla-session"
+description = "Orla session: a live scene over the runtimes, and the protocol every interface speaks to it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orla-compiler = { path = "../compiler" }
+orla-language = { path = "../language" }
+orla-ir = { path = "../ir" }
+orla-graph = { path = "../graph" }
+orla-runtime = { path = "../runtime" }
+orla-cpu = { path = "../cpu" }
+orla-gpu = { path = "../gpu" }
+orla-jit = { path = "../jit" }
+serde_json = "1"
+
+[lints]
+workspace = true

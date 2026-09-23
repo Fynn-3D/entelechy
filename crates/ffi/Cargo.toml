@@ -11,7 +11,7 @@ name = "orla_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-orla = { path = "../cli" }
+orla-session = { path = "../session" }
 orla-abi = { path = "../abi" }
 orla-graph = { path = "../graph" }
 

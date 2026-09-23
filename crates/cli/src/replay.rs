@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use orla_graph::Report;
 use orla_runtime::{Context, Handle, InputState, Runtime};
 
-use crate::session::Session;
+use orla_session::Session;
 
 /// One scripted step.
 #[derive(Clone, Debug, PartialEq)]
@@ -288,7 +288,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             }
             ["expect", target, "=", values @ ..] if target.contains('[') && !values.is_empty() => {
                 let (node, port, index, path) =
-                    crate::session::parse_target(target).map_err(error)?;
+                    orla_session::parse_target(target).map_err(error)?;
                 steps.push(Step::ExpectElement {
                     node,
                     port,
@@ -345,8 +345,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     let mut session = Session::open_with(&replay.scene, replay.kernels.as_deref(), runtime);
     let mut rejected = Vec::new();
     for event in session.sync() {
-        if let crate::session::Event::Rejected { .. } | crate::session::Event::SceneRejected(_) =
-            &event
+        if let orla_session::Event::Rejected { .. } | orla_session::Event::SceneRejected(_) = &event
         {
             rejected.push(event.to_string());
         }
