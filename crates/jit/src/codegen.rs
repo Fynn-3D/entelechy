@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    AbiParam, Block, BlockArg, BlockCall, FuncRef, InstBuilder, JumpTableData, MemFlags, Signature,
-    StackSlot, StackSlotData, StackSlotKind, Value, types,
+    AbiParam, AtomicRmwOp, Block, BlockArg, BlockCall, FuncRef, InstBuilder, JumpTableData,
+    MemFlags, Signature, StackSlot, StackSlotData, StackSlotKind, Value, types,
 };
 use cranelift_codegen::isa::TargetIsa;
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
 use orla_abi::{Encoding, Scalar, Type, encoding};
@@ -36,6 +36,8 @@ use crate::offsets;
 const DIVISION_BY_ZERO: i64 = 1;
 const OVERFLOW: i64 = 2;
 const EXHAUSTED: i64 = 3;
+/// The failure code of an element whose run passed its total.
+const OVERRUN: i64 = 4;
 
 /// The imported helpers, by function id.
 struct Imports {
@@ -468,6 +470,11 @@ struct Fx<'a, 'b> {
     /// The loop iterations an element may run, when the module counts
     /// them; see [`orla_ir::Module::counts_work`].
     budget: Option<u32>,
+    /// When the module counts: the element's iterations, held in a
+    /// register and written to the context only around a call; the next
+    /// count that needs a look, the budget passed or a block full; and
+    /// the count at the last look, up to which the blocks are the run's.
+    work: Option<(Variable, Variable, Variable)>,
 }
 
 impl<'a, 'b> Fx<'a, 'b> {
@@ -559,6 +566,157 @@ impl<'a, 'b> Fx<'a, 'b> {
             flags: MemFlags::trusted(),
             settled: MemFlags::trusted().with_readonly(),
             budget: module.counts_work().then_some(module.manifest.budget),
+            work: None,
+        }
+    }
+
+    /// Sets the count and the count at the last look, and so the next
+    /// count that needs a look: the end of the block looked in, or one
+    /// past the budget.
+    fn count_from(&mut self, work: Value, looked: Value) {
+        let (Some(budget), Some((count, next, seen))) = (self.budget, self.work) else {
+            return;
+        };
+        self.b.def_var(count, work);
+        self.b.def_var(seen, looked);
+        let block = self
+            .b
+            .ins()
+            .bor_imm(looked, i64::from(orla_ir::WORK_BLOCK - 1));
+        let block_end = self.b.ins().iadd_imm(block, 1);
+        let past = self.i32c(i64::from(budget) + 1);
+        let at = self.b.ins().umin(block_end, past);
+        self.b.def_var(next, at);
+    }
+
+    /// Reads the count and the count at the last look from the context,
+    /// which a caller, a callee, a step or a merge left there.
+    fn load_count(&mut self) {
+        if self.work.is_none() {
+            return;
+        }
+        let work = self
+            .b
+            .ins()
+            .load(types::I32, self.flags, self.ctx, offsets::WORK);
+        let looked = self
+            .b
+            .ins()
+            .load(types::I32, self.flags, self.ctx, offsets::LOOKED);
+        self.count_from(work, looked);
+    }
+
+    /// Declares the count's registers and reads the count.
+    fn begin_count(&mut self) {
+        if self.budget.is_none() {
+            return;
+        }
+        let count = self.b.declare_var(types::I32);
+        let next = self.b.declare_var(types::I32);
+        let looked = self.b.declare_var(types::I32);
+        self.work = Some((count, next, looked));
+        self.load_count();
+    }
+
+    /// Adds the `ran` iterations a loop ran as it finishes: one addition,
+    /// and nothing more.
+    fn charge(&mut self, ran: Value) {
+        if let Some((count, _, _)) = self.work {
+            let before = self.b.use_var(count);
+            let work = self.b.ins().iadd(before, ran);
+            self.b.def_var(count, work);
+        }
+    }
+
+    /// Looks at the element's work: a compare, unless the count has
+    /// reached the end of the block last looked in or passed the budget.
+    /// Past the budget, the element fails; the blocks filled since the
+    /// last look go to the run's total, added in place, and past that
+    /// the run fails and the count is set past the budget, so every loop
+    /// around leaves. With `leave`, a failed element leaves that loop.
+    fn look(&mut self, leave: Option<(Block, &[BlockArg])>) {
+        let (Some(budget), Some((count, next, seen))) = (self.budget, self.work) else {
+            return;
+        };
+        let work = self.b.use_var(count);
+        let look_at = self.b.use_var(next);
+        let due = self
+            .b
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, work, look_at);
+        let (slow, spend, spent, resume, after) = (
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+        );
+        self.b.ins().brif(due, slow, &[], after, &[]);
+        self.b.switch_to_block(slow);
+        self.b.seal_block(slow);
+        let over = self
+            .b
+            .ins()
+            .icmp_imm(IntCC::UnsignedGreaterThan, work, i64::from(budget));
+        self.fail_if(over, EXHAUSTED);
+        match leave {
+            Some((exit, args)) => self.b.ins().brif(over, exit, args, spend, &[]),
+            None => self.b.ins().brif(over, after, &[], spend, &[]),
+        };
+        self.b.switch_to_block(spend);
+        self.b.seal_block(spend);
+        let looked = self.b.use_var(seen);
+        let shift = i64::from(orla_ir::WORK_BLOCK.trailing_zeros());
+        let filled_now = self.b.ins().ushr_imm(work, shift);
+        let filled_before = self.b.ins().ushr_imm(looked, shift);
+        let filled = self.b.ins().isub(filled_now, filled_before);
+        let blocks = self
+            .b
+            .ins()
+            .load(self.ptr, self.settled, self.ctx, offsets::RUN_BLOCKS);
+        let limit = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, self.ctx, offsets::RUN_LIMIT);
+        let handed = self.b.ins().atomic_rmw(
+            types::I32,
+            MemFlags::trusted(),
+            AtomicRmwOp::Add,
+            blocks,
+            filled,
+        );
+        let total = self.b.ins().iadd(handed, filled);
+        let passed = self.b.ins().icmp(IntCC::UnsignedGreaterThan, total, limit);
+        self.fail_if(passed, OVERRUN);
+        self.b.ins().brif(passed, spent, &[], resume, &[]);
+        self.b.switch_to_block(spent);
+        self.b.seal_block(spent);
+        let past = self.i32c(i64::from(budget) + 1);
+        self.b.def_var(count, past);
+        match leave {
+            Some((exit, args)) => self.b.ins().jump(exit, args),
+            None => self.b.ins().jump(after, &[]),
+        };
+        self.b.switch_to_block(resume);
+        self.b.seal_block(resume);
+        self.count_from(work, work);
+        self.b.ins().jump(after, &[]);
+        self.b.switch_to_block(after);
+        self.b.seal_block(after);
+    }
+
+    /// Writes the count and the count at the last look to the context,
+    /// for a callee or a caller.
+    fn store_count(&mut self) {
+        if let Some((count, _, seen)) = self.work {
+            let held = self.b.use_var(count);
+            self.b
+                .ins()
+                .store(self.flags, held, self.ctx, offsets::WORK);
+            let looked = self.b.use_var(seen);
+            self.b
+                .ins()
+                .store(self.flags, looked, self.ctx, offsets::LOOKED);
         }
     }
 
@@ -571,6 +729,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.types = vec![Type::Float; slots];
         let block = self.b.current_block().expect("entry block");
         let params: Vec<Value> = self.b.block_params(block).to_vec();
+        self.begin_count();
         if kind == Kind::Map {
             return self.map_run(function, &params);
         }
@@ -613,6 +772,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 offset += self.b.func.dfg.value_type(word).bytes() as i32;
             }
         }
+        self.store_count();
         self.b.ins().return_(&[]);
         self.b.finalize();
     }
@@ -664,9 +824,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         // Every element starts its work anew.
         if self.budget.is_some() {
             let zero = self.i32c(0);
-            self.b
-                .ins()
-                .store(self.flags, zero, self.ctx, offsets::WORK);
+            self.count_from(zero, zero);
         }
         self.block(&function.body);
         let mut offset = 0i32;
@@ -675,6 +833,25 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.b.ins().store(self.flags, word, out, offset);
                 offset += self.b.func.dfg.value_type(word).bytes() as i32;
             }
+        }
+        // The element looks as it finishes, and what it ran short of a
+        // block is kept for the run.
+        self.look(None);
+        if let Some((count, _, _)) = self.work {
+            let held = self.b.use_var(count);
+            let short = self
+                .b
+                .ins()
+                .band_imm(held, i64::from(orla_ir::WORK_BLOCK - 1));
+            let short = self.b.ins().uextend(types::I64, short);
+            let left = self
+                .b
+                .ins()
+                .load(types::I64, self.flags, self.ctx, offsets::LEFT);
+            let left = self.b.ins().iadd(left, short);
+            self.b
+                .ins()
+                .store(self.flags, left, self.ctx, offsets::LEFT);
         }
         // A failure stops the run where it happened, so the element the
         // caller names is the element that failed.
@@ -1441,7 +1618,10 @@ impl<'a, 'b> Fx<'a, 'b> {
                 for arg in args {
                     passed.extend(self.words(arg));
                 }
+                // The callee's loops count into the same element's work.
+                self.store_count();
                 self.b.ins().call(self.calls[*callee as usize], &passed);
+                self.load_count();
                 self.loads(&tys, self.flags, out, 0)
             }
             Op::Intrinsic(intrinsic, args) => self.intrinsic(*intrinsic, args),
@@ -1581,10 +1761,23 @@ impl<'a, 'b> Fx<'a, 'b> {
                     self.b.append_block_param(exit, *t);
                 }
                 self.b.append_block_param(header, types::I32);
+                // The exit also takes the iterations whose body ran,
+                // which the loop adds as it finishes.
+                let counting = self.budget.is_some() && self.work.is_some();
+                if counting {
+                    self.b.append_block_param(exit, types::I32);
+                }
+                let leave = |carried: &[Value], ran: Value| -> Vec<BlockArg> {
+                    let mut args: Vec<BlockArg> = carried.iter().map(|v| (*v).into()).collect();
+                    if counting {
+                        args.push(ran.into());
+                    }
+                    args
+                };
                 let init_words = self.words(init);
                 let zero = self.i32c(0);
                 let mut init_args: Vec<_> = init_words.iter().map(|v| (*v).into()).collect();
-                let carried_args_from_init: Vec<_> = init_args.clone();
+                let carried_args_from_init = leave(&init_words, zero);
                 init_args.push(zero.into());
                 match bound {
                     // A run-time count may be zero: then the loop yields
@@ -1604,35 +1797,26 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let carried = header_params[..carried_types.len()].to_vec();
                 let index = header_params[carried_types.len()];
                 self.loops.push((carried.clone(), index));
-                let carried_args: Vec<_> = carried.iter().map(|v| (*v).into()).collect();
-                // An iteration is work: past the budget, the element
-                // records it and leaves the loop, so it ends.
-                if let Some(budget) = self.budget {
-                    let work = self
-                        .b
-                        .ins()
-                        .load(types::I32, self.flags, self.ctx, offsets::WORK);
-                    let work = self.b.ins().iadd_imm(work, 1);
-                    self.b
-                        .ins()
-                        .store(self.flags, work, self.ctx, offsets::WORK);
-                    let over =
-                        self.b
-                            .ins()
-                            .icmp_imm(IntCC::UnsignedGreaterThan, work, i64::from(budget));
-                    self.fail_if(over, EXHAUSTED);
-                    let within = self.b.create_block();
-                    self.b.ins().brif(over, exit, &carried_args, within, &[]);
-                    self.b.switch_to_block(within);
-                    self.b.seal_block(within);
+                // A loop that can run a lot looks at its element's work at
+                // the start of each iteration, and leaves once it has
+                // failed.
+                let nested = orla_ir::loop_looks(
+                    *count,
+                    until.as_ref(),
+                    body,
+                    &self.module.functions_work(),
+                );
+                if counting && nested {
+                    let args = leave(&carried, index);
+                    self.look(Some((exit, &args)));
                 }
                 if let Some(until) = until {
                     self.block(&until.body);
                     let done_word = self.words(&until.result)[0];
                     let done = self.cond_of(done_word);
-                    self.b
-                        .ins()
-                        .brif(done, exit, &carried_args, body_block, &[]);
+                    // The iteration `until` stops is not one whose body ran.
+                    let args = leave(&carried, index);
+                    self.b.ins().brif(done, exit, &args, body_block, &[]);
                 } else {
                     self.b.ins().jump(body_block, &[]);
                 }
@@ -1645,8 +1829,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                     self.b
                         .ins()
                         .icmp(IntCC::UnsignedGreaterThanOrEqual, next_index, limit);
-                let next_args: Vec<_> = next.iter().map(|v| (*v).into()).collect();
-                let mut again: Vec<_> = next_args.clone();
+                let next_args = leave(&next, next_index);
+                let mut again: Vec<BlockArg> = next.iter().map(|v| (*v).into()).collect();
                 again.push(next_index.into());
                 self.b
                     .ins()
@@ -1655,7 +1839,11 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.loops.pop();
                 self.b.switch_to_block(exit);
                 self.b.seal_block(exit);
-                self.b.block_params(exit).to_vec()
+                let params = self.b.block_params(exit).to_vec();
+                if counting {
+                    self.charge(params[carried_types.len()]);
+                }
+                params[..carried_types.len()].to_vec()
             }
             Op::Carried => self
                 .loops

@@ -269,13 +269,18 @@ Represented in the IR, and so on every backend:
   column-major, `IVec2/3`, structured `if`, bounded `loop` whose count is
   any `Int` read once and clamped to `MAX_LOOP_COUNT`, and `match` on an
   `Int` (the JIT uses a `br_table` over a dense range).
-- A Kernel's work is bounded: [`Manifest::budget`](crates/ir/src/lib.rs)
+- A Kernel's work is bounded twice: [`Manifest::budget`](crates/ir/src/lib.rs)
   is the loop iterations one element may run, and
-  [`Module::counts_work`](crates/ir/src/lib.rs) counts only when the
-  static bound (`worst_work`) can pass it. The interpreter, the JIT and
-  the GPU count at the start of every iteration and fail with
-  `ExecutionError::Exhausted` at the same element
-  ([session test](crates/cli/tests/session.rs)).
+  [`Host::work`](crates/host/src/lib.rs) the iterations one run may take,
+  all elements together, kept as a [`Run`](crates/rules/src/lib.rs) that
+  elements hand whole blocks to. [`Module::counts_work`](crates/ir/src/lib.rs)
+  counts only when the static bound (`worst_work`) can fill a block or
+  pass the budget. Every backend adds a loop's iterations as it
+  finishes and looks where [`loop_looks`](crates/ir/src/lib.rs) says and
+  at an element's end, so an innermost loop pays one addition; it fails
+  with `ExecutionError::Exhausted` at the same element, or `Overrun` for
+  the run, whose sum is exact
+  ([session tests](crates/cli/tests/session.rs)).
 - Integer failures are the reference's on every backend. The GPU emits
   checked arithmetic for a module that can fail ([`can_fail`](crates/gpu/src/wgsl.rs)),
   each invocation recording its first failure into one word by
@@ -385,8 +390,7 @@ Represented in the IR, and so on every backend:
   through the same Rust helpers. It compiles maps and scans; reduce and
   scatter run its compiled entry under the CPU's own fold and combine
   rules, and native operations are the CPU's code.
-- The GPU matches to rounding and does not report integer arithmetic
-  failures. The JIT is the default backend; the Player takes the GPU, then
+- The GPU matches to rounding. The JIT is the default backend; the Player takes the GPU, then
   the JIT, then the interpreter. `--backend cpu` and `trace` ask for the
   reference.
 - Async nodes run on a Host of their own thread and are adopted when they

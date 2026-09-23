@@ -42,27 +42,51 @@ Kernel can always compute a count and `value(port)` can size by it,
 so a new domain term needs a case where that round trip is wrong, not
 merely longer.
 
-## A Kernel's work is bounded, in iterations
+## Work is bounded, in iterations, per element and per run
 
 Every element of a Kernel may run a bounded number of loop iterations,
-the Kernel's budget: 2^24 unless it declares `budget N;`. An element
-that passes it fails the evaluation like an integer overflow: the
-element is named, nothing commits, and the running system keeps its last
-state.
+the Kernel's budget: 2^24 unless it declares `budget N;`. And one run of
+a Kernel, all its elements together, may take a bounded number, the
+Host's: four thousand million unless a session is given `--work`. An
+element past its budget fails the evaluation like an integer overflow,
+named; a run past the Host's fails as a run. Nothing commits, and the
+running system keeps its last state.
 
 **Why.** Loops take counts read at run time, so a Kernel an agent
 publishes can ask for more work than a frame has. A failed update must
 leave the running system alive, and a Kernel that never finishes is a
-failure no validation catches. The budget counts iterations, not time,
-so the same element fails on the interpreter, the JIT and the GPU, on
-any machine, and a replay that passes today passes on a slower machine.
+failure no validation catches. A bound per element is not enough: a
+million elements each within theirs can still hold a device until its
+driver resets it, which takes the running system with it. The Kernel
+owns its budget, since it knows its loops; the Host owns the run's,
+since it owns the machine, as it owns memory.
 
-**Where.** [`Manifest::budget`](../crates/ir/src/lib.rs) and
-[`Module::counts_work`](../crates/ir/src/lib.rs): a Kernel whose loops
-cannot pass its budget, by their static bound, is not counted and pays
-nothing. Each backend counts at the start of an iteration and reports
-`ExecutionError::Exhausted` (test
-`an_element_past_its_budget_fails_alike_on_every_backend`).
+Both count iterations, not time, so what fails fails on the
+interpreter, the JIT and the GPU, on any machine, and a replay that
+passes today passes on a slower machine. Whether a run passes the
+Host's bound is its elements' exact sum, so it is decided alike however
+they are scheduled. A run that passes it and also has a failing element
+may be named for either, since a run that has passed is stopped before
+every element runs; it fails either way.
+
+**How it stays free.** A loop adds the iterations whose body ran when it
+finishes, not at each one, so an innermost loop pays one addition. An
+element looks at its count when it finishes; only a loop that can run
+more than 2^20 iterations by itself, its nested loops' included, also
+looks at the start of each of its iterations, so an element runs at most
+that far past a bound before it is stopped. The run's shared count is
+touched in blocks of 1024 iterations, and what elements run short of a
+block is summed where they ran (a thread, a workgroup) and handed on in
+bulk. A Kernel whose elements cannot run 1024 iterations, or pass their
+budget, is not counted at all. Measured against uncounted runs, the loop
+scenes cost what they did.
+
+**Where.** [`Manifest::budget`](../crates/ir/src/lib.rs),
+[`Host::work`](../crates/host/src/lib.rs),
+[`Run`](../crates/rules/src/lib.rs) and
+[`Module::counts_work`](../crates/ir/src/lib.rs). Tests
+`an_element_past_its_budget_fails_alike_on_every_backend` and
+`a_run_past_the_hosts_work_fails_alike_on_every_backend`.
 
 **What would change it.** A measure of work that is as deterministic
 across backends and cheaper to keep, or a Kernel form that needs

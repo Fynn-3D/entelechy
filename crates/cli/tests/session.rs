@@ -1908,7 +1908,13 @@ output result <- plain.result;
 
 #[test]
 fn a_device_failure_fails_the_evaluation_as_the_reference_does() {
-    let Ok(device) = Session::runtime_for("gpu", 1 << 22) else {
+    let Ok(device) = Session::runtime_for(
+        "gpu",
+        orla_session::Limits {
+            words: 1 << 22,
+            ..Default::default()
+        },
+    ) else {
         return;
     };
     let dir = scratch("device-failure");
@@ -1925,7 +1931,14 @@ output result <- m.result;
     .unwrap();
     // The same scene on the reference and on the device, taken through
     // the same values: every answer the same, failure for failure.
-    let reference = Session::runtime_for("cpu", 1 << 22).unwrap();
+    let reference = Session::runtime_for(
+        "cpu",
+        orla_session::Limits {
+            words: 1 << 22,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let mut sessions = [
         Session::open_with(&dir.join("scene.osn"), None, reference),
         Session::open_with(&dir.join("scene.osn"), None, device),
@@ -1959,6 +1972,73 @@ output result <- m.result;
     assert!(answers[0][0].is_ok() && answers[0][3].is_ok());
 }
 
+/// A run is bounded as a whole: elements each well within their own
+/// budget still fail the run once together they pass what the Host lets
+/// one run take, alike on every backend, and the same Kernel with a
+/// bound it stays within runs. The whole is exact: elements that each
+/// run less than a block count every iteration, and a run of exactly
+/// the bound passes.
+#[test]
+fn a_run_past_the_hosts_work_fails_alike_on_every_backend() {
+    // A map, a map over a grid, a scan and a reduction: every element
+    // loops S times.
+    let scenes = [
+        "node w: kernel { requires { field.write; } param steps: Int = S; output result: Rows<Int>; domain = N;
+            compute { return loop steps with a = 0 { a + 1 }; } }
+output result <- w.result;",
+        "node w: kernel { requires { field.write; } param steps: Int = S; output result: Grid<Int>; domain = vec2(25, N / 25);
+            compute { return loop steps with a = 0 { a + 1 }; } }
+output result <- w.result;",
+        "node s: Rows<Int> { domain = N; }
+node w: kernel { requires { field.read; field.write; } param steps: Int = S; input t: Rows<Int> <- s.result; output result: Rows<Int>;
+            scan with c = 0 { return c + loop steps with a = 0 { a + 1 }; } }
+output result <- w.result;",
+        "node s: Rows<Int> { domain = N; }
+node w: kernel { requires { field.read; field.write; } param steps: Int = S; input t: Rows<Int> <- s.result; output result: Rows<Int>;
+            compute { return loop steps with a = 0 { a + 1 }; } merge(a, b) { return a + b; } }
+output result <- w.result;",
+    ];
+    let dir = scratch("run-work");
+    // (elements, iterations an element, the run's bound, whether it fails)
+    let cases = [
+        ("1000", "5000", 3_000_000, true),
+        ("500", "5000", 3_000_000, false),
+        ("1000", "800", 799_999, true),
+        ("1000", "800", 800_000, false),
+    ];
+    for (k, scene) in scenes.iter().enumerate() {
+        for (count, steps, work, fails) in cases {
+            let text = scene.replace('N', count).replace('S', steps);
+            std::fs::write(dir.join("scene.osn"), text).unwrap();
+            let limits = orla_session::Limits {
+                words: 1 << 22,
+                work,
+            };
+            for backend in ["cpu", "jit", "gpu"] {
+                let Ok(runtime) = Session::runtime_for(backend, limits) else {
+                    continue;
+                };
+                let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+                let events = session.sync();
+                assert!(rejected(&events).is_empty(), "{:?}", rejected(&events));
+                let answer = session
+                    .evaluate(&Context::default())
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+                let case = format!("scene {k}, {count} x {steps} within {work} on {backend}");
+                match fails {
+                    true => assert!(
+                        answer.as_ref().is_err_and(|error| error
+                            .contains(&format!("together took more than {work} loop iterations"))),
+                        "{case}: {answer:?}"
+                    ),
+                    false => assert!(answer.is_ok(), "{case}: {answer:?}"),
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn an_element_past_its_budget_fails_alike_on_every_backend() {
     // Each element runs n + n * n iterations for its own n; with a budget
@@ -1978,6 +2058,12 @@ output result <- w.result;",
 node w: kernel { requires { field.read; field.write; } budget 50; input t: Rows<Int> <- ticks.result; output result: Rows<Int>;
             compute { return 3; } merge(a, b) { return loop a with x = b { x + 1 }; } }
 output result <- w.result;",
+        // Element e's body runs e times before `until` stops the loop:
+        // the iteration `until` stops is not one whose body ran, so 1001
+        // is the first past a thousand.
+        "node w: kernel { requires { field.write; } budget 1000; output result: Rows<Int>; domain = 1100;
+            compute { return loop 2000 with a = 0 until index() >= element() { a + 1 }; } }
+output result <- w.result;",
         // A loop bounded where it is written cannot pass the budget: it
         // is never counted, and never fails.
         "node w: kernel { requires { field.write; } budget 1000; output result: Rows<Int>; domain = 64;
@@ -1989,7 +2075,13 @@ output result <- w.result;",
         std::fs::write(dir.join("scene.osn"), scene).unwrap();
         let mut answers = Vec::new();
         for backend in ["cpu", "jit", "gpu"] {
-            let Ok(runtime) = Session::runtime_for(backend, 1 << 22) else {
+            let Ok(runtime) = Session::runtime_for(
+                backend,
+                orla_session::Limits {
+                    words: 1 << 22,
+                    ..Default::default()
+                },
+            ) else {
                 continue;
             };
             let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
@@ -2013,7 +2105,14 @@ output result <- w.result;",
                     .contains("at element (32, 0): more than 1000 loop iterations"),
                 "{reference:?}"
             ),
-            4 => assert!(reference.is_ok(), "{reference:?}"),
+            4 => assert!(
+                reference
+                    .as_ref()
+                    .unwrap_err()
+                    .contains("at element (1001, 0): more than 1000 loop iterations"),
+                "{reference:?}"
+            ),
+            5 => assert!(reference.is_ok(), "{reference:?}"),
             _ => assert!(reference.is_err(), "scene {k}: {reference:?}"),
         }
     }

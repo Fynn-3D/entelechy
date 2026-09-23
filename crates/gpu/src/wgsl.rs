@@ -23,12 +23,16 @@ pub const OUTPUT_BINDING: u32 = 2;
 /// `INPUT_BINDING + i`.
 pub const INPUT_BINDING: u32 = 3;
 
-/// Binding index of the word a pass that can fail records its first
-/// failure in: all ones less the element times four plus the failure's
-/// code, the greatest kept, so the first element in row-major order is
-/// the one named, as the reference names it. Zero is none, which is what
-/// a cleared buffer holds.
+/// Binding index of the record a pass that can fail keeps. Its first
+/// word is the first failure: all ones less the element times four plus
+/// the failure's code, the greatest kept, so the first element in
+/// row-major order is the one named, as the reference names it; zero is
+/// none. Its second counts the blocks of work the run has taken, and its
+/// third is the most it may take ([`orla_rules::Run`]).
 pub const FAILURE_BINDING: u32 = 90;
+
+/// The bytes of the failure record: three words, and one to round it.
+pub const FAILURE_BYTES: u64 = 16;
 
 /// A failure's code in the word: an overflow.
 pub const FAILED_OVERFLOW: u32 = 1;
@@ -602,6 +606,21 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     out.push_str(
         "var<private> current: u32;\nvar<private> failed_here: bool;\nvar<private> work: u32;\n",
     );
+    // The element's loop iterations, and the next count that needs a
+    // look: the end of its block or one past the budget. An iteration is
+    // then one add and one compare.
+    let budget = manifest.budget;
+    let _ = writeln!(
+        out,
+        "var<private> next_look: u32;
+var<private> looked: u32;
+fn begin_work() {{
+    work = 0u;
+    looked = 0u;
+    next_look = {}u;
+}}",
+        orla_ir::WORK_BLOCK.min(budget + 1)
+    );
     if can_fail(module) {
         // An invocation records its first failure only: the reference
         // stops at it, so a failure after it within the same element (a
@@ -609,14 +628,72 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
         // names.
         let _ = writeln!(
             out,
-            "@group(0) @binding({FAILURE_BINDING}) var<storage, read_write> failure: atomic<u32>;
+            "struct Failure {{ word: atomic<u32>, blocks: atomic<u32>, limit: u32, left: atomic<u32> }}
+@group(0) @binding({FAILURE_BINDING}) var<storage, read_write> failure: Failure;
 fn fail(code: u32) {{
     if (!failed_here) {{
         failed_here = true;
-        atomicMax(&failure, 0xFFFFFFFFu - (current * 4u + code));
+        atomicMax(&failure.word, 0xFFFFFFFFu - (current * 4u + code));
     }}
+}}
+// Hands the run the blocks this element filled; true once the run has
+// passed its total, which the record's count says, not the element.
+fn spend(blocks: u32) -> bool {{
+    if (atomicAdd(&failure.blocks, blocks) + blocks <= failure.limit) {{
+        return false;
+    }}
+    failed_here = true;
+    return true;
 }}"
         );
+        if module.counts_work() {
+            // A loop adds the iterations it ran as it finishes; an element
+            // looks when it finishes and at each iteration of a loop that
+            // starts others. Past the budget, the element fails; the blocks
+            // filled since the last look go to the run's total, and past
+            // that its count is set past the budget, so every loop around
+            // it leaves.
+            let _ = writeln!(
+                out,
+                "fn look() -> bool {{
+    if (work > {budget}u) {{
+        fail({FAILED_BUDGET}u);
+        return true;
+    }}
+    if (spend((work >> {shift}u) - (looked >> {shift}u))) {{
+        work = {past}u;
+        return true;
+    }}
+    looked = work;
+    next_look = min((work | {mask}u) + 1u, {past}u);
+    return false;
+}}
+// What this invocation's finished elements ran short of their blocks,
+// kept, and handed to the run's record in blocks and as it is.
+var<private> owed: u32;
+var<workgroup> leftover: atomic<u32>;
+fn keep_left() {{
+    if (work >= next_look) {{
+        look();
+    }}
+    owed = owed + (work & {mask}u);
+    if (owed >= {handed}u) {{
+        settle_left();
+    }}
+}}
+fn settle_left() {{
+    if (owed > 0u) {{
+        spend(owed >> {shift}u);
+        atomicAdd(&failure.left, owed & {mask}u);
+        owed = 0u;
+    }}
+}}",
+                shift = orla_ir::WORK_BLOCK.trailing_zeros(),
+                mask = orla_ir::WORK_BLOCK - 1,
+                past = budget + 1,
+                handed = 64 * orla_ir::WORK_BLOCK,
+            );
+        }
         out.push_str(CHECKED_HELPERS);
         out.push_str(&checked_vector_helpers(2));
         out.push_str(&checked_vector_helpers(3));
@@ -819,16 +896,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     for (var i: u32 = 0u; i < n; i = i + 1u) {{
         storageBarrier();
         current = i;
-        work = 0u;
+        begin_work();
         carried = entry(vec3<f32>(f32(i), 0.0, 0.0), i, carried);
         store_out0(i, carried);
+        {keep}
     }}
+    {settle}
 }}",
             wgsl_type(
                 init.results
                     .first()
                     .map_or(Type::Float, |r| result_type_of(init, *r))
-            )
+            ),
+            keep = keep_left(module),
+            settle = settle_left(module),
         );
         return out;
     }
@@ -838,6 +919,47 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     } else {
         "store_out0(element, entry(coord, element));"
     };
+    if module.counts_work() {
+        // A module that counts its work runs every invocation to one
+        // barrier: an element runs unless its run has already passed the
+        // Host's bound, keeps what it ran short of a block in the
+        // workgroup's sum, and one invocation hands the sum on.
+        let _ = writeln!(
+            out,
+            "
+@compute @workgroup_size({WORKGROUP}, {WORKGROUP}, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {{
+    let w = u32(ctx[0].x);
+    let h = u32(ctx[0].y);
+    let d = u32(ctx[1].z);
+    let fold = u32(ctx[5].y);
+    var x = gid.x;
+    var y = gid.y;
+    if (fold != 0u) {{
+        x = gid.x + gid.y * fold;
+        y = 0u;
+    }}
+    if (x < w && y < h && gid.z < d && atomicLoad(&failure.blocks) <= failure.limit) {{
+        let element = (gid.z * h + y) * w + x;
+        current = element;
+        begin_work();
+        let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
+        {store}
+        if (work >= next_look) {{
+            look();
+        }}
+        atomicAdd(&leftover, work & {mask}u);
+    }}
+    workgroupBarrier();
+    if (lid == 0u) {{
+        owed = atomicLoad(&leftover);
+        settle_left();
+    }}
+}}",
+            mask = orla_ir::WORK_BLOCK - 1,
+        );
+        return out;
+    }
     let _ = writeln!(
         out,
         "
@@ -858,7 +980,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }}
     let element = (gid.z * h + y) * w + x;
     current = element;
-    work = 0u;
+    begin_work();
     let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
     {store}
 }}"
@@ -1686,17 +1808,40 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         var k = 0u;
         loop {{
             if (k >= pairs) {{ break; }}
-            work = 0u;
+            begin_work();
             held[k] = merge(held[2u * k], held[2u * k + 1u]);
+            {keep}
             k = k + 1u;
         }}
         if ((run & 1u) == 1u) {{ held[pairs] = held[run - 1u]; }}
         run = (run + 1u) / 2u;
     }}
+    {settle}
     store_level(gid.x, held[0]);
-}}"
+}}",
+        keep = keep_left(module),
+        settle = settle_left(module),
     );
     out
+}
+
+/// A pass's call that keeps what an element ran short of a block, when
+/// the module counts its work.
+fn keep_left(module: &Module) -> &'static str {
+    if module.counts_work() {
+        "keep_left();"
+    } else {
+        ""
+    }
+}
+
+/// A pass's call that hands the run what its elements kept, at its end.
+fn settle_left(module: &Module) -> &'static str {
+    if module.counts_work() {
+        "settle_left();"
+    } else {
+        ""
+    }
 }
 
 /// The fold pass's own bindings, after the inputs': the level count, the
@@ -2722,24 +2867,36 @@ impl Emitter<'_> {
                 };
                 // `it` and the value's number: a plain `i` would spell
                 // `i32` at value 32, which WGSL reads as the type.
-                self.line(
-                    depth,
-                    &format!(
-                        "for (var it{0}: i32 = 0; it{0} < {limit}; it{0} = it{0} + 1) {{",
-                        id.0
-                    ),
-                );
-                self.loops.push(*id);
-                // An iteration is work: past the budget, the element
-                // records it and leaves the loop, so it ends.
-                if self.module.counts_work() {
+                let counts = self.module.counts_work();
+                // A loop that counts keeps `it` after it: the iterations
+                // whose body ran, all of them unless `until` stopped one,
+                // which is what it adds as it finishes.
+                if counts {
+                    self.line(depth, &format!("var it{}: i32 = 0;", id.0));
                     self.line(
-                        depth + 1,
+                        depth,
+                        &format!("for (; it{0} < {limit}; it{0} = it{0} + 1) {{", id.0),
+                    );
+                } else {
+                    self.line(
+                        depth,
                         &format!(
-                            "work = work + 1u; if (work > {}u) {{ fail({FAILED_BUDGET}u); break; }}",
-                            self.module.manifest.budget
+                            "for (var it{0}: i32 = 0; it{0} < {limit}; it{0} = it{0} + 1) {{",
+                            id.0
                         ),
                     );
+                }
+                self.loops.push(*id);
+                // A loop that can run a lot looks at its element's work at
+                // the start of each iteration.
+                let nested = orla_ir::loop_looks(
+                    *count,
+                    until.as_ref(),
+                    body,
+                    &self.module.functions_work(),
+                );
+                if counts && nested {
+                    self.line(depth + 1, "if (work >= next_look && look()) { break; }");
                 }
                 if let Some(until) = until {
                     let done = self.block(until, depth + 1);
@@ -2749,6 +2906,9 @@ impl Emitter<'_> {
                 self.line(depth + 1, &format!("v{} = {next};", id.0));
                 self.loops.pop();
                 self.line(depth, "}");
+                if counts {
+                    self.line(depth, &format!("work = work + u32(it{});", id.0));
+                }
                 return;
             }
             Op::Carried => match self.loops.last() {

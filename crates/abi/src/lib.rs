@@ -13,10 +13,10 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
+pub use orla_host::{DEFAULT_WORK, MAX_WORK, encoding, file};
 pub use orla_host::{
     Domain, Encoding, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
 };
-pub use orla_host::{encoding, file};
 
 /// A named authority a Kernel may declare and be granted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1122,6 +1122,12 @@ impl<'a> Scope<'a> {
         } else {
             Err(AbiError::Denied(capability))
         }
+    }
+
+    /// The loop iterations this run may take, all its elements together
+    /// ([`Host::work`]). A bound, not an access: it needs no capability.
+    pub fn work(&self) -> u64 {
+        self.host.work()
     }
 
     /// The extent of an input. Requires `field.read`.

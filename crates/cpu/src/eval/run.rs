@@ -19,6 +19,10 @@ pub(crate) struct CallRecord {
 /// How many calls a trace records before it stops recording.
 pub(crate) const CALL_RECORDS: usize = 256;
 
+/// How much a thread keeps short of blocks before handing it to the run:
+/// enough that the shared total is touched rarely.
+const LEFT_HANDED: u64 = 64 * orla_ir::WORK_BLOCK as u64;
+
 /// Interpreter state for one thread: a stack of words holding every
 /// frame, and the loop indices of the running element.
 pub(crate) struct Machine<'p, 's> {
@@ -36,6 +40,12 @@ pub(crate) struct Machine<'p, 's> {
     pub(super) loops: Vec<i32>,
     /// Loop iterations the running element has run, when counted.
     pub(super) work: u32,
+    /// The running element's count when it last looked: the blocks up to
+    /// it are the run's already.
+    pub(super) looked: u32,
+    /// What this thread's finished elements ran short of their blocks,
+    /// summed, not yet handed to the run's total.
+    pub(super) left: u64,
     pub(super) at: [u32; 3],
     pub(super) scratch: Vec<f32>,
 }
@@ -83,6 +93,8 @@ impl<'p, 's> Machine<'p, 's> {
             sp: 0,
             loops: Vec::new(),
             work: 0,
+            looked: 0,
+            left: 0,
             at: [0; 3],
             scratch: Vec::new(),
         }
@@ -99,8 +111,9 @@ impl<'p, 's> Machine<'p, 's> {
         let entry = &program.code.entry;
         self.at = at;
         self.loops.clear();
-        self.begin(entry.frame);
+        self.begin(entry.frame)?;
         self.run(&entry.code, 0)?;
+        self.look()?;
         let mut cursor = 0;
         for result in &entry.results {
             out[cursor..cursor + result.n]
@@ -124,9 +137,10 @@ impl<'p, 's> Machine<'p, 's> {
         self.at = [index, 0, 0];
         self.loops.clear();
         self.loops.push(index as i32);
-        self.begin(entry.frame);
+        self.begin(entry.frame)?;
         self.stack[..program.code.carry].copy_from_slice(carried);
         self.run(&entry.code, 0)?;
+        self.look()?;
         let result = entry.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
@@ -142,8 +156,9 @@ impl<'p, 's> Machine<'p, 's> {
             .expect("only scan modules have an init");
         self.at = [0; 3];
         self.loops.clear();
-        self.begin(init.frame);
+        self.begin(init.frame)?;
         self.run(&init.code, 0)?;
+        self.look()?;
         let result = init.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
@@ -165,11 +180,12 @@ impl<'p, 's> Machine<'p, 's> {
             .expect("only reduce modules merge");
         self.at = [0; 3];
         self.loops.clear();
-        self.begin(merge.frame);
+        self.begin(merge.frame)?;
         let (la, lb) = (merge.args[0], merge.args[1]);
         self.stack[la.at..la.at + la.n].copy_from_slice(a);
         self.stack[lb.at..lb.at + lb.n].copy_from_slice(b);
         self.run(&merge.code, 0)?;
+        self.look()?;
         let result = merge.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
@@ -237,13 +253,62 @@ impl<'p, 's> Machine<'p, 's> {
             .collect()
     }
 
-    /// Opens the outermost frame of `words`.
-    fn begin(&mut self, words: usize) {
-        self.work = 0;
+    /// Opens the outermost frame of `words` for a new element, keeping
+    /// what the last one ran short of a block: handed to the run's total
+    /// in bulk, which stops this thread once the run has passed it.
+    fn begin(&mut self, words: usize) -> Result<(), ExecutionError> {
+        self.keep_left()?;
         if self.stack.len() < words {
             self.stack.resize(words, 0);
         }
         self.sp = words;
+        Ok(())
+    }
+
+    /// Keeps what the running element ran short of a block, and hands the
+    /// thread's sum on once it holds many blocks.
+    fn keep_left(&mut self) -> Result<(), ExecutionError> {
+        self.left += u64::from(self.work % orla_ir::WORK_BLOCK);
+        self.work = 0;
+        self.looked = 0;
+        if self.left >= LEFT_HANDED {
+            self.hand_left()?;
+        }
+        Ok(())
+    }
+
+    fn hand_left(&mut self) -> Result<(), ExecutionError> {
+        let left = std::mem::take(&mut self.left);
+        match &self.program.run {
+            Some(run) if run.settle(left) => Err(run.overrun()),
+            _ => Ok(()),
+        }
+    }
+
+    /// Hands the run everything this thread's elements ran: called once
+    /// the thread has run its last element.
+    pub(crate) fn finish(&mut self) -> Result<(), ExecutionError> {
+        self.keep_left()?;
+        self.hand_left()
+    }
+
+    /// Looks at the running element's work: past the budget, the element
+    /// fails; the blocks it has filled since it last looked go to the
+    /// run's total, and past that, the run fails. An element looks when
+    /// it finishes and at each iteration of a loop that starts others.
+    fn look(&mut self) -> Result<(), ExecutionError> {
+        let (Some(budget), Some(run)) = (self.program.budget, &self.program.run) else {
+            return Ok(());
+        };
+        if self.work > budget {
+            return Err(self.exhausted(budget));
+        }
+        let filled = self.work / orla_ir::WORK_BLOCK - self.looked / orla_ir::WORK_BLOCK;
+        self.looked = self.work;
+        if filled > 0 && run.spend(filled) {
+            return Err(run.overrun());
+        }
+        Ok(())
     }
 
     /// The element that ran past its budget, as a failure names it.
@@ -781,6 +846,7 @@ impl<'p, 's> Machine<'p, 's> {
                 until,
                 body,
                 body_result,
+                looks,
             } => {
                 s.copy_within(fp + init..fp + init + n, fp + carried);
                 let times = match bound {
@@ -788,20 +854,18 @@ impl<'p, 's> Machine<'p, 's> {
                     None => *count,
                 };
                 self.loops.push(0);
+                // The iterations whose body ran: all of them, unless
+                // `until` stops one.
+                let mut ran = times;
                 for index in 0..times {
-                    // An iteration is work: past the budget, the element
-                    // stops here.
-                    if let Some(budget) = program.budget {
-                        self.work += 1;
-                        if self.work > budget {
-                            self.loops.pop();
-                            return Err(self.exhausted(budget));
-                        }
+                    if *looks {
+                        self.look()?;
                     }
                     *self.loops.last_mut().expect("loop is open") = index as i32;
                     if let Some((until, done)) = until {
                         self.run(until, fp)?;
                         if self.stack[fp + done] != 0 {
+                            ran = index;
                             break;
                         }
                     }
@@ -810,6 +874,7 @@ impl<'p, 's> Machine<'p, 's> {
                         .copy_within(fp + body_result..fp + body_result + n, fp + carried);
                 }
                 self.loops.pop();
+                self.work = self.work.saturating_add(ran);
             }
             Instr::Index { dst } => {
                 s[fp + dst] = *self.loops.last().expect("validation guarantees a loop") as u32;

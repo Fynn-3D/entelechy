@@ -104,6 +104,7 @@ impl Runtime {
             return Ok(run);
         };
         let mut scratch = Host::new(self.host.budget_words());
+        scratch.set_work(self.host.work());
         let mut inputs = Vec::with_capacity(invocation.inputs.len());
         for handle in &invocation.inputs {
             self.materialize(*handle)?;

@@ -1008,6 +1008,13 @@ pub const DEFAULT_BUDGET: u32 = 1 << 24;
 /// The largest work budget a Kernel may declare.
 pub const MAX_BUDGET: u32 = 1 << 30;
 
+/// The loop iterations an element hands to its run's total at a time.
+/// A run's total is counted in whole blocks: an element's iterations
+/// short of a block are its own, so the total never costs more than one
+/// shared addition per block, and a Kernel whose elements cannot fill
+/// one is never counted.
+pub const WORK_BLOCK: u32 = 1024;
+
 /// One SSA operation. Host access is explicit and named.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
@@ -1328,6 +1335,24 @@ fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
     })
 }
 
+/// The most loop iterations one run of a loop may take, its nested
+/// loops' included, and still only be looked at when it finishes. A loop
+/// adds the iterations it ran as it finishes, and an element looks at its
+/// work (its budget, and the blocks it owes the run) when it finishes;
+/// a loop that can run more than this also looks at the start of each of
+/// its iterations. An innermost loop never looks, and pays one addition;
+/// an element runs at most this far past a bound before it is stopped.
+pub const LOOK_WORK: u64 = 1 << 20;
+
+/// Whether a loop of `count` iterations looks at its element's work at
+/// the start of each, `functions` the most one call of each function may
+/// run ([`Module::functions_work`]); see [`LOOK_WORK`].
+pub fn loop_looks(count: u32, until: Option<&Block>, body: &Block, functions: &[u64]) -> bool {
+    let inner = block_work(&body.body, functions)
+        .saturating_add(until.map_or(0, |until| block_work(&until.body, functions)));
+    u64::from(count).saturating_mul(inner.saturating_add(1)) > LOOK_WORK
+}
+
 /// A complete compiled Kernel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
@@ -1356,11 +1381,7 @@ impl Module {
     /// multiplied, the longer arm of a branch, calls counted where they
     /// are made. Saturates.
     pub fn worst_work(&self) -> u64 {
-        let mut per_function: Vec<u64> = Vec::with_capacity(self.functions.len());
-        for function in &self.functions {
-            let work = block_work(&function.body, &per_function);
-            per_function.push(work);
-        }
+        let per_function = self.functions_work();
         std::iter::once(&self.entry)
             .chain(&self.merge)
             .chain(&self.init)
@@ -1369,11 +1390,23 @@ impl Module {
             .unwrap_or(0)
     }
 
+    /// For each function, the most loop iterations one call may run.
+    pub fn functions_work(&self) -> Vec<u64> {
+        let mut per_function: Vec<u64> = Vec::with_capacity(self.functions.len());
+        for function in &self.functions {
+            let work = block_work(&function.body, &per_function);
+            per_function.push(work);
+        }
+        per_function
+    }
+
     /// Whether a backend counts this module's work as it runs: only when
-    /// its worst case can pass its budget. A module whose loops cannot
-    /// reach it, which is nearly every one, runs uncounted everywhere.
+    /// its worst case can pass its budget, or fill a [`WORK_BLOCK`] of
+    /// its run's total. A module whose elements run fewer iterations,
+    /// which is most of them, runs uncounted everywhere.
     pub fn counts_work(&self) -> bool {
-        self.worst_work() > u64::from(self.manifest.budget)
+        let worst = self.worst_work();
+        worst > u64::from(self.manifest.budget) || worst >= u64::from(WORK_BLOCK)
     }
 
     /// Whether the module holds a 64-bit value anywhere: a port, a

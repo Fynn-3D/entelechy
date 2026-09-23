@@ -847,12 +847,22 @@ impl Slot {
 /// them shows.
 const POISON: u32 = 0xDEAD_BEEF;
 
-/// The Host: a bounded store of primitive resources.
+/// The loop iterations one run of a Kernel may take, all its elements
+/// together, when nothing says otherwise: four thousand million.
+pub const DEFAULT_WORK: u64 = 4_000_000_000;
+
+/// The most loop iterations a Host may let one run take.
+pub const MAX_WORK: u64 = 1 << 40;
+
+/// The Host: a bounded store of primitive resources, and a bound on the
+/// compute one run may spend.
 pub struct Host {
     slots: Vec<Slot>,
     free: Vec<u32>,
     budget_words: usize,
     used_words: usize,
+    /// The loop iterations one run of a Kernel may take.
+    work: u64,
     /// Word buffers a released Field gave back, largest last. A scene
     /// makes and drops the same Fields every frame, and asking the
     /// system for a megabyte and touching it again costs more than the
@@ -870,7 +880,20 @@ impl Host {
             spare: Vec::new(),
             budget_words,
             used_words: 0,
+            work: DEFAULT_WORK,
         }
+    }
+
+    /// The loop iterations one run of a Kernel may take, all its
+    /// elements together: what keeps a run that asks for more than a
+    /// frame has from holding a device until a driver resets it.
+    pub fn work(&self) -> u64 {
+        self.work
+    }
+
+    /// Sets [`Host::work`], clamped to `1..=MAX_WORK`.
+    pub fn set_work(&mut self, iterations: u64) {
+        self.work = iterations.clamp(1, MAX_WORK);
     }
 
     /// Number of live resources, resident ones included.

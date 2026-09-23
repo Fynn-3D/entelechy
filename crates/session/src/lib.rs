@@ -75,6 +75,59 @@ pub fn budget_of_megabytes(megabytes: usize) -> usize {
     megabytes.saturating_mul(1024 * 1024 / 4)
 }
 
+/// What a session's Host may hold and spend: the words of Fields it
+/// holds at once (`--memory`), and the loop iterations one run of a
+/// Kernel may take, all its elements together (`--work`). Both are nets
+/// and not policies, and a scene that wants more says so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Words the Host may hold at once.
+    pub words: usize,
+    /// Loop iterations one run may take.
+    pub work: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            words: DEFAULT_BUDGET_WORDS,
+            work: orla_runtime::DEFAULT_WORK,
+        }
+    }
+}
+
+impl Limits {
+    /// Whether `flag` sets a limit: `--memory` or `--work`.
+    pub fn takes(flag: &str) -> bool {
+        matches!(flag, "--memory" | "--work")
+    }
+
+    /// Sets the limit `flag` names from its value: `--memory <MB>` in
+    /// whole mebibytes, `--work <M>` in millions of iterations.
+    pub fn read(&mut self, flag: &str, text: &str) -> Result<(), String> {
+        let whole = |unit: &str| -> Result<u64, String> {
+            text.parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| {
+                format!("{flag} takes a whole number of {unit}, at least one, found `{text}`")
+            })
+        };
+        match flag {
+            "--memory" => self.words = budget_of_megabytes(whole("mebibytes")? as usize),
+            "--work" => {
+                let millions = whole("millions of iterations")?;
+                let most = orla_runtime::MAX_WORK / 1_000_000;
+                if millions > most {
+                    return Err(format!(
+                        "--work is at most {most} million iterations, found {millions}"
+                    ));
+                }
+                self.work = millions * 1_000_000;
+            }
+            _ => return Err(format!("{flag} sets no limit")),
+        }
+        Ok(())
+    }
+}
+
 /// Something the session observed while synchronizing with the filesystem.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -815,7 +868,13 @@ impl Session {
 
     /// Builds a runtime over a named backend: `cpu`, or `gpu` when a device
     /// is available.
-    pub fn runtime_for(backend: &str, budget_words: usize) -> Result<Runtime, String> {
+    pub fn runtime_for(backend: &str, limits: Limits) -> Result<Runtime, String> {
+        let mut runtime = Self::backend_runtime(backend, limits.words)?;
+        runtime.host_mut().set_work(limits.work);
+        Ok(runtime)
+    }
+
+    fn backend_runtime(backend: &str, budget_words: usize) -> Result<Runtime, String> {
         match backend {
             "cpu" => Ok(Runtime::with_backend(
                 budget_words,

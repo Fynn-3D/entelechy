@@ -15,7 +15,7 @@ usage:
                        [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu|jit]
                        [--param <name>=<literal>]... [--no-fusion]
-                       [--window <w>x<h>[@<scale>]] [--profile] [--memory <MB>]
+                       [--window <w>x<h>[@<scale>]] [--profile] [--memory <MB>] [--work <M>]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version. --window is the window a scene sized by `window()`
@@ -23,7 +23,9 @@ usage:
       --memory says how many mebibytes of Fields the Host may hold at once
       (2048 by default); a scene of millions of triangles wants more, and
       `run`, `render`, `replay`, `serve`, `graph`, `trace` and `bench` all
-      take it.
+      take it. --work says how many million loop iterations one run of a
+      Kernel may take, all its elements together (4000 by default), and
+      the same commands take it.
       --profile prints how long each executed node took; it waits for the
       device after each one, so a GPU's numbers are the work, not the
       submission, and the frame is slower than it would be. What
@@ -313,18 +315,6 @@ fn check(args: &[String]) -> Result<(), String> {
     }
 }
 
-/// `--memory <MB>`: how much the Host may hold at once. A budget is a
-/// net rather than a policy, so a scene that wants more says so here.
-fn memory_words(text: &str) -> Result<usize, String> {
-    let megabytes: usize = text
-        .parse()
-        .map_err(|_| format!("--memory takes whole mebibytes, found `{text}`"))?;
-    if megabytes == 0 {
-        return Err("--memory needs at least one mebibyte".into());
-    }
-    Ok(orla_session::budget_of_megabytes(megabytes))
-}
-
 struct RunOptions {
     scene: PathBuf,
     kernels: Option<PathBuf>,
@@ -339,8 +329,8 @@ struct RunOptions {
     window: Option<([f32; 2], f32)>,
     /// Whether to print each executed node's time.
     profile: bool,
-    /// Words the Host may hold at once.
-    memory: usize,
+    /// What the Host may hold and spend.
+    limits: orla_session::Limits,
 }
 
 /// `render`: the scene and its session flags, and how to render.
@@ -354,8 +344,8 @@ struct RenderOptions {
     render: orla::render::Options,
     /// Node outputs written after the last frame, as `run --save`.
     saves: Vec<(String, String, PathBuf)>,
-    /// Words the Host may hold at once.
-    memory: usize,
+    /// What the Host may hold and spend.
+    limits: orla_session::Limits,
 }
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
@@ -367,7 +357,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
         backend: "jit".into(),
         fusion: true,
         saves: Vec::new(),
-        memory: orla_session::DEFAULT_BUDGET_WORDS,
+        limits: orla_session::Limits::default(),
         render: orla::render::Options {
             frames: 0,
             rate: 60.0,
@@ -410,7 +400,9 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
             }
             "--no-fusion" => options.fusion = false,
             "--backend" => options.backend = value("--backend")?,
-            "--memory" => options.memory = memory_words(&value("--memory")?)?,
+            flag if orla_session::Limits::takes(flag) => {
+                options.limits.read(flag, &value(flag)?)?;
+            }
             "--param" => {
                 let binding = value("--param")?;
                 let (name, text) = binding
@@ -456,7 +448,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
 
 fn render(args: &[String]) -> Result<(), String> {
     let options = parse_render(args)?;
-    let runtime = Session::runtime_for(&options.backend, options.memory)?;
+    let runtime = Session::runtime_for(&options.backend, options.limits)?;
     let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         session
@@ -520,7 +512,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         fusion: true,
         window: None,
         profile: false,
-        memory: orla_session::DEFAULT_BUDGET_WORDS,
+        limits: orla_session::Limits::default(),
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -538,7 +530,9 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
             "--no-fusion" => options.fusion = false,
             "--profile" => options.profile = true,
             "--backend" => options.backend = value("--backend")?,
-            "--memory" => options.memory = memory_words(&value("--memory")?)?,
+            flag if orla_session::Limits::takes(flag) => {
+                options.limits.read(flag, &value(flag)?)?;
+            }
             "--param" => {
                 let binding = value("--param")?;
                 let (name, text) = binding
@@ -581,7 +575,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
 
 fn run(args: &[String]) -> Result<(), String> {
     let options = parse_run(args)?;
-    let runtime = Session::runtime_for(&options.backend, options.memory)?;
+    let runtime = Session::runtime_for(&options.backend, options.limits)?;
     let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         session
@@ -740,7 +734,9 @@ fn measure(args: &[String]) -> Result<(), String> {
                     .map_err(|_| "--rate needs frames a second".to_string())?;
             }
             "--backend" => backends.push(value("--backend")?),
-            "--memory" => options.memory = memory_words(&value("--memory")?)?,
+            flag if orla_session::Limits::takes(flag) => {
+                options.limits.read(flag, &value(flag)?)?;
+            }
             "--nodes" => options.nodes = true,
             "--no-fusion" => options.fusion = false,
             "--library" => options.kernels = Some(PathBuf::from(value("--library")?)),
@@ -777,7 +773,7 @@ fn measure(args: &[String]) -> Result<(), String> {
     if backends.iter().any(|name| name == "all") {
         backends = ["cpu", "jit", "gpu"]
             .iter()
-            .filter(|name| Session::runtime_for(name, orla_session::DEFAULT_BUDGET_WORDS).is_ok())
+            .filter(|name| Session::runtime_for(name, orla_session::Limits::default()).is_ok())
             .map(|name| (*name).to_owned())
             .collect();
     }
@@ -805,7 +801,7 @@ fn graph(args: &[String]) -> Result<(), String> {
     let mut library = None;
     let mut scene = None;
     let mut fusion = true;
-    let mut memory = orla_session::DEFAULT_BUDGET_WORDS;
+    let mut limits = orla_session::Limits::default();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -816,11 +812,9 @@ fn graph(args: &[String]) -> Result<(), String> {
                 ));
             }
             "--no-fusion" => fusion = false,
-            "--memory" => {
-                let text = iter
-                    .next()
-                    .ok_or_else(|| "--memory needs mebibytes".to_string())?;
-                memory = memory_words(text)?;
+            flag if orla_session::Limits::takes(flag) => {
+                let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                limits.read(flag, text)?;
             }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => {
@@ -831,7 +825,8 @@ fn graph(args: &[String]) -> Result<(), String> {
         }
     }
     let scene = scene.ok_or_else(|| "graph needs a scene file".to_string())?;
-    let mut session = Session::open(&scene, library.as_deref(), memory);
+    let runtime = Session::runtime_for("cpu", limits)?;
+    let mut session = Session::open_with(&scene, library.as_deref(), runtime);
     session.set_fusion(fusion);
     let events = session.sync();
     for event in &events {
@@ -881,7 +876,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut scene = None;
     let mut listen = None;
     let mut window = None;
-    let mut memory = orla_session::DEFAULT_BUDGET_WORDS;
+    let mut limits = orla_session::Limits::default();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -891,11 +886,9 @@ fn serve(args: &[String]) -> Result<(), String> {
                     .cloned()
                     .ok_or_else(|| "--backend needs a value".to_string())?;
             }
-            "--memory" => {
-                let text = iter
-                    .next()
-                    .ok_or_else(|| "--memory needs mebibytes".to_string())?;
-                memory = memory_words(text)?;
+            flag if orla_session::Limits::takes(flag) => {
+                let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                limits.read(flag, text)?;
             }
             "--window" => {
                 let text = iter
@@ -925,7 +918,7 @@ fn serve(args: &[String]) -> Result<(), String> {
         }
     }
     let scene = scene.ok_or_else(|| "serve needs a scene file".to_string())?;
-    let runtime = Session::runtime_for(&backend, memory)?;
+    let runtime = Session::runtime_for(&backend, limits)?;
     let mut session = Session::open_with(&scene, library.as_deref(), runtime);
     session.set_window(window);
     report_events(&session.sync());
@@ -947,7 +940,7 @@ fn serve(args: &[String]) -> Result<(), String> {
 
 fn replay(args: &[String]) -> Result<(), String> {
     let mut backend = "jit".to_string();
-    let mut memory = orla_session::DEFAULT_BUDGET_WORDS;
+    let mut limits = orla_session::Limits::default();
     let mut files = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -958,11 +951,9 @@ fn replay(args: &[String]) -> Result<(), String> {
                     .cloned()
                     .ok_or_else(|| "--backend needs a value".to_string())?;
             }
-            "--memory" => {
-                let text = iter
-                    .next()
-                    .ok_or_else(|| "--memory needs mebibytes".to_string())?;
-                memory = memory_words(text)?;
+            flag if orla_session::Limits::takes(flag) => {
+                let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                limits.read(flag, text)?;
             }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => files.push(PathBuf::from(other)),
@@ -977,7 +968,7 @@ fn replay(args: &[String]) -> Result<(), String> {
         let base = file.parent().unwrap_or_else(|| Path::new("."));
         let replay = orla::replay::parse(&text, base)
             .map_err(|error| format!("{}: {error}", file.display()))?;
-        let runtime = Session::runtime_for(&backend, memory)?;
+        let runtime = Session::runtime_for(&backend, limits)?;
         match orla::replay::run(&replay, runtime) {
             Ok(outcome) if outcome.failures.is_empty() => {
                 println!(
@@ -1118,7 +1109,7 @@ fn trace(args: &[String]) -> Result<(), String> {
     let node = node.ok_or("trace needs --node <name>")?;
     let at = at.ok_or("trace needs --element <i> or --at <x> <y> [<z>]")?;
     let options = parse_run(&rest)?;
-    let runtime = Session::runtime_for(&options.backend, options.memory)?;
+    let runtime = Session::runtime_for(&options.backend, options.limits)?;
     let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         session

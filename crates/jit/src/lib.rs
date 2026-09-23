@@ -66,11 +66,21 @@ pub struct Ctx {
     height: u32,
     depth: u32,
     /// Zero, or the first failure: 1 division by zero, 2 overflow, 3
-    /// more loop iterations than the budget.
+    /// more loop iterations than the budget, 4 the run past its total.
     error: u32,
     /// Loop iterations the running element has run, when the module
     /// counts them.
     work: u32,
+    /// The element's count when it last looked: the blocks up to it are
+    /// the run's already.
+    looked: u32,
+    /// The run's count of blocks, which the element adds a block to at
+    /// a time, and the most it may reach ([`orla_rules::Run`]).
+    run_blocks: *const std::sync::atomic::AtomicU32,
+    run_limit: u32,
+    /// What this thread's finished elements ran short of their blocks,
+    /// summed, not yet handed to the run's total.
+    left: u64,
     /// The `x` the failure was seen at, which a map's entry writes as it
     /// leaves its run; the caller knows the rest of the coordinates.
     error_at: u32,
@@ -245,6 +255,10 @@ struct Shared {
     template: Ctx,
     /// The loop iterations an element may run, for naming a failure.
     budget: u32,
+    /// The run's total; boxed so the contexts' pointer to it stays good.
+    run: Box<orla_rules::Run>,
+    /// Whether the module counts its work.
+    counts: bool,
 }
 
 // The views point into the scope's Fields, borrowed for the run, and the
@@ -303,6 +317,7 @@ fn shared(
     }
     let params: Vec<u32> = invocation.params.iter().flat_map(param_words).collect();
     let input = &invocation.context.input;
+    let run = Box::new(orla_rules::Run::new(scope.work()));
     // The vectors' heap buffers stay put when the vectors move into `Shared`.
     let template = Ctx {
         views: views.as_ptr(),
@@ -321,6 +336,10 @@ fn shared(
         depth: domain.depth(),
         error: 0,
         work: 0,
+        looked: 0,
+        run_blocks: run.blocks(),
+        run_limit: run.limit(),
+        left: 0,
         error_at: 0,
     };
     Ok(Shared {
@@ -330,6 +349,8 @@ fn shared(
         schemas,
         template,
         budget: module.manifest.budget,
+        run,
+        counts: module.counts_work(),
     })
 }
 
@@ -387,6 +408,10 @@ fn compute_into(
         depth: t.depth,
         error: 0,
         work: 0,
+        looked: 0,
+        run_blocks: t.run_blocks,
+        run_limit: t.run_limit,
+        left: 0,
         error_at: 0,
     };
     // One call a run of elements that share a row: a `Rows` domain is
@@ -415,16 +440,12 @@ fn compute_into(
                 )
             };
             if ctx.error != 0 {
-                return Err(failure(
-                    ctx.error,
-                    ctx.error_at,
-                    z * height + y,
-                    shared.budget,
-                ));
+                return Err(failure(ctx.error, ctx.error_at, z * height + y, shared));
             }
+            hand_left(&mut ctx, shared, LEFT_HANDED)?;
             done += run;
         }
-        Ok(())
+        hand_left(&mut ctx, shared, 1)
     };
     if threads == 1 {
         run_elements(0, results)?;
@@ -484,7 +505,8 @@ fn run(
         let outcome = scope
             .storage_mut(handle)
             .map_err(ExecutionError::from)
-            .and_then(|words| compute_into(entry, &shared, domain, stride, words));
+            .and_then(|words| compute_into(entry, &shared, domain, stride, words))
+            .and_then(|()| shared.run.outcome());
         return match outcome {
             Ok(()) => Ok(vec![handle]),
             Err(error) => {
@@ -494,6 +516,7 @@ fn run(
         };
     }
     let results = compute(entry, &shared, domain, stride)?;
+    shared.run.outcome()?;
     let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
     let mut offset = 0;
     for (port, words) in module.manifest.outputs.iter().zip(&strides) {
@@ -551,8 +574,9 @@ fn run_reduce(
             ctx.work = 0;
             unsafe { merge(&mut ctx, a, b, out) };
             if ctx.error != 0 {
-                return Err(failure(ctx.error, 0, 0, module.manifest.budget));
+                return Err(failure(ctx.error, 0, 0, &shared));
             }
+            keep_left(&mut ctx, &shared, 0)?;
         }
         if count % 2 == 1 {
             next[pairs * stride..].copy_from_slice(&level[(count - 1) * stride..count * stride]);
@@ -560,6 +584,8 @@ fn run_reduce(
         level = next;
         count = count.div_ceil(2);
     }
+    hand_left(&mut ctx, &shared, 1)?;
+    shared.run.outcome()?;
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
     if let Err(error) = scope.write_values(output, &level) {
         let _ = scope.release(output);
@@ -585,6 +611,7 @@ fn run_prefix(
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, domain)?;
     let mut values = compute(entry, &shared, domain, stride)?;
+    shared.run.outcome()?;
     drop(shared);
     let scalars = port.ty.schema.scalars();
     let count = domain.count();
@@ -628,6 +655,7 @@ fn run_scatter(
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, sources)?;
     let pairs = compute(entry, &shared, sources, address + stride)?;
+    shared.run.outcome()?;
     drop(shared);
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let scalars = port.ty.schema.scalars();
@@ -655,12 +683,55 @@ fn run_scatter(
     Ok(vec![output])
 }
 
+/// How much a thread keeps short of blocks before handing it to the run:
+/// enough that the shared total is touched rarely.
+const LEFT_HANDED: u64 = 64 * orla_ir::WORK_BLOCK as u64;
+
+/// Hands the run what a context's elements ran short of their blocks,
+/// once it is `at_least`: the run's failure once it has passed.
+fn hand_left(ctx: &mut Ctx, shared: &Shared, at_least: u64) -> Result<(), ExecutionError> {
+    if ctx.left < at_least.max(1) {
+        return Ok(());
+    }
+    match shared.run.settle(std::mem::take(&mut ctx.left)) {
+        true => Err(shared.run.overrun()),
+        false => Ok(()),
+    }
+}
+
+/// Looks at what a merge, a step or `init` ran as it finishes, as the
+/// map's code does for its elements (the element at `x`): past the
+/// budget it fails, and the blocks it filled since it last looked go to
+/// the run's total. Then keeps what it ran short of a block, and starts
+/// the next one's work anew.
+fn keep_left(ctx: &mut Ctx, shared: &Shared, x: u32) -> Result<(), ExecutionError> {
+    if shared.counts {
+        if ctx.work > shared.budget {
+            return Err(ExecutionError::Exhausted {
+                x,
+                y: 0,
+                budget: shared.budget,
+            });
+        }
+        let filled = ctx.work / orla_ir::WORK_BLOCK - ctx.looked / orla_ir::WORK_BLOCK;
+        if filled > 0 && shared.run.spend(filled) {
+            return Err(shared.run.overrun());
+        }
+        ctx.left += u64::from(ctx.work % orla_ir::WORK_BLOCK);
+    }
+    ctx.work = 0;
+    ctx.looked = 0;
+    hand_left(ctx, shared, LEFT_HANDED)
+}
+
 /// The failure a context's error code names.
 /// What the code a run left in the context says, at the element named:
 /// 1 a division by zero, 2 an overflow, 3 more loop iterations than the
-/// budget.
-fn failure(code: u32, x: u32, y: u32, budget: u32) -> ExecutionError {
+/// budget, 4 the run past its total.
+fn failure(code: u32, x: u32, y: u32, shared: &Shared) -> ExecutionError {
+    let budget = shared.budget;
     match code {
+        4 => shared.run.overrun(),
         1 => ExecutionError::Arithmetic {
             x,
             y,
@@ -696,12 +767,11 @@ fn run_scan(
     let count = domain.count();
     let mut ctx = Ctx { ..shared.template };
     let mut carried = vec![0u32; stride];
-    let budget = module.manifest.budget;
     let failure = |ctx: &Ctx, index: u32| -> Result<(), ExecutionError> {
         if ctx.error == 0 {
             return Ok(());
         }
-        Err(failure(ctx.error, index, 0, budget))
+        Err(failure(ctx.error, index, 0, &shared))
     };
     // `init` writes exactly `stride` words; each step reads `stride` words
     // of the carried value and writes `stride` words of the next.
@@ -709,6 +779,7 @@ fn run_scan(
     ctx.work = 0;
     unsafe { init(&mut ctx, carried.as_mut_ptr()) };
     failure(&ctx, 0)?;
+    keep_left(&mut ctx, &shared, 0)?;
     let mut words = vec![0u32; count * stride];
     for index in 0..count {
         let out = &mut words[index * stride..(index + 1) * stride];
@@ -716,8 +787,11 @@ fn run_scan(
         ctx.work = 0;
         unsafe { entry(&mut ctx, index as u32, carried.as_ptr(), out.as_mut_ptr()) };
         failure(&ctx, index as u32)?;
+        keep_left(&mut ctx, &shared, index as u32)?;
         carried.copy_from_slice(out);
     }
+    hand_left(&mut ctx, &shared, 1)?;
+    shared.run.outcome()?;
     let output = scope.create(port.ty.schema.clone(), domain)?;
     if let Err(error) = scope.write_values(output, &words) {
         let _ = scope.release(output);
@@ -1106,6 +1180,10 @@ pub(crate) mod offsets {
     pub const ERROR: i32 = std::mem::offset_of!(Ctx, error) as i32;
     pub const ERROR_AT: i32 = std::mem::offset_of!(Ctx, error_at) as i32;
     pub const WORK: i32 = std::mem::offset_of!(Ctx, work) as i32;
+    pub const LOOKED: i32 = std::mem::offset_of!(Ctx, looked) as i32;
+    pub const RUN_BLOCKS: i32 = std::mem::offset_of!(Ctx, run_blocks) as i32;
+    pub const RUN_LIMIT: i32 = std::mem::offset_of!(Ctx, run_limit) as i32;
+    pub const LEFT: i32 = std::mem::offset_of!(Ctx, left) as i32;
     pub const VIEW_SIZE: i64 = std::mem::size_of::<View>() as i64;
     pub const VIEW_WORDS: i32 = std::mem::offset_of!(View, words) as i32;
     pub const VIEW_BYTES: i32 = std::mem::offset_of!(View, bytes) as i32;

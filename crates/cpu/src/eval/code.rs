@@ -389,6 +389,9 @@ pub(super) enum Instr {
         until: Option<(Vec<Instr>, usize)>,
         body: Vec<Instr>,
         body_result: usize,
+        /// Whether its iterations can start other loops, and so look at
+        /// the element's work at the start of each.
+        looks: bool,
     },
     Index {
         dst: usize,

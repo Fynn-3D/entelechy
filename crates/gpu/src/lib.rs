@@ -640,7 +640,9 @@ impl GpuBackend {
         Ok(buffer)
     }
 
-    /// A failure word and its way back to the Host, from the pile or new.
+    /// A failure record and its way back to the Host, from the pile or
+    /// new: the first failure's word, the blocks of work the run has
+    /// taken, and the most it may take ([`wgsl::FAILURE_BYTES`]).
     fn failure_pair(&self) -> (wgpu::Buffer, wgpu::Buffer) {
         if let Some(pair) = self
             .failures
@@ -652,7 +654,7 @@ impl GpuBackend {
         }
         let word = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("failure"),
-            size: 4,
+            size: wgsl::FAILURE_BYTES,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -660,7 +662,7 @@ impl GpuBackend {
         });
         let back = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("failure back"),
-            size: 4,
+            size: wgsl::FAILURE_BYTES,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1204,7 +1206,7 @@ impl Backend for GpuBackend {
         // The failure word, copied where it can be read once the device
         // is waited for: at the caller's commit, not here.
         if let Some((word, back)) = &failure {
-            encoder.copy_buffer_to_buffer(word, 0, back, 0, 4);
+            encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
         }
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
@@ -1232,6 +1234,7 @@ impl Backend for GpuBackend {
                 pile: Arc::clone(&self.failures),
                 width: domain.width(),
                 budget: module.manifest.budget,
+                run: orla_rules::Run::new(scope.work()),
             }) as Box<dyn Check>
         });
         Ok((outputs, check))
@@ -1755,8 +1758,15 @@ impl GpuBackend {
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
         }
+        // No failure yet, no work taken, and the most the run may take;
+        // written before this submission's passes run.
         if let Some((failure, _)) = &failure {
-            encoder.clear_buffer(failure, 0, None);
+            let limit = orla_rules::Run::new(scope.work()).limit();
+            let record: Vec<u8> = [0u32, 0, limit, 0]
+                .iter()
+                .flat_map(|word| word.to_le_bytes())
+                .collect();
+            self.queue.write_buffer(failure, 0, &record);
         }
         // A narrow output whose elements share words is stored by atomic
         // or, which needs every word it lands in to start at zero.
@@ -2212,6 +2222,8 @@ struct FailureCheck {
     width: u32,
     /// The budget the run had, for naming a failure past it.
     budget: u32,
+    /// The run's total, for naming a run past it.
+    run: orla_rules::Run,
 }
 
 impl Check for FailureCheck {
@@ -2222,19 +2234,23 @@ impl Check for FailureCheck {
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|error| ExecutionError::Device(error.to_string()))?;
-        let word = {
+        let (word, blocks, left) = {
             let bytes = slice
                 .get_mapped_range()
                 .map_err(|error| ExecutionError::Device(error.to_string()))?;
-            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+            let at =
+                |k: usize| u32::from_le_bytes([bytes[k], bytes[k + 1], bytes[k + 2], bytes[k + 3]]);
+            (at(0), at(4), at(12))
         };
         back.unmap();
         self.pile
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push((word_buffer, back));
+        // An element's own failure names that element; past the run's
+        // total and with no element failing, the run is what failed.
         if word == 0 {
-            return Ok(());
+            return orla_rules::Run::judge(self.run.work(), u64::from(blocks), u64::from(left));
         }
         let word = u32::MAX - word;
         let element = word / 4;

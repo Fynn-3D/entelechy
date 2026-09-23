@@ -96,6 +96,99 @@ pub enum ExecutionError {
         /// The budget it had.
         budget: u32,
     },
+    /// The run's elements together ran more loop iterations than the Host
+    /// lets one run take.
+    Overrun {
+        /// The iterations the run could take.
+        work: u64,
+    },
+}
+
+/// A run's total of loop iterations, shared by every thread or
+/// invocation that runs its elements. An element hands it the blocks of
+/// [`orla_ir::WORK_BLOCK`] iterations it fills as its loops finish, so a
+/// run that passes the Host's bound is stopped while it runs; what is
+/// left of each element, short of a block, is summed where the element
+/// ran and handed on in blocks, and at the end as it is. The run fails
+/// when the whole, blocks and what is left, is more than the Host lets
+/// it take: an exact sum of every element's iterations, so it is decided
+/// alike however the elements are scheduled.
+pub struct Run {
+    blocks: std::sync::atomic::AtomicU32,
+    left: std::sync::atomic::AtomicU64,
+    limit: u32,
+    work: u64,
+}
+
+impl Run {
+    /// A run that may take `work` iterations ([`orla_abi::Scope::work`]).
+    pub fn new(work: u64) -> Self {
+        let blocks = (work / u64::from(orla_ir::WORK_BLOCK)).min(u64::from(u32::MAX / 2));
+        Self {
+            blocks: std::sync::atomic::AtomicU32::new(0),
+            left: std::sync::atomic::AtomicU64::new(0),
+            limit: blocks as u32,
+            work,
+        }
+    }
+
+    /// Hands the run `blocks` full blocks; `true` once the run has
+    /// certainly passed its bound, when the element should stop.
+    pub fn spend(&self, blocks: u32) -> bool {
+        self.blocks
+            .fetch_add(blocks, std::sync::atomic::Ordering::Relaxed)
+            .saturating_add(blocks)
+            > self.limit
+    }
+
+    /// Hands the run what a thread's elements left short of their
+    /// blocks, summed: its full blocks as blocks, the rest as it is.
+    /// `true` once the run has certainly passed its bound.
+    pub fn settle(&self, left: u64) -> bool {
+        let block = u64::from(orla_ir::WORK_BLOCK);
+        self.left
+            .fetch_add(left % block, std::sync::atomic::Ordering::Relaxed);
+        self.spend((left / block).min(u64::from(u32::MAX / 2)) as u32)
+    }
+
+    /// The run's answer once every element has handed in what it ran:
+    /// the failure when the whole is more than its bound.
+    pub fn outcome(&self) -> Result<(), ExecutionError> {
+        let blocks = u64::from(self.blocks.load(std::sync::atomic::Ordering::Relaxed));
+        let left = self.left.load(std::sync::atomic::Ordering::Relaxed);
+        Self::judge(self.work, blocks, left)
+    }
+
+    /// The answer for a run whose blocks and remainder were counted
+    /// elsewhere, a device's record read back.
+    pub fn judge(work: u64, blocks: u64, left: u64) -> Result<(), ExecutionError> {
+        match blocks * u64::from(orla_ir::WORK_BLOCK) + left > work {
+            true => Err(ExecutionError::Overrun { work }),
+            false => Ok(()),
+        }
+    }
+
+    /// The iterations the run may take.
+    pub fn work(&self) -> u64 {
+        self.work
+    }
+
+    /// The blocks a run may take, as a device is told.
+    pub fn limit(&self) -> u32 {
+        self.limit
+    }
+
+    /// The count of blocks handed, for a backend that adds to it in the
+    /// code it generates: the run has passed once the count after an
+    /// addition is more than [`Run::limit`].
+    pub fn blocks(&self) -> &std::sync::atomic::AtomicU32 {
+        &self.blocks
+    }
+
+    /// The failure of a run that passed its bound.
+    pub fn overrun(&self) -> ExecutionError {
+        ExecutionError::Overrun { work: self.work }
+    }
 }
 
 impl fmt::Display for ExecutionError {
@@ -128,6 +221,10 @@ impl fmt::Display for ExecutionError {
             Self::Exhausted { x, y, budget } => write!(
                 f,
                 "at element ({x}, {y}): more than {budget} loop iterations, the Kernel's budget (`budget N;` sets another)"
+            ),
+            Self::Overrun { work } => write!(
+                f,
+                "the run's elements together took more than {work} loop iterations, what the Host lets one run take (`--work` sets another)"
             ),
         }
     }

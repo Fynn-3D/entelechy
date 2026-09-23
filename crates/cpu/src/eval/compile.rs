@@ -73,6 +73,17 @@ pub(crate) struct Program<'s> {
     /// The loop iterations an element may run, when the module's worst
     /// case can pass it; `None` runs uncounted.
     pub(super) budget: Option<u32>,
+    /// The run's total, which every thread's elements hand their blocks
+    /// to, when the module counts.
+    pub(super) run: Option<orla_rules::Run>,
+}
+
+impl Program<'_> {
+    /// The run's answer once every element has handed in what it ran:
+    /// the failure when its elements together passed the Host's bound.
+    pub(crate) fn outcome(&self) -> Result<(), ExecutionError> {
+        self.run.as_ref().map_or(Ok(()), orla_rules::Run::outcome)
+    }
 }
 
 /// A module compiled to word code: what does not change from one
@@ -98,6 +109,8 @@ pub(super) struct Shared {
     pub(super) records: Vec<orla_ir::StructDef>,
     /// What one element of each input is.
     pub(super) elements: Vec<Type>,
+    /// For each function, the most loop iterations one call may run.
+    pub(super) functions_work: Vec<u64>,
 }
 
 impl Shared {
@@ -149,6 +162,7 @@ impl<'s> Program<'s> {
                 .iter()
                 .map(|port| port.element())
                 .collect(),
+            functions_work: module.functions_work(),
         };
         for function in &module.functions {
             let code = compile_function(&shared, function, None);
@@ -230,6 +244,9 @@ impl<'s> Program<'s> {
             domain,
             context: invocation.context,
             budget: module.counts_work().then_some(module.manifest.budget),
+            run: module
+                .counts_work()
+                .then(|| orla_rules::Run::new(scope.work())),
         })
     }
 }
@@ -869,11 +886,14 @@ impl FunctionCompiler<'_> {
                 body,
             } => {
                 let dst = define(self);
+                let looks =
+                    orla_ir::loop_looks(*count, until.as_ref(), body, &self.shared.functions_work);
                 self.loops.push(dst);
                 let until = until.as_ref().map(|block| self.nested(block));
                 let (body_code, body_result) = self.nested(body);
                 self.loops.pop();
                 Instr::Loop {
+                    looks,
                     count: *count,
                     bound: bound.as_ref().map(|bound| self.loc(bound).at),
                     init: self.loc(init).at,

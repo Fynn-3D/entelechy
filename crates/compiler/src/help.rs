@@ -287,7 +287,7 @@ pub fn forms() -> Vec<Form> {
             "budget",
             "kernel",
             "budget 100000;",
-            "The loop iterations one element may run (a step of a scan, a merge of a reduction), 16777216 unless declared; an element past it fails the evaluation on every backend, as an overflow does, and the running system keeps its last state. A Kernel whose loops cannot pass it is never counted.",
+            "The loop iterations one element may run (a step of a scan, a merge of a reduction), 16777216 unless declared, a loop's added as it finishes; an element past it fails the evaluation on every backend, as an overflow does, and the running system keeps its last state. A run of all the elements together is bounded by the Host (`--work`).",
         ),
         form(
             "compute",

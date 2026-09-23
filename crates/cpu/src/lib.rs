@@ -96,6 +96,7 @@ impl CpuBackend {
         }
         let program = eval::Program::with(code, module, invocation, scope, invocation.domain)?;
         let results = compute(&program, &strides)?;
+        program.outcome()?;
         drop(program);
         let domain = invocation.domain;
         let stride: usize = strides.iter().sum();
@@ -179,6 +180,8 @@ fn reduce(
         level = next;
         count = count.div_ceil(2);
     }
+    machine.finish()?;
+    program.outcome()?;
     drop(machine);
     drop(program);
     let port = &module.manifest.outputs[0];
@@ -205,6 +208,7 @@ fn prefix(
     let domain = scope.size(invocation.inputs[0])?;
     let program = eval::Program::with(code.clone(), module, invocation, scope, domain)?;
     let mut values = compute(&program, &[stride])?;
+    program.outcome()?;
     drop(program);
     let port = &module.manifest.outputs[0];
     let scalars = port.ty.schema.scalars();
@@ -543,6 +547,8 @@ fn scan(
     }
     // The memories as the steps left them become the outputs after the
     // first, in the manifest's order.
+    machine.finish()?;
+    program.outcome()?;
     let memories = machine.take_memories();
     drop(machine);
     drop(program);
@@ -594,6 +600,7 @@ fn scatter(
     let address = address_words(target);
     let program = eval::Program::with(code.clone(), module, invocation, scope, sources)?;
     let pairs = compute(&program, &[address + stride])?;
+    program.outcome()?;
     drop(program);
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let port = &module.manifest.outputs[0];
@@ -653,7 +660,7 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
             let (y, z) = (row % height, row / height);
             machine.run_entry_words([x, y, z], slot)?;
         }
-        Ok(())
+        machine.finish()
     };
     if threads == 1 {
         run_elements(0, &mut results)?;
