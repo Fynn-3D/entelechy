@@ -19,12 +19,12 @@ orla-ir = { path = "../ir" }
 orla-graph = { path = "../graph" }
 orla-scene = { path = "../scene" }
 orla-runtime = { path = "../runtime" }
-orla-cpu = { path = "../cpu" }
 orla-session = { path = "../session" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+orla-cpu = { path = "../cpu" }
 orla-graph = { path = "../graph" }
 serde_json = "1"

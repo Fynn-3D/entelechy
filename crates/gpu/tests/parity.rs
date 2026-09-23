@@ -502,7 +502,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
 
 #[test]
 fn the_rasterizer_matches_the_reference_on_interior_pixels() {
-    use orla_cpu::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
+    use orla_rules::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
     let Some(gpu) = gpu() else { return };
     let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, Box::new(gpu));
     // Two triangles: a large one at depth 0.6 and a nearer one at 0.3
@@ -1562,7 +1562,7 @@ fn nothing_the_shader_declares_spells_a_type() {
 /// which pixels those are.
 #[test]
 fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
-    use orla_cpu::raster::{
+    use orla_rules::raster::{
         Cutout, SURFACE_WORDS, mask_schema, rasterize_masked, triangle_schema, vertex_schema,
     };
     let Some(gpu) = gpu() else { return };

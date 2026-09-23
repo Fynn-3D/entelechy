@@ -26,7 +26,7 @@ contract is enforced, and the constraints that are not visible from the code.
 | Orla IR | [ir](crates/ir/src/lib.rs), [validation](crates/ir/src/validate.rs), [display](crates/ir/src/display.rs), [fusion](crates/ir/src/fuse.rs), [optimizer](crates/ir/src/optimize.rs) | typing, SSA order, capability coverage; [fusion bit-identity](crates/ir/tests/fusion.rs) |
 | Kernel language | [language](crates/language/src/lib.rs), [parser](crates/language/src/parser.rs), [lexer](crates/language/src/lexer.rs) | syntax, precedence, positioned errors, near misses |
 | Compiler | [compiler](crates/compiler/src/lib.rs), [lowering](crates/compiler/src/lower/), [help](crates/compiler/src/help.rs) | [compile tests](crates/compiler/tests/compile.rs) |
-| Shared rules | [rules](crates/rules/src/lib.rs), [the `Backend` contract](crates/rules/src/backend.rs), [reduce tree](crates/rules/src/reduce.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract](crates/rules/src/raster.rs) | every backend's parity test runs by them |
+| Shared rules | [rules](crates/rules/src/lib.rs), [the `Backend` contract](crates/rules/src/backend.rs), [reduce tree](crates/rules/src/reduce.rs), [matrix formulas](crates/rules/src/matrix.rs), [rasterizer contract and reference](crates/rules/src/raster.rs) | every backend's parity test runs by them |
 | Reference backend | [cpu](crates/cpu/src/lib.rs), [word code](crates/cpu/src/eval/) | [execution tests](crates/cpu/tests/execute.rs), [optimizer tests](crates/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/jit/src/lib.rs), [Cranelift emission](crates/jit/src/codegen.rs) | [parity](crates/jit/tests/parity.rs), [matrix](crates/jit/tests/matrix.rs), every replay on `jit` |
 | GPU backend | [gpu](crates/gpu/src/lib.rs), [WGSL emission](crates/gpu/src/wgsl.rs), [rasterizer](crates/gpu/src/raster.rs), [presenter](crates/gpu/src/present.rs) | [parity](crates/gpu/tests/parity.rs), [matrix](crates/gpu/tests/matrix.rs); both skip without an adapter |
@@ -391,8 +391,9 @@ Represented in the IR, and so on every backend:
 - The JIT matches it bit for bit: same word layout, same integer checks
   recorded in a context struct, Field reads and transcendental functions
   through the same Rust helpers. It compiles maps and scans; reduce and
-  scatter run its compiled entry under the CPU's own fold and combine
-  rules, and native operations are the CPU's code.
+  scatter run its compiled entry under the fold and combine rules of
+  [rules](crates/rules/src/lib.rs), and native operations are the
+  reference rasterizer there; the JIT takes nothing from the interpreter.
 - The GPU matches to rounding. The JIT is the default backend; the Player takes the GPU, then
   the JIT, then the interpreter. `--backend cpu` and `trace` ask for the
   reference.

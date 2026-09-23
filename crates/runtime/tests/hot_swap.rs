@@ -208,7 +208,7 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
     let vertices = host
         .adopt(
             orla_runtime::FieldData::from_storage(
-                orla_cpu::raster::vertex_schema(),
+                orla_rules::raster::vertex_schema(),
                 Domain::Rows(3),
                 words,
             )
@@ -218,7 +218,7 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
     let triangles = host
         .adopt(
             orla_runtime::FieldData::from_storage(
-                orla_cpu::raster::triangle_schema(),
+                orla_rules::raster::triangle_schema(),
                 Domain::Rows(1),
                 vec![0, 1, 2],
             )

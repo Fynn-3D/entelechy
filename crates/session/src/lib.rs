@@ -35,6 +35,11 @@ use orla_runtime::{
     Value,
 };
 
+/// What `trace` returns: the reference interpreter's record of one
+/// element, which only the interpreter keeps, so an interface reads it
+/// here rather than reaching for that backend itself.
+pub use orla_cpu::{CALL_RECORDS, Trace, TraceValue};
+
 /// Parses a window given on a command line: `<w>x<h>` or `<w>x<h>@<scale>`,
 /// returning the size in pixels and the scale factor (one when absent).
 pub fn parse_window(text: &str) -> Result<([f32; 2], f32), String> {

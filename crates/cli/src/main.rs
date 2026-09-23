@@ -1163,7 +1163,7 @@ fn trace(args: &[String]) -> Result<(), String> {
             orla_session::protocol::type_name(module, value.ty)
         );
     }
-    let show = |value: &orla_cpu::TraceValue, indent: &str, arrow: &str| {
+    let show = |value: &orla_session::TraceValue, indent: &str, arrow: &str| {
         let shown = if value.ran {
             orla_session::protocol::words_text(module, value.ty, &value.words)
         } else {
@@ -1187,7 +1187,7 @@ fn trace(args: &[String]) -> Result<(), String> {
     if traced.calls_truncated {
         println!(
             "  ... more calls than the {} recorded",
-            orla_cpu::CALL_RECORDS
+            orla_session::CALL_RECORDS
         );
     }
     for value in &traced.results {

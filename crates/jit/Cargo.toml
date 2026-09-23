@@ -10,7 +10,6 @@ rust-version.workspace = true
 orla-rules = { path = "../rules" }
 orla-abi = { path = "../abi" }
 orla-ir = { path = "../ir" }
-orla-cpu = { path = "../cpu" }
 # 0.131 is the newest Cranelift that builds on Rust 1.93; later ones want 1.94.
 cranelift-codegen = "0.131"
 cranelift-frontend = "0.131"
@@ -19,6 +18,7 @@ cranelift-module = "0.131"
 cranelift-native = "0.131"
 
 [dev-dependencies]
+orla-cpu = { path = "../cpu" }
 orla-compiler = { path = "../compiler" }
 orla-matrix = { path = "../matrix" }
 

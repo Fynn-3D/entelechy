@@ -13,7 +13,6 @@
 //! first failing pixel in row-major order is the one reported.
 
 mod eval;
-pub mod raster;
 
 use std::any::Any;
 
@@ -738,8 +737,8 @@ impl Backend for CpuBackend {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
         match op {
-            NativeOp::Rasterize => raster::rasterize(invocation, scope),
-            NativeOp::RasterizeCutout => raster::rasterize_cutout(invocation, scope),
+            NativeOp::Rasterize => orla_rules::raster::rasterize(invocation, scope),
+            NativeOp::RasterizeCutout => orla_rules::raster::rasterize_cutout(invocation, scope),
         }
     }
 }
