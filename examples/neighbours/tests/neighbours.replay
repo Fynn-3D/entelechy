@@ -35,3 +35,12 @@ frame 1.0
 expect unsorted.result[0] = 0
 expect crowded.result[0] = 0
 expect 96 54 = 0.136 0.129 0.125 0.02
+
+# A window of odd sides, which is what dragging a corner gives: the
+# canvas is half of it either way, floored, and a side of a domain is a
+# whole number.
+reset
+window 193 109
+frame 0.0
+expect unsorted.result[0] = 0
+expect count heat.result = 5184

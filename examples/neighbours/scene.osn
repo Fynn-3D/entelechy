@@ -43,7 +43,9 @@ node ends: flock.ends@1 { counts <- counts.result; }
 node crowded: flock.crowded@1 { counts <- counts.result; cap = cap; }
 node unsorted: flock.unsorted@1 { cells <- cell.result; order <- order.result; }
 
-node canvas: Grid<Int> { domain = window() / 2; }
+// Half the window each way, floored: a window is any size a hand
+// drags it to, and a side of a domain is a whole number.
+node canvas: Grid<Int> { domain = max(floor(window() / 2), 1); }
 node heat: flock.splat@1 { bodies <- bodies.result; canvas <- canvas.result; }
 node soft: flock.soften@1 { heat <- heat.result; }
 node view: flock.view@1 { heat <- soft.result; bright = bright; domain = window(); }

@@ -339,11 +339,14 @@ impl DomainExpr {
             (v > 0.0 && v.fract() == 0.0 && v <= u32::MAX as f32)
                 .then_some(v as u32)
                 .ok_or_else(|| {
-                    // A count a Kernel works out reaches zero the frame
-                    // it culls everything, which is the one case worth
-                    // naming the remedy for.
+                    // Two cases are worth naming the remedy for: a count
+                    // a Kernel works out reaches zero the frame it culls
+                    // everything, and a window divided is a fraction as
+                    // soon as somebody drags the corner to an odd width.
                     let hint = if v == 0.0 {
                         "; a count that can reach zero wants `max(..., 1)`"
+                    } else if v.fract() != 0.0 {
+                        "; a side that divides wants `floor(...)`"
                     } else {
                         ""
                     };
@@ -651,6 +654,43 @@ mod tests {
             let printed = expr.to_string();
             assert_eq!(parse(&printed), expr, "{text} printed as {printed}");
         }
+        // A window is whatever size a hand drags it to, so a side that
+        // divides is a fraction half the time; the message says what to
+        // write instead.
+        let odd = |name: &str| match name {
+            "window" => Some(Value::Vec2([953.0, 541.0])),
+            _ => None,
+        };
+        let fraction = parse("window() / 2")
+            .resolve(&port, &param, &odd, &element)
+            .unwrap_err()
+            .message;
+        assert!(fraction.contains("found 476.5"), "{fraction}");
+        assert!(fraction.contains("`floor(...)`"), "{fraction}");
+        assert_eq!(
+            parse("max(floor(window() / 2), 1)")
+                .resolve(&port, &param, &odd, &element)
+                .unwrap(),
+            Domain::Grid(476, 270),
+        );
+        // And the smallest window there is leaves a side of nothing,
+        // which the other half of that spelling covers.
+        let tiny = |name: &str| match name {
+            "window" => Some(Value::Vec2([1.0, 1.0])),
+            _ => None,
+        };
+        let zero = parse("floor(window() / 2)")
+            .resolve(&port, &param, &tiny, &element)
+            .unwrap_err()
+            .message;
+        assert!(zero.contains("`max(..., 1)`"), "{zero}");
+        assert_eq!(
+            parse("max(floor(window() / 2), 1)")
+                .resolve(&port, &param, &tiny, &element)
+                .unwrap(),
+            Domain::Grid(1, 1),
+        );
+
         assert!(parse("256").is_constant());
         assert!(!parse("size(map)").is_constant());
         assert!(!parse("value(live)").is_constant());
