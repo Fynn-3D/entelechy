@@ -429,15 +429,11 @@ fn fields_flow_through_the_gpu_exactly() {
 #[test]
 fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
     let Some(gpu) = gpu() else { return };
+    // The device is taken before the backend goes to the runtime, which
+    // knows only a `Backend` from then on.
+    let device = gpu.device().clone();
     let mut runtime = orla_runtime::Runtime::with_backend(1 << 22, Box::new(gpu));
     runtime.set_background(true);
-    let device = runtime
-        .backend()
-        .as_any()
-        .downcast_ref::<GpuBackend>()
-        .unwrap()
-        .device()
-        .clone();
     let source = |value: &str| {
         format!(
             "kernel test.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4({value}, 0.5, 0.25, 1.0); }} }}"

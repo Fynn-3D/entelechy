@@ -2,7 +2,6 @@
 //! another for scans prepares and executes each mode where it belongs,
 //! and the scan's inputs reach it through Host memory.
 
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use orla_abi::{Capabilities, Capability, Domain, Handle, Invocation, Scope};
@@ -20,9 +19,6 @@ struct Recorder {
 impl Backend for Recorder {
     fn name(&self) -> &'static str {
         self.name
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
     fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
         (self.no_doubles && module.holds(orla_abi::Type::Double))
@@ -184,9 +180,6 @@ struct Clocked {
 impl Backend for Clocked {
     fn name(&self) -> &'static str {
         "clocked"
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
     fn prepare(
         &self,

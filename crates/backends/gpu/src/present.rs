@@ -1,6 +1,7 @@
 //! Presenting a resident image to a window without reading it back.
 //!
-//! The Player hands the backend a window; the backend configures a surface
+//! The Player takes a [`Display`] from the backend before the backend goes
+//! to a runtime, and hands it a window; the display configures a surface
 //! on it and draws the output image with one fullscreen triangle whose
 //! fragment shader samples the image's storage buffer directly, letterboxed
 //! and nearest-neighbour scaled. The image never crosses to the Host. An
@@ -10,6 +11,32 @@
 use std::any::Any;
 
 use crate::{DeviceImage, GpuBackend};
+
+/// The GPU's device as a window reaches it. It is taken from a backend
+/// before the backend is given to a runtime and shares its device, so an
+/// interface draws what the backend left resident without asking the
+/// runtime which backend it holds: the runtime only knows a `Backend`.
+#[derive(Clone)]
+pub struct Display {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl GpuBackend {
+    /// A display on this backend's device, for presenting what it leaves
+    /// resident.
+    pub fn display(&self) -> Display {
+        let (instance, adapter, device, queue) = self.parts();
+        Display {
+            instance: instance.clone(),
+            adapter: adapter.clone(),
+            device: device.clone(),
+            queue: queue.clone(),
+        }
+    }
+}
 
 /// Where the image landed inside the window, in window pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -103,7 +130,7 @@ pub struct Overlay<'a> {
     pub height: u32,
 }
 
-/// A window surface the backend draws resident images into.
+/// A window surface a [`Display`] draws resident images into.
 pub struct Presenter {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -112,7 +139,7 @@ pub struct Presenter {
     srgb: bool,
 }
 
-impl GpuBackend {
+impl Display {
     /// Configures a surface on `target` (a window handle the backend may
     /// keep) of the given size.
     pub fn presenter(
@@ -121,7 +148,7 @@ impl GpuBackend {
         width: u32,
         height: u32,
     ) -> Result<Presenter, String> {
-        let (instance, adapter, device, _) = self.parts();
+        let (instance, adapter, device) = (&self.instance, &self.adapter, &self.device);
         let surface = instance
             .create_surface(target)
             .map_err(|error| error.to_string())?;
@@ -235,7 +262,7 @@ impl GpuBackend {
         let image = device
             .downcast_ref::<DeviceImage>()
             .ok_or_else(|| "image is resident on a different backend".to_string())?;
-        let (_, _, gpu_device, queue) = self.parts();
+        let (gpu_device, queue) = (&self.device, &self.queue);
         if (presenter.config.width, presenter.config.height) != (window_width, window_height)
             && window_width > 0
             && window_height > 0
@@ -326,6 +353,21 @@ impl GpuBackend {
         queue.submit(Some(encoder.finish()));
         queue.present(texture);
         Ok(Some(placement))
+    }
+
+    /// A buffer of `contents`, as the backend makes one.
+    fn buffer(&self, label: &str, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        let size = (contents.len().max(16) as u64).div_ceil(16) * 16;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !contents.is_empty() {
+            self.queue.write_buffer(&buffer, 0, contents);
+        }
+        buffer
     }
 }
 

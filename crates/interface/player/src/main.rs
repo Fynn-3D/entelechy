@@ -6,8 +6,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use orla_gpu::GpuBackend;
-use orla_gpu::present::{Overlay, Presenter};
+use orla_gpu::present::{Display, Overlay, Presenter};
 use orla_player::audio::Audio;
 use orla_player::gamepad::Gamepad;
 use orla_player::hud::{self, Panel, Stats};
@@ -147,6 +146,9 @@ struct Player {
     clock: Instant,
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    /// The device the backend computes on, when it has one to show: a
+    /// window presents what it left resident there without a readback.
+    display: Option<Display>,
     /// The GPU presenter, when the backend is the GPU and the surface could
     /// be configured; then frames are shown without any readback.
     presenter: Option<Presenter>,
@@ -421,14 +423,13 @@ impl Player {
                 (presentable, resident, host.image_size(output))
             {
                 let size = window.inner_size();
-                let backend = self.session.runtime().backend().as_any();
-                if let Some(gpu) = backend.downcast_ref::<GpuBackend>() {
+                if let Some(display) = &self.display {
                     let overlay = self.panel.as_ref().map(|panel| Overlay {
                         pixels: &panel.pixels,
                         width: panel.width,
                         height: panel.height,
                     });
-                    match gpu.present(
+                    match display.present(
                         presenter,
                         device,
                         width,
@@ -617,9 +618,8 @@ impl ApplicationHandler for Player {
             }
         };
         let size = window.inner_size();
-        let backend = self.session.runtime().backend().as_any();
-        if let Some(gpu) = backend.downcast_ref::<GpuBackend>() {
-            match gpu.presenter(window.clone(), size.width, size.height) {
+        if let Some(display) = &self.display {
+            match display.presenter(window.clone(), size.width, size.height) {
                 Ok(presenter) => {
                     self.presenter = Some(presenter);
                     eprintln!("presenting on the device");
@@ -746,17 +746,17 @@ fn main() -> ExitCode {
     };
     let budget = options.limits;
     let runtime = match options.backend.as_deref() {
-        Some(name) => Session::runtime_for(name, budget),
-        None => Session::runtime_for("gpu", budget).or_else(|error| {
+        Some(name) => Session::runtime_and_display(name, budget),
+        None => Session::runtime_and_display("gpu", budget).or_else(|error| {
             eprintln!("gpu backend unavailable ({error}); using the jit");
-            Session::runtime_for("jit", budget).or_else(|error| {
+            Session::runtime_and_display("jit", budget).or_else(|error| {
                 eprintln!("jit backend unavailable ({error}); using the interpreter");
-                Session::runtime_for("cpu", budget)
+                Session::runtime_and_display("cpu", budget)
             })
         }),
     };
-    let runtime = match runtime {
-        Ok(runtime) => runtime,
+    let (runtime, display) = match runtime {
+        Ok(built) => built,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
@@ -791,6 +791,7 @@ fn main() -> ExitCode {
         clock: Instant::now(),
         window: None,
         surface: None,
+        display,
         presenter: None,
         downloads: 0,
         last_frame: Vec::new(),

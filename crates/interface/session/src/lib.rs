@@ -321,31 +321,49 @@ impl Session {
     /// Builds a runtime over a named backend: `cpu`, or `gpu` when a device
     /// is available.
     pub fn runtime_for(backend: &str, limits: Limits) -> Result<Runtime, String> {
-        let mut runtime = Self::backend_runtime(backend, limits.words)?;
-        runtime.host_mut().set_work(limits.work);
-        Ok(runtime)
+        Self::runtime_and_display(backend, limits).map(|(runtime, _)| runtime)
     }
 
-    fn backend_runtime(backend: &str, budget_words: usize) -> Result<Runtime, String> {
+    /// The same, with the display a window presents what the backend
+    /// leaves resident through, when the backend has a device to show.
+    /// It is taken before the backend goes into the runtime, which knows
+    /// only a `Backend` from then on.
+    pub fn runtime_and_display(
+        backend: &str,
+        limits: Limits,
+    ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
+        let (mut runtime, display) = Self::backend_runtime(backend, limits.words)?;
+        runtime.host_mut().set_work(limits.work);
+        Ok((runtime, display))
+    }
+
+    fn backend_runtime(
+        backend: &str,
+        budget_words: usize,
+    ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
         match backend {
-            "cpu" => Ok(Runtime::with_backend(
-                budget_words,
-                Box::new(orla_cpu::CpuBackend),
+            "cpu" => Ok((
+                Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend)),
+                None,
             )),
             "gpu" => {
                 // A GPU walks a scan on one thread; the JIT takes the
                 // scans, the GPU everything else.
                 let gpu = orla_gpu::GpuBackend::new().map_err(|error| error.to_string())?;
+                let display = gpu.display();
                 let backend: Box<dyn Backend> = Box::new(gpu);
                 let ordered: Option<Box<dyn Backend>> = orla_jit::JitBackend::new()
                     .ok()
                     .map(|jit| Box::new(jit) as Box<dyn Backend>);
-                Ok(Runtime::with_backends(budget_words, backend, ordered))
+                Ok((
+                    Runtime::with_backends(budget_words, backend, ordered),
+                    Some(display),
+                ))
             }
             "jit" => {
                 let jit = orla_jit::JitBackend::new()?;
                 let backend: Box<dyn Backend> = Box::new(jit);
-                Ok(Runtime::with_backend(budget_words, backend))
+                Ok((Runtime::with_backend(budget_words, backend), None))
             }
             other => Err(format!("unknown backend `{other}`; use cpu, gpu, or jit")),
         }
@@ -586,14 +604,7 @@ impl Session {
     /// that is the difference between a dispatch and a picture. The CPU
     /// and the JIT are measured as they are.
     pub fn set_measured(&mut self, on: bool) {
-        if let Some(gpu) = self
-            .runtime
-            .backend()
-            .as_any()
-            .downcast_ref::<orla_gpu::GpuBackend>()
-        {
-            gpu.set_measured(on);
-        }
+        self.runtime.backend().set_measured(on);
     }
 
     /// What measuring one node costs before the node does anything, so
@@ -607,11 +618,7 @@ impl Session {
     /// Whether a profile's numbers are what the device's own clock said
     /// about the work, rather than what the call and its wait took.
     pub fn measures_the_device(&self) -> bool {
-        self.runtime()
-            .backend()
-            .as_any()
-            .downcast_ref::<orla_gpu::GpuBackend>()
-            .is_some_and(|gpu| gpu.device_clock_answered())
+        self.runtime().backend().measures_the_device()
     }
 
     /// Enables or disables fusion of pointwise chains.

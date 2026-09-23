@@ -1860,9 +1860,6 @@ impl orla_runtime::Backend for NoDoubles {
     fn name(&self) -> &'static str {
         "device"
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
         module
             .holds(orla_ir::Type::Double)

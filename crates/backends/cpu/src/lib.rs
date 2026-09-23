@@ -711,10 +711,6 @@ impl Backend for CpuBackend {
         "cpu"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         Ok(Box::new(CpuCode(Code::of(module))))
     }

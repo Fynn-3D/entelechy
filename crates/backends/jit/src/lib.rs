@@ -169,10 +169,6 @@ impl Backend for JitBackend {
         "jit"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         let code = codegen::compile(module, self.isa.clone())?;
         Ok(Box::new(Compiled {

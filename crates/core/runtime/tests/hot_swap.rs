@@ -286,10 +286,6 @@ impl orla_runtime::Backend for Lossy {
         "lossy"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn prepare(
         &self,
         module: &orla_runtime::Validated,

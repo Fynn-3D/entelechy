@@ -395,15 +395,8 @@ impl GpuBackend {
         })
     }
 
-    /// Makes every execution wait for the device before it returns, so a
-    /// profile measures the work rather than the submission. It costs a
-    /// stall per node, so it is for measuring, not for running.
-    pub fn set_measured(&self, on: bool) {
-        self.measured
-            .store(on, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Whether executions wait for the device; see [`GpuBackend::set_measured`].
+    /// Whether executions wait for the device; see
+    /// [`Backend::set_measured`].
     pub fn measured(&self) -> bool {
         self.measured.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -793,6 +786,15 @@ impl Backend for GpuBackend {
         }
     }
 
+    fn set_measured(&self, on: bool) {
+        self.measured
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn measures_the_device(&self) -> bool {
+        self.device_clock_answered()
+    }
+
     /// Waits for the queue to run dry. A dispatch is submitted and not
     /// waited for, so a frame a caller times is otherwise the asking; a
     /// measurement wants this, a Player gets it from presenting, and an
@@ -806,10 +808,6 @@ impl Backend for GpuBackend {
 
     fn has_device(&self) -> bool {
         true
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn declines(&self, module: &Validated) -> Option<String> {

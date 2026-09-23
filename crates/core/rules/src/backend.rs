@@ -161,10 +161,6 @@ pub trait Backend: Send + Sync {
     /// Short backend name for diagnostics, e.g. `cpu`.
     fn name(&self) -> &'static str;
 
-    /// For interfaces that know a specific backend, such as a window that
-    /// presents a resident image directly.
-    fn as_any(&self) -> &dyn Any;
-
     /// Why this backend does not run `module`, when it does not: a GPU
     /// without 64-bit arithmetic, say. A runtime with a second backend
     /// prepares the module there and reports the reason beside the node;
@@ -245,6 +241,21 @@ pub trait Backend: Send + Sync {
     /// it.
     fn measurement_floor(&self) -> std::time::Duration {
         std::time::Duration::ZERO
+    }
+
+    /// Makes every execution wait for the device before it returns, so
+    /// a profile measures the work rather than the submission. It costs
+    /// a stall per node, so it is for measuring, not for running. A
+    /// backend whose work is done when `execute` returns is measured as
+    /// it is.
+    fn set_measured(&self, on: bool) {
+        let _ = on;
+    }
+
+    /// Whether a measured run's times are what the device's own clock
+    /// said about the work, rather than what the call and its wait took.
+    fn measures_the_device(&self) -> bool {
+        false
     }
 
     /// Runs a map `repeat` times, feeding input `chain.0` from output
