@@ -270,6 +270,8 @@ impl fmt::Display for Op {
             Self::Count(input) => write!(f, "host count input{input}"),
             Self::Size(input) => write!(f, "host size input{input}"),
             Self::Put(input, index, value) => write!(f, "host put input{input} {index} {value}"),
+            Self::Spend(counted) => write!(f, "work spend {counted}"),
+            Self::Look => write!(f, "work look"),
         }
     }
 }

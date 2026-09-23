@@ -2227,9 +2227,11 @@ impl Session {
             let module = written
                 .as_ref()
                 .unwrap_or_else(|| version.module().expect("checked above"));
+            // It runs with its work accounted, as a backend runs it.
+            let module = orla_ir::account(module);
             let granted = module.manifest.requires.clone();
             let mut scope = orla_runtime::Scope::new(self.runtime.host_mut(), granted);
-            orla_cpu::trace(module, &invocation, &mut scope, at).map_err(|error| error.to_string())
+            orla_cpu::trace(&module, &invocation, &mut scope, at).map_err(|error| error.to_string())
         })();
         for node in pinned {
             self.evaluator.unpin(&node);

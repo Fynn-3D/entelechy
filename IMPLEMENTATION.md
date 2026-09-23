@@ -275,12 +275,15 @@ Represented in the IR, and so on every backend:
   all elements together, kept as a [`Run`](crates/rules/src/lib.rs) that
   elements hand whole blocks to. [`Module::counts_work`](crates/ir/src/lib.rs)
   counts only when the static bound (`worst_work`) can fill a block or
-  pass the budget. Every backend adds a loop's iterations as it
-  finishes and looks where [`loop_looks`](crates/ir/src/lib.rs) says and
-  at an element's end, so an innermost loop pays one addition; it fails
+  pass the budget. Where work is counted is IR:
+  [`account`](crates/ir/src/account.rs) places `Op::Spend` after every
+  loop and `Op::Look` where an element looks, and the runtime accounts a
+  module as it prepares it ([`prepare_on`](crates/runtime/src/lib.rs)),
+  so a backend implements two operations and never the rule. It fails
   with `ExecutionError::Exhausted` at the same element, or `Overrun` for
   the run, whose sum is exact
-  ([session tests](crates/cli/tests/session.rs)).
+  ([IR tests](crates/compiler/tests/compile.rs),
+  [session tests](crates/cli/tests/session.rs)).
 - Integer failures are the reference's on every backend. The GPU emits
   checked arithmetic for a module that can fail ([`can_fail`](crates/gpu/src/wgsl.rs)),
   each invocation recording its first failure into one word by

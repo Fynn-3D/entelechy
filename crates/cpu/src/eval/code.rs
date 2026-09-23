@@ -389,9 +389,6 @@ pub(super) enum Instr {
         until: Option<(Vec<Instr>, usize)>,
         body: Vec<Instr>,
         body_result: usize,
-        /// Whether its iterations can start other loops, and so look at
-        /// the element's work at the start of each.
-        looks: bool,
     },
     Index {
         dst: usize,
@@ -493,6 +490,16 @@ pub(super) enum Instr {
         kind: Address,
         value: usize,
         n: usize,
+    },
+    /// Adds the iterations whose body ran, of the loop just finished, to
+    /// the element's work.
+    Spend {
+        dst: usize,
+    },
+    /// Looks at the element's work: a failure past a bound, the blocks
+    /// filled handed to the run.
+    Look {
+        dst: usize,
     },
 }
 

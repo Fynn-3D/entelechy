@@ -9,6 +9,7 @@
 //! access appears only as explicit operations, so a validator can prove
 //! which capabilities a Kernel needs before it ever runs.
 
+mod account;
 mod display;
 pub use display::{NamedManifest, port_type_name, type_name};
 mod fuse;
@@ -18,6 +19,7 @@ mod validate;
 use std::fmt;
 use std::str::FromStr;
 
+pub use account::account;
 pub use fuse::{FuseError, InputUse, fuse, fuse_outputs, input_use, samples_only};
 pub use optimize::optimize;
 pub use orla_abi::{
@@ -1166,6 +1168,19 @@ pub enum Op {
     /// address outside the memory is dropped. Yields the value written.
     /// Host call: `field.write`. Entry point of an ordered Kernel only.
     Put(u32, ValueId, ValueId),
+    /// Adds to the running element's work the iterations whose body ran
+    /// of the loop the operand names, which is the instruction right
+    /// before it, and yields them as `Int`. Placed by [`account`] and
+    /// never written; see [`Module::worst_work`] for when.
+    Spend(ValueId),
+    /// Looks at the running element's work, as `Bool`: `true` once the
+    /// element has run more loop iterations than its Kernel's budget, or
+    /// its run more than the Host's bound, each a failure recorded where
+    /// it is seen, when the element stops its loops. Otherwise it hands
+    /// the run's total the blocks of [`WORK_BLOCK`] the element has
+    /// filled since it last looked. Placed by [`account`] and never
+    /// written.
+    Look,
 }
 
 /// One step from a whole value towards a part of it, as [`Op::Part`]
@@ -1388,6 +1403,15 @@ impl Module {
             .map(|function| block_work(&function.body, &per_function))
             .max()
             .unwrap_or(0)
+    }
+
+    /// Whether the module's work is accounted in it ([`account`]): an
+    /// element looks when it finishes.
+    pub fn accounted(&self) -> bool {
+        std::iter::once(&self.entry)
+            .chain(&self.merge)
+            .chain(&self.init)
+            .any(|function| matches!(function.body.last(), Some(i) if i.op == Op::Look))
     }
 
     /// For each function, the most loop iterations one call may run.

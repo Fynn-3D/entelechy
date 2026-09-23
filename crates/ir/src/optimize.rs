@@ -852,7 +852,7 @@ impl Ctx<'_> {
     /// Whether an instruction must run for what it does, not for its value.
     fn has_effects(&self, op: &Op) -> bool {
         match op {
-            Op::Put(..) => true,
+            Op::Put(..) | Op::Spend(_) | Op::Look => true,
             Op::Call(callee, _) => self.writers[*callee as usize],
             Op::If {
                 then, otherwise, ..
@@ -880,7 +880,7 @@ impl Ctx<'_> {
     /// index, not a read of a memory the steps change, not a block.
     fn cse_safe(&self, op: &Op) -> bool {
         match op {
-            Op::Put(..) | Op::Carried | Op::Index => false,
+            Op::Put(..) | Op::Spend(_) | Op::Look | Op::Carried | Op::Index => false,
             Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => false,
             Op::Call(callee, _) => !self.writers[*callee as usize],
             Op::Sample(input)
@@ -1043,6 +1043,7 @@ fn operands(op: &Op) -> Vec<ValueId> {
             }))
             .collect(),
         Op::Put(_, address, value) => vec![*address, *value],
+        Op::Spend(counted) => vec![*counted],
         _ => Vec::new(),
     }
 }
@@ -1461,6 +1462,7 @@ fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
             *address = map(*address);
             *value = map(*value);
         }
+        Op::Spend(counted) => *counted = map(*counted),
         _ => {}
     }
 }
@@ -1615,6 +1617,30 @@ fn fold_intrinsic(intrinsic: Intrinsic, args: &[Value]) -> Option<Value> {
         (ToInt, [Value::Float(v)]) => Some(Value::Int(*v as i32)),
         (ToInt, [Value::Bool(v)]) => Some(Value::Int(i32::from(*v))),
         _ => None,
+    }
+}
+
+/// A function numbered again in pre-order, its operands following.
+pub(crate) fn renumbered(function: Function) -> Function {
+    let mut renumber = Renumber {
+        ids: BTreeMap::new(),
+        next: 0,
+    };
+    let body = renumber.block(&function.body);
+    Function {
+        name: function.name,
+        args: function.args,
+        body,
+        results: function
+            .results
+            .iter()
+            .map(|id| renumber.map(*id))
+            .collect(),
+        bindings: function
+            .bindings
+            .into_iter()
+            .map(|(id, name)| (renumber.map(id), name))
+            .collect(),
     }
 }
 

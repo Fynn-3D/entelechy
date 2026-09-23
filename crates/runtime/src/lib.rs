@@ -54,7 +54,11 @@ impl fmt::Display for Generation {
 /// the backend's native operations.
 enum Body {
     Kernel {
+        /// The Kernel as it was compiled, which fusion and inspection read.
         module: Box<Validated>,
+        /// The module the backend runs: the Kernel with its work
+        /// accounted ([`orla_ir::account`]).
+        run: Box<Validated>,
         prepared: Box<dyn Prepared>,
     },
     Native(NativeOp),
@@ -117,6 +121,9 @@ impl KernelVersion {
 /// published.
 pub struct Candidate {
     module: Validated,
+    /// The module the backend prepared and runs: `module` with its work
+    /// accounted.
+    run: Validated,
     source: String,
     prepared: Box<dyn Prepared>,
 }
@@ -267,9 +274,13 @@ fn prepare_on(
     module: Validated,
     source: String,
 ) -> Result<Candidate, PrepareError> {
-    let prepared = backend.prepare(&module).map_err(PrepareError::Backend)?;
+    // A backend runs the Kernel with its work accounted in its IR, so
+    // where work is counted is one rule, not one a backend.
+    let run = orla_ir::account(&module);
+    let prepared = backend.prepare(&run).map_err(PrepareError::Backend)?;
     Ok(Candidate {
         module,
+        run,
         source,
         prepared,
     })
@@ -487,6 +498,7 @@ impl Runtime {
             source: candidate.source,
             body: Body::Kernel {
                 module: Box::new(candidate.module),
+                run: Box::new(candidate.run),
                 prepared: candidate.prepared,
             },
         })
@@ -721,6 +733,7 @@ impl Runtime {
             source: candidate.source,
             body: Body::Kernel {
                 module: Box::new(candidate.module),
+                run: Box::new(candidate.run),
                 prepared: candidate.prepared,
             },
         });
@@ -772,7 +785,11 @@ impl Runtime {
     ) -> Result<Vec<Handle>, ExecutionError> {
         // A backend that runs the whole thing itself keeps every Field
         // between the times to itself, which is the point of asking.
-        if let Body::Kernel { module, prepared } = &version.body
+        if let Body::Kernel {
+            module,
+            run,
+            prepared,
+        } = &version.body
             && !self.routed(module)
         {
             let granted = version.manifest().requires.clone();
@@ -782,7 +799,7 @@ impl Runtime {
                 let mut scope = Scope::new(&mut self.host, granted);
                 backend.execute_repeated(
                     prepared.as_ref(),
-                    module,
+                    run,
                     invocation,
                     &mut scope,
                     repeat,
@@ -834,7 +851,11 @@ impl Runtime {
         // neighbour's time was printed as its own.
         self.last_measured = None;
         match &version.body {
-            Body::Kernel { module, prepared } => {
+            Body::Kernel {
+                module,
+                run,
+                prepared,
+            } => {
                 let ordered = self.routed(module);
                 if ordered {
                     // The ordered backend reads through Host memory:
@@ -852,7 +873,7 @@ impl Runtime {
                 let before = backend.uploaded();
                 let outputs = {
                     let mut scope = Scope::new(&mut self.host, granted);
-                    backend.execute_checked(prepared.as_ref(), module, invocation, &mut scope)
+                    backend.execute_checked(prepared.as_ref(), run, invocation, &mut scope)
                 };
                 self.moved.uploaded += backend.uploaded().saturating_sub(before);
                 self.last_measured = backend.last_device_time();

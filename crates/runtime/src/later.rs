@@ -230,7 +230,7 @@ fn run_on(
     invocation: &Invocation,
     host: &mut Host,
 ) -> Outcome {
-    let Body::Kernel { module, prepared } = &version.body else {
+    let Body::Kernel { run, prepared, .. } = &version.body else {
         return Err(ExecutionError::Device(
             "a native operation runs on the frame".into(),
         ));
@@ -238,7 +238,7 @@ fn run_on(
     let granted = version.manifest().requires.clone();
     let outputs = {
         let mut scope = Scope::new(host, granted);
-        backend.execute(prepared.as_ref(), module, invocation, &mut scope)
+        backend.execute(prepared.as_ref(), run, invocation, &mut scope)
     };
     let outputs = crate::held_to(version.manifest(), host, outputs)?;
     outputs

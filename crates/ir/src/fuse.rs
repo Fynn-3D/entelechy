@@ -598,6 +598,8 @@ impl<'a> Renumber<'a> {
                 *value = self.map(*value);
             }
             Op::Key(code) | Op::Button(code) | Op::Stick(code) => *code = self.map(*code),
+            Op::Spend(counted) => *counted = self.map(*counted),
+            Op::Look => {}
             Op::Const(_)
             | Op::Param(_)
             | Op::Arg(_)

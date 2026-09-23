@@ -46,8 +46,8 @@ pub const FAILED_BUDGET: u32 = 3;
 /// least integer, `udiv` and `urem` by zero. Such a module's passes
 /// record their first failure; any other pays nothing for the checking.
 pub fn can_fail(module: &Module) -> bool {
-    // A module whose loops can pass its budget fails where they do.
-    module.counts_work()
+    // A module whose work is accounted fails where its looks say.
+    module.accounted()
         || module
             .functions
             .iter()
@@ -646,16 +646,17 @@ fn spend(blocks: u32) -> bool {{
     return true;
 }}"
         );
-        if module.counts_work() {
-            // A loop adds the iterations it ran as it finishes; an element
-            // looks when it finishes and at each iteration of a loop that
-            // starts others. Past the budget, the element fails; the blocks
+        if module.accounted() {
+            // `Op::Look`: past the budget, the element fails; the blocks
             // filled since the last look go to the run's total, and past
-            // that its count is set past the budget, so every loop around
-            // it leaves.
+            // that its count is set past the budget, so every look after
+            // says so too.
             let _ = writeln!(
                 out,
                 "fn look() -> bool {{
+    if (work < next_look) {{
+        return false;
+    }}
     if (work > {budget}u) {{
         fail({FAILED_BUDGET}u);
         return true;
@@ -673,9 +674,6 @@ fn spend(blocks: u32) -> bool {{
 var<private> owed: u32;
 var<workgroup> leftover: atomic<u32>;
 fn keep_left() {{
-    if (work >= next_look) {{
-        look();
-    }}
     owed = owed + (work & {mask}u);
     if (owed >= {handed}u) {{
         settle_left();
@@ -919,7 +917,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     } else {
         "store_out0(element, entry(coord, element));"
     };
-    if module.counts_work() {
+    if module.accounted() {
         // A module that counts its work runs every invocation to one
         // barrier: an element runs unless its run has already passed the
         // Host's bound, keeps what it ran short of a block in the
@@ -945,9 +943,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
         begin_work();
         let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
         {store}
-        if (work >= next_look) {{
-            look();
-        }}
         atomicAdd(&leftover, work & {mask}u);
     }}
     workgroupBarrier();
@@ -1828,7 +1823,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 /// A pass's call that keeps what an element ran short of a block, when
 /// the module counts its work.
 fn keep_left(module: &Module) -> &'static str {
-    if module.counts_work() {
+    if module.accounted() {
         "keep_left();"
     } else {
         ""
@@ -1837,7 +1832,7 @@ fn keep_left(module: &Module) -> &'static str {
 
 /// A pass's call that hands the run what its elements kept, at its end.
 fn settle_left(module: &Module) -> &'static str {
-    if module.counts_work() {
+    if module.accounted() {
         "settle_left();"
     } else {
         ""
@@ -2485,7 +2480,13 @@ fn speculable(block: &Block) -> bool {
         && block.body.iter().all(|instruction| {
             !matches!(
                 instruction.op,
-                Op::Loop { .. } | Op::If { .. } | Op::Match { .. } | Op::Put(..) | Op::Call(..)
+                Op::Loop { .. }
+                    | Op::If { .. }
+                    | Op::Match { .. }
+                    | Op::Put(..)
+                    | Op::Call(..)
+                    | Op::Spend(_)
+                    | Op::Look
             ) && !fails(&instruction.op, instruction.ty)
         })
 }
@@ -2783,6 +2784,17 @@ impl Emitter<'_> {
                 args.iter().map(v).collect::<Vec<_>>().join(", ")
             ),
             Op::Intrinsic(intrinsic, args) => self.intrinsic(*intrinsic, args, *ty),
+            // The iterations whose body ran are the loop's own counter,
+            // kept after it: one addition.
+            Op::Spend(counted) => {
+                self.line(depth, &format!("work = work + u32(it{});", counted.0));
+                self.line(depth, &format!("let v{}: i32 = it{};", id.0, counted.0));
+                return;
+            }
+            Op::Look => {
+                self.line(depth, &format!("let v{}: bool = look();", id.0));
+                return;
+            }
             Op::Put(input, index, value) => {
                 // The store, when the address is inside; the value is the
                 // instruction's own.
@@ -2867,10 +2879,10 @@ impl Emitter<'_> {
                 };
                 // `it` and the value's number: a plain `i` would spell
                 // `i32` at value 32, which WGSL reads as the type.
-                let counts = self.module.counts_work();
-                // A loop that counts keeps `it` after it: the iterations
-                // whose body ran, all of them unless `until` stopped one,
-                // which is what it adds as it finishes.
+                let counts = self.module.accounted();
+                // A loop of a module that counts keeps `it` after it: the
+                // iterations whose body ran, all of them unless `until`
+                // stopped one, which the spend after it adds.
                 if counts {
                     self.line(depth, &format!("var it{}: i32 = 0;", id.0));
                     self.line(
@@ -2887,17 +2899,6 @@ impl Emitter<'_> {
                     );
                 }
                 self.loops.push(*id);
-                // A loop that can run a lot looks at its element's work at
-                // the start of each iteration.
-                let nested = orla_ir::loop_looks(
-                    *count,
-                    until.as_ref(),
-                    body,
-                    &self.module.functions_work(),
-                );
-                if counts && nested {
-                    self.line(depth + 1, "if (work >= next_look && look()) { break; }");
-                }
                 if let Some(until) = until {
                     let done = self.block(until, depth + 1);
                     self.line(depth + 1, &format!("if ({done}) {{ break; }}"));
@@ -2906,9 +2907,6 @@ impl Emitter<'_> {
                 self.line(depth + 1, &format!("v{} = {next};", id.0));
                 self.loops.pop();
                 self.line(depth, "}");
-                if counts {
-                    self.line(depth, &format!("work = work + u32(it{});", id.0));
-                }
                 return;
             }
             Op::Carried => match self.loops.last() {

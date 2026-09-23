@@ -257,8 +257,6 @@ struct Shared {
     budget: u32,
     /// The run's total; boxed so the contexts' pointer to it stays good.
     run: Box<orla_rules::Run>,
-    /// Whether the module counts its work.
-    counts: bool,
 }
 
 // The views point into the scope's Fields, borrowed for the run, and the
@@ -350,7 +348,6 @@ fn shared(
         template,
         budget: module.manifest.budget,
         run,
-        counts: module.counts_work(),
     })
 }
 
@@ -576,7 +573,7 @@ fn run_reduce(
             if ctx.error != 0 {
                 return Err(failure(ctx.error, 0, 0, &shared));
             }
-            keep_left(&mut ctx, &shared, 0)?;
+            keep_left(&mut ctx, &shared)?;
         }
         if count % 2 == 1 {
             next[pairs * stride..].copy_from_slice(&level[(count - 1) * stride..count * stride]);
@@ -699,26 +696,11 @@ fn hand_left(ctx: &mut Ctx, shared: &Shared, at_least: u64) -> Result<(), Execut
     }
 }
 
-/// Looks at what a merge, a step or `init` ran as it finishes, as the
-/// map's code does for its elements (the element at `x`): past the
-/// budget it fails, and the blocks it filled since it last looked go to
-/// the run's total. Then keeps what it ran short of a block, and starts
-/// the next one's work anew.
-fn keep_left(ctx: &mut Ctx, shared: &Shared, x: u32) -> Result<(), ExecutionError> {
-    if shared.counts {
-        if ctx.work > shared.budget {
-            return Err(ExecutionError::Exhausted {
-                x,
-                y: 0,
-                budget: shared.budget,
-            });
-        }
-        let filled = ctx.work / orla_ir::WORK_BLOCK - ctx.looked / orla_ir::WORK_BLOCK;
-        if filled > 0 && shared.run.spend(filled) {
-            return Err(shared.run.overrun());
-        }
-        ctx.left += u64::from(ctx.work % orla_ir::WORK_BLOCK);
-    }
+/// Keeps what a merge, a step or `init` ran short of a block, as the map's
+/// code does for its elements, once its last look has handed the run its
+/// blocks; then starts the next one's work anew.
+fn keep_left(ctx: &mut Ctx, shared: &Shared) -> Result<(), ExecutionError> {
+    ctx.left += u64::from(ctx.work % orla_ir::WORK_BLOCK);
     ctx.work = 0;
     ctx.looked = 0;
     hand_left(ctx, shared, LEFT_HANDED)
@@ -779,7 +761,7 @@ fn run_scan(
     ctx.work = 0;
     unsafe { init(&mut ctx, carried.as_mut_ptr()) };
     failure(&ctx, 0)?;
-    keep_left(&mut ctx, &shared, 0)?;
+    keep_left(&mut ctx, &shared)?;
     let mut words = vec![0u32; count * stride];
     for index in 0..count {
         let out = &mut words[index * stride..(index + 1) * stride];
@@ -787,7 +769,7 @@ fn run_scan(
         ctx.work = 0;
         unsafe { entry(&mut ctx, index as u32, carried.as_ptr(), out.as_mut_ptr()) };
         failure(&ctx, index as u32)?;
-        keep_left(&mut ctx, &shared, index as u32)?;
+        keep_left(&mut ctx, &shared)?;
         carried.copy_from_slice(out);
     }
     hand_left(&mut ctx, &shared, 1)?;

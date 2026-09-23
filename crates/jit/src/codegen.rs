@@ -475,6 +475,9 @@ struct Fx<'a, 'b> {
     /// count that needs a look, the budget passed or a block full; and
     /// the count at the last look, up to which the blocks are the run's.
     work: Option<(Variable, Variable, Variable)>,
+    /// The iterations whose body ran, of each loop finished, by the
+    /// loop's value: what the spend right after it adds.
+    ran: HashMap<u32, Value>,
 }
 
 impl<'a, 'b> Fx<'a, 'b> {
@@ -565,8 +568,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             scratch,
             flags: MemFlags::trusted(),
             settled: MemFlags::trusted().with_readonly(),
-            budget: module.counts_work().then_some(module.manifest.budget),
+            budget: module.accounted().then_some(module.manifest.budget),
             work: None,
+            ran: HashMap::new(),
         }
     }
 
@@ -618,25 +622,26 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.load_count();
     }
 
-    /// Adds the `ran` iterations a loop ran as it finishes: one addition,
-    /// and nothing more.
-    fn charge(&mut self, ran: Value) {
+    /// [`Op::Spend`]: adds the iterations whose body ran, of the loop
+    /// just finished, to the count: one addition.
+    fn spend(&mut self, ran: Value) -> Value {
         if let Some((count, _, _)) = self.work {
             let before = self.b.use_var(count);
             let work = self.b.ins().iadd(before, ran);
             self.b.def_var(count, work);
         }
+        ran
     }
 
-    /// Looks at the element's work: a compare, unless the count has
-    /// reached the end of the block last looked in or passed the budget.
-    /// Past the budget, the element fails; the blocks filled since the
-    /// last look go to the run's total, added in place, and past that
-    /// the run fails and the count is set past the budget, so every loop
-    /// around leaves. With `leave`, a failed element leaves that loop.
-    fn look(&mut self, leave: Option<(Block, &[BlockArg])>) {
+    /// [`Op::Look`]: a compare, unless the count has reached the end of
+    /// the block last looked in or passed the budget. Past the budget,
+    /// the element fails; the blocks filled since the last look go to the
+    /// run's total, added in place, and past that the run fails and the
+    /// count is set past the budget, so every look after says so too.
+    /// Gives the `Bool` word of whether the element must stop.
+    fn look(&mut self) -> Value {
         let (Some(budget), Some((count, next, seen))) = (self.budget, self.work) else {
-            return;
+            return self.i32c(0);
         };
         let work = self.b.use_var(count);
         let look_at = self.b.use_var(next);
@@ -651,7 +656,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             self.b.create_block(),
             self.b.create_block(),
         );
-        self.b.ins().brif(due, slow, &[], after, &[]);
+        self.b.append_block_param(after, types::I32);
+        let (no, yes) = (self.i32c(0), self.i32c(1));
+        self.b.ins().brif(due, slow, &[], after, &[no.into()]);
         self.b.switch_to_block(slow);
         self.b.seal_block(slow);
         let over = self
@@ -659,10 +666,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             .ins()
             .icmp_imm(IntCC::UnsignedGreaterThan, work, i64::from(budget));
         self.fail_if(over, EXHAUSTED);
-        match leave {
-            Some((exit, args)) => self.b.ins().brif(over, exit, args, spend, &[]),
-            None => self.b.ins().brif(over, after, &[], spend, &[]),
-        };
+        self.b.ins().brif(over, after, &[yes.into()], spend, &[]);
         self.b.switch_to_block(spend);
         self.b.seal_block(spend);
         let looked = self.b.use_var(seen);
@@ -693,16 +697,16 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.seal_block(spent);
         let past = self.i32c(i64::from(budget) + 1);
         self.b.def_var(count, past);
-        match leave {
-            Some((exit, args)) => self.b.ins().jump(exit, args),
-            None => self.b.ins().jump(after, &[]),
-        };
+        let yes = self.i32c(1);
+        self.b.ins().jump(after, &[yes.into()]);
         self.b.switch_to_block(resume);
         self.b.seal_block(resume);
         self.count_from(work, work);
-        self.b.ins().jump(after, &[]);
+        let no = self.i32c(0);
+        self.b.ins().jump(after, &[no.into()]);
         self.b.switch_to_block(after);
         self.b.seal_block(after);
+        self.b.block_params(after)[0]
     }
 
     /// Writes the count and the count at the last look to the context,
@@ -834,9 +838,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                 offset += self.b.func.dfg.value_type(word).bytes() as i32;
             }
         }
-        // The element looks as it finishes, and what it ran short of a
-        // block is kept for the run.
-        self.look(None);
+        // What the element ran short of a block, once its last look has
+        // handed the run its blocks, is kept for the run.
         if let Some((count, _, _)) = self.work {
             let held = self.b.use_var(count);
             let short = self
@@ -1761,9 +1764,9 @@ impl<'a, 'b> Fx<'a, 'b> {
                     self.b.append_block_param(exit, *t);
                 }
                 self.b.append_block_param(header, types::I32);
-                // The exit also takes the iterations whose body ran,
-                // which the loop adds as it finishes.
-                let counting = self.budget.is_some() && self.work.is_some();
+                // The exit also takes the iterations whose body ran, which
+                // the spend after the loop adds.
+                let counting = self.work.is_some();
                 if counting {
                     self.b.append_block_param(exit, types::I32);
                 }
@@ -1797,19 +1800,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let carried = header_params[..carried_types.len()].to_vec();
                 let index = header_params[carried_types.len()];
                 self.loops.push((carried.clone(), index));
-                // A loop that can run a lot looks at its element's work at
-                // the start of each iteration, and leaves once it has
-                // failed.
-                let nested = orla_ir::loop_looks(
-                    *count,
-                    until.as_ref(),
-                    body,
-                    &self.module.functions_work(),
-                );
-                if counting && nested {
-                    let args = leave(&carried, index);
-                    self.look(Some((exit, &args)));
-                }
                 if let Some(until) = until {
                     self.block(&until.body);
                     let done_word = self.words(&until.result)[0];
@@ -1841,7 +1831,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.b.seal_block(exit);
                 let params = self.b.block_params(exit).to_vec();
                 if counting {
-                    self.charge(params[carried_types.len()]);
+                    self.ran.insert(id.0, params[carried_types.len()]);
                 }
                 params[..carried_types.len()].to_vec()
             }
@@ -2123,6 +2113,14 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let tys = word_types(self.module, ty);
                 self.load_scratch(&tys)
             }
+            Op::Spend(counted) => {
+                let ran = match self.ran.get(&counted.0) {
+                    Some(ran) => *ran,
+                    None => self.i32c(0),
+                };
+                vec![self.spend(ran)]
+            }
+            Op::Look => vec![self.look()],
             Op::Put(input, address, value) => {
                 // The value's words go to the scratch slot; the helper
                 // resolves the address as the interpreter does and drops a

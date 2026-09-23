@@ -43,6 +43,9 @@ pub(crate) struct Machine<'p, 's> {
     /// The running element's count when it last looked: the blocks up to
     /// it are the run's already.
     pub(super) looked: u32,
+    /// The iterations whose body ran, of the loop that finished last,
+    /// which a spend right after it adds.
+    pub(super) ran: u32,
     /// What this thread's finished elements ran short of their blocks,
     /// summed, not yet handed to the run's total.
     pub(super) left: u64,
@@ -94,6 +97,7 @@ impl<'p, 's> Machine<'p, 's> {
             loops: Vec::new(),
             work: 0,
             looked: 0,
+            ran: 0,
             left: 0,
             at: [0; 3],
             scratch: Vec::new(),
@@ -113,7 +117,6 @@ impl<'p, 's> Machine<'p, 's> {
         self.loops.clear();
         self.begin(entry.frame)?;
         self.run(&entry.code, 0)?;
-        self.look()?;
         let mut cursor = 0;
         for result in &entry.results {
             out[cursor..cursor + result.n]
@@ -140,7 +143,6 @@ impl<'p, 's> Machine<'p, 's> {
         self.begin(entry.frame)?;
         self.stack[..program.code.carry].copy_from_slice(carried);
         self.run(&entry.code, 0)?;
-        self.look()?;
         let result = entry.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
@@ -158,7 +160,6 @@ impl<'p, 's> Machine<'p, 's> {
         self.loops.clear();
         self.begin(init.frame)?;
         self.run(&init.code, 0)?;
-        self.look()?;
         let result = init.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
@@ -185,7 +186,6 @@ impl<'p, 's> Machine<'p, 's> {
         self.stack[la.at..la.at + la.n].copy_from_slice(a);
         self.stack[lb.at..lb.at + lb.n].copy_from_slice(b);
         self.run(&merge.code, 0)?;
-        self.look()?;
         let result = merge.results[0];
         out.copy_from_slice(&self.stack[result.at..result.at + result.n]);
         Ok(())
@@ -846,7 +846,6 @@ impl<'p, 's> Machine<'p, 's> {
                 until,
                 body,
                 body_result,
-                looks,
             } => {
                 s.copy_within(fp + init..fp + init + n, fp + carried);
                 let times = match bound {
@@ -858,9 +857,6 @@ impl<'p, 's> Machine<'p, 's> {
                 // `until` stops one.
                 let mut ran = times;
                 for index in 0..times {
-                    if *looks {
-                        self.look()?;
-                    }
                     *self.loops.last_mut().expect("loop is open") = index as i32;
                     if let Some((until, done)) = until {
                         self.run(until, fp)?;
@@ -874,7 +870,7 @@ impl<'p, 's> Machine<'p, 's> {
                         .copy_within(fp + body_result..fp + body_result + n, fp + carried);
                 }
                 self.loops.pop();
-                self.work = self.work.saturating_add(ran);
+                self.ran = ran;
             }
             Instr::Index { dst } => {
                 s[fp + dst] = *self.loops.last().expect("validation guarantees a loop") as u32;
@@ -996,6 +992,16 @@ impl<'p, 's> Machine<'p, 's> {
                 }
                 let first = offset.min(view.stride.saturating_sub(*n));
                 view.read(words, index, first, &mut s[fp + dst..fp + dst + n]);
+            }
+            Instr::Spend { dst } => {
+                self.work = self.work.saturating_add(self.ran);
+                self.stack[fp + dst] = self.ran;
+            }
+            Instr::Look { dst } => {
+                // The interpreter stops at a failure, so an element that
+                // looks and goes on has not failed.
+                self.look()?;
+                self.stack[fp + dst] = 0;
             }
             Instr::Put {
                 dst,

@@ -69,6 +69,14 @@ they are scheduled. A run that passes it and also has a failing element
 may be named for either, since a run that has passed is stopped before
 every element runs; it fails either way.
 
+**Where the rule lives.** Where work is counted is written into the IR,
+once: [`orla_ir::account`](../crates/ir/src/account.rs) follows every
+loop with a `Spend` of the iterations whose body ran, ends every element
+with a `Look`, and puts a `Look` first in the `until` of every loop that
+can run a lot. The runtime accounts a module as it hands it to a
+backend, and a backend implements what a spend and a look are, as it
+implements any other operation, never where they go.
+
 **How it stays free.** A loop adds the iterations whose body ran when it
 finishes, not at each one, so an innermost loop pays one addition. An
 element looks at its count when it finishes; only a loop that can run
@@ -81,7 +89,8 @@ bulk. A Kernel whose elements cannot run 1024 iterations, or pass their
 budget, is not counted at all. Measured against uncounted runs, the loop
 scenes cost what they did.
 
-**Where.** [`Manifest::budget`](../crates/ir/src/lib.rs),
+**Where.** [`account`](../crates/ir/src/account.rs),
+[`Manifest::budget`](../crates/ir/src/lib.rs),
 [`Host::work`](../crates/host/src/lib.rs),
 [`Run`](../crates/rules/src/lib.rs) and
 [`Module::counts_work`](../crates/ir/src/lib.rs). Tests

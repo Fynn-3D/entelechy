@@ -1288,3 +1288,108 @@ fn a_parameter_is_any_value_a_kernel_can_hold() {
     );
     assert!(wrong.contains("an IVec2 default must be"), "{wrong}");
 }
+
+/// Where work is counted is written into the IR, once: every loop is
+/// followed by a spend of the iterations whose body ran, every element
+/// looks when it finishes, and only a loop that can run more than
+/// `LOOK_WORK` by itself looks at each of its iterations. A module that
+/// cannot pass its budget or fill a block is left as it is, and
+/// accounting twice changes nothing.
+#[test]
+fn work_is_accounted_in_the_ir() {
+    fn ops(instructions: &[orla_ir::Instruction], out: &mut Vec<String>) {
+        for instruction in instructions {
+            match &instruction.op {
+                Op::Loop { until, body, .. } => {
+                    out.push("loop".into());
+                    if let Some(until) = until {
+                        out.push("until".into());
+                        ops(&until.body, out);
+                    }
+                    ops(&body.body, out);
+                    out.push("end".into());
+                }
+                Op::If {
+                    then, otherwise, ..
+                } => {
+                    ops(&then.body, out);
+                    ops(&otherwise.body, out);
+                }
+                Op::Spend(_) => out.push("spend".into()),
+                Op::Look => out.push("look".into()),
+                _ => {}
+            }
+        }
+    }
+    let shape = |module: &orla_ir::Validated| {
+        let mut out = Vec::new();
+        ops(&module.entry.body, &mut out);
+        out.join(" ")
+    };
+    let kernel = |compute: &str| {
+        compile(&format!(
+            "kernel t.w@1 {{ requires {{ field.write; }} param n: Int = 3; output result: Rows<Int>; compute {{ {compute} }} }}"
+        ))
+        .unwrap()
+    };
+
+    // A loop read at run time can fill a block: it is counted, and the
+    // element looks when it finishes.
+    let counted = orla_ir::account(&kernel("return loop n with a = 0 { a + 1 };"));
+    assert_eq!(shape(&counted), "loop end spend look");
+    assert!(counted.accounted());
+
+    // A nest that can run more than LOOK_WORK looks at each outer
+    // iteration, before its own `until`; the inner loop only spends.
+    let nested = orla_ir::account(&kernel(
+        "return loop 64 with a = 0 until a > n { loop n with b = a { b + 1 } };",
+    ));
+    assert_eq!(
+        shape(&nested),
+        "loop until look loop end spend end spend look"
+    );
+
+    // A nest that cannot run that much is looked at when it finishes.
+    let small = orla_ir::account(&kernel(
+        "return loop 9 with a = 0 { loop n with b = a { b + 1 } };",
+    ));
+    assert_eq!(shape(&small), "loop loop end spend end spend look");
+
+    // Loops bounded where they are written, within a block: nothing.
+    let literal = kernel("return loop 30 with a = 0 { loop 30 with b = a { b + 1 } };");
+    let unchanged = orla_ir::account(&literal);
+    assert!(!unchanged.accounted());
+    assert_eq!(unchanged.to_string(), literal.to_string());
+
+    // Accounting an accounted module gives it back.
+    assert_eq!(orla_ir::account(&counted).to_string(), counted.to_string());
+}
+
+/// A spend counts the loop right before it and nothing else: the
+/// validator refuses one anywhere else, so a backend can take the loop's
+/// own counter for it.
+#[test]
+fn a_spend_follows_its_loop() {
+    let module = orla_ir::account(
+        &compile(
+            "kernel t.w@1 { requires { field.write; } param n: Int = 3; output result: Rows<Int>; compute { let x = loop n with a = 0 { a + 1 }; return x * 2; } }",
+        )
+        .unwrap(),
+    )
+    .into_module();
+    let mut moved = module.clone();
+    // Swap the spend with the instruction after it.
+    let at = moved
+        .entry
+        .body
+        .iter()
+        .position(|instruction| matches!(instruction.op, Op::Spend(_)))
+        .unwrap();
+    let (a, b) = (moved.entry.body[at].id, moved.entry.body[at + 1].id);
+    moved.entry.body.swap(at, at + 1);
+    moved.entry.body[at].id = a;
+    moved.entry.body[at + 1].id = b;
+    let error = orla_ir::validate(moved).unwrap_err().to_string();
+    assert!(error.contains("not the loop right before it"), "{error}");
+    assert!(orla_ir::validate(module).is_ok());
+}

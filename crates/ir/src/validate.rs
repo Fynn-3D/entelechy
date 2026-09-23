@@ -623,8 +623,19 @@ impl<'a> Checker<'a> {
     }
 
     fn instructions(&mut self, instructions: &[Instruction]) -> Result<(), ValidationError> {
+        let mut before: Option<&Instruction> = None;
         for instruction in instructions {
+            // A spend counts the loop right before it.
+            if let Op::Spend(counted) = instruction.op
+                && !before.is_some_and(|b| b.id == counted && matches!(b.op, Op::Loop { .. }))
+            {
+                return Err(self.fail(format!(
+                    "{} spends {counted}, which is not the loop right before it",
+                    instruction.id
+                )));
+            }
             self.instruction(instruction)?;
+            before = Some(instruction);
         }
         Ok(())
     }
@@ -641,6 +652,11 @@ impl<'a> Checker<'a> {
         self.next += 1;
         let manifest = &self.module.manifest;
         let actual = match op {
+            Op::Spend(counted) => {
+                self.operand(*counted, position)?;
+                Type::Int
+            }
+            Op::Look => Type::Bool,
             Op::Const(value) => value
                 .ty()
                 .ok_or_else(|| self.fail(format!("{position} is a constant record")))?,
