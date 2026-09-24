@@ -169,8 +169,13 @@ impl Session {
         self.kernels.collect_pending(&mut self.runtime, &mut events);
         self.scene
             .sync(&mut self.kernels, &mut self.runtime, &mut events);
-        self.inputs
-            .sync(self.scene.graph(), self.runtime.host_mut(), &mut events);
+        let documents = self.scene.read_from();
+        self.inputs.sync(
+            self.scene.graph(),
+            &documents,
+            self.runtime.host_mut(),
+            &mut events,
+        );
         self.sync_placements(&mut events);
         events.append(&mut self.inputs.take_frame_events());
         events.append(&mut self.writes.take_events());
@@ -182,6 +187,29 @@ impl Session {
     /// anywhere else, and nothing at all until something is allowed.
     pub fn allow_writes(&mut self, dir: &Path) -> Result<(), String> {
         self.writes.allow(dir)
+    }
+
+    /// Holds what the scene's inputs read to the directories the scene
+    /// names, its own, the graphs' it places and the libraries and
+    /// packages it uses, and the ones [`Session::allow_reads`] allowed. For a session an
+    /// agent composes and reads back from (`serve`, the Player's
+    /// `--serve`): a scene a person runs reads what it names.
+    pub fn restrict_reads(&mut self) {
+        self.inputs.restrict_reads();
+    }
+
+    /// Allows the scene's inputs to be read from files in `dir` and under
+    /// it, where reads are restricted ([`Session::restrict_reads`]).
+    pub fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
+        self.inputs.allow_reads(dir)
+    }
+
+    /// Grants what a command line's `--allow` said.
+    pub fn allow(&mut self, allowance: &crate::Allowance) -> Result<(), String> {
+        match allowance {
+            crate::Allowance::FileRead(dir) => self.allow_reads(dir),
+            crate::Allowance::FileWrite(dir) => self.allow_writes(dir),
+        }
     }
 
     /// Whether `text`, as the scene document, would be taken whole: it

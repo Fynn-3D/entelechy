@@ -63,6 +63,15 @@ pub fn read_document(path: &Path) -> Result<String, String> {
     }
 }
 
+/// Whether `path` is inside a package: a directory above it that ends
+/// in `.orlapkg` and holds a `package.osn`. What a package ships, its
+/// font or its meshes, is there to be read by whatever uses it.
+pub(crate) fn in_a_package(path: &Path) -> bool {
+    path.ancestors().skip(1).any(|dir| {
+        dir.extension().is_some_and(|ext| ext == "orlapkg") && dir.join("package.osn").is_file()
+    })
+}
+
 /// A path whose first part names a package: `picture.orlapkg/graphs/x.osn`
 /// where the package is one `ORLA_PACKAGES` lists. `None` when no part of
 /// it names a package that is there.

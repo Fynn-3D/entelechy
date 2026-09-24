@@ -1292,3 +1292,151 @@ fn compose_checks_before_it_writes_and_against_the_version_read() {
     assert_eq!(responses[1]["ok"]["text"], grown);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A served scene is composed by an agent and read back through `read`,
+/// so what its inputs read is held to its documents' directories and the
+/// ones the person allowed: a file elsewhere is refused by name, and read
+/// once `--allow file.read` names its directory.
+#[test]
+fn a_served_scene_reads_beside_its_documents_or_where_allowed() {
+    let base = std::env::temp_dir().join(format!("orla-protocol-reads-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (dir, elsewhere) = (base.join("scene"), base.join("elsewhere"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(dir.join("beside.bin"), b"ab").unwrap();
+    std::fs::write(elsewhere.join("secret.bin"), b"xyz").unwrap();
+    let scene = dir.join("scene.osn");
+    let text = |path: &str| {
+        format!(
+            "input data: Rows<Int> = bytes \"{path}\";\n\
+             node copy: kernel {{ requires {{ field.read; field.write; }} input bytes: Rows<Int> <- data; output result: Rows<Int>; domain = 1; compute {{ return at(bytes, 0); }} }}\n\
+             output result <- copy.result;\n"
+        )
+    };
+    std::fs::write(&scene, text("beside.bin")).unwrap();
+    let secret = elsewhere.join("secret.bin").display().to_string();
+    let escape = "../elsewhere/secret.bin";
+    let kinds = |answer: &Json| -> Vec<String> {
+        answer["ok"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                format!(
+                    "{} {}",
+                    event["kind"].as_str().unwrap_or_default(),
+                    event["message"]
+                        .as_str()
+                        .or(event["error"].as_str())
+                        .unwrap_or_default()
+                )
+            })
+            .collect()
+    };
+    let closed = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "text": text(&secret) }),
+            json!({ "id": 2, "op": "compose", "text": text(escape) }),
+            json!({ "id": 3, "op": "compose", "text": text("beside.bin") }),
+        ],
+    );
+    for refused in &closed[..2] {
+        let said = kinds(refused).join("\n");
+        assert!(
+            said.contains("outside the directories the scene's documents are in or use"),
+            "{said}"
+        );
+    }
+    assert!(
+        kinds(&closed[2]).iter().any(|k| k.starts_with("loaded")),
+        "{:?}",
+        kinds(&closed[2])
+    );
+
+    let allow = format!("file.read={}", elsewhere.display());
+    let open = talk_with(
+        &scene,
+        &["--allow", &allow],
+        &[json!({ "id": 1, "op": "compose", "text": text(&secret) })],
+    );
+    assert!(
+        kinds(&open[0]).iter().any(|k| k.starts_with("loaded")),
+        "{:?}",
+        kinds(&open[0])
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Any web page the person visits can reach a server on this machine. A
+/// page elsewhere is refused its WebSocket unless `--allow-origin` names
+/// it, and an HTTP request that is no upgrade, a form's or a fetch's, is
+/// answered and closed rather than read as request lines, so its body
+/// composes nothing.
+#[test]
+fn a_page_elsewhere_can_neither_open_a_socket_nor_post_requests() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpStream;
+    let dir = scratch_in("-origins");
+    let scene = dir.join("scene.osn");
+    let original = std::fs::read_to_string(&scene).unwrap();
+    let mut child = Server(
+        Command::new(env!("CARGO_BIN_EXE_orla"))
+            .arg("serve")
+            .arg(&scene)
+            .args([
+                "--listen",
+                "127.0.0.1:0",
+                "--allow-origin",
+                "https://studio.example",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = BufReader::new(child.0.stderr.take().unwrap());
+    let port = stderr
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| {
+            line.strip_prefix("listening on 127.0.0.1:")
+                .map(str::to_owned)
+        })
+        .expect("the server names its port");
+    let answer = |request: String| -> String {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut head = [0u8; 12];
+        stream.read_exact(&mut head).unwrap();
+        String::from_utf8_lossy(&head).into_owned()
+    };
+    let upgrade = |origin: &str| {
+        format!(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nOrigin: {origin}\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        )
+    };
+    assert_eq!(answer(upgrade("https://evil.example")), "HTTP/1.1 403");
+    assert_eq!(
+        answer(upgrade("http://localhost.evil.example")),
+        "HTTP/1.1 403"
+    );
+    assert_eq!(answer(upgrade("null")), "HTTP/1.1 101");
+    assert_eq!(answer(upgrade("http://localhost:5173")), "HTTP/1.1 101");
+    assert_eq!(answer(upgrade("https://studio.example")), "HTTP/1.1 101");
+    let compose = json!({ "id": 1, "op": "compose", "text": "node broken: {" }).to_string();
+    let post = format!(
+        "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{compose}\n",
+        compose.len() + 1
+    );
+    assert_eq!(answer(post), "HTTP/1.1 400");
+    // Nothing the page sent reached the session.
+    let mut stdin = child.0.stdin.take().unwrap();
+    writeln!(stdin, "{}", json!({ "id": 2, "op": "quit" })).unwrap();
+    drop(stdin);
+    assert!(child.0.wait().unwrap().success());
+    assert_eq!(std::fs::read_to_string(&scene).unwrap(), original);
+    let _ = std::fs::remove_dir_all(&dir);
+}

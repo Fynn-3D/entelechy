@@ -41,6 +41,13 @@ and the scene running stay as they were. `document` answers the scene's
 and with `expect` set to a version it writes only if the document is
 still that one, otherwise it refuses with the version it is at.
 
+A served scene is composed by an agent and read back through `read`, so
+its inputs read files only beside the documents that declare them (the
+scene and the graphs it places) and in directories the person started the
+server with `--allow file.read=<dir>` for; a file elsewhere is a
+`rejected` event naming it. Writes take `--allow file.write=<dir>` in the
+same way. Neither is ever granted over the wire.
+
 The same protocol runs inside the Player with `orla-player --serve
 <scene.osn>`: requests arrive on stdin while the window runs, an `evaluate`
 answers with the next window frame under the person's real pointer and keys,
@@ -55,8 +62,15 @@ session, a `quit` on a socket ends only that connection, and a `quit` on
 stdin ends the process. This is how another program, Blender say, talks
 to a running window: see `bridges/blender`. A connection that opens with
 an HTTP request is upgraded to a WebSocket and carries the same lines as
-text frames, so a browser is a client too: see `bridges/web`. Anything
-else opening with HTTP is told, in a 426, what it reached.
+text frames, so a browser is a client too: see `bridges/web`. A GET that
+asks for no upgrade is told, in a 426, what it reached; any other HTTP
+request is answered with a 400 and closed, so what a page sends in its
+body is never read as requests. Any page the person visits can reach
+this machine, so the upgrade is refused (403) to a page elsewhere: a
+page served from this machine (`localhost`, `127.0.0.1`, `[::1]`), one
+opened from a file (`null`), and a client that is no browser connect;
+another origin only where the server was started with
+`--allow-origin <origin>`, `https://host:port` as a browser writes it.
 
 `status` answers with the session's backend, scene, watched files,
 counts, and `versions`, the ABI, language, IR and package format

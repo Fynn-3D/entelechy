@@ -57,6 +57,34 @@ impl Scene {
         }
     }
 
+    /// The directories the scene reads from by what it says: the root's
+    /// and those of the graphs it places, and what it `use`s, a
+    /// library's or a package's directory as it is, a file's beside it.
+    pub(crate) fn read_from(&self) -> Vec<PathBuf> {
+        let beside = |path: &Path| {
+            path.parent()
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+                .to_path_buf()
+        };
+        let used = self
+            .uses
+            .iter()
+            .map(|(path, _)| path)
+            .chain(&self.extra_uses)
+            .map(|path| {
+                if path.is_dir() {
+                    path.clone()
+                } else {
+                    beside(path)
+                }
+            });
+        std::iter::once(beside(&self.root))
+            .chain(self.sub_graphs.keys().map(|path| beside(path)))
+            .chain(used)
+            .collect()
+    }
+
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }

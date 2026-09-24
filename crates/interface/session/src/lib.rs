@@ -55,13 +55,26 @@ pub use sources::{
 /// here rather than reaching for that backend itself.
 pub use orla_cpu::{CALL_RECORDS, Trace, TraceValue};
 
-/// Parses an allowance given on a command line: `file.write=<dir>`, the
-/// directory a scene's outputs may be written into.
-pub fn parse_allow(text: &str) -> Result<PathBuf, String> {
+/// What the person running a session allows its scene beyond its own
+/// directory: given on a command line, never by what the session runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Allowance {
+    /// Inputs may be read from files in this directory and under it.
+    FileRead(PathBuf),
+    /// Outputs may be written to files in this directory and under it.
+    FileWrite(PathBuf),
+}
+
+/// Parses an allowance given on a command line: `file.read=<dir>` or
+/// `file.write=<dir>`.
+pub fn parse_allow(text: &str) -> Result<Allowance, String> {
     match text.split_once('=') {
-        Some(("file.write", dir)) if !dir.is_empty() => Ok(PathBuf::from(dir)),
+        Some(("file.read", dir)) if !dir.is_empty() => Ok(Allowance::FileRead(PathBuf::from(dir))),
+        Some(("file.write", dir)) if !dir.is_empty() => {
+            Ok(Allowance::FileWrite(PathBuf::from(dir)))
+        }
         _ => Err(format!(
-            "--allow takes file.write=<directory>, found `{text}`"
+            "--allow takes file.read=<directory> or file.write=<directory>, found `{text}`"
         )),
     }
 }

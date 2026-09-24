@@ -177,7 +177,7 @@ fn replace(target: &Path, bytes: &[u8]) -> Result<(), String> {
 
 /// `path` made absolute with `.` and `..` taken away, and the longest
 /// part of it that exists resolved through its links.
-fn resolve(path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn resolve(path: &Path) -> Result<PathBuf, String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {

@@ -101,20 +101,30 @@ pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) {
 /// window. A connection that opens with an HTTP request is a browser:
 /// it is upgraded to a WebSocket and the same lines travel as text
 /// frames ([`crate::websocket`]).
+///
+/// A browser's page is admitted by its origin ([`crate::websocket::Origins`]),
+/// and a connection that opens with any other HTTP request is closed:
+/// a page on the web can send one to this machine, and its body would
+/// otherwise be read as request lines.
 pub fn listen(
     address: &str,
     sink: std::sync::mpsc::Sender<Incoming>,
+    origins: crate::websocket::Origins,
 ) -> std::io::Result<std::net::SocketAddr> {
     let listener = std::net::TcpListener::bind(address)?;
     let bound = listener.local_addr()?;
     std::thread::spawn(move || {
         for stream in listener.incoming().map_while(Result::ok) {
             let sink = sink.clone();
+            let origins = origins.clone();
             std::thread::spawn(move || {
-                let mut opening = [0u8; 4];
-                let websocket = matches!(stream.peek(&mut opening), Ok(4) if &opening == b"GET ");
-                if websocket {
-                    serve_websocket(stream, sink);
+                let mut opening = [0u8; 8];
+                let peeked = stream.peek(&mut opening).unwrap_or(0);
+                let opening = &opening[..peeked];
+                if opening.starts_with(b"GET ") {
+                    serve_websocket(stream, sink, &origins);
+                } else if is_http(opening) {
+                    refuse_http(stream);
                 } else {
                     serve_lines(stream, sink);
                 }
@@ -122,6 +132,29 @@ pub fn listen(
         }
     });
     Ok(bound)
+}
+
+/// Whether a connection opens as an HTTP request other than an upgrade:
+/// a method word in capitals and a space. A request line is never one.
+fn is_http(opening: &[u8]) -> bool {
+    let word = opening
+        .iter()
+        .take_while(|b| b.is_ascii_uppercase())
+        .count();
+    word >= 3 && opening.get(word) == Some(&b' ')
+}
+
+/// Answers an HTTP request that is not a WebSocket upgrade and closes:
+/// what a page elsewhere could send with a form or a fetch.
+fn refuse_http(mut stream: std::net::TcpStream) {
+    let body = "Orla's creation protocol takes JSON lines, or a WebSocket; see docs/PROTOCOL.md.\n";
+    let _ = write!(
+        stream,
+        "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.flush();
+    let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
 /// One connection of JSON lines.
@@ -163,7 +196,11 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
 /// One connection of WebSocket frames: the handshake, then a text frame
 /// per request line and one per answer; pings are answered, a close
 /// frame or a quit ends it.
-fn serve_websocket(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incoming>) {
+fn serve_websocket(
+    stream: std::net::TcpStream,
+    sink: std::sync::mpsc::Sender<Incoming>,
+    origins: &crate::websocket::Origins,
+) {
     use crate::websocket::{self, Message};
     let Ok(writer) = stream.try_clone() else {
         return;
@@ -174,7 +211,7 @@ fn serve_websocket(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<In
         let mut guard = writer
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        websocket::handshake(&mut reader, &mut *guard)
+        websocket::handshake(&mut reader, &mut *guard, origins)
     };
     if !matches!(opened, Ok(true)) {
         let guard = writer

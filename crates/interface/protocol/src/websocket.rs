@@ -17,12 +17,71 @@ pub enum Message {
     Close,
 }
 
+/// The web pages whose scripts a socket answers. A browser says which
+/// page opened a WebSocket in its `Origin`, and any page on the web can
+/// open one to this machine: without a check, a site the person happens
+/// to visit could compose their scene and read what it holds. Admitted
+/// are a client that is not a browser (no `Origin`), a page opened from a
+/// file (`null`, which is how `bridges/web` runs), a page served from
+/// this machine (`localhost`, `127.0.0.1`, `[::1]`, any port), and the
+/// origins the person running the server named (`--allow-origin`).
+#[derive(Clone, Debug, Default)]
+pub struct Origins {
+    named: Vec<String>,
+}
+
+impl Origins {
+    /// The local origins and these, each written as a browser sends it:
+    /// `https://example.com`, `http://host:8080`.
+    pub fn with(named: Vec<String>) -> Self {
+        let named = named
+            .into_iter()
+            .map(|origin| origin.trim_end_matches('/').to_ascii_lowercase())
+            .collect();
+        Self { named }
+    }
+
+    /// Whether a page of `origin` may open the socket.
+    pub fn admits(&self, origin: Option<&str>) -> bool {
+        let Some(origin) = origin else {
+            return true;
+        };
+        let origin = origin.trim().trim_end_matches('/').to_ascii_lowercase();
+        if origin == "null" || self.named.contains(&origin) {
+            return true;
+        }
+        let Some(rest) = origin
+            .strip_prefix("http://")
+            .or_else(|| origin.strip_prefix("https://"))
+        else {
+            return false;
+        };
+        // `host` or `host:port`, the port all digits: nothing may follow
+        // the host that would make it another one.
+        let (host, port) = match rest.find(']') {
+            Some(end) if rest.starts_with('[') => (&rest[..=end], &rest[end + 1..]),
+            _ => rest.split_at(rest.find(':').unwrap_or(rest.len())),
+        };
+        let port_ok = port.is_empty()
+            || port.strip_prefix(':').is_some_and(|digits| {
+                !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+            });
+        port_ok && matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+    }
+}
+
 /// Reads the HTTP request the peer opened with. When it asks to upgrade to
-/// a WebSocket, answers with the switch and returns `true`; otherwise
-/// answers that an upgrade is required and returns `false`.
-pub fn handshake(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<bool> {
+/// a WebSocket from an origin `origins` admits, answers with the switch
+/// and returns `true`; a page it does not admit is refused, and a request
+/// that is no upgrade is told one is required, both returning `false`.
+pub fn handshake(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    origins: &Origins,
+) -> io::Result<bool> {
     let mut key = None;
     let mut upgrade = false;
+    let mut origin = None;
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
@@ -37,9 +96,23 @@ pub fn handshake(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Resu
             match name.trim().to_ascii_lowercase().as_str() {
                 "sec-websocket-key" => key = Some(value.to_owned()),
                 "upgrade" if value.eq_ignore_ascii_case("websocket") => upgrade = true,
+                "origin" => origin = Some(value.to_owned()),
                 _ => {}
             }
         }
+    }
+    if !origins.admits(origin.as_deref()) {
+        let body = format!(
+            "A page of {} may not open this session; the person running it may allow it with --allow-origin.\n",
+            origin.unwrap_or_default()
+        );
+        write!(
+            writer,
+            "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )?;
+        writer.flush()?;
+        return Ok(false);
     }
     match key {
         Some(key) if upgrade => {
@@ -287,7 +360,7 @@ mod tests {
         let request = b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
         let mut reader = &request[..];
         let mut reply = Vec::new();
-        assert!(handshake(&mut reader, &mut reply).unwrap());
+        assert!(handshake(&mut reader, &mut reply, &Origins::default()).unwrap());
         let reply = String::from_utf8(reply).unwrap();
         assert!(reply.starts_with("HTTP/1.1 101"), "{reply}");
         assert!(
@@ -297,11 +370,48 @@ mod tests {
         let plain = b"GET / HTTP/1.1\r\nHost: x\r\n\r\n";
         let mut reader = &plain[..];
         let mut reply = Vec::new();
-        assert!(!handshake(&mut reader, &mut reply).unwrap());
+        assert!(!handshake(&mut reader, &mut reply, &Origins::default()).unwrap());
         assert!(
             String::from_utf8(reply)
                 .unwrap()
                 .starts_with("HTTP/1.1 426")
+        );
+    }
+
+    /// A page on the web may not open the socket; a page of this machine,
+    /// one opened from a file, a client that is no browser, and an origin
+    /// the person named may.
+    #[test]
+    fn a_page_elsewhere_is_refused_and_a_local_one_admitted() {
+        let origins = Origins::with(vec!["https://studio.example".into()]);
+        for admitted in [
+            None,
+            Some("null"),
+            Some("http://localhost:8000"),
+            Some("http://127.0.0.1"),
+            Some("https://[::1]:9000"),
+            Some("https://studio.example/"),
+        ] {
+            assert!(origins.admits(admitted), "{admitted:?}");
+        }
+        for refused in [
+            "https://evil.example",
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example:80",
+            "http://[::1].evil.example",
+            "https://studio.example.evil",
+            "file:///etc",
+        ] {
+            assert!(!origins.admits(Some(refused)), "{refused}");
+        }
+        let request = b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nOrigin: https://evil.example\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        let mut reader = &request[..];
+        let mut reply = Vec::new();
+        assert!(!handshake(&mut reader, &mut reply, &origins).unwrap());
+        assert!(
+            String::from_utf8(reply)
+                .unwrap()
+                .starts_with("HTTP/1.1 403")
         );
     }
 }

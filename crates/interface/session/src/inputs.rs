@@ -60,9 +60,62 @@ pub(crate) struct Inputs {
     texts: BTreeMap<String, String>,
     /// What went wrong selecting a frame, reported by the next sync.
     frame_events: Vec<Event>,
+    /// Whether reads are held to [`Inputs::readable`]: where an agent
+    /// composes the scene and reads back what it holds.
+    restricted: bool,
+    /// Directories the person running the session allowed reads from,
+    /// resolved.
+    allowed: Vec<PathBuf>,
+    /// The directories the scene names ([`crate::scene::Scene::read_from`]),
+    /// resolved: each document reads beside itself, and a scene reads in
+    /// what it uses.
+    beside: Vec<PathBuf>,
 }
 
 impl Inputs {
+    /// Holds reads to the documents' own directories and the ones
+    /// [`Inputs::allow_reads`] allowed.
+    pub(crate) fn restrict_reads(&mut self) {
+        self.restricted = true;
+    }
+
+    /// Allows files in `dir` and under it to be read into inputs.
+    pub(crate) fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
+        let resolved = dir
+            .canonicalize()
+            .map_err(|e| format!("cannot allow reads from {}: {e}", dir.display()))?;
+        if !resolved.is_dir() {
+            return Err(format!(
+                "cannot allow reads from {}: not a directory",
+                dir.display()
+            ));
+        }
+        self.allowed.push(resolved);
+        Ok(())
+    }
+
+    /// Whether `path` may be read: it is inside an allowed directory once
+    /// `..` and links are followed, so no spelling reaches past one.
+    fn readable(&self, path: &Path) -> Result<(), String> {
+        if !self.restricted {
+            return Ok(());
+        }
+        let target = crate::writes::resolve(path)?;
+        if crate::sources::in_a_package(&target)
+            || self
+                .beside
+                .iter()
+                .chain(&self.allowed)
+                .any(|dir| target.starts_with(dir))
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "{} is outside the directories the scene's documents are in or use, every package, and every directory allowed with `--allow file.read`",
+            target.display()
+        ))
+    }
+
     /// The Field each input holds now, by name.
     pub(crate) fn handles(&self) -> &BTreeMap<String, Handle> {
         &self.handles
@@ -92,7 +145,17 @@ impl Inputs {
     /// Brings every input in line with what `graph` declares: files that
     /// are new or changed are read, directories listed, texts written,
     /// and inputs the scene no longer declares forgotten.
-    pub(crate) fn sync(&mut self, graph: Option<&Graph>, host: &mut Host, events: &mut Vec<Event>) {
+    pub(crate) fn sync(
+        &mut self,
+        graph: Option<&Graph>,
+        read_from: &[PathBuf],
+        host: &mut Host,
+        events: &mut Vec<Event>,
+    ) {
+        self.beside = read_from
+            .iter()
+            .filter_map(|dir| dir.canonicalize().ok())
+            .collect();
         self.sync_assets(graph, host, events);
         self.sync_sequences(graph, host, events);
         self.sync_texts(graph, host, events);
@@ -140,6 +203,16 @@ impl Inputs {
                     stamp: current,
                 },
             );
+            // Asked when the file is read, so a refusal is said once until
+            // the file or the scene changes.
+            if let Err(why) = self.readable(&path) {
+                self.forget(host, &name);
+                events.push(Event::Rejected {
+                    path,
+                    error: format!(" {why}"),
+                });
+                continue;
+            }
             let read = if bytes {
                 orla_formats::read_bytes(&path)
             } else {
@@ -203,7 +276,7 @@ impl Inputs {
             self.forget(host, &name);
         }
         for (name, dir, ty, rate) in wanted {
-            let files = match frame_files(&dir) {
+            let files = match self.readable(&dir).and_then(|()| frame_files(&dir)) {
                 Ok(files) => files,
                 Err(error) => {
                     if self.sequences.remove(&name).is_some() {

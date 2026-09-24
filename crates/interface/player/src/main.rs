@@ -26,7 +26,7 @@ const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--window <w>x<h>] [--backend gpu|cpu|jit] [--memory <MB>] [--work <M>]
-              [--allow file.write=<dir>]...
+              [--allow file.read|file.write=<dir>]...
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the
@@ -41,11 +41,16 @@ usage:
       take, all its elements together, 4000 by default.
       --allow file.write=<dir> lets the scene's outputs written `to` a file
       land in that directory; nothing is written without it.
+      --allow file.read=<dir> lets a served scene's inputs read files
+      there; with --serve a scene reads only beside its documents without
+      it.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window, and on every connection to --listen <host:port>: an agent's
       publish, compose, and param land in the frame a person watches, and
-      its evaluate observes that person's input.";
+      its evaluate observes that person's input. A browser's page connects
+      from this machine or from a file; a page elsewhere only from an
+      origin --allow-origin <origin> names.";
 
 /// The window `window()` reads before one opens, when none was asked for.
 const DEFAULT_WINDOW: (u32, u32) = (960, 540);
@@ -60,13 +65,14 @@ struct Options {
     backend: Option<String>,
     serve: bool,
     listen: Option<String>,
+    origins: Vec<String>,
     params: Vec<(String, orla_runtime::Value)>,
     /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
     /// What the Host may hold and spend.
     limits: orla_session::Limits,
     /// Directories the scene's outputs may be written into.
-    allow: Vec<PathBuf>,
+    allow: Vec<orla_session::Allowance>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -79,6 +85,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         backend: None,
         serve: false,
         listen: None,
+        origins: Vec::new(),
         params: Vec::new(),
         limits: orla_session::Limits::default(),
         no_audio: false,
@@ -103,6 +110,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 options.serve = true;
                 options.listen = Some(value("--listen")?);
             }
+            "--allow-origin" => options.origins.push(value("--allow-origin")?),
             "--no-audio" => options.no_audio = true,
             "--allow" => options
                 .allow
@@ -782,14 +790,20 @@ fn main() -> ExitCode {
         }
     );
     let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
+    // An agent composes a served scene and reads back what it holds:
+    // what it reads is held to its documents' directories and what the
+    // person allowed.
+    if options.serve {
+        session.restrict_reads();
+    }
     for (name, path) in &options.inputs {
         if let Err(error) = session.bind_external(name, path) {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     }
-    for dir in &options.allow {
-        if let Err(error) = session.allow_writes(dir) {
+    for allowance in &options.allow {
+        if let Err(error) = session.allow(allowance) {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
@@ -836,7 +850,8 @@ fn main() -> ExitCode {
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {
-            match orla_protocol::listen(address, sender.clone()) {
+            let origins = orla_protocol::websocket::Origins::with(options.origins.clone());
+            match orla_protocol::listen(address, sender.clone(), origins) {
                 Ok(bound) => eprintln!("listening on {bound}"),
                 Err(error) => {
                     eprintln!("error: cannot listen on {address}: {error}");
