@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lib]
+# The crate has no doc tests, so `cargo test` skips the rustdoc pass.
+doctest = false
+
 [dependencies]
 orla-language = { path = "../../frontend/language" }
 orla-ir = { path = "../../core/ir" }

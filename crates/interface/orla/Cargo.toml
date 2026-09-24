@@ -8,6 +8,10 @@ rust-version.workspace = true
 
 default-run = "orla"
 
+[lib]
+# The crate has no doc tests, so `cargo test` skips the rustdoc pass.
+doctest = false
+
 [[bin]]
 name = "orla"
 path = "src/main.rs"
