@@ -715,7 +715,11 @@ output result <- display.result;      // named graph output; sub-graph outputs
    wired as written, and `carry port <- output;` feeds the port from the
    previous time's output from the second time on, so a relaxation, a
    Jacobi solve, or a subdivision is one node with a count. `name.port`
-   anywhere means the last time's. `N` is a literal or a graph param; a
+   anywhere means the last time's. `N = 0` places no node, and a carried
+   output is then what its port is first bound to — no steps leave the
+   start, level 0 of a subdivision is the mesh — while an output no
+   carry names, or a carry started by `<~`, has no value and is refused
+   where it is read. `N` is a literal or a graph param; a
    param that sizes the graph lowers the document again when it changes,
    so `param level 3` over the protocol resizes a running scene.
 11. A node may be a Field rather than a Kernel: `node zeros: Rows<Float>

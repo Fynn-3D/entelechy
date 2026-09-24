@@ -361,7 +361,7 @@ pub fn forms() -> Vec<Form> {
             "times",
             "graph",
             "times = 5;   carry port <- output;",
-            "A node written once and placed N times, each wired as written, `carry` feeding a port from the previous time's output.",
+            "A node written once and placed N times, each wired as written, `carry` feeding a port from the previous time's output; at N = 0, a carried output is what its port is first bound to.",
         ),
         form(
             "async",

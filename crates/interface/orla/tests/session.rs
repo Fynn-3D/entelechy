@@ -1555,6 +1555,46 @@ fn bench_measures_frames_and_compares_with_what_it_wrote() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A command that evaluates once stops at a scene that does not load and
+/// says why, rather than evaluating a scene that is not there.
+#[test]
+fn a_scene_that_does_not_load_stops_a_command_with_why() {
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let dir = scratch("unloaded");
+    let scene = dir.join("broken.osn");
+    std::fs::write(
+        &scene,
+        "param n: Int = 1;\nnode a: t.k@1 { times = n; domain = 4; }\noutput result <- a.result;\n",
+    )
+    .unwrap();
+    for command in [
+        vec!["run", "--param", "n=-1"],
+        vec![
+            "bench",
+            "--backend",
+            "cpu",
+            "--frames",
+            "1",
+            "--repeat",
+            "1",
+            "--param",
+            "n=-1",
+        ],
+    ] {
+        let output = Command::new(orla)
+            .arg(command[0])
+            .arg(&scene)
+            .args(&command[1..])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{command:?}: {stderr}");
+        assert!(stderr.contains("`times` must be"), "{command:?}: {stderr}");
+        assert!(!stderr.contains("<no scene>"), "{command:?}: {stderr}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// What a long session must not do: keep what it replaced. A thousand
 /// republishes of one Kernel, evaluated in step, leave one version of
 /// it, nothing waiting to be collected, and the Host holding only the

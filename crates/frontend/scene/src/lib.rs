@@ -376,7 +376,10 @@ impl Lowering<'_, '_> {
     /// A node with `times = N;` stands for `N` nodes `name/1` to `name/N`,
     /// each wired as written, except that a `carry port <- output;` feeds
     /// the port from the previous time's output from the second time on;
-    /// `name.port` anywhere means the last time's. `N` is a literal or a
+    /// `name.port` anywhere means the last time's. At `times = 0` there is
+    /// no node, and a carried output is what its port is first bound to:
+    /// no steps of a relaxation leave its start, no subdivision leaves the
+    /// mesh. An output no carry names has no value then. `N` is a literal or a
     /// param of this document, resolved from the placing graph, the
     /// caller's overrides, or the default; a root param that sizes the
     /// graph is remembered so a change to it lowers the document again.
@@ -388,6 +391,9 @@ impl Lowering<'_, '_> {
     ) -> Result<Expanded, DocumentError> {
         let mut nodes: Vec<NodeDecl> = Vec::new();
         let mut renames: BTreeMap<String, String> = BTreeMap::new();
+        // Nodes placed no times: each carried output, by the node, and
+        // what it passes through.
+        let mut passed: BTreeMap<String, BTreeMap<String, SourceRef>> = BTreeMap::new();
         for decl in &document.nodes {
             let times = decl.members.iter().find_map(|member| match member {
                 NodeMember::Set(name, expr) if name.value == "times" => Some((name, expr)),
@@ -449,11 +455,11 @@ impl Lowering<'_, '_> {
                 _ => literal(expr, &self.known_structs())?,
             };
             let count = match value {
-                Value::Int(n) if n >= 1 => n as usize,
+                Value::Int(n) if n >= 0 => n as usize,
                 other => {
                     return Err(error(
                         times_name.span,
-                        format!("`times` must be a whole number of at least 1, found {other:?}"),
+                        format!("`times` must be a whole number of at least 0, found {other:?}"),
                     ));
                 }
             };
@@ -482,6 +488,32 @@ impl Lowering<'_, '_> {
                 }
             }
             let base_name = decl.name.value.clone();
+            if count == 0 {
+                let mut through = BTreeMap::new();
+                for (port, output) in &carries {
+                    let first = decl.members.iter().find_map(|member| match member {
+                        NodeMember::Bind(p, source) if &p.value == port => Some(Ok(source)),
+                        NodeMember::Previous { port: p, .. } if &p.value == port => Some(Err(p)),
+                        _ => None,
+                    });
+                    match first {
+                        Some(Ok(source)) => {
+                            through.insert(output.clone(), source.clone());
+                        }
+                        Some(Err(p)) => {
+                            return Err(error(
+                                p.span,
+                                format!(
+                                    "carried port `{port}` is bound with `<~`, which has no value to pass through at `times = 0`"
+                                ),
+                            ));
+                        }
+                        None => {}
+                    }
+                }
+                passed.insert(base_name, through);
+                continue;
+            }
             if count == 1 {
                 // One time is the node itself, under its own name.
                 let mut copy = decl.clone();
@@ -521,24 +553,47 @@ impl Lowering<'_, '_> {
                 nodes.push(copy);
             }
         }
-        // `name.port` written anywhere now means the last time's.
-        let rename = |reference: &mut SourceRef| {
+        // `name.port` written anywhere now means the last time's, and a
+        // carried output of a node placed no times what it passes through,
+        // which may itself be one (at most as many steps as such nodes).
+        let rename = |reference: &mut SourceRef| -> Result<(), DocumentError> {
+            for _ in 0..=passed.len() {
+                let Some(through) = reference.node.as_ref().and_then(|node| passed.get(node))
+                else {
+                    break;
+                };
+                let Some(source) = through.get(&reference.name) else {
+                    return Err(error(
+                        reference.span,
+                        format!(
+                            "`{}.{}` has no value at `times = 0`: only a carried output passes through",
+                            reference.node.as_deref().unwrap_or(""),
+                            reference.name
+                        ),
+                    ));
+                };
+                *reference = SourceRef {
+                    span: reference.span,
+                    ..source.clone()
+                };
+            }
             if let Some(node) = &reference.node
                 && let Some(last) = renames.get(node)
             {
                 reference.node = Some(last.clone());
             }
+            Ok(())
         };
-        if !renames.is_empty() {
+        if !renames.is_empty() || !passed.is_empty() {
             for node in &mut nodes {
                 for member in &mut node.members {
                     match member {
-                        NodeMember::Bind(_, reference) => rename(reference),
+                        NodeMember::Bind(_, reference) => rename(reference)?,
                         NodeMember::Previous {
                             source, initial, ..
                         } => {
-                            rename(source);
-                            rename(initial);
+                            rename(source)?;
+                            rename(initial)?;
                         }
                         NodeMember::Set(..) | NodeMember::Carry(..) => {}
                     }
@@ -546,12 +601,12 @@ impl Lowering<'_, '_> {
                 if let NodeKind::Inline(kernel) = &mut node.kind {
                     for input in &mut kernel.inputs {
                         match &mut input.binding {
-                            Some(BindingDecl::Now(reference)) => rename(reference),
+                            Some(BindingDecl::Now(reference)) => rename(reference)?,
                             Some(BindingDecl::Previous {
                                 source, initial, ..
                             }) => {
-                                rename(source);
-                                rename(initial);
+                                rename(source)?;
+                                rename(initial)?;
                             }
                             None => {}
                         }
@@ -561,7 +616,7 @@ impl Lowering<'_, '_> {
         }
         let mut outputs = document.outputs.clone();
         for (_, reference) in &mut outputs {
-            rename(reference);
+            rename(reference)?;
         }
         Ok((nodes, outputs))
     }
@@ -1652,10 +1707,63 @@ output result <- show.result;
         assert_eq!(ids(&lowered.graph), ["seed", "step", "show"]);
     }
 
+    /// No times is no node: a carried output is what its port is first
+    /// bound to, through a chain of such nodes too, and an output no carry
+    /// names, or a carry started by `<~`, has nothing to pass.
+    #[test]
+    fn times_zero_passes_carried_outputs_through() {
+        let graph =
+            parse(&REPEATED.replace("param level: Int = 2;", "param level: Int = 0;")).unwrap();
+        assert_eq!(ids(&graph), ["seed", "show"]);
+        assert_eq!(
+            graph.nodes[1].inputs["source"],
+            Binding::Now(Source::Node {
+                node: NodeId("seed".into()),
+                port: "result".into()
+            })
+        );
+        let chained = parse(
+            "node seed: test.zero@1 { domain = 4; }
+node a: test.inc@1 { times = 0; carry previous <- result; previous <- seed.result; }
+node b: test.inc@1 { times = 0; carry previous <- result; previous <- a.result; }
+node c: test.inc@1 { times = 2; carry previous <- result; previous <- b.result; }
+output result <- b.result;
+output last <- c.result;",
+        )
+        .unwrap();
+        assert_eq!(ids(&chained), ["seed", "c/1", "c/2"]);
+        assert_eq!(
+            chained.nodes[1].inputs["previous"],
+            Binding::Now(Source::Node {
+                node: NodeId("seed".into()),
+                port: "result".into()
+            })
+        );
+        let uncarried = parse(
+            "node seed: test.zero@1 { domain = 4; }
+node a: test.two@1 { times = 0; carry previous <- result; previous <- seed.result; }
+output result <- a.other;",
+        )
+        .unwrap_err();
+        assert!(
+            uncarried
+                .message
+                .contains("`a.other` has no value at `times = 0`"),
+            "{uncarried}"
+        );
+        let stateful = parse(
+            "node seed: test.zero@1 { domain = 4; }
+node a: test.inc@1 { times = 0; carry previous <- result; previous <~ a.result from seed.result; }
+output result <- a.result;",
+        )
+        .unwrap_err();
+        assert!(stateful.message.contains("bound with `<~`"), "{stateful}");
+    }
+
     #[test]
     fn times_and_carry_are_checked() {
-        let zero = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 0; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
-        assert!(zero.message.contains("at least 1"), "{zero}");
+        let negative = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = -1; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        assert!(negative.message.contains("at least 0"), "{negative}");
         let unbound = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 2; carry previous <- result; }\noutput result <- r.result;").unwrap_err();
         assert!(
             unbound

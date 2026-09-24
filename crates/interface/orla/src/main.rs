@@ -466,7 +466,9 @@ fn render(args: &[String]) -> Result<(), String> {
     for (node, _, _) in &options.saves {
         session.pin(orla_graph::NodeId(node.clone()));
     }
-    report_events(&session.sync());
+    let events = session.sync();
+    report_events(&events);
+    loaded(&session, &events)?;
     let started = Instant::now();
     let total = options.render.frames;
     let summary = orla::render::render(&mut session, &options.render, |index| {
@@ -598,6 +600,10 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let events = session.sync();
     report_events(&events);
+    // Watching, a scene that does not load yet may be fixed and saved.
+    if !options.watch {
+        loaded(&session, &events)?;
+    }
     let clock = Instant::now();
     let window = options.window;
     let mut healthy = evaluate_and_export(
@@ -1123,7 +1129,9 @@ fn trace(args: &[String]) -> Result<(), String> {
         session.set_param(name, value.clone())?;
     }
     session.set_fusion(options.fusion);
-    report_events(&session.sync());
+    let events = session.sync();
+    report_events(&events);
+    loaded(&session, &events)?;
     let (size, scale) = options.window.unwrap_or(([0.0, 0.0], 1.0));
     let context = Context {
         time,
@@ -1199,6 +1207,27 @@ fn report_events(events: &[Event]) {
     for event in events {
         eprintln!("{event}");
     }
+}
+
+/// Whether the scene loaded: an error naming why it did not, so a
+/// command that evaluates once stops there instead of evaluating
+/// nothing.
+fn loaded(session: &Session, events: &[Event]) -> Result<(), String> {
+    if session.graph().is_some() {
+        return Ok(());
+    }
+    let why: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::SceneRejected(error) => Some(error.clone()),
+            _ => None,
+        })
+        .collect();
+    Err(if why.is_empty() {
+        "the scene did not load".into()
+    } else {
+        format!("the scene did not load: {}", why.join("; "))
+    })
 }
 
 fn evaluate_and_export(

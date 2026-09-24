@@ -330,6 +330,7 @@ fn open(options: &Options, backend: &str) -> Result<Session, String> {
         .iter()
         .filter_map(|event| match event {
             crate::Event::Rejected { path, error } => Some(format!("{}:{error}", path.display())),
+            crate::Event::SceneRejected(error) => Some(format!("scene rejected: {error}")),
             _ => None,
         })
         .collect();
