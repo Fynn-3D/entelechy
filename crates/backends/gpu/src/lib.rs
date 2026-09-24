@@ -927,7 +927,10 @@ impl Backend for GpuBackend {
     }
 
     fn declines(&self, module: &Validated) -> Option<String> {
-        self.refusal(module)
+        self.refusal(module).or_else(|| {
+            (module.manifest.mode == orla_ir::Mode::Scan)
+                .then(|| "a scan runs its steps in order, on one thread".to_owned())
+        })
     }
 
     fn uploaded(&self) -> u64 {

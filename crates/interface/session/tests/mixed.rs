@@ -14,6 +14,9 @@ struct Recorder {
     cpu: orla_cpu::CpuBackend,
     /// Declines a module holding a `Double`, as a device without one does.
     no_doubles: bool,
+    /// Leaves scans to another, as a device that would walk one on a
+    /// single thread does.
+    no_scans: bool,
 }
 
 impl Backend for Recorder {
@@ -21,6 +24,9 @@ impl Backend for Recorder {
         self.name
     }
     fn declines(&self, module: &orla_ir::Validated) -> Option<String> {
+        if self.no_scans && module.manifest.mode == orla_ir::Mode::Scan {
+            return Some("a scan runs its steps in order, on one thread".to_owned());
+        }
         (self.no_doubles && module.holds(orla_abi::Type::Double))
             .then(|| "it holds a Double".to_owned())
     }
@@ -61,12 +67,14 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
         log: log.clone(),
         cpu: orla_cpu::CpuBackend,
         no_doubles: false,
+        no_scans: true,
     };
     let ordered = Recorder {
         name: "ordered",
         log: log.clone(),
         cpu: orla_cpu::CpuBackend,
         no_doubles: false,
+        no_scans: false,
     };
     let mut runtime = Runtime::with_backends(1 << 20, Box::new(main), Some(Box::new(ordered)));
     let map = prepare(&runtime, "kernel t.map@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 2; } }")
@@ -134,6 +142,7 @@ fn what_the_main_backend_declines_goes_to_the_ordered_one_and_says_why() {
         log: log.clone(),
         cpu: orla_cpu::CpuBackend,
         no_doubles,
+        no_scans: false,
     };
     let mut runtime = Runtime::with_backends(
         1 << 20,

@@ -679,13 +679,11 @@ impl Runtime {
                 routed: None,
             };
         }
-        let why = match self.backend.declines(module) {
-            Some(reason) => format!("not on {}: {reason}", self.backend.name()),
-            None => format!(
-                "not on {}: a scan runs its steps in order, on one thread",
-                self.backend.name()
-            ),
-        };
+        let why = format!(
+            "not on {}: {}",
+            self.backend.name(),
+            self.backend.declines(module).unwrap_or_default()
+        );
         Placement {
             backend: self.backend_for(module).name(),
             routed: Some(why),
@@ -987,9 +985,9 @@ pub(crate) fn held_to(
 }
 
 /// Whether a module belongs on the ordered backend rather than `main`:
-/// a scan, or a module `main` does not take.
+/// one `main` leaves to another, by its own answer.
 fn goes_ordered(main: &dyn Backend, module: &Validated) -> bool {
-    module.manifest.mode == orla_ir::Mode::Scan || main.declines(module).is_some()
+    main.declines(module).is_some()
 }
 
 /// Where a version executes: the backend's name, and why it is not the

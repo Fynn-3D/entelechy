@@ -213,9 +213,21 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
         };
         assert!(error.contains("holds a Double"), "{}: {error}", case.name);
     }
-    // Everything else it takes.
+    // Everything else it takes, but a scan, which it leaves to an
+    // ordered backend where there is one and runs where there is none.
     for case in orla_conformance::cases() {
         let module = compile(&case.source).unwrap();
-        assert!(gpu.declines(&module).is_none(), "{}: not taken", case.name);
+        match module.manifest.mode {
+            orla_ir::Mode::Scan => {
+                let why = gpu.declines(&module).unwrap_or_default();
+                assert!(
+                    why.contains("a scan runs its steps in order"),
+                    "{}: {why}",
+                    case.name
+                );
+                assert!(Backend::prepare(&gpu, &module).is_ok(), "{}", case.name);
+            }
+            _ => assert!(gpu.declines(&module).is_none(), "{}: not taken", case.name),
+        }
     }
 }

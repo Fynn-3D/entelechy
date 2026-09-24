@@ -211,11 +211,13 @@ pub trait Backend: Send + Sync {
     /// Short backend name for diagnostics, e.g. `cpu`.
     fn name(&self) -> &'static str;
 
-    /// Why this backend does not run `module`, when it does not: a GPU
-    /// without 64-bit arithmetic, say. A runtime with a second backend
-    /// prepares the module there and reports the reason beside the node;
-    /// one without says it when the module is prepared here. `None` is a
-    /// module this backend runs.
+    /// Why this backend leaves `module` to another, when it does: one it
+    /// cannot run (a GPU without 64-bit arithmetic, say), or one it runs
+    /// badly (a scan's steps in order, on one of a GPU's threads). A
+    /// runtime with a second backend prepares the module there and
+    /// reports the reason beside the node; one without runs it here,
+    /// and [`Backend::prepare`] says what it cannot. `None` is a module
+    /// this backend takes.
     fn declines(&self, module: &Validated) -> Option<String> {
         let _ = module;
         None
