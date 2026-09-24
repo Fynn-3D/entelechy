@@ -40,21 +40,22 @@ done
 
 ## Next
 
-Carry a rig's travel in the scene. A joint a Kernel writes is done:
-`skin.aim@1` turns any joint onto a point over what the clip says, and
-`examples/reach` holds a shoulder computed and an elbow authored. What a
-game needs next is root motion: a clip whose root travels, the travel
-taken out of the pose each frame and carried by the scene's own state
-(a `<~` feedback of where the rig stands), so a walk moves the body
-through the world instead of dragging it back when the clip loops.
+Decide whether the CPU and the JIT still need a native rasterizer. The
+rig is driven now (`skin.aim@1` and `examples/reach` for a joint a
+Kernel writes; `skin.stride@1`, `skin.travel@1` and `examples/stride`
+for root motion), and the raster package is within about 1.1 times the
+device's rasterizer on the GPU and 1.4 times the Rust fast path on the
+JIT. `native.rasterize@1` on the CPU and the JIT is the rasterizer's
+rule written a second time, in Rust, held to the package by a test;
+the GPU's is the hardware, which the typed-field architecture allows.
 
 Done when:
 
-- the `skin` package has a Kernel that splits a pose's root travel from
-  the pose, and an example carries it through feedback, with its
-  `kernels/`, scene, README and replay;
-- the replay passes on the interpreter, the JIT and the GPU, pinning
-  where the rig stands after the clip has looped at least once;
-- anything it turns up in the engine or in the `skin` package is fixed
-  with a test of its own;
+- the package and the fast path are measured side by side on the JIT
+  and the interpreter over the mesh, culled and model examples, small
+  meshes and large;
+- either the fast path is kept, with the measurements that justify it
+  written where the decision lives, or it is retired on the CPU and the
+  JIT and every scene that named it runs the package there, its replays
+  unchanged;
 - the verification above is clean.

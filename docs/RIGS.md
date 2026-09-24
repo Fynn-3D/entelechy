@@ -43,6 +43,12 @@ declares them as `Point`, `Tri`, `Bound`, `Joint` and `Pose`.
   Nothing in the rows says what rate they were sampled at: `orla import`
   prints it, the bridge uses the scene's, and a scene passes it to
   `skin.sample@1` as `rate`.
+- **Travel.** A clip whose root travels closes on itself: its last
+  frame is its first with the root moved on by one stride, so it loops
+  every `frames - 1` frames. `skin.stride@1` plays it in place and
+  `skin.travel@1` gives the travel for a scene to carry; a clip that
+  does not travel is played by `skin.sample@1`, which loops every
+  `frames`.
 - **Weights.** Four at most, and they should sum to one. All four zero
   means the vertex is bound to nothing, and the package leaves it where
   it is — which is how a model that mixes skinned and unskinned meshes

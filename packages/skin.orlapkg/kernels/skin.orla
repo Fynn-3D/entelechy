@@ -182,6 +182,83 @@ kernel skin.add@1 {
     }
 }
 
+// Where a travelling clip's root has got to, `moment` frames in: how far
+// along the `ground` axes it has moved since the clip began, whole loops
+// counted. A travelling clip closes on itself: its last frame is its
+// first moved on by one stride, so it loops every `frames - 1` frames
+// and each loop travels that stride again.
+fn travelled(clip: Clip, joints: Int, joint: Int, moment: Float, ground: Vec3) -> Vec3 {
+    let frames = count(clip) / joints;
+    let span = float(max(frames - 1, 1));
+    let start = at(clip, joint).at;
+    let stride = at(clip, (frames - 1) * joints + joint).at - start;
+    let loops = floor(moment / span);
+    let held = moment - loops * span;
+    let first = int(floor(held));
+    let next = min(first + 1, frames - 1);
+    let here = mix(at(clip, first * joints + joint).at, at(clip, next * joints + joint).at, held - floor(held));
+    return (stride * loops + here - start) * ground;
+}
+
+// A travelling clip played in place: every joint as `skin.sample@1`
+// would pose it, looping every `frames - 1` frames as the clip closes on
+// itself, and the root with its travel along the `ground` axes taken
+// out. What stays in the root is what is not travel — a walk's bob, its
+// sway on an axis `ground` leaves out — and the travel is what
+// `skin.travel@1` gives the scene to carry.
+kernel skin.stride@1 {
+    requires { field.read; field.write; }
+    input skeleton: Skeleton;
+    input clip: Clip;
+    input at: Rows<Float>;
+    param rate: Float = 30.0;
+    // The joint whose travel is the body's: the root.
+    param joint: Int = 0;
+    // Which axes of its translation are travel: the ground, y up.
+    param ground: Vec3 = vec3(1.0, 0.0, 1.0);
+    output result: Rows<Pose>;
+
+    compute {
+        let joints = count(skeleton);
+        let frames = count(clip) / joints;
+        let span = float(max(frames - 1, 1));
+        let moment = at(at, element() / joints) * rate;
+        let held = moment - span * floor(moment / span);
+        let first = int(floor(held));
+        let next = min(first + 1, frames - 1);
+        let mine = element() % joints;
+        let p = mixing(at(clip, first * joints + mine), at(clip, next * joints + mine), held - floor(held));
+        if mine != joint { return p; }
+        let away = (p.at - at(clip, joint).at) * ground;
+        return Pose { at: p.at - away, turn: p.turn, grow: p.grow };
+    }
+}
+
+// How far a travelling clip's root moved between two moments, `was` and
+// `at`, one row an instance: the travel `skin.stride@1` took out of the
+// pose, for the scene to add to where the body stands. It is the
+// difference of where the root had got to at each, so a scene that adds
+// it every evaluation stands where the clip says whatever its frames
+// are, loops and all.
+kernel skin.travel@1 {
+    requires { field.read; field.write; }
+    input skeleton: Skeleton;
+    input clip: Clip;
+    input at: Rows<Float>;
+    input was: Rows<Float>;
+    param rate: Float = 30.0;
+    param joint: Int = 0;
+    param ground: Vec3 = vec3(1.0, 0.0, 1.0);
+    output result: Rows<Vec3>;
+
+    compute {
+        let joints = count(skeleton);
+        let now = travelled(clip, joints, joint, sample(at) * rate, ground);
+        let then = travelled(clip, joints, joint, sample(was) * rate, ground);
+        return now - then;
+    }
+}
+
 // A joint's walk up its parents: where it has got to, and whose
 // transform it has not applied yet.
 struct Walk { matrix: Mat4; joint: Int; }

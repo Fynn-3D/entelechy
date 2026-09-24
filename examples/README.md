@@ -178,6 +178,10 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [reach](reach/README.md): an arm whose shoulder turns every frame to
   face a point while its elbow plays the clip: `skin.aim@1` between the
   sample and the palette, a pose partly authored and partly computed.
+- [stride](stride/README.md): root motion. A clip whose root travels,
+  played in place by `skin.stride@1`, its travel (`skin.travel@1`)
+  carried by the scene through `<~`, so the arm crawls on instead of
+  snapping back each loop.
 
 ## Games, tools and machines
 
