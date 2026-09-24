@@ -1192,13 +1192,22 @@ fn advance_saves_only_where_writes_are_allowed() {
     let open = talk_with(
         &dir.join("scene.osn"),
         &["--allow", &allow],
-        &[request(1, &outside), request(2, &escape), request(3, &inside)],
+        &[
+            request(1, &outside),
+            request(2, &escape),
+            request(3, &inside),
+        ],
     );
     for refused in &open[..2] {
         let why = refused["error"]["message"].as_str().unwrap_or_default();
         assert!(why.contains("outside every directory"), "{refused}");
     }
     assert!(!outside.exists());
-    assert_eq!(open[2]["ok"]["saved"].as_array().unwrap().len(), 1, "{}", open[2]);
+    assert_eq!(
+        open[2]["ok"]["saved"].as_array().unwrap().len(),
+        1,
+        "{}",
+        open[2]
+    );
     assert!(inside.exists());
 }
