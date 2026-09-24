@@ -17,9 +17,5 @@ orla-language = { path = "../../frontend/language" }
 orla-compiler = { path = "../../frontend/compiler" }
 orla-graph = { path = "../../core/graph" }
 
-[dev-dependencies]
-orla-runtime = { path = "../../core/runtime" }
-orla-cpu = { path = "../../backends/cpu" }
-
 [lints]
 workspace = true

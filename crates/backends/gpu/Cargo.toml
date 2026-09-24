@@ -21,12 +21,10 @@ pollster = "0.4"
 
 [dev-dependencies]
 orla-runtime = { path = "../../core/runtime" }
-orla-scene = { path = "../../frontend/scene" }
 orla-cpu = { path = "../../backends/cpu" }
 orla-compiler = { path = "../../frontend/compiler" }
 orla-conformance = { path = "../../backends/conformance" }
 orla-graph = { path = "../../core/graph" }
-orla-language = { path = "../../frontend/language" }
 
 [lints]
 workspace = true

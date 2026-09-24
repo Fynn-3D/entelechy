@@ -1777,10 +1777,8 @@ dependencies = [
  "orla-cpu",
  "orla-graph",
  "orla-ir",
- "orla-language",
  "orla-rules",
  "orla-runtime",
- "orla-scene",
  "pollster",
  "wgpu",
 ]
@@ -1813,8 +1811,6 @@ name = "orla-ir"
 version = "0.1.0"
 dependencies = [
  "orla-abi",
- "orla-compiler",
- "orla-cpu",
 ]
 
 [[package]]
@@ -1886,8 +1882,6 @@ name = "orla-runtime"
 version = "0.1.0"
 dependencies = [
  "orla-abi",
- "orla-compiler",
- "orla-cpu",
  "orla-ir",
  "orla-rules",
 ]
@@ -1898,17 +1892,16 @@ version = "0.1.0"
 dependencies = [
  "orla-abi",
  "orla-compiler",
- "orla-cpu",
  "orla-graph",
  "orla-ir",
  "orla-language",
- "orla-runtime",
 ]
 
 [[package]]
 name = "orla-session"
 version = "0.1.0"
 dependencies = [
+ "orla-abi",
  "orla-compiler",
  "orla-cpu",
  "orla-formats",
@@ -1917,6 +1910,7 @@ dependencies = [
  "orla-ir",
  "orla-jit",
  "orla-language",
+ "orla-rules",
  "orla-runtime",
  "orla-scene",
 ]

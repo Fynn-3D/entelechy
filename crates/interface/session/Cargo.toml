@@ -22,5 +22,9 @@ orla-gpu = { path = "../../backends/gpu" }
 orla-jit = { path = "../../backends/jit" }
 orla-formats = { path = "../../interface/formats" }
 
+[dev-dependencies]
+orla-abi = { path = "../../core/abi" }
+orla-rules = { path = "../../core/rules" }
+
 [lints]
 workspace = true

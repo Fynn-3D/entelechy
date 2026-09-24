@@ -13,9 +13,5 @@ doctest = false
 [dependencies]
 orla-abi = { path = "../../core/abi" }
 
-[dev-dependencies]
-orla-compiler = { path = "../../frontend/compiler" }
-orla-cpu = { path = "../../backends/cpu" }
-
 [lints]
 workspace = true

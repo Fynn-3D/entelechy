@@ -1,8 +1,12 @@
 //! The workspace's layers, held by its manifests: every crate sits in
 //! `crates/<layer>/<crate>`, depends only in the directions AGENTS.md
 //! allows, and takes a dependency from outside the workspace only where
-//! AGENTS.md names one. Development dependencies are free: a test may
-//! hold one backend to another.
+//! AGENTS.md names one. A crate's tests depend in the same directions,
+//! so a lower crate is tested without building a higher one; a test that
+//! needs a higher crate lives where that crate is below it. A backend's
+//! tests alone may also reach what a backend is held to: the compiler,
+//! to write its Kernels as source, the interpreter it answers to, and
+//! the conformance matrix.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,6 +30,10 @@ const MACHINES: [(&str, &[&str]); 2] = [
     ),
 ];
 
+/// What a backend's tests may reach beyond its layers: the compiler, the
+/// reference interpreter, and the conformance matrix.
+const YARDSTICKS: [&str; 3] = ["orla-compiler", "orla-cpu", "orla-conformance"];
+
 /// Interface crates that take nothing from outside all the same.
 const PLAIN_INTERFACES: [&str; 1] = ["orla-formats"];
 
@@ -35,20 +43,22 @@ struct Crate {
     /// Normal dependencies: workspace crates by package name, and the rest.
     inside: Vec<String>,
     outside: Vec<String>,
+    /// Development dependencies inside the workspace, by package name.
+    tests: Vec<String>,
 }
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
-/// A manifest's package name and its `[dependencies]` table, read as
-/// lines: a key is what comes before `=`, and a workspace crate is one
-/// given by `path`.
-fn read(manifest: &Path) -> (String, Vec<String>, Vec<String>) {
+/// A manifest's package name, its `[dependencies]` inside and outside the
+/// workspace, and its `[dev-dependencies]` inside, read as lines: a key
+/// is what comes before `=`, and a workspace crate is one given by `path`.
+fn read(manifest: &Path) -> (String, Vec<String>, Vec<String>, Vec<String>) {
     let text = std::fs::read_to_string(manifest).unwrap();
     let mut name = None;
     let mut table = "";
-    let (mut inside, mut outside) = (Vec::new(), Vec::new());
+    let (mut inside, mut outside, mut tests) = (Vec::new(), Vec::new(), Vec::new());
     for line in text.lines().map(str::trim) {
         if line.starts_with('[') {
             table = line;
@@ -68,11 +78,15 @@ fn read(manifest: &Path) -> (String, Vec<String>, Vec<String>) {
                 outside.push(key.to_owned());
             }
         }
+        if table == "[dev-dependencies]" && !key.starts_with('#') && value.contains("path") {
+            tests.push(key.to_owned());
+        }
     }
     (
         name.unwrap_or_else(|| panic!("{} names no package", manifest.display())),
         inside,
         outside,
+        tests,
     )
 }
 
@@ -100,7 +114,7 @@ fn crates() -> BTreeMap<String, Crate> {
                 "{} is not a crate; a layer holds crates only",
                 dir.display()
             );
-            let (package, inside, outside) = read(&manifest);
+            let (package, inside, outside, tests) = read(&manifest);
             let dir = Path::new("crates")
                 .join(layer)
                 .join(dir.file_name().unwrap());
@@ -111,11 +125,23 @@ fn crates() -> BTreeMap<String, Crate> {
                     dir,
                     inside,
                     outside,
+                    tests,
                 },
             );
         }
     }
     found
+}
+
+/// Whether a crate of `from` may depend on one of `to`.
+fn down(from: &str, to: &str) -> bool {
+    match from {
+        "core" => to == "core",
+        "frontend" => matches!(to, "core" | "frontend"),
+        // A backend is a peer of the others: it reaches none of them.
+        "backends" => to == "core",
+        _ => true,
+    }
 }
 
 #[test]
@@ -131,14 +157,7 @@ fn every_crate_depends_only_down_its_layers() {
                 ));
                 continue;
             };
-            let allowed = match krate.layer {
-                "core" => target.layer == "core",
-                "frontend" => matches!(target.layer, "core" | "frontend"),
-                // A backend is a peer of the others: it reaches none of them.
-                "backends" => target.layer == "core",
-                _ => true,
-            };
-            if !allowed {
+            if !down(krate.layer, target.layer) {
                 wrong.push(format!(
                     "{name} ({}) depends on {dependency} ({})",
                     krate.layer, target.layer
@@ -147,6 +166,36 @@ fn every_crate_depends_only_down_its_layers() {
         }
     }
     assert!(wrong.is_empty(), "layers crossed:\n{}", wrong.join("\n"));
+}
+
+#[test]
+fn every_crate_is_tested_down_its_layers() {
+    let crates = crates();
+    let mut wrong = Vec::new();
+    for (name, krate) in &crates {
+        for dependency in &krate.tests {
+            let Some(target) = crates.get(dependency) else {
+                wrong.push(format!(
+                    "{name}'s tests depend on `{dependency}`, which is no crate here"
+                ));
+                continue;
+            };
+            let yardstick = krate.layer == "backends"
+                && YARDSTICKS.contains(&dependency.as_str())
+                && dependency != name;
+            if !down(krate.layer, target.layer) && !yardstick {
+                wrong.push(format!(
+                    "{name}'s tests ({}) depend on {dependency} ({}); a test that needs it lives where it is below",
+                    krate.layer, target.layer
+                ));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "layers crossed by tests:\n{}",
+        wrong.join("\n")
+    );
 }
 
 #[test]
