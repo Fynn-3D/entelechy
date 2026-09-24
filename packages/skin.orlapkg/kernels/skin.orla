@@ -15,6 +15,9 @@
 //   weights   Rows<Bound>   one per vertex, in the mesh's own row order
 //   mesh      Rows<Point>   position, normal, uv — the rest pose
 //
+// Rotations and transforms are the `transform` package's.
+use "../../transform.orlapkg/kernels/transform.orla";
+
 // A joint's `parent` is its place in this same row, or -1 at the root.
 // `bind` is the inverse bind matrix: where the joint was when the mesh
 // was bound to it.
@@ -34,45 +37,9 @@ type Skeleton = Rows<Joint>;
 type Clip = Rows<Pose>;
 type Palette = Rows<Mat4>;
 
-// A quaternion as a rotation.
-fn turning(q: Vec4) -> Mat4 {
-    let x = q.x; let y = q.y; let z = q.z; let w = q.w;
-    return mat4(
-        vec4(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w), 0.0),
-        vec4(2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w), 0.0),
-        vec4(2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y), 0.0),
-        vec4(0.0, 0.0, 0.0, 1.0));
-}
-
 // A pose as the matrix it stands for: scale, then turn, then move.
 fn posing(p: Pose) -> Mat4 {
-    let r = turning(p.turn);
-    return mat4(
-        r[0] * p.grow.x,
-        r[1] * p.grow.y,
-        r[2] * p.grow.z,
-        vec4(p.at.x, p.at.y, p.at.z, 1.0));
-}
-
-// The shorter way round between two rotations, blended.
-fn between(a: Vec4, b: Vec4, t: Float) -> Vec4 {
-    let same = if dot(a, b) < 0.0 { vec4(0.0, 0.0, 0.0, 0.0) - b } else { b };
-    let mixed = a * (1.0 - t) + same * t;
-    let length = sqrt(dot(mixed, mixed));
-    return if length > 0.0 { mixed / length } else { a };
-}
-
-// One rotation after another, and the way back from one.
-fn after(a: Vec4, b: Vec4) -> Vec4 {
-    return vec4(
-        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z);
-}
-
-fn back(q: Vec4) -> Vec4 {
-    return vec4(0.0 - q.x, 0.0 - q.y, 0.0 - q.z, q.w);
+    return transform(p.at, p.turn, p.grow);
 }
 
 fn mixing(a: Pose, b: Pose, t: Float) -> Pose {
@@ -262,28 +229,6 @@ kernel skin.travel@1 {
 // A joint's walk up its parents: where it has got to, and whose
 // transform it has not applied yet.
 struct Walk { matrix: Mat4; joint: Int; }
-
-// A vector turned by a rotation.
-fn rotating(q: Vec4, v: Vec3) -> Vec3 {
-    let u = vec3(q.x, q.y, q.z);
-    let t = cross(u, v) * 2.0;
-    return v + t * q.w + cross(u, t);
-}
-
-// The shortest rotation that takes direction `a` to direction `b`, both
-// of unit length. Opposite directions turn half way round an axis at
-// right angles to `a`.
-fn arc(a: Vec3, b: Vec3) -> Vec4 {
-    let d = dot(a, b);
-    if d < -0.999999 {
-        let side = if abs(a.x) < 0.9 { cross(a, vec3(1.0, 0.0, 0.0)) } else { cross(a, vec3(0.0, 1.0, 0.0)) };
-        let n = normalize(side);
-        return vec4(n.x, n.y, n.z, 0.0);
-    }
-    let c = cross(a, b);
-    let q = vec4(c.x, c.y, c.z, 1.0 + d);
-    return q / sqrt(dot(q, q));
-}
 
 // Where a joint's parent stands, in the skin's space: its pose composed
 // up its own chain, as the palette composes it. The root's parent is the

@@ -20,6 +20,9 @@
 //! expect step.result[0].score = 1   # a field of an element of a node's output:
 //!                                   # ints and bools exact, floats and vectors
 //!                                   # with an optional trailing tolerance
+//! expect fall.result[0].speed > 2.5 # or on one side of a bound, every
+//!                                   # component: `<`, `<=`, `>`, `>=`, strict
+//!                                   # (no tolerance), numbers only
 //! expect count ground.result = 6889 # how many elements a node's output holds,
 //!                                   # which is what a `domain` came out as
 //! expect placed ring main           # the node runs on the session's main
@@ -114,6 +117,9 @@ pub enum Step {
         /// Struct fields to follow, outermost first; empty for the element
         /// itself.
         path: Vec<String>,
+        /// How the value is held to what is written: equal (within a
+        /// tolerance for floats), or on one side of it.
+        compare: Compare,
         /// Expected components as written.
         values: Vec<String>,
         /// Line number, for messages.
@@ -319,7 +325,9 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     line,
                 });
             }
-            ["expect", target, "=", values @ ..] if target.contains('[') && !values.is_empty() => {
+            ["expect", target, sign, values @ ..]
+                if target.contains('[') && !values.is_empty() && Compare::read(sign).is_some() =>
+            {
                 let (node, port, index, path) =
                     orla_session::parse_target(target).map_err(error)?;
                 steps.push(Step::ExpectElement {
@@ -327,6 +335,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     port,
                     index,
                     path,
+                    compare: Compare::read(sign).expect("matched"),
                     values: values.iter().map(|v| (*v).to_owned()).collect(),
                     line,
                 });
@@ -475,6 +484,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                 port,
                 index,
                 path,
+                compare,
                 values,
                 line,
             } => {
@@ -486,7 +496,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                     "{node}.{port}[{index}]{}",
                     path.iter().map(|p| format!(".{p}")).collect::<String>()
                 );
-                match check_element(&mut session, node, port, *index, path, values) {
+                match check_element(&mut session, node, port, *index, path, *compare, values) {
                     Ok(None) => {}
                     Ok(Some(mismatch)) => outcome
                         .failures
@@ -570,6 +580,56 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     Ok(outcome)
 }
 
+/// How an element expectation holds a value to what is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compare {
+    /// `=`: equal, a float within the tolerance.
+    Equal,
+    /// `<`: every component below.
+    Below,
+    /// `<=`: every component at most.
+    AtMost,
+    /// `>`: every component above.
+    Above,
+    /// `>=`: every component at least.
+    AtLeast,
+}
+
+impl Compare {
+    /// The comparison a sign writes, if it writes one.
+    fn read(sign: &str) -> Option<Self> {
+        Some(match sign {
+            "=" => Self::Equal,
+            "<" => Self::Below,
+            "<=" => Self::AtMost,
+            ">" => Self::Above,
+            ">=" => Self::AtLeast,
+            _ => return None,
+        })
+    }
+
+    fn sign(self) -> &'static str {
+        match self {
+            Self::Equal => "=",
+            Self::Below => "<",
+            Self::AtMost => "<=",
+            Self::Above => ">",
+            Self::AtLeast => ">=",
+        }
+    }
+
+    /// Whether `actual` stands where this says of `expected`.
+    fn holds(self, actual: f64, expected: f64) -> bool {
+        match self {
+            Self::Equal => actual == expected,
+            Self::Below => actual < expected,
+            Self::AtMost => actual <= expected,
+            Self::Above => actual > expected,
+            Self::AtLeast => actual >= expected,
+        }
+    }
+}
+
 /// Reads one element field of a node's output and compares it with the
 /// written values. `Ok(None)` means it matched; `Ok(Some(text))` says how
 /// it did not; `Err` means the expectation could not be read at all.
@@ -579,6 +639,7 @@ fn check_element(
     port: &str,
     index: u32,
     path: &[String],
+    compare: Compare,
     values: &[String],
 ) -> Result<Option<String>, String> {
     use orla_ir::{Number, Type};
@@ -594,15 +655,22 @@ fn check_element(
     let exact = numbers
         .iter()
         .all(|n| matches!(n, Number::Int(_) | Number::Long(_) | Number::Bool(_)));
+    if compare != Compare::Equal && numbers.iter().any(|n| matches!(n, Number::Bool(_))) {
+        return Err(format!(
+            "a {ty} is equal or not: `{}` takes numbers",
+            compare.sign()
+        ));
+    }
     let tolerance = match values.len() {
         n if n == components => 0.01,
-        n if n == components + 1 && !exact => values[components]
+        // A bound is a bound: only `=` takes a tolerance.
+        n if n == components + 1 && !exact && compare == Compare::Equal => values[components]
             .parse::<f64>()
             .map_err(|_| format!("tolerance `{}` is not a number", values[components]))?,
         _ => {
             return Err(format!(
                 "a {ty} takes {components} value(s){}",
-                if exact {
+                if exact || compare != Compare::Equal {
                     ""
                 } else {
                     " and an optional tolerance"
@@ -621,13 +689,24 @@ fn check_element(
         })
         .collect();
     let near = |expected: &str, v: f64| {
-        expected
-            .parse::<f64>()
-            .is_ok_and(|e| (e - v).abs() <= tolerance)
+        expected.parse::<f64>().is_ok_and(|e| match compare {
+            Compare::Equal => (e - v).abs() <= tolerance,
+            other => other.holds(v, e),
+        })
+    };
+    // Integers compare exactly, as integers, whichever the comparison.
+    let whole = |expected: &str, v: i64| {
+        expected.parse::<i64>().is_ok_and(|e| match compare {
+            Compare::Equal => v == e,
+            Compare::Below => v < e,
+            Compare::AtMost => v <= e,
+            Compare::Above => v > e,
+            Compare::AtLeast => v >= e,
+        })
     };
     let matches = numbers.iter().zip(values).all(|(n, expected)| match n {
-        Number::Int(v) => expected.parse::<i64>().is_ok_and(|e| e == i64::from(*v)),
-        Number::Long(v) => expected.parse::<i64>().is_ok_and(|e| e == *v),
+        Number::Int(v) => whole(expected, i64::from(*v)),
+        Number::Long(v) => whole(expected, *v),
         Number::Bool(v) => match expected.as_str() {
             "true" => *v,
             "false" => !*v,
@@ -636,18 +715,56 @@ fn check_element(
         Number::Float(v) => near(expected, f64::from(*v)),
         Number::Double(v) => near(expected, *v),
     });
-    Ok((!matches).then(|| {
-        format!(
+    Ok((!matches).then(|| match compare {
+        Compare::Equal => format!(
             "is {}, expected {}",
             actual.join(" "),
             values[..components].join(" ")
-        )
+        ),
+        other => format!(
+            "is {}, expected {} {}",
+            actual.join(" "),
+            other.sign(),
+            values[..components].join(" ")
+        ),
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_element_is_held_equal_or_to_one_side() {
+        let replay = parse(
+            "scene s.osn\nexpect a.result[0] = 1\nexpect a.result[0] < 2\nexpect a.result[1].v >= 0.5 0.5 0.5\nexpect a.result[2] > -1\nexpect a.result[3] <= 0\n",
+            Path::new("."),
+        )
+        .unwrap();
+        let compares: Vec<Compare> = replay
+            .steps
+            .iter()
+            .map(|step| match step {
+                Step::ExpectElement { compare, .. } => *compare,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            compares,
+            [
+                Compare::Equal,
+                Compare::Below,
+                Compare::AtLeast,
+                Compare::Above,
+                Compare::AtMost
+            ]
+        );
+        // Not a comparison it knows, and the line says so.
+        let error = parse("scene s.osn\nexpect a.result[0] ~ 1\n", Path::new(".")).unwrap_err();
+        assert!(error.message.contains("cannot read"), "{error}");
+        assert!(Compare::Below.holds(1.0, 2.0) && !Compare::Below.holds(2.0, 2.0));
+        assert!(Compare::AtLeast.holds(2.0, 2.0) && !Compare::Above.holds(2.0, 2.0));
+    }
 
     #[test]
     fn parses_every_step() {

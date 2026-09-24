@@ -1211,6 +1211,14 @@ impl Parser {
     }
 
     fn block_body(&mut self) -> Result<Block, ParseError> {
+        self.block_body_with(false).map(|(block, _)| block)
+    }
+
+    /// A block's body after its `{`, through its `}`. Where `effects`
+    /// allows, a body of statements alone — `{ emit(p); }` — is read too,
+    /// and the flag returned says it was one: it gives no value, and its
+    /// result is a placeholder nothing reads.
+    fn block_body_with(&mut self, effects: bool) -> Result<(Block, bool), ParseError> {
         let mut lets = Vec::new();
         loop {
             if self.is_keyword("if") {
@@ -1218,24 +1226,34 @@ impl Parser {
                 let span = self.span();
                 self.next();
                 let condition = self.expr()?;
-                let then = self.block()?;
+                let (then, effect) = self.effects_block()?;
+                if effect {
+                    // An `if` of statements alone does them when it holds,
+                    // an `else` its own when not, and the block goes on.
+                    let otherwise = self.effects_else()?;
+                    lets.push(Self::done(condition, then, otherwise, span));
+                    continue;
+                }
                 if self.is_keyword("else") {
                     // An `if` with both arms is an expression; read it
                     // again as one.
                     self.position = saved;
                 } else {
-                    let otherwise = self.block_body()?;
-                    return Ok(Block {
-                        lets,
-                        result: Expr {
-                            kind: ExprKind::If {
-                                condition: Box::new(condition),
-                                then: Box::new(then),
-                                otherwise: Box::new(otherwise),
+                    let (otherwise, _) = self.block_body_with(effects)?;
+                    return Ok((
+                        Block {
+                            lets,
+                            result: Expr {
+                                kind: ExprKind::If {
+                                    condition: Box::new(condition),
+                                    then: Box::new(then),
+                                    otherwise: Box::new(otherwise),
+                                },
+                                span,
                             },
-                            span,
                         },
-                    });
+                        false,
+                    ));
                 }
             }
             if self.is_keyword("let") {
@@ -1254,7 +1272,7 @@ impl Parser {
                 let result = self.expr()?;
                 self.expect_punct(";")?;
                 self.expect_punct("}")?;
-                return Ok(Block { lets, result });
+                return Ok((Block { lets, result }, false));
             } else if self.is_keyword("break") {
                 // `break expr;` ends its block, as `return` does; the
                 // loop around it stops and gives that value.
@@ -1263,14 +1281,28 @@ impl Parser {
                 let value = self.expr()?;
                 self.expect_punct(";")?;
                 self.expect_punct("}")?;
-                return Ok(Block {
-                    lets,
-                    result: Expr {
-                        kind: ExprKind::Break(Box::new(value)),
-                        span,
+                return Ok((
+                    Block {
+                        lets,
+                        result: Expr {
+                            kind: ExprKind::Break(Box::new(value)),
+                            span,
+                        },
                     },
-                });
+                    false,
+                ));
             } else if self.is_punct("}") {
+                if effects {
+                    let span = self.span();
+                    self.next();
+                    return Ok((
+                        Block {
+                            lets,
+                            result: Self::nothing(span),
+                        },
+                        true,
+                    ));
+                }
                 return Err(self.error("a block must end with `return expr;` or a value"));
             } else {
                 let result = self.expr()?;
@@ -1288,9 +1320,80 @@ impl Parser {
                     continue;
                 }
                 self.expect_punct("}")?;
-                return Ok(Block { lets, result });
+                return Ok((Block { lets, result }, false));
             }
         }
+    }
+
+    /// What a block of statements alone gives, which nothing reads.
+    fn nothing(span: Span) -> Expr {
+        Expr {
+            kind: ExprKind::Int(0),
+            span,
+        }
+    }
+
+    /// An `if` of statements, as the binding to `_` it is read as.
+    fn done(condition: Expr, then: Block, otherwise: Block, span: Span) -> (Spanned<String>, Expr) {
+        (
+            Spanned {
+                value: "_".to_owned(),
+                span,
+            },
+            Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(condition),
+                    then: Box::new(then),
+                    otherwise: Box::new(otherwise),
+                },
+                span,
+            },
+        )
+    }
+
+    /// The first arm of an `if`: a block that may be statements alone.
+    fn effects_block(&mut self) -> Result<(Block, bool), ParseError> {
+        if self.at_record() {
+            return Ok((self.block()?, false));
+        }
+        self.expect_punct("{")?;
+        self.block_body_with(true)
+    }
+
+    /// The `else` of an `if` of statements alone: none (nothing done), a
+    /// block of statements, or another such `if`.
+    fn effects_else(&mut self) -> Result<Block, ParseError> {
+        let span = self.span();
+        if !self.is_keyword("else") {
+            return Ok(Block {
+                lets: Vec::new(),
+                result: Self::nothing(span),
+            });
+        }
+        self.next();
+        if self.is_keyword("if") {
+            // The chain goes on as a block holding its own `if`.
+            self.next();
+            let condition = self.expr()?;
+            let (then, effect) = self.effects_block()?;
+            if !effect {
+                return Err(self.error(
+                    "an `else if` after an `if` of statements is statements too: end what it gives with `;`",
+                ));
+            }
+            let otherwise = self.effects_else()?;
+            return Ok(Block {
+                lets: vec![Self::done(condition, then, otherwise, span)],
+                result: Self::nothing(span),
+            });
+        }
+        let (block, effect) = self.effects_block()?;
+        if !effect {
+            return Err(self.error(
+                "the `else` of an `if` of statements is statements too: end what it gives with `;`",
+            ));
+        }
+        Ok(block)
     }
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
@@ -2179,5 +2282,32 @@ mod document_tests {
                 .collect::<Vec<_>>(),
             ["twice", "peek", "own"]
         );
+    }
+
+    #[test]
+    fn an_if_of_statements_alone_does_them_and_goes_on() {
+        let kernel = |body: &str| {
+            parse(&format!(
+                "kernel t.k@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ {body} }} }}"
+            ))
+        };
+        // Statements alone, with no `else`, an `else`, and an `else if`
+        // chain; the block goes on after each, and an empty arm is one.
+        for body in [
+            "let x = 1; if x > 0 { let y = 2; } return x;",
+            "if element() > 0 { let a = 1; } else { let b = 2; } return 0;",
+            "if element() == 0 { } else if element() == 1 { let c = 3; } else { } return 1;",
+        ] {
+            kernel(body).unwrap_or_else(|error| panic!("{body}: {error}"));
+        }
+        // A guard is what it was: `return` in the arm, the rest the other.
+        let guard = kernel("if element() == 0 { return 5; } return 6;").unwrap();
+        assert!(matches!(guard.compute.result.kind, ExprKind::If { .. }));
+        // An arm that gives a value beside one that does not is refused,
+        // as is a block that ends with statements and gives nothing.
+        let error = kernel("if element() > 0 { let y = 2; } else { 5 }; return 0;").unwrap_err();
+        assert!(error.message.contains("statements too"), "{error}");
+        let error = kernel("if element() > 0 { let y = 2; }").unwrap_err();
+        assert!(error.message.contains("must end with"), "{error}");
     }
 }

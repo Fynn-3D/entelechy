@@ -475,6 +475,12 @@ initial carried value may not write, though it may read a memory with
 cell its memory holds). An expression
 followed by `;` is a statement for its effect, `put(ram, a, v);`, the
 same as `let _ = put(ram, a, v);`; a binding named `_` binds nothing.
+An `if` whose arm is statements alone, `if hit { emit(p); }`, does them
+when it holds and the block goes on; an `else` or an `else if` after it
+is statements too, and an empty arm `{ }` does nothing. It is the same
+as `let _ = if hit { emit(p); 0 } else { 0 };`, so an arm that gives a
+value beside one that does not is refused, and a guard that returns is
+still a guard.
 
 A Kernel with `scatter` in place of `compute` writes where it computes,
 the fourth execution mode:

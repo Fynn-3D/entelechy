@@ -1,0 +1,92 @@
+// Rotations and rigid transforms. A rotation is a unit quaternion held
+// in a `Vec4` as `x y z w`, the order glTF and Blender write; a
+// transform is a `Mat4` by columns, as the ABI lays one out, taking a
+// point with w = 1 and a direction with w = 0.
+
+// A turn of `angle` radians about `axis`, which need not be of unit
+// length. No axis is no turn.
+fn turn_about(axis: Vec3, angle: Float) -> Vec4 {
+    let length = sqrt(dot(axis, axis));
+    if length == 0.0 { return vec4(0.0, 0.0, 0.0, 1.0); }
+    let a = axis / length * sin(angle * 0.5);
+    return vec4(a.x, a.y, a.z, cos(angle * 0.5));
+}
+
+// One rotation after another: `after(a, b)` turns by `b`, then by `a`.
+fn after(a: Vec4, b: Vec4) -> Vec4 {
+    return vec4(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z);
+}
+
+// The way back from a rotation.
+fn back(q: Vec4) -> Vec4 {
+    return vec4(0.0 - q.x, 0.0 - q.y, 0.0 - q.z, q.w);
+}
+
+// The shorter way round between two rotations, `t` of the way from `a`
+// to `b`, normalized: what a blend of two poses takes.
+fn between(a: Vec4, b: Vec4, t: Float) -> Vec4 {
+    let same = if dot(a, b) < 0.0 { vec4(0.0, 0.0, 0.0, 0.0) - b } else { b };
+    let mixed = a * (1.0 - t) + same * t;
+    let length = sqrt(dot(mixed, mixed));
+    return if length > 0.0 { mixed / length } else { a };
+}
+
+// A vector turned by a rotation.
+fn rotating(q: Vec4, v: Vec3) -> Vec3 {
+    let u = vec3(q.x, q.y, q.z);
+    let t = cross(u, v) * 2.0;
+    return v + t * q.w + cross(u, t);
+}
+
+// The shortest rotation that takes direction `a` to direction `b`, both
+// of unit length. Opposite directions turn half way round an axis at
+// right angles to `a`.
+fn arc(a: Vec3, b: Vec3) -> Vec4 {
+    let d = dot(a, b);
+    if d < -0.999999 {
+        let side = if abs(a.x) < 0.9 { cross(a, vec3(1.0, 0.0, 0.0)) } else { cross(a, vec3(0.0, 1.0, 0.0)) };
+        let n = normalize(side);
+        return vec4(n.x, n.y, n.z, 0.0);
+    }
+    let c = cross(a, b);
+    let q = vec4(c.x, c.y, c.z, 1.0 + d);
+    return q / sqrt(dot(q, q));
+}
+
+// A rotation as the matrix it stands for.
+fn turning(q: Vec4) -> Mat4 {
+    let x = q.x; let y = q.y; let z = q.z; let w = q.w;
+    return mat4(
+        vec4(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w), 0.0),
+        vec4(2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w), 0.0),
+        vec4(2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y), 0.0),
+        vec4(0.0, 0.0, 0.0, 1.0));
+}
+
+// A move, a turn and a scale as one matrix: scale, then turn, then move.
+fn transform(at: Vec3, turn: Vec4, grow: Vec3) -> Mat4 {
+    let r = turning(turn);
+    return mat4(
+        r[0] * grow.x,
+        r[1] * grow.y,
+        r[2] * grow.z,
+        vec4(at.x, at.y, at.z, 1.0));
+}
+
+// A turn of `a` radians about one axis, as a `Mat3`: what a camera
+// orbiting its subject is written with.
+fn rotate_x(a: Float) -> Mat3 {
+    return mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(a), sin(a)), vec3(0.0, -sin(a), cos(a)));
+}
+
+fn rotate_y(a: Float) -> Mat3 {
+    return mat3(vec3(cos(a), 0.0, -sin(a)), vec3(0.0, 1.0, 0.0), vec3(sin(a), 0.0, cos(a)));
+}
+
+fn rotate_z(a: Float) -> Mat3 {
+    return mat3(vec3(cos(a), sin(a), 0.0), vec3(-sin(a), cos(a), 0.0), vec3(0.0, 0.0, 1.0));
+}

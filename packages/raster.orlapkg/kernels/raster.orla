@@ -124,11 +124,9 @@ kernel raster.cover@1 {
                 let w2 = edge(k.a.xy, k.b.xy, p);
                 let z = w0 / k.area * k.a.z + w1 / k.area * k.b.z + w2 / k.area * k.c.z;
                 let covered = w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 && z >= 0.0 && z < 1.0;
-                let _hit = if covered {
-                    emit(Hit { pixel: vec2(float(px), float(py)), key: (long(bits(z)) << 32) | row })
-                } else {
-                    none
-                };
+                if covered {
+                    emit(Hit { pixel: vec2(float(px), float(py)), key: (long(bits(z)) << 32) | row });
+                }
                 dx + 1
             };
             dy + 1

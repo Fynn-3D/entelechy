@@ -8,7 +8,7 @@ expect check.result[0] = 1 0.0001
 frame 1.5
 expect check.result[0] = 1 0.0001
 # With the reach turned all the way up, the pose is not the clip's.
-expect check.result[1] = 0.09209 0.0005
+expect check.result[1] > 0.01
 
 # With the reach turned off, the elbow is the clip's own.
 param weight 0

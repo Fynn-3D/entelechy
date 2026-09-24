@@ -413,7 +413,10 @@ element of a node's output, named as the Kernel declared it
 (`expect step.result[0].score = 1`, `expect mix.result[0] = -0.125 -0.125 0.01`,
 and a vector's component by its letter, `expect sum.result[0].a = 32`):
 ints and bools compare exactly, floats and vectors within the trailing
-tolerance. The second kind states what the application's state is rather
+tolerance; `<`, `<=`, `>` or `>=` in place of `=` holds every component
+to one side of a bound instead (`expect fall.result[0].speed > 2.5`),
+strictly, for what a scene promises without pinning an exact value.
+The second kind states what the application's state is rather
 than what its picture looks like, and nodes it names are kept materialized.
 `expect placed ring main` says a node stays on the session's main
 backend and `expect placed filter ordered` that it leaves it (on a GPU

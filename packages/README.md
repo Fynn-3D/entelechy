@@ -48,7 +48,8 @@ use "picture.orlapkg";
   bodies by the grid cell they are in, which is what turns every pair
   into the nine cells around one.
 - **skin** — a skeleton, the clips that pose it, and the mesh that
-  follows. `orla import` writes the rows out of a rigged glTF and the
+  follows, its rotations the `transform` package's. `orla import`
+  writes the rows out of a rigged glTF and the
   Blender bridge writes the same ones ([the contract](../docs/RIGS.md)); sampling a clip, blending two,
   composing a joint's parents and moving a vertex by the four joints it
   hangs off are Kernels, so a pose is data all the way through and a
@@ -58,6 +59,13 @@ use "picture.orlapkg";
   `skin.add@1` lays a clip over a pose rather than into it.
   `graphs/pose.osn` plays one clip as one node; `examples/skin` blends
   two by hand and `examples/crowd` poses sixty-four.
+- **transform** — rotations as quaternions and rigid transforms as
+  matrices, as functions and no Kernels: a turn about an axis, one
+  rotation after another and back, the short way between two, the
+  shortest turn from one direction to another, a vector turned, a move,
+  turn and scale as one `Mat4`, and a turn about x, y or z as a `Mat3`
+  for a camera's orbit. `skin` poses joints with them; any scene that
+  turns things uses the same.
 - **raster** — triangles turned into the surface a camera sees, as
   Kernels: for every pixel the nearest triangle's depth, normal and uv,
   perspective-correct, and its row as `id`. `graphs/raster.osn` draws at

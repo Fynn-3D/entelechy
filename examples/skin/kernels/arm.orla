@@ -9,14 +9,6 @@ type Vertices = Rows<Vertex>;
 type Triangles = Rows<Tri>;
 type GBuffer = Grid<Surface>;
 
-fn rotate_y(a: Float) -> Mat3 {
-    return mat3(vec3(cos(a), 0.0, -sin(a)), vec3(0.0, 1.0, 0.0), vec3(sin(a), 0.0, cos(a)));
-}
-
-fn rotate_x(a: Float) -> Mat3 {
-    return mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(a), sin(a)), vec3(0.0, -sin(a), cos(a)));
-}
-
 // The clock the clips are read at, and how much of the second one to
 // take: the pointer's height, so a hand blends the two live. With no
 // hand on it the blend sweeps on its own, which is what the replay

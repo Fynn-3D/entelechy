@@ -80,14 +80,6 @@ kernel crowd.faces@1 {
     }
 }
 
-fn rotate_y(a: Float) -> Mat3 {
-    return mat3(vec3(cos(a), 0.0, -sin(a)), vec3(0.0, 1.0, 0.0), vec3(sin(a), 0.0, cos(a)));
-}
-
-fn rotate_x(a: Float) -> Mat3 {
-    return mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(a), sin(a)), vec3(0.0, -sin(a), cos(a)));
-}
-
 kernel crowd.project@1 {
     requires { field.read; field.write; time.read; }
     input mesh: Rows<Point>;

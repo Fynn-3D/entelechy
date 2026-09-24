@@ -1173,3 +1173,51 @@ fn a_scatter_emits_as_many_pairs_as_it_likes() {
         .collect();
     assert_eq!(got, expected);
 }
+
+/// An `if` of statements alone emits when it holds and the body goes on:
+/// a chain of them picks one slot or two, an empty arm does nothing, and
+/// a guard after them still returns early.
+#[test]
+fn an_if_of_statements_emits_when_it_holds() {
+    let source = "kernel test.pick@1 { requires { field.read; field.write; }
+        input values: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+        struct Put { at: Int; value: Int; }
+        scatter into slots with sum {
+            let v = sample(values);
+            if v % 3 == 0 { emit(Put { at: 0, value: 1 }); }
+            else if v % 3 == 1 { emit(Put { at: 1, value: 1 }); emit(Put { at: 1, value: 10 }); }
+            else { }
+            if v > 4 { return Put { at: 3, value: 100 }; }
+            return Put { at: 2, value: v };
+        } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 16);
+    let ints = |host: &mut Host, words: Vec<u32>| {
+        let n = words.len() as u32;
+        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        host.adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
+            .unwrap()
+    };
+    let values = ints(&mut host, vec![0, 1, 2, 3, 4, 5, 6]);
+    let slots = ints(&mut host, vec![0; 4]);
+    let invocation = Invocation {
+        inputs: vec![values, slots],
+        params: vec![],
+        domain: Domain::Rows(7),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let got: Vec<i32> = host
+        .data(output)
+        .unwrap()
+        .values()
+        .iter()
+        .map(|w| *w as i32)
+        .collect();
+    // 0, 3 and 6 land one in slot 0; 1 and 4 eleven each in slot 1; 0 to 4
+    // return their value into slot 2, and 5 and 6 a hundred into slot 3.
+    assert_eq!(got, vec![3, 22, 1 + 2 + 3 + 4, 200]);
+}
