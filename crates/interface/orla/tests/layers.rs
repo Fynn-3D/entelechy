@@ -318,3 +318,34 @@ fn only_the_jit_and_the_ffi_may_be_unsafe() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// The core composes and computes; files are the interface's. Nothing
+/// under `crates/core` names a path or the filesystem outside its tests:
+/// what a scene reads and writes travels beside the Graph
+/// (`orla_scene::Files`), carried out by the session.
+#[test]
+fn the_core_knows_no_file() {
+    fn walk(dir: &Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "tests") {
+                    continue;
+                }
+                walk(&path, found);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                // A module's own tests may make files to read back.
+                let text = text.split("#[cfg(test)]").next().unwrap_or_default();
+                for word in ["std::fs", "std::path", "PathBuf"] {
+                    if text.contains(word) {
+                        found.push(format!("{} names `{word}`", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&root().join("crates/core"), &mut found);
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}

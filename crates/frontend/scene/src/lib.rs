@@ -27,7 +27,7 @@ use orla_language::{
 };
 
 use orla_graph::{
-    Asset, Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
+    Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
     literal_text,
 };
 
@@ -132,12 +132,60 @@ pub struct InlineKernel {
     pub document: PathBuf,
 }
 
+/// An external a document reads from a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Asset {
+    /// The input's name.
+    pub name: String,
+    /// The file, resolved against the document's directory.
+    pub path: PathBuf,
+    /// The type, aliases resolved: it tells a picture file whether to come
+    /// in as pixels or as a `Grid<Float>`, and how the Field keeps what
+    /// came in (`Grid<Vec4 as unorm8>`).
+    pub ty: String,
+    /// Whether the file comes in as its bytes, one to an element of a
+    /// `Rows<Int>`, rather than as a Field of its own format.
+    pub bytes: bool,
+}
+
+/// An output the Host writes to a file: `output name <- source to
+/// "file";`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Write {
+    /// The output's name.
+    pub output: String,
+    /// The file, resolved against the document's directory.
+    pub path: PathBuf,
+    /// Whether the Field goes out as its bytes, one to an element of a
+    /// `Rows<Int>`, rather than in the format the extension names.
+    pub bytes: bool,
+}
+
+/// What a scene document says of files: the inputs it reads from them,
+/// the directories it reads frames from, and the outputs it writes. The
+/// session reads and writes them; nothing below the interface does.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Files {
+    /// Externals read from files; the session loads and watches them.
+    pub assets: Vec<Asset>,
+    /// Externals read frame by frame from a directory: the name, the
+    /// directory resolved against the document, the type as written, and
+    /// the frames a second of the session's time.
+    pub sequences: Vec<(String, PathBuf, String, u32)>,
+    /// Outputs written to files once an evaluation that changed them
+    /// commits; only the root document's.
+    pub writes: Vec<Write>,
+}
+
 /// A lowered document: the graph plus everything the loader must publish
 /// and watch.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lowered {
     /// The graph.
     pub graph: Graph,
+    /// What the document reads from and writes to files, which the
+    /// session carries out: the Graph composes, and knows no file.
+    pub files: Files,
     /// Inline Kernels from every level, in document order.
     pub inline: Vec<InlineKernel>,
     /// `use` targets from every level, resolved, with whether the path
@@ -322,16 +370,14 @@ fn lower(
             graph: Graph {
                 name: name.to_owned(),
                 externals: Vec::new(),
-                assets: Vec::new(),
                 texts: Vec::new(),
-                sequences: Vec::new(),
                 params: Vec::new(),
                 times_params: Vec::new(),
                 nodes: Vec::new(),
                 outputs: Vec::new(),
-                writes: Vec::new(),
                 fallbacks: Vec::new(),
             },
+            files: Files::default(),
             inline: Vec::new(),
             uses: Vec::new(),
             documents: Vec::new(),
@@ -348,13 +394,13 @@ fn lower(
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
     lowering.out.graph.externals = level.externals;
-    lowering.out.graph.assets = level.assets;
+    lowering.out.files.assets = level.assets;
     lowering.out.graph.texts = level.texts;
-    lowering.out.graph.sequences = level.sequences;
+    lowering.out.files.sequences = level.sequences;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
     lowering.out.graph.fallbacks = level.fallbacks;
-    lowering.out.graph.writes = level.writes;
+    lowering.out.files.writes = level.writes;
     Ok(lowering.out)
 }
 
@@ -370,7 +416,7 @@ struct Level {
     /// What each input read from a file falls back on.
     fallbacks: Vec<(String, Source)>,
     /// The outputs written to files (the root's only).
-    writes: Vec<orla_graph::Write>,
+    writes: Vec<Write>,
 }
 
 impl Lowering<'_, '_> {
@@ -1308,14 +1354,14 @@ impl Lowering<'_, '_> {
             }
             if writes
                 .iter()
-                .any(|w: &orla_graph::Write| w.path == base.join(&write.path.value))
+                .any(|w: &Write| w.path == base.join(&write.path.value))
             {
                 return Err(error(
                     write.path.span,
                     format!("`{}` is written by two outputs", write.path.value),
                 ));
             }
-            writes.push(orla_graph::Write {
+            writes.push(Write {
                 output: write.output.clone(),
                 path: base.join(&write.path.value),
                 bytes: write.bytes,
@@ -1850,16 +1896,16 @@ output result <- a.result;",
     /// names the input itself; only the scene itself writes.
     #[test]
     fn writes_and_fallbacks_lower_into_the_graph() {
-        let graph = parse(
-            "input saved: Rows<Int> = \"saved.field\" else seed.result;
+        let text = "input saved: Rows<Int> = \"saved.field\" else seed.result;
 node seed: test.zero@1 { times = 2; carry previous <- result; previous <- first.result; }
 node first: test.zero@1 { domain = 4; }
 node show: test.show@1 { source <- saved; }
 output result <- show.result;
 output kept <- show.result to \"saves/kept.field\";
-output raw <- first.result to bytes \"raw.bin\";",
-        )
-        .unwrap();
+output raw <- first.result to bytes \"raw.bin\";";
+        let lowered =
+            from_document(&orla_language::parse_document(text).unwrap(), "graph").unwrap();
+        let graph = lowered.graph;
         assert_eq!(
             graph.fallback("saved"),
             Some(&Source::Node {
@@ -1876,14 +1922,14 @@ output raw <- first.result to bytes \"raw.bin\";",
         let at = |name: &str| order.iter().position(|id| *id == name).unwrap();
         assert!(at("seed/2") < at("show"), "{order:?}");
         assert_eq!(
-            graph.writes,
+            lowered.files.writes,
             [
-                orla_graph::Write {
+                Write {
                     output: "kept".into(),
                     path: PathBuf::from("./saves/kept.field"),
                     bytes: false,
                 },
-                orla_graph::Write {
+                Write {
                     output: "raw".into(),
                     path: PathBuf::from("./raw.bin"),
                     bytes: true,

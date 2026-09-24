@@ -37,6 +37,8 @@ pub(crate) struct Scene {
     types: Vec<orla_language::TypeAlias>,
     functions: Vec<orla_language::FnDecl>,
     graph: Option<Graph>,
+    /// What the lowered document reads from and writes to files.
+    files: orla_scene::Files,
     /// Caller overrides of graph parameters.
     params: BTreeMap<String, Value>,
 }
@@ -53,6 +55,7 @@ impl Scene {
             types: Vec::new(),
             functions: Vec::new(),
             graph: None,
+            files: orla_scene::Files::default(),
             params: BTreeMap::new(),
         }
     }
@@ -87,6 +90,11 @@ impl Scene {
 
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// What the scene reads from and writes to files.
+    pub(crate) fn files(&self) -> &orla_scene::Files {
+        &self.files
     }
 
     pub(crate) fn graph(&self) -> Option<&Graph> {
@@ -320,6 +328,7 @@ impl Scene {
         self.sub_graphs = sub_graphs;
         self.uses = lowered.uses;
         self.graph = Some(lowered.graph);
+        self.files = lowered.files;
         events.push(Event::SceneLoaded);
     }
 

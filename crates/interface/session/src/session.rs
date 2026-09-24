@@ -172,6 +172,7 @@ impl Session {
         let documents = self.scene.read_from();
         self.inputs.sync(
             self.scene.graph(),
+            self.scene.files(),
             &documents,
             self.runtime.host_mut(),
             &mut events,
@@ -350,7 +351,8 @@ impl Session {
             self.scene.params(),
         )?;
         // Committed: what the evaluation changed may now leave the session.
-        self.writes.after(graph, &report, &mut self.runtime);
+        self.writes
+            .after(&self.scene.files().writes, &report, &mut self.runtime);
         Ok(report)
     }
 

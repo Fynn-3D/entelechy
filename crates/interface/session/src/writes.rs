@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 
-use orla_graph::{Graph, Report};
+use orla_graph::Report;
 use orla_runtime::{Handle, Runtime};
 
 use crate::Event;
@@ -45,8 +45,13 @@ impl Writes {
 
     /// Writes every output of `graph` the evaluation behind `report`
     /// changed. Called once the evaluation has committed.
-    pub(crate) fn after(&mut self, graph: &Graph, report: &Report, runtime: &mut Runtime) {
-        for write in &graph.writes {
+    pub(crate) fn after(
+        &mut self,
+        writes: &[orla_scene::Write],
+        report: &Report,
+        runtime: &mut Runtime,
+    ) {
+        for write in writes {
             let Some(handle) = report
                 .outputs
                 .iter()

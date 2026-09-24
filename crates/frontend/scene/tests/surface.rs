@@ -60,7 +60,7 @@ fn lowered(path: &Path) -> Result<String, String> {
     }
     let graph = &lowered.graph;
     let mut out = graph.to_string();
-    for asset in &graph.assets {
+    for asset in &lowered.files.assets {
         let kind = if asset.bytes { " bytes" } else { "" };
         out.push_str(&format!(
             "// file {} {} {}{kind}\n",
@@ -69,7 +69,7 @@ fn lowered(path: &Path) -> Result<String, String> {
             asset.ty
         ));
     }
-    for (name, dir, ty, rate) in &graph.sequences {
+    for (name, dir, ty, rate) in &lowered.files.sequences {
         out.push_str(&format!(
             "// frames {name} {} {ty} {rate}\n",
             relative(dir, &base)

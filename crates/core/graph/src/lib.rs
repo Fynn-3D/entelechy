@@ -17,14 +17,12 @@
 mod domain;
 mod evaluate;
 
-use std::collections::BTreeMap;
-use std::fmt;
-use std::path::PathBuf;
-
 pub use domain::{DomainError, DomainExpr, DomainOp, DomainSpec};
 pub use evaluate::{EvaluateError, Evaluator, Placed, PlanEntry, Report};
 pub use orla_abi::{Context, Domain, InputState, Value};
 pub use orla_ir::KernelId;
+use std::collections::BTreeMap;
+use std::fmt;
 
 /// Name of a node within a graph.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -163,22 +161,6 @@ impl PartialEq for Node {
     }
 }
 
-/// An external a document reads from a file.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Asset {
-    /// The input's name.
-    pub name: String,
-    /// The file, resolved against the document's directory.
-    pub path: PathBuf,
-    /// The type, aliases resolved: it tells a picture file whether to come
-    /// in as pixels or as a `Grid<Float>`, and how the Field keeps what
-    /// came in (`Grid<Vec4 as unorm8>`).
-    pub ty: String,
-    /// Whether the file comes in as its bytes, one to an element of a
-    /// `Rows<Int>`, rather than as a Field of its own format.
-    pub bytes: bool,
-}
-
 /// A graph document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graph {
@@ -186,17 +168,9 @@ pub struct Graph {
     pub name: String,
     /// External Field names the caller must supply.
     pub externals: Vec<String>,
-    /// Externals the document reads from files; the Host loads and
-    /// watches them.
-    pub assets: Vec<Asset>,
     /// Externals the document writes as text: the name and the text,
     /// which the session supplies as `Rows<Int>` of the characters' codes.
     pub texts: Vec<(String, String)>,
-    /// Externals the document reads frame by frame from a directory: the
-    /// name, the directory resolved against the document, the type as
-    /// written, and the frames a second of the session's time; the
-    /// session supplies the file whose turn it is at each evaluation.
-    pub sequences: Vec<(String, PathBuf, String, u32)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
     /// Parameters that size the graph (a node's `times`): a change to one
@@ -206,26 +180,10 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     /// Named results in document order; interfaces present the first.
     pub outputs: Vec<(String, Source)>,
-    /// Outputs the Host writes to files once an evaluation that changed
-    /// them commits; only the root document's.
-    pub writes: Vec<Write>,
     /// What an external read from a file reads while the caller supplies
     /// nothing for it (the file absent or unreadable): the external's
     /// name and the source.
     pub fallbacks: Vec<(String, Source)>,
-}
-
-/// An output the Host writes to a file: `output name <- source to
-/// "file";`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Write {
-    /// The output's name.
-    pub output: String,
-    /// The file, resolved against the document's directory.
-    pub path: PathBuf,
-    /// Whether the Field goes out as its bytes, one to an element of a
-    /// `Rows<Int>`, rather than in the format the extension names.
-    pub bytes: bool,
 }
 
 /// Structural problems with a graph.

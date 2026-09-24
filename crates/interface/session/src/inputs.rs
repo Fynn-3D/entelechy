@@ -148,6 +148,7 @@ impl Inputs {
     pub(crate) fn sync(
         &mut self,
         graph: Option<&Graph>,
+        files: &orla_scene::Files,
         read_from: &[PathBuf],
         host: &mut Host,
         events: &mut Vec<Event>,
@@ -156,8 +157,8 @@ impl Inputs {
             .iter()
             .filter_map(|dir| dir.canonicalize().ok())
             .collect();
-        self.sync_assets(graph, host, events);
-        self.sync_sequences(graph, host, events);
+        self.sync_assets(graph, files, host, events);
+        self.sync_sequences(files, host, events);
         self.sync_texts(graph, host, events);
     }
 
@@ -168,9 +169,14 @@ impl Inputs {
 
     /// Reads every input's file that is new or changed since it was last
     /// read, and forgets inputs the scene no longer declares.
-    fn sync_assets(&mut self, graph: Option<&Graph>, host: &mut Host, events: &mut Vec<Event>) {
-        let wanted: Vec<orla_graph::Asset> =
-            graph.map(|graph| graph.assets.clone()).unwrap_or_default();
+    fn sync_assets(
+        &mut self,
+        graph: Option<&Graph>,
+        files: &orla_scene::Files,
+        host: &mut Host,
+        events: &mut Vec<Event>,
+    ) {
+        let wanted: Vec<orla_scene::Asset> = files.assets.clone();
         let stale: Vec<String> = self
             .assets
             .keys()
@@ -181,7 +187,7 @@ impl Inputs {
             self.assets.remove(&name);
             self.forget(host, &name);
         }
-        for orla_graph::Asset {
+        for orla_scene::Asset {
             name,
             path,
             ty,
@@ -261,10 +267,13 @@ impl Inputs {
     /// Lists every `frames` input's directory anew, and forgets sequences
     /// the scene no longer declares. A listing that changed starts over:
     /// the frame whose turn it is comes in at the next evaluation.
-    fn sync_sequences(&mut self, graph: Option<&Graph>, host: &mut Host, events: &mut Vec<Event>) {
-        let wanted: Vec<(String, PathBuf, String, u32)> = graph
-            .map(|graph| graph.sequences.clone())
-            .unwrap_or_default();
+    fn sync_sequences(
+        &mut self,
+        files: &orla_scene::Files,
+        host: &mut Host,
+        events: &mut Vec<Event>,
+    ) {
+        let wanted: Vec<(String, PathBuf, String, u32)> = files.sequences.clone();
         let stale: Vec<String> = self
             .sequences
             .keys()
