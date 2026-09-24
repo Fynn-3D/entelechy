@@ -53,6 +53,21 @@ button that places a voxel and then another, undo and redo of the
 stroke, the middle button orbiting, Shift and the middle button panning,
 the wheel, a held right button erasing, and the reset.
 
+`tests/monolith.replay` makes a piece with the editor the way a person
+would, and holds it: it tilts, zooms and pans the camera onto an open
+patch of ground with the middle button, the wheel and Shift, then builds
+a two-step plinth (blue, then white), white lanterns on its corners, a
+golden spire and a ruby crown, one click a voxel, switching colours on
+the bar between, and orbits to a last view. Every click is checked
+where it lands, the voxel under the pointer and the volume's word it
+wrote, and the last picture by the colours of the crown, the spire, a
+lantern and the step. Each click aims at the middle of the face it
+builds on, from the editor's own camera (`eye_at`, `forward`,
+`ray_at`); the build order keeps what is near from standing between the
+pointer and what is far. It keeps a frame every tenth of a second, so
+`orla-player --replay tests/monolith.replay` shows the piece being made
+at a pace to watch, and hands the window over when it is done.
+
 Saving and loading go through the protocol: `read` with the node returns
 the volume's words, and `write` puts words back into `world.result`,
 which is state, so the next frame carries on from them. The Player

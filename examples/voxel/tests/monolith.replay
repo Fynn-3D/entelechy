@@ -1,0 +1,480 @@
+# The Monolith of Light, made in the voxel editor by hand: the camera
+# framed on an open patch of ground, then a blue plinth, white lanterns,
+# a golden spire and a ruby crown, every voxel placed with a click and
+# held here by the volume's words; the picture at the end by its colours.
+# Coordinates come from the editor's own camera (eye_at, forward,
+# ray_at): each click aims at the middle of the face it builds on.
+# A frame every tenth of a second, so the Player, which plays a replay
+# at its own times (orla-player --replay), shows it at a pace to watch.
+scene voxel.osn
+window 960 540 1
+frame 0.0
+
+# Tilt: the middle button dragged down 25 pixels, 0.2 more pitch.
+pointer 700 120 up
+frame 0.1
+button middle down
+frame 0.2
+pointer 700 145 up
+frame 0.3
+button middle up
+frame 0.4
+expect state.result[0].pitch = 0.700 0.001
+
+# Closer: the wheel, three times.
+wheel 0 1
+frame 0.5
+wheel 0 0
+frame 0.6
+wheel 0 1
+frame 0.7
+wheel 0 0
+frame 0.8
+wheel 0 1
+frame 0.9
+wheel 0 0
+frame 1.0
+expect state.result[0].zoom = 0.560 0.001
+
+# Pan with Shift and the middle button, -29.4 and -327.3 pixels, to bring
+# the patch of ground at the site to the middle of the picture.
+pointer 400.0 200.0 up
+key 16 down
+frame 1.1
+button middle down
+frame 1.2
+pointer 370.6 -127.3 up
+frame 1.3
+button middle up
+frame 1.4
+key 16 up
+frame 1.5
+expect state.result[0].pan = 6.830 -10.800 6.140 0.01
+# The colour item, clicked 3 time(s): white to blue.
+pointer 518.0 508.0 down
+frame 1.6
+pointer up
+frame 1.7
+pointer 518.0 508.0 down
+frame 1.8
+pointer up
+frame 1.9
+pointer 518.0 508.0 down
+frame 2.0
+pointer up
+frame 2.1
+expect state.result[0].colour = 4
+
+# The plinth's first step: twenty-five blue voxels on the ground, the
+# far ones first so the near ones never stand between the pointer and
+# the next.
+pointer 474.0 319.5 down
+frame 2.2
+expect state.result[0].hit = 32 0 32
+expect world.result[73808] = 4
+pointer up
+frame 2.3
+pointer 493.1 330.6 down
+frame 2.4
+expect state.result[0].hit = 33 0 32
+expect world.result[73809] = 4
+pointer up
+frame 2.5
+pointer 457.7 332.8 down
+frame 2.6
+expect state.result[0].hit = 32 0 33
+expect world.result[76112] = 4
+pointer up
+frame 2.7
+pointer 512.7 342.1 down
+frame 2.8
+expect state.result[0].hit = 34 0 32
+expect world.result[73810] = 4
+pointer up
+frame 2.9
+pointer 476.9 344.3 down
+frame 3.0
+expect state.result[0].hit = 33 0 33
+expect world.result[76113] = 4
+pointer up
+frame 3.1
+pointer 440.9 346.5 down
+frame 3.2
+expect state.result[0].hit = 32 0 34
+expect world.result[78416] = 4
+pointer up
+frame 3.3
+pointer 532.9 354.0 down
+frame 3.4
+expect state.result[0].hit = 35 0 32
+expect world.result[73811] = 4
+pointer up
+frame 3.5
+pointer 496.6 356.2 down
+frame 3.6
+expect state.result[0].hit = 34 0 33
+expect world.result[76114] = 4
+pointer up
+frame 3.7
+pointer 460.1 358.5 down
+frame 3.8
+expect state.result[0].hit = 33 0 34
+expect world.result[78417] = 4
+pointer up
+frame 3.9
+pointer 423.4 360.8 down
+frame 4.0
+expect state.result[0].hit = 32 0 35
+expect world.result[80720] = 4
+pointer up
+frame 4.1
+pointer 553.8 366.2 down
+frame 4.2
+expect state.result[0].hit = 36 0 32
+expect world.result[73812] = 4
+pointer up
+frame 4.3
+pointer 517.0 368.5 down
+frame 4.4
+expect state.result[0].hit = 35 0 33
+expect world.result[76115] = 4
+pointer up
+frame 4.5
+pointer 480.0 370.9 down
+frame 4.6
+expect state.result[0].hit = 34 0 34
+expect world.result[78418] = 4
+pointer up
+frame 4.7
+pointer 405.2 375.6 down
+frame 4.8
+expect state.result[0].hit = 32 0 36
+expect world.result[83024] = 4
+pointer up
+frame 4.9
+pointer 442.7 373.2 down
+frame 5.0
+expect state.result[0].hit = 33 0 35
+expect world.result[80721] = 4
+pointer up
+frame 5.1
+pointer 538.0 381.2 down
+frame 5.2
+expect state.result[0].hit = 36 0 33
+expect world.result[76116] = 4
+pointer up
+frame 5.3
+pointer 500.5 383.6 down
+frame 5.4
+expect state.result[0].hit = 35 0 34
+expect world.result[78419] = 4
+pointer up
+frame 5.5
+pointer 462.6 386.1 down
+frame 5.6
+expect state.result[0].hit = 34 0 35
+expect world.result[80722] = 4
+pointer up
+frame 5.7
+pointer 424.6 388.5 down
+frame 5.8
+expect state.result[0].hit = 33 0 36
+expect world.result[83025] = 4
+pointer up
+frame 5.9
+pointer 521.6 396.8 down
+frame 6.0
+expect state.result[0].hit = 36 0 34
+expect world.result[78420] = 4
+pointer up
+frame 6.1
+pointer 483.2 399.3 down
+frame 6.2
+expect state.result[0].hit = 35 0 35
+expect world.result[80723] = 4
+pointer up
+frame 6.3
+pointer 444.6 401.9 down
+frame 6.4
+expect state.result[0].hit = 34 0 36
+expect world.result[83026] = 4
+pointer up
+frame 6.5
+pointer 504.6 413.1 down
+frame 6.6
+expect state.result[0].hit = 36 0 35
+expect world.result[80724] = 4
+pointer up
+frame 6.7
+pointer 465.4 415.7 down
+frame 6.8
+expect state.result[0].hit = 35 0 36
+expect world.result[83027] = 4
+pointer up
+frame 6.9
+pointer 486.8 430.0 down
+frame 7.0
+expect state.result[0].hit = 36 0 36
+expect world.result[83028] = 4
+pointer up
+frame 7.1
+# The colour item, clicked 5 time(s): blue to white.
+pointer 518.0 508.0 down
+frame 7.2
+pointer up
+frame 7.3
+pointer 518.0 508.0 down
+frame 7.4
+pointer up
+frame 7.5
+pointer 518.0 508.0 down
+frame 7.6
+pointer up
+frame 7.7
+pointer 518.0 508.0 down
+frame 7.8
+pointer up
+frame 7.9
+pointer 518.0 508.0 down
+frame 8.0
+pointer up
+frame 8.1
+expect state.result[0].colour = 1
+
+# White lanterns on three corners of the first step, before the
+# second step would hide the far one; the near one waits, for it would
+# hide the spire's foot from the pointer.
+pointer 473.9 301.3 down
+frame 8.2
+expect state.result[0].hit = 32 1 32
+expect world.result[73856] = 1
+pointer up
+frame 8.3
+pointer 555.4 347.8 down
+frame 8.4
+expect state.result[0].hit = 36 1 32
+expect world.result[73860] = 1
+pointer up
+frame 8.5
+pointer 403.6 357.1 down
+frame 8.6
+expect state.result[0].hit = 32 1 36
+expect world.result[83072] = 1
+pointer up
+frame 8.7
+
+# The second step, nine white voxels on the first.
+pointer 476.8 326.0 down
+frame 8.8
+expect state.result[0].hit = 33 1 33
+expect world.result[76161] = 1
+pointer up
+frame 8.9
+pointer 497.0 337.8 down
+frame 9.0
+expect state.result[0].hit = 34 1 33
+expect world.result[76162] = 1
+pointer up
+frame 9.1
+pointer 459.7 340.1 down
+frame 9.2
+expect state.result[0].hit = 33 1 34
+expect world.result[78465] = 1
+pointer up
+frame 9.3
+pointer 517.8 350.1 down
+frame 9.4
+expect state.result[0].hit = 35 1 33
+expect world.result[76163] = 1
+pointer up
+frame 9.5
+pointer 480.0 352.4 down
+frame 9.6
+expect state.result[0].hit = 34 1 34
+expect world.result[78466] = 1
+pointer up
+frame 9.7
+pointer 441.9 354.8 down
+frame 9.8
+expect state.result[0].hit = 33 1 35
+expect world.result[80769] = 1
+pointer up
+frame 9.9
+pointer 500.9 365.2 down
+frame 10.0
+expect state.result[0].hit = 35 1 34
+expect world.result[78467] = 1
+pointer up
+frame 10.1
+pointer 462.3 367.6 down
+frame 10.2
+expect state.result[0].hit = 34 1 35
+expect world.result[80770] = 1
+pointer up
+frame 10.3
+pointer 483.3 380.8 down
+frame 10.4
+expect state.result[0].hit = 35 1 35
+expect world.result[80771] = 1
+pointer up
+frame 10.5
+# The colour item, clicked 4 time(s): white to gold.
+pointer 518.0 508.0 down
+frame 10.6
+pointer up
+frame 10.7
+pointer 518.0 508.0 down
+frame 10.8
+pointer up
+frame 10.9
+pointer 518.0 508.0 down
+frame 11.0
+pointer up
+frame 11.1
+pointer 518.0 508.0 down
+frame 11.2
+pointer up
+frame 11.3
+expect state.result[0].colour = 5
+
+# The golden spire, seven high, each on the one below.
+pointer 480.0 333.2 down
+frame 11.4
+expect state.result[0].hit = 34 2 34
+expect world.result[78514] = 5
+pointer up
+frame 11.5
+pointer 479.9 313.1 down
+frame 11.6
+expect state.result[0].hit = 34 3 34
+expect world.result[78562] = 5
+pointer up
+frame 11.7
+pointer 479.9 292.0 down
+frame 11.8
+expect state.result[0].hit = 34 4 34
+expect world.result[78610] = 5
+pointer up
+frame 11.9
+pointer 479.9 270.0 down
+frame 12.0
+expect state.result[0].hit = 34 5 34
+expect world.result[78658] = 5
+pointer up
+frame 12.1
+pointer 479.9 246.9 down
+frame 12.2
+expect state.result[0].hit = 34 6 34
+expect world.result[78706] = 5
+pointer up
+frame 12.3
+pointer 479.9 222.7 down
+frame 12.4
+expect state.result[0].hit = 34 7 34
+expect world.result[78754] = 5
+pointer up
+frame 12.5
+pointer 479.9 197.3 down
+frame 12.6
+expect state.result[0].hit = 34 8 34
+expect world.result[78802] = 5
+pointer up
+frame 12.7
+# The colour item, clicked 5 time(s): gold to red.
+pointer 518.0 508.0 down
+frame 12.8
+pointer up
+frame 12.9
+pointer 518.0 508.0 down
+frame 13.0
+pointer up
+frame 13.1
+pointer 518.0 508.0 down
+frame 13.2
+pointer up
+frame 13.3
+pointer 518.0 508.0 down
+frame 13.4
+pointer up
+frame 13.5
+pointer 518.0 508.0 down
+frame 13.6
+pointer up
+frame 13.7
+expect state.result[0].colour = 2
+
+# The ruby crown, two high.
+pointer 479.9 170.6 down
+frame 13.8
+expect state.result[0].hit = 34 9 34
+expect world.result[78850] = 2
+pointer up
+frame 13.9
+pointer 479.9 142.4 down
+frame 14.0
+expect state.result[0].hit = 34 10 34
+expect world.result[78898] = 2
+pointer up
+frame 14.1
+# The colour item, clicked 7 time(s): red to white.
+pointer 518.0 508.0 down
+frame 14.2
+pointer up
+frame 14.3
+pointer 518.0 508.0 down
+frame 14.4
+pointer up
+frame 14.5
+pointer 518.0 508.0 down
+frame 14.6
+pointer up
+frame 14.7
+pointer 518.0 508.0 down
+frame 14.8
+pointer up
+frame 14.9
+pointer 518.0 508.0 down
+frame 15.0
+pointer up
+frame 15.1
+pointer 518.0 508.0 down
+frame 15.2
+pointer up
+frame 15.3
+pointer 518.0 508.0 down
+frame 15.4
+pointer up
+frame 15.5
+expect state.result[0].colour = 1
+
+# The last lantern, on the near corner.
+pointer 486.9 411.5 down
+frame 15.6
+expect state.result[0].hit = 36 1 36
+expect world.result[83076] = 1
+pointer up
+frame 15.7
+
+# The hero view: the middle button carries the camera round, 110
+# pixels of yaw and 10 of pitch back up.
+pointer 300 300 up
+frame 15.8
+button middle down
+frame 15.9
+pointer 355 295 up
+frame 16.0
+pointer 410 290 up
+frame 16.1
+button middle up
+frame 16.2
+expect state.result[0].yaw = 1.580 0.001
+expect state.result[0].pitch = 0.620 0.001
+pointer 900 60 up
+frame 16.3
+
+# The picture: the crown red, the spire gold, a lantern white, the step
+# blue, where the camera puts them.
+expect 342 60 = 0.851 0.431 0.381 0.03    # the ruby crown
+expect 340 184 = 0.542 0.493 0.258 0.03    # the golden spire
+expect 413 320 = 0.889 0.878 0.856 0.03    # a lantern
+expect 360 360 = 0.223 0.310 0.441 0.03    # the blue step
