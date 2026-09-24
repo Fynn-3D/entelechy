@@ -666,7 +666,10 @@ output result <- display.result;      // named graph output; sub-graph outputs
    same way connects. `native.rasterize@1` takes `vertices` (rows of
    `clip: Vec4; normal: Vec3; uv: Vec2`) and `triangles` (rows of three
    `Int`s) and writes `surface`, a grid of `depth: Float; normal: Vec3;
-   uv: Vec2; id: Int` over the node's `domain`.
+   uv: Vec2; id: Int` over the node's `domain`. A scene places the
+   raster package for that and binds `native.rasterize@1` where it wants
+   the fast path: the same surface bit for bit on the interpreter and the
+   JIT, the device's own rasterizer, approximate at edges, on a GPU.
 9. The graph exposes `input`, `param`, and `output` like a Kernel does, so
    a graph is placed as a node with `node name: graph "path.osn" { ... }`.
    Placement flattens it: its nodes join the parent under the prefix

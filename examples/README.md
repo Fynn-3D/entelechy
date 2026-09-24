@@ -76,11 +76,12 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
   camera and it starts over.
 - [mesh](mesh/README.md): a torus as vertex and triangle rows, subdivided
   by Kernels whose output rows are sized from their inputs, projected by a
-  Kernel, rasterized by the backend's native `native.rasterize@1`, and
-  shaded by a Kernel; the CPU and GPU rasterizers agree.
+  Kernel, rasterized by the raster package, and shaded by a Kernel; the
+  package draws the same surface on every backend, edges included, and
+  `native.rasterize@1` in its place is the one-line fast path.
 - [model](model/README.md): a crate from a GLB, brought in by `orla-import`
   as vertex and triangle rows and a PNG the scene reads as inputs, spun
-  and rasterized by the native rasterizer, textured with `at_linear`.
+  and rasterized by the raster package, textured with `at_linear`.
 - [mipmap](mipmap/README.md): a ground running to the horizon, read at
   the level each pixel asks for. The strip of halvings is a shared
   sub-graph placed `levels` times with `carry`, and the level comes from

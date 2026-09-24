@@ -34,7 +34,7 @@ the workspace, is checked by [a test](crates/interface/orla/tests/layers.rs).
 | Orla IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | typing, SSA order, capability coverage; [fusion bit-identity](crates/core/ir/tests/fusion.rs) |
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs) | syntax, precedence, positioned errors, near misses |
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [the language surface at its version](crates/frontend/compiler/tests/surface.rs) |
-| Shared rules | [rules](crates/core/rules/src/lib.rs), [the `Backend` contract](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer contract and reference](crates/core/rules/src/raster.rs) | every backend's parity test runs by them |
+| Shared rules | [rules](crates/core/rules/src/lib.rs), [the `Backend` contract](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer contract and fast path](crates/core/rules/src/raster.rs) | every backend's parity test runs by them |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution tests](crates/backends/cpu/tests/execute.rs), [optimizer tests](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), every replay on `jit` |
 | GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL emission](crates/backends/gpu/src/wgsl.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs); both skip without an adapter; [the names a shader declares](crates/backends/gpu/tests/names.rs), without one |
@@ -61,6 +61,7 @@ What these packages do needed no engine feature; keep it that way.
 | [Mip levels](packages/picture.orlapkg/graphs/mip.osn): a sub-graph placed `levels` times with `carry`, the level read off a rasterized surface's neighbouring `uv` | `times`, `carry`, the rasterizer's `uv` and `id` | [mipmap replay](examples/mipmap/tests/ground.replay) |
 | [Text](packages/text.orlapkg/kernels/text.orla): labels are `Rows<Glyph>`, the font a `Grid<Float>` atlas baked by a Kernel | shared functions, assets | [text replay](examples/text/tests/text.replay) |
 | [Skinning](packages/skin.orlapkg/kernels/skin.orla): a rig's rows under the [rig contract](docs/RIGS.md) | maps over rows | [rig tests](crates/interface/orla/tests/rigs.rs), [skin](examples/skin/tests/skin.replay) and [crowd](examples/crowd/tests/crowd.replay) replays |
+| [Rasterization](packages/raster.orlapkg/kernels/raster.orla): candidates a triangle's box of pixel centres, ranked by `prefix with sum`, found by bisection, the nearest kept by a scatter `min` and the earliest at it by a second | prefix, a domain of `value(port)`, scatter | [edges replay](examples/mesh/tests/edges.replay) on three backends; [the fast path held to the rule](crates/core/rules/src/raster.rs) |
 
 ## Contracts
 
@@ -188,7 +189,15 @@ and nothing emitted for a `Long` may use `select`
   such a triangle to a point rather than clip it
   ([near-plane replay](examples/mesh/tests/near.replay)). The cutout form
   reads the mask by the shared `mask_alpha` formula so the edge is the
-  same pixel on every backend.
+  same pixel on every backend. A native operation names the structs of
+  its ports ([`NativeOp::structs`](crates/core/rules/src/backend.rs)),
+  so its elements are read by field as a Kernel's are
+  ([native replay](examples/mesh/tests/native.replay)).
+- The raster package is the rasterizer a scene places; `native.rasterize@1`
+  is its fast path ([decision](docs/DECISIONS.md)). On the interpreter
+  and the JIT the fast path sets triangles up in parallel runs and draws
+  bands of rows in parallel, and a test holds it bit for bit to the rule
+  written plainly; on the GPU it is the device's rasterizer.
 
 ### Graph, state and composition
 

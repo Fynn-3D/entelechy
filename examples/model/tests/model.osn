@@ -6,7 +6,12 @@ input faces: Triangles = "../assets/crate.triangles.field";
 input albedo: Image = "../assets/crate.albedo.png";
 
 node project: model.project@1 { mesh <- mesh; }
-node raster: native.rasterize@1 { vertices <- project.result; triangles <- faces; domain = vec2(320, 240); }
+node raster: graph "../../../packages/raster.orlapkg/graphs/raster.osn" {
+    vertices <- project.result;
+    triangles <- faces;
+    width = 320;
+    height = 240;
+}
 node view: model.shade@1 { surface <- raster.surface; albedo <- albedo; }
 
 output result <- view.result;

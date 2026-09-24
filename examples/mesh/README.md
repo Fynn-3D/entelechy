@@ -5,11 +5,19 @@ one vertex per element and `mesh.torus_faces` two triangles per lattice
 cell, both as rows; `mesh.split_vertices` and `mesh.split_faces` subdivide
 every triangle into four, sizing their rows from the inputs with
 `domain = count(mesh) + 3 * count(faces);` and `domain = 4 * count(faces);`;
-`mesh.project` rotates and projects the vertices into clip space; `native.rasterize@1`, the backend's rasterizer, turns the two
-rows into a `Grid<Surface>` of depth, normal, uv, and triangle id; and
-`mesh.shade` lights that surface. The rasterizer is device access, not an
-algorithm: on the GPU it is a render pipeline, on the CPU a reference
-implementation, and they agree on every interior pixel.
+`mesh.project` rotates and projects the vertices into clip space; the
+[raster package](../../packages/raster.orlapkg/kernels/raster.orla)
+turns the two rows into a `Grid<Surface>` of depth, normal, uv, and
+triangle id; and `mesh.shade` lights that surface. The rasterizer is
+Kernels like the rest, so it draws the same surface on the interpreter,
+the JIT and the GPU, edges included, which `tests/edges.replay` pins at
+pixels on an edge between two triangles.
+
+`native.rasterize@1` in the package's place is the fast path, one node
+for another (`tests/native.osn`): on the interpreter and the JIT it
+draws what the package draws, bit for bit, several times faster; on the
+GPU it is the device's own rasterizer, faster still and approximate, an
+edge pixel now and then taken the other way.
 
 The subdivision is `level.osn`, one level as a sub-graph, placed `level`
 times with `times = level;` and `carry`, so `param level 2` over the

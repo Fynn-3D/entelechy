@@ -1,0 +1,58 @@
+scene torus.osn
+
+# The torus's surface at pixels on an edge between two triangles, where
+# a rasterizer's rule is tested: the pixel's owner and its depth, as the
+# rule gives them. The raster package draws them, so they are the same
+# on the interpreter, the JIT and the GPU; `native.rasterize@1` gives
+# them too where it is exact, which the rule's own test holds. The last
+# pixel is one nothing covers.
+frame 0.0
+expect raster.resolved.result[21873].id = 2544
+expect raster.resolved.result[21873].depth = 0.982194 0.0001
+expect raster.resolved.result[24427].id = 2915
+expect raster.resolved.result[24427].depth = 0.980683 0.0001
+expect raster.resolved.result[26418].id = 3762
+expect raster.resolved.result[26418].depth = 0.982144 0.0001
+expect raster.resolved.result[28296].id = 4089
+expect raster.resolved.result[28296].depth = 0.981889 0.0001
+expect raster.resolved.result[29970].id = 3820
+expect raster.resolved.result[29970].depth = 0.979298 0.0001
+expect raster.resolved.result[31589].id = 3073
+expect raster.resolved.result[31589].depth = 0.975721 0.0001
+expect raster.resolved.result[33166].id = 4205
+expect raster.resolved.result[33166].depth = 0.979419 0.0001
+expect raster.resolved.result[34714].id = 5278
+expect raster.resolved.result[34714].depth = 0.983877 0.0001
+expect raster.resolved.result[36249].id = 2840
+expect raster.resolved.result[36249].depth = 0.971201 0.0001
+expect raster.resolved.result[38167].id = 2455
+expect raster.resolved.result[38167].depth = 0.969009 0.0001
+expect raster.resolved.result[40534].id = 2367
+expect raster.resolved.result[40534].depth = 0.96735 0.0001
+expect raster.resolved.result[42621].id = 1302
+expect raster.resolved.result[42621].depth = 0.966928 0.0001
+expect raster.resolved.result[44213].id = 1297
+expect raster.resolved.result[44213].depth = 0.967298 0.0001
+expect raster.resolved.result[45893].id = 2026
+expect raster.resolved.result[45893].depth = 0.962635 0.0001
+expect raster.resolved.result[47730].id = 912
+expect raster.resolved.result[47730].depth = 0.966849 0.0001
+expect raster.resolved.result[49659].id = 907
+expect raster.resolved.result[49659].depth = 0.964992 0.0001
+expect raster.resolved.result[51660].id = 1633
+expect raster.resolved.result[51660].depth = 0.959763 0.0001
+expect raster.resolved.result[53823].id = 514
+expect raster.resolved.result[53823].depth = 0.963921 0.0001
+expect raster.resolved.result[56056].id = 141
+expect raster.resolved.result[56056].depth = 0.965729 0.0001
+expect raster.resolved.result[58326].id = 511
+expect raster.resolved.result[58326].depth = 0.961359 0.0001
+expect raster.resolved.result[60693].id = 458
+expect raster.resolved.result[60693].depth = 0.959936 0.0001
+expect raster.resolved.result[63255].id = 77
+expect raster.resolved.result[63255].depth = 0.960438 0.0001
+expect raster.resolved.result[66075].id = 103
+expect raster.resolved.result[66075].depth = 0.959068 0.0001
+expect raster.resolved.result[69246].id = 8939
+expect raster.resolved.result[69246].depth = 0.961658 0.0001
+expect raster.resolved.result[0].id = -1

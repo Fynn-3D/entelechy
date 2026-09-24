@@ -13,7 +13,7 @@ input albedo: Image = "assets/crate.albedo.png";
 ```
 
 `model.project` turns the vertices into clip space under an orbit, the
-backend's native rasterizer lands the triangles, and `model.shade` reads
+raster package lands the triangles, and `model.shade` reads
 the texture at each pixel's uv with `at_linear`, lit by a key light and
 the sky. Nothing in the runtime knows glTF; the importer is a tool that
 speaks the Host's formats, and a model in any other format needs only

@@ -32,7 +32,10 @@ node palette: skin.palette@1 { poses <- poses.result; skeleton <- skeleton; }
 node posed: skin.apply@1 { mesh <- mesh; weights <- weights; palette <- palette.result; skeleton <- skeleton; }
 
 node project: arm.project@1 { mesh <- posed.result; }
-node raster: native.rasterize@1 { vertices <- project.result; triangles <- faces; domain = window(); }
+node raster: graph "../../packages/raster.orlapkg/graphs/window.osn" {
+    vertices <- project.result;
+    triangles <- faces;
+}
 node view: arm.shade@1 { surface <- raster.surface; domain = window(); }
 
 output result <- view.result;

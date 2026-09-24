@@ -57,10 +57,9 @@ node project: world.project@1 {
     mesh <- ground.result;
     camera <- camera.result;
 }
-node raster: native.rasterize@1 {
+node raster: graph "../../packages/raster.orlapkg/graphs/window.osn" {
     vertices <- project.result;
     triangles <- faces.result;
-    domain = window();
 }
 node view: world.shade@1 {
     surface <- raster.surface;

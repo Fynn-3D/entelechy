@@ -78,7 +78,10 @@ node standing: skin.place@1 { mesh <- posed.result; places <- places.result; one
 node triangles: crowd.faces@1 { faces <- faces; mesh <- mesh; domain = instances * count(faces); }
 
 node project: crowd.project@1 { mesh <- standing.result; }
-node raster: native.rasterize@1 { vertices <- project.result; triangles <- triangles.result; domain = window(); }
+node raster: graph "../../packages/raster.orlapkg/graphs/window.osn" {
+    vertices <- project.result;
+    triangles <- triangles.result;
+}
 node view: crowd.shade@1 { surface <- raster.surface; faces <- faces; domain = window(); }
 
 output result <- view.result;

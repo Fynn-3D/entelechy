@@ -14,10 +14,11 @@ node subdivided: graph "../level.osn" {
     faces <- faces.result;
 }
 node project: mesh.project@1 { mesh <- subdivided.vertices; }
-node raster: native.rasterize@1 {
+node raster: graph "../../../packages/raster.orlapkg/graphs/raster.osn" {
     vertices <- project.result;
     triangles <- subdivided.triangles;
-    domain = vec2(320, 240);
+    width = 320;
+    height = 240;
 }
 node view: mesh.shade@1 { surface <- raster.surface; }
 

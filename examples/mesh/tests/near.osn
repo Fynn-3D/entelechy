@@ -43,10 +43,11 @@ node face: kernel {
     }
 }
 
-node raster: native.rasterize@1 {
+node raster: graph "../../../packages/raster.orlapkg/graphs/raster.osn" {
     vertices <- points.result;
     triangles <- face.result;
-    domain = vec2(64, 64);
+    width = 64;
+    height = 64;
 }
 
 node view: kernel {

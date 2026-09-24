@@ -58,5 +58,13 @@ use "picture.orlapkg";
   `skin.add@1` lays a clip over a pose rather than into it.
   `graphs/pose.osn` plays one clip as one node; `examples/skin` blends
   two by hand and `examples/crowd` poses sixty-four.
+- **raster** — triangles turned into the surface a camera sees, as
+  Kernels: for every pixel the nearest triangle's depth, normal and uv,
+  perspective-correct, and its row as `id`. `graphs/raster.osn` draws at
+  a `width` and `height`, `graphs/window.osn` at the window's size. It
+  is the rasterizer every example places; `native.rasterize@1` in its
+  place is the fast path, bit for bit the same on the interpreter and
+  the JIT and the device's approximate rasterizer on a GPU
+  ([why](../docs/DECISIONS.md)).
 - **pixelfx** — a coarse pixel grid and a four-colour palette, and the
   NES look made of both as a preset. The example of what a package is.

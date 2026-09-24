@@ -13,10 +13,9 @@ node strip: graph "../../packages/picture.orlapkg/graphs/mip.osn" { source <- te
 
 node quad: ground.quad@1 { domain = 4; }
 node faces: ground.faces@1 { domain = 2; }
-node raster: native.rasterize@1 {
+node raster: graph "../../packages/raster.orlapkg/graphs/window.osn" {
     vertices <- quad.result;
     triangles <- faces.result;
-    domain = window();
 }
 
 node view: ground.shade@1 {

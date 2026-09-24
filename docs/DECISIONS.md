@@ -173,3 +173,39 @@ write is refused until `LANGUAGE_VERSION` is raised.
 **What would change it.** A contract that has no outside reader after
 all, which then need not be held; or a second version of one living
 beside the first, which would need both held.
+
+## The rasterizer is a package; the native one is its fast path
+
+A scene places `packages/raster.orlapkg` to turn triangles into a
+surface, and binds `native.rasterize@1` in its place, one node for
+another, where it wants speed. Both keep one rule: a pixel is covered
+where its centre is inside the triangle's box and on or inside all three
+edges, holds the nearest fragment in `[0, 1)`, the earlier triangle on a
+tie, with attributes interpolated by `1 / w`.
+
+**Why.** Written as Kernels, rasterization is what the rest of Orla is:
+typed, traced, hot-reloaded, and the same on every backend, edges
+included, because every backend runs the same IR. A native rasterizer on
+a GPU is the device's, whose coverage at an edge and whose precision are
+its own, so the three backends drew different surfaces; and a
+rasterizer in Rust is a feature an author cannot change. The package is
+slower — a frame of the culled example's world is 18 ms on the GPU
+against 11 with the device's rasterizer, and on the JIT the Rust fast
+path draws in 22 ms what the package draws in about 90 — so the fast
+path stays, as an acceleration of the package rather than a second
+definition of it.
+
+**Where.** The package and its presets; every example places it. On the
+interpreter and the JIT the fast path is `orla_rules::raster`, held bit
+for bit to the rule by a test that writes the rule plainly; on the GPU it
+is the device's rasterizer, which the documents call approximate.
+`examples/mesh/tests/edges.replay` pins the package's surface at edge
+pixels on all three backends, and `native.replay` the fast path's
+inside them.
+
+**What would change it.** A GPU fast path exact to the rule (a compute
+rasterizer as fast as the device's, or integer coverage the device
+honours), which would make the fast path a pure acceleration on every
+backend; or a scene that needs the fast path chosen for it, which would
+need the Graph to know that a placed graph and a native operation are
+one computation.
