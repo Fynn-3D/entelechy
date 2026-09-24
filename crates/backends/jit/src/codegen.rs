@@ -227,6 +227,19 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         ),
         _ => None,
     };
+    // The scratch slot holds what a `put` writes, an input's element, or
+    // what an `emit` gives, a pair: the target's element after an address
+    // of at most three words.
+    let pair = match module.manifest.mode {
+        orla_ir::Mode::Scatter { base, .. } => {
+            module.manifest.inputs[base as usize]
+                .ty
+                .schema
+                .value_words()
+                + 3
+        }
+        _ => 0,
+    };
     let max_stride = module
         .manifest
         .inputs
@@ -234,6 +247,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         .map(|port| port.ty.schema.value_words())
         .max()
         .unwrap_or(1)
+        .max(pair)
         .max(1);
     let mut context = jit.make_context();
     let mut fbc = FunctionBuilderContext::new();
@@ -2139,7 +2153,13 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let slot = self.scratch_addr();
                 self.stores(&words, self.flags, slot);
                 let element = self.element_index();
-                let n = self.i32c(words.len() as i64);
+                // Counted in words, not values: a 64-bit value is one
+                // value and two words.
+                let bytes: u32 = words
+                    .iter()
+                    .map(|word| self.b.func.dfg.value_type(*word).bytes())
+                    .sum();
+                let n = self.i32c(i64::from(bytes / 4));
                 self.b.ins().call(self.emit, &[self.ctx, element, slot, n]);
                 words
             }

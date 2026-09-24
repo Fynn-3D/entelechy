@@ -569,3 +569,59 @@ fn emitted_pairs_land_as_the_interpreters_do() {
         assert_eq!(cpu, jit, "{rule}");
     }
 }
+
+/// A pair wider than every input's element is emitted through the
+/// scratch slot, which was sized by the inputs alone: the store ran past
+/// it and over the run's own state, and pairs went missing. Long keys of
+/// a depth's bits and a row, emitted from nested loops under a branch.
+#[test]
+fn keys_emitted_from_nested_loops_land_as_the_interpreters_do() {
+    let count = 20_000u32;
+    let source = "kernel test.cover@1 { requires { field.read; field.write; }
+        input keys: Rows<Int>; input canvas: Grid<Long>; output result: Grid<Long>;
+        struct Hit { pixel: Vec2; key: Long; }
+        scatter into canvas with min {
+            let t = element();
+            let k = sample(keys);
+            let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+            let _rows = loop k % 4 + 1 with dy = 0 {
+                let _cols = loop k % 3 + 1 with dx = 0 {
+                    let z = float((k + dx * 7 + dy * 3) % 1000) / 1000.0;
+                    let _hit = if (dx + dy + k) % 3 != 0 {
+                        emit(Hit { pixel: vec2(float((k + dx) % 64), float((k / 64 + dy) % 48)), key: (long(bits(z)) << 32) | long(t) })
+                    } else { none };
+                    dx + 1
+                };
+                dy + 1
+            };
+            return none;
+        } }";
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let longs = orla_abi::Schema::new(vec![orla_abi::Scalar::Long; 2]);
+    let (cpu, jit) = both_all(
+        source,
+        &[
+            (
+                ints,
+                Domain::Rows(count),
+                (0..count)
+                    .map(|i| i.wrapping_mul(2_654_435_761) >> 12)
+                    .collect(),
+            ),
+            (
+                longs,
+                Domain::Grid(64, 48),
+                (0..64 * 48)
+                    .flat_map(|_| [u32::MAX, i32::MAX as u32])
+                    .collect(),
+            ),
+        ],
+        Domain::Rows(count),
+    );
+    let differ = cpu[0]
+        .chunks(2)
+        .zip(jit[0].chunks(2))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(differ, 0, "{differ} pixels differ");
+}
