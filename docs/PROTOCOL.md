@@ -104,7 +104,9 @@ as soon as the value says to: the target is `node.port[index].field`
 the spelling a replay writes, and the value is a Float, an Int or a
 Bool. With `save`, an object of `node.port` to a file path (relative
 paths beside the scene), it writes those outputs when the run stops, by
-the rules `run --save` follows. The answer says `frames` (how many
+the rules `run --save` follows, into a directory the session was started
+with `--allow file.write` for and nowhere else; a path outside one is
+refused before any frame runs. The answer says `frames` (how many
 ran), `stopped` (`"frames"` or `"until"`), `target` and `value` (what
 the watched value last was), `saved`, `millis`, and `report`, the last
 frame's. Only what `until` and `save` name has to be materialized, so a

@@ -23,9 +23,15 @@ fn scratch_in(name: &str) -> PathBuf {
 
 /// Sends requests one per line and returns the responses in order.
 fn talk(scene: &Path, requests: &[Json]) -> Vec<Json> {
+    talk_with(scene, &[], requests)
+}
+
+/// [`talk`] to a session started with `flags` after the scene.
+fn talk_with(scene: &Path, flags: &[&str], requests: &[Json]) -> Vec<Json> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
         .arg("serve")
         .arg(scene)
+        .args(flags)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -975,8 +981,10 @@ fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
     )
     .unwrap();
     let kept = dir.join("count.field");
-    let responses = talk(
+    let allow = format!("file.write={}", dir.display());
+    let responses = talk_with(
         &dir.join("scene.osn"),
+        &["--allow", &allow],
         &[
             json!({ "id": 1, "op": "advance", "frames": 500,
                     "until": { "target": "tally.result[0]", "above": 41.5 },
@@ -1158,4 +1166,39 @@ fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
     let style = params.iter().find(|p| p["name"] == "style").unwrap();
     assert_eq!(style["type"], "Style");
     assert_eq!(style["value"][2], json!(2.0));
+}
+
+/// An agent saves by the allowance the person running the session gave,
+/// as a scene's outputs are written: with none, or outside it, nothing
+/// is written, and nothing runs either.
+#[test]
+fn advance_saves_only_where_writes_are_allowed() {
+    let dir = scratch_in("-save-allowed");
+    let saves = dir.join("saves");
+    std::fs::create_dir_all(&saves).unwrap();
+    let outside = dir.join("outside.field");
+    let inside = saves.join("cells.field");
+    let escape = saves.join("../outside.field");
+    let request = |id: u32, path: &Path| {
+        json!({ "id": id, "op": "advance", "frames": 1,
+                "save": { "life.result": path.display().to_string() } })
+    };
+    let closed = talk(&dir.join("scene.osn"), &[request(1, &inside)]);
+    let why = closed[0]["error"]["message"].as_str().unwrap_or_default();
+    assert!(why.contains("--allow file.write"), "{}", closed[0]);
+    assert!(!inside.exists());
+
+    let allow = format!("file.write={}", saves.display());
+    let open = talk_with(
+        &dir.join("scene.osn"),
+        &["--allow", &allow],
+        &[request(1, &outside), request(2, &escape), request(3, &inside)],
+    );
+    for refused in &open[..2] {
+        let why = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(why.contains("outside every directory"), "{refused}");
+    }
+    assert!(!outside.exists());
+    assert_eq!(open[2]["ok"]["saved"].as_array().unwrap().len(), 1, "{}", open[2]);
+    assert!(inside.exists());
 }

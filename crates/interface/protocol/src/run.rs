@@ -174,6 +174,11 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
                         .unwrap_or_else(|| std::path::Path::new("."))
                         .join(resolved)
                 };
+                // An agent writes files by the allowance the person
+                // running the session gave, as a scene's outputs do.
+                let resolved = session
+                    .allowed_write(&resolved)
+                    .map_err(|why| failure(format!("cannot save {target}: {why}")))?;
                 saves.push((
                     orla_graph::NodeId(node.to_owned()),
                     port.to_owned(),

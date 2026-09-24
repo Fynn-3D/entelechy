@@ -109,7 +109,7 @@ impl Writes {
     /// Where `path` lands, once it is known to be inside an allowed
     /// directory: `..` and links are followed before the test, so no
     /// spelling reaches past one.
-    fn place(&self, path: &Path) -> Result<PathBuf, String> {
+    pub(crate) fn place(&self, path: &Path) -> Result<PathBuf, String> {
         if self.allowed.is_empty() {
             return Err(format!(
                 "writing files is not allowed; run with `--allow file.write={}`",

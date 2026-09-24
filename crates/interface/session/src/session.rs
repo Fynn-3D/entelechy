@@ -184,6 +184,14 @@ impl Session {
         self.writes.allow(dir)
     }
 
+    /// Where a write to `path` lands, once it is known to be inside a
+    /// directory [`Session::allow_writes`] allowed: what a caller acting
+    /// for someone other than the person running the session, an agent
+    /// over the protocol, asks before it writes anywhere.
+    pub fn allowed_write(&self, path: &Path) -> Result<std::path::PathBuf, String> {
+        self.writes.place(path)
+    }
+
     /// Where every node of the scene runs: the backend, and why it is not
     /// the main one when it is not. A node whose Kernel is not published
     /// is left out.
