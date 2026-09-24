@@ -12,41 +12,24 @@
 //   whose depth is in `[0, 1)`; of two at one depth, the earlier triangle.
 // - Attributes are interpolated perspective-correct, by `1 / w`.
 //
-// It goes in six steps, the middle ones the compact package's shape: a
-// triangle's box of pixels is its count of candidate fragments, a prefix
-// of the counts ranks them, and a node sized by the total gives each
-// candidate one element. A scatter keeps each pixel's nearest depth and a
-// second the earliest triangle at it, and the surface is read back from
-// the winners.
+// It goes in two steps. Each triangle walks the pixels of its box and
+// emits, for each one it covers, a key of the fragment's depth above and
+// its own row below: a pixel keeps the least key, which is the nearest
+// depth and, of two at it, the earlier triangle, one 64-bit atomic
+// apiece on a device. The surface is read back from the keys.
 
 struct Corner { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Face { a: Int; b: Int; c: Int; }
 
-// A triangle in pixels as the fragments need it: each corner as `x, y,
-// z`, wound so the edge functions are positive inside, the area (twice
-// it), and the box of pixels whose centres it may cover, from `x0, y0`,
-// `w` wide, `n` in all. What only the surface needs, the rows and `1/w`,
-// is found again for the pixels a triangle wins.
-struct Setup {
-    a: Vec3; b: Vec3; c: Vec3;
-    area: Float;
-    x0: Int; y0: Int; w: Int;
-    n: Int;
-}
-
-// A triangle in pixels with what the surface needs: its corners as `x,
-// y, z, 1/w` and the rows they came from, wound as `Setup` winds them;
-// `usable` false for one that is skipped.
+// A triangle in pixels: its corners as `x, y, z, 1/w` and the rows they
+// came from, wound so the inside is on every edge's left, and the area
+// (twice it); `usable` false for one that is skipped.
 struct Corners {
     a: Vec4; b: Vec4; c: Vec4;
     ia: Int; ib: Int; ic: Int;
     area: Float;
     usable: Bool;
 }
-
-// One candidate pixel of one triangle: where, how deep, and whose; a
-// pixel of `-1` when the triangle does not cover it.
-struct Fragment { pixel: Vec2; z: Float; t: Int; }
 
 // What a pixel shows: the layout `native.rasterize@1` writes.
 struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
@@ -79,8 +62,8 @@ fn usable(v: Corner) -> Bool {
 
 // A triangle in pixels over a canvas of `size`: its corners from the
 // vertex rows, clamped, wound so the inside is on every edge's left.
-// Setting a triangle up and reading a surface back both come here, so
-// both see the same corners to the last bit.
+// Covering and reading a surface back both come here, so both see the
+// same corners to the last bit.
 fn corners(face: Face, vertices: Rows<Corner>, size: Vec2) -> Corners {
     let last = count(vertices) - 1;
     let ia = clamp(face.a, 0, last);
@@ -104,148 +87,72 @@ fn corners(face: Face, vertices: Rows<Corner>, size: Vec2) -> Corners {
     };
 }
 
-// Each triangle in pixels, and how many pixels there are whose centres
-// it may cover: those whose centre is inside its box. A triangle smaller
-// than a pixel that covers no centre has none, which is most of what a
-// far-off mesh is.
-kernel raster.setup@1 {
+// Every pixel's nearest fragment as one key: the bits of its depth (a
+// Float of no sign orders as its bits do) above, the triangle's row
+// below, so the least key is the nearest depth and the earliest row at
+// it. A triangle emits one key a pixel it covers and returns none.
+kernel raster.cover@1 {
     requires { field.read; field.write; }
     input triangles: Rows<Face>;
     input vertices: Rows<Corner>;
-    input canvas: Grid<Float>;
-    output result: Rows<Setup>;
-    output counts: Rows<Int>;
-    compute {
-        let size = size(canvas);
+    input keys: Grid<Long>;
+    output result: Grid<Long>;
+    struct Hit { pixel: Vec2; key: Long; }
+    scatter into keys with min {
+        let t = element();
+        let size = size(keys);
         let k = corners(sample(triangles), vertices, size);
-        let none = vec3(0.0, 0.0, 0.0);
-        let skip = {
-            result: Setup { a: none, b: none, c: none, area: 0.0, x0: 0, y0: 0, w: 1, n: 0 },
-            counts: 0
-        };
-        if !k.usable { return skip; }
+        let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+        if !k.usable { return none; }
         // The first and last pixel whose centre, at `x + 0.5`, is inside
         // the box, and so may be inside the triangle.
         let x0 = max(ceil(min(min(k.a.x, k.b.x), k.c.x) - 0.5), 0.0);
         let y0 = max(ceil(min(min(k.a.y, k.b.y), k.c.y) - 0.5), 0.0);
         let x1 = min(floor(max(max(k.a.x, k.b.x), k.c.x) - 0.5), size.x - 1.0);
         let y1 = min(floor(max(max(k.a.y, k.b.y), k.c.y) - 0.5), size.y - 1.0);
-        if x1 < x0 || y1 < y0 { return skip; }
+        if x1 < x0 || y1 < y0 { return none; }
         let w = int(x1 - x0) + 1;
-        let n = w * (int(y1 - y0) + 1);
-        return {
-            result: Setup {
-                a: k.a.xyz, b: k.b.xyz, c: k.c.xyz,
-                area: k.area,
-                x0: int(x0), y0: int(y0), w: w,
-                n: n
-            },
-            counts: n
+        let h = int(y1 - y0) + 1;
+        let row = long(t);
+        let _rows = loop h with dy = 0 {
+            let py = int(y0) + dy;
+            let _columns = loop w with dx = 0 {
+                let px = int(x0) + dx;
+                let p = vec2(float(px) + 0.5, float(py) + 0.5);
+                let w0 = edge(k.b.xy, k.c.xy, p);
+                let w1 = edge(k.c.xy, k.a.xy, p);
+                let w2 = edge(k.a.xy, k.b.xy, p);
+                let z = w0 / k.area * k.a.z + w1 / k.area * k.b.z + w2 / k.area * k.c.z;
+                let covered = w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 && z >= 0.0 && z < 1.0;
+                let _hit = if covered {
+                    emit(Hit { pixel: vec2(float(px), float(py)), key: (long(bits(z)) << 32) | row })
+                } else {
+                    none
+                };
+                dx + 1
+            };
+            dy + 1
         };
+        return none;
     }
 }
 
-// Where each triangle's candidates begin: an inclusive prefix of the
-// counts, so triangle `t`'s run of candidates ends before `offsets[t]`.
-kernel raster.offsets@1 {
+// The surface: at each covered pixel, the depth its key holds and the
+// winner's attributes interpolated at the pixel's centre,
+// perspective-correct.
+kernel raster.resolve@2 {
     requires { field.read; field.write; }
-    input counts: Rows<Int>;
-    output result: Rows<Int>;
-    prefix with sum { return sample(counts); }
-}
-
-// How many candidates there are, which sizes the next node: the last
-// offset, read once rather than summed again.
-kernel raster.total@1 {
-    requires { field.read; field.write; }
-    input offsets: Rows<Int>;
-    output result: Rows<Int>;
-    compute { return at(offsets, count(offsets) - 1); }
-}
-
-// Each candidate: its triangle found by bisecting the offsets, its pixel
-// by its place in the triangle's box, and whether the triangle covers the
-// pixel's centre, at what depth.
-kernel raster.fragments@1 {
-    requires { field.read; field.write; }
-    input setup: Rows<Setup>;
-    input offsets: Rows<Int>;
-    input total: Rows<Int>;
-    output result: Rows<Fragment>;
-    compute {
-        let f = element();
-        let none = Fragment { pixel: vec2(-1.0, -1.0), z: 1.0, t: -1 };
-        if f >= at(total, 0) { return none; }
-        // The first triangle whose offset passes `f`.
-        let span = loop 32 with r = ivec2(0, count(setup)) until r.x >= r.y {
-            let mid = (r.x + r.y) / 2;
-            if at(offsets, mid) > f { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
-        };
-        let t = span.x;
-        let s = at(setup, t);
-        let local = f - (at(offsets, t) - s.n);
-        let px = s.x0 + local % s.w;
-        let py = s.y0 + local / s.w;
-        let p = vec2(float(px) + 0.5, float(py) + 0.5);
-        let w0 = edge(s.b.xy, s.c.xy, p);
-        let w1 = edge(s.c.xy, s.a.xy, p);
-        let w2 = edge(s.a.xy, s.b.xy, p);
-        if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 { return none; }
-        let l0 = w0 / s.area;
-        let l1 = w1 / s.area;
-        let l2 = w2 / s.area;
-        let z = l0 * s.a.z + l1 * s.b.z + l2 * s.c.z;
-        if !(z >= 0.0 && z < 1.0) { return none; }
-        return Fragment { pixel: vec2(float(px), float(py)), z: z, t: t };
-    }
-}
-
-// Every pixel's nearest depth. A pixel nothing covers keeps the `1.0` it
-// started with, which no fragment reaches.
-kernel raster.nearest@1 {
-    requires { field.read; field.write; }
-    input fragments: Rows<Fragment>;
-    input canvas: Grid<Float>;
-    output result: Grid<Float>;
-    struct Near { pixel: Vec2; z: Float; }
-    scatter into canvas with min {
-        let f = sample(fragments);
-        return Near { pixel: f.pixel, z: f.z };
-    }
-}
-
-// Every pixel's owner: of the fragments at its nearest depth, the one
-// from the earliest triangle. A depth is read as the scatter above kept
-// it, so the test is exact.
-kernel raster.owner@1 {
-    requires { field.read; field.write; }
-    input fragments: Rows<Fragment>;
-    input depth: Grid<Float>;
-    input owners: Grid<Int>;
-    output result: Grid<Int>;
-    struct Own { pixel: Vec2; t: Int; }
-    scatter into owners with min {
-        let f = sample(fragments);
-        let wins = f.t >= 0 && f.z == at(depth, f.pixel);
-        return Own { pixel: if wins { f.pixel } else { vec2(-1.0, -1.0) }, t: f.t };
-    }
-}
-
-// The surface: at each owned pixel, the owner's attributes interpolated
-// at the pixel's centre, perspective-correct.
-kernel raster.resolve@1 {
-    requires { field.read; field.write; }
-    input owners: Grid<Int>;
-    input depth: Grid<Float>;
+    input keys: Grid<Long>;
     input triangles: Rows<Face>;
     input vertices: Rows<Corner>;
     output result: Grid<Surface>;
     compute {
-        let t = sample(owners);
-        if t == 2147483647 {
+        let key = sample(keys);
+        if key == 9223372036854775807l {
             return Surface { depth: 1.0, normal: vec3(0.0, 0.0, 0.0), uv: vec2(0.0, 0.0), id: -1 };
         }
-        let k = corners(at(triangles, t), vertices, size(depth));
+        let t = int(key & 0xFFFFFFFFl);
+        let k = corners(at(triangles, t), vertices, size(keys));
         let p = coord() + vec2(0.5, 0.5);
         let w0 = edge(k.b.xy, k.c.xy, p);
         let w1 = edge(k.c.xy, k.a.xy, p);
@@ -259,6 +166,6 @@ kernel raster.resolve@1 {
         let vc = at(vertices, k.ic);
         let normal = (l0 * va.normal * k.a.w + l1 * vb.normal * k.b.w + l2 * vc.normal * k.c.w) / inv_w;
         let uv = (l0 * va.uv * k.a.w + l1 * vb.uv * k.b.w + l2 * vc.uv * k.c.w) / inv_w;
-        return Surface { depth: sample(depth), normal: normal, uv: uv, id: t };
+        return Surface { depth: from_bits(int(key >> 32)), normal: normal, uv: uv, id: t };
     }
 }

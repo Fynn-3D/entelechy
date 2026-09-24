@@ -10,39 +10,17 @@ use "../kernels/raster.orla";
 
 input vertices: Rows<Corner>;
 input triangles: Rows<Face>;
-// What a pixel holds before anything is drawn on it.
-node far: Grid<Float> { domain = window(); value = 1.0; }
-node nobody: Grid<Int> { domain = window(); value = 2147483647; }
+// What a pixel holds before anything is drawn on it: the key no
+// fragment gives.
+node empty: Grid<Long> { domain = window(); value = 9223372036854775807l; }
 
-node setup: raster.setup@1 {
+node cover: raster.cover@1 {
     triangles <- triangles;
     vertices <- vertices;
-    canvas <- far.result;
+    keys <- empty.result;
 }
-node offsets: raster.offsets@1 { counts <- setup.counts; }
-node total: raster.total@1 {
-    offsets <- offsets.result;
-    domain = 1;
-}
-
-node fragments: raster.fragments@1 {
-    setup <- setup.result;
-    offsets <- offsets.result;
-    total <- total.result;
-    domain = max(value(total), 1);
-}
-node nearest: raster.nearest@1 {
-    fragments <- fragments.result;
-    canvas <- far.result;
-}
-node owner: raster.owner@1 {
-    fragments <- fragments.result;
-    depth <- nearest.result;
-    owners <- nobody.result;
-}
-node resolved: raster.resolve@1 {
-    owners <- owner.result;
-    depth <- nearest.result;
+node resolved: raster.resolve@2 {
+    keys <- cover.result;
     triangles <- triangles;
     vertices <- vertices;
 }
