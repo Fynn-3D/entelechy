@@ -282,6 +282,10 @@ struct Pipeline {
     /// Whether a scatter's entry emits pairs, combining them into the
     /// target as it runs: the target is then ready before the entry.
     emits: bool,
+    /// The inputs its passes read from one buffer, copied there before
+    /// they run, because binding each would be more than the device binds
+    /// at once; see [`wgsl::packed_inputs`].
+    packed: Vec<usize>,
 }
 
 /// A prefix fold's three passes: a block a walk, the blocks' totals
@@ -346,6 +350,16 @@ impl GpuBackend {
         }
     }
 
+    /// The inputs `module` packs into one buffer on this device.
+    fn packing(&self, module: &Validated) -> Vec<usize> {
+        let limits = self.device.limits();
+        wgsl::packed_inputs(
+            module,
+            limits.max_buffers_and_acceleration_structures_per_shader_stage as usize,
+            limits.max_storage_buffers_per_shader_stage as usize,
+        )
+    }
+
     /// Why `module`'s widest pass binds more buffers than this device
     /// does at once, if it does: its uniforms (the context and the
     /// parameters) and its storage (every input, every output it writes,
@@ -354,12 +368,14 @@ impl GpuBackend {
     /// on uniform buffers, and on all of them together. Such a module runs
     /// on the ordered backend; nothing about it is wrong.
     fn wider_than_device(&self, module: &Validated) -> Option<String> {
-        let uniforms = 2usize;
+        let (uniforms, unpacked) = wgsl::bindings(module);
         let inputs = module.manifest.inputs.len();
         let written = wgsl::written_outputs(module);
         let failure = usize::from(wgsl::can_fail(module));
         let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty());
-        let storage = inputs + written + failure + emitting;
+        // Inputs packed into one buffer bind as one.
+        let packed = self.packing(module).len();
+        let storage = unpacked - packed + usize::from(packed > 0);
         let limits = self.device.limits();
         let most_storage = limits.max_storage_buffers_per_shader_stage as usize;
         let most_uniform = limits.max_uniform_buffers_per_shader_stage as usize;
@@ -944,7 +960,8 @@ impl Backend for GpuBackend {
             ));
         }
         let written = wgsl::written_outputs(module);
-        let source = wgsl::emit(module);
+        let packed = self.packing(module);
+        let source = wgsl::emit_packed(module, &packed);
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = self
             .device
@@ -958,8 +975,14 @@ impl Backend for GpuBackend {
             storage_entry(wgsl::OUTPUT_BINDING, false),
         ];
         for (index, port) in module.manifest.inputs.iter().enumerate() {
+            if packed.contains(&index) {
+                continue;
+            }
             let memory = module.manifest.memories.contains(&port.name);
             entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, !memory));
+        }
+        if !packed.is_empty() {
+            entries.push(storage_entry(wgsl::PACKED_BINDING, true));
         }
         for k in 1..written {
             entries.push(storage_entry(wgsl::output_binding(module, k), false));
@@ -1003,7 +1026,7 @@ impl Backend for GpuBackend {
         }
         let reduce = if module.manifest.mode == orla_ir::Mode::Reduce {
             let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let reduce_source = wgsl::emit_reduce(module);
+            let reduce_source = wgsl::emit_reduce_packed(module, &packed);
             let shader = self
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1017,7 +1040,12 @@ impl Backend for GpuBackend {
                 uniform_entry(wgsl::PARAMS_BINDING),
             ];
             for index in 0..module.manifest.inputs.len() {
-                entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, true));
+                if !packed.contains(&index) {
+                    entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, true));
+                }
+            }
+            if !packed.is_empty() {
+                entries.push(storage_entry(wgsl::PACKED_BINDING, true));
             }
             entries.extend([
                 uniform_entry(count_binding),
@@ -1174,6 +1202,7 @@ impl Backend for GpuBackend {
             prefix,
             fails,
             emits,
+            packed,
         }))
     }
 
@@ -1241,6 +1270,7 @@ impl Backend for GpuBackend {
             context_buffer,
             params_buffer,
             input_buffers,
+            bound_inputs,
             memory_outputs,
             output_buffer,
             further_outputs,
@@ -1259,7 +1289,7 @@ impl Backend for GpuBackend {
                 reduce,
                 &context_buffer,
                 &params_buffer,
-                &input_buffers,
+                &bound_inputs,
                 output_buffer,
                 element_count,
                 output_words,
@@ -1347,6 +1377,15 @@ impl Backend for GpuBackend {
         chain: (usize, usize),
     ) -> Option<Result<Vec<Handle>, ExecutionError>> {
         let (input, output) = chain;
+        // A pack is copied before each run, and the times would read the
+        // chain through it: they go one by one instead.
+        if prepared
+            .as_any()
+            .downcast_ref::<Pipeline>()
+            .is_some_and(|pipeline| !pipeline.packed.is_empty())
+        {
+            return None;
+        }
         // Only the shape the planner makes: a map of one output whose
         // own output comes back on one input. A measured run times each
         // node, so it goes the ordinary way.
@@ -1487,6 +1526,9 @@ struct Staged {
     context_buffer: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
     input_buffers: Vec<wgpu::Buffer>,
+    /// What the passes bind for the inputs, by binding: the inputs' own
+    /// buffers, and the pack where some are packed.
+    bound_inputs: Vec<(u32, wgpu::Buffer)>,
     /// A memory's copy, written by the steps, to adopt as that output.
     memory_outputs: Vec<(usize, wgpu::Buffer, orla_abi::Domain)>,
     output_buffer: wgpu::Buffer,
@@ -1615,6 +1657,7 @@ impl GpuBackend {
             element_count,
             failure: _,
             target: _,
+            bound_inputs: _,
         } = staged;
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         // The first time reads the input it was given and writes the
@@ -1768,8 +1811,53 @@ impl GpuBackend {
                 input_buffers.push(bound);
             }
         }
+        // What the pass binds for its inputs: each its own, but for those
+        // it packs, which are copied into one buffer before it runs, each
+        // at the offset in words the parameters carry after their own.
+        let mut bound_inputs: Vec<(u32, wgpu::Buffer)> = Vec::new();
+        let mut packs: Vec<(wgpu::Buffer, u64, u64)> = Vec::new();
+        let mut offsets: Vec<u32> = Vec::new();
+        let mut packed_words = 0u64;
+        for (index, buffer) in input_buffers.iter().enumerate() {
+            if pipeline.packed.contains(&index) {
+                let extent = scope.size(invocation.inputs[index])?;
+                let words = module.manifest.inputs[index]
+                    .ty
+                    .schema
+                    .storage_words(extent.count()) as u64;
+                let offset = u32::try_from(packed_words).map_err(|_| {
+                    ExecutionError::Device(
+                        "the inputs packed into one buffer pass 2^32 words".to_owned(),
+                    )
+                })?;
+                offsets.push(offset);
+                packs.push((buffer.clone(), packed_words * 4, words * 4));
+                packed_words += words;
+            } else {
+                bound_inputs.push((wgsl::INPUT_BINDING + index as u32, buffer.clone()));
+            }
+        }
+        let pack = (!packs.is_empty()).then(|| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("packed inputs"),
+                size: (packed_words * 4).max(16).div_ceil(16) * 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        if let Some(pack) = &pack {
+            bound_inputs.push((wgsl::PACKED_BINDING, pack.clone()));
+        }
         let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let params_bytes = param_bytes(&invocation.params);
+        let mut params_bytes = param_bytes(&invocation.params);
+        if !offsets.is_empty() {
+            // The offsets start at the first slot after the parameters'.
+            params_bytes.truncate(wgsl::param_slots(module).1 * 16);
+            for offset in &offsets {
+                params_bytes.extend_from_slice(&offset.to_le_bytes());
+            }
+            params_bytes.resize(params_bytes.len().div_ceil(16) * 16, 0);
+        }
         let (context_buffer, params_buffer) = self.uniform_buffers(&context_bytes, &params_bytes);
         let output_schema = &module.manifest.outputs[0].ty.schema;
         let output_words = output_schema.value_words();
@@ -1801,9 +1889,9 @@ impl GpuBackend {
                 resource: output_buffer.as_entire_binding(),
             },
         ];
-        for (index, buffer) in input_buffers.iter().enumerate() {
+        for (binding, buffer) in &bound_inputs {
             entries.push(wgpu::BindGroupEntry {
-                binding: wgsl::INPUT_BINDING + index as u32,
+                binding: *binding,
                 resource: buffer.as_entire_binding(),
             });
         }
@@ -1867,6 +1955,13 @@ impl GpuBackend {
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
         }
+        if let Some(pack) = &pack {
+            for (from, at, size) in &packs {
+                if *size > 0 {
+                    encoder.copy_buffer_to_buffer(from, 0, pack, *at, *size);
+                }
+            }
+        }
         if let (Some((base, count, buffer)), Some(scatter)) = (&target, &pipeline.scatter) {
             self.prepare_target(
                 &mut encoder,
@@ -1922,6 +2017,7 @@ impl GpuBackend {
             context_buffer,
             params_buffer,
             input_buffers,
+            bound_inputs,
             memory_outputs,
             output_buffer,
             further_outputs,
@@ -2021,7 +2117,7 @@ impl GpuBackend {
         reduce: &Pass,
         context_buffer: &wgpu::Buffer,
         params_buffer: &wgpu::Buffer,
-        input_buffers: &[wgpu::Buffer],
+        bound_inputs: &[(u32, wgpu::Buffer)],
         mapped: wgpu::Buffer,
         element_count: usize,
         output_words: usize,
@@ -2063,9 +2159,9 @@ impl GpuBackend {
                     resource: params_buffer_for_reduce.as_entire_binding(),
                 },
             ];
-            for (index, buffer) in input_buffers.iter().enumerate() {
+            for (binding, buffer) in bound_inputs {
                 fold_entries.push(wgpu::BindGroupEntry {
-                    binding: wgsl::INPUT_BINDING + index as u32,
+                    binding: *binding,
                     resource: buffer.as_entire_binding(),
                 });
             }

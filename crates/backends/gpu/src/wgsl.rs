@@ -31,6 +31,81 @@ pub const INPUT_BINDING: u32 = 3;
 /// third is the most it may take ([`orla_rules::Run`]).
 pub const FAILURE_BINDING: u32 = 90;
 
+/// Binding index of the inputs a pass packs into one buffer when it
+/// binds more than the device does at once; see [`packed_inputs`].
+pub const PACKED_BINDING: u32 = 91;
+
+/// Buffers a module's widest pass binds when nothing is packed: its two
+/// uniforms (the context and the parameters), every input, every output
+/// it writes, the failure record where its arithmetic can fail, and an
+/// emitting scatter's target.
+pub fn bindings(module: &Module) -> (usize, usize) {
+    let inputs = module.manifest.inputs.len();
+    let failure = usize::from(can_fail(module));
+    // A reduction's fold pass is its widest: a third uniform (the level's
+    // count) and the level it reads beside the one it writes.
+    if module.manifest.mode == Mode::Reduce {
+        return (3, inputs + 2 + failure);
+    }
+    let storage =
+        inputs + written_outputs(module) + failure + usize::from(!emitted_pairs(module).is_empty());
+    (2, storage)
+}
+
+/// The inputs a module packs into one buffer so it binds no more than
+/// `most` buffers in all and `most_storage` storage buffers: none when it
+/// fits, else the fewest that do, the last read-only inputs first (a
+/// memory is written, so it keeps its own). Packing `k` inputs binds
+/// `k - 1` fewer buffers, since the pack is one. Empty too when packing
+/// every read-only input would not be enough, which leaves the module
+/// wider than the device.
+pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<usize> {
+    let (uniforms, storage) = bindings(module);
+    let over = (uniforms + storage)
+        .saturating_sub(most)
+        .max(storage.saturating_sub(most_storage));
+    if over == 0 {
+        return Vec::new();
+    }
+    let candidates: Vec<usize> = (0..module.manifest.inputs.len())
+        .rev()
+        .filter(|&k| {
+            !module
+                .manifest
+                .memories
+                .contains(&module.manifest.inputs[k].name)
+        })
+        .collect();
+    if candidates.len() < over + 1 {
+        return Vec::new();
+    }
+    let mut packed: Vec<usize> = candidates[..over + 1].to_vec();
+    packed.sort_unstable();
+    packed
+}
+
+/// Where the words of input `index` are read from: its own buffer, or
+/// the pack at the offset the parameters carry for it, in the unit the
+/// input's loads count in (words, or bytes where it is kept narrow).
+fn input_source(
+    module: &Module,
+    packed: &[usize],
+    index: usize,
+    encoding: Encoding,
+) -> (String, String) {
+    let Some(slot) = packed.iter().position(|&k| k == index) else {
+        return (format!("in{index}"), String::new());
+    };
+    let first = param_slots(module).1;
+    let offset = format!("params[{}u][{}u]", first + slot / 4, slot % 4);
+    let offset = if encoding == Encoding::Word {
+        offset
+    } else {
+        format!("{offset} * 4u")
+    };
+    ("inputs_packed".to_owned(), format!("{offset} + "))
+}
+
 /// The bytes of the failure record: three words, and one to round it.
 pub const FAILURE_BYTES: u64 = 16;
 
@@ -527,10 +602,11 @@ fn long_of(low: u32, high: u32) -> i64 {
 /// normalizers, mixers, linear readers and memory writers. A `merge` may
 /// read inputs, params and the context like any function, so the fold
 /// shader carries the same.
-fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
+fn emit_preamble(out: &mut String, module: &Module, with_output: bool, packed: &[usize]) {
     let manifest = &module.manifest;
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
-    let params_len = param_slots(module).1.max(1);
+    // The packed inputs' offsets follow the parameters, four a slot.
+    let params_len = (param_slots(module).1 + packed.len().div_ceil(4)).max(1);
     let _ = writeln!(
         out,
         "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;"
@@ -554,7 +630,16 @@ fn emit_preamble(out: &mut String, module: &Module, with_output: bool) {
             );
         }
     }
+    if !packed.is_empty() {
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({PACKED_BINDING}) var<storage, read> inputs_packed: array<u32>;"
+        );
+    }
     for (index, port) in manifest.inputs.iter().enumerate() {
+        if packed.contains(&index) {
+            continue;
+        }
         // A memory is written by the steps, so its binding is read-write.
         let access = if manifest.memories.contains(&port.name) {
             "read_write"
@@ -742,7 +827,15 @@ fn settle_left() {{
         } else {
             port.ty.schema.element_bytes()
         };
-        let (expr, _) = load_expr(module, element, &format!("in{index}"), "b", 0, encoding);
+        let (buffer, offset) = input_source(module, packed, index, encoding);
+        let (expr, _) = load_expr(
+            module,
+            element,
+            &buffer,
+            &format!("({offset}b)"),
+            0,
+            encoding,
+        );
         let _ = writeln!(
             out,
             "fn load_in{index}(index: u32) -> {} {{
@@ -868,9 +961,15 @@ fn urem_u32(a: u32, b: u32) -> u32 {{
 
 /// Emits a complete compute shader for the module.
 pub fn emit(module: &Module) -> String {
+    emit_packed(module, &[])
+}
+
+/// Emits the module's shader with the inputs `packed` names read from
+/// one buffer; see [`packed_inputs`].
+pub fn emit_packed(module: &Module, packed: &[usize]) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
-    emit_preamble(&mut out, module, true);
+    emit_preamble(&mut out, module, true, packed);
     // One store per output the pass writes: a map's every output, into
     // its own buffer; a scatter's map pass stores the entry's pairs.
     let scattering = matches!(manifest.mode, Mode::Scatter { .. });
@@ -904,15 +1003,22 @@ pub fn emit(module: &Module) -> String {
     }
     emit_functions(module, &mut out);
     for (index, function) in module.functions.iter().enumerate() {
-        emit_function(&mut out, module, function, &function_name(index), false);
+        emit_function(
+            &mut out,
+            module,
+            function,
+            &function_name(index),
+            false,
+            packed,
+        );
         out.push('\n');
     }
-    emit_function(&mut out, module, &module.entry, "entry", true);
+    emit_function(&mut out, module, &module.entry, "entry", true, packed);
     if let Some(merge) = &module.merge {
-        emit_function(&mut out, module, merge, "merge", false);
+        emit_function(&mut out, module, merge, "merge", false, packed);
     }
     if let Some(init) = &module.init {
-        emit_function(&mut out, module, init, "init", false);
+        emit_function(&mut out, module, init, "init", false, packed);
         // Ordered work: one invocation walks the rows, carrying the value.
         let _ = writeln!(
             out,
@@ -1910,6 +2016,12 @@ pub const REDUCE_SPAN: u32 = MAX_GROUPS * REDUCE_WORKGROUP;
 /// at a time. Run with the level's element count in the uniform until
 /// one element is left.
 pub fn emit_reduce(module: &Module) -> String {
+    emit_reduce_packed(module, &[])
+}
+
+/// The fold pass with the inputs `packed` names read from one buffer, as
+/// the map pass reads them.
+pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
     debug_assert_eq!(module.manifest.mode, Mode::Reduce);
     let Some(merge) = &module.merge else {
         return String::new();
@@ -1920,7 +2032,7 @@ pub fn emit_reduce(module: &Module) -> String {
     let mut out = String::new();
     // The same context, params and inputs as the map shader: `merge` is a
     // plain function and may read any of them, or call one that does.
-    emit_preamble(&mut out, module, false);
+    emit_preamble(&mut out, module, false, packed);
     let _ = writeln!(
         out,
         "@group(0) @binding({count_binding}) var<uniform> level: vec4<u32>;"
@@ -1954,10 +2066,17 @@ pub fn emit_reduce(module: &Module) -> String {
         wgsl_type(element)
     );
     for (index, function) in module.functions.iter().enumerate() {
-        emit_function(&mut out, module, function, &function_name(index), false);
+        emit_function(
+            &mut out,
+            module,
+            function,
+            &function_name(index),
+            false,
+            packed,
+        );
         out.push('\n');
     }
-    emit_function(&mut out, module, merge, "merge", false);
+    emit_function(&mut out, module, merge, "merge", false, packed);
     let fold = orla_rules::reduce::FOLD;
     let element = wgsl_type(element);
     let _ = writeln!(
@@ -2583,7 +2702,14 @@ fn store_lines(
     }
 }
 
-fn emit_function(out: &mut String, module: &Module, function: &Function, name: &str, entry: bool) {
+fn emit_function(
+    out: &mut String,
+    module: &Module,
+    function: &Function,
+    name: &str,
+    entry: bool,
+    packed: &[usize],
+) {
     let args = if entry && module.manifest.mode == Mode::Scan {
         format!(
             "coord: vec3<f32>, element: u32, carried: {}",
@@ -2613,6 +2739,7 @@ fn emit_function(out: &mut String, module: &Module, function: &Function, name: &
         out,
         module,
         function,
+        packed,
         loops: Vec::new(),
     };
     emitter.instructions(&function.body, 1);
@@ -2698,6 +2825,8 @@ struct Emitter<'a> {
     out: &'a mut String,
     module: &'a Module,
     function: &'a Function,
+    /// The inputs read from the pack.
+    packed: &'a [usize],
     /// Ids of enclosing loop instructions, innermost last.
     loops: Vec<ValueId>,
 }
@@ -3200,8 +3329,16 @@ impl Emitter<'_> {
                         "let {base} = index_in{input}({element}) * {element_size}u + u32(clamp({offset}, 0i, {last}i)) * {scalar_size}u;"
                     ),
                 );
-                let (expression, _) =
-                    load_expr(self.module, *ty, &format!("in{input}"), &base, 0, encoding);
+                let (buffer, offset) =
+                    input_source(self.module, self.packed, *input as usize, encoding);
+                let (expression, _) = load_expr(
+                    self.module,
+                    *ty,
+                    &buffer,
+                    &format!("({offset}{base})"),
+                    0,
+                    encoding,
+                );
                 expression
             }
             Op::AtLinear(input, index) => format!("linear_in{input}({})", v(index)),

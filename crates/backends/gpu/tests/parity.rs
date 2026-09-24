@@ -1975,57 +1975,132 @@ fn emitted_pairs_land_as_the_references_do() {
     }
 }
 
-/// A Kernel as wide as the device binds runs there, failure record and
-/// all, and the answer is the interpreter's; one wider is declined with
-/// what it binds, so a session runs it elsewhere, rather than prepared
-/// into the driver's validation. Twenty-five inputs, an output, two
-/// uniforms and the record an integer division keeps come to twenty-nine,
-/// one past the default of twenty-eight the device was once opened at,
-/// which is what an adapter that binds twenty-nine was refused.
+/// A Kernel wider than the device binds at once runs there all the
+/// same: the backend packs the inputs past the device's limit into one
+/// buffer, each at its own offset, and reads them from it. Twenty-five,
+/// forty and eighty inputs, every one read — plain ones, narrow ones kept
+/// a byte a row, records read a field at a time — with a division, so
+/// the failure record is bound too; a reduction of forty, whose fold pass
+/// binds the pack as its map pass does. All the interpreter's words. What
+/// cannot be packed, a scan's memories, which its steps write, still
+/// declines with what it binds.
 #[test]
-fn a_kernel_as_wide_as_the_device_runs_there_and_a_wider_one_is_declined() {
+fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
     let Some(gpu) = gpu() else { return };
-    let source = |inputs: usize| {
-        let ports: String = (0..inputs)
-            .map(|k| format!("input f{k}: Rows<Int>; "))
-            .collect();
-        // Every input is bound whether it is read or not; two are read.
-        let last = inputs - 1;
-        format!(
-            "kernel test.wide@1 {{ requires {{ field.read; field.write; }} {ports}
-             output result: Rows<Int>;
-             compute {{ return (sample(f0) + sample(f{last})) / (element() % 7 + 1); }} }}"
-        )
-    };
-    for inputs in [25usize, 80] {
-        let module = compile(&source(inputs)).unwrap_or_else(|error| panic!("{error}"));
-        match gpu.declines(&module) {
-            None => {
-                let mut host = Host::new(1 << 22);
-                let handles: Vec<_> = (0..inputs)
-                    .map(|k| {
-                        host.adopt(
-                            orla_abi::FieldData::from_storage(
-                                orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
-                                Domain::Rows(64),
-                                (0..64u32).map(|i| i * 3 + k as u32).collect(),
-                            )
-                            .unwrap(),
-                        )
-                        .unwrap()
-                    })
-                    .collect();
-                let (cpu, device) =
-                    on_both_inputs(&gpu, &mut host, &module, handles, Domain::Rows(64));
-                assert_eq!(cpu, device, "{inputs} inputs");
-            }
-            Some(why) => {
-                assert!(why.contains("binds") && why.contains("at most"), "{why}");
-                let error = Backend::prepare(&gpu, &module)
-                    .err()
-                    .expect("declined, so not prepared");
-                assert!(error.contains(&why), "{error}");
+    // Every input a term, summed as a balanced tree: a long chain of
+    // additions is deeper than a test thread's stack in a debug build.
+    fn tree(terms: &[String]) -> String {
+        match terms {
+            [one] => one.clone(),
+            _ => {
+                let (left, right) = terms.split_at(terms.len() / 2);
+                format!("({} + {})", tree(left), tree(right))
             }
         }
     }
+    // Every fifteenth input is plain whatever else its index says.
+    let plain = |k: usize| k.is_multiple_of(15);
+    let narrow = |k: usize| !plain(k) && k % 3 == 1;
+    let record = |k: usize| !narrow(k) && k % 5 == 2;
+    let source = |inputs: usize, reduce: bool| {
+        let ports: String = (0..inputs)
+            .map(|k| {
+                if narrow(k) {
+                    format!("input f{k}: Rows<Int as u8>; ")
+                } else if record(k) {
+                    format!("input f{k}: Rows<Pair>; ")
+                } else {
+                    format!("input f{k}: Rows<Int>; ")
+                }
+            })
+            .collect();
+        let terms: Vec<String> = (0..inputs)
+            .map(|k| {
+                if record(k) {
+                    format!("at(f{k}, element()).b")
+                } else {
+                    format!("sample(f{k})")
+                }
+            })
+            .collect();
+        let body = format!("return {} / (element() % 7 + 1);", tree(&terms));
+        let mode = if reduce {
+            format!("compute {{ {body} }} merge(a, b) {{ return a + b; }}")
+        } else {
+            format!("compute {{ {body} }}")
+        };
+        format!(
+            "kernel test.packed@1 {{ requires {{ field.read; field.write; }}
+             struct Pair {{ a: Int; b: Int; }} {ports} output result: Rows<Int>; {mode} }}"
+        )
+    };
+    let rows = 64u32;
+    for (inputs, reduce) in [(25usize, false), (40, false), (80, false), (40, true)] {
+        let module = compile(&source(inputs, reduce)).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            gpu.declines(&module).is_none(),
+            "{inputs} inputs: {:?}",
+            gpu.declines(&module)
+        );
+        let mut host = Host::new(1 << 22);
+        let handles: Vec<_> = (0..inputs)
+            .map(|k| {
+                let (schema, words): (orla_abi::Schema, Vec<u32>) = if narrow(k) {
+                    (
+                        orla_abi::Schema::encoded(
+                            vec![orla_abi::Scalar::Int],
+                            vec![orla_abi::Encoding::U8],
+                        )
+                        .unwrap(),
+                        (0..rows).map(|i| (i * 7 + k as u32) % 256).collect(),
+                    )
+                } else if record(k) {
+                    (
+                        orla_abi::Schema::new(vec![orla_abi::Scalar::Int; 2]),
+                        (0..rows)
+                            .flat_map(|i| [i + 1000, i * 5 + k as u32])
+                            .collect(),
+                    )
+                } else {
+                    (
+                        orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                        (0..rows).map(|i| i * 3 + k as u32 * 11).collect(),
+                    )
+                };
+                host.adopt(
+                    orla_abi::FieldData::from_values(schema, Domain::Rows(rows), &words).unwrap(),
+                )
+                .unwrap()
+            })
+            .collect();
+        let domain = if reduce {
+            Domain::Rows(1)
+        } else {
+            Domain::Rows(rows)
+        };
+        let (cpu, device) = on_both_inputs(&gpu, &mut host, &module, handles, domain);
+        assert_eq!(cpu, device, "{inputs} inputs, reduce {reduce}");
+    }
+
+    // A scan's memories are its own to write, so none is packed: past the
+    // device's storage buffers, the scan declines and says why.
+    let memories = 40;
+    let ports: String = (0..memories)
+        .map(|k| format!("memory m{k}: Rows<Int>; "))
+        .collect();
+    let module = compile(&format!(
+        "kernel test.remember@1 {{ requires {{ field.read; field.write; }}
+         input ticks: Rows<Int>; {ports} output result: Rows<Int>;
+         scan with acc = 0 {{ put(m0, 0, acc); put(m{last}, 0, acc); return acc + 1; }} }}",
+        last = memories - 1
+    ))
+    .unwrap_or_else(|error| panic!("{error}"));
+    let why = gpu
+        .declines(&module)
+        .expect("forty memories are more than the device binds");
+    assert!(why.contains("binds") && why.contains("at most"), "{why}");
+    let error = Backend::prepare(&gpu, &module)
+        .err()
+        .expect("declined, so not prepared");
+    assert!(error.contains(&why), "{error}");
 }
