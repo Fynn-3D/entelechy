@@ -349,6 +349,63 @@ pub fn scatter_index(domain: Domain, address: &[u32]) -> Option<usize> {
     Some(((z * domain.height() + y) * domain.width() + x) as usize)
 }
 
+/// `max` of two floats as every backend computes it (IEEE 754-2019
+/// maximumNumber): a NaN gives way to the other operand, and of two
+/// equal values the one without a sign, so `max(-0.0, 0.0)` is `0.0`
+/// whichever comes first. Rust's own `f32::max` leaves the zero's sign
+/// to the machine, which is no rule for a reference.
+pub fn max_f32(a: f32, b: f32) -> f32 {
+    if a.is_nan() {
+        b
+    } else if b.is_nan() || a > b {
+        a
+    } else if b > a {
+        b
+    } else {
+        f32::from_bits(a.to_bits() & b.to_bits())
+    }
+}
+
+/// `min` of two floats: [`max_f32`]'s rule the other way, so of two
+/// equal values the one with a sign, `min(-0.0, 0.0)` is `-0.0`.
+pub fn min_f32(a: f32, b: f32) -> f32 {
+    if a.is_nan() {
+        b
+    } else if b.is_nan() || a < b {
+        a
+    } else if b < a {
+        b
+    } else {
+        f32::from_bits(a.to_bits() | b.to_bits())
+    }
+}
+
+/// [`max_f32`] for doubles.
+pub fn max_f64(a: f64, b: f64) -> f64 {
+    if a.is_nan() {
+        b
+    } else if b.is_nan() || a > b {
+        a
+    } else if b > a {
+        b
+    } else {
+        f64::from_bits(a.to_bits() & b.to_bits())
+    }
+}
+
+/// [`min_f32`] for doubles.
+pub fn min_f64(a: f64, b: f64) -> f64 {
+    if a.is_nan() {
+        b
+    } else if b.is_nan() || a < b {
+        a
+    } else if b < a {
+        b
+    } else {
+        f64::from_bits(a.to_bits() | b.to_bits())
+    }
+}
+
 /// The total order `min` and `max` use over floats, as a key that orders
 /// like the float: every negative below every positive, negative zero
 /// below positive zero, NaN beyond the infinities by its bits. Both

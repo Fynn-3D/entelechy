@@ -429,17 +429,14 @@ fn per_column(ty: Type, f: impl Fn(usize) -> String) -> String {
 }
 
 fn literal(value: &Value) -> String {
+    // WGSL evaluates an expression of constants when it compiles, and
+    // refuses one that is not finite: a NaN or an infinity the optimizer
+    // folded is written as its bits.
     let f = |v: f32| {
-        if v.is_nan() {
-            "(0.0 / 0.0)".to_owned()
-        } else if v.is_infinite() {
-            if v > 0.0 {
-                "(1.0 / 0.0)".to_owned()
-            } else {
-                "(-1.0 / 0.0)".to_owned()
-            }
-        } else {
+        if v.is_finite() {
             format!("{v:?}")
+        } else {
+            format!("bitcast<f32>({:#010x}u)", v.to_bits())
         }
     };
     let ints = |v: &[i32]| {
@@ -753,20 +750,60 @@ fn atan2_ref(y: f32, x: f32) -> f32 {{
     }}
     return atan2(y, x);
 }}
+fn max_ref(a: f32, b: f32) -> f32 {{
+    let tie = bitcast<f32>(bitcast<u32>(a) & bitcast<u32>(b));
+    let m = select(max(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
+}}
+fn min_ref(a: f32, b: f32) -> f32 {{
+    let tie = bitcast<f32>(bitcast<u32>(a) | bitcast<u32>(b));
+    let m = select(min(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
+}}
 fn smoothstep_ref(l: f32, h: f32, x: f32) -> f32 {{
-    let t = min(max((x - l) / (h - l), 0.0), 1.0);
+    let t = min_ref(max_ref((x - l) / (h - l), f32(0.0)), f32(1.0));
     return t * t * (3.0 - 2.0 * t);
+}}
+fn max_ref2(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {{
+    let tie = bitcast<vec2<f32>>(bitcast<vec2<u32>>(a) & bitcast<vec2<u32>>(b));
+    let m = select(max(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
+}}
+fn min_ref2(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {{
+    let tie = bitcast<vec2<f32>>(bitcast<vec2<u32>>(a) | bitcast<vec2<u32>>(b));
+    let m = select(min(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
 }}
 fn smoothstep_ref2(l: vec2<f32>, h: vec2<f32>, x: vec2<f32>) -> vec2<f32> {{
-    let t = min(max((x - l) / (h - l), vec2<f32>(0.0)), vec2<f32>(1.0));
+    let t = min_ref2(max_ref2((x - l) / (h - l), vec2<f32>(0.0)), vec2<f32>(1.0));
     return t * t * (3.0 - 2.0 * t);
+}}
+fn max_ref3(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {{
+    let tie = bitcast<vec3<f32>>(bitcast<vec3<u32>>(a) & bitcast<vec3<u32>>(b));
+    let m = select(max(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
+}}
+fn min_ref3(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {{
+    let tie = bitcast<vec3<f32>>(bitcast<vec3<u32>>(a) | bitcast<vec3<u32>>(b));
+    let m = select(min(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
 }}
 fn smoothstep_ref3(l: vec3<f32>, h: vec3<f32>, x: vec3<f32>) -> vec3<f32> {{
-    let t = min(max((x - l) / (h - l), vec3<f32>(0.0)), vec3<f32>(1.0));
+    let t = min_ref3(max_ref3((x - l) / (h - l), vec3<f32>(0.0)), vec3<f32>(1.0));
     return t * t * (3.0 - 2.0 * t);
 }}
+fn max_ref4(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {{
+    let tie = bitcast<vec4<f32>>(bitcast<vec4<u32>>(a) & bitcast<vec4<u32>>(b));
+    let m = select(max(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
+}}
+fn min_ref4(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {{
+    let tie = bitcast<vec4<f32>>(bitcast<vec4<u32>>(a) | bitcast<vec4<u32>>(b));
+    let m = select(min(a, b), tie, a == b);
+    return select(select(m, a, b != b), b, a != a);
+}}
 fn smoothstep_ref4(l: vec4<f32>, h: vec4<f32>, x: vec4<f32>) -> vec4<f32> {{
-    let t = min(max((x - l) / (h - l), vec4<f32>(0.0)), vec4<f32>(1.0));
+    let t = min_ref4(max_ref4((x - l) / (h - l), vec4<f32>(0.0)), vec4<f32>(1.0));
     return t * t * (3.0 - 2.0 * t);
 }}
 fn to_int2(v: vec2<f32>) -> vec2<i32> {{
@@ -3480,6 +3517,26 @@ impl Emitter<'_> {
             // The angle at the origin, which a device's own does not
             // give; see `atan2_ref` in the preamble.
             Intrinsic::Atan2 => format!("atan2_ref({}, {})", v(&args[0]), v(&args[1])),
+            // Float `min`, `max` and `clamp` keep the rule every backend
+            // keeps (a NaN gives way, of two equal zeros `max` the positive
+            // and `min` the negative); see `max_ref` in the preamble.
+            Intrinsic::Min | Intrinsic::Max | Intrinsic::Clamp if float_lanes(ty) => {
+                let suffix = match ty {
+                    Type::Vec2 => "2",
+                    Type::Vec3 => "3",
+                    Type::Vec4 => "4",
+                    _ => "",
+                };
+                let a: Vec<String> = args.iter().map(|arg| splat(arg, ty)).collect();
+                match intrinsic {
+                    Intrinsic::Min => format!("min_ref{suffix}({}, {})", a[0], a[1]),
+                    Intrinsic::Max => format!("max_ref{suffix}({}, {})", a[0], a[1]),
+                    _ => format!(
+                        "min_ref{suffix}(max_ref{suffix}({}, {}), {})",
+                        a[0], a[1], a[2]
+                    ),
+                }
+            }
             // WGSL wants every operand the result's type; a Float broadcasts.
             Intrinsic::Min | Intrinsic::Max | Intrinsic::Clamp | Intrinsic::Mix => format!(
                 "{}({})",
@@ -3583,4 +3640,10 @@ impl Emitter<'_> {
         }
         find(&self.function.body, id).unwrap_or(Type::Float)
     }
+}
+
+/// Whether a value of `ty` is floats, one or a vector of them: what the
+/// float rule of `min`, `max` and `clamp` applies to.
+fn float_lanes(ty: Type) -> bool {
+    matches!(ty, Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4)
 }

@@ -1178,8 +1178,8 @@ impl FunctionCompiler<'_> {
             Intrinsic::Log => map1(f32::ln),
             Intrinsic::Min if is_int(0) => imap2(i32::min),
             Intrinsic::Max if is_int(0) => imap2(i32::max),
-            Intrinsic::Min => map2(f32::min),
-            Intrinsic::Max => map2(f32::max),
+            Intrinsic::Min => map2(orla_rules::min_f32),
+            Intrinsic::Max => map2(orla_rules::max_f32),
             Intrinsic::AddWrap => imap2(i32::wrapping_add),
             Intrinsic::SubWrap => imap2(i32::wrapping_sub),
             Intrinsic::MulWrap => imap2(i32::wrapping_mul),
@@ -1192,7 +1192,9 @@ impl FunctionCompiler<'_> {
                 sh: self.stride(&args[2], n),
                 n,
             },
-            Intrinsic::Clamp => map3(|v, low, high| v.max(low).min(high)),
+            Intrinsic::Clamp => {
+                map3(|v, low, high| orla_rules::min_f32(orla_rules::max_f32(v, low), high))
+            }
             Intrinsic::Mix => map3(|a, b, t| a + (b - a) * t),
             Intrinsic::ToFloat => Instr::ToFloat {
                 dst: dst.at,
@@ -1212,12 +1214,12 @@ impl FunctionCompiler<'_> {
             Intrinsic::Pow => map2(f32::powf),
             Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
             Intrinsic::Smoothstep => map3(|low, high, x| {
-                // The same clamp `clamp` is: `f32::clamp` carries a NaN
-                // through and `max` then `min` does not, and a Kernel
-                // that writes `clamp` and one that writes `smoothstep`
-                // must not disagree about that. The device's does not.
-                #[allow(clippy::manual_clamp)]
-                let t = ((x - low) / (high - low)).max(0.0).min(1.0);
+                // The same clamp `clamp` is, the rule's `max` then `min`:
+                // a NaN gives way, a zero keeps the rule's sign, and a
+                // Kernel that writes `clamp` and one that writes
+                // `smoothstep` must not disagree about that.
+                let t =
+                    orla_rules::min_f32(orla_rules::max_f32((x - low) / (high - low), 0.0), 1.0);
                 t * t * (3.0 - 2.0 * t)
             }),
             Intrinsic::Atan2 => Instr::Atan2 {
@@ -1461,18 +1463,20 @@ impl FunctionCompiler<'_> {
             Intrinsic::Sinh => map1(f64::sinh),
             Intrinsic::Cosh => map1(f64::cosh),
             Intrinsic::Tanh => map1(f64::tanh),
-            Intrinsic::Min => map2(f64::min),
-            Intrinsic::Max => map2(f64::max),
+            Intrinsic::Min => map2(orla_rules::min_f64),
+            Intrinsic::Max => map2(orla_rules::max_f64),
             Intrinsic::Pow => map2(f64::powf),
             Intrinsic::Atan2 => map2(f64::atan2),
             Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
             #[allow(clippy::manual_clamp)]
-            Intrinsic::Clamp => map3(|v, low, high| v.max(low).min(high)),
+            Intrinsic::Clamp => {
+                map3(|v, low, high| orla_rules::min_f64(orla_rules::max_f64(v, low), high))
+            }
             Intrinsic::Mix => map3(|a, b, t| a + (b - a) * t),
             Intrinsic::Fma => map3(|a, b, c| a.mul_add(b, c)),
             Intrinsic::Smoothstep => map3(|low, high, x| {
-                #[allow(clippy::manual_clamp)]
-                let t = ((x - low) / (high - low)).max(0.0).min(1.0);
+                let t =
+                    orla_rules::min_f64(orla_rules::max_f64((x - low) / (high - low), 0.0), 1.0);
                 t * t * (3.0 - 2.0 * t)
             }),
             other => unreachable!("`{}` takes no 64-bit value", other.name()),

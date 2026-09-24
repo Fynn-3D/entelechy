@@ -1074,20 +1074,28 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().fcmp(FloatCC::Unordered, v, v)
     }
 
-    /// Rust's `f32::min`: the other operand when one is NaN.
+    /// `min` by the rule every backend keeps (`orla_rules::min_f32`): the
+    /// other operand when one is NaN, and of two equal zeros the negative.
+    /// Cranelift's `fmin` orders the zeros so already (IEEE 754-2019
+    /// minimum) and carries a NaN through; the NaN gives way here.
     fn fmin(&mut self, a: Value, b: Value) -> Value {
-        let less = self.b.ins().fcmp(FloatCC::LessThan, b, a);
-        let picked = self.b.ins().select(less, b, a);
-        let nan = self.is_nan(a);
-        self.b.ins().select(nan, b, picked)
+        let m = self.b.ins().fmin(a, b);
+        self.nan_gives_way(a, b, m)
     }
 
-    /// Rust's `f32::max`.
+    /// `max` by the rule every backend keeps (`orla_rules::max_f32`): of
+    /// two equal zeros the positive.
     fn fmax(&mut self, a: Value, b: Value) -> Value {
-        let greater = self.b.ins().fcmp(FloatCC::GreaterThan, b, a);
-        let picked = self.b.ins().select(greater, b, a);
-        let nan = self.is_nan(a);
-        self.b.ins().select(nan, b, picked)
+        let m = self.b.ins().fmax(a, b);
+        self.nan_gives_way(a, b, m)
+    }
+
+    /// `m`, unless `a` or `b` is NaN: then the other.
+    fn nan_gives_way(&mut self, a: Value, b: Value, m: Value) -> Value {
+        let b_nan = self.is_nan(b);
+        let m = self.b.ins().select(b_nan, a, m);
+        let a_nan = self.is_nan(a);
+        self.b.ins().select(a_nan, b, m)
     }
 
     /// Componentwise over two operands, a one-word operand broadcast.

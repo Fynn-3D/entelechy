@@ -370,3 +370,28 @@ machine, which would want the socket itself authenticated; a
 capability with an effect outside the Host, which would want its grant
 to differ by who published the Kernel (a document the person wrote, or
 an agent over the wire) rather than one set for both.
+
+## Float `min` and `max` have one rule, and it is not the machine's
+
+`max(a, b)` of floats is IEEE 754-2019 maximumNumber: a NaN gives way to
+the other operand, and of two equal values the one without a sign, so
+`max(-0.0, 0.0)` is `0.0` in either order; `min` is the same rule the
+other way, `min(-0.0, 0.0)` is `-0.0`; `clamp` is `max` then `min`, and
+`smoothstep` clamps so. The interpreter writes the rule out
+(`orla_rules::max_f32` and its siblings), the JIT emits it, the GPU
+calls it (`max_ref` in the shader's preamble).
+
+**Why.** The reference had no rule: Rust's `f32::max` leaves the zero's
+sign to the machine, and on this one the interpreter and the JIT gave
+`inf` and `-inf` for the same program. Random programs found it
+(`crates/backends/jit/tests/fuzz.rs`); the device's own `min` lost the
+sign too. A semantics a backend may choose is not one.
+
+**Cost.** A few instructions a call on the JIT: a scene whose hot loop
+is mostly `max` (`examples/million`) runs about five per cent slower
+there; the GPU's scenes measured within noise.
+
+**What would change it.** An operand known not to be NaN or zero, a
+constant, lets the check go; that is an optimization of the rule, not a
+change to it.
+

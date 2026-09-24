@@ -26,6 +26,8 @@
 
 use orla_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
 
+pub mod random;
+
 /// One Kernel of the matrix and everything it runs with.
 #[derive(Clone, Debug)]
 pub struct Case {
@@ -47,6 +49,15 @@ pub struct Case {
 /// `Out` they yield.
 pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
+        // `max` of a negative and a positive zero is the positive one,
+        // `min` the negative, whichever comes first; `clamp` is `max`
+        // then `min`. Held by the zeros' bits: a device's fast arithmetic
+        // may lose a zero's sign in a sum or a division, never in these.
+        (
+            "signed zeros in min max clamp",
+            "let nz = from_bits((1 << 31) + i * 0); let pz = from_bits(i * 0);",
+            "Out { f: from_bits((bits(max(nz, pz)) >>> 31) + (bits(max(pz, nz)) >>> 31) * 2 + 0x3F800000), i: (bits(min(pz, nz)) >>> 31) + (bits(min(nz, pz)) >>> 31) * 2 + (bits(clamp(nz, pz, 1.0)) >>> 31) * 4, b: bits(min(pz, nz)) < 0, v: vec3(1.0, 2.0, 3.0) }",
+        ),
         (
             "float arithmetic",
             "let f = x * 2.0 - 1.0 / (x + 1.0) + x % 0.3;",
@@ -557,102 +568,107 @@ pub fn cases() -> Vec<Case> {
     let mut out = Vec::new();
     for (feature, lets, result) in features() {
         for (mode, wrap) in modes() {
-            let source = wrap(lets, result);
-            let (inputs, domain) = match mode {
-                "map over rows" => (
-                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
-                    Domain::Rows(COUNT),
-                ),
-                "map over a grid" => (
-                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
-                    Domain::Grid(16, 3),
-                ),
-                "map into several outputs" => (
-                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
-                    Domain::Grid(16, 3),
-                ),
-                "reduce" => (
-                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
-                    Domain::Rows(1),
-                ),
-                // A prefix maps over its first input and gives a row of
-                // the same count, as a scan does.
-                "prefix" => (
-                    vec![rows(), ints(), cells(), parts_input(), patches_input()],
-                    Domain::Rows(COUNT),
-                ),
-                "scan" => (
-                    vec![
-                        (
-                            Schema::new(vec![Scalar::Int]),
-                            Domain::Rows(COUNT),
-                            vec![0; COUNT as usize],
-                        ),
-                        rows(),
-                        ints(),
-                        cells(),
-                        parts_input(),
-                        patches_input(),
-                        (
-                            Schema::new(vec![Scalar::Int]),
-                            Domain::Rows(16),
-                            vec![0; 16],
-                        ),
-                    ],
-                    Domain::Rows(COUNT),
-                ),
-                // An emitting scatter's target holds `Run`s, and starts
-                // below what most pairs give, so what lands shows.
-                "scatter emitting" => (
-                    vec![
-                        rows(),
-                        ints(),
-                        cells(),
-                        parts_input(),
-                        patches_input(),
-                        (
-                            Schema::new(vec![
-                                Scalar::Float,
-                                Scalar::Int,
-                                Scalar::Float,
-                                Scalar::Float,
-                                Scalar::Float,
-                            ]),
-                            Domain::Rows(16),
-                            (0..16)
-                                .flat_map(|_| {
-                                    let low = (-1.0e6f32).to_bits();
-                                    [low, i32::MIN as u32 + 1, low, low, low]
-                                })
-                                .collect(),
-                        ),
-                    ],
-                    Domain::Rows(16),
-                ),
-                _ => (
-                    vec![
-                        rows(),
-                        ints(),
-                        cells(),
-                        parts_input(),
-                        patches_input(),
-                        (out_schema(), Domain::Rows(16), vec![0; 16 * 6]),
-                    ],
-                    Domain::Rows(16),
-                ),
-            };
-            out.push(Case {
-                name: format!("{feature} in {mode}"),
-                source,
-                inputs,
-                params: params(),
-                domain,
-                context: context(),
-            });
+            out.push(case_in(feature, mode, wrap(lets, result)));
         }
     }
     out.extend(narrow_cases());
     out
+}
+
+/// A Kernel of `mode` with the inputs, domain, params and context that
+/// mode's cases run with.
+fn case_in(feature: &str, mode: &str, source: String) -> Case {
+    let (inputs, domain) = match mode {
+        "map over rows" => (
+            vec![rows(), ints(), cells(), parts_input(), patches_input()],
+            Domain::Rows(COUNT),
+        ),
+        "map over a grid" => (
+            vec![rows(), ints(), cells(), parts_input(), patches_input()],
+            Domain::Grid(16, 3),
+        ),
+        "map into several outputs" => (
+            vec![rows(), ints(), cells(), parts_input(), patches_input()],
+            Domain::Grid(16, 3),
+        ),
+        "reduce" => (
+            vec![rows(), ints(), cells(), parts_input(), patches_input()],
+            Domain::Rows(1),
+        ),
+        // A prefix maps over its first input and gives a row of
+        // the same count, as a scan does.
+        "prefix" => (
+            vec![rows(), ints(), cells(), parts_input(), patches_input()],
+            Domain::Rows(COUNT),
+        ),
+        "scan" => (
+            vec![
+                (
+                    Schema::new(vec![Scalar::Int]),
+                    Domain::Rows(COUNT),
+                    vec![0; COUNT as usize],
+                ),
+                rows(),
+                ints(),
+                cells(),
+                parts_input(),
+                patches_input(),
+                (
+                    Schema::new(vec![Scalar::Int]),
+                    Domain::Rows(16),
+                    vec![0; 16],
+                ),
+            ],
+            Domain::Rows(COUNT),
+        ),
+        // An emitting scatter's target holds `Run`s, and starts
+        // below what most pairs give, so what lands shows.
+        "scatter emitting" => (
+            vec![
+                rows(),
+                ints(),
+                cells(),
+                parts_input(),
+                patches_input(),
+                (
+                    Schema::new(vec![
+                        Scalar::Float,
+                        Scalar::Int,
+                        Scalar::Float,
+                        Scalar::Float,
+                        Scalar::Float,
+                    ]),
+                    Domain::Rows(16),
+                    (0..16)
+                        .flat_map(|_| {
+                            let low = (-1.0e6f32).to_bits();
+                            [low, i32::MIN as u32 + 1, low, low, low]
+                        })
+                        .collect(),
+                ),
+            ],
+            Domain::Rows(16),
+        ),
+        _ => (
+            vec![
+                rows(),
+                ints(),
+                cells(),
+                parts_input(),
+                patches_input(),
+                (out_schema(), Domain::Rows(16), vec![0; 16 * 6]),
+            ],
+            Domain::Rows(16),
+        ),
+    };
+    Case {
+        name: format!("{feature} in {mode}"),
+        source,
+        inputs,
+        params: params(),
+        domain,
+        context: context(),
+    }
 }
 
 /// The 64-bit features: a name, `let`s over the wide environment, and
