@@ -24,6 +24,7 @@ orla-formats = { path = "../../interface/formats" }
 
 [dev-dependencies]
 orla-abi = { path = "../../core/abi" }
+orla-conformance = { path = "../../backends/conformance" }
 orla-rules = { path = "../../core/rules" }
 
 [lints]

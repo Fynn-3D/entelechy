@@ -31,6 +31,7 @@ orla-protocol = { path = "../../interface/protocol" }
 workspace = true
 
 [dev-dependencies]
+orla-conformance = { path = "../../backends/conformance" }
 orla-cpu = { path = "../../backends/cpu" }
 orla-graph = { path = "../../core/graph" }
 serde_json = "1"

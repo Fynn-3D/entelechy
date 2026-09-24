@@ -1695,6 +1695,7 @@ name = "orla"
 version = "0.1.0"
 dependencies = [
  "orla-compiler",
+ "orla-conformance",
  "orla-cpu",
  "orla-formats",
  "orla-graph",
@@ -1903,6 +1904,7 @@ version = "0.1.0"
 dependencies = [
  "orla-abi",
  "orla-compiler",
+ "orla-conformance",
  "orla-cpu",
  "orla-formats",
  "orla-gpu",
