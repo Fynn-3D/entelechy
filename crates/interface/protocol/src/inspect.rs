@@ -19,6 +19,7 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
         "kernels": session.runtime().kernels().count(),
         "nodes": session.graph().map_or(0, |graph| graph.nodes.len()),
         "fusion": session.fusion(),
+        "grants": session.runtime().grants().iter().map(|c| c.name()).collect::<Vec<_>>(),
     }))
 }
 

@@ -29,8 +29,8 @@ use std::thread::JoinHandle;
 
 pub use orla_abi::pad;
 pub use orla_abi::{
-    ABI_VERSION, Context, Domain, Encoding, FieldData, Handle, Host, HostError, Image, InputState,
-    Invocation, Pixel, Scalar, Schema, Scope, Shape, Value,
+    ABI_VERSION, Capabilities, Capability, Context, Domain, Encoding, FieldData, Handle, Host,
+    HostError, Image, InputState, Invocation, Pixel, Scalar, Schema, Scope, Shape, Value,
 };
 pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding, file};
 pub use orla_ir::{KernelId, Manifest, Validated};
@@ -162,6 +162,13 @@ pub enum PrepareError {
     /// The backend panicked preparing the module: a fault of the
     /// backend, caught so the Kernel running and the worker live on.
     Panicked(String),
+    /// The Kernel requires capabilities the runtime does not grant.
+    NotGranted {
+        /// The Kernel.
+        id: KernelId,
+        /// What it requires and is not granted.
+        missing: Capabilities,
+    },
 }
 
 impl fmt::Display for PrepareError {
@@ -174,6 +181,10 @@ impl fmt::Display for PrepareError {
             Self::Panicked(message) => {
                 write!(f, "the backend failed preparing the kernel: {message}")
             }
+            Self::NotGranted { id, missing } => write!(
+                f,
+                "{id} requires {missing}, which this session does not grant"
+            ),
         }
     }
 }
@@ -343,6 +354,11 @@ pub struct Runtime {
     ready: BTreeMap<Ticket, Result<Candidate, PrepareError>>,
     discarded: BTreeSet<Ticket>,
     runs: later::Runs,
+    /// The capabilities a Kernel may be given: what it requires must be
+    /// among them to be prepared, and what it runs with is what it
+    /// requires of them. Every capability, unless whoever made the
+    /// runtime says less ([`Runtime::set_grants`]).
+    grants: Capabilities,
 }
 
 impl Runtime {
@@ -372,6 +388,7 @@ impl Runtime {
             ready: BTreeMap::new(),
             discarded: BTreeSet::new(),
             runs: later::Runs::new(),
+            grants: Capability::ALL.into_iter().collect(),
         };
         // Native operations are published from the start, at generation
         // zero, so graphs bind to them like any Kernel.
@@ -471,6 +488,10 @@ impl Runtime {
     pub fn prepare_later(&mut self, module: Validated, source: String) -> Ticket {
         let ticket = Ticket(self.next_ticket);
         self.next_ticket += 1;
+        if let Err(refused) = self.granted(&module) {
+            self.ready.insert(ticket, Err(refused));
+            return ticket;
+        }
         match &self.worker {
             Some(worker) => {
                 if let Err(unsent) = worker.jobs.send(Job {
@@ -626,7 +647,49 @@ impl Runtime {
         module: Validated,
         source: &str,
     ) -> Result<Candidate, PrepareError> {
+        self.granted(&module)?;
         prepare_on(self.backend_for(&module), module, source.to_owned())
+    }
+
+    /// Sets the capabilities a Kernel may be given. Set by whoever runs
+    /// the session, never by what it runs: a Kernel that requires more is
+    /// refused when it is prepared, before anything is swapped, and one
+    /// already published runs with only what is granted of what it
+    /// requires.
+    pub fn set_grants(&mut self, grants: Capabilities) {
+        self.grants = grants;
+    }
+
+    /// The capabilities a Kernel may be given.
+    pub fn grants(&self) -> &Capabilities {
+        &self.grants
+    }
+
+    /// Whether everything `module` requires is granted.
+    fn granted(&self, module: &Validated) -> Result<(), PrepareError> {
+        let missing: Capabilities = module
+            .manifest
+            .requires
+            .iter()
+            .filter(|capability| !self.grants.contains(*capability))
+            .collect();
+        if missing.iter().next().is_none() {
+            return Ok(());
+        }
+        Err(PrepareError::NotGranted {
+            id: module.manifest.id.clone(),
+            missing,
+        })
+    }
+
+    /// What a version runs with: what it requires, of what is granted.
+    pub(crate) fn scope_grants(&self, version: &KernelVersion) -> Capabilities {
+        version
+            .manifest()
+            .requires
+            .iter()
+            .filter(|capability| self.grants.contains(*capability))
+            .collect()
     }
 
     /// The backend a module is prepared on and executes on: the ordered
@@ -854,7 +917,7 @@ impl Runtime {
         } = &version.body
             && !self.routed(module)
         {
-            let granted = version.manifest().requires.clone();
+            let granted = self.scope_grants(version);
             let backend = Arc::clone(&self.backend);
             let before = backend.uploaded();
             let answered = {
@@ -906,7 +969,7 @@ impl Runtime {
         version: &KernelVersion,
         invocation: &Invocation,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        let granted = version.manifest().requires.clone();
+        let granted = self.scope_grants(version);
         // Nothing carries over: a backend that does not measure this
         // execution must answer `None` here, not the previous node's
         // number. A native operation used to leave it standing, and its

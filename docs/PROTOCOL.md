@@ -74,7 +74,11 @@ another origin only where the server was started with
 
 `status` answers with the session's backend, scene, watched files,
 counts, and `versions`, the ABI, language, IR and package format
-versions each on their own, as `orla version` prints them.
+versions each on their own, as `orla version` prints them, and
+`grants`, the capabilities a Kernel may be given: every one, unless the
+person started the server with `--grant` naming fewer. A Kernel that
+requires one not granted is refused when it is prepared, with the ones
+it lacks, and whatever ran before goes on running.
 
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0 (a manifest's `memories` names the ports that

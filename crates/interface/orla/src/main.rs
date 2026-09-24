@@ -18,7 +18,7 @@ usage:
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu|jit]
                        [--param <name>=<literal>]... [--no-fusion]
                        [--window <w>x<h>[@<scale>]] [--profile] [--memory <MB>] [--work <M>]
-                       [--allow file.read|file.write=<dir>]...
+                       [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version. --window is the window a scene sized by `window()`
@@ -42,12 +42,17 @@ usage:
       scene's inputs read files there: under `serve`, where an agent
       composes the scene, a scene reads only beside its documents
       without it.
+      --grant field.read,field.write,... names the capabilities a Kernel
+      may be given, and no others (every one without it): a Kernel that
+      requires another is refused when it is prepared, and what ran
+      before goes on running. `render`, `serve`, `bench` and the Player
+      take it too.
   orla render <scene.osn> --frames <n> [--rate <fps>] [--sound-rate <hz>]
                           [--out <dir>] [--library <dir|file>] [--input <name>=<file.ppm>]...
                           [--param <name>=<literal>]... [--window <w>x<h>[@<scale>]]
                           [--backend cpu|gpu|jit] [--no-fusion]
                           [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
-                          [--allow file.read|file.write=<dir>]...
+                          [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
       Step the scene for n frames at the rate (60 by default) and write each
       frame's picture as <dir>/0000.png, 0001.png, ... and the sound output,
       block after block, as <dir>/sound.wav at the sound rate (48000 by
@@ -104,6 +109,7 @@ usage:
                          [--no-fusion] [--memory <MB>] [--work <M>]
                          [--listen <host:port>] [--window <w>x<h>[@<scale>]]
                          [--allow file.read|file.write=<dir>]... [--allow-origin <origin>]...
+                         [--grant <capability,...>]
       Serve the creation protocol: JSON requests on stdin, one response per
       line on stdout, and on every connection to --listen, where a client's
       quit ends only its connection. A browser's page connects from this

@@ -1440,3 +1440,40 @@ fn a_page_elsewhere_can_neither_open_a_socket_nor_post_requests() {
     assert_eq!(std::fs::read_to_string(&scene).unwrap(), original);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A server started with `--grant` gives Kernels those capabilities and
+/// no others: `status` says which, and a Kernel an agent publishes that
+/// requires another is refused with what it lacks, the one running kept.
+#[test]
+fn a_served_kernel_gets_only_what_the_server_grants() {
+    let dir = scratch_in("-grants");
+    let reads_clock = BRIGHT_SHOW.replace(
+        "requires { field.read; field.write; }",
+        "requires { field.read; field.write; time.read; }",
+    );
+    let responses = talk_with(
+        &dir.join("scene.osn"),
+        &["--grant", "field.read,field.write", "--grant", "input.read"],
+        &[
+            json!({ "id": 1, "op": "status" }),
+            json!({ "id": 2, "op": "publish", "source": reads_clock, "expect": "any" }),
+            json!({ "id": 3, "op": "kernel", "kernel": "life.show@1" }),
+            json!({ "id": 4, "op": "publish", "source": BRIGHT_SHOW, "expect": "any" }),
+        ],
+    );
+    assert_eq!(
+        responses[0]["ok"]["grants"],
+        json!(["field.read", "field.write", "input.read"])
+    );
+    let why = responses[1]["error"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        why.contains("requires time.read, which this session does not grant"),
+        "{}",
+        responses[1]
+    );
+    assert_eq!(responses[2]["ok"]["generation"], 3, "{}", responses[2]);
+    assert!(responses[3].get("error").is_none(), "{}", responses[3]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

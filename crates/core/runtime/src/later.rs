@@ -116,12 +116,19 @@ impl Runtime {
             ..invocation.clone()
         };
         let backend = self.shared_backend_for(module);
+        let granted = self.scope_grants(version);
         let version = Arc::clone(version);
         let landed = self.runs.landed.clone();
         std::thread::Builder::new()
             .name(format!("orla run {run}"))
             .spawn(move || {
-                let outcome = run_on(backend.as_ref(), &version, &invocation, &mut scratch);
+                let outcome = run_on(
+                    backend.as_ref(),
+                    &version,
+                    &invocation,
+                    granted,
+                    &mut scratch,
+                );
                 let _ = landed.send(Landed { run, outcome });
             })
             .map_err(|error| ExecutionError::Device(format!("cannot start a thread: {error}")))?;
@@ -228,6 +235,7 @@ fn run_on(
     backend: &dyn Backend,
     version: &KernelVersion,
     invocation: &Invocation,
+    granted: orla_abi::Capabilities,
     host: &mut Host,
 ) -> Outcome {
     let Body::Kernel { run, prepared, .. } = &version.body else {
@@ -235,7 +243,6 @@ fn run_on(
             "a native operation runs on the frame".into(),
         ));
     };
-    let granted = version.manifest().requires.clone();
     let outputs = {
         let mut scope = Scope::new(host, granted);
         backend.execute(prepared.as_ref(), run, invocation, &mut scope)

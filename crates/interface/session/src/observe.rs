@@ -236,7 +236,13 @@ pub(crate) fn trace_element(
         .unwrap_or_else(|| version.module().expect("a traced Kernel has a module"));
     // It runs with its work accounted, as a backend runs it.
     let module = orla_ir::account(module).map_err(|error| error.to_string())?;
-    let granted = module.manifest.requires.clone();
+    // What it requires, of what the session grants, as an execution.
+    let granted: orla_runtime::Capabilities = module
+        .manifest
+        .requires
+        .iter()
+        .filter(|capability| runtime.grants().contains(*capability))
+        .collect();
     let mut scope = orla_runtime::Scope::new(runtime.host_mut(), granted);
     orla_cpu::trace(&module, &invocation, &mut scope, at).map_err(|error| error.to_string())
 }

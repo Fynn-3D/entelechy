@@ -25,7 +25,7 @@ const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--window <w>x<h>] [--backend gpu|cpu|jit] [--memory <MB>] [--work <M>]
-              [--allow file.read|file.write=<dir>]...
+              [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the

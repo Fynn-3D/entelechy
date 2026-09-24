@@ -30,6 +30,9 @@ pub struct SessionOptions {
     pub limits: Limits,
     /// Directories the scene may read from and write into.
     pub allow: Vec<Allowance>,
+    /// The capabilities a Kernel may be given, when the command line
+    /// names them (`--grant`); every capability otherwise.
+    pub grants: Option<orla_runtime::Capabilities>,
 }
 
 impl Default for SessionOptions {
@@ -43,6 +46,7 @@ impl Default for SessionOptions {
             fusion: true,
             limits: Limits::default(),
             allow: Vec::new(),
+            grants: None,
         }
     }
 }
@@ -62,6 +66,21 @@ impl SessionOptions {
             "--backend" => self.backend = Some(value(arg)?),
             "--no-fusion" => self.fusion = false,
             "--allow" => self.allow.push(parse_allow(&value(arg)?)?),
+            // `--grant field.read,field.write`: what a Kernel may be
+            // given, and nothing else; repeated, the names add up.
+            "--grant" => {
+                let grants = self.grants.get_or_insert_with(Default::default);
+                for name in value(arg)?.split(',').filter(|name| !name.is_empty()) {
+                    let capability: orla_runtime::Capability =
+                        name.trim().parse().map_err(|_| {
+                            format!(
+                                "--grant takes capabilities ({}), not `{name}`",
+                                orla_runtime::Capability::ALL.map(|c| c.name()).join(", ")
+                            )
+                        })?;
+                    grants.insert(capability);
+                }
+            }
             flag if Limits::takes(flag) => self.limits.read(flag, &value(flag)?)?,
             "--param" => {
                 let binding = value(arg)?;
@@ -107,6 +126,10 @@ impl SessionOptions {
     /// inputs bound, the params set, fusion, and what is allowed.
     /// Nothing is read until the caller syncs.
     pub fn open_over(&self, runtime: Runtime) -> Result<Session, String> {
+        let mut runtime = runtime;
+        if let Some(grants) = &self.grants {
+            runtime.set_grants(grants.clone());
+        }
         let mut session = Session::open_with(self.scene()?, self.library.as_deref(), runtime);
         for (name, path) in &self.inputs {
             session

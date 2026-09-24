@@ -338,7 +338,10 @@ beside the documents the scene reads (the root, the graphs it places,
 what it uses), inside a package, or where `--allow file.read` says. A
 browser's page opens the socket only from this machine, from a file, or
 from an origin `--allow-origin` names, and an HTTP request that is no
-WebSocket upgrade is answered and closed. A Kernel or a scene an agent
+WebSocket upgrade is answered and closed. A Kernel's capabilities are
+granted, not taken: what it `requires` must be among what the runtime
+grants (every capability, unless `--grant` names fewer) for it to be
+prepared at all, and it runs with what it requires of those. A Kernel or a scene an agent
 sends is bounded before it costs anything: a domain is charged against
 the Host's budget before it is allocated, an `[each]` and a `times`
 before they are written out, and a rejected scene never reaches the
@@ -363,4 +366,7 @@ reads, origins and compose.
 
 **What would change it.** A second person on the same session, which
 would want who asked, not only what; a network listener beyond this
-machine, which would want the socket itself authenticated.
+machine, which would want the socket itself authenticated; a
+capability with an effect outside the Host, which would want its grant
+to differ by who published the Kernel (a document the person wrote, or
+an agent over the wire) rather than one set for both.

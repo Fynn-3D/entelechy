@@ -466,3 +466,56 @@ fn publishing_several_is_all_or_nothing() {
         first.generation()
     );
 }
+
+/// What a Kernel requires is granted by whoever runs the runtime, not
+/// taken: one that requires a capability not granted is refused when it
+/// is prepared, inline or on the worker, and the version running goes
+/// on; one that requires only what is granted is taken.
+#[test]
+fn a_kernel_requiring_what_is_not_granted_is_refused_and_the_running_one_stays() {
+    let mut runtime = cpu(64);
+    let first = load(&mut runtime, &source("c.r"));
+    runtime.set_grants(
+        [
+            orla_runtime::Capability::FieldRead,
+            orla_runtime::Capability::FieldWrite,
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let reads_keys = source("float(key(65))").replace(
+        "requires { field.read; field.write; }",
+        "requires { field.read; field.write; input.read; }",
+    );
+    let Err(refused) = runtime.prepare_module(compile_ok(&reads_keys), &reads_keys) else {
+        panic!("taken inline");
+    };
+    assert!(
+        refused
+            .to_string()
+            .contains("requires input.read, which this session does not grant"),
+        "{refused}"
+    );
+    runtime.set_background(true);
+    let ticket = runtime.prepare_later(compile_ok(&reads_keys), reads_keys.clone());
+    let refused = loop {
+        if let Some(result) = runtime.poll(ticket) {
+            break result;
+        }
+    };
+    assert!(matches!(
+        refused,
+        Err(orla_runtime::PrepareError::NotGranted { .. })
+    ));
+    assert_eq!(
+        runtime.kernel(&id()).unwrap().generation(),
+        first.generation()
+    );
+    // What is granted is taken.
+    let plain = runtime
+        .prepare_module(compile_ok(&source("0.5")), &source("0.5"))
+        .unwrap();
+    runtime
+        .publish(plain, Expect::Generation(first.generation()))
+        .unwrap();
+}
