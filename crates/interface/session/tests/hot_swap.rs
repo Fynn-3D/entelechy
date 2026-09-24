@@ -422,3 +422,47 @@ fn a_backend_that_panics_preparing_rejects_the_kernel_and_the_worker_lives() {
 fn compile_ok(source: &str) -> orla_runtime::Validated {
     orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"))
 }
+
+/// Candidates published as one change are checked before any is swapped
+/// in: one stale expectation, and none is published.
+#[test]
+fn publishing_several_is_all_or_nothing() {
+    let mut runtime = cpu(64);
+    let first = load(&mut runtime, &source("c.r"));
+    let other = |red: &str| {
+        let text = source(red).replace("test.color@1", "test.other@1");
+        (compile_ok(&text), text)
+    };
+    let (module, text) = other("0.1");
+    let fresh = runtime.prepare_module(module, &text).unwrap();
+    let replacement = runtime
+        .prepare_module(compile_ok(&source("0.5")), &source("0.5"))
+        .unwrap();
+    // The replacement expects a generation that is not current.
+    let stale = Expect::Generation(Generation(first.generation().0 + 7));
+    let refused = runtime.publish_all(vec![(fresh, Expect::Absent), (replacement, stale)]);
+    assert!(refused.is_err());
+    assert!(runtime.kernel(&"test.other@1".parse().unwrap()).is_none());
+    assert_eq!(
+        runtime.kernel(&id()).unwrap().generation(),
+        first.generation()
+    );
+
+    let (module, text) = other("0.1");
+    let fresh = runtime.prepare_module(module, &text).unwrap();
+    let replacement = runtime
+        .prepare_module(compile_ok(&source("0.5")), &source("0.5"))
+        .unwrap();
+    let published = runtime
+        .publish_all(vec![
+            (fresh, Expect::Absent),
+            (replacement, Expect::Generation(first.generation())),
+        ])
+        .unwrap();
+    assert_eq!(published.len(), 2);
+    assert!(runtime.kernel(&"test.other@1".parse().unwrap()).is_some());
+    assert_ne!(
+        runtime.kernel(&id()).unwrap().generation(),
+        first.generation()
+    );
+}

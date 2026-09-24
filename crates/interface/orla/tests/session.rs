@@ -2259,3 +2259,87 @@ fn the_package_cutout_is_the_fast_paths_to_the_bit_off_the_device() {
         assert_eq!(outcome.checks, 3, "{backend}");
     }
 }
+
+/// A document's Kernels change together. Two that change the struct
+/// they pass between them, one of which does not compile yet: neither is
+/// published, so the pair that ran goes on running, never a new one
+/// beside an old one. Fixed, both land in the same sync, on the worker
+/// as well as inline.
+#[test]
+fn a_documents_kernels_publish_together_or_not_at_all() {
+    let dir = std::env::temp_dir().join(format!("orla-together-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pair = |field: &str, broken: bool| {
+        format!(
+            "struct P {{ {field}: Int; }}\n\
+             kernel t.make@1 {{ requires {{ field.write; }} output result: Rows<P>; compute {{ return P {{ {field}: element() + 1 }}; }} }}\n\
+             kernel t.use@1 {{ requires {{ field.read; field.write; }} input p: Rows<P>; output result: Rows<Int>; compute {{ return sample(p).{} * 10; }} }}\n",
+            if broken { "nope" } else { field }
+        )
+    };
+    std::fs::write(dir.join("pair.orla"), pair("a", false)).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "use \"pair.orla\";\nnode make: t.make@1 { domain = 3; }\nnode use: t.use@1 { p <- make.result; }\noutput result <- use.result;\n",
+    )
+    .unwrap();
+    for background in [false, true] {
+        let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+        session.set_background(background);
+        std::fs::write(dir.join("pair.orla"), pair("a", false)).unwrap();
+        let events = session.sync();
+        assert!(rejected(&events).is_empty(), "{:?}", rejected(&events));
+        let generation = |session: &Session, id: &str| {
+            session
+                .runtime()
+                .kernel(&id.parse().unwrap())
+                .unwrap()
+                .generation()
+        };
+        let (make, used) = (
+            generation(&session, "t.make@1"),
+            generation(&session, "t.use@1"),
+        );
+        let value = |session: &mut Session| {
+            let report = session.evaluate(&Context::default()).unwrap();
+            session.runtime().host().element(report.output, 2).unwrap()[0] as i32
+        };
+        assert_eq!(value(&mut session), 30);
+
+        // The field is renamed in both, and the reader is broken.
+        std::fs::write(dir.join("pair.orla"), pair("b", true)).unwrap();
+        let mut events = session.sync();
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            events.extend(session.sync());
+        }
+        assert!(published(&events).is_empty(), "{events:?}");
+        let said = rejected(&events).join("\n");
+        assert!(said.contains("nope"), "{said}");
+        assert!(said.contains("change together"), "{said}");
+        assert_eq!(
+            generation(&session, "t.make@1"),
+            make,
+            "background {background}"
+        );
+        assert_eq!(generation(&session, "t.use@1"), used);
+        assert_eq!(value(&mut session), 30, "the pair that ran runs");
+
+        // Fixed: both land, together.
+        std::fs::write(dir.join("pair.orla"), pair("b", false)).unwrap();
+        // On the worker, the replacements land in a later sync.
+        let mut landed = published(&session.sync());
+        for _ in 0..1000 {
+            if landed.len() == 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            landed.extend(published(&session.sync()));
+        }
+        landed.sort();
+        assert_eq!(landed, ["t.make@1", "t.use@1"], "background {background}");
+        assert_eq!(value(&mut session), 30);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

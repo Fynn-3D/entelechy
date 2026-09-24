@@ -733,27 +733,61 @@ impl Runtime {
         candidate: Candidate,
         expect: Expect,
     ) -> Result<Arc<KernelVersion>, StaleCandidate> {
-        let id = candidate.id().clone();
-        let actual = self.kernels.get(&id).map(|version| version.generation);
-        if self.kernels.get(&id).is_some_and(|v| v.native().is_some()) {
-            return Err(StaleCandidate {
-                id,
-                expected: expect,
-                actual,
-            });
+        self.expected(candidate.id(), expect)?;
+        Ok(self.swap_in(candidate))
+    }
+
+    /// Publishes several candidates as one change: every expectation is
+    /// checked before any is swapped in, so either all are published or
+    /// none is and the registry is as it was. For Kernels that change
+    /// together, an interface between them say, which must never run one
+    /// new beside the other old.
+    pub fn publish_all(
+        &mut self,
+        candidates: Vec<(Candidate, Expect)>,
+    ) -> Result<Vec<Arc<KernelVersion>>, StaleCandidate> {
+        let mut seen = std::collections::BTreeSet::new();
+        for (candidate, expect) in &candidates {
+            self.expected(candidate.id(), *expect)?;
+            // One change publishes an id once; a second would be checked
+            // against the registry the first already changed.
+            if !seen.insert(candidate.id().clone()) {
+                return Err(StaleCandidate {
+                    id: candidate.id().clone(),
+                    expected: *expect,
+                    actual: None,
+                });
+            }
         }
+        Ok(candidates
+            .into_iter()
+            .map(|(candidate, _)| self.swap_in(candidate))
+            .collect())
+    }
+
+    /// Whether `expect` holds for `id` now, and it is not a native
+    /// operation's.
+    fn expected(&self, id: &KernelId, expect: Expect) -> Result<(), StaleCandidate> {
+        let actual = self.kernels.get(id).map(|version| version.generation);
+        let native = self.kernels.get(id).is_some_and(|v| v.native().is_some());
         let matches = match expect {
             Expect::Absent => actual.is_none(),
             Expect::Generation(generation) => actual == Some(generation),
             Expect::Any => true,
         };
-        if !matches {
+        if native || !matches {
             return Err(StaleCandidate {
-                id,
+                id: id.clone(),
                 expected: expect,
                 actual,
             });
         }
+        Ok(())
+    }
+
+    /// Swaps a checked candidate in as the id's next generation.
+    fn swap_in(&mut self, candidate: Candidate) -> Arc<KernelVersion> {
+        let id = candidate.id().clone();
         let generation = Generation(self.next_generation);
         self.next_generation += 1;
         let version = Arc::new(KernelVersion {
@@ -768,7 +802,7 @@ impl Runtime {
             },
         });
         self.kernels.insert(id, Arc::clone(&version));
-        Ok(version)
+        version
     }
 
     /// Prepares and publishes in one step, replacing any current version.
