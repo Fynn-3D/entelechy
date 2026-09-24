@@ -276,6 +276,9 @@ struct Pipeline {
     /// Whether the module's arithmetic can fail, so its map and fold
     /// passes record their first failure; see [`wgsl::can_fail`].
     fails: bool,
+    /// Whether a scatter's entry emits pairs, combining them into the
+    /// target as it runs: the target is then ready before the entry.
+    emits: bool,
 }
 
 /// A prefix fold's three passes: a block a walk, the blocks' totals
@@ -858,7 +861,9 @@ impl Backend for GpuBackend {
         // difference between a Kernel that is too wide for this device
         // and a page of the driver's validation.
         let written = wgsl::written_outputs(module);
-        let wanted = module.manifest.inputs.len() + written;
+        // An entry that emits binds its target once more, as atomics.
+        let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty());
+        let wanted = module.manifest.inputs.len() + written + emitting;
         let allowed = self.device.limits().max_storage_buffers_per_shader_stage as usize;
         if wanted > allowed {
             return Err(format!(
@@ -890,6 +895,10 @@ impl Backend for GpuBackend {
         let fails = wgsl::can_fail(module);
         if fails {
             entries.push(storage_entry(wgsl::FAILURE_BINDING, false));
+        }
+        let emits = !wgsl::emitted_pairs(module).is_empty();
+        if emits {
+            entries.push(storage_entry(wgsl::EMIT_BINDING, false));
         }
         let layout = self
             .device
@@ -1092,6 +1101,7 @@ impl Backend for GpuBackend {
             scatter,
             prefix,
             fails,
+            emits,
         }))
     }
 
@@ -1165,6 +1175,7 @@ impl Backend for GpuBackend {
             output_words,
             element_count,
             failure,
+            target,
         } = staged;
         // What the map pass left is the output, unless the mode has more
         // to do with it: a reduction folds it, a scatter combines it
@@ -1200,6 +1211,7 @@ impl Backend for GpuBackend {
             (Mode::Scatter { base, .. }, _, Some(scatter)) => self.combine(
                 &mut encoder,
                 scatter,
+                target,
                 &input_buffers[base as usize],
                 &context_buffer,
                 output_buffer,
@@ -1413,6 +1425,8 @@ struct Staged {
     /// The word the passes record their first failure in, when the
     /// module can fail, and the buffer it is read back through.
     failure: Option<(wgpu::Buffer, wgpu::Buffer)>,
+    /// A scatter's target, ready before the entry when the entry emits.
+    target: Option<wgpu::Buffer>,
 }
 
 /// The domain the entry maps over: a reduction's and a scatter's first
@@ -1528,6 +1542,7 @@ impl GpuBackend {
             output_words: _,
             element_count,
             failure: _,
+            target: _,
         } = staged;
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         // The first time reads the input it was given and writes the
@@ -1752,6 +1767,21 @@ impl GpuBackend {
                 resource: buffer.as_entire_binding(),
             });
         }
+        // A scatter that emits combines into its target as the entry
+        // runs, so the target is made, and bound, here.
+        let target = match module.manifest.mode {
+            Mode::Scatter { base, .. } if pipeline.emits => {
+                let count = scope.size(invocation.inputs[base as usize])?.count();
+                Some((base, count, self.target_buffer(count, output_words)))
+            }
+            _ => None,
+        };
+        if let Some((_, _, buffer)) = &target {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::EMIT_BINDING,
+                resource: buffer.as_entire_binding(),
+            });
+        }
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("orla kernel"),
             layout: &pipeline.layout,
@@ -1764,6 +1794,18 @@ impl GpuBackend {
             });
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
+        }
+        if let (Some((base, count, buffer)), Some(scatter)) = (&target, &pipeline.scatter) {
+            self.prepare_target(
+                &mut encoder,
+                scatter,
+                buffer,
+                &input_buffers[*base as usize],
+                &context_buffer,
+                &output_buffer,
+                *count,
+                output_words,
+            );
         }
         // No failure yet, no work taken, and the most the run may take;
         // written before this submission's passes run.
@@ -1814,6 +1856,7 @@ impl GpuBackend {
             output_words,
             element_count,
             failure,
+            target: target.map(|(_, _, buffer)| buffer),
         })
     }
 
@@ -2006,19 +2049,84 @@ impl GpuBackend {
         current
     }
 
-    /// A scatter's combine: the target copied on the device, then the
-    /// pairs applied by the plan. A float sum sorts the pairs by target
+    /// A scatter's target, `count` elements of `words` words. It is
+    /// copied over whole before anything reads it, so it may come from
+    /// the pile.
+    fn target_buffer(&self, count: usize, words: usize) -> wgpu::Buffer {
+        let size = (count * words * 4) as u64;
+        self.spare.take(
+            &self.device,
+            size.max(16).div_ceil(16) * 16,
+            wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        )
+    }
+
+    /// The target made ready for pairs: the base copied into it, and
+    /// its float words turned into ordered keys where the plan compares
+    /// them with atomics.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_target(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        scatter: &Scatter,
+        target: &wgpu::Buffer,
+        base_buffer: &wgpu::Buffer,
+        context_buffer: &wgpu::Buffer,
+        pairs: &wgpu::Buffer,
+        count: usize,
+        words: usize,
+    ) {
+        encoder.copy_buffer_to_buffer(base_buffer, 0, target, 0, (count * words * 4) as u64);
+        let Scatter::Parallel {
+            keys: Some(keys), ..
+        } = scatter
+        else {
+            return;
+        };
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("orla scatter"),
+            layout: &keys.1,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: wgsl::CONTEXT_BINDING,
+                    resource: context_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::SCATTER_PAIRS_BINDING,
+                    resource: pairs.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::SCATTER_OUT_BINDING,
+                    resource: target.as_entire_binding(),
+                },
+            ],
+        });
+        let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("orla scatter keys"),
+            timestamp_writes: None,
+        });
+        compute.set_pipeline(&keys.0);
+        compute.set_bind_group(0, &group, &[]);
+        let (x, y) = wgsl::folded((count as u32).div_ceil(wgsl::SCATTER_WORKGROUP));
+        compute.dispatch_workgroups(x, y, 1);
+    }
+
+    /// A scatter's combine: the target made ready (unless the entry,
+    /// emitting, had it ready already), then the pairs applied by the
+    /// plan. A float sum sorts the pairs by target
     /// and source (a bitonic sort, one small dispatch per step) and folds
     /// each target's run in source order; the order-free rules apply one
     /// invocation per pair with atomics, `min` and `max` over floats
     /// between two key passes, `last` followed by a gather. Returns the
     /// target.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn combine(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         scatter: &Scatter,
+        target: Option<wgpu::Buffer>,
         base_buffer: &wgpu::Buffer,
         context_buffer: &wgpu::Buffer,
         pairs: wgpu::Buffer,
@@ -2028,17 +2136,21 @@ impl GpuBackend {
         timing: Option<&wgpu::QuerySet>,
     ) -> wgpu::Buffer {
         let final_buffer = pairs;
-        let size = (target_count * output_words * 4) as u64;
-        // The target is copied over whole before anything reads it, so
-        // it may come from the pile.
-        let target = self.spare.take(
-            &self.device,
-            size.max(16).div_ceil(16) * 16,
-            wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        );
-        encoder.copy_buffer_to_buffer(base_buffer, 0, &target, 0, size);
+        // Ready already when the entry emitted into it.
+        let target = target.unwrap_or_else(|| {
+            let target = self.target_buffer(target_count, output_words);
+            self.prepare_target(
+                encoder,
+                scatter,
+                &target,
+                base_buffer,
+                context_buffer,
+                &final_buffer,
+                target_count,
+                output_words,
+            );
+            target
+        });
         let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
         let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
         let storage = |label: &str, words: usize| {
@@ -2200,10 +2312,6 @@ impl GpuBackend {
                         resource: winners.as_entire_binding(),
                     }])
                     .collect();
-                if let Some(keys) = keys {
-                    let group = bind(&keys.1, &common);
-                    dispatch(encoder, keys, &group, &[], over_target);
-                }
                 let group = bind(&apply.1, &with_winners);
                 dispatch(encoder, apply, &group, &[], over_sources);
                 if let Some(gather) = gather {

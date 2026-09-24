@@ -344,8 +344,9 @@ fn column_matrix(kind: Type, n: usize) -> Option<Type> {
 /// context and construction ones, whose forms the language owns. The
 /// math builtins are ordinary calls, and a function of one's name
 /// stands for it in its document.
-pub(super) const RESERVED_BUILTINS: [&str; 44] = [
+pub(super) const RESERVED_BUILTINS: [&str; 45] = [
     "put",
+    "emit",
     "sample",
     "at",
     "fetch",

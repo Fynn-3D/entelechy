@@ -852,7 +852,7 @@ impl Ctx<'_> {
     /// Whether an instruction must run for what it does, not for its value.
     fn has_effects(&self, op: &Op) -> bool {
         match op {
-            Op::Put(..) | Op::Spend(_) | Op::Look => true,
+            Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look => true,
             Op::Call(callee, _) => self.writers[*callee as usize],
             Op::If {
                 then, otherwise, ..
@@ -880,7 +880,7 @@ impl Ctx<'_> {
     /// index, not a read of a memory the steps change, not a block.
     fn cse_safe(&self, op: &Op) -> bool {
         match op {
-            Op::Put(..) | Op::Spend(_) | Op::Look | Op::Carried | Op::Index => false,
+            Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look | Op::Carried | Op::Index => false,
             Op::If { .. } | Op::Match { .. } | Op::Loop { .. } => false,
             Op::Call(callee, _) => !self.writers[*callee as usize],
             Op::Sample(input)
@@ -1043,7 +1043,7 @@ fn operands(op: &Op) -> Vec<ValueId> {
             }))
             .collect(),
         Op::Put(_, address, value) => vec![*address, *value],
-        Op::Spend(counted) => vec![*counted],
+        Op::Spend(counted) | Op::Emit(counted) => vec![*counted],
         _ => Vec::new(),
     }
 }
@@ -1462,7 +1462,7 @@ fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
             *address = map(*address);
             *value = map(*value);
         }
-        Op::Spend(counted) => *counted = map(*counted),
+        Op::Spend(counted) | Op::Emit(counted) => *counted = map(*counted),
         _ => {}
     }
 }

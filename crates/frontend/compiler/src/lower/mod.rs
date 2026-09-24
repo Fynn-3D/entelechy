@@ -266,73 +266,8 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         }
         let mut split: Option<Vec<ValueId>> = None;
         let actual = builder.ty(result);
-        if let Mode::Scatter { base, .. } = manifest.mode {
-            // The body yields a pair: an address into the target and a
-            // value of its element type, as a struct of two fields.
-            let target = &manifest.inputs[base as usize];
-            let address = target.ty.index_type();
-            let table = structs.borrow();
-            let fields = match actual {
-                Type::Struct(index) if !table[index as usize].is_array() => {
-                    Some(&table[index as usize].fields)
-                }
-                _ => None,
-            };
-            let well_formed = fields.is_some_and(|fields| {
-                fields.len() == 2 && fields[0].ty == address && fields[1].ty == expected
-            });
-            // An integer address (`IVec2` into a grid) is the float one
-            // converted: exact, as every coordinate a Field can have is.
-            let integer_address = fields.is_some_and(|fields| {
-                fields.len() == 2
-                    && fields[0].ty.other_kind() == Some(address)
-                    && fields[1].ty == expected
-            });
-            if integer_address {
-                let integer = fields.map(|fields| fields[0].ty).unwrap_or(address);
-                let name = format!(
-                    "({}, {})",
-                    describe(address, &table),
-                    describe(expected, &table)
-                );
-                let existing = table.iter().position(|def| def.name == name);
-                drop(table);
-                let pair = match existing {
-                    Some(index) => Type::Struct(index as u32),
-                    None => {
-                        let mut table = structs.borrow_mut();
-                        table.push(StructDef::record(
-                            name,
-                            vec![
-                                Field {
-                                    name: "address".into(),
-                                    ty: address,
-                                },
-                                Field {
-                                    name: "value".into(),
-                                    ty: expected,
-                                },
-                            ],
-                        ));
-                        Type::Struct((table.len() - 1) as u32)
-                    }
-                };
-                let at = builder.emit(integer, Op::Extract(result, 0));
-                let at = builder.emit(address, Op::Intrinsic(Intrinsic::ToFloat, vec![at]));
-                let value = builder.emit(expected, Op::Extract(result, 1));
-                result = builder.emit(pair, Op::Construct(vec![at, value]));
-            } else if !well_formed {
-                return Err(semantic(
-                    kernel.compute.result.span,
-                    format!(
-                        "a scatter into `{}` gives a struct of two fields per element, an address ({}) and a value ({}), but the body gives {}",
-                        target.name,
-                        describe(address, &table),
-                        describe(expected, &table),
-                        describe(actual, &table)
-                    ),
-                ));
-            }
+        if let Mode::Scatter { .. } = manifest.mode {
+            result = builder.scatter_pair(result, kernel.compute.result.span)?;
         } else if let Some(record) = shared.record {
             // Several outputs: the body gives their record, and the entry
             // gives each output its field, in declaration order.
@@ -664,6 +599,86 @@ impl<'a> Builder<'a> {
 
     fn ty(&self, id: ValueId) -> Type {
         self.types[id.0 as usize]
+    }
+
+    /// A scatter's pair, as the body returns it or `emit` gives it: a
+    /// struct of an address into the target and a value of its element.
+    /// An integer address is the float one converted, exact as every
+    /// coordinate a Field can have is.
+    fn scatter_pair(&mut self, pair: ValueId, span: Span) -> Result<ValueId, CompileError> {
+        let Mode::Scatter { base, .. } = self.manifest.mode else {
+            return Ok(pair);
+        };
+        let expected = self.manifest.outputs[0].element();
+        let actual = self.ty(pair);
+        let mut pair = pair;
+        // The body yields a pair: an address into the target and a
+        // value of its element type, as a struct of two fields.
+        let target = &self.manifest.inputs[base as usize];
+        let address = target.ty.index_type();
+        let table = self.shared.structs.borrow();
+        let fields = match actual {
+            Type::Struct(index) if !table[index as usize].is_array() => {
+                Some(&table[index as usize].fields)
+            }
+            _ => None,
+        };
+        let well_formed = fields.is_some_and(|fields| {
+            fields.len() == 2 && fields[0].ty == address && fields[1].ty == expected
+        });
+        // An integer address (`IVec2` into a grid) is the float one
+        // converted: exact, as every coordinate a Field can have is.
+        let integer_address = fields.is_some_and(|fields| {
+            fields.len() == 2
+                && fields[0].ty.other_kind() == Some(address)
+                && fields[1].ty == expected
+        });
+        if integer_address {
+            let integer = fields.map(|fields| fields[0].ty).unwrap_or(address);
+            let name = format!(
+                "({}, {})",
+                describe(address, &table),
+                describe(expected, &table)
+            );
+            let existing = table.iter().position(|def| def.name == name);
+            drop(table);
+            let normal = match existing {
+                Some(index) => Type::Struct(index as u32),
+                None => {
+                    let mut table = self.shared.structs.borrow_mut();
+                    table.push(StructDef::record(
+                        name,
+                        vec![
+                            Field {
+                                name: "address".into(),
+                                ty: address,
+                            },
+                            Field {
+                                name: "value".into(),
+                                ty: expected,
+                            },
+                        ],
+                    ));
+                    Type::Struct((table.len() - 1) as u32)
+                }
+            };
+            let at = self.emit(integer, Op::Extract(pair, 0));
+            let at = self.emit(address, Op::Intrinsic(Intrinsic::ToFloat, vec![at]));
+            let value = self.emit(expected, Op::Extract(pair, 1));
+            pair = self.emit(normal, Op::Construct(vec![at, value]));
+        } else if !well_formed {
+            return Err(semantic(
+                span,
+                format!(
+                    "a scatter into `{}` gives a struct of two fields per element, an address ({}) and a value ({}), but the body gives {}",
+                    target.name,
+                    describe(address, &table),
+                    describe(expected, &table),
+                    describe(actual, &table)
+                ),
+            ));
+        }
+        Ok(pair)
     }
 
     fn describe(&self, ty: Type) -> String {

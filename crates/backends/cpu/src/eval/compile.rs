@@ -1023,6 +1023,14 @@ impl FunctionCompiler<'_> {
                     n: dst.n,
                 }
             }
+            Op::Emit(pair) => {
+                let dst = define(self);
+                Instr::Emit {
+                    dst: dst.at,
+                    pair: self.loc(pair).at,
+                    n: dst.n,
+                }
+            }
             Op::Spend(_) => Instr::Spend {
                 dst: define(self).at,
             },

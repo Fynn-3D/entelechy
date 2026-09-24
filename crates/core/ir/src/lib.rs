@@ -338,6 +338,24 @@ impl Combine {
             _ => None,
         }
     }
+
+    /// Whether the rule gives one answer whatever order the pairs come
+    /// in, over an element of `element`: `min` and `max` always, `sum`
+    /// when no scalar is a float, whose sum depends on its order. Only
+    /// such a rule takes pairs a scatter emits, which a device applies as
+    /// they come.
+    pub fn order_free(self, element: Type, structs: &[StructDef]) -> bool {
+        match self {
+            Self::Min | Self::Max => true,
+            Self::Sum => schema_of(element, structs).is_some_and(|schema| {
+                !schema
+                    .scalars()
+                    .iter()
+                    .any(|s| matches!(s, Scalar::Float | Scalar::Double))
+            }),
+            Self::Last => false,
+        }
+    }
 }
 
 impl fmt::Display for Mode {
@@ -1168,6 +1186,13 @@ pub enum Op {
     /// address outside the memory is dropped. Yields the value written.
     /// Host call: `field.write`. Entry point of an ordered Kernel only.
     Put(u32, ValueId, ValueId),
+    /// Gives one more pair of a scatter: an address into the target and a
+    /// value of its element, as a struct of two fields laid out as the
+    /// pair the entry returns. The running element's pairs are the ones it
+    /// emits, in order, then the one it returns; an address outside the
+    /// target is dropped. Yields the pair. Host call: `field.write`. A
+    /// scatter's entry and what it calls only, under an order-free rule.
+    Emit(ValueId),
     /// Adds to the running element's work the iterations whose body ran
     /// of the loop the operand names, which is the instruction right
     /// before it, and yields them as `Int`. Placed by [`account`] and

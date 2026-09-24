@@ -184,6 +184,8 @@ builtin dvec4
   dvec4(xyz: DVec3, w: Double) -> DVec4
 builtin element entry
   element() -> Int
+builtin emit requires field.write entry
+  emit(pair: P) -> P
 builtin exp
   exp(x: DVec2) -> DVec2
   exp(x: DVec3) -> DVec3

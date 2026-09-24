@@ -1122,3 +1122,54 @@ fn a_break_stops_its_loop_and_the_rest_of_it_never_runs() {
         .collect();
     assert_eq!(words, expected, "{words:?}");
 }
+
+#[test]
+fn a_scatter_emits_as_many_pairs_as_it_likes() {
+    // Each value is spread over three slots from twice its own index, by
+    // pairs emitted in a loop; the pair it returns is outside and dropped.
+    let source = "kernel test.spread@1 { requires { field.read; field.write; }
+        input values: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+        struct Put { at: Int; value: Int; }
+        scatter into slots with sum {
+            let v = sample(values);
+            let _spread = loop 3 with k = 0 {
+                emit(Put { at: element() * 2 + k, value: v * 10 + k });
+                k + 1
+            };
+            return Put { at: -1, value: 0 };
+        } }";
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let mut host = Host::new(1 << 16);
+    let ints = |host: &mut Host, words: Vec<u32>| {
+        let n = words.len() as u32;
+        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        host.adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
+            .unwrap()
+    };
+    let values = ints(&mut host, vec![1, 2, 3, 4]);
+    let slots = ints(&mut host, vec![100; 10]);
+    let invocation = Invocation {
+        inputs: vec![values, slots],
+        params: vec![],
+        domain: Domain::Rows(4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let output = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap()[0];
+    let mut expected = [100i32; 10];
+    for (e, v) in [1, 2, 3, 4].into_iter().enumerate() {
+        for k in 0..3 {
+            expected[e * 2 + k] += v * 10 + k as i32;
+        }
+    }
+    let got: Vec<i32> = host
+        .data(output)
+        .unwrap()
+        .values()
+        .iter()
+        .map(|w| *w as i32)
+        .collect();
+    assert_eq!(got, expected);
+}

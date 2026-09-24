@@ -47,6 +47,7 @@ struct Imports {
     button: FuncId,
     put: FuncId,
     put_rows: FuncId,
+    emit: FuncId,
     unary: Vec<(Intrinsic, FuncId)>,
     powf: FuncId,
     atan2f: FuncId,
@@ -123,6 +124,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let key_sig = sig(&[ptr, i], &[i]);
     let put_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
     let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
+    let emit_sig = sig(&[ptr, i, ptr, i], &[]);
     let unary_sig = sig(&[f], &[f]);
     let binary_sig = sig(&[f, f], &[f]);
     let unary64_sig = sig(&[types::F64], &[types::F64]);
@@ -134,6 +136,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         button: declare(&mut jit, "orla_jit_button", &key_sig)?,
         put: declare(&mut jit, "orla_jit_put", &put_sig)?,
         put_rows: declare(&mut jit, "orla_jit_put_rows", &put_rows_sig)?,
+        emit: declare(&mut jit, "orla_jit_emit", &emit_sig)?,
         unary: [
             (Intrinsic::Sin, "orla_jit_sinf"),
             (Intrinsic::Cos, "orla_jit_cosf"),
@@ -446,6 +449,7 @@ struct Fx<'a, 'b> {
     button: FuncRef,
     put: FuncRef,
     put_rows: FuncRef,
+    emit: FuncRef,
     unary: Vec<(Intrinsic, FuncRef)>,
     powf: FuncRef,
     atan2f: FuncRef,
@@ -504,6 +508,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         let button = import(jit, &mut b, imports.button);
         let put = import(jit, &mut b, imports.put);
         let put_rows = import(jit, &mut b, imports.put_rows);
+        let emit = import(jit, &mut b, imports.emit);
         let unary = imports
             .unary
             .iter()
@@ -555,6 +560,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             button,
             put,
             put_rows,
+            emit,
             unary,
             powf,
             atan2f,
@@ -1147,6 +1153,24 @@ impl<'a, 'b> Fx<'a, 'b> {
     fn iconst(&mut self, like: Value, v: i64) -> Value {
         let t = self.b.func.dfg.value_type(like);
         self.b.ins().iconst(t, v)
+    }
+
+    /// The running element's index over the domain, `element()`: rows
+    /// of every layer one after another.
+    fn element_index(&mut self) -> Value {
+        let (x, y, z, _) = self.coords.expect("entry point");
+        let w = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, self.ctx, offsets::WIDTH);
+        let h = self
+            .b
+            .ins()
+            .load(types::I32, self.settled, self.ctx, offsets::HEIGHT);
+        let zh = self.b.ins().imul(z, h);
+        let row = self.b.ins().iadd(zh, y);
+        let base = self.b.ins().imul(row, w);
+        self.b.ins().iadd(base, x)
     }
 
     fn scratch_addr(&mut self) -> Value {
@@ -1876,21 +1900,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                     _ => vec![self.u32_to_f32(w), self.u32_to_f32(h), self.u32_to_f32(d)],
                 }
             }
-            Op::Element => {
-                let (x, y, z, _) = self.coords.expect("entry point");
-                let w = self
-                    .b
-                    .ins()
-                    .load(types::I32, self.settled, self.ctx, offsets::WIDTH);
-                let h = self
-                    .b
-                    .ins()
-                    .load(types::I32, self.settled, self.ctx, offsets::HEIGHT);
-                let zh = self.b.ins().imul(z, h);
-                let row = self.b.ins().iadd(zh, y);
-                let base = self.b.ins().imul(row, w);
-                vec![self.b.ins().iadd(base, x)]
-            }
+            Op::Element => vec![self.element_index()],
             Op::Time => vec![
                 self.b
                     .ins()
@@ -2121,6 +2131,18 @@ impl<'a, 'b> Fx<'a, 'b> {
                 vec![self.spend(ran)]
             }
             Op::Look => vec![self.look()],
+            Op::Emit(pair) => {
+                // The pair's words go to the scratch slot, and the helper
+                // keeps them after the element's index, which is how the
+                // caller puts them before the pair the element returns.
+                let words = self.words(pair);
+                let slot = self.scratch_addr();
+                self.stores(&words, self.flags, slot);
+                let element = self.element_index();
+                let n = self.i32c(words.len() as i64);
+                self.b.ins().call(self.emit, &[self.ctx, element, slot, n]);
+                words
+            }
             Op::Put(input, address, value) => {
                 // The value's words go to the scratch slot; the helper
                 // resolves the address as the interpreter does and drops a

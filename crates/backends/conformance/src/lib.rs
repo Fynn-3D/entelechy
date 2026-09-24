@@ -20,7 +20,8 @@
 //! input of the output's shape), the params `k`, `n`, `flag` and `v`,
 //! and three functions. A mode's wrapper puts the snippet in a map over
 //! rows, a map over a grid, a reduction, a scan with a memory, a
-//! scatter, a prefix, and a map writing four outputs by name, and
+//! scatter, a scatter that emits, a prefix, and a map writing four
+//! outputs by name, and
 //! returns what that mode returns.
 
 use orla_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
@@ -286,6 +287,7 @@ pub fn modes() -> Vec<(&'static str, Wrapper)> {
         ("reduce", reduce),
         ("scan", scan),
         ("scatter", scatter),
+        ("scatter emitting", scatter_emitting),
         ("prefix", prefix),
         ("map into several outputs", map_several),
     ]
@@ -400,6 +402,26 @@ fn scatter(lets: &str, out: &str) -> String {
     output result: Rows<Out>;
     struct Pair {{ at: Int; value: Out; }}
     scatter into target with last {{ let i = element(); {ENV} {lets} let out = {out}; return Pair {{ at: (i * 7) % 16, value: out }}; }} }}"
+    )
+}
+
+/// A scatter whose element emits a pair per `fan` before the one it
+/// returns, under `max`, the rule `emit` takes: floats as their order,
+/// integers as theirs, whatever order a backend lands them in.
+fn scatter_emitting(lets: &str, out: &str) -> String {
+    format!(
+        "kernel matrix.scatter_emitting@1 {{ {HEAD}
+    input rows: Rows<Float>; input ints: Rows<Int>; input cells: Grid<Cell>; input parts: Rows<Patch>; input patches: Grid<Patch>;
+    struct Run {{ f: Float; i: Int; v: Vec3; }}
+    input target: Rows<Run>;
+    output result: Rows<Run>;
+    struct Pair {{ at: Int; value: Run; }}
+    scatter into target with max {{ let i = element(); {ENV} {lets} let out = {out};
+        let _fanned = loop i % 3 with fan = 0 {{
+            emit(Pair {{ at: (i * 5 + fan * 3) % 16, value: Run {{ f: out.f, i: out.i ^ fan, v: out.v * float(fan) }} }});
+            fan + 1
+        }};
+        return Pair {{ at: (i * 7) % 16, value: Run {{ f: out.f, i: out.i, v: out.v }} }}; }} }}"
     )
 }
 
@@ -573,6 +595,34 @@ pub fn cases() -> Vec<Case> {
                         ),
                     ],
                     Domain::Rows(COUNT),
+                ),
+                // An emitting scatter's target holds `Run`s, and starts
+                // below what most pairs give, so what lands shows.
+                "scatter emitting" => (
+                    vec![
+                        rows(),
+                        ints(),
+                        cells(),
+                        parts_input(),
+                        patches_input(),
+                        (
+                            Schema::new(vec![
+                                Scalar::Float,
+                                Scalar::Int,
+                                Scalar::Float,
+                                Scalar::Float,
+                                Scalar::Float,
+                            ]),
+                            Domain::Rows(16),
+                            (0..16)
+                                .flat_map(|_| {
+                                    let low = (-1.0e6f32).to_bits();
+                                    [low, i32::MIN as u32 + 1, low, low, low]
+                                })
+                                .collect(),
+                        ),
+                    ],
+                    Domain::Rows(16),
                 ),
                 _ => (
                     vec![

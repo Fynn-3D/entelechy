@@ -897,6 +897,7 @@ pub fn emit(module: &Module) -> String {
             wgsl_type(element)
         );
     }
+    emit_functions(module, &mut out);
     for (index, function) in module.functions.iter().enumerate() {
         emit_function(&mut out, module, function, &function_name(index), false);
         out.push('\n');
@@ -1457,32 +1458,10 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
         &format!("p.{}", member_name(1)),
         &mut words,
     );
-    let mut lines = Vec::new();
-    match combine {
-        Combine::Sum => {
-            for (k, (expr, _)) in words.iter().enumerate() {
-                lines.push(format!(
-                    "    atomicAdd(&out0[b + {k}u], bitcast<i32>({expr}));"
-                ));
-            }
-        }
-        Combine::Min | Combine::Max => {
-            let op = if combine == Combine::Min {
-                "atomicMin"
-            } else {
-                "atomicMax"
-            };
-            for (k, (expr, ty)) in words.iter().enumerate() {
-                let key = if *ty == Type::Float {
-                    format!("key_of(bitcast<i32>({expr}))")
-                } else {
-                    format!("bitcast<i32>({expr})")
-                };
-                lines.push(format!("    {op}(&out0[b + {k}u], {key});"));
-            }
-        }
-        Combine::Last => lines.push("    atomicMax(&winner[at], i + 1u);".to_owned()),
-    }
+    let lines = match combine {
+        Combine::Last => vec!["    atomicMax(&winner[at], i + 1u);".to_owned()],
+        _ => atomic_lines(&words, combine, "out0"),
+    };
     let _ = writeln!(
         out,
         "
@@ -1502,6 +1481,118 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         lines.join("\n")
     );
     out
+}
+
+/// The atomics that combine a pair's value words into the element of
+/// `target` at word `b`, under an order-free rule: `sum` adds, `min` and
+/// `max` compare, floats as their ordered keys.
+fn atomic_lines(words: &[(String, Type)], combine: Combine, target: &str) -> Vec<String> {
+    let op = match combine {
+        Combine::Sum => "atomicAdd",
+        Combine::Min => "atomicMin",
+        _ => "atomicMax",
+    };
+    words
+        .iter()
+        .enumerate()
+        .map(|(k, (expr, ty))| {
+            let key = if *ty == Type::Float && combine != Combine::Sum {
+                format!("key_of(bitcast<i32>({expr}))")
+            } else {
+                format!("bitcast<i32>({expr})")
+            };
+            format!("    {op}(&{target}[b + {k}u], {key});")
+        })
+        .collect()
+}
+
+/// Binding index of the target a scatter's `emit` combines into as it
+/// runs: the base copied, float words as keys, bound as atomics.
+pub const EMIT_BINDING: u32 = 89;
+
+/// The pair types a scatter's entry emits, each once; none when it
+/// emits nothing.
+pub fn emitted_pairs(module: &Module) -> Vec<Type> {
+    fn walk(instructions: &[Instruction], found: &mut Vec<Type>) {
+        for instruction in instructions {
+            match &instruction.op {
+                Op::Emit(_) if !found.contains(&instruction.ty) => found.push(instruction.ty),
+                Op::If {
+                    then, otherwise, ..
+                } => {
+                    walk(&then.body, found);
+                    walk(&otherwise.body, found);
+                }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    for (_, block) in arms {
+                        walk(&block.body, found);
+                    }
+                    walk(&otherwise.body, found);
+                }
+                Op::Loop { until, body, .. } => {
+                    if let Some(until) = until {
+                        walk(&until.body, found);
+                    }
+                    walk(&body.body, found);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&module.entry.body, &mut found);
+    found
+}
+
+/// The target binding and one function a pair type that `emit` gives
+/// the target at once: the address checked as the apply pass checks it,
+/// then the value's words combined with atomics.
+fn emit_functions(module: &Module, out: &mut String) {
+    let Mode::Scatter { base, combine } = module.manifest.mode else {
+        return;
+    };
+    let pairs = emitted_pairs(module);
+    if pairs.is_empty() {
+        return;
+    }
+    let target = &module.manifest.inputs[base as usize];
+    let stride = target.ty.schema.value_words();
+    let _ = writeln!(
+        out,
+        "@group(0) @binding({EMIT_BINDING}) var<storage, read_write> emitted: array<atomic<i32>>;
+fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}"
+    );
+    for pair in pairs {
+        let mut words = Vec::new();
+        value_words(
+            module,
+            target.element(),
+            &format!("p.{}", member_name(1)),
+            &mut words,
+        );
+        let _ = writeln!(
+            out,
+            "fn {}(p: {}) {{
+    {}
+    let b = at * {stride}u;
+{}
+}}",
+            emit_name(pair),
+            wgsl_type(pair),
+            scatter_address(module, "return;"),
+            atomic_lines(&words, combine, "emitted").join("\n")
+        );
+    }
+}
+
+/// The name of the function that emits a pair of a type.
+fn emit_name(pair: Type) -> String {
+    match pair {
+        Type::Struct(index) => format!("emit_s{index}"),
+        _ => "emit_pair".to_owned(),
+    }
 }
 
 /// Emits the gather pass of `last`: one invocation per target element,
@@ -2531,6 +2622,7 @@ fn speculable(block: &Block) -> bool {
                     | Op::If { .. }
                     | Op::Match { .. }
                     | Op::Put(..)
+                    | Op::Emit(_)
                     | Op::Call(..)
                     | Op::Spend(_)
                     | Op::Look
@@ -2841,6 +2933,12 @@ impl Emitter<'_> {
             }
             Op::Look => {
                 self.line(depth, &format!("let v{}: bool = look();", id.0));
+                return;
+            }
+            Op::Emit(pair) => {
+                // Combined into the target now; the value is the pair.
+                self.line(depth, &format!("{}({});", emit_name(*ty), v(pair)));
+                self.line(depth, &format!("let v{}: {ty_name} = {};", id.0, v(pair)));
                 return;
             }
             Op::Put(input, index, value) => {

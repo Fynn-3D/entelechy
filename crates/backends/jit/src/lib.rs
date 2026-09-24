@@ -84,6 +84,9 @@ pub struct Ctx {
     /// The `x` the failure was seen at, which a map's entry writes as it
     /// leaves its run; the caller knows the rest of the coordinates.
     error_at: u32,
+    /// Where a scatter's `emit` keeps its pairs, each after the element
+    /// it came from; null where nothing emits.
+    emitted: *mut Vec<u32>,
 }
 
 /// A map entry's native signature: the context, where a run of elements
@@ -335,6 +338,7 @@ fn shared(
         run_limit: run.limit(),
         left: 0,
         error_at: 0,
+        emitted: std::ptr::null_mut(),
     };
     Ok(Shared {
         views,
@@ -361,6 +365,20 @@ fn compute(
     Ok(results)
 }
 
+/// The same, with what a scatter's elements emitted: each run of elements
+/// gives its pairs, each after the element it came from, and the runs
+/// come in order.
+fn compute_emitting(
+    entry: Entry,
+    shared: &Shared,
+    domain: Domain,
+    stride: usize,
+) -> Result<(Vec<u32>, Vec<Vec<u32>>), ExecutionError> {
+    let mut results = vec![0u32; domain.count() * stride];
+    let emitted = compute_into(entry, shared, domain, stride, &mut results)?;
+    Ok((results, emitted))
+}
+
 /// The same, into words the caller owns: a Field it just created, so a
 /// map's output is written once instead of into a buffer that is then
 /// copied into the Field.
@@ -370,7 +388,7 @@ fn compute_into(
     domain: Domain,
     stride: usize,
     results: &mut [u32],
-) -> Result<(), ExecutionError> {
+) -> Result<Vec<Vec<u32>>, ExecutionError> {
     let width = domain.width() as usize;
     let height = domain.height();
     let rows = height as usize * domain.depth() as usize;
@@ -406,11 +424,14 @@ fn compute_into(
         run_limit: t.run_limit,
         left: 0,
         error_at: 0,
+        emitted: std::ptr::null_mut(),
     };
     // One call a run of elements that share a row: a `Rows` domain is
     // one run of a million, a grid one run a row.
-    let run_elements = |first: usize, chunk: &mut [u32]| -> Result<(), ExecutionError> {
+    let run_elements = |first: usize, chunk: &mut [u32]| -> Result<Vec<u32>, ExecutionError> {
         let mut ctx = fresh(&shared.template);
+        let mut emitted: Vec<u32> = Vec::new();
+        ctx.emitted = &mut emitted;
         let elements = chunk.len() / stride.max(1);
         let mut done = 0usize;
         while done < elements {
@@ -438,13 +459,15 @@ fn compute_into(
             hand_left(&mut ctx, shared, LEFT_HANDED)?;
             done += run;
         }
-        hand_left(&mut ctx, shared, 1)
+        hand_left(&mut ctx, shared, 1)?;
+        Ok(emitted)
     };
     if threads == 1 {
-        run_elements(0, results)?;
-    } else {
+        return Ok(vec![run_elements(0, results)?]);
+    }
+    {
         let chunk_len = per_thread * stride.max(1);
-        let outcomes: Vec<Result<(), ExecutionError>> = std::thread::scope(|s| {
+        let outcomes: Vec<Result<Vec<u32>, ExecutionError>> = std::thread::scope(|s| {
             let handles: Vec<_> = results
                 .chunks_mut(chunk_len)
                 .enumerate()
@@ -458,11 +481,8 @@ fn compute_into(
                 .map(|handle| handle.join().expect("element worker panicked"))
                 .collect()
         });
-        for outcome in outcomes {
-            outcome?;
-        }
+        outcomes.into_iter().collect()
     }
-    Ok(())
 }
 
 /// A map: the entry over the invocation's domain, its words split into
@@ -499,7 +519,7 @@ fn run(
             .storage_mut(handle)
             .map_err(ExecutionError::from)
             .and_then(|words| compute_into(entry, &shared, domain, stride, words))
-            .and_then(|()| shared.run.outcome());
+            .and_then(|_| shared.run.outcome());
         return match outcome {
             Ok(()) => Ok(vec![handle]),
             Err(error) => {
@@ -647,14 +667,15 @@ fn run_scatter(
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, sources)?;
-    let pairs = compute(entry, &shared, sources, address + stride)?;
+    let pair_words = address + stride;
+    let (pairs, emitted) = compute_emitting(entry, &shared, sources, pair_words)?;
     shared.run.outcome()?;
     drop(shared);
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let scalars = port.ty.schema.scalars();
-    for (index, pair) in pairs.chunks_exact(address + stride).enumerate() {
+    let mut apply = |pair: &[u32], index: usize| -> Result<(), ExecutionError> {
         let Some(at) = orla_rules::scatter_index(target, &pair[..address]) else {
-            continue;
+            return Ok(());
         };
         orla_rules::combine_words(
             combine,
@@ -666,7 +687,19 @@ fn run_scatter(
             x: (index % sources.width() as usize) as u32,
             y: (index / sources.width() as usize) as u32,
             error,
-        })?;
+        })
+    };
+    // Element by element: the pairs it emitted, each kept after its
+    // index, then the one it returned.
+    let mut kept = emitted
+        .iter()
+        .flat_map(|run| run.chunks_exact(pair_words + 1))
+        .peekable();
+    for (index, returned) in pairs.chunks_exact(pair_words).enumerate() {
+        while let Some(record) = kept.next_if(|record| record[0] as usize == index) {
+            apply(&record[1..], index)?;
+        }
+        apply(returned, index)?;
     }
     let output = scope.create(port.ty.schema.clone(), target)?;
     if let Err(error) = scope.write_values(output, &words) {
@@ -958,6 +991,18 @@ unsafe extern "C" fn orla_jit_button(ctx: *const Ctx, code: i32) -> i32 {
     ((bits >> code) & 1) as i32
 }
 
+/// `emit`: the element's index and the pair's `n` words, kept in the
+/// order they come.
+unsafe extern "C" fn orla_jit_emit(ctx: *mut Ctx, element: u32, pair: *const u32, n: u32) {
+    let ctx = unsafe { &mut *ctx };
+    if ctx.emitted.is_null() {
+        return;
+    }
+    let emitted = unsafe { &mut *ctx.emitted };
+    emitted.push(element);
+    emitted.extend_from_slice(unsafe { std::slice::from_raw_parts(pair, n as usize) });
+}
+
 /// `put` into a rows memory: the element's words replaced, an index
 /// outside the memory dropped.
 unsafe extern "C" fn orla_jit_put_rows(ctx: *const Ctx, input: u32, i: i32, value: *const u32) {
@@ -1103,6 +1148,7 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ("orla_jit_button", orla_jit_button as *const u8),
         ("orla_jit_put", orla_jit_put as *const u8),
         ("orla_jit_put_rows", orla_jit_put_rows as *const u8),
+        ("orla_jit_emit", orla_jit_emit as *const u8),
         ("orla_jit_fail", orla_jit_fail as *const u8),
         ("orla_jit_sinf", orla_jit_sinf as *const u8),
         ("orla_jit_cosf", orla_jit_cosf as *const u8),

@@ -598,13 +598,14 @@ fn scatter(
     let sources = invocation.domain;
     let address = address_words(target);
     let program = eval::Program::with(code.clone(), module, invocation, scope, sources)?;
-    let pairs = compute(&program, &[address + stride])?;
+    let (pairs, sources_of) = compute_pairs(&program, address + stride)?;
     program.outcome()?;
     drop(program);
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let port = &module.manifest.outputs[0];
     let scalars = port.ty.schema.scalars();
-    for (index, pair) in pairs.chunks_exact(address + stride).enumerate() {
+    for (pair, index) in pairs.chunks_exact(address + stride).zip(sources_of) {
+        let index = index as usize;
         let Some(at) = scatter_index(target, &pair[..address]) else {
             continue;
         };
@@ -626,6 +627,70 @@ fn scatter(
         return Err(error.into());
     }
     Ok(vec![output])
+}
+
+/// A scatter's pairs' words, and the element each pair came from.
+type Pairs = (Vec<u32>, Vec<u32>);
+
+/// A scatter's pairs, in the order the rule applies them: element by
+/// element, the pairs each emits and then the one it returns, with the
+/// element each came from. Threads take runs of elements and their pairs
+/// are joined in run order, so the order is the one thread's would be.
+fn compute_pairs(program: &eval::Program<'_>, pair_words: usize) -> Result<Pairs, ExecutionError> {
+    let domain = program.domain;
+    let width = domain.width() as usize;
+    let height = domain.height();
+    let element_count = width * height as usize * domain.depth() as usize;
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(element_count.max(1))
+        .min(element_count.div_ceil(PARALLEL_THRESHOLD))
+        .max(1);
+    let per_thread = element_count.div_ceil(threads).max(1);
+    let run = |first: usize| -> Result<Pairs, ExecutionError> {
+        let mut machine = eval::Machine::new(program);
+        let mut pairs = Vec::new();
+        let mut sources = Vec::new();
+        let mut slot = vec![0u32; pair_words];
+        for element in first..(first + per_thread).min(element_count) {
+            let x = (element % width.max(1)) as u32;
+            let row = (element / width.max(1)) as u32;
+            let (y, z) = (row % height, row / height);
+            machine.run_entry_words([x, y, z], &mut slot)?;
+            let emitted = machine.take_emitted();
+            sources.extend(std::iter::repeat_n(
+                element as u32,
+                emitted.len() / pair_words + 1,
+            ));
+            pairs.extend(emitted);
+            pairs.extend_from_slice(&slot);
+        }
+        machine.finish()?;
+        Ok((pairs, sources))
+    };
+    if threads == 1 {
+        return run(0);
+    }
+    let runs: Vec<Result<Pairs, ExecutionError>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|index| {
+                let run = &run;
+                s.spawn(move || run(index * per_thread))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("scatter worker panicked"))
+            .collect()
+    });
+    let (mut pairs, mut sources) = (Vec::new(), Vec::new());
+    for run in runs {
+        let (p, s) = run?;
+        pairs.extend(p);
+        sources.extend(s);
+    }
+    Ok((pairs, sources))
 }
 
 /// Runs the entry point over every element of the program's domain, on

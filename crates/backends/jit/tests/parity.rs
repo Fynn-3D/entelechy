@@ -536,3 +536,36 @@ fn a_failure_names_its_element_through_a_call_and_a_loop() {
     assert_eq!(cpu[5], 0, "the loop that never ran carries its initial");
     assert_eq!(cpu[4], 300, "three times a hundred over one");
 }
+
+#[test]
+fn emitted_pairs_land_as_the_interpreters_do() {
+    // Each element emits as many pairs as its key says, into slots its key
+    // picks, over enough elements that both backends split them among
+    // threads; the pair each returns lands too.
+    let count = 50_000u32;
+    for rule in ["sum", "max", "min"] {
+        let source = format!(
+            "kernel test.fan@1 {{ requires {{ field.read; field.write; }}
+            input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+            struct Pair {{ at: Int; value: Int; }}
+            scatter into slots with {rule} {{
+                let k = sample(keys);
+                let _fan = loop k % 5 with j = 0 {{
+                    emit(Pair {{ at: (k * 31 + j * 7) % 97, value: k % 1000 - j * 3 }});
+                    j + 1
+                }};
+                return Pair {{ at: k % 101 - 3, value: k % 17 }};
+            }} }}"
+        );
+        let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let (cpu, jit) = both_all(
+            &source,
+            &[
+                (ints.clone(), Domain::Rows(count), (0..count).collect()),
+                (ints, Domain::Rows(97), vec![0; 97]),
+            ],
+            Domain::Rows(count),
+        );
+        assert_eq!(cpu, jit, "{rule}");
+    }
+}

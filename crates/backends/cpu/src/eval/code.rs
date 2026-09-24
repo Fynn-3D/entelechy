@@ -491,6 +491,13 @@ pub(super) enum Instr {
         value: usize,
         n: usize,
     },
+    /// Gives the scatter one more pair: the pair's words, kept by the
+    /// machine in the order they come, and the instruction's own value.
+    Emit {
+        dst: usize,
+        pair: usize,
+        n: usize,
+    },
     /// Adds the iterations whose body ran, of the loop just finished, to
     /// the element's work.
     Spend {

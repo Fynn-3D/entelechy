@@ -300,6 +300,7 @@ pub fn fuse_outputs(
                 path: path.clone(),
             },
             Op::Put(i, a, v) => Op::Put(index(*i), *a, *v),
+            Op::Emit(pair) => Op::Emit(*pair),
             other => other.clone(),
         }
     };
@@ -598,7 +599,7 @@ impl<'a> Renumber<'a> {
                 *value = self.map(*value);
             }
             Op::Key(code) | Op::Button(code) | Op::Stick(code) => *code = self.map(*code),
-            Op::Spend(counted) => *counted = self.map(*counted),
+            Op::Spend(counted) | Op::Emit(counted) => *counted = self.map(*counted),
             Op::Look => {}
             Op::Const(_)
             | Op::Param(_)

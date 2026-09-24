@@ -1050,6 +1050,46 @@ impl<'a> Checker<'a> {
                 }
                 port.element()
             }
+            Op::Emit(pair) => {
+                if !self.is_entry {
+                    return Err(self.fail(format!(
+                        "{position} emits from a function; a pair belongs to the element the entry runs"
+                    )));
+                }
+                self.require(Capability::FieldWrite, position)?;
+                let manifest = &self.module.manifest;
+                let Mode::Scatter { base, combine } = manifest.mode else {
+                    return Err(self.fail(format!(
+                        "{position} emits a pair, which only a scatter does"
+                    )));
+                };
+                let target = self.input(base, position)?;
+                let (address, element) = (target.ty.index_type(), target.element());
+                if !combine.order_free(element, &self.module.structs) {
+                    return Err(self.fail(format!(
+                        "{position} emits a pair into a scatter `with {}`, whose answer depends on the order pairs come in; emitting takes `min`, `max`, or a `sum` of integers",
+                        combine.name()
+                    )));
+                }
+                let ty = self.operand(*pair, position)?;
+                let well_formed = match ty {
+                    Type::Struct(index) => {
+                        let def = &self.module.structs[index as usize];
+                        !def.is_array()
+                            && def.fields.len() == 2
+                            && def.fields[0].ty == address
+                            && def.fields[1].ty == element
+                    }
+                    _ => false,
+                };
+                if !well_formed {
+                    return Err(self.fail(format!(
+                        "{position} emits {ty}; a pair is a struct of an address ({address}) into `{}` and a value ({element})",
+                        target.name
+                    )));
+                }
+                ty
+            }
             Op::Time => {
                 self.require(Capability::TimeRead, position)?;
                 Type::Float
@@ -1253,7 +1293,7 @@ fn block_writes(instructions: &[Instruction], writers: &[bool]) -> bool {
     instructions
         .iter()
         .any(|instruction| match &instruction.op {
-            Op::Put(..) => true,
+            Op::Put(..) | Op::Emit(_) => true,
             Op::Call(callee, _) => writers[*callee as usize],
             Op::If {
                 then, otherwise, ..

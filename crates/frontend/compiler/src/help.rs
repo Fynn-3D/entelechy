@@ -150,6 +150,8 @@ pub fn builtins() -> Vec<Builtin> {
             "The Field's extent along each axis, as integers.", Some("field.read"), false),
         fixed("put", "memory", &["put(memory: Rows<T>, index: Int, value: T) -> T", "put(memory: Grid<T>, at: Vec2, value: T) -> T", "put(memory: Grid<T>, at: IVec2, value: T) -> T", "put(memory: Volume<T>, at: Vec3, value: T) -> T", "put(memory: Volume<T>, at: IVec3, value: T) -> T"],
             "Writes an element of a memory port in step order (scan only; from the entry or a function with the memory as a parameter); an address outside is dropped, never clamped. Yields the value written.", Some("field.write"), false),
+        fixed("emit", "scatter", &["emit(pair: P) -> P"],
+            "Gives a scatter one more pair, a struct of an address into its target and a value of its element, as it returns one: an element's pairs are the ones it emits, in order, then the one it returns, and an address outside the target is dropped. Scatter only, from its body, under `min`, `max`, or a `sum` of integers, whose answer is the same in any order.", Some("field.write"), true),
         fixed("element", "context", &["element() -> Int"], "This element's index over rows; a scan's step.", None, true),
         fixed("coord", "context", &["coord() -> Vec2", "coord() -> Vec3"], "This element's coordinates over a grid or a volume; rows have element().", None, true),
         fixed("icoord", "context", &["icoord() -> IVec2", "icoord() -> IVec3"], "This element's coordinates as integers, for arithmetic on cells.", None, true),

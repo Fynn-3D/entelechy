@@ -34,6 +34,9 @@ pub(crate) struct Machine<'p, 's> {
     /// The memories' working copies, one per memory input: what the
     /// steps have written so far, and the outputs at the end.
     pub(super) memories: Vec<Option<Vec<u32>>>,
+    /// The pairs the running elements have emitted, in order, a
+    /// scatter's to take after each element.
+    pub(super) emitted: Vec<u32>,
     pub(super) stack: Vec<u32>,
     /// Top of the stack: where the next call's frame begins.
     pub(super) sp: usize,
@@ -92,6 +95,7 @@ impl<'p, 's> Machine<'p, 's> {
             calls: None,
             calls_truncated: false,
             memories,
+            emitted: Vec::new(),
             stack: vec![0; program.code.entry.frame * 2],
             sp: 0,
             loops: Vec::new(),
@@ -102,6 +106,11 @@ impl<'p, 's> Machine<'p, 's> {
             at: [0; 3],
             scratch: Vec::new(),
         }
+    }
+
+    /// The pairs emitted since the last call, in order.
+    pub(crate) fn take_emitted(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.emitted)
     }
 
     /// Runs the entry point for one element and writes its results into
@@ -1030,6 +1039,11 @@ impl<'p, 's> Machine<'p, 's> {
                 if let (Some(index), Some(memory)) = (index, self.memories[*input].as_mut()) {
                     view.write(memory, index, &s[written..written + n]);
                 }
+            }
+            Instr::Emit { dst, pair, n } => {
+                let words = fp + pair;
+                s.copy_within(words..words + n, fp + dst);
+                self.emitted.extend_from_slice(&s[words..words + n]);
             }
             Instr::AtLinear {
                 dst,

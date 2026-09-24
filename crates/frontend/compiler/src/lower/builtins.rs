@@ -212,6 +212,32 @@ impl Builder<'_> {
                 }
                 Ok(self.emit(element, Op::Put(input, address, value)))
             }
+            "emit" => {
+                self.entry_only(name, span)?;
+                self.require(name, Capability::FieldWrite, span)?;
+                self.arity(name, args, 1, span)?;
+                let Mode::Scatter { combine, .. } = self.manifest.mode else {
+                    return Err(semantic(
+                        span,
+                        "`emit` gives a scatter more pairs than the one it returns, which only `scatter` does",
+                    ));
+                };
+                let element = self.manifest.outputs[0].element();
+                if !combine.order_free(element, &self.shared.structs.borrow()) {
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`emit` takes a rule whose answer is the same in any order, and `with {}` over {} is not one: scatter `with min`, `with max`, or a `sum` of integers",
+                            combine.name(),
+                            self.describe(element)
+                        ),
+                    ));
+                }
+                let pair = self.value(&args[0])?;
+                let pair = self.scatter_pair(pair, args[0].span)?;
+                let ty = self.ty(pair);
+                Ok(self.emit(ty, Op::Emit(pair)))
+            }
             "sample" => {
                 self.entry_only(name, span)?;
                 self.require(name, Capability::FieldRead, span)?;

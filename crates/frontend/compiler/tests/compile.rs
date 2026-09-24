@@ -1393,3 +1393,34 @@ fn a_spend_follows_its_loop() {
     assert!(error.contains("not the loop right before it"), "{error}");
     assert!(orla_ir::validate(module).is_ok());
 }
+
+#[test]
+fn emit_belongs_to_a_scatter_whose_rule_ignores_order() {
+    let outside = "kernel test.map@1 { requires { field.write; } output result: Rows<Int>;
+        struct Put { at: Int; value: Int; }
+        compute { let _p = emit(Put { at: 0, value: 1 }); return 1; } }";
+    let error = compile(outside).unwrap_err().to_string();
+    assert!(error.contains("only `scatter`"), "{error}");
+    for rule in ["last", "sum"] {
+        let ordered = format!(
+            "kernel test.keep@1 {{ requires {{ field.read; field.write; }}
+            input values: Rows<Float>; input slots: Rows<Float>; output result: Rows<Float>;
+            struct Put {{ at: Int; value: Float; }}
+            scatter into slots with {rule} {{
+                emit(Put {{ at: 0, value: sample(values) }});
+                return Put {{ at: -1, value: 0.0 }};
+            }} }}"
+        );
+        let error = compile(&ordered).unwrap_err().to_string();
+        assert!(error.contains("same in any order"), "{rule}: {error}");
+    }
+    let wrong = "kernel test.shape@1 { requires { field.read; field.write; }
+        input values: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+        struct Put { at: Int; value: Int; }
+        scatter into slots with max {
+            emit(sample(values));
+            return Put { at: -1, value: 0 };
+        } }";
+    let error = compile(wrong).unwrap_err().to_string();
+    assert!(error.contains("two fields"), "{error}");
+}

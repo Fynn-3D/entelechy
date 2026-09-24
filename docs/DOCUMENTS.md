@@ -513,6 +513,17 @@ and extent, so a scatter node takes no `domain`, and a scatter is never
 fused. The exact language is defined by [the frontend](../crates/frontend/language/src/lib.rs)
 and its tests.
 
+An element may give more pairs than the one it returns. `emit(pair);`,
+in the body and in no function it calls, gives the target one more pair
+of the same form, and may run inside a loop, so an element gives as many
+as it computes (a triangle one pair a pixel it covers). An element's
+pairs are the ones it emits, in order, then the one it returns; a body
+that has nothing more to give returns an address outside the target.
+`emit` takes only a rule whose answer is the same in any order — `min`,
+`max`, or a `sum` of no floats — so a backend is free to land a pair the
+moment it is emitted: the GPU combines it into the target with an atomic
+from inside the body and keeps no list of pairs.
+
 A Kernel with `prefix` in place of `compute` is a prefix fold, the fifth
 mode: every element of the output is its own value combined with every
 value before it.

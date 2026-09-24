@@ -1985,3 +1985,86 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
     let (cpu, gpu_words) = on_both_inputs(&gpu, &mut host, &summed, inputs, Domain::Rows(count));
     assert_eq!(cpu, gpu_words, "scatter with a float sum");
 }
+
+/// Pairs an entry emits land on the device as the reference lands them:
+/// the device combines them into the target as the entry runs, which an
+/// order-free rule answers the same for. Ints under every such rule;
+/// floats, as ordered keys, under `min` and `max` on a grid.
+#[test]
+fn emitted_pairs_land_as_the_references_do() {
+    let Some(gpu) = gpu() else { return };
+    let count = 50_000u32;
+    let mut host = Host::new(1 << 24);
+    let adopt = |host: &mut Host, scalar, domain: Domain, words: Vec<u32>| {
+        let schema = orla_abi::Schema::new(vec![scalar]);
+        host.adopt(orla_abi::FieldData::from_storage(schema, domain, words).unwrap())
+            .unwrap()
+    };
+    for rule in ["sum", "max", "min"] {
+        let module = compile(&format!(
+            "kernel test.fan@1 {{ requires {{ field.read; field.write; }}
+             input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+             struct Pair {{ at: Int; value: Int; }}
+             scatter into slots with {rule} {{
+                 let k = sample(keys);
+                 let _fan = loop k % 5 with j = 0 {{
+                     emit(Pair {{ at: (k * 31 + j * 7) % 97, value: k % 1000 - j * 3 }});
+                     j + 1
+                 }};
+                 return Pair {{ at: k % 101 - 3, value: k % 17 }};
+             }} }}"
+        ))
+        .unwrap();
+        let inputs = vec![
+            adopt(
+                &mut host,
+                orla_abi::Scalar::Int,
+                Domain::Rows(count),
+                (0..count).collect(),
+            ),
+            adopt(
+                &mut host,
+                orla_abi::Scalar::Int,
+                Domain::Rows(97),
+                vec![5; 97],
+            ),
+        ];
+        let (cpu, gpu_words) =
+            on_both_inputs(&gpu, &mut host, &module, inputs, Domain::Rows(count));
+        assert_eq!(cpu, gpu_words, "emitted ints under {rule}");
+    }
+    for rule in ["min", "max"] {
+        let module = compile(&format!(
+            "kernel test.spray@1 {{ requires {{ field.read; field.write; }}
+             input keys: Rows<Int>; input canvas: Grid<Float>; output result: Grid<Float>;
+             struct Dot {{ at: Vec2; value: Float; }}
+             scatter into canvas with {rule} {{
+                 let k = sample(keys);
+                 let v = float(k % 2001 - 1000) * 0.25;
+                 emit(Dot {{ at: vec2(float(k % 23), float(k % 11)), value: v }});
+                 emit(Dot {{ at: vec2(float(k % 19) - 1.0, float(k % 13)), value: -v }});
+                 return Dot {{ at: vec2(float(k % 7), float(k % 5)), value: v * 2.0 }};
+             }} }}"
+        ))
+        .unwrap();
+        let inputs = vec![
+            adopt(
+                &mut host,
+                orla_abi::Scalar::Int,
+                Domain::Rows(count),
+                (0..count)
+                    .map(|i| i.wrapping_mul(2_654_435_761) >> 7)
+                    .collect(),
+            ),
+            adopt(
+                &mut host,
+                orla_abi::Scalar::Float,
+                Domain::Grid(20, 12),
+                vec![0.5f32.to_bits(); 240],
+            ),
+        ];
+        let (cpu, gpu_words) =
+            on_both_inputs(&gpu, &mut host, &module, inputs, Domain::Rows(count));
+        assert_eq!(cpu, gpu_words, "emitted floats under {rule}");
+    }
+}
