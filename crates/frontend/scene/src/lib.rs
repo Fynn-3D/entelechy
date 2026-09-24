@@ -284,7 +284,15 @@ struct Lowering<'a, 'b> {
     aliases: Vec<orla_language::TypeAlias>,
     structs: Vec<orla_language::StructDecl>,
     functions: Vec<orla_language::FnDecl>,
+    /// Nodes `times` has placed so far, every level together.
+    placed: usize,
 }
+
+/// The most nodes `times` places in one scene, every level together: a
+/// placed graph placed many times places its own nodes many times over,
+/// and a document an agent composed must not spend the loader's memory
+/// without end.
+pub const MAX_PLACED: usize = 1 << 16;
 
 /// Where something in a document was written, in the `file:line:column`
 /// a Kernel's diagnostics use.
@@ -336,6 +344,7 @@ fn lower(
             .cloned()
             .collect(),
         stack: Vec::new(),
+        placed: 0,
     };
     let level = lowering.level(document, text, name, base, &PathBuf::from(name), None)?;
     lowering.out.graph.externals = level.externals;
@@ -472,6 +481,15 @@ impl Lowering<'_, '_> {
                     ));
                 }
             };
+            self.placed = self.placed.saturating_add(count);
+            if self.placed > MAX_PLACED {
+                return Err(error(
+                    times_name.span,
+                    format!(
+                        "`times = {count}` places more than {MAX_PLACED} nodes in the scene, every level together"
+                    ),
+                ));
+            }
             let carries: Vec<(String, String)> = decl
                 .members
                 .iter()
@@ -1921,6 +1939,15 @@ output raw <- first.result to bytes \"raw.bin\";",
         assert!(orphan.message.contains("needs `times"), "{orphan}");
         let unknown = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = n; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
         assert!(unknown.message.contains("not a param"), "{unknown}");
+        // A count past what a scene may place is refused before a copy
+        // is made, and so are counts that pass it together.
+        let huge = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 2000000000; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
+        assert!(
+            huge.message.contains("places more than 65536 nodes"),
+            "{huge}"
+        );
+        let together = parse("node s: t.z@1 { domain = 1; }\nnode a: t.i@1 { times = 40000; previous <- s.result; }\nnode b: t.i@1 { times = 40000; previous <- s.result; }\noutput result <- b.result;").unwrap_err();
+        assert!(together.message.contains("places more than"), "{together}");
     }
 
     /// The Graph computes structure and never values: a value a node is

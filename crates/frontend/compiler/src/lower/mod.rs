@@ -88,6 +88,22 @@ fn resolve_type(name: &Spanned<String>, structs: &Structs) -> Result<Type, Compi
     parse_type(name)
 }
 
+/// The most values a function's `[each ...]` builders may write out
+/// before one is refused: a copy of the body per element, and builders
+/// nested in builders multiply.
+pub(crate) const MAX_UNROLLED_VALUES: usize = 1 << 18;
+
+/// Whether an array may have `count` elements.
+pub(crate) fn check_array_count(count: u32, span: Span) -> Result<(), CompileError> {
+    if count == 0 || count > MAX_ARRAY_COUNT {
+        return Err(semantic(
+            span,
+            format!("an array has 1 to {MAX_ARRAY_COUNT} elements, not {count}"),
+        ));
+    }
+    Ok(())
+}
+
 /// The array type `[element; count]`, interned in the struct table.
 fn array_type(
     structs: &Structs,
@@ -95,12 +111,7 @@ fn array_type(
     count: u32,
     span: Span,
 ) -> Result<Type, CompileError> {
-    if count == 0 || count > MAX_ARRAY_COUNT {
-        return Err(semantic(
-            span,
-            format!("an array has 1 to {MAX_ARRAY_COUNT} elements, not {count}"),
-        ));
-    }
+    check_array_count(count, span)?;
     let existing = structs
         .borrow()
         .iter()

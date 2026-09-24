@@ -1469,3 +1469,33 @@ fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
         "the unoptimized module is the document's"
     );
 }
+
+/// `[each ...]` writes its body out once an element, and builders nested
+/// in builders multiply: three of 4096 would be 6.9e10 copies. The count
+/// is checked before the first copy, and the copies as they add up, so a
+/// Kernel an agent sent is refused in moments rather than taking the
+/// compiler's memory. A builder of reasonable size still compiles.
+#[test]
+fn nested_builders_are_refused_before_they_run_away() {
+    let kernel = |body: &str| {
+        format!(
+            "kernel t.each@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ let a = {body}; return a[0]; }} }}"
+        )
+    };
+    let started = std::time::Instant::now();
+    let nested = kernel("[each 4096 { [each 4096 { [each 4096 { float(index()) }][0] }][0] }]");
+    let error = compile(&nested).unwrap_err().to_string();
+    assert!(error.contains("past 262144 values"), "{error}");
+    let zero = kernel("[each 0 { 1.0 }]");
+    let error = compile(&zero).unwrap_err().to_string();
+    assert!(error.contains("positive integer count"), "{error}");
+    let over = kernel("[each 5000 { [each 5000 { 1.0 }][0] }]");
+    let error = compile(&over).unwrap_err().to_string();
+    assert!(error.contains("not 5000"), "{error}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(compile(&kernel("[each 64 { [each 64 { float(index()) }][3] }]")).is_ok());
+}

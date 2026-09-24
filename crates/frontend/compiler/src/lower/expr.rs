@@ -257,6 +257,12 @@ impl Builder<'_> {
                 Ok(self.emit(ty, Op::Construct(vec![id; count.value as usize])))
             }
             ExprKind::Each(count, body) => {
+                // The count is checked before the body is written out even
+                // once, and what the copies add up to as they are written:
+                // builders nested in builders multiply, and a Kernel an
+                // agent sent must not spend the compiler's time and memory
+                // without end.
+                super::check_array_count(count.value, count.span)?;
                 // Unrolled: the body once per element, `index()` a literal.
                 let mut ids = Vec::with_capacity(count.value as usize);
                 for position in 0..count.value {
@@ -264,6 +270,15 @@ impl Builder<'_> {
                     let id = self.block(body);
                     self.each.pop();
                     ids.push(id?);
+                    if self.types.len() > super::MAX_UNROLLED_VALUES {
+                        return Err(super::semantic(
+                            count.span,
+                            format!(
+                                "this `[each ...]` writes its body out past {} values; nest fewer or smaller builders, or use a loop",
+                                super::MAX_UNROLLED_VALUES
+                            ),
+                        ));
+                    }
                 }
                 let ty = self.array_type(self.ty(ids[0]), count.value, count.span)?;
                 Ok(self.emit(ty, Op::Construct(ids)))
