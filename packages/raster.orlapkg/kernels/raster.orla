@@ -87,45 +87,84 @@ fn corners(face: Face, vertices: Rows<Corner>, size: Vec2) -> Corners {
     };
 }
 
-// Every pixel's nearest fragment as one key: the bits of its depth (a
-// Float of no sign orders as its bits do) above, the triangle's row
-// below, so the least key is the nearest depth and the earliest row at
-// it. A triangle emits one key a pixel it covers and returns none.
-kernel raster.cover@1 {
+// The pixels whose centres, at `x + 0.5`, are inside a triangle's box and
+// the canvas, and so may be inside the triangle: from `x0, y0`, `w` wide
+// and `h` high, none (`w` zero) for a triangle that is skipped.
+struct Box { x0: Int; y0: Int; w: Int; h: Int; }
+
+fn boxed(k: Corners, size: Vec2) -> Box {
+    let none = Box { x0: 0, y0: 0, w: 0, h: 0 };
+    if !k.usable { return none; }
+    let x0 = max(ceil(min(min(k.a.x, k.b.x), k.c.x) - 0.5), 0.0);
+    let y0 = max(ceil(min(min(k.a.y, k.b.y), k.c.y) - 0.5), 0.0);
+    let x1 = min(floor(max(max(k.a.x, k.b.x), k.c.x) - 0.5), size.x - 1.0);
+    let y1 = min(floor(max(max(k.a.y, k.b.y), k.c.y) - 0.5), size.y - 1.0);
+    if x1 < x0 || y1 < y0 { return none; }
+    return Box { x0: int(x0), y0: int(y0), w: int(x1 - x0) + 1, h: int(y1 - y0) + 1 };
+}
+
+// The depth of the fragment a triangle leaves at a pixel's centre, or -1
+// where it leaves none: the centre outside an edge, or the depth outside
+// `[0, 1)`.
+fn depth_at(k: Corners, px: Int, py: Int) -> Float {
+    let p = vec2(float(px) + 0.5, float(py) + 0.5);
+    let w0 = edge(k.b.xy, k.c.xy, p);
+    let w1 = edge(k.c.xy, k.a.xy, p);
+    let w2 = edge(k.a.xy, k.b.xy, p);
+    let z = w0 / k.area * k.a.z + w1 / k.area * k.b.z + w2 / k.area * k.c.z;
+    return if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 && z >= 0.0 && z < 1.0 { z } else { -1.0 };
+}
+
+// The uv a triangle's fragment at a pixel's centre has, perspective-
+// correct by `1 / w`, in the order the surface reads it back.
+fn uv_at(k: Corners, va: Corner, vb: Corner, vc: Corner, px: Int, py: Int) -> Vec2 {
+    let p = vec2(float(px) + 0.5, float(py) + 0.5);
+    let l0 = edge(k.b.xy, k.c.xy, p) / k.area;
+    let l1 = edge(k.c.xy, k.a.xy, p) / k.area;
+    let l2 = edge(k.a.xy, k.b.xy, p) / k.area;
+    let inv_w = l0 * k.a.w + l1 * k.b.w + l2 * k.c.w;
+    return (l0 * va.uv * k.a.w + l1 * vb.uv * k.b.w + l2 * vc.uv * k.c.w) / inv_w;
+}
+
+// A fragment's key: the bits of its depth (a Float of no sign orders as
+// its bits do) above, the triangle's row below, so the least key is the
+// nearest depth and the earliest row at it.
+fn key_of(z: Float, t: Int) -> Long {
+    return (long(bits(z)) << 32) | long(t);
+}
+
+// Whether a box is more than one tile: such a triangle's pixels are
+// covered by `raster.cover_tiles@1`, a tile to an invocation, rather
+// than all by its own. A tile of zero is no tiling: every triangle
+// covers its own box.
+fn large(b: Box, tile: Int) -> Bool {
+    return tile > 0 && (b.w > tile || b.h > tile);
+}
+
+// Every pixel's nearest fragment as one key: each triangle walks its box
+// and emits a key a pixel it covers. With a `tile`, only the triangles
+// whose box is one tile or less; the larger ones are left to
+// `raster.cover_tiles@1`, which takes these keys as its own start, so the
+// least of both is kept.
+kernel raster.cover@2 {
     requires { field.read; field.write; }
     input triangles: Rows<Face>;
     input vertices: Rows<Corner>;
     input keys: Grid<Long>;
+    param tile: Int = 0;
     output result: Grid<Long>;
     struct Hit { pixel: Vec2; key: Long; }
     scatter into keys with min {
         let t = element();
-        let size = size(keys);
-        let k = corners(sample(triangles), vertices, size);
+        let k = corners(sample(triangles), vertices, size(keys));
+        let b = boxed(k, size(keys));
         let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
-        if !k.usable { return none; }
-        // The first and last pixel whose centre, at `x + 0.5`, is inside
-        // the box, and so may be inside the triangle.
-        let x0 = max(ceil(min(min(k.a.x, k.b.x), k.c.x) - 0.5), 0.0);
-        let y0 = max(ceil(min(min(k.a.y, k.b.y), k.c.y) - 0.5), 0.0);
-        let x1 = min(floor(max(max(k.a.x, k.b.x), k.c.x) - 0.5), size.x - 1.0);
-        let y1 = min(floor(max(max(k.a.y, k.b.y), k.c.y) - 0.5), size.y - 1.0);
-        if x1 < x0 || y1 < y0 { return none; }
-        let w = int(x1 - x0) + 1;
-        let h = int(y1 - y0) + 1;
-        let row = long(t);
-        let _rows = loop h with dy = 0 {
-            let py = int(y0) + dy;
-            let _columns = loop w with dx = 0 {
-                let px = int(x0) + dx;
-                let p = vec2(float(px) + 0.5, float(py) + 0.5);
-                let w0 = edge(k.b.xy, k.c.xy, p);
-                let w1 = edge(k.c.xy, k.a.xy, p);
-                let w2 = edge(k.a.xy, k.b.xy, p);
-                let z = w0 / k.area * k.a.z + w1 / k.area * k.b.z + w2 / k.area * k.c.z;
-                let covered = w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 && z >= 0.0 && z < 1.0;
-                if covered {
-                    emit(Hit { pixel: vec2(float(px), float(py)), key: (long(bits(z)) << 32) | row });
+        if b.w == 0 || large(b, tile) { return none; }
+        loop b.h with dy = 0 {
+            loop b.w with dx = 0 {
+                let z = depth_at(k, b.x0 + dx, b.y0 + dy);
+                if z >= 0.0 {
+                    emit(Hit { pixel: vec2(float(b.x0 + dx), float(b.y0 + dy)), key: key_of(z, t) });
                 }
                 dx + 1
             };
@@ -135,61 +174,188 @@ kernel raster.cover@1 {
     }
 }
 
-// The same, with a cutout: a fragment whose alpha in `mask`, read at its
-// own uv as `at_linear(mask, uv * size(mask))` reads it, is below
+// How many tiles each triangle's box is cut into: none for one of a
+// tile or less, which `raster.cover@2` covers whole.
+kernel raster.tiles@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input canvas: Grid<Long>;
+    param tile: Int = 16;
+    output result: Rows<Int>;
+    compute {
+        let b = boxed(corners(sample(triangles), vertices, size(canvas)), size(canvas));
+        if !large(b, tile) { return 0; }
+        return ((b.w + tile - 1) / tile) * ((b.h + tile - 1) / tile);
+    }
+}
+
+// Where each triangle's tiles begin: an inclusive prefix of the counts,
+// so triangle `t`'s tiles end before `offsets[t]`.
+kernel raster.offsets@1 {
+    requires { field.read; field.write; }
+    input counts: Rows<Int>;
+    output result: Rows<Int>;
+    prefix with sum { return sample(counts); }
+}
+
+// How many tiles there are, which sizes the next node: the last offset.
+kernel raster.total@1 {
+    requires { field.read; field.write; }
+    input offsets: Rows<Int>;
+    output result: Rows<Int>;
+    compute { return at(offsets, count(offsets) - 1); }
+}
+
+// The triangle and the tile of its box an element covers: the first
+// triangle whose offset passes it, by bisection, and its place among
+// that triangle's tiles.
+struct Place { t: Int; x0: Int; y0: Int; w: Int; h: Int; }
+
+fn place(e: Int, counts: Rows<Int>, offsets: Rows<Int>, triangles: Rows<Face>, vertices: Rows<Corner>, size: Vec2, tile: Int) -> Place {
+    let span = loop 32 with r = ivec2(0, count(offsets)) until r.x >= r.y {
+        let mid = (r.x + r.y) / 2;
+        if at(offsets, mid) > e { ivec2(r.x, mid) } else { ivec2(mid + 1, r.y) }
+    };
+    let t = span.x;
+    let b = boxed(corners(at(triangles, t), vertices, size), size);
+    let local = e - (at(offsets, t) - at(counts, t));
+    let across = (b.w + tile - 1) / tile;
+    let x0 = b.x0 + local % across * tile;
+    let y0 = b.y0 + local / across * tile;
+    return Place {
+        t: t, x0: x0, y0: y0,
+        w: min(tile, b.x0 + b.w - x0),
+        h: min(tile, b.y0 + b.h - y0),
+    };
+}
+
+// Every pixel's nearest fragment as one key, of the large triangles, a
+// tile of one's box at a time, so a triangle that fills the canvas is
+// covered by as many invocations as it has tiles rather than by one. The
+// node's domain is a pool of invocations sized by the canvas, each taking
+// every `n`th tile, so how many tiles there are this frame is read on the
+// device and never waited for. It starts from the keys `raster.cover@2`
+// left, and keeps the least.
+kernel raster.cover_tiles@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input counts: Rows<Int>;
+    input offsets: Rows<Int>;
+    input total: Rows<Int>;
+    input keys: Grid<Long>;
+    param tile: Int = 16;
+    output result: Grid<Long>;
+    struct Hit { pixel: Vec2; key: Long; }
+    scatter into keys with min {
+        let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+        let size = size(keys);
+        // A pool of invocations, the node's own domain, each taking every
+        // `n`th tile from its own.
+        let n = idomain();
+        let e = element();
+        let total = at(total, 0);
+        let rounds = if e < total { (total - e + n - 1) / n } else { 0 };
+        loop rounds with j = 0 {
+            let at_ = place(e + j * n, counts, offsets, triangles, vertices, size, tile);
+            let k = corners(at(triangles, at_.t), vertices, size);
+            loop at_.h with dy = 0 {
+                loop at_.w with dx = 0 {
+                    let z = depth_at(k, at_.x0 + dx, at_.y0 + dy);
+                    if z >= 0.0 {
+                        emit(Hit { pixel: vec2(float(at_.x0 + dx), float(at_.y0 + dy)), key: key_of(z, at_.t) });
+                    }
+                    dx + 1
+                };
+                dy + 1
+            };
+            j + 1
+        };
+        return none;
+    }
+}
+
+// The same pair with a cutout: a fragment whose alpha in `mask`, read at
+// its own uv as `at_linear(mask, uv * size(mask))` reads it, is below
 // `cutout` is not drawn — it emits no key, so it settles no depth and
-// what is behind a leaf's edge is seen through it. The uv is the one the
-// surface reads back, perspective-correct by `1 / w`, in the same order
-// of operations, so a pixel the cutout keeps shows the uv it was kept at.
-kernel raster.cover_cutout@1 {
+// what is behind a leaf's edge is seen through it.
+kernel raster.cover_cutout@2 {
     requires { field.read; field.write; }
     input triangles: Rows<Face>;
     input vertices: Rows<Corner>;
     input mask: Image;
     input keys: Grid<Long>;
     param cutout: Float = 0.5;
+    param tile: Int = 0;
     output result: Grid<Long>;
     struct Hit { pixel: Vec2; key: Long; }
     scatter into keys with min {
         let t = element();
-        let size = size(keys);
-        let k = corners(sample(triangles), vertices, size);
+        let k = corners(sample(triangles), vertices, size(keys));
+        let b = boxed(k, size(keys));
         let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
-        if !k.usable { return none; }
-        let x0 = max(ceil(min(min(k.a.x, k.b.x), k.c.x) - 0.5), 0.0);
-        let y0 = max(ceil(min(min(k.a.y, k.b.y), k.c.y) - 0.5), 0.0);
-        let x1 = min(floor(max(max(k.a.x, k.b.x), k.c.x) - 0.5), size.x - 1.0);
-        let y1 = min(floor(max(max(k.a.y, k.b.y), k.c.y) - 0.5), size.y - 1.0);
-        if x1 < x0 || y1 < y0 { return none; }
-        let w = int(x1 - x0) + 1;
-        let h = int(y1 - y0) + 1;
-        let row = long(t);
+        if b.w == 0 || large(b, tile) { return none; }
         let va = at(vertices, k.ia);
         let vb = at(vertices, k.ib);
         let vc = at(vertices, k.ic);
         let texels = size(mask);
-        loop h with dy = 0 {
-            let py = int(y0) + dy;
-            loop w with dx = 0 {
-                let px = int(x0) + dx;
-                let p = vec2(float(px) + 0.5, float(py) + 0.5);
-                let w0 = edge(k.b.xy, k.c.xy, p);
-                let w1 = edge(k.c.xy, k.a.xy, p);
-                let w2 = edge(k.a.xy, k.b.xy, p);
-                let z = w0 / k.area * k.a.z + w1 / k.area * k.b.z + w2 / k.area * k.c.z;
-                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 && z >= 0.0 && z < 1.0 {
-                    let l0 = w0 / k.area;
-                    let l1 = w1 / k.area;
-                    let l2 = w2 / k.area;
-                    let inv_w = l0 * k.a.w + l1 * k.b.w + l2 * k.c.w;
-                    let uv = (l0 * va.uv * k.a.w + l1 * vb.uv * k.b.w + l2 * vc.uv * k.c.w) / inv_w;
-                    if at_linear(mask, uv * texels).a >= cutout {
-                        emit(Hit { pixel: vec2(float(px), float(py)), key: (long(bits(z)) << 32) | row });
-                    }
+        loop b.h with dy = 0 {
+            loop b.w with dx = 0 {
+                let px = b.x0 + dx;
+                let py = b.y0 + dy;
+                let z = depth_at(k, px, py);
+                if z >= 0.0 && at_linear(mask, uv_at(k, va, vb, vc, px, py) * texels).a >= cutout {
+                    emit(Hit { pixel: vec2(float(px), float(py)), key: key_of(z, t) });
                 }
                 dx + 1
             };
             dy + 1
+        };
+        return none;
+    }
+}
+
+kernel raster.cover_cutout_tiles@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input counts: Rows<Int>;
+    input offsets: Rows<Int>;
+    input total: Rows<Int>;
+    input mask: Image;
+    input keys: Grid<Long>;
+    param cutout: Float = 0.5;
+    param tile: Int = 16;
+    output result: Grid<Long>;
+    struct Hit { pixel: Vec2; key: Long; }
+    scatter into keys with min {
+        let none = Hit { pixel: vec2(-1.0, -1.0), key: 0l };
+        let size = size(keys);
+        let texels = size(mask);
+        let n = idomain();
+        let e = element();
+        let total = at(total, 0);
+        let rounds = if e < total { (total - e + n - 1) / n } else { 0 };
+        loop rounds with j = 0 {
+            let at_ = place(e + j * n, counts, offsets, triangles, vertices, size, tile);
+            let k = corners(at(triangles, at_.t), vertices, size);
+            let va = at(vertices, k.ia);
+            let vb = at(vertices, k.ib);
+            let vc = at(vertices, k.ic);
+            loop at_.h with dy = 0 {
+                loop at_.w with dx = 0 {
+                    let px = at_.x0 + dx;
+                    let py = at_.y0 + dy;
+                    let z = depth_at(k, px, py);
+                    if z >= 0.0 && at_linear(mask, uv_at(k, va, vb, vc, px, py) * texels).a >= cutout {
+                        emit(Hit { pixel: vec2(float(px), float(py)), key: key_of(z, at_.t) });
+                    }
+                    dx + 1
+                };
+                dy + 1
+            };
+            j + 1
         };
         return none;
     }

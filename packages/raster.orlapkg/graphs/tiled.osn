@@ -1,0 +1,58 @@
+// The tiled form of `raster.osn`: a triangle whose box is larger than
+// a `tile` is covered a tile to an invocation, by a pool of `pool`
+// invocations, so a mesh of few large triangles (a model close to the
+// camera, a quad filling the screen) draws in parallel on a device. It
+// costs a pass over every triangle, a prefix and a pass more, so a mesh
+// of small triangles draws faster with `raster.osn`.
+use "../kernels/raster.orla";
+
+input vertices: Rows<Corner>;
+input triangles: Rows<Face>;
+param width: Int = 320;
+param height: Int = 240;
+
+// A triangle whose box is larger than a tile this wide is covered a
+// tile to an invocation, by a pool of this many, each taking every
+// `pool`th tile: how many tiles there are is read on the device and
+// never waited for.
+param tile: Int = 16;
+param pool: Int = 4096;
+
+// What a pixel holds before anything is drawn on it: the key no
+// fragment gives.
+node empty: Grid<Long> { domain = vec2(width, height); value = 9223372036854775807l; }
+
+// Triangles of a tile or less cover their own box; larger ones are cut
+// into tiles, counted, ranked by a prefix, and covered a tile to an
+// invocation, starting from the keys the small ones left.
+node cover: raster.cover@2 {
+    triangles <- triangles;
+    vertices <- vertices;
+    keys <- empty.result;
+    tile = tile;
+}
+node tiles: raster.tiles@1 {
+    triangles <- triangles;
+    vertices <- vertices;
+    canvas <- empty.result;
+    tile = tile;
+}
+node offsets: raster.offsets@1 { counts <- tiles.result; }
+node total: raster.total@1 { offsets <- offsets.result; domain = 1; }
+node covered: raster.cover_tiles@1 {
+    triangles <- triangles;
+    vertices <- vertices;
+    counts <- tiles.result;
+    offsets <- offsets.result;
+    total <- total.result;
+    keys <- cover.result;
+    tile = tile;
+    domain = pool;
+}
+node resolved: raster.resolve@2 {
+    keys <- covered.result;
+    triangles <- triangles;
+    vertices <- vertices;
+}
+
+output surface <- resolved.result;

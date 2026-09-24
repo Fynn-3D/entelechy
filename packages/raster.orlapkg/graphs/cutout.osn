@@ -21,7 +21,10 @@ param height: Int = 240;
 // fragment gives.
 node empty: Grid<Long> { domain = vec2(width, height); value = 9223372036854775807l; }
 
-node cover: raster.cover_cutout@1 {
+// Every triangle covers its own box, one invocation each: the fastest
+// for meshes of small triangles. `tiled` forms of this preset cut a
+// large triangle across many.
+node cover: raster.cover_cutout@2 {
     triangles <- triangles;
     vertices <- vertices;
     mask <- mask;

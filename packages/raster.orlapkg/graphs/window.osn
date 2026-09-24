@@ -14,7 +14,10 @@ input triangles: Rows<Face>;
 // fragment gives.
 node empty: Grid<Long> { domain = window(); value = 9223372036854775807l; }
 
-node cover: raster.cover@1 {
+// Every triangle covers its own box, one invocation each: the fastest
+// for meshes of small triangles. `tiled` forms of this preset cut a
+// large triangle across many.
+node cover: raster.cover@2 {
     triangles <- triangles;
     vertices <- vertices;
     keys <- empty.result;

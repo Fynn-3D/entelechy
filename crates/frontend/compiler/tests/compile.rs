@@ -35,8 +35,12 @@ fn grayscale_compiles_to_validated_ir() {
     assert_eq!(manifest.inputs[0].name, "source");
     assert_eq!(manifest.params[0].name, "amount");
     assert_eq!(manifest.outputs[0].ty, orla_ir::PortType::image());
-    assert_eq!(module.functions.len(), 1);
-    assert_eq!(module.functions[0].args, vec![Type::Vec4]);
+    // The lowering keeps the helper; the optimizer writes it out where it
+    // is called, and a function nothing calls then is not in the module.
+    let lowered = orla_compiler::compile_unoptimized(GRAYSCALE).unwrap();
+    assert_eq!(lowered.functions.len(), 1);
+    assert_eq!(lowered.functions[0].args, vec![Type::Vec4]);
+    assert!(module.functions.is_empty());
     assert!(module.entry.body.iter().any(|i| i.op == Op::Sample(0)));
     // The optimizer writes a short function out where it was called, so
     // the call is in the lowering and the arithmetic is in the entry.
@@ -376,7 +380,9 @@ fn rate_is_context_under_time_read() {
 
 #[test]
 fn functions_with_field_parameters_are_instantiated_per_port() {
-    let module = compile(
+    // The lowering is what is looked at; the optimizer writes short
+    // functions out where they are called, and drops what is then unused.
+    let module = orla_compiler::compile_unoptimized(
         "kernel test.peek@1 { requires { field.read; field.write; } input a: Grid<Float>; input b: Grid<Float>; output result: Grid<Float>;
             fn half(x: Float) -> Float { return x * 0.5; }
             fn peek(f: Grid<Float>, c: Vec2) -> Float { return half(at(f, c)) + at(f, c + vec2(1.0, 0.0)); }
@@ -837,7 +843,9 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
 
 #[test]
 fn integer_vectors_address_fields_without_conversions_in_the_source() {
-    let module = compile(
+    // The lowering is what is looked at; the optimizer writes short
+    // functions out where they are called, and drops what is then unused.
+    let module = orla_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.read; field.write; }
             struct Site { cell: IVec2; weight: Int; }
             input cells: Grid<Int>;
@@ -1020,7 +1028,9 @@ fn a_function_calls_only_what_is_defined_above_it() {
 
 #[test]
 fn a_type_parameter_is_bound_by_the_call() {
-    let module = compile(
+    // The lowering is what is looked at; the optimizer writes short
+    // functions out where they are called, and drops what is then unused.
+    let module = orla_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>;
             fn twice<T>(v: T) -> T { return v + v; }
             compute { let i = element(); return twice(float(i)) + twice(vec2(1.0, 2.0)).x + float(twice(i)); } }",
@@ -1036,7 +1046,7 @@ fn a_type_parameter_is_bound_by_the_call() {
     assert_eq!(module.functions.len(), 3, "one instance a type: {text}");
 
     // The same types again are the same instance.
-    let module = compile(
+    let module = orla_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn twice<T>(v: T) -> T { return v + v; } compute { return twice(1.0) + twice(2.0); } }",
     )
     .unwrap();
@@ -1423,4 +1433,39 @@ fn emit_belongs_to_a_scatter_whose_rule_ignores_order() {
         } }";
     let error = compile(wrong).unwrap_err().to_string();
     assert!(error.contains("two fields"), "{error}");
+}
+
+/// A document's helpers are every Kernel's in it, and one a Kernel never
+/// calls is not the Kernel's: optimized, its module keeps only what its
+/// entry reaches, so a `Long` a helper beside it returns does not make a
+/// device refuse it, and the helper is not emitted for it.
+#[test]
+fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
+    let module = compile(
+        "kernel t.rank@1 { requires { field.read; field.write; }
+         fn keyed(z: Float, t: Int) -> Long { return (long(bits(z)) << 32) | long(t); }
+         fn twice(x: Int) -> Int { return x + x; }
+         fn quad(x: Int) -> Int { return twice(twice(x)); }
+         input counts: Rows<Int>; output result: Rows<Int>;
+         prefix with sum { return quad(sample(counts)); } }",
+    )
+    .unwrap();
+    assert!(!module.holds(Type::Long));
+    assert!(
+        module.functions.len() <= 2,
+        "{} functions",
+        module.functions.len()
+    );
+    // What it does call, it keeps, and what that calls.
+    let unoptimized = orla_compiler::compile_unoptimized(
+        "kernel t.rank@1 { requires { field.read; field.write; }
+         fn keyed(z: Float, t: Int) -> Long { return (long(bits(z)) << 32) | long(t); }
+         input counts: Rows<Int>; output result: Rows<Int>;
+         prefix with sum { return sample(counts); } }",
+    )
+    .unwrap();
+    assert!(
+        unoptimized.holds(Type::Long),
+        "the unoptimized module is the document's"
+    );
 }

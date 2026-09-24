@@ -88,7 +88,10 @@ fn many_helpers_and_fields_are_named_apart_from_wgsl() {
         }} }}",
         last = MANY - 1
     );
-    let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+    // As lowered: the optimizer writes the helpers out where they are
+    // called and drops them, and what is looked at is a shader of many.
+    let module =
+        orla_compiler::compile_unoptimized(&source).unwrap_or_else(|error| panic!("{error}"));
     let shader = emit(&module);
     clean(&shader);
     assert!(

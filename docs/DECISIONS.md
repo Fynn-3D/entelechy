@@ -240,6 +240,16 @@ because it is faster where it matters and costs little to keep:
 Measured on an M4 at 320 by 240 (the culled world at 640 by 400, the
 model at 640 by 480), 2026-09-24.
 
+A large triangle is the package's own weakness on a device: one
+invocation walks its whole box. The `tiled` presets cut a box larger than
+a tile across a pool of invocations, which draws the model on the GPU in
+1.7 ms instead of 9.5 (the device's rasterizer: 1.0). They are not the
+default because the cut costs every triangle a pass, a prefix and a pass
+more, which a mesh of small triangles pays for and gains nothing from: the
+torus of nine thousand triangles took twice as long, the culled world 1.4
+times, two million triangles on the JIT 1.9 times. A scene with large
+triangles names the tiled preset; the surface is the same to the bit.
+
 **Where.** The package and its presets; every example places it. On the
 interpreter and the JIT the fast path is `orla_rules::raster`, held bit
 for bit to the rule by a test that writes the rule plainly; on the GPU it

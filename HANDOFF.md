@@ -40,22 +40,27 @@ done
 
 ## Next
 
-Let the raster package draw a large triangle across many invocations.
-Whether the CPU and the JIT keep a native rasterizer is decided (they
-do; `docs/DECISIONS.md` has the measurements), and the package now has
-the fast path's cutout too. What the measurements turned up is the
-package's own weakness: `raster.cover@1` gives each triangle one
-invocation, which walks every pixel of its box, so a mesh of few large
-triangles — the model example — draws 9.6 times as slow on the GPU as
-the device's rasterizer, where a mesh of small ones is within 1.1 times.
+Rasterize ten million triangles at 4K within a frame. Large triangles
+are handled (the `tiled` raster presets, opt-in); what a big scene hits
+now is memory, not arithmetic. At 3840 by 2160, 9.4 million triangles
+(the torus at `level = 6`) take 33 ms with the device's rasterizer and
+about 47 with the package, and neither is mostly the coverage test:
+`native.rasterize` writes a seven-word surface a pixel (232 MB at 4K),
+`project` writes nine words a vertex, the package's cover reads three
+whole vertices a triangle for the four words of position it needs, and
+the shade reads the surface back. The package's keys are already a
+visibility buffer — a depth and a triangle in eight bytes a pixel.
 
 Done when:
 
-- a triangle whose box is large is covered by many invocations, each a
-  tile of its box, by Kernels in the package and nothing in the engine;
-- the model example's frame on the GPU with the package is within a
-  small factor of the device's rasterizer, measured and written where
-  the decision lives, and the torus and culled scenes lose nothing;
+- a scene draws the torus at `level = 6` at 3840 by 2160 on the GPU in
+  20 ms a frame or less, measured and written where the decision lives,
+  with the package (not only the device's rasterizer);
+- the way there is Kernels and presets — shading from the keys by the
+  triangle rather than from a materialized surface, a position stream
+  the cover reads instead of whole vertices, or what measuring shows —
+  and anything the engine needs for it is fixed with a test of its own;
 - `edges.replay`, `cutout.replay` and the session test that holds the
-  package to the fast path to the bit still pass, unchanged;
+  package to the fast path to the bit still pass, and the small scenes
+  (torus, culled, model) lose nothing;
 - the verification above is clean.

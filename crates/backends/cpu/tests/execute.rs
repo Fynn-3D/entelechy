@@ -1221,3 +1221,48 @@ fn an_if_of_statements_emits_when_it_holds() {
     // return their value into slot 2, and 5 and 6 a hundred into slot 3.
     assert_eq!(got, vec![3, 22, 1 + 2 + 3 + 4, 200]);
 }
+
+/// A scatter's domain has the shape its entry was compiled over, its first
+/// input's: a grid domain for a scatter over rows would have `element()`
+/// and `domain()` read one shape as another (the interpreter read a
+/// float's bits as a count), so it is refused, as a map's is.
+#[test]
+fn a_scatter_over_rows_refuses_a_grid_domain() {
+    let module = compile(
+        "kernel test.pool@1 { requires { field.read; field.write; }
+         input slots: Rows<Int>; output result: Rows<Int>;
+         struct Put { at: Int; value: Int; }
+         scatter into slots with max { return Put { at: element() % 5, value: idomain() }; } }",
+    )
+    .unwrap();
+    let mut host = Host::new(1 << 16);
+    let slots = host
+        .adopt(
+            orla_abi::FieldData::from_storage(
+                orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                Domain::Rows(5),
+                vec![0; 5],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let invocation = |domain| Invocation {
+        inputs: vec![slots],
+        params: vec![],
+        domain,
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, granted());
+    let error = CpuBackend
+        .execute(&module, &invocation(Domain::Grid(4, 3)), &mut scope)
+        .unwrap_err();
+    assert!(
+        matches!(error, ExecutionError::DomainShape { .. }),
+        "{error}"
+    );
+    // Over rows it is what it says: seven elements.
+    let output = CpuBackend
+        .execute(&module, &invocation(Domain::Rows(7)), &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.data(output).unwrap().values()[0], 7);
+}

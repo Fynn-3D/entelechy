@@ -82,14 +82,118 @@ pub fn optimize(module: Module) -> Module {
         .init
         .as_ref()
         .map(|f| ctx.function(&inline_calls(f, &functions, &module.structs)));
-    Module {
+    prune(Module {
         manifest: module.manifest,
         structs: module.structs,
         functions,
         entry,
         merge,
         init,
+    })
+}
+
+/// The module without the functions nothing it runs calls: a document's
+/// helpers are every Kernel's in it, and one a Kernel never calls must
+/// not decide what it is — a device refusing it for a `Long` it never
+/// computes — nor be emitted for it. The rest keep their order, so a
+/// call is still to one defined before.
+fn prune(mut module: Module) -> Module {
+    fn calls(body: &[Instruction], found: &mut Vec<bool>) {
+        for instruction in body {
+            match &instruction.op {
+                Op::Call(callee, _) => found[*callee as usize] = true,
+                Op::If {
+                    then, otherwise, ..
+                } => {
+                    calls(&then.body, found);
+                    calls(&otherwise.body, found);
+                }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    for (_, arm) in arms {
+                        calls(&arm.body, found);
+                    }
+                    calls(&otherwise.body, found);
+                }
+                Op::Loop { until, body, .. } => {
+                    if let Some(until) = until {
+                        calls(&until.body, found);
+                    }
+                    calls(&body.body, found);
+                }
+                _ => {}
+            }
+        }
     }
+    fn renumber(body: &mut [Instruction], to: &[u32]) {
+        for instruction in body {
+            match &mut instruction.op {
+                Op::Call(callee, _) => *callee = to[*callee as usize],
+                Op::If {
+                    then, otherwise, ..
+                } => {
+                    renumber(&mut then.body, to);
+                    renumber(&mut otherwise.body, to);
+                }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    for (_, arm) in arms {
+                        renumber(&mut arm.body, to);
+                    }
+                    renumber(&mut otherwise.body, to);
+                }
+                Op::Loop { until, body, .. } => {
+                    if let Some(until) = until {
+                        renumber(&mut until.body, to);
+                    }
+                    renumber(&mut body.body, to);
+                }
+                _ => {}
+            }
+        }
+    }
+    let count = module.functions.len();
+    let mut used = vec![false; count];
+    calls(&module.entry.body, &mut used);
+    for function in module.merge.iter().chain(module.init.iter()) {
+        calls(&function.body, &mut used);
+    }
+    // A function calls only those before it, so going back from the last
+    // finds everything a used one calls.
+    for index in (0..count).rev() {
+        if used[index] {
+            let body = module.functions[index].body.clone();
+            calls(&body, &mut used);
+        }
+    }
+    if used.iter().all(|&u| u) {
+        return module;
+    }
+    let mut to = vec![u32::MAX; count];
+    let mut kept = 0u32;
+    for (index, &u) in used.iter().enumerate() {
+        if u {
+            to[index] = kept;
+            kept += 1;
+        }
+    }
+    let functions = std::mem::take(&mut module.functions);
+    module.functions = functions
+        .into_iter()
+        .zip(&used)
+        .filter(|(_, u)| **u)
+        .map(|(mut function, _)| {
+            renumber(&mut function.body, &to);
+            function
+        })
+        .collect();
+    renumber(&mut module.entry.body, &to);
+    for function in module.merge.iter_mut().chain(module.init.iter_mut()) {
+        renumber(&mut function.body, &to);
+    }
+    module
 }
 
 /// How many instructions a body holds, nested blocks counted.

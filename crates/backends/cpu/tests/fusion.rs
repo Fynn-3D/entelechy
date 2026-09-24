@@ -1,5 +1,5 @@
 use orla_abi::{Capability, Context, Domain, Host, Invocation, Scope, Value};
-use orla_compiler::compile;
+use orla_compiler::{compile, compile_unoptimized};
 use orla_cpu::CpuBackend;
 use orla_ir::{fuse, fuse_outputs, samples_only};
 
@@ -33,8 +33,10 @@ fn run(
 
 #[test]
 fn fused_pointwise_chain_is_bit_identical_to_the_materialized_chain() {
-    let gradient = compile(GRADIENT).unwrap();
-    let grayscale = compile(GRAYSCALE).unwrap();
+    // As lowered, with their helpers: what fusion does with a function
+    // is what is looked at (optimized, they are written out and gone).
+    let gradient = compile_unoptimized(GRADIENT).unwrap();
+    let grayscale = compile_unoptimized(GRAYSCALE).unwrap();
     let fused = fuse(&grayscale, 0, &gradient, "source").unwrap();
     let manifest = &fused.manifest;
     assert_eq!(manifest.inputs.len(), 0);
@@ -81,11 +83,11 @@ fn producer_helpers_with_struct_arguments_survive_fusion() {
     // consumer does not have is appended; a helper taking it as an
     // argument must shift exactly once. The element type the two share
     // is the same struct in the fused table, not a copy of it.
-    let producer = compile(
+    let producer = compile_unoptimized(
         "kernel test.points@1 { requires { field.write; } output result: Rows<Point>; struct Point { p: Vec2; w: Float; } struct Wide { a: Float; b: Float; c: Float; } fn nudge(a: Wide) -> Point { return Point { p: vec2(a.a + 1.0, a.b), w: a.c }; } compute { return nudge(Wide { a: float(element()), b: 0.0, c: 2.0 }); } }",
     )
     .unwrap();
-    let consumer = compile(
+    let consumer = compile_unoptimized(
         "kernel test.weigh@1 { requires { field.read; field.write; } input points: Rows<Point>; output result: Rows<Float>; struct Pad { a: Float; } struct Extra { b: Int; } struct Point { p: Vec2; w: Float; } compute { let q = sample(points); return q.p.x * q.w; } }",
     )
     .unwrap();

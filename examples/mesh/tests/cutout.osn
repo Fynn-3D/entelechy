@@ -56,6 +56,49 @@ node whole: graph "../../../packages/raster.orlapkg/graphs/raster.osn" {
     height = 240;
 }
 
+// The same two, cut into tiles two pixels wide, so nearly every triangle
+// is covered a tile to an invocation: the package's two forms, which
+// must draw the same surface to the bit on every backend.
+node tiled: graph "../../../packages/raster.orlapkg/graphs/cutout_tiled.osn" {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    mask <- mask.result;
+    cutout = cutout;
+    width = 320;
+    height = 240;
+    tile = 2;
+}
+node tiled_whole: graph "../../../packages/raster.orlapkg/graphs/tiled.osn" {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    width = 320;
+    height = 240;
+    tile = 2;
+}
+
+// How many pixels either tiled form draws other than its one-pass form,
+// any word of the surface to the bit.
+node split: kernel {
+    requires { field.read; field.write; }
+    input cut: GBuffer <- package.surface;
+    input cut_tiled: GBuffer <- tiled.surface;
+    input all: GBuffer <- whole.surface;
+    input all_tiled: GBuffer <- tiled_whole.surface;
+    output result: Rows<Int>;
+    compute {
+        let a = sample(cut);
+        let b = sample(cut_tiled);
+        let c = sample(all);
+        let d = sample(all_tiled);
+        let same_cut = a.id == b.id && bits(a.depth) == bits(b.depth)
+            && bits(a.uv.x) == bits(b.uv.x) && bits(a.uv.y) == bits(b.uv.y) && bits(a.normal.z) == bits(b.normal.z);
+        let same_all = c.id == d.id && bits(c.depth) == bits(d.depth)
+            && bits(c.uv.x) == bits(d.uv.x) && bits(c.uv.y) == bits(d.uv.y) && bits(c.normal.z) == bits(d.normal.z);
+        return if same_cut && same_all { 0 } else { 1 };
+    }
+    merge(a, b) { return a + b; }
+}
+
 // How many pixels the two draw differently: a different triangle, or
 // none where the other has one — which the device's rasterizer may do at
 // an edge pixel, or at a texel of the mask it reads at another uv.

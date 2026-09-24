@@ -8,7 +8,7 @@ input faces: Triangles = "assets/crate.triangles.field";
 input albedo: Image = "assets/crate.albedo.png";
 
 node project: model.project@1 { mesh <- mesh; }
-node raster: graph "../../packages/raster.orlapkg/graphs/raster.osn" {
+node raster: graph "../../packages/raster.orlapkg/graphs/tiled.osn" {
     vertices <- project.result;
     triangles <- faces;
     width = 640;

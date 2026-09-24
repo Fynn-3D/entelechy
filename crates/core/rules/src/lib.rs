@@ -471,7 +471,18 @@ pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(
         }
         return Ok(());
     }
-    // A scatter's output has the target's shape, whatever its domain.
+    // A scatter's output has the target's shape, whatever its domain; its
+    // domain has the shape its entry was compiled over, its first input's,
+    // or `element()`, `coord()` and `domain()` would read one shape as
+    // another.
+    if let (Mode::Scatter { .. }, Some(first)) = (manifest.mode, manifest.inputs.first())
+        && first.ty.shape != invocation.domain.shape()
+    {
+        return Err(ExecutionError::DomainShape {
+            expected: first.ty.shape,
+            actual: invocation.domain.shape(),
+        });
+    }
     if let Some(output) = manifest.outputs.first()
         && !matches!(manifest.mode, Mode::Scatter { .. })
         && output.ty.shape != invocation.domain.shape()

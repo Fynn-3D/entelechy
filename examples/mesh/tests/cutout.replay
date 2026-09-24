@@ -11,3 +11,6 @@ frame 0.0
 expect differ.result[0] <= 64
 # And the mask takes the same pixels from the torus on every backend.
 expect taken.result[0] = 6728
+# The package's tiled forms, cut two pixels to a tile, draw what its
+# one-pass forms draw, every word to the bit, with a mask and without.
+expect split.result[0] = 0
