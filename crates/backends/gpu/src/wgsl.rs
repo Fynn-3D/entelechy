@@ -753,6 +753,22 @@ fn atan2_ref(y: f32, x: f32) -> f32 {{
     }}
     return atan2(y, x);
 }}
+fn smoothstep_ref(l: f32, h: f32, x: f32) -> f32 {{
+    let t = min(max((x - l) / (h - l), 0.0), 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}}
+fn smoothstep_ref2(l: vec2<f32>, h: vec2<f32>, x: vec2<f32>) -> vec2<f32> {{
+    let t = min(max((x - l) / (h - l), vec2<f32>(0.0)), vec2<f32>(1.0));
+    return t * t * (3.0 - 2.0 * t);
+}}
+fn smoothstep_ref3(l: vec3<f32>, h: vec3<f32>, x: vec3<f32>) -> vec3<f32> {{
+    let t = min(max((x - l) / (h - l), vec3<f32>(0.0)), vec3<f32>(1.0));
+    return t * t * (3.0 - 2.0 * t);
+}}
+fn smoothstep_ref4(l: vec4<f32>, h: vec4<f32>, x: vec4<f32>) -> vec4<f32> {{
+    let t = min(max((x - l) / (h - l), vec4<f32>(0.0)), vec4<f32>(1.0));
+    return t * t * (3.0 - 2.0 * t);
+}}
 fn to_int2(v: vec2<f32>) -> vec2<i32> {{
     return vec2<i32>(to_int(v.x), to_int(v.y));
 }}
@@ -3502,8 +3518,17 @@ impl Emitter<'_> {
                 v(&args[1])
             ),
             Intrinsic::Step => format!("step({}, {})", splat(&args[0], ty), v(&args[1])),
+            // The interpreter's rule, not the device's `smoothstep`, whose
+            // result where `low >= high` is the driver's to choose; see
+            // `smoothstep_ref` in the preamble.
             Intrinsic::Smoothstep => format!(
-                "smoothstep({}, {}, {})",
+                "smoothstep_ref{}({}, {}, {})",
+                match ty {
+                    Type::Vec2 => "2",
+                    Type::Vec3 => "3",
+                    Type::Vec4 => "4",
+                    _ => "",
+                },
                 splat(&args[0], ty),
                 splat(&args[1], ty),
                 v(&args[2])

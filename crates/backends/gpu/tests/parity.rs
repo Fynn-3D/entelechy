@@ -2281,3 +2281,26 @@ fn branches_nested_past_what_a_shader_holds_run_off_the_device() {
         assert_eq!(routed, host.data(reference).unwrap().storage(), "{shape}");
     }
 }
+
+/// `smoothstep` is the interpreter's rule on the device too, where the
+/// device's own is its driver's to choose: at `low == high` a step
+/// (0 below, 1 at and above, as the division gives), at `low > high` a
+/// ramp that falls, scalar and vector alike.
+#[test]
+fn smoothstep_is_the_interpreters_at_its_edges() {
+    let Some(gpu) = gpu() else { return };
+    let ramp: Vec<[f32; 4]> = (0..32 * 4)
+        .map(|i| [(i % 32) as f32 / 31.0 * 2.0 - 0.5, 0.5, 0.25, 1.0])
+        .collect();
+    let source = "kernel test.edges@1 { requires { field.read; field.write; } input source: Image; output result: Image;
+        compute {
+            let x = sample(source).r;
+            let flat = smoothstep(0.5, 0.5, x);
+            let falling = smoothstep(1.0, 0.0, x);
+            let v = smoothstep(vec3(0.0, 0.5, 1.0), vec3(1.0, 0.5, 0.0), vec3(x, x, x));
+            return vec4(flat, falling, v.y, v.z);
+        } }";
+    let (cpu, gpu_pixels) = both(&gpu, source, &[ramp], (32, 4), vec![], Domain::Grid(32, 4));
+    assert!(cpu.iter().any(|p| p[0] == 0.0) && cpu.iter().any(|p| p[0] == 1.0));
+    assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-5), 0.0);
+}
