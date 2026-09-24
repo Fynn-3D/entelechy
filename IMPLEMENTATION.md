@@ -61,7 +61,7 @@ What these packages do needed no engine feature; keep it that way.
 | [Mip levels](packages/picture.orlapkg/graphs/mip.osn): a sub-graph placed `levels` times with `carry`, the level read off a rasterized surface's neighbouring `uv` | `times`, `carry`, the rasterizer's `uv` and `id` | [mipmap replay](examples/mipmap/tests/ground.replay) |
 | [Text](packages/text.orlapkg/kernels/text.orla): labels are `Rows<Glyph>`, the font a `Grid<Float>` atlas baked by a Kernel | shared functions, assets | [text replay](examples/text/tests/text.replay) |
 | [Skinning](packages/skin.orlapkg/kernels/skin.orla): a rig's rows under the [rig contract](docs/RIGS.md) | maps over rows | [rig tests](crates/interface/orla/tests/rigs.rs), [skin](examples/skin/tests/skin.replay) and [crowd](examples/crowd/tests/crowd.replay) replays |
-| [Rasterization](packages/raster.orlapkg/kernels/raster.orla): candidates a triangle's box of pixel centres, ranked by `prefix with sum`, found by bisection, the nearest kept by a scatter `min` and the earliest at it by a second | prefix, a domain of `value(port)`, scatter | [edges replay](examples/mesh/tests/edges.replay) on three backends; [the fast path held to the rule](crates/core/rules/src/raster.rs) |
+| [Rasterization](packages/raster.orlapkg/kernels/raster.orla): each triangle walks its box of pixel centres and emits a `Long` key per pixel it covers, the depth's `bits` above and its row below; a scatter `min` keeps the nearest and, at one depth, the earliest | scatter with `emit`, 64-bit atomics on the GPU | [edges replay](examples/mesh/tests/edges.replay) on three backends; [the fast path held to the rule](crates/core/rules/src/raster.rs) |
 
 ## Contracts
 
