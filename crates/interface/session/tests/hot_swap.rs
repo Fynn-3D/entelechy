@@ -343,3 +343,82 @@ fn a_backend_that_answers_with_the_wrong_count_of_fields_is_refused() {
         "what it did give is released"
     );
 }
+
+/// A backend that panics on a module containing `PANIC`: a backend bug
+/// a live session must survive.
+struct Brittle;
+
+impl orla_runtime::Backend for Brittle {
+    fn name(&self) -> &'static str {
+        "brittle"
+    }
+
+    fn prepare(
+        &self,
+        module: &orla_runtime::Validated,
+    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+        if module.manifest.id.to_string().contains("panics") {
+            panic!("the backend could not handle this module");
+        }
+        orla_runtime::Backend::prepare(&orla_cpu::CpuBackend, module)
+    }
+
+    fn execute(
+        &self,
+        prepared: &dyn orla_runtime::Prepared,
+        module: &orla_runtime::Validated,
+        invocation: &Invocation,
+        scope: &mut orla_runtime::Scope<'_>,
+    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
+        orla_runtime::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+    }
+}
+
+/// A backend that panics preparing a Kernel rejects it, inline or on the
+/// worker: the worker answers the ticket and goes on preparing, and the
+/// Kernel running is untouched. (A panic on the worker used to end it
+/// without an answer, and the publish waited for ever.)
+#[test]
+fn a_backend_that_panics_preparing_rejects_the_kernel_and_the_worker_lives() {
+    let mut runtime = Runtime::with_backend(1 << 12, Box::new(Brittle));
+    let first = load(&mut runtime, &source("c.r"));
+    let panics = |id: &str| {
+        orla_compiler::compile(&format!(
+            "kernel test.{id}@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4(1.0, 0.0, 0.0, 1.0); }} }}"
+        ))
+        .unwrap()
+    };
+    let Err(inline) = runtime.prepare_module(panics("panics"), "") else {
+        panic!("taken inline");
+    };
+    assert!(
+        inline.to_string().contains("could not handle this module"),
+        "{inline}"
+    );
+
+    runtime.set_background(true);
+    let refused = runtime.prepare_later(panics("panics"), String::new());
+    let taken = runtime.prepare_later(compile_ok(&source("0.5")), source("0.5"));
+    let wait = |runtime: &mut Runtime, ticket| loop {
+        if let Some(result) = runtime.poll(ticket) {
+            break result;
+        }
+        std::thread::yield_now();
+    };
+    let Err(error) = wait(&mut runtime, refused) else {
+        panic!("taken on the worker");
+    };
+    assert!(
+        error.to_string().contains("could not handle this module"),
+        "{error}"
+    );
+    let candidate = wait(&mut runtime, taken).expect("the worker went on");
+    runtime
+        .publish(candidate, Expect::Generation(first.generation()))
+        .unwrap();
+    assert_eq!(runtime.kernel(&id()).unwrap().generation(), Generation(2));
+}
+
+fn compile_ok(source: &str) -> orla_runtime::Validated {
+    orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"))
+}

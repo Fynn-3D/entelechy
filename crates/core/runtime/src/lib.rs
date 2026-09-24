@@ -156,12 +156,24 @@ impl Candidate {
 pub enum PrepareError {
     /// The backend rejected the module; the message is backend specific.
     Backend(String),
+    /// Accounting the module's work made it invalid: a fault of the
+    /// runtime, reported rather than taken down with.
+    Accounting(String),
+    /// The backend panicked preparing the module: a fault of the
+    /// backend, caught so the Kernel running and the worker live on.
+    Panicked(String),
 }
 
 impl fmt::Display for PrepareError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Backend(message) => write!(f, "backend rejected the kernel: {message}"),
+            Self::Accounting(message) => {
+                write!(f, "accounting the kernel's work made it invalid: {message}")
+            }
+            Self::Panicked(message) => {
+                write!(f, "the backend failed preparing the kernel: {message}")
+            }
         }
     }
 }
@@ -276,8 +288,21 @@ fn prepare_on(
 ) -> Result<Candidate, PrepareError> {
     // A backend runs the Kernel with its work accounted in its IR, so
     // where work is counted is one rule, not one a backend.
-    let run = orla_ir::account(&module);
-    let prepared = backend.prepare(&run).map_err(PrepareError::Backend)?;
+    let run = orla_ir::account(&module).map_err(|e| PrepareError::Accounting(e.to_string()))?;
+    // A backend that panics on a module is a bug; a live session
+    // reports it as a rejection, as it would any other, and keeps
+    // running what it ran. Preparing touches nothing shared: the
+    // candidate is dropped and the registry never saw it.
+    let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.prepare(&run)))
+        .map_err(|panic| {
+            let said = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic".to_owned());
+            PrepareError::Panicked(said)
+        })?
+        .map_err(PrepareError::Backend)?;
     Ok(Candidate {
         module,
         run,

@@ -15,10 +15,12 @@ use crate::{
 
 /// The module with its work accounted, when it counts its work
 /// ([`Module::counts_work`]); the module as it is otherwise. A module
-/// already accounted is given back as it is.
-pub fn account(module: &Validated) -> Validated {
+/// already accounted is given back as it is. The accounted module is
+/// validated again: a rewrite that broke it is an error the caller
+/// reports, never a panic on the thread that prepares a Kernel.
+pub fn account(module: &Validated) -> Result<Validated, crate::ValidationError> {
     if !module.counts_work() || module.accounted() {
-        return module.clone();
+        return Ok(module.clone());
     }
     let functions = module.functions_work();
     let rewrite = |function: &Function, element: bool| {
@@ -48,7 +50,7 @@ pub fn account(module: &Validated) -> Validated {
         merge: module.merge.as_ref().map(|merge| rewrite(merge, true)),
         init: module.init.as_ref().map(|init| rewrite(init, true)),
     };
-    validate(accounted).expect("accounting keeps a valid module valid")
+    validate(accounted)
 }
 
 /// The instructions with every loop followed by its spend, and the

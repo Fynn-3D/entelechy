@@ -237,7 +237,10 @@ fn check(args: &[String]) -> Result<(), String> {
                     // What a backend runs, not a step before it: the
                     // module with its work accounted.
                     if show_ir {
-                        println!("{}", orla_ir::account(&module));
+                        match orla_ir::account(&module) {
+                            Ok(run) => println!("{run}"),
+                            Err(error) => println!("{file}: accounting: {error}"),
+                        }
                     }
                 }
                 Err(error) => {

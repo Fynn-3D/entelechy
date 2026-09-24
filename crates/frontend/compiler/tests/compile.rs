@@ -1345,13 +1345,13 @@ fn work_is_accounted_in_the_ir() {
 
     // A loop read at run time can fill a block: it is counted, and the
     // element looks when it finishes.
-    let counted = orla_ir::account(&kernel("return loop n with a = 0 { a + 1 };"));
+    let counted = account_ok(&kernel("return loop n with a = 0 { a + 1 };"));
     assert_eq!(shape(&counted), "loop end spend look");
     assert!(counted.accounted());
 
     // A nest that can run more than LOOK_WORK looks at each outer
     // iteration, before its own `until`; the inner loop only spends.
-    let nested = orla_ir::account(&kernel(
+    let nested = account_ok(&kernel(
         "return loop 64 with a = 0 until a > n { loop n with b = a { b + 1 } };",
     ));
     assert_eq!(
@@ -1360,19 +1360,19 @@ fn work_is_accounted_in_the_ir() {
     );
 
     // A nest that cannot run that much is looked at when it finishes.
-    let small = orla_ir::account(&kernel(
+    let small = account_ok(&kernel(
         "return loop 9 with a = 0 { loop n with b = a { b + 1 } };",
     ));
     assert_eq!(shape(&small), "loop loop end spend end spend look");
 
     // Loops bounded where they are written, within a block: nothing.
     let literal = kernel("return loop 30 with a = 0 { loop 30 with b = a { b + 1 } };");
-    let unchanged = orla_ir::account(&literal);
+    let unchanged = account_ok(&literal);
     assert!(!unchanged.accounted());
     assert_eq!(unchanged.to_string(), literal.to_string());
 
     // Accounting an accounted module gives it back.
-    assert_eq!(orla_ir::account(&counted).to_string(), counted.to_string());
+    assert_eq!(account_ok(&counted).to_string(), counted.to_string());
 }
 
 /// A spend counts the loop right before it and nothing else: the
@@ -1380,7 +1380,7 @@ fn work_is_accounted_in_the_ir() {
 /// own counter for it.
 #[test]
 fn a_spend_follows_its_loop() {
-    let module = orla_ir::account(
+    let module = account_ok(
         &compile(
             "kernel t.w@1 { requires { field.write; } param n: Int = 3; output result: Rows<Int>; compute { let x = loop n with a = 0 { a + 1 }; return x * 2; } }",
         )
@@ -1498,4 +1498,8 @@ fn nested_builders_are_refused_before_they_run_away() {
         started.elapsed()
     );
     assert!(compile(&kernel("[each 64 { [each 64 { float(index()) }][3] }]")).is_ok());
+}
+
+fn account_ok(module: &orla_ir::Validated) -> orla_ir::Validated {
+    orla_ir::account(module).unwrap_or_else(|error| panic!("{error}"))
 }
