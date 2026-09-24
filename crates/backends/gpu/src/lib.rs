@@ -55,9 +55,11 @@ pub(crate) struct Spare {
 }
 
 /// How many buffers the pile holds, and how much of it. A frame wants
-/// a handful of sizes; beyond that they are the driver's again.
+/// a handful of sizes; beyond that they are the driver's again. Ten
+/// million triangles drawn at 4K pass half a gigabyte of them a frame,
+/// and a pile smaller than that makes some anew every frame.
 const SPARE_BUFFERS: usize = 12;
-const SPARE_BYTES: u64 = 512 * 1024 * 1024;
+const SPARE_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// The targets a rasterizer draws into, kept by shape between calls.
 /// They belong to the call and to nothing else, so they go back at the
@@ -299,17 +301,24 @@ struct Prefix {
 /// One compute pipeline with its bind group layout.
 type Pass = (wgpu::ComputePipeline, wgpu::BindGroupLayout);
 
+/// The key transform's two passes: in place, and from the base.
+struct Keys {
+    in_place: Pass,
+    from_base: Pass,
+}
+
 /// A scatter's combine as pipelines, by its plan.
 enum Scatter {
     /// A float sum: sort keys, the sort's step, and the fold.
     Sorted { keys: Pass, step: Pass, fold: Pass },
     /// An order-free rule: the parallel apply; the gather after `last`;
-    /// the key transform around `min` and `max` over floats, the same
-    /// pass before and after.
+    /// the key transform around `min` and `max` over floats and longs:
+    /// in place after, and before from the base into the target, which
+    /// spares the target a copy of the base.
     Parallel {
         apply: Pass,
         gather: Option<Pass>,
-        keys: Option<Pass>,
+        keys: Option<Keys>,
     },
 }
 
@@ -1183,16 +1192,24 @@ impl Backend for GpuBackend {
                         })
                         .transpose()?,
                     keys: keys
-                        .then(|| {
-                            self.pass(
-                                "scatter keys",
-                                &wgsl::emit_scatter_keys(module, true),
-                                &[
-                                    uniform_entry(wgsl::CONTEXT_BINDING),
-                                    storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
-                                    storage_entry(wgsl::SCATTER_OUT_BINDING, false),
-                                ],
-                            )
+                        .then(|| -> Result<Keys, String> {
+                            let entries = [
+                                uniform_entry(wgsl::CONTEXT_BINDING),
+                                storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
+                                storage_entry(wgsl::SCATTER_OUT_BINDING, false),
+                            ];
+                            Ok(Keys {
+                                in_place: self.pass(
+                                    "scatter keys",
+                                    &wgsl::emit_scatter_keys(module, false),
+                                    &entries,
+                                )?,
+                                from_base: self.pass(
+                                    "scatter keys from the base",
+                                    &wgsl::emit_scatter_keys(module, true),
+                                    &entries,
+                                )?,
+                            })
                         })
                         .transpose()?,
                 },
@@ -1870,7 +1887,11 @@ impl GpuBackend {
         let output_words = output_schema.value_words();
         // A scatter's map pass stores a pair per source element; the
         // rest store elements as the output keeps them.
-        let map_bytes = if matches!(module.manifest.mode, Mode::Scatter { .. }) {
+        let map_bytes = if pipeline.emits {
+            // A scatter that emits lands every pair from its entry, the
+            // one it returns too: its pairs buffer is never written.
+            16
+        } else if matches!(module.manifest.mode, Mode::Scatter { .. }) {
             element_count * wgsl::type_words(module, wgsl::result_type(&module.entry)) * 4
         } else {
             output_schema.storage_words(element_count) * 4
@@ -1976,7 +1997,6 @@ impl GpuBackend {
                 buffer,
                 &input_buffers[*base as usize],
                 &context_buffer,
-                &output_buffer,
                 *count,
                 output_words,
             );
@@ -2238,9 +2258,9 @@ impl GpuBackend {
         )
     }
 
-    /// The target made ready for pairs: the base copied into it, and
-    /// its float words turned into ordered keys where the plan compares
-    /// them with atomics.
+    /// The target made ready for pairs: the base copied into it, or,
+    /// where the plan compares its words with atomics, the base's words
+    /// turned into ordered keys as they are written into it.
     #[allow(clippy::too_many_arguments)]
     fn prepare_target(
         &self,
@@ -2249,17 +2269,17 @@ impl GpuBackend {
         target: &wgpu::Buffer,
         base_buffer: &wgpu::Buffer,
         context_buffer: &wgpu::Buffer,
-        pairs: &wgpu::Buffer,
         count: usize,
         words: usize,
     ) {
-        encoder.copy_buffer_to_buffer(base_buffer, 0, target, 0, (count * words * 4) as u64);
         let Scatter::Parallel {
             keys: Some(keys), ..
         } = scatter
         else {
+            encoder.copy_buffer_to_buffer(base_buffer, 0, target, 0, (count * words * 4) as u64);
             return;
         };
+        let keys = &keys.from_base;
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("orla scatter"),
             layout: &keys.1,
@@ -2270,7 +2290,7 @@ impl GpuBackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::SCATTER_PAIRS_BINDING,
-                    resource: pairs.as_entire_binding(),
+                    resource: base_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::SCATTER_OUT_BINDING,
@@ -2311,7 +2331,9 @@ impl GpuBackend {
         timing: Option<&wgpu::QuerySet>,
     ) -> wgpu::Buffer {
         let final_buffer = pairs;
-        // Ready already when the entry emitted into it.
+        // Ready already when the entry emitted into it, and then the entry
+        // landed every pair itself: nothing is left to apply.
+        let landed = target.is_some();
         let target = target.unwrap_or_else(|| {
             let target = self.target_buffer(target_count, output_words);
             self.prepare_target(
@@ -2320,7 +2342,6 @@ impl GpuBackend {
                 &target,
                 base_buffer,
                 context_buffer,
-                &final_buffer,
                 target_count,
                 output_words,
             );
@@ -2487,15 +2508,17 @@ impl GpuBackend {
                         resource: winners.as_entire_binding(),
                     }])
                     .collect();
-                let group = bind(&apply.1, &with_winners);
-                dispatch(encoder, apply, &group, &[], over_sources);
+                if !landed {
+                    let group = bind(&apply.1, &with_winners);
+                    dispatch(encoder, apply, &group, &[], over_sources);
+                }
                 if let Some(gather) = gather {
                     let group = bind(&gather.1, &with_winners);
                     dispatch(encoder, gather, &group, &[], over_target);
                 }
                 if let Some(keys) = keys {
-                    let group = bind(&keys.1, &common);
-                    dispatch(encoder, keys, &group, &[], over_target);
+                    let group = bind(&keys.in_place.1, &common);
+                    dispatch(encoder, &keys.in_place, &group, &[], over_target);
                 }
             }
         }

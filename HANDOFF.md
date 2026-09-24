@@ -40,27 +40,24 @@ done
 
 ## Next
 
-Rasterize ten million triangles at 4K within a frame. Large triangles
-are handled (the `tiled` raster presets, opt-in); what a big scene hits
-now is memory, not arithmetic. At 3840 by 2160, 9.4 million triangles
-(the torus at `level = 6`) take 33 ms with the device's rasterizer and
-about 47 with the package, and neither is mostly the coverage test:
-`native.rasterize` writes a seven-word surface a pixel (232 MB at 4K),
-`project` writes nine words a vertex, the package's cover reads three
-whole vertices a triangle for the four words of position it needs, and
-the shade reads the surface back. The package's keys are already a
-visibility buffer — a depth and a triangle in eight bytes a pixel.
+Give the ten-million-triangle frame room. The package draws
+[`ten_million.osn`](examples/mesh/tests/ten_million.osn) on the GPU in
+19.7 to 20.0 ms (the device's rasterizer: 32), which meets the bound
+with half a millisecond to spare, and the frame is near what its memory
+traffic allows (the rasterizer's decision in `docs/DECISIONS.md`). The
+largest share is the mesh, not the rasterizer: `mesh.split_vertices`
+makes three new vertices a face and shares no midpoint, so level 6 has
+9.4 million vertices for 9.4 million triangles, and `project` writes
+and the cover gathers twice what a shared mesh would need.
 
 Done when:
 
-- a scene draws the torus at `level = 6` at 3840 by 2160 on the GPU in
-  20 ms a frame or less, measured and written where the decision lives,
-  with the package (not only the device's rasterizer);
-- the way there is Kernels and presets — shading from the keys by the
-  triangle rather than from a materialized surface, a position stream
-  the cover reads instead of whole vertices, or what measuring shows —
-  and anything the engine needs for it is fixed with a test of its own;
-- `edges.replay`, `cutout.replay` and the session test that holds the
-  package to the fast path to the bit still pass, and the small scenes
-  (torus, culled, model) lose nothing;
+- the torus at `level = 6` draws at 3840 by 2160 on the GPU in 17 ms a
+  frame or less with the package, measured where the decision lives;
+- the way there is Kernels and presets (a subdivision that shares its
+  midpoints, or what measuring shows), and anything the engine needs for
+  it is fixed with a test of its own;
+- the mesh replays (`torus`, `edges`, `cutout`, `native`, `near`) still
+  pass, or change only where the mesh itself is meant to, and the small
+  scenes (torus, culled, model) lose nothing;
 - the verification above is clean.

@@ -1094,7 +1094,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return out;
     }
     // A map of several outputs stores them from the entry itself.
-    let store = if written_outputs(module) > 1 {
+    // A scatter that emits lands the pair it returns as it lands the ones
+    // it emits, at once: its rule is order-free, so no list of pairs and
+    // no pass applying them is needed.
+    let landing = if emitted_pairs(module).is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{}(entry(coord, element));",
+            emit_name(result_type(&module.entry))
+        ))
+    };
+    let store = if let Some(landing) = &landing {
+        landing.as_str()
+    } else if written_outputs(module) > 1 {
         "entry(coord, element);"
     } else {
         "store_out0(element, entry(coord, element));"
@@ -1748,9 +1761,14 @@ fn emit_functions(module: &Module, out: &mut String) {
     let Mode::Scatter { base, combine } = module.manifest.mode else {
         return;
     };
-    let pairs = emitted_pairs(module);
+    let mut pairs = emitted_pairs(module);
     if pairs.is_empty() {
         return;
+    }
+    // The pair the entry returns is landed the same way.
+    let returned = result_type(&module.entry);
+    if !pairs.contains(&returned) {
+        pairs.push(returned);
     }
     let target = &module.manifest.inputs[base as usize];
     let stride = target.ty.schema.value_words();
@@ -1830,8 +1848,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }
 
 /// Emits the pass that turns the target's float words into ordered keys
-/// (`encode`) or back, around a parallel `min` or `max`.
-pub fn emit_scatter_keys(module: &Module, encode: bool) -> String {
+/// or back, around a parallel `min` or `max`: in place, or, `from_base`,
+/// read from the base bound where the pairs are and written whole into
+/// the target, which then needs no copy of the base first.
+pub fn emit_scatter_keys(module: &Module, from_base: bool) -> String {
     let Mode::Scatter { base, .. } = module.manifest.mode else {
         return String::new();
     };
@@ -1840,22 +1860,32 @@ pub fn emit_scatter_keys(module: &Module, encode: bool) -> String {
     let slot = CONTEXT_HEAD + base as usize;
     let mut out = scatter_header(module, Some(false), "");
     // The key transform is an involution, so one function serves both ways.
-    let _ = encode;
     // A float's key is `key_of` of its word; a long's is its sign bit
     // flipped, in its high word.
     // The schema lists a scalar per word, a long twice.
+    let from = if from_base { "pairs" } else { "out0" };
     let mut lines = Vec::new();
     let scalars = target.ty.schema.scalars();
     let mut k = 0;
     while let Some(scalar) = scalars.get(k) {
         match scalar {
             orla_abi::Scalar::Float => lines.push(format!(
-                "    out0[b + {k}u] = bitcast<u32>(key_of(bitcast<i32>(out0[b + {k}u])));"
+                "    out0[b + {k}u] = bitcast<u32>(key_of(bitcast<i32>({from}[b + {k}u])));"
             )),
-            orla_abi::Scalar::Long => lines.push(format!(
-                "    out0[b + {high}u] = out0[b + {high}u] ^ 0x80000000u;",
-                high = k + 1
-            )),
+            orla_abi::Scalar::Long => {
+                if from_base {
+                    lines.push(format!("    out0[b + {k}u] = pairs[b + {k}u];"));
+                }
+                lines.push(format!(
+                    "    out0[b + {high}u] = {from}[b + {high}u] ^ 0x80000000u;",
+                    high = k + 1
+                ));
+            }
+            _ if from_base => {
+                for word in k..k + scalar.words() {
+                    lines.push(format!("    out0[b + {word}u] = pairs[b + {word}u];"));
+                }
+            }
             _ => {}
         }
         k += scalar.words();

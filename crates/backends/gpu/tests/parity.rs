@@ -1975,6 +1975,75 @@ fn emitted_pairs_land_as_the_references_do() {
     }
 }
 
+/// The base reaches a keyed target in one pass, turned into keys as it
+/// is written there rather than copied first: a record of a float and
+/// an int, its base every sign and both zeros, lands every word as the
+/// reference keeps it, those no pair reaches included. (Longs, which the
+/// device keys only in records of longs, are `long_extremes_land_as_the_references_do`'s.)
+#[test]
+fn a_keyed_target_starts_from_every_word_of_its_base() {
+    let Some(gpu) = gpu() else { return };
+    let count = 20_000u32;
+    let mut host = Host::new(1 << 24);
+    let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    for rule in ["min", "max"] {
+        let module = compile(&format!(
+            "kernel test.mixed@1 {{ requires {{ field.read; field.write; }}
+             input keys: Rows<Int>; input cells: Rows<Cell>; output result: Rows<Cell>;
+             struct Cell {{ f: Float; i: Int; }}
+             struct Pair {{ at: Int; value: Cell; }}
+             scatter into cells with {rule} {{
+                 let k = sample(keys);
+                 let v = float(k % 2001 - 1000) * 0.125;
+                 emit(Pair {{ at: k % 89, value: Cell {{ f: v, i: k % 77 - 38 }} }});
+                 return Pair {{ at: k % 131, value: Cell {{ f: -v, i: 38 - k % 77 }} }};
+             }} }}"
+        ))
+        .unwrap();
+        let keys = host
+            .adopt(
+                orla_abi::FieldData::from_storage(
+                    orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                    Domain::Rows(count),
+                    (0..count)
+                        .map(|i| i.wrapping_mul(2_654_435_761) >> 9)
+                        .collect(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        // More cells than any pair reaches, so some keep their base.
+        let cells = host
+            .adopt(
+                orla_abi::FieldData::from_storage(
+                    schema.clone(),
+                    Domain::Rows(160),
+                    (0..160i64)
+                        .flat_map(|i| {
+                            let f = match i % 4 {
+                                0 => -0.0f32,
+                                1 => 0.0,
+                                2 => -(i as f32) * 3.5,
+                                _ => i as f32 * 2.25,
+                            };
+                            [f.to_bits(), (i - 80) as u32]
+                        })
+                        .collect(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let (cpu, gpu_words) = on_both_inputs(
+            &gpu,
+            &mut host,
+            &module,
+            vec![keys, cells],
+            Domain::Rows(count),
+        );
+        assert_eq!(cpu, gpu_words, "a mixed record under {rule}");
+    }
+}
+
 /// A Kernel wider than the device binds at once runs there all the
 /// same: the backend packs the inputs past the device's limit into one
 /// buffer, each at its own offset, and reads them from it. Twenty-five,

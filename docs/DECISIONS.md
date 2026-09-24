@@ -250,6 +250,26 @@ torus of nine thousand triangles took twice as long, the culled world 1.4
 times, two million triangles on the JIT 1.9 times. A scene with large
 triangles names the tiled preset; the surface is the same to the bit.
 
+At scale the package is the faster of the two on a device. Ten million
+triangles at 4K ([`ten_million.osn`](../examples/mesh/tests/ten_million.osn),
+the torus at `level = 6`, 9.4 million, at 3840 by 2160) draw on the GPU
+in 19.7 to 20.0 ms a frame with the package and 32 with the device's
+rasterizer, which writes a seven-word surface a pixel where the package
+keeps a key of two. What had cost the package was the engine around its
+Kernels, not the Kernels: an emitting scatter kept a list of the pairs
+it returned and applied them in a pass of their own, and a target
+compared as ordered keys was copied from its base and then encoded in a
+second pass over it. Both are now one pass (the returned pair lands with
+the emitted ones; the base is encoded as it is written into the target),
+and the device's pile of spare buffers holds a gigabyte, the half of it
+a frame at 4K asks for, rather than making some anew every frame. A
+stream of screen positions worked out once a vertex, for the cover to
+read instead of whole vertices, was measured and lost: its own pass cost
+more than it saved (27 ms against 21). The frame is near what its memory
+traffic allows — about two gigabytes, `project` and the cover's reads
+most of it — and varies by half a millisecond from run to run, M4,
+2026-09-24.
+
 **Where.** The package and its presets; every example places it. On the
 interpreter and the JIT the fast path is `orla_rules::raster`, held bit
 for bit to the rule by a test that writes the rule plainly; on the GPU it
