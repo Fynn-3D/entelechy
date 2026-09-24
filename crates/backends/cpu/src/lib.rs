@@ -598,7 +598,8 @@ fn scatter(
     let sources = invocation.domain;
     let address = address_words(target);
     let program = eval::Program::with(code.clone(), module, invocation, scope, sources)?;
-    let (pairs, sources_of) = compute_pairs(&program, address + stride)?;
+    let held = orla_rules::Held::new(scope.room());
+    let (pairs, sources_of) = compute_pairs(&program, address + stride, &held)?;
     program.outcome()?;
     drop(program);
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
@@ -636,7 +637,13 @@ type Pairs = (Vec<u32>, Vec<u32>);
 /// element, the pairs each emits and then the one it returns, with the
 /// element each came from. Threads take runs of elements and their pairs
 /// are joined in run order, so the order is the one thread's would be.
-fn compute_pairs(program: &eval::Program<'_>, pair_words: usize) -> Result<Pairs, ExecutionError> {
+/// Every pair is held against the Host's room with the word naming its
+/// element: the returned ones before the run, the emitted as they come.
+fn compute_pairs(
+    program: &eval::Program<'_>,
+    pair_words: usize,
+    held: &orla_rules::Held,
+) -> Result<Pairs, ExecutionError> {
     let domain = program.domain;
     let width = domain.width() as usize;
     let height = domain.height();
@@ -648,8 +655,12 @@ fn compute_pairs(program: &eval::Program<'_>, pair_words: usize) -> Result<Pairs
         .min(element_count.div_ceil(PARALLEL_THRESHOLD))
         .max(1);
     let per_thread = element_count.div_ceil(threads).max(1);
+    if !held.take(element_count * (pair_words + 1)) {
+        return Err(held.over());
+    }
     let run = |first: usize| -> Result<Pairs, ExecutionError> {
         let mut machine = eval::Machine::new(program);
+        machine.hold(held);
         let mut pairs = Vec::new();
         let mut sources = Vec::new();
         let mut slot = vec![0u32; pair_words];

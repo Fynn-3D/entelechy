@@ -101,6 +101,12 @@ pub enum ExecutionError {
         /// The iterations the run could take.
         work: u64,
     },
+    /// A scatter's pairs, held in Host memory while the run applies them,
+    /// needed more words than the Host had room for when the run began.
+    OverRoom {
+        /// The words the Host had room for.
+        room: usize,
+    },
 }
 
 /// A run's total of loop iterations, shared by every thread or
@@ -190,6 +196,45 @@ impl Run {
     }
 }
 
+/// The Host words a run holds beyond its Fields — a scatter's pairs,
+/// returned and emitted, while it applies them — against the room the
+/// Host had when the run began ([`orla_abi::Scope::room`]). Shared by
+/// every thread of the run; a backend whose pairs never reach Host
+/// memory (a device landing them where they are emitted) holds none.
+pub struct Held {
+    words: std::sync::atomic::AtomicUsize,
+    room: usize,
+}
+
+impl Held {
+    /// Nothing held yet, against `room` words.
+    pub fn new(room: usize) -> Self {
+        Self {
+            words: std::sync::atomic::AtomicUsize::new(0),
+            room,
+        }
+    }
+
+    /// Holds `words` more; `false`, and nothing held, when that would
+    /// pass the room.
+    pub fn take(&self, words: usize) -> bool {
+        let before = self
+            .words
+            .fetch_add(words, std::sync::atomic::Ordering::Relaxed);
+        if before.saturating_add(words) > self.room {
+            self.words
+                .fetch_sub(words, std::sync::atomic::Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    /// The failure of a run whose pairs passed the room.
+    pub fn over(&self) -> ExecutionError {
+        ExecutionError::OverRoom { room: self.room }
+    }
+}
+
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -224,6 +269,10 @@ impl fmt::Display for ExecutionError {
             Self::Overrun { work } => write!(
                 f,
                 "the run's elements together took more than {work} loop iterations, what the Host lets one run take (`--work` sets another)"
+            ),
+            Self::OverRoom { room } => write!(
+                f,
+                "the scatter's pairs needed more than the {room} words the Host had room for; a larger Host budget holds them, or fewer pairs fit"
             ),
         }
     }

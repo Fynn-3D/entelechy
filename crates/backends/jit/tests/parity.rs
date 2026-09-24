@@ -701,3 +701,72 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
         .unwrap_err();
     assert_eq!(cpu.to_string(), got.to_string());
 }
+
+/// A scatter's pairs are held in Host memory while the run applies them,
+/// and the Host's budget bounds them as it bounds a Field: past the room
+/// the Host has, the interpreter and the JIT both refuse the run and say
+/// so; with room, both run it alike.
+#[test]
+fn pairs_past_the_hosts_room_fail_the_run_on_both() {
+    let module = compile(
+        "kernel test.flood@1 { requires { field.read; field.write; }
+         input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+         struct Pair { at: Int; value: Int; }
+         scatter into slots with sum {
+             let k = sample(keys);
+             let _fan = loop 1000 with j = 0 {
+                 emit(Pair { at: (k + j) % 64, value: 1 });
+                 j + 1
+             };
+             return Pair { at: -1, value: 0 };
+         } }",
+    )
+    .unwrap();
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let run = |budget: usize, backend: &dyn Backend| {
+        let mut host = Host::new(budget);
+        let inputs = vec![
+            host.adopt(
+                orla_abi::FieldData::from_storage(
+                    ints.clone(),
+                    Domain::Rows(200),
+                    (0..200).collect(),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            host.adopt(
+                orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(64), vec![0; 64])
+                    .unwrap(),
+            )
+            .unwrap(),
+        ];
+        let invocation = Invocation {
+            inputs,
+            params: vec![],
+            domain: Domain::Rows(200),
+            context: Context::default(),
+        };
+        let prepared = backend.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        backend
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .map(|out| host.data(out[0]).unwrap().storage().to_vec())
+    };
+    let jit = JitBackend::new().unwrap();
+    // Two hundred elements of a thousand pairs, three words each held.
+    for backend in [&CpuBackend as &dyn Backend, &jit] {
+        let error = run(100_000, backend).unwrap_err();
+        assert!(
+            matches!(error, orla_rules::ExecutionError::OverRoom { .. }),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        run(100_000, &CpuBackend).unwrap_err().to_string(),
+        run(100_000, &jit).unwrap_err().to_string()
+    );
+    let cpu = run(4_000_000, &CpuBackend).unwrap();
+    assert_eq!(cpu, run(4_000_000, &jit).unwrap());
+    assert_eq!(cpu.iter().sum::<u32>(), 200_000);
+}

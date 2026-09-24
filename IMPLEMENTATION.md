@@ -48,7 +48,7 @@ the workspace, is checked by [a test](crates/interface/orla/tests/layers.rs).
 | Player | [window loop](crates/interface/player/src/main.rs), [audio](crates/interface/player/src/audio.rs), [gamepad](crates/interface/player/src/gamepad.rs) | presentation and blit tests |
 | Import and export | [import](crates/interface/import/src/), [export](crates/interface/export/src/) | [MIDI tests](crates/interface/formats/tests/midi.rs), [round trip](crates/interface/export/tests/round_trip.rs) |
 | Bridges | [bridges](bridges/), each in its program's own language | [bridge tests](crates/interface/orla/tests/bridges.rs), run when the program is present |
-| Conformance matrix | [conformance matrix](crates/backends/conformance/src/lib.rs) | [on the JIT](crates/backends/jit/tests/matrix.rs) bit for bit, [on the GPU](crates/backends/gpu/tests/matrix.rs) ints exact and floats to rounding; the 64-bit rows on the JIT, the `Long` rows on both |
+| Conformance matrix | [conformance matrix](crates/backends/conformance/src/lib.rs) | [on the JIT](crates/backends/jit/tests/matrix.rs) bit for bit, [on the GPU](crates/backends/gpu/tests/matrix.rs) ints exact and floats to rounding; the 64-bit rows on the JIT, the `Long` rows on both; the element shapes a scatter's target may hold (one word to twenty-one, `Long`s, rows and a volume, every rule, emitting where it may) from one narrow input, on both |
 
 ## Libraries, not primitives
 

@@ -101,6 +101,35 @@ scenes cost what they did.
 across backends and cheaper to keep, or a Kernel form that needs
 unbounded iteration and cannot be split across evaluations.
 
+## What a run holds in Host memory counts against the Host's budget
+
+A scatter's pairs — the one each element returns and every one it
+`emit`s — are held in Host memory by the interpreter and the JIT while
+the run applies them, and they are held against the room the Host's
+budget has left when the run begins
+([`Scope::room`](../crates/core/abi/src/lib.rs)), as a Field is. The
+pairs returned are held before the run starts, the ones emitted as they
+come, and the JIT's copies sorted into its parts before it sorts them.
+Past the room, the run fails as `OverRoom`, named for the room it had;
+nothing commits.
+
+**Why.** The Host owns memory, as it owns the run's work. Before
+`emit`, what a scatter held was as large as its sources, and the Fields
+it read already bounded that. An element that emits in a loop holds as
+much as its work lets it, and the work bound is iterations, four
+thousand million by default: a bound on time, not on memory. A Kernel an
+agent publishes must not be able to take the machine's memory by asking
+for it.
+
+**What it does not cover.** A device that lands each pair where it is
+emitted (the GPU combines it into the target with an atomic) holds no
+list of pairs, and its pair of each element lives in device memory: a
+run that fits there may not fit on the interpreter, which has less room
+for the same work. Which backend a run fits on is a property of the
+machine, as it is for any allocation; what a run computes is not. A run
+that passes the room and also has a failing element may be named for
+either, as a run past its work may.
+
 ## A few formats are read live; the rest are bytes or converted
 
 The Host knows one format of its own, `.field`, and raw bytes. Every

@@ -66,7 +66,8 @@ pub struct Ctx {
     height: u32,
     depth: u32,
     /// Zero, or the first failure: 1 division by zero, 2 overflow, 3
-    /// more loop iterations than the budget, 4 the run past its total.
+    /// more loop iterations than the budget, 4 the run past its total,
+    /// 5 a scatter's pairs past the Host's room.
     error: u32,
     /// Loop iterations the running element has run, when the module
     /// counts them.
@@ -87,6 +88,9 @@ pub struct Ctx {
     /// Where a scatter's `emit` keeps its pairs, each after the element
     /// it came from; null where nothing emits.
     emitted: *mut Vec<u32>,
+    /// What the run holds against the Host's room, which every emitted
+    /// pair is held in.
+    held: *const orla_rules::Held,
 }
 
 /// A map entry's native signature: the context, where a run of elements
@@ -256,6 +260,9 @@ struct Shared {
     budget: u32,
     /// The run's total; boxed so the contexts' pointer to it stays good.
     run: Box<orla_rules::Run>,
+    /// What the run holds beyond its Fields, against the Host's room;
+    /// boxed for the same reason.
+    held: Box<orla_rules::Held>,
 }
 
 // The views point into the scope's Fields, borrowed for the run, and the
@@ -315,6 +322,7 @@ fn shared(
     let params: Vec<u32> = invocation.params.iter().flat_map(param_words).collect();
     let input = &invocation.context.input;
     let run = Box::new(orla_rules::Run::new(scope.work()));
+    let held = Box::new(orla_rules::Held::new(scope.room()));
     // The vectors' heap buffers stay put when the vectors move into `Shared`.
     let template = Ctx {
         views: views.as_ptr(),
@@ -339,6 +347,7 @@ fn shared(
         left: 0,
         error_at: 0,
         emitted: std::ptr::null_mut(),
+        held: &*held,
     };
     Ok(Shared {
         views,
@@ -348,6 +357,7 @@ fn shared(
         template,
         budget: module.manifest.budget,
         run,
+        held,
     })
 }
 
@@ -439,6 +449,7 @@ fn compute_into(
         left: 0,
         error_at: 0,
         emitted: std::ptr::null_mut(),
+        held: t.held,
     };
     // One call a run of elements that share a row: a `Rows` domain is
     // one run of a million, a grid one run a row.
@@ -682,9 +693,14 @@ fn run_scatter(
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, sources)?;
     let pair_words = address + stride;
+    // Held against the Host's room: the pairs returned, one an element,
+    // before the run; those emitted as they come; and the parts' copies
+    // of the pairs that land, before they are sorted.
+    if !shared.held.take(sources.count() * pair_words) {
+        return Err(shared.held.over());
+    }
     let (pairs, runs) = compute_emitting(entry, &shared, sources, pair_words)?;
     shared.run.outcome()?;
-    drop(shared);
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let scalars = port.ty.schema.scalars();
     // The target is cut into parts, one a worker. Each run of elements
@@ -704,6 +720,10 @@ fn run_scatter(
     let span = count.div_ceil(parts).max(1);
     // A record: where the pair lands, the element it came from, the value.
     let record = stride + 2;
+    if !shared.held.take(pair_count * record) {
+        return Err(shared.held.over());
+    }
+    drop(shared);
     let sort = |(first, end, emitted): &Emitted| -> Vec<Vec<u32>> {
         let mut buckets = vec![Vec::new(); parts];
         let mut put = |pair: &[u32], index: usize| {
@@ -828,6 +848,7 @@ fn failure(code: u32, x: u32, y: u32, shared: &Shared) -> ExecutionError {
     let budget = shared.budget;
     match code {
         4 => shared.run.overrun(),
+        5 => shared.held.over(),
         1 => ExecutionError::Arithmetic {
             x,
             y,
@@ -1080,7 +1101,13 @@ unsafe extern "C" fn orla_jit_button(ctx: *const Ctx, code: i32) -> i32 {
 /// order they come.
 unsafe extern "C" fn orla_jit_emit(ctx: *mut Ctx, element: u32, pair: *const u32, n: u32) {
     let ctx = unsafe { &mut *ctx };
-    if ctx.emitted.is_null() {
+    if ctx.emitted.is_null() || ctx.error != 0 {
+        return;
+    }
+    // Held with the word naming its element; past the room, the element
+    // stops as a failure does.
+    if !ctx.held.is_null() && !unsafe { &*ctx.held }.take(n as usize + 1) {
+        ctx.error = 5;
         return;
     }
     let emitted = unsafe { &mut *ctx.emitted };

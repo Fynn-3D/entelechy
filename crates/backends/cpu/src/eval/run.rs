@@ -37,6 +37,9 @@ pub(crate) struct Machine<'p, 's> {
     /// The pairs the running elements have emitted, in order, a
     /// scatter's to take after each element.
     pub(super) emitted: Vec<u32>,
+    /// What a scatter's run holds against the Host's room; every pair
+    /// emitted is held, with the word naming its element.
+    pub(super) held: Option<&'p orla_rules::Held>,
     pub(super) stack: Vec<u32>,
     /// Top of the stack: where the next call's frame begins.
     pub(super) sp: usize,
@@ -96,6 +99,7 @@ impl<'p, 's> Machine<'p, 's> {
             calls_truncated: false,
             memories,
             emitted: Vec::new(),
+            held: None,
             stack: vec![0; program.code.entry.frame * 2],
             sp: 0,
             loops: Vec::new(),
@@ -109,6 +113,11 @@ impl<'p, 's> Machine<'p, 's> {
     }
 
     /// The pairs emitted since the last call, in order.
+    /// Holds what this machine emits against `held`.
+    pub(crate) fn hold(&mut self, held: &'p orla_rules::Held) {
+        self.held = Some(held);
+    }
+
     pub(crate) fn take_emitted(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.emitted)
     }
@@ -1041,6 +1050,11 @@ impl<'p, 's> Machine<'p, 's> {
                 }
             }
             Instr::Emit { dst, pair, n } => {
+                if let Some(held) = self.held
+                    && !held.take(n + 1)
+                {
+                    return Err(held.over());
+                }
                 let words = fp + pair;
                 s.copy_within(words..words + n, fp + dst);
                 self.emitted.extend_from_slice(&s[words..words + n]);

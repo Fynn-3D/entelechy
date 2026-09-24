@@ -525,7 +525,10 @@ that has nothing more to give returns an address outside the target.
 `emit` takes only a rule whose answer is the same in any order — `min`,
 `max`, or a `sum` of no floats — so a backend is free to land a pair the
 moment it is emitted: the GPU combines it into the target with an atomic
-from inside the body and keeps no list of pairs.
+from inside the body and keeps no list of pairs. The interpreter and the
+JIT do keep one, and hold it against the Host's budget: a run whose
+pairs need more room than the Host has left fails as a run, and commits
+nothing ([decision](DECISIONS.md)).
 
 A Kernel with `prefix` in place of `compute` is a prefix fold, the fifth
 mode: every element of the output is its own value combined with every

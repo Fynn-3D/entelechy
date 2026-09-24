@@ -1130,6 +1130,15 @@ impl<'a> Scope<'a> {
         self.host.work()
     }
 
+    /// The words the Host may still allocate under its budget: the room a
+    /// run has for what it holds beyond its Fields. A bound, not an
+    /// access: it needs no capability.
+    pub fn room(&self) -> usize {
+        self.host
+            .budget_words()
+            .saturating_sub(self.host.used_words())
+    }
+
     /// The extent of an input. Requires `field.read`.
     pub fn size(&self, field: Handle) -> Result<Domain, AbiError> {
         self.require(Capability::FieldRead)?;
