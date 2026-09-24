@@ -9,11 +9,17 @@ use crate::{
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
 pub fn parse_document(source: &str) -> Result<Document, ParseError> {
+    crate::on_a_deep_stack(|| read_document(source))
+}
+
+fn read_document(source: &str) -> Result<Document, ParseError> {
     let tokens = tokenize(source)?;
     let mut parser = Parser {
         tokens,
         position: 0,
         temporaries: 0,
+        depth: 0,
+        read_ifs: std::collections::HashMap::new(),
     };
     let mut document = Document {
         package: None,
@@ -128,11 +134,17 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
 
 /// Parses one literal expression, as written in a document value position.
 pub fn parse_literal(source: &str) -> Result<Expr, ParseError> {
+    crate::on_a_deep_stack(|| read_literal(source))
+}
+
+fn read_literal(source: &str) -> Result<Expr, ParseError> {
     let tokens = tokenize(source)?;
     let mut parser = Parser {
         tokens,
         position: 0,
         temporaries: 0,
+        depth: 0,
+        read_ifs: std::collections::HashMap::new(),
     };
     let expr = parser.expr()?;
     if parser.peek() != &Token::Eof {
@@ -172,12 +184,55 @@ struct Parser {
     position: usize,
     /// How many values a `let { ... }` has had to name for itself.
     temporaries: usize,
+    /// How deep the expression being read nests, counting what encloses
+    /// it and the operators chained before it: at most
+    /// [`MAX_NESTING`](crate::MAX_NESTING).
+    depth: usize,
+    /// An `if` at a block's start whose arm was read before its `else`
+    /// said it is an expression: its condition, its arm, and where the
+    /// `else` is, by where the `if` is. The expression takes them from
+    /// here rather than reading the arm again, which, an `if` in an arm
+    /// of an `if`, would read the innermost twice a level.
+    read_ifs: std::collections::HashMap<usize, (Expr, Block, usize)>,
 }
 
 impl Parser {
     /// How many values one `match` range may hold: enough for a byte's
     /// worth of opcodes, few enough that the arms stay a table.
     const RANGE_LIMIT: i64 = 256;
+
+    /// Runs one level of the reading, and leaves the depth as it found
+    /// it, however the level ends.
+    fn nested<T>(
+        &mut self,
+        level: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let depth = self.depth;
+        let read = level(self);
+        self.depth = depth;
+        read
+    }
+
+    /// One level deeper: past [`MAX_NESTING`](crate::MAX_NESTING) it is
+    /// an error, which is what keeps every pass after this one — each
+    /// walks the tree by recursion — inside the stack of any thread that
+    /// compiles, a live session's included.
+    fn deeper(&mut self) -> Result<(), ParseError> {
+        self.depth += 1;
+        if self.depth > crate::MAX_NESTING {
+            return Err(self.error(format!(
+                "this nests or chains more than {} deep; bind parts of it with `let`",
+                crate::MAX_NESTING
+            )));
+        }
+        Ok(())
+    }
+
+    /// A binary operation, one more link in its chain.
+    fn binary(&mut self, op: BinaryOp, left: Expr, right: Expr) -> Result<Expr, ParseError> {
+        self.deeper()?;
+        Ok(binary(op, left, right))
+    }
 
     fn peek(&self) -> &Token {
         &self.tokens[self.position].token
@@ -1219,6 +1274,13 @@ impl Parser {
     /// and the flag returned says it was one: it gives no value, and its
     /// result is a placeholder nothing reads.
     fn block_body_with(&mut self, effects: bool) -> Result<(Block, bool), ParseError> {
+        self.nested(|parser| {
+            parser.deeper()?;
+            parser.block_body_level(effects)
+        })
+    }
+
+    fn block_body_level(&mut self, effects: bool) -> Result<(Block, bool), ParseError> {
         let mut lets = Vec::new();
         loop {
             if self.is_keyword("if") {
@@ -1235,8 +1297,10 @@ impl Parser {
                     continue;
                 }
                 if self.is_keyword("else") {
-                    // An `if` with both arms is an expression; read it
-                    // again as one.
+                    // An `if` with both arms is an expression: it is read
+                    // as one from its start, with what is read so far.
+                    self.read_ifs
+                        .insert(saved, (condition, then, self.position));
                     self.position = saved;
                 } else {
                     let (otherwise, _) = self.block_body_with(effects)?;
@@ -1401,26 +1465,38 @@ impl Parser {
     }
 
     fn or(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::or_level)
+    }
+
+    fn or_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.and()?;
         while self.is_punct("||") {
             self.next();
             let right = self.and()?;
-            left = binary(BinaryOp::Or, left, right);
+            left = self.binary(BinaryOp::Or, left, right)?;
         }
         Ok(left)
     }
 
     fn and(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::and_level)
+    }
+
+    fn and_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.comparison()?;
         while self.is_punct("&&") {
             self.next();
             let right = self.comparison()?;
-            left = binary(BinaryOp::And, left, right);
+            left = self.binary(BinaryOp::And, left, right)?;
         }
         Ok(left)
     }
 
     fn comparison(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::comparison_level)
+    }
+
+    fn comparison_level(&mut self) -> Result<Expr, ParseError> {
         let left = self.bit_or()?;
         let op = match self.peek() {
             Token::Punct("<") => BinaryOp::Less,
@@ -1433,7 +1509,7 @@ impl Parser {
         };
         self.next();
         let right = self.bit_or()?;
-        let result = binary(op, left, right);
+        let result = self.binary(op, left, right)?;
         if matches!(
             self.peek(),
             Token::Punct("<" | "<=" | ">" | ">=" | "==" | "!=")
@@ -1446,36 +1522,52 @@ impl Parser {
     /// The integer bit operators bind between comparison and arithmetic,
     /// loosest first: `|`, then `^`, then `&`, then the shifts.
     fn bit_or(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::bit_or_level)
+    }
+
+    fn bit_or_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.bit_xor()?;
         while self.is_punct("|") {
             self.next();
             let right = self.bit_xor()?;
-            left = binary(BinaryOp::BitOr, left, right);
+            left = self.binary(BinaryOp::BitOr, left, right)?;
         }
         Ok(left)
     }
 
     fn bit_xor(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::bit_xor_level)
+    }
+
+    fn bit_xor_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.bit_and()?;
         while self.is_punct("^") {
             self.next();
             let right = self.bit_and()?;
-            left = binary(BinaryOp::BitXor, left, right);
+            left = self.binary(BinaryOp::BitXor, left, right)?;
         }
         Ok(left)
     }
 
     fn bit_and(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::bit_and_level)
+    }
+
+    fn bit_and_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.shift()?;
         while self.is_punct("&") {
             self.next();
             let right = self.shift()?;
-            left = binary(BinaryOp::BitAnd, left, right);
+            left = self.binary(BinaryOp::BitAnd, left, right)?;
         }
         Ok(left)
     }
 
     fn shift(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::shift_level)
+    }
+
+    fn shift_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.additive()?;
         loop {
             let op = if self.is_punct("<<") {
@@ -1489,11 +1581,15 @@ impl Parser {
             };
             self.next();
             let right = self.additive()?;
-            left = binary(op, left, right);
+            left = self.binary(op, left, right)?;
         }
     }
 
     fn additive(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::additive_level)
+    }
+
+    fn additive_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.multiplicative()?;
         loop {
             let op = if self.is_punct("+") {
@@ -1505,11 +1601,15 @@ impl Parser {
             };
             self.next();
             let right = self.multiplicative()?;
-            left = binary(op, left, right);
+            left = self.binary(op, left, right)?;
         }
     }
 
     fn multiplicative(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::multiplicative_level)
+    }
+
+    fn multiplicative_level(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.unary()?;
         loop {
             let op = if self.is_punct("*") {
@@ -1523,11 +1623,18 @@ impl Parser {
             };
             self.next();
             let right = self.unary()?;
-            left = binary(op, left, right);
+            left = self.binary(op, left, right)?;
         }
     }
 
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        self.nested(|parser| {
+            parser.deeper()?;
+            parser.unary_level()
+        })
+    }
+
+    fn unary_level(&mut self) -> Result<Expr, ParseError> {
         if self.is_punct("-") {
             let span = self.next().1;
             let inner = self.unary()?;
@@ -1608,9 +1715,18 @@ impl Parser {
                 })
             }
             Token::Ident(name) if name == "if" => {
-                self.next();
-                let condition = self.expr()?;
-                let then = self.block()?;
+                let (condition, then) = match self.read_ifs.remove(&self.position) {
+                    Some((condition, then, at_else)) => {
+                        self.position = at_else;
+                        (condition, then)
+                    }
+                    None => {
+                        self.next();
+                        let condition = self.expr()?;
+                        let then = self.block()?;
+                        (condition, then)
+                    }
+                };
                 self.keyword("else")?;
                 let otherwise = if self.is_keyword("if") {
                     let nested = self.primary()?;
@@ -2309,5 +2425,46 @@ mod document_tests {
         assert!(error.message.contains("statements too"), "{error}");
         let error = kernel("if element() > 0 { let y = 2; }").unwrap_err();
         assert!(error.message.contains("must end with"), "{error}");
+    }
+
+    #[test]
+    fn what_nests_past_the_limit_is_an_error_and_what_does_not_reads_once() {
+        let kernel = |body: String| {
+            parse(&format!(
+                "kernel t.k@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ {body} }} }}"
+            ))
+        };
+        let deep = crate::MAX_NESTING + 10;
+        for body in [
+            format!("return element(){};", " + 1".repeat(deep)),
+            format!("return {}element(){};", "(".repeat(deep), ")".repeat(deep)),
+            format!("return {}element();", "-".repeat(deep)),
+            format!(
+                "return {}element(){};",
+                "abs(".repeat(deep),
+                ")".repeat(deep)
+            ),
+            format!(
+                "let x = 1; {}let y = 2;{} return x;",
+                "if x > 0 { ".repeat(deep),
+                " }".repeat(deep)
+            ),
+        ] {
+            let error = kernel(body.clone()).unwrap_err();
+            assert!(error.message.contains("deep"), "{error}");
+        }
+        // Within it, a long chain reads, and an `if` in an arm of an `if`
+        // a hundred deep reads in linear time: its arm is read once, not
+        // twice a level.
+        kernel(format!("return element(){};", " + 1".repeat(200))).unwrap();
+        let ifs = 100;
+        let started = std::time::Instant::now();
+        kernel(format!(
+            "let x = element(); return {}x{};",
+            "if x > 0 { ".repeat(ifs),
+            " } else { 0 }".repeat(ifs)
+        ))
+        .unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }

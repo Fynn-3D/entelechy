@@ -482,6 +482,14 @@ as `let _ = if hit { emit(p); 0 } else { 0 };`, so an arm that gives a
 value beside one that does not is refused, and a guard that returns is
 still a guard.
 
+An expression or a block nests at most 256 deep, counting what encloses
+it and the operators chained before it (`a + b + c` is three deep at
+`c`); past that the document is refused, saying where, and a long chain
+is split with `let`. The bound is what lets a live session take any
+Kernel an agent sends: a failed update is an error, never a process
+that ran out of stack
+([`MAX_NESTING`](../crates/frontend/language/src/lib.rs)).
+
 A Kernel with `scatter` in place of `compute` writes where it computes,
 the fourth execution mode:
 

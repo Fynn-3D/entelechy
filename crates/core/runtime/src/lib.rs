@@ -383,6 +383,11 @@ impl Runtime {
         let ordered = self.ordered.clone();
         let handle = std::thread::Builder::new()
             .name("orla-prepare".into())
+            // A backend walks a module's nested blocks by recursion; the
+            // language bounds how deep they nest, and this is room for
+            // that bound (orla_language::DEEP_STACK, which the runtime
+            // does not depend on).
+            .stack_size(256 << 20)
             .spawn(move || {
                 for job in inbox {
                     let chosen = match &ordered {

@@ -67,6 +67,62 @@ fn talk(scene: &Path, requests: &[Json]) -> Vec<Json> {
 
 const BRIGHT_SHOW: &str = "kernel life.show@1 { requires { field.read; field.write; } input cells: Image; output result: Image; compute { let c = sample(cells); return if c.r > 0.5 { vec4(1.0, 1.0, 1.0, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) }; } }";
 
+/// A failed update leaves the running system alive, whatever the
+/// Kernel: one chained or nested past what a document may hold is
+/// refused with where, by a live session, which then goes on evaluating
+/// — rather than taking the process down with a stack its compiler ran
+/// out of. An `if` in an arm of an `if` two hundred deep is read once.
+#[test]
+fn a_kernel_too_deep_to_compile_is_refused_and_the_session_lives_on() {
+    let dir = scratch_in("-deep");
+    let scene = dir.join("scene.osn");
+    let kernel = |body: String| {
+        format!(
+            "kernel deep.k@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ {body} }} }}"
+        )
+    };
+    let chained = kernel(format!(
+        "return element(){};",
+        (0..20_000)
+            .map(|k| format!(" + {}", k % 7))
+            .collect::<String>()
+    ));
+    let nested = kernel(format!(
+        "return {}element(){};",
+        "(".repeat(60_000),
+        ")".repeat(60_000)
+    ));
+    let branches = 100;
+    let ifs = kernel(format!(
+        "let x = element(); return {}x{};",
+        (0..branches)
+            .map(|k| format!("if x > {k} {{ "))
+            .collect::<String>(),
+        " } else { 0 }".repeat(branches)
+    ));
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "publish", "source": chained }),
+            json!({ "id": 2, "op": "publish", "source": nested }),
+            json!({ "id": 3, "op": "publish", "source": ifs }),
+            json!({ "id": 4, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 5, "op": "status" }),
+            json!({ "id": 6, "op": "quit" }),
+        ],
+    );
+    for index in [0, 1] {
+        let message = responses[index]["error"]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(message.contains("deep"), "{}", responses[index]);
+    }
+    assert!(responses[2].get("error").is_none(), "{}", responses[2]);
+    assert!(responses[3].get("error").is_none(), "{}", responses[3]);
+    assert_eq!(responses[4]["ok"]["nodes"], 3, "{}", responses[4]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
     let dir = scratch_in("-inspect");

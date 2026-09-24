@@ -438,6 +438,57 @@ pub struct FnDecl {
     pub body: Block,
 }
 
+/// How deep an expression or a block may nest, counting what encloses it
+/// and the operators chained before it (`a + b + c` is three deep at `c`).
+/// Past this a document is refused with an error, never a crash: every
+/// pass after the parser walks the tree by recursion, and a Kernel an
+/// agent publishes to a live session must not be able to exhaust the
+/// stack of the thread that compiles it.
+pub const MAX_NESTING: usize = 256;
+
+/// The stack a thread that reads or compiles a document is given: room
+/// for a tree [`MAX_NESTING`] deep through every pass that walks it by
+/// recursion, a debug build's frames included. Reserved, not committed:
+/// what is never touched costs no memory.
+pub const DEEP_STACK: usize = 256 << 20;
+
+thread_local! {
+    /// Whether this thread is one [`on_a_deep_stack`] made.
+    static DEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `work` on a thread with [`DEEP_STACK`] of stack and waits for it,
+/// or runs it here when this thread is such a one already, or when no
+/// thread can be had. Reading and compiling go through here, so how deep
+/// a document may nest does not depend on which thread asked: a live
+/// session's socket, a test's, the FFI's caller's.
+pub fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    if DEEP.with(std::cell::Cell::get) {
+        return work();
+    }
+    let mut work = Some(work);
+    let spawned = std::thread::scope(|scope| {
+        let work = &mut work;
+        std::thread::Builder::new()
+            .name("orla-compile".into())
+            .stack_size(DEEP_STACK)
+            .spawn_scoped(scope, move || {
+                DEEP.with(|deep| deep.set(true));
+                (work.take().expect("run once"))()
+            })
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .ok()
+    });
+    match spawned {
+        Some(done) => done,
+        None => (work.take().expect("not run"))(),
+    }
+}
+
 /// A sequence of `let` bindings ending in a result: `return expr;` in
 /// function and `compute` bodies, or a tail expression in `if` and `loop`
 /// blocks (both forms are accepted everywhere).
