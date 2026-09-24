@@ -222,7 +222,7 @@ impl Schema {
     /// Words of memory `count` elements take: their bytes, rounded up to
     /// a whole word.
     pub fn storage_words(&self, count: usize) -> usize {
-        (count * self.bytes).div_ceil(4)
+        count.saturating_mul(self.bytes).div_ceil(4)
     }
 
     /// The Kernel's word for scalar `scalar` of element `element`, read
@@ -473,9 +473,12 @@ impl Domain {
         }
     }
 
-    /// Total number of elements.
+    /// Total number of elements; a count past what a `usize` holds is
+    /// `usize::MAX`, which no Field is allowed ([`MAX_ELEMENTS`]).
     pub fn count(self) -> usize {
-        self.width() as usize * self.height() as usize * self.depth() as usize
+        (self.width() as usize)
+            .saturating_mul(self.height() as usize)
+            .saturating_mul(self.depth() as usize)
     }
 
     /// Whether any side is zero.
@@ -494,6 +497,24 @@ impl fmt::Display for Domain {
     }
 }
 
+/// The most elements one Field holds: past the Host an element is found
+/// by a 32-bit index, in a Kernel, a backend and a file alike.
+pub const MAX_ELEMENTS: usize = u32::MAX as usize;
+
+/// The words of memory `schema` over `domain` takes, once the domain is
+/// one a Field may have: not empty, no more than [`MAX_ELEMENTS`].
+/// Asked before anything is allocated, so a domain however large costs
+/// nothing to refuse.
+fn words_for(schema: &Schema, domain: Domain) -> Result<usize, HostError> {
+    if domain.is_empty() || schema.value_words() == 0 {
+        return Err(HostError::ZeroSize);
+    }
+    if domain.count() > MAX_ELEMENTS {
+        return Err(HostError::TooManyElements(domain));
+    }
+    Ok(schema.storage_words(domain.count()))
+}
+
 /// Elements laid out by a [`Schema`] over a [`Domain`], first axis
 /// fastest. What it holds is its storage: the Kernel's words for a wide
 /// schema, narrower scalars packed for a narrow one.
@@ -507,10 +528,7 @@ pub struct FieldData {
 impl FieldData {
     /// A zeroed Field.
     pub fn new(schema: Schema, domain: Domain) -> Result<Self, HostError> {
-        if domain.is_empty() || schema.value_words() == 0 {
-            return Err(HostError::ZeroSize);
-        }
-        let storage = vec![0; schema.storage_words(domain.count())];
+        let storage = vec![0; words_for(&schema, domain)?];
         Ok(Self {
             schema,
             domain,
@@ -525,10 +543,7 @@ impl FieldData {
         domain: Domain,
         storage: Vec<u32>,
     ) -> Result<Self, HostError> {
-        if domain.is_empty() || schema.value_words() == 0 {
-            return Err(HostError::ZeroSize);
-        }
-        let expected = schema.storage_words(domain.count());
+        let expected = words_for(&schema, domain)?;
         if storage.len() != expected {
             return Err(HostError::WordCount {
                 expected,
@@ -545,9 +560,7 @@ impl FieldData {
     /// A Field of the Kernel's words, one per scalar per element, kept as
     /// the schema says: narrowed where it is narrow.
     pub fn from_values(schema: Schema, domain: Domain, values: &[u32]) -> Result<Self, HostError> {
-        if domain.is_empty() || schema.value_words() == 0 {
-            return Err(HostError::ZeroSize);
-        }
+        words_for(&schema, domain)?;
         let expected = domain.count() * schema.value_words();
         if values.len() != expected {
             return Err(HostError::WordCount {
@@ -748,6 +761,9 @@ pub enum HostError {
     },
     /// Fields must have at least one element and one word per element.
     ZeroSize,
+    /// The domain holds more elements than one Field may
+    /// ([`MAX_ELEMENTS`]).
+    TooManyElements(Domain),
     /// Pixel data length does not match the dimensions.
     PixelCount {
         /// Pixels implied by the dimensions.
@@ -790,6 +806,10 @@ impl fmt::Display for HostError {
                 write!(f, "element {index} is outside a Field of {count}")
             }
             Self::ZeroSize => write!(f, "fields must have at least one element"),
+            Self::TooManyElements(domain) => write!(
+                f,
+                "a Field over {domain} holds more than {MAX_ELEMENTS} elements"
+            ),
             Self::PixelCount { expected, actual } => {
                 write!(f, "expected {expected} pixels, received {actual}")
             }
@@ -960,10 +980,10 @@ impl Host {
         schema: &Schema,
         domain: Domain,
     ) -> Result<Option<Vec<u32>>, HostError> {
-        if domain.is_empty() || schema.value_words() == 0 {
-            return Err(HostError::ZeroSize);
-        }
-        let wanted = schema.storage_words(domain.count());
+        let wanted = words_for(schema, domain)?;
+        // Charged before a word is allocated: a domain however large is
+        // refused for what it would cost, not by running out of memory.
+        self.within_budget(wanted)?;
         let at = self.spare.iter().position(|buffer| buffer.len() == wanted);
         Ok(at.map(|at| self.spare.swap_remove(at)))
     }
@@ -982,10 +1002,7 @@ impl Host {
         domain: Domain,
         device: Box<dyn Any + Send + Sync>,
     ) -> Result<Handle, HostError> {
-        if domain.is_empty() || schema.value_words() == 0 {
-            return Err(HostError::ZeroSize);
-        }
-        let requested = schema.storage_words(domain.count());
+        let requested = words_for(&schema, domain)?;
         self.place(
             requested,
             Storage::Resident {
@@ -1006,7 +1023,20 @@ impl Host {
         self.adopt(FieldData::from_image(image))
     }
 
-    fn place(&mut self, requested: usize, storage: Storage) -> Result<Handle, HostError> {
+    /// Whether Fields of these schemas over these domains would fit
+    /// under the budget now: what a backend that allocates somewhere
+    /// else first, a device, asks before it does, so a domain however
+    /// large is refused before it costs anything anywhere.
+    pub fn can_hold(&self, fields: &[(&Schema, Domain)]) -> Result<(), HostError> {
+        let mut requested = 0usize;
+        for (schema, domain) in fields {
+            requested = requested.saturating_add(words_for(schema, *domain)?);
+        }
+        self.within_budget(requested)
+    }
+
+    /// Whether `requested` more words fit under the budget.
+    fn within_budget(&self, requested: usize) -> Result<(), HostError> {
         let available = self.budget_words.saturating_sub(self.used_words);
         if requested > available {
             return Err(HostError::BudgetExceeded {
@@ -1014,6 +1044,11 @@ impl Host {
                 available,
             });
         }
+        Ok(())
+    }
+
+    fn place(&mut self, requested: usize, storage: Storage) -> Result<Handle, HostError> {
+        self.within_budget(requested)?;
         self.used_words += requested;
         let index = match self.free.pop() {
             Some(index) => {
@@ -1494,6 +1529,50 @@ mod tests {
                 actual: 3
             }
         );
+    }
+
+    /// A domain an agent wrote is refused for what it would cost before
+    /// a word of it is allocated, however large: past the budget, past
+    /// what 32-bit indices reach, past what a `usize` multiplies to.
+    #[test]
+    fn a_domain_is_refused_before_it_is_allocated() {
+        let mut host = Host::new(1 << 20);
+        let int = Schema::new(vec![Scalar::Int]);
+        // Four billion words would not fit anywhere; asked, not tried.
+        assert_eq!(
+            host.create(int.clone(), Domain::Rows(u32::MAX)),
+            Err(HostError::BudgetExceeded {
+                requested: u32::MAX as usize,
+                available: 1 << 20
+            })
+        );
+        for huge in [
+            Domain::Grid(u32::MAX, u32::MAX),
+            Domain::Volume(1 << 22, 1 << 21, 1 << 21),
+            Domain::Volume(u32::MAX, u32::MAX, u32::MAX),
+        ] {
+            assert_eq!(
+                host.create(int.clone(), huge),
+                Err(HostError::TooManyElements(huge))
+            );
+            assert_eq!(
+                host.create_for_fill(int.clone(), huge),
+                Err(HostError::TooManyElements(huge))
+            );
+            assert_eq!(
+                host.can_hold(&[(&int, huge)]),
+                Err(HostError::TooManyElements(huge))
+            );
+            assert!(FieldData::from_values(int.clone(), huge, &[]).is_err());
+        }
+        // Together, what several would hold is charged as one.
+        let half = Domain::Rows(1 << 19);
+        assert!(host.can_hold(&[(&int, half)]).is_ok());
+        assert!(
+            host.can_hold(&[(&int, half), (&int, half), (&int, half)])
+                .is_err()
+        );
+        assert_eq!(host.used_words(), 0);
     }
 
     #[test]

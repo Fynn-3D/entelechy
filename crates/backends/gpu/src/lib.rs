@@ -1277,6 +1277,7 @@ impl Backend for GpuBackend {
             Mode::Scatter { base, .. } => scope.size(invocation.inputs[base as usize])?,
             _ => domain,
         };
+        outputs_fit(module, output_domain, scope)?;
         // Under a profile, the device's own clock around every pass of
         // this node: the set is made first so the opening timestamp is
         // the encoder's first command.
@@ -1585,6 +1586,23 @@ fn execution_domain(
     })
 }
 
+/// Whether the Host has room for every output over `domain`, asked
+/// before a buffer is made for one: the device is not where a domain
+/// too large for the budget is found out.
+fn outputs_fit(
+    module: &Validated,
+    domain: orla_abi::Domain,
+    scope: &Scope<'_>,
+) -> Result<(), ExecutionError> {
+    let fields: Vec<_> = module
+        .manifest
+        .outputs
+        .iter()
+        .map(|port| (&port.ty.schema, domain))
+        .collect();
+    Ok(scope.can_hold(&fields)?)
+}
+
 /// The output and the memories as the scope's resident Fields; on a
 /// failure, whatever was adopted is released.
 fn adopt_outputs(
@@ -1668,6 +1686,9 @@ impl GpuBackend {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let domain = execution_domain(module, invocation, scope)?;
+        // Two buffers take turns, so the output is held twice.
+        let schema = &module.manifest.outputs[0].ty.schema;
+        scope.can_hold(&[(schema, domain), (schema, domain)])?;
         let staged = self.stage(pipeline, module, invocation, scope, domain, None)?;
         let Staged {
             mut encoder,

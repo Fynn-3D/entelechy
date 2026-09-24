@@ -1204,6 +1204,15 @@ impl<'a> Scope<'a> {
         Ok(self.host.create(schema, domain)?)
     }
 
+    /// Whether Fields of these schemas over these domains would fit
+    /// under the Host's budget now ([`Host::can_hold`]): asked by a
+    /// backend before it allocates their words on a device. Requires
+    /// `field.write`, as creating them does.
+    pub fn can_hold(&self, fields: &[(&Schema, Domain)]) -> Result<(), AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self.host.can_hold(fields)?)
+    }
+
     /// A new Field whose words are whatever buffer it was given: for a
     /// backend that writes every one of them before anything reads it.
     /// Requires `field.write`.

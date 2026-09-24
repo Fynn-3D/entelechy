@@ -116,7 +116,7 @@ pub fn decode(bytes: &[u8]) -> Result<FieldData, FileError> {
         return Err(FileError::Header(format!("`{shape}` is not a shape")));
     };
     let body = &bytes[second + 1..];
-    let expected = domain.count() * schema.element_bytes();
+    let expected = domain.count().saturating_mul(schema.element_bytes());
     if body.len() != expected {
         return Err(FileError::Length {
             expected,

@@ -342,6 +342,7 @@ pub(crate) fn rasterize(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let domain = invocation.domain;
+    scope.can_hold(&[(&surface_schema(), domain)])?;
     let (width, height) = (domain.width(), domain.height());
     let vertex_count = scope.size(vertices)?.count() as u32;
     let triangle_count = scope.size(triangles)?.count() as u32;

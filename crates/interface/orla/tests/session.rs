@@ -2178,6 +2178,61 @@ output result <- w.result;",
     }
 }
 
+/// A domain an agent wrote is charged before a word of it is allocated,
+/// on every backend alike: past the budget or past what 32-bit indices
+/// reach, the node fails with why and the session goes on. (Before, the
+/// last wrapped to an empty Field that said it held 2^65 elements.)
+#[test]
+fn a_domain_past_the_budget_fails_the_node_not_the_process() {
+    let scenes = [
+        (
+            "domain = 2000000000;",
+            "Rows<Int>",
+            "resource budget exceeded",
+        ),
+        (
+            "domain = vec3(4194304, 2097152, 2097152);",
+            "Volume<Int>",
+            "holds more than 4294967295 elements",
+        ),
+        (
+            "domain = vec2(4294967295, 4294967295);",
+            "Grid<Int>",
+            "holds more than 4294967295 elements",
+        ),
+    ];
+    let dir = scratch("huge-domain");
+    for backend in ["cpu", "jit", "gpu"] {
+        let Ok(runtime) = Session::runtime_for(backend, Default::default()) else {
+            continue;
+        };
+        std::fs::write(dir.join("scene.osn"), "node w: kernel { requires { field.write; } output result: Rows<Int>; domain = 4; compute { return 1; } }\noutput result <- w.result;").unwrap();
+        let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+        for (domain, ty, why) in scenes {
+            std::fs::write(
+                dir.join("scene.osn"),
+                format!(
+                    "node w: kernel {{ requires {{ field.write; }} output result: {ty}; {domain} compute {{ return 1; }} }}\noutput result <- w.result;"
+                ),
+            )
+            .unwrap();
+            let events = session.sync();
+            assert!(rejected(&events).is_empty(), "{:?}", rejected(&events));
+            let error = session
+                .evaluate(&Context::default())
+                .map(|_| ())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(why), "{backend}, {domain}: {error}");
+            assert_eq!(session.runtime().host().used_words(), 0, "{backend}");
+        }
+        // The same session, a domain it can hold: it evaluates.
+        std::fs::write(dir.join("scene.osn"), "node w: kernel { requires { field.write; } output result: Rows<Int>; domain = 8; compute { return 2; } }\noutput result <- w.result;").unwrap();
+        session.sync();
+        assert!(session.evaluate(&Context::default()).is_ok(), "{backend}");
+    }
+}
+
 /// The raster package's cutout and `native.rasterize@2` draw the same
 /// surface on the interpreter and the JIT — which triangle at every
 /// pixel, and its depth to the bit — since there the fast path is the

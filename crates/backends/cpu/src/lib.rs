@@ -93,6 +93,15 @@ impl CpuBackend {
                 combine,
             );
         }
+        // The words are computed here before the Host holds them: asked
+        // first, so a domain past the budget costs nothing to refuse.
+        let fields: Vec<_> = module
+            .manifest
+            .outputs
+            .iter()
+            .map(|port| (&port.ty.schema, invocation.domain))
+            .collect();
+        scope.can_hold(&fields)?;
         let program = eval::Program::with(code, module, invocation, scope, invocation.domain)?;
         let results = compute(&program, &strides)?;
         program.outcome()?;
