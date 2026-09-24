@@ -40,10 +40,13 @@ done
 
 ## Next
 
-Open: the user ranked the remaining gaps and has not chosen the next.
-Portability (a second platform: Vulkan or DX12, Linux or Windows; only
-macOS with Metal is verified) and a WASM backend are both pending their
-word. Ask before starting either. Effects grow from
-`docs/DECISIONS.md#a-kernels-effects-are-data-the-host-carries-out-after-a-commit`:
-a target a Kernel chooses while running, or a second kind of effect, is
-where that decision says it would change.
+Open: the user has not chosen the next round. Still pending their word:
+portability (a second platform: Vulkan or DX12, Linux or Windows; only
+macOS with Metal is verified) and a WASM backend; and two structural
+questions from the last evaluation, neither started: whether a Kernel's
+capabilities should be granted by a policy rather than taken from its
+`requires` (today every capability is benign, so the two agree), and
+whether the core `Graph` should stop carrying file paths (inputs, frames,
+texts, writes) for the session to own. Ask before starting any of them.
+Effects grow from
+`docs/DECISIONS.md#a-kernels-effects-are-data-the-host-carries-out-after-a-commit`.
