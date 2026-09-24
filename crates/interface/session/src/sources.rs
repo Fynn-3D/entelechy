@@ -299,7 +299,17 @@ pub fn declarations_within(
                         .iter()
                         .find(|(s, _)| s.name.value == decl.name.value)
                     {
-                        Some((same, _)) if same.fields == decl.fields => {}
+                        // The same fields in the same order are the same
+                        // declaration, wherever each file wrote them.
+                        Some((same, _))
+                            if same
+                                .fields
+                                .iter()
+                                .map(|(name, ty)| (&name.value, &ty.value))
+                                .eq(decl
+                                    .fields
+                                    .iter()
+                                    .map(|(name, ty)| (&name.value, &ty.value))) => {}
                         Some((_, other)) => {
                             return Err(format!(
                                 "struct `{}` is declared differently by {} and {}",
