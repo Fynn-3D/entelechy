@@ -1,0 +1,16 @@
+scene elbow.osn
+
+# The elbow faces the point exactly, at two moments of the clip: the
+# shoulder under it is somewhere else each time, so its space is worked
+# out afresh up the chain.
+frame 0.35
+expect check.result[0] = 1 0.0001
+frame 1.5
+expect check.result[0] = 1 0.0001
+# With the reach turned all the way up, the pose is not the clip's.
+expect check.result[1] = 0.09209 0.0005
+
+# With the reach turned off, the elbow is the clip's own.
+param weight 0
+frame 1.5
+expect check.result[1] = 0 0.000001

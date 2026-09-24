@@ -40,23 +40,21 @@ done
 
 ## Next
 
-Drive a rig rather than play one. The ABI changes the user asked for
-are done (several outputs, narrow storage, parameters of any value
-type, `Double` and `Long`); robust geometry predicates over doubles
-are a later round, if the user wants them. `examples/skin`
-blends two clips by where the pointer is and `examples/crowd` poses
-sixty-four out of one rig; what a game needs next is a joint a Kernel
-writes — a head that follows a point, a foot held on the ground —
-between the sample and the palette, and root motion: a clip whose root
-travels, the travel taken out of the pose and carried by the scene's own
-state.
+Carry a rig's travel in the scene. A joint a Kernel writes is done:
+`skin.aim@1` turns any joint onto a point over what the clip says, and
+`examples/reach` holds a shoulder computed and an elbow authored. What a
+game needs next is root motion: a clip whose root travels, the travel
+taken out of the pose each frame and carried by the scene's own state
+(a `<~` feedback of where the rig stands), so a walk moves the body
+through the world instead of dragging it back when the clip loops.
 
 Done when:
 
-- an example holds a rig whose pose is partly authored and partly
-  computed, with its `kernels/`, scene, README and replay;
-- the replay passes on the interpreter, the JIT and the GPU, pinning the
-  joint matrices at two moments;
+- the `skin` package has a Kernel that splits a pose's root travel from
+  the pose, and an example carries it through feedback, with its
+  `kernels/`, scene, README and replay;
+- the replay passes on the interpreter, the JIT and the GPU, pinning
+  where the rig stands after the clip has looped at least once;
 - anything it turns up in the engine or in the `skin` package is fixed
   with a test of its own;
 - the verification above is clean.

@@ -186,6 +186,85 @@ kernel skin.add@1 {
 // transform it has not applied yet.
 struct Walk { matrix: Mat4; joint: Int; }
 
+// A vector turned by a rotation.
+fn rotating(q: Vec4, v: Vec3) -> Vec3 {
+    let u = vec3(q.x, q.y, q.z);
+    let t = cross(u, v) * 2.0;
+    return v + t * q.w + cross(u, t);
+}
+
+// The shortest rotation that takes direction `a` to direction `b`, both
+// of unit length. Opposite directions turn half way round an axis at
+// right angles to `a`.
+fn arc(a: Vec3, b: Vec3) -> Vec4 {
+    let d = dot(a, b);
+    if d < -0.999999 {
+        let side = if abs(a.x) < 0.9 { cross(a, vec3(1.0, 0.0, 0.0)) } else { cross(a, vec3(0.0, 1.0, 0.0)) };
+        let n = normalize(side);
+        return vec4(n.x, n.y, n.z, 0.0);
+    }
+    let c = cross(a, b);
+    let q = vec4(c.x, c.y, c.z, 1.0 + d);
+    return q / sqrt(dot(q, q));
+}
+
+// Where a joint's parent stands, in the skin's space: its pose composed
+// up its own chain, as the palette composes it. The root's parent is the
+// skin itself.
+fn standing(poses: Rows<Pose>, skeleton: Skeleton, block: Int, joint: Int, depth: Int) -> Mat4 {
+    let parent = at(skeleton, joint).parent;
+    if parent < 0 { return mat4(1.0); }
+    let walked = loop depth with w = Walk { matrix: posing(at(poses, block + parent)), joint: parent }
+        until at(skeleton, w.joint).parent < 0 {
+        let up = at(skeleton, w.joint).parent;
+        Walk { matrix: posing(at(poses, block + up)) * w.matrix, joint: up }
+    };
+    return walked.matrix;
+}
+
+// One joint turned to face a point, over whatever the poses already say:
+// a head that follows what it looks at, an arm that reaches, a gun that
+// tracks. The joint's `axis`, in its own space (a bone from Blender runs
+// along its y), is turned the shortest way onto the target, and that
+// turn is laid over the pose the joint already had, so the twist the
+// clip gives it stays; `weight` blends between the two. Every other
+// joint passes through, so this sits between sampling and the palette
+// and the chain below the joint follows it.
+//
+// `target` is in the skin's space, one row an instance: a crowd sized
+// `instances * count(skeleton)` has each instance look at its own.
+kernel skin.aim@1 {
+    requires { field.read; field.write; }
+    input poses: Rows<Pose>;
+    input skeleton: Skeleton;
+    input target: Rows<Vec3>;
+    input weight: Rows<Float>;
+    param joint: Int = 0;
+    param axis: Vec3 = vec3(0.0, 1.0, 0.0);
+    // How deep a skeleton may be, as the palette takes it.
+    param depth: Int = 64;
+    output result: Rows<Pose>;
+
+    compute {
+        let p = sample(poses);
+        let joints = count(skeleton);
+        let instance = element() / joints;
+        if element() % joints != joint { return p; }
+        let how = clamp(at(weight, min(instance, count(weight) - 1)), 0.0, 1.0);
+        let block = instance * joints;
+        // The target where the joint's own translation is: its parent's
+        // space, which is the space its pose is written in.
+        let goal = at(target, min(instance, count(target) - 1));
+        let local = inverse(standing(poses, skeleton, block, joint, depth)) * vec4(goal.x, goal.y, goal.z, 1.0);
+        let toward = vec3(local.x, local.y, local.z) - p.at;
+        let far = sqrt(dot(toward, toward));
+        if far == 0.0 { return p; }
+        let facing = rotating(p.turn, normalize(axis));
+        let turned = after(arc(normalize(facing), toward / far), p.turn);
+        return Pose { at: p.at, turn: between(p.turn, turned, how), grow: p.grow };
+    }
+}
+
 // The palette: each joint's local transform composed up the parent
 // chain and taken through its inverse bind, which is the matrix a
 // vertex bound to that joint is moved by.

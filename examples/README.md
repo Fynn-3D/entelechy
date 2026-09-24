@@ -175,6 +175,9 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [crowd](crowd/README.md): sixty-four arms out of one rig, each at its
   own moment in the clip: the `skin` package's own Kernels on nodes sized
   `instances * count(skeleton)`.
+- [reach](reach/README.md): an arm whose shoulder turns every frame to
+  face a point while its elbow plays the clip: `skin.aim@1` between the
+  sample and the palette, a pose partly authored and partly computed.
 
 ## Games, tools and machines
 
