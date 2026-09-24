@@ -320,21 +320,35 @@ output stirred <- stir.result;
     assert!(message(11).contains("one kernel"), "{}", message(11));
 }
 
+/// A listening server a test started, killed when the test ends, however
+/// it ends: one that listens does not stop when its standard input
+/// closes, so a failing test would leave it running.
+struct Server(std::process::Child);
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn the_protocol_serves_sockets_and_a_quit_ends_only_its_connection() {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
     let dir = scratch_in("-sockets");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
-        .arg("serve")
-        .arg(dir.join("scene.osn"))
-        .args(["--listen", "127.0.0.1:0"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut child = Server(
+        Command::new(env!("CARGO_BIN_EXE_orla"))
+            .arg("serve")
+            .arg(dir.join("scene.osn"))
+            .args(["--listen", "127.0.0.1:0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = BufReader::new(child.0.stderr.take().unwrap());
     let port = stderr
         .lines()
         .map_while(Result::ok)
@@ -376,10 +390,10 @@ fn the_protocol_serves_sockets_and_a_quit_ends_only_its_connection() {
     // the rasterizer and its cutout.
     assert_eq!(second[0]["ok"]["kernels"], 5, "{}", second[0]);
     // A quit on standard input ends the process.
-    let mut stdin = child.stdin.take().unwrap();
+    let mut stdin = child.0.stdin.take().unwrap();
     writeln!(stdin, "{}", json!({ "id": 6, "op": "quit" })).unwrap();
     drop(stdin);
-    assert!(child.wait().unwrap().success());
+    assert!(child.0.wait().unwrap().success());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -388,16 +402,18 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpStream;
     let dir = scratch_in("-websocket");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
-        .arg("serve")
-        .arg(dir.join("scene.osn"))
-        .args(["--listen", "127.0.0.1:0"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut child = Server(
+        Command::new(env!("CARGO_BIN_EXE_orla"))
+            .arg("serve")
+            .arg(dir.join("scene.osn"))
+            .args(["--listen", "127.0.0.1:0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = BufReader::new(child.0.stderr.take().unwrap());
     let port = stderr
         .lines()
         .map_while(Result::ok)
@@ -503,10 +519,10 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
     plain.read_to_string(&mut answer).unwrap();
     assert!(answer.starts_with("HTTP/1.1 426"), "{answer}");
     assert!(answer.contains("creation protocol"), "{answer}");
-    let mut stdin = child.stdin.take().unwrap();
+    let mut stdin = child.0.stdin.take().unwrap();
     writeln!(stdin, "{}", json!({ "id": 6, "op": "quit" })).unwrap();
     drop(stdin);
-    assert!(child.wait().unwrap().success());
+    assert!(child.0.wait().unwrap().success());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
