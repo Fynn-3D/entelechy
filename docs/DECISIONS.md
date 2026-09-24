@@ -327,3 +327,40 @@ while running (a file named by a Field, a network request), which would
 make the target part of the data as well; a second effect beside files,
 which would get its own allowance; or an effect that must happen before a
 frame commits, which this model refuses on purpose.
+
+## What a served scene reaches is what the person running it gave
+
+A session an agent drives, `orla serve` or the Player's `--serve`, holds
+the scene to what the person who started it allowed, and nothing that
+arrives over the wire widens it. An agent's `save` and a scene's `to`
+land only where `--allow file.write` says. An input reads a file only
+beside the documents the scene reads (the root, the graphs it places,
+what it uses), inside a package, or where `--allow file.read` says. A
+browser's page opens the socket only from this machine, from a file, or
+from an origin `--allow-origin` names, and an HTTP request that is no
+WebSocket upgrade is answered and closed. A Kernel or a scene an agent
+sends is bounded before it costs anything: a domain is charged against
+the Host's budget before it is allocated, an `[each]` and a `times`
+before they are written out, and a rejected scene never reaches the
+disk.
+
+**Why.** An agent composes the scene and reads back what it holds, so a
+file it could read is a file it could send away, and any web page the
+person visits can reach a socket on their machine. A scene a person runs
+themselves (`run`, `render`, `replay`) reads what they chose to run, as
+any program they start does, and has no channel back out but the
+directories they allowed writes into; holding its reads too would only
+make every test scene name its own assets again.
+
+**Where.** The session's
+[inputs](../crates/interface/session/src/inputs.rs) and
+[writes](../crates/interface/session/src/writes.rs); the protocol's
+[transport](../crates/interface/protocol/src/transport.rs) and
+[WebSocket](../crates/interface/protocol/src/websocket.rs); the Host's
+[budget](../crates/core/host/src/lib.rs). Held by the protocol's tests
+([`protocol.rs`](../crates/interface/orla/tests/protocol.rs)): saves,
+reads, origins and compose.
+
+**What would change it.** A second person on the same session, which
+would want who asked, not only what; a network listener beyond this
+machine, which would want the socket itself authenticated.
