@@ -1432,6 +1432,82 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     );
 }
 
+const TALLY_FAILS_AT_5: &str = "kernel tally.check@1 { requires { field.read; field.write; } struct Tally { count: Int; doubled: Int; } input tally: Rows<Tally>; output result: Rows<Int>; compute { let t = sample(tally); return 100 / (t.count - 5); } }";
+
+/// A migration is part of the evaluation it runs in: when a node after
+/// it fails, the state it replaced is put back, not lost, so the Kernel
+/// that wrote that state reads it again once it is back. And when one
+/// port of several fails to migrate, the ones already carried are put
+/// back too.
+#[test]
+fn a_failed_evaluation_puts_back_the_state_a_migration_replaced() {
+    let mut runtime = cpu(1024);
+    for source in [
+        TALLY_ZERO,
+        TALLY_STEP_V1,
+        TALLY_UPGRADE,
+        TALLY_UPGRADE_WRONG,
+        TALLY_FAILS_AT_5,
+    ] {
+        load(&mut runtime, source);
+    }
+    let ctx = Context::default();
+    let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime, graph: &Graph| {
+        evaluator.evaluate(graph, runtime, &BTreeMap::new(), &ctx, &BTreeMap::new())
+    };
+    let plain = orla_scene::parse(TALLY_SCENE).unwrap();
+    let checked = orla_scene::parse(&format!(
+        "{TALLY_SCENE}node check: tally.check@1 {{ tally <- count.result; }}\noutput checked <- check.result;\n"
+    ))
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    for _ in 0..4 {
+        evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
+    }
+    // The count is 4. The new layout migrates it, the step makes it 5,
+    // and the check fails there: nothing of this evaluation stands.
+    load(&mut runtime, TALLY_STEP_V2);
+    let error = evaluate(&mut evaluator, &mut runtime, &checked).unwrap_err();
+    assert!(error.to_string().contains("check"), "{error}");
+    // Back to the Kernel that wrote the state: it reads 4 and counts on,
+    // rather than finding a migrated layout and starting over.
+    load(&mut runtime, TALLY_STEP_V1);
+    let report = evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
+    assert!(report.reset.is_empty(), "{:?}", report.reset);
+    assert_eq!(tally(&runtime, report.output), vec![5]);
+
+    // Two ports: the first migrates, the second's migration gives the
+    // wrong layout. Both stay as they were.
+    let two = orla_scene::parse(
+        "node seed: tally.zero@1 { domain = 1; }
+node a: tally.step@1 { previous <~ a.result from seed.result migrate tally.upgrade@1; }
+node b: tally.step@1 { previous <~ b.result from seed.result migrate tally.wrong@1; }
+output a <- a.result;
+output b <- b.result;
+",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    for _ in 0..3 {
+        evaluate(&mut evaluator, &mut runtime, &two).unwrap();
+    }
+    load(&mut runtime, TALLY_STEP_V2);
+    let error = evaluate(&mut evaluator, &mut runtime, &two).unwrap_err();
+    assert!(
+        matches!(&error, EvaluateError::Migration { node, .. } if node.0 == "b"),
+        "{error}"
+    );
+    load(&mut runtime, TALLY_STEP_V1);
+    let report = evaluate(&mut evaluator, &mut runtime, &two).unwrap();
+    assert!(report.reset.is_empty(), "{:?}", report.reset);
+    let counts: Vec<Vec<i32>> = report
+        .outputs
+        .iter()
+        .map(|(_, handle)| tally(&runtime, *handle))
+        .collect();
+    assert_eq!(counts, vec![vec![4], vec![4]]);
+}
+
 const COUNT: &str = "kernel test.count@1 { requires { field.read; field.write; } input previous: Image; output result: Image; compute { let c = sample(previous); return vec4(c.r + 1.0, c.g, c.b, c.a); } }";
 const OFF_FRAME: &str = "
 node source: image.gradient@1 { domain = vec2(2, 2); }

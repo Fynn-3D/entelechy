@@ -342,6 +342,14 @@ pub type Migrated = Vec<(NodeId, String, KernelId)>;
 /// its port, and why.
 pub type Reset = Vec<(NodeId, String, String)>;
 
+/// A state port an evaluation changed before its nodes ran: what was
+/// committed, kept alive until the evaluation commits, so a failure can
+/// put it back.
+struct Replaced {
+    key: (NodeId, String),
+    previous: Handle,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum InputKey {
     External(Handle),
@@ -468,6 +476,10 @@ pub struct Evaluator {
     fused: BTreeMap<NodeId, Fused>,
     pending: BTreeMap<NodeId, Pending>,
     running: BTreeMap<NodeId, Running>,
+    /// State an evaluation replaced before its nodes ran (a migration, a
+    /// restart), kept until it commits or put back when it fails; while
+    /// here it is held as committed state is.
+    replaced: Vec<Replaced>,
 }
 
 impl fmt::Debug for Evaluator {
@@ -611,7 +623,7 @@ impl Evaluator {
         for stale in &order[at..] {
             if let Some(gone) = self.cache_take(stale) {
                 for output in gone.outputs {
-                    if !self.is_committed(output) {
+                    if !self.is_kept(output) {
                         release(runtime, output);
                     }
                 }
@@ -674,6 +686,12 @@ impl Evaluator {
             "the cached-handle count disagrees with the cache"
         );
         held
+    }
+
+    /// Whether `handle` is state: committed, or replaced by an evaluation
+    /// that may yet put it back. What is kept is never released.
+    fn is_kept(&self, handle: Handle) -> bool {
+        self.is_committed(handle) || self.replaced.iter().any(|r| r.previous == handle)
     }
 
     fn is_committed(&self, handle: Handle) -> bool {
@@ -837,172 +855,187 @@ impl Evaluator {
         let needed = demand.map(|demand| self.needed(graph, demand));
         let groups = self.plan(graph, &order, runtime, externals, params, context)?;
         let (migrated, reset) = self.reconcile_state(&groups, runtime, context)?;
-        // Nodes absorbed into a group are no longer materialized.
-        let absorbed: BTreeSet<&NodeId> = groups.iter().flat_map(|g| g.absorbed.iter()).collect();
-        let stale: Vec<NodeId> = self
-            .cache
-            .keys()
-            .filter(|id| absorbed.contains(id))
-            .cloned()
-            .collect();
-        for id in stale {
-            self.drop_cache(&id, runtime);
-        }
-        let mut executed = Vec::new();
-        let mut reused = Vec::new();
-        let mut fused = Vec::new();
-        let mut timings = Vec::new();
-        let mut placements = Vec::new();
-        // Every node run on the frame, in order, with what its runs
-        // answered besides their outputs: whether a device's run failed,
-        // known once the device is waited for, before anything commits.
-        let mut checks: Vec<(NodeId, Vec<Box<dyn orla_runtime::Check>>)> = Vec::new();
-        runtime.take_checks();
-        let mut pending = Vec::new();
-        for group in &groups {
-            let node = &group.node;
-            if needed
-                .as_ref()
-                .is_some_and(|needed| !needed.contains(&node.id))
-            {
-                continue;
-            }
-            let (invocation, key) = self.bind(
-                graph,
-                node,
-                &group.version,
-                runtime,
-                externals,
-                context,
-                params,
-            )?;
-            if !group.absorbed.is_empty() {
-                fused.push((node.id.clone(), group.absorbed.clone()));
-            }
-            if self
+        // Everything from here to the commit either commits or leaves the
+        // state as it was before this evaluation began: a node that fails
+        // after a migration puts the state it replaced back.
+        let evaluated = (|| -> Result<Report, EvaluateError> {
+            // Nodes absorbed into a group are no longer materialized.
+            let absorbed: BTreeSet<&NodeId> =
+                groups.iter().flat_map(|g| g.absorbed.iter()).collect();
+            let stale: Vec<NodeId> = self
                 .cache
-                .get(&node.id)
-                .is_some_and(|cached| cached.key == key)
-            {
-                reused.push(node.id.clone());
-                continue;
-            }
-            let output_names: Vec<String> = group
-                .version
-                .manifest()
-                .outputs
-                .iter()
-                .map(|port| port.name.clone())
+                .keys()
+                .filter(|id| absorbed.contains(id))
+                .cloned()
                 .collect();
-            if node.is_async && self.cache.contains_key(&node.id) {
-                // One run at a time; while it goes, the frame carries the
-                // last output and the state this node feeds stays.
-                if !self.running.contains_key(&node.id) {
-                    let run =
-                        runtime
-                            .execute_later(&group.version, &invocation)
-                            .map_err(|error| EvaluateError::Execution {
+            for id in stale {
+                self.drop_cache(&id, runtime);
+            }
+            let mut executed = Vec::new();
+            let mut reused = Vec::new();
+            let mut fused = Vec::new();
+            let mut timings = Vec::new();
+            let mut placements = Vec::new();
+            // Every node run on the frame, in order, with what its runs
+            // answered besides their outputs: whether a device's run failed,
+            // known once the device is waited for, before anything commits.
+            let mut checks: Vec<(NodeId, Vec<Box<dyn orla_runtime::Check>>)> = Vec::new();
+            runtime.take_checks();
+            let mut pending = Vec::new();
+            for group in &groups {
+                let node = &group.node;
+                if needed
+                    .as_ref()
+                    .is_some_and(|needed| !needed.contains(&node.id))
+                {
+                    continue;
+                }
+                let (invocation, key) = self.bind(
+                    graph,
+                    node,
+                    &group.version,
+                    runtime,
+                    externals,
+                    context,
+                    params,
+                )?;
+                if !group.absorbed.is_empty() {
+                    fused.push((node.id.clone(), group.absorbed.clone()));
+                }
+                if self
+                    .cache
+                    .get(&node.id)
+                    .is_some_and(|cached| cached.key == key)
+                {
+                    reused.push(node.id.clone());
+                    continue;
+                }
+                let output_names: Vec<String> = group
+                    .version
+                    .manifest()
+                    .outputs
+                    .iter()
+                    .map(|port| port.name.clone())
+                    .collect();
+                if node.is_async && self.cache.contains_key(&node.id) {
+                    // One run at a time; while it goes, the frame carries the
+                    // last output and the state this node feeds stays.
+                    if !self.running.contains_key(&node.id) {
+                        let run = runtime.execute_later(&group.version, &invocation).map_err(
+                            |error| EvaluateError::Execution {
                                 node: node.id.clone(),
                                 error,
-                            })?;
-                    self.running.insert(
-                        node.id.clone(),
-                        Running {
-                            run,
-                            key,
-                            output_names,
-                        },
-                    );
+                            },
+                        )?;
+                        self.running.insert(
+                            node.id.clone(),
+                            Running {
+                                run,
+                                key,
+                                output_names,
+                            },
+                        );
+                    }
+                    pending.push(node.id.clone());
+                    continue;
                 }
-                pending.push(node.id.clone());
-                continue;
-            }
-            // A first run, or one with nothing cached to carry, is on the
-            // frame; a run still going for it is no longer wanted.
-            if let Some(running) = self.running.remove(&node.id) {
-                runtime.discard_run(running.run);
-            }
-            let placement = runtime.placement(&group.version);
-            runtime.take_moved();
-            let started = std::time::Instant::now();
-            let outputs = match group.chain {
-                Some(chain) => {
-                    runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
+                // A first run, or one with nothing cached to carry, is on the
+                // frame; a run still going for it is no longer wanted.
+                if let Some(running) = self.running.remove(&node.id) {
+                    runtime.discard_run(running.run);
                 }
-                None => runtime.execute(&group.version, &invocation),
+                let placement = runtime.placement(&group.version);
+                runtime.take_moved();
+                let started = std::time::Instant::now();
+                let outputs = match group.chain {
+                    Some(chain) => {
+                        runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
+                    }
+                    None => runtime.execute(&group.version, &invocation),
+                }
+                .map_err(|error| EvaluateError::Execution {
+                    node: node.id.clone(),
+                    error,
+                })?;
+                // What the device says it took, when it measures; the call's
+                // own time otherwise.
+                let took = runtime.last_measured().unwrap_or_else(|| started.elapsed());
+                timings.push((node.id.clone(), took));
+                checks.push((node.id.clone(), runtime.take_checks()));
+                let moved = runtime.take_moved();
+                placements.push(Placed {
+                    node: node.id.clone(),
+                    backend: placement.backend,
+                    routed: placement.routed,
+                    uploaded: moved.uploaded,
+                    downloaded: moved.downloaded,
+                });
+                self.store(&node.id, key, outputs, output_names, runtime);
+                executed.push(node.id.clone());
             }
-            .map_err(|error| EvaluateError::Execution {
-                node: node.id.clone(),
-                error,
-            })?;
-            // What the device says it took, when it measures; the call's
-            // own time otherwise.
-            let took = runtime.last_measured().unwrap_or_else(|| started.elapsed());
-            timings.push((node.id.clone(), took));
-            checks.push((node.id.clone(), runtime.take_checks()));
-            let moved = runtime.take_moved();
-            placements.push(Placed {
-                node: node.id.clone(),
-                backend: placement.backend,
-                routed: placement.routed,
-                uploaded: moved.uploaded,
-                downloaded: moved.downloaded,
-            });
-            self.store(&node.id, key, outputs, output_names, runtime);
-            executed.push(node.id.clone());
-        }
-        let mut outputs = Vec::with_capacity(graph.outputs.len());
-        for (name, source) in &graph.outputs {
-            let handle = match source {
-                Source::External(external) => {
-                    *externals
-                        .get(external)
-                        .ok_or_else(|| EvaluateError::MissingExternal {
-                            node: NodeId(format!("output {name}")),
-                            name: external.clone(),
+            let mut outputs = Vec::with_capacity(graph.outputs.len());
+            for (name, source) in &graph.outputs {
+                let handle = match source {
+                    Source::External(external) => {
+                        *externals
+                            .get(external)
+                            .ok_or_else(|| EvaluateError::MissingExternal {
+                                node: NodeId(format!("output {name}")),
+                                name: external.clone(),
+                            })?
+                    }
+                    Source::Node { node, port } => {
+                        self.cached(node, port).ok_or_else(|| {
+                            // What that node does write, so a port named
+                            // slightly wrong is named.
+                            let near = self.cache.get(node).and_then(|cached| {
+                                orla_abi::names::nearest(
+                                    port,
+                                    cached.output_names.iter().map(String::as_str),
+                                )
+                                .map(str::to_owned)
+                            });
+                            EvaluateError::UnknownOutput {
+                                node: node.clone(),
+                                port: port.clone(),
+                                near,
+                            }
                         })?
-                }
-                Source::Node { node, port } => {
-                    self.cached(node, port).ok_or_else(|| {
-                        // What that node does write, so a port named
-                        // slightly wrong is named.
-                        let near = self.cache.get(node).and_then(|cached| {
-                            orla_abi::names::nearest(
-                                port,
-                                cached.output_names.iter().map(String::as_str),
-                            )
-                            .map(str::to_owned)
-                        });
-                        EvaluateError::UnknownOutput {
-                            node: node.clone(),
-                            port: port.clone(),
-                            near,
-                        }
-                    })?
-                }
-            };
-            outputs.push((name.clone(), handle));
+                    }
+                };
+                outputs.push((name.clone(), handle));
+            }
+            let output = outputs
+                .first()
+                .map(|(_, handle)| *handle)
+                .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
+            self.wait_for_checks(checks, runtime)?;
+            let committed = self.commit(graph, runtime)?;
+            Ok(Report {
+                output,
+                executed,
+                timings,
+                placements,
+                reused,
+                committed,
+                outputs,
+                fused,
+                migrated,
+                reset,
+                pending,
+                landed,
+            })
+        })();
+        match evaluated {
+            Ok(report) => {
+                self.release_replaced(runtime);
+                Ok(report)
+            }
+            Err(error) => {
+                self.restore_replaced(runtime);
+                Err(error)
+            }
         }
-        let output = outputs
-            .first()
-            .map(|(_, handle)| *handle)
-            .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
-        self.wait_for_checks(checks, runtime)?;
-        let committed = self.commit(graph, runtime)?;
-        Ok(Report {
-            output,
-            executed,
-            timings,
-            placements,
-            reused,
-            committed,
-            outputs,
-            fused,
-            migrated,
-            reset,
-            pending,
-            landed,
-        })
     }
 
     /// Caches a node's fresh outputs and lets go of the ones they replace,
@@ -1024,7 +1057,7 @@ impl Evaluator {
         };
         if let Some(previous) = self.cache_put(id.clone(), fresh) {
             for output in previous.outputs {
-                if !self.is_committed(output) {
+                if !self.is_kept(output) {
                     release(runtime, output);
                 }
             }
@@ -1087,9 +1120,25 @@ impl Evaluator {
     /// changed what it carries) is carried over by the binding's
     /// migration Kernel, a map from the old elements to the new run once
     /// over the state; without one, the port restarts from its initial
-    /// source. A migration that fails, or gives the wrong layout, fails
-    /// the evaluation and leaves the state as it was.
+    /// source. What was committed is kept, not released: the caller
+    /// either lets it go once the evaluation commits
+    /// ([`Evaluator::release_replaced`]) or puts it back when it fails
+    /// ([`Evaluator::restore_replaced`]). A migration that fails, or gives
+    /// the wrong layout, puts back what this call had already changed.
     fn reconcile_state(
+        &mut self,
+        groups: &[Group],
+        runtime: &mut Runtime,
+        context: &Context,
+    ) -> Result<(Migrated, Reset), EvaluateError> {
+        let outcome = self.reconcile_into(groups, runtime, context);
+        if outcome.is_err() {
+            self.restore_replaced(runtime);
+        }
+        outcome
+    }
+
+    fn reconcile_into(
         &mut self,
         groups: &[Group],
         runtime: &mut Runtime,
@@ -1163,15 +1212,43 @@ impl Evaluator {
                     }
                 };
                 self.commit_take(&key);
-                if !self.is_cached(current) && !self.is_committed(current) {
-                    release(runtime, current);
-                }
+                self.replaced.push(Replaced {
+                    key: key.clone(),
+                    previous: current,
+                });
                 if let Some(carried) = carried {
                     self.commit_put(key, carried);
                 }
             }
         }
         Ok((migrated, reset))
+    }
+
+    /// Puts back the state [`Evaluator::reconcile_state`] replaced, last
+    /// first, releasing what a migration carried in its place.
+    fn restore_replaced(&mut self, runtime: &mut Runtime) {
+        let replaced = std::mem::take(&mut self.replaced);
+        for Replaced { key, previous } in replaced.into_iter().rev() {
+            let carried = self.commit_put(key, previous);
+            if let Some(carried) = carried
+                && carried != previous
+                && !self.is_cached(carried)
+                && !self.is_kept(carried)
+            {
+                release(runtime, carried);
+            }
+        }
+    }
+
+    /// Lets go of the state [`Evaluator::reconcile_state`] replaced, once
+    /// the evaluation has committed and nothing will put it back.
+    fn release_replaced(&mut self, runtime: &mut Runtime) {
+        let replaced = std::mem::take(&mut self.replaced);
+        for Replaced { previous, .. } in replaced {
+            if !self.is_cached(previous) && !self.is_kept(previous) {
+                release(runtime, previous);
+            }
+        }
     }
 
     /// Decides what executes: every node as its own group, then producers
@@ -1773,7 +1850,7 @@ impl Evaluator {
     fn drop_cache(&mut self, id: &NodeId, runtime: &mut Runtime) {
         if let Some(cached) = self.cache_take(id) {
             for output in cached.outputs {
-                if !self.is_committed(output) {
+                if !self.is_kept(output) {
                     release(runtime, output);
                 }
             }
@@ -1876,7 +1953,7 @@ impl Evaluator {
         let handle = runtime.host_mut().adopt(data)?;
         if let Some(previous) = self.commit_put(key, handle)
             && !self.is_cached(previous)
-            && !self.is_committed(previous)
+            && !self.is_kept(previous)
         {
             release(runtime, previous);
         }
@@ -1924,7 +2001,7 @@ impl Evaluator {
                     advanced.push(key);
                     if let Some(previous) = previous
                         && !self.is_cached(previous)
-                        && !self.is_committed(previous)
+                        && !self.is_kept(previous)
                     {
                         release(runtime, previous);
                     }
