@@ -553,6 +553,15 @@ fn run(
             }
         };
     }
+    // The words are computed here before the Host holds them: asked
+    // first, so a domain past the budget costs nothing to refuse.
+    let fields: Vec<_> = module
+        .manifest
+        .outputs
+        .iter()
+        .map(|port| (&port.ty.schema, domain))
+        .collect();
+    scope.can_hold(&fields)?;
     let results = compute(entry, &shared, domain, stride)?;
     shared.run.outcome()?;
     let mut outputs = Vec::with_capacity(module.manifest.outputs.len());
@@ -1194,8 +1203,18 @@ unsafe extern "C" fn orla_jit_linear(
     let (z0, z1, fz) = axis(z, view.depth);
     let stride = view.stride as usize;
     let (width, height) = (view.width as usize, view.height as usize);
-    let mut sums = [0.0f32; 64];
-    let sums = &mut sums[..stride];
+    // An element of up to 64 words blends on the stack; a wider one,
+    // which the language allows, on the heap rather than past the end.
+    let (mut sums_here, mut sums_heap, mut element_here, mut element_heap);
+    let (sums, element): (&mut [f32], &mut [u32]) = if stride <= 64 {
+        sums_here = [0.0f32; 64];
+        element_here = [0u32; 64];
+        (&mut sums_here[..stride], &mut element_here[..stride])
+    } else {
+        sums_heap = vec![0.0f32; stride];
+        element_heap = vec![0u32; stride];
+        (&mut sums_heap, &mut element_heap)
+    };
     for (corner, weight) in [
         ((x0, y0, z0), (1.0 - fx) * (1.0 - fy) * (1.0 - fz)),
         ((x1, y0, z0), fx * (1.0 - fy) * (1.0 - fz)),
@@ -1210,9 +1229,8 @@ unsafe extern "C" fn orla_jit_linear(
             continue;
         }
         let (cx, cy, cz) = corner;
-        let mut element = [0u32; 64];
         unsafe { copy_out(view, (cz * height + cy) * width + cx, element.as_mut_ptr()) };
-        for (slot, word) in sums.iter_mut().zip(&element) {
+        for (slot, word) in sums.iter_mut().zip(element.iter()) {
             *slot += f32::from_bits(*word) * weight;
         }
     }

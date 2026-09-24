@@ -889,3 +889,29 @@ fn folds_split_across_workers_are_the_walks() {
     assert!(cpu.is_err(), "{cpu:?}");
     assert_eq!(cpu, jit, "a reduction that overflows");
 }
+
+/// `at_linear` blends an element as wide as the language lets a struct
+/// be: past 64 words it blends every one of them, as the interpreter
+/// does, rather than taking the process down.
+#[test]
+fn at_linear_blends_an_element_wider_than_64_words() {
+    let source = "kernel test.wide@1 { requires { field.read; field.write; } input rows: Rows<Wide>; output result: Rows<Float>;
+        struct Wide { a0: Vec4; a1: Vec4; a2: Vec4; a3: Vec4; a4: Vec4; a5: Vec4; a6: Vec4; a7: Vec4; a8: Vec4; a9: Vec4; a10: Vec4; a11: Vec4; a12: Vec4; a13: Vec4; a14: Vec4; a15: Vec4; a16: Vec4; }
+        compute {
+            let w = at_linear(rows, float(element()) * 0.61 + 0.3);
+            return dot(w.a0, vec4(1.0, 2.0, 3.0, 1.0)) + dot(w.a1, vec4(1.0, 2.0, 3.0, 2.0)) + dot(w.a2, vec4(1.0, 2.0, 3.0, 3.0)) + dot(w.a3, vec4(1.0, 2.0, 3.0, 4.0)) + dot(w.a4, vec4(1.0, 2.0, 3.0, 5.0)) + dot(w.a5, vec4(1.0, 2.0, 3.0, 6.0)) + dot(w.a6, vec4(1.0, 2.0, 3.0, 7.0)) + dot(w.a7, vec4(1.0, 2.0, 3.0, 8.0)) + dot(w.a8, vec4(1.0, 2.0, 3.0, 9.0)) + dot(w.a9, vec4(1.0, 2.0, 3.0, 10.0)) + dot(w.a10, vec4(1.0, 2.0, 3.0, 11.0)) + dot(w.a11, vec4(1.0, 2.0, 3.0, 12.0)) + dot(w.a12, vec4(1.0, 2.0, 3.0, 13.0)) + dot(w.a13, vec4(1.0, 2.0, 3.0, 14.0)) + dot(w.a14, vec4(1.0, 2.0, 3.0, 15.0)) + dot(w.a15, vec4(1.0, 2.0, 3.0, 16.0)) + dot(w.a16, vec4(1.0, 2.0, 3.0, 17.0));
+        } }";
+    let wide = orla_abi::Schema::new(vec![orla_abi::Scalar::Float; 68]);
+    let rows: Vec<u32> = (0..6 * 68)
+        .map(|i| ((i as f32) * 0.37).sin().to_bits())
+        .collect();
+    let (cpu, jit) = both(
+        source,
+        &[(wide, Domain::Rows(6), rows)],
+        vec![],
+        Domain::Rows(9),
+        Context::default(),
+    );
+    assert_eq!(cpu.len(), 9);
+    assert_eq!(cpu, jit);
+}
