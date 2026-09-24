@@ -9,7 +9,9 @@ use serde_json::{Value as Json, json};
 use orla_session::Session;
 
 use crate::request::Request;
-use crate::wire::{events_json, failure, manifest_json, positioned, value_from_json, value_json};
+use crate::wire::{
+    diagnostic_json, events_json, failure, manifest_json, value_from_json, value_json,
+};
 
 /// Replaces the scene document and syncs: checked first, so a text that
 /// would be rejected never reaches the disk, and with `expect`, only if
@@ -74,7 +76,9 @@ pub(crate) fn sync(session: &mut Session) -> Result<Json, Json> {
 /// Prepares a Kernel without publishing it.
 pub(crate) fn prepare(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let source = request.text("source")?;
-    let candidate = session.prepare_source(&source).map_err(positioned)?;
+    let candidate = session
+        .prepare_source(&source)
+        .map_err(|e| diagnostic_json(&e))?;
     let current = session
         .runtime()
         .kernel(candidate.id())
@@ -108,7 +112,7 @@ pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, 
     };
     let version = session
         .publish_source(&source, expect)
-        .map_err(positioned)?;
+        .map_err(|e| diagnostic_json(&e))?;
     Ok(json!({ "id": version.id().to_string(), "generation": version.generation().0 }))
 }
 

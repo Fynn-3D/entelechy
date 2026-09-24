@@ -201,7 +201,7 @@ pub unsafe extern "C" fn orla_open(
             let reason = events
                 .iter()
                 .find_map(|event| match event {
-                    Event::SceneRejected(error) => Some(error.clone()),
+                    Event::SceneRejected(error) => Some(error.to_string()),
                     Event::Rejected { path, error } => Some(format!("{}: {error}", path.display())),
                     _ => None,
                 })

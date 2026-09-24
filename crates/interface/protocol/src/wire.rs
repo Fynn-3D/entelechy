@@ -275,15 +275,15 @@ pub(crate) fn evaluation_error(error: &orla_graph::EvaluateError, frame: Option<
     json
 }
 
-/// A diagnostic with a position when the message starts with `line:col:`.
-pub(crate) fn positioned(message: String) -> Json {
-    let mut parts = message.splitn(3, ':');
-    if let (Some(line), Some(column), Some(rest)) = (parts.next(), parts.next(), parts.next())
-        && let (Ok(line), Ok(column)) = (line.trim().parse::<u32>(), column.trim().parse::<u32>())
-    {
-        return json!({ "message": rest.trim(), "line": line, "column": column });
+/// A diagnostic as data: its message, and its line and column when it
+/// has a place.
+pub(crate) fn diagnostic_json(diagnostic: &orla_session::Diagnostic) -> Json {
+    let mut json = failure(diagnostic.message.clone());
+    if let Some((line, column)) = diagnostic.at {
+        json["line"] = json!(line);
+        json["column"] = json!(column);
     }
-    failure(message)
+    json
 }
 
 pub(crate) fn manifest_json(
@@ -357,7 +357,7 @@ pub(crate) fn events_json(events: &[Event]) -> Vec<Json> {
                 generation,
             } => json!({ "kind": "published", "path": path.display().to_string(), "id": id.to_string(), "generation": generation.0 }),
             Event::Rejected { path, error } => {
-                let mut json = positioned(error.trim_start_matches(' ').to_owned());
+                let mut json = diagnostic_json(error);
                 json["kind"] = json!("rejected");
                 json["path"] = json!(path.display().to_string());
                 json
@@ -367,7 +367,7 @@ pub(crate) fn events_json(events: &[Event]) -> Vec<Json> {
             Event::Loaded { name, path, detail } => json!({ "kind": "loaded", "name": name, "path": path.display().to_string(), "detail": detail }),
             Event::Text { name, chars } => json!({ "kind": "text", "name": name, "chars": chars }),
             Event::SceneRejected(error) => {
-                let mut json = positioned(error.clone());
+                let mut json = diagnostic_json(error);
                 json["kind"] = json!("scene_rejected");
                 json
             }

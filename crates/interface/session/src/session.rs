@@ -217,7 +217,7 @@ impl Session {
     /// itself compiles. Nothing is written, published or run: what a
     /// caller asks before it replaces the document, so a rejected text
     /// never reaches the disk.
-    pub fn check_scene(&self, text: &str) -> Result<(), String> {
+    pub fn check_scene(&self, text: &str) -> Result<(), crate::Diagnostic> {
         self.scene.check(text)
     }
 
@@ -289,18 +289,21 @@ impl Session {
         &mut self,
         source: &str,
         expect: Expect,
-    ) -> Result<std::sync::Arc<orla_runtime::KernelVersion>, String> {
+    ) -> Result<std::sync::Arc<orla_runtime::KernelVersion>, crate::Diagnostic> {
         let candidate = self.prepare_source(source)?;
         self.runtime
             .publish(candidate, expect)
-            .map_err(|e| e.to_string())
+            .map_err(|e| crate::Diagnostic::new(e.to_string()))
     }
 
     /// Prepares `source`, a document holding one Kernel, without
     /// publishing it. The Kernel sees the declarations the source makes
     /// or `use`s, and the scene's shared ones after those, so a Kernel
     /// from a file republishes through the protocol as it is.
-    pub fn prepare_source(&self, source: &str) -> Result<orla_runtime::Candidate, String> {
+    pub fn prepare_source(
+        &self,
+        source: &str,
+    ) -> Result<orla_runtime::Candidate, crate::Diagnostic> {
         self.scene
             .prepare_source(source, &self.kernels, &self.runtime)
     }

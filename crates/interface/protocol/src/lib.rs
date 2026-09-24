@@ -157,7 +157,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::positioned;
+    use crate::wire::diagnostic_json;
     use orla_runtime::Value;
 
     /// The table at the top of this module is the protocol's contract.
@@ -249,11 +249,17 @@ mod tests {
     }
 
     #[test]
-    fn positions_are_lifted_out_of_messages() {
-        let json = positioned("4:20: `oops` is not defined".into());
+    fn a_diagnostic_carries_its_place_as_data() {
+        let json = diagnostic_json(&orla_session::Diagnostic {
+            message: "`oops` is not defined".into(),
+            at: Some((4, 20)),
+        });
         assert_eq!(json["line"], 4);
         assert_eq!(json["column"], 20);
         assert_eq!(json["message"], "`oops` is not defined");
-        assert!(positioned("plain".into())["line"].is_null());
+        // A message that happens to start with numbers is not a place.
+        let plain = diagnostic_json(&orla_session::Diagnostic::new("3:4 is a ratio"));
+        assert!(plain["line"].is_null());
+        assert_eq!(plain["message"], "3:4 is a ratio");
     }
 }

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use orla_graph::Graph;
 use orla_runtime::{FieldData, Handle, Host};
 
-use crate::Event;
 use crate::stamp::{Stamp, stamp};
+use crate::{Diagnostic, Event};
 
 /// A file an input is read from.
 struct Asset {
@@ -209,7 +209,7 @@ impl Inputs {
                 self.forget(host, &name);
                 events.push(Event::Rejected {
                     path,
-                    error: format!(" {why}"),
+                    error: Diagnostic::new(why),
                 });
                 continue;
             }
@@ -240,7 +240,7 @@ impl Inputs {
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.clone(),
-                        error: format!(" {error}"),
+                        error: Diagnostic::new(error.to_string()),
                     });
                     continue;
                 }
@@ -252,7 +252,7 @@ impl Inputs {
                 }
                 Err(error) => events.push(Event::Rejected {
                     path,
-                    error: format!(" {error}"),
+                    error: Diagnostic::new(error.to_string()),
                 }),
             }
         }
@@ -284,7 +284,7 @@ impl Inputs {
                     }
                     events.push(Event::Rejected {
                         path: dir,
-                        error: format!(" {error}"),
+                        error: Diagnostic::new(error.to_string()),
                     });
                     continue;
                 }
@@ -300,7 +300,9 @@ impl Inputs {
             if files.is_empty() {
                 events.push(Event::Rejected {
                     path: dir.clone(),
-                    error: " holds no frame: a .png, .ppm, .pgm, .field or .wav file".into(),
+                    error: Diagnostic::new(
+                        "holds no frame: a .png, .ppm, .pgm, .field or .wav file",
+                    ),
                 });
             } else {
                 events.push(Event::Loaded {
@@ -355,7 +357,7 @@ impl Inputs {
                 }
                 Err(error) => self.frame_events.push(Event::Rejected {
                     path,
-                    error: format!(" {error}"),
+                    error: Diagnostic::new(error.to_string()),
                 }),
             }
         }
@@ -394,9 +396,9 @@ impl Inputs {
                     self.texts.insert(name.clone(), text);
                     events.push(Event::Text { name, chars });
                 }
-                Err(error) => events.push(Event::SceneRejected(format!(
+                Err(error) => events.push(Event::SceneRejected(Diagnostic::new(format!(
                     "input `{name}`'s text: {error}"
-                ))),
+                )))),
             }
         }
     }

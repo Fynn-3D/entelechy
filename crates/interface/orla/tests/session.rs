@@ -35,7 +35,7 @@ fn rejected(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            Event::Rejected { error, .. } => Some(error.clone()),
+            Event::Rejected { error, .. } => Some(error.to_string()),
             _ => None,
         })
         .collect()
@@ -848,7 +848,7 @@ output result <- count.result;
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, Event::SceneRejected(message) if message.contains("at least one character"))),
+            .any(|e| matches!(e, Event::SceneRejected(message) if message.message.contains("at least one character"))),
         "{events:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1259,7 +1259,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     std::fs::remove_dir_all(dir.join("clip")).unwrap();
     std::fs::create_dir_all(dir.join("clip")).unwrap();
     let events = session.sync();
-    assert!(events.iter().any(|event| matches!(event, Event::Rejected { error, .. } if error.contains("holds no frame"))), "{events:?}");
+    assert!(events.iter().any(|event| matches!(event, Event::Rejected { error, .. } if error.message.contains("holds no frame"))), "{events:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1445,7 +1445,7 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, Event::Rejected { error, .. } if error.contains("empty"))),
+            .any(|event| matches!(event, Event::Rejected { error, .. } if error.message.contains("empty"))),
         "{events:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);

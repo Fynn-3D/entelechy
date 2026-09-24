@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use orla_language::Kernel;
 use orla_runtime::{Candidate, Expect, KernelId, Runtime, Ticket};
 
-use crate::Event;
 use crate::sources::located;
 use crate::stamp::Stamp;
+use crate::{Diagnostic, Event};
 
 /// A Kernel a document defines: its id, its source text, and the parse.
 pub(crate) struct Defined {
@@ -108,8 +108,8 @@ impl Kernels {
 
     /// A diagnostic with the file that declares what it could not find,
     /// searched among the documents this ledger knows.
-    pub(crate) fn located(&self, message: String, document: &Path, root: &Path) -> String {
-        located(message, document, root, &self.documents())
+    pub(crate) fn located(&self, error: Diagnostic, document: &Path, root: &Path) -> Diagnostic {
+        located(error, document, root, &self.documents())
     }
 
     /// Publishes every document's change whose Kernels the worker has
@@ -138,7 +138,7 @@ impl Kernels {
                 for (id, error) in failed {
                     events.push(Event::Rejected {
                         path: path.clone(),
-                        error: format!(" {id}: {error}"),
+                        error: Diagnostic::new(format!("{id}: {error}")),
                     });
                 }
                 self.hold_back(&path, batch, held, runtime, events);
@@ -192,7 +192,7 @@ impl Kernels {
             Err(error) => {
                 events.push(Event::Rejected {
                     path: path.to_path_buf(),
-                    error: format!(" {error}"),
+                    error: Diagnostic::new(error.to_string()),
                 });
                 let batch = Batch {
                     items: Vec::new(),
@@ -226,7 +226,9 @@ impl Kernels {
         if held {
             events.push(Event::Rejected {
                 path: path.to_path_buf(),
-                error: " nothing in it was published: a document's Kernels change together, and the ones it had go on running".into(),
+                error: Diagnostic::new(
+                    "nothing in it was published: a document's Kernels change together, and the ones it had go on running",
+                ),
             });
         }
     }
@@ -277,10 +279,10 @@ impl Kernels {
             {
                 events.push(Event::Rejected {
                     path: path.to_path_buf(),
-                    error: format!(
-                        " {id} is already published by {}; kernel ids are unique",
+                    error: Diagnostic::new(format!(
+                        "{id} is already published by {}; kernel ids are unique",
                         owner.display()
-                    ),
+                    )),
                 });
                 failed = true;
                 continue;
@@ -294,7 +296,7 @@ impl Kernels {
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.to_path_buf(),
-                        error: self.located(error.to_string(), path, root),
+                        error: self.located((&error).into(), path, root),
                     });
                     failed = true;
                     continue;
@@ -328,7 +330,7 @@ impl Kernels {
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.to_path_buf(),
-                        error: self.located(error.to_string(), path, root),
+                        error: Diagnostic::new(error.to_string()),
                     });
                     failed = true;
                 }

@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use orla_graph::Graph;
 use orla_runtime::{Runtime, Value};
 
-use crate::Event;
 use crate::kernels::{Defined, Kernels};
 use crate::sources::{
     declarations_for, declarations_key, declarations_within, expand_use, is_library, named_id,
     read_document,
 };
 use crate::stamp::{Stamp, stamp};
+use crate::{Diagnostic, Event};
 
 /// A scene document and what was built from it.
 pub(crate) struct Scene {
@@ -157,8 +157,11 @@ impl Scene {
 
     /// The root's text read and lowered, the documents it places
     /// loaded: what a sync publishes from, nothing published yet.
-    fn lower(&self, text: &str) -> Result<(orla_language::Document, orla_scene::Lowered), String> {
-        let document = orla_language::parse_document(text).map_err(|e| e.to_string())?;
+    fn lower(
+        &self,
+        text: &str,
+    ) -> Result<(orla_language::Document, orla_scene::Lowered), Diagnostic> {
+        let document = orla_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
         let mut loader = |path: &Path| read_document(path);
         let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
         let lowered = orla_scene::load_with_params(
@@ -170,17 +173,17 @@ impl Scene {
             &mut declare,
             &self.params,
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Diagnostic::from(&e))?;
         Ok((document, lowered))
     }
 
     /// Whether `text`, as the root, would be taken whole: it lowers, and
     /// every Kernel it defines itself compiles. Nothing is written,
     /// published or run; see [`crate::Session::check_scene`].
-    pub(crate) fn check(&self, text: &str) -> Result<(), String> {
+    pub(crate) fn check(&self, text: &str) -> Result<(), Diagnostic> {
         let (mut document, lowered) = self.lower(text)?;
         let (structs, types, functions) =
-            declarations_for(&self.base(), &document.uses).map_err(|e| e.to_string())?;
+            declarations_for(&self.base(), &document.uses).map_err(Diagnostic::new)?;
         document.inherit(&structs, &types, &functions);
         let root_key = PathBuf::from(self.document_name());
         let inline = lowered
@@ -194,7 +197,8 @@ impl Scene {
             .map(|kernel| (named_id(kernel), kernel));
         for (id, kernel) in top.chain(inline) {
             let id = id?;
-            orla_compiler::compile_kernel(kernel, Some(&id)).map_err(|error| error.to_string())?;
+            orla_compiler::compile_kernel(kernel, Some(&id))
+                .map_err(|error| Diagnostic::from(&error))?;
         }
         Ok(())
     }
@@ -212,7 +216,7 @@ impl Scene {
         let text = match std::fs::read_to_string(&self.root) {
             Ok(text) => text,
             Err(error) => {
-                events.push(Event::SceneRejected(error.to_string()));
+                events.push(Event::SceneRejected(Diagnostic::new(error.to_string())));
                 return;
             }
         };
@@ -248,7 +252,7 @@ impl Scene {
             }
             Err(error) => events.push(Event::Rejected {
                 path: root.clone(),
-                error: format!(" {error}"),
+                error: Diagnostic::new(error),
             }),
         }
         for kernel in &document.kernels {
@@ -358,7 +362,7 @@ impl Scene {
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.clone(),
-                        error: format!(" {error}"),
+                        error: Diagnostic::new(error.to_string()),
                     });
                     kernels.mark_read(path, current);
                     continue;
@@ -369,7 +373,7 @@ impl Scene {
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.clone(),
-                        error: error.to_string(),
+                        error: Diagnostic::from(&error),
                     });
                     kernels.mark_read(path, current);
                     continue;
@@ -378,7 +382,10 @@ impl Scene {
             if !is_library(&document) {
                 events.push(Event::Rejected {
                     path: path.clone(),
-                    error: "1:1: a used document must hold kernels only".into(),
+                    error: Diagnostic {
+                        message: "a used document must hold kernels only".into(),
+                        at: Some((1, 1)),
+                    },
                 });
                 kernels.mark_read(path, current);
                 continue;
@@ -397,7 +404,7 @@ impl Scene {
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.clone(),
-                        error: format!(" {error}"),
+                        error: Diagnostic::new(error),
                     });
                     kernels.mark_read(path, current);
                     continue;
@@ -438,19 +445,20 @@ impl Scene {
         source: &str,
         kernels: &Kernels,
         runtime: &Runtime,
-    ) -> Result<orla_runtime::Candidate, String> {
-        let mut document = orla_language::parse_document(source).map_err(|e| e.to_string())?;
+    ) -> Result<orla_runtime::Candidate, Diagnostic> {
+        let mut document =
+            orla_language::parse_document(source).map_err(|e| Diagnostic::from(&e))?;
         if document.kernels.len() != 1 {
-            return Err(format!(
+            return Err(Diagnostic::new(format!(
                 "expected one kernel, found {}",
                 document.kernels.len()
-            ));
+            )));
         }
         let base = self.root.parent().unwrap_or_else(|| Path::new("."));
         let (mut structs, mut types, mut functions) = if document.uses.is_empty() {
             (Vec::new(), Vec::new(), Vec::new())
         } else {
-            declarations_for(base, &document.uses).map_err(|e| e.to_string())?
+            declarations_for(base, &document.uses).map_err(Diagnostic::new)?
         };
         // The scene's shared declarations come after the source's own,
         // and a name the source declares, at its top or inside its
@@ -485,9 +493,9 @@ impl Scene {
         }
         document.inherit(&structs, &types, &functions);
         let module = orla_compiler::compile_kernel(&document.kernels[0], None)
-            .map_err(|e| kernels.located(e.to_string(), &self.root, &self.root))?;
+            .map_err(|e| kernels.located(Diagnostic::from(&e), &self.root, &self.root))?;
         runtime
             .prepare_module(module, source)
-            .map_err(|e| e.to_string())
+            .map_err(|e| Diagnostic::new(e.to_string()))
     }
 }

@@ -1276,7 +1276,7 @@ fn loaded(session: &Session, events: &[Event]) -> Result<(), String> {
     let why: Vec<String> = events
         .iter()
         .filter_map(|event| match event {
-            Event::SceneRejected(error) => Some(error.clone()),
+            Event::SceneRejected(error) => Some(error.to_string()),
             _ => None,
         })
         .collect();

@@ -440,13 +440,16 @@ pub(crate) fn declarations_key(
     format!("{structs:?}{types:?}{functions:?}")
 }
 
-pub(crate) fn named_id(kernel: &Kernel) -> Result<KernelId, String> {
+pub(crate) fn named_id(kernel: &Kernel) -> Result<KernelId, crate::Diagnostic> {
     match &kernel.id {
         Some(id) => id
             .value
             .parse::<KernelId>()
-            .map_err(|error| format!("{}: {error}", id.span)),
-        None => Err("1:1: a kernel outside a node needs an id".into()),
+            .map_err(|error| crate::Diagnostic::at(id.span, error.to_string())),
+        None => Err(crate::Diagnostic {
+            message: "a kernel outside a node needs an id".into(),
+            at: Some((1, 1)),
+        }),
     }
 }
 
@@ -461,9 +464,14 @@ pub(crate) fn is_library(document: &Document) -> bool {
 /// when one is known: a `use` away is the usual reason, and saying which
 /// file says what to write. `known` are the documents the caller reads
 /// already, and `root` the scene they belong to.
-pub(crate) fn located(message: String, document: &Path, root: &Path, known: &[PathBuf]) -> String {
-    let Some(name) = missing_name(&message) else {
-        return message;
+pub(crate) fn located(
+    error: crate::Diagnostic,
+    document: &Path,
+    root: &Path,
+    known: &[PathBuf],
+) -> crate::Diagnostic {
+    let Some(name) = missing_name(&error.message) else {
+        return error;
     };
     // What this document already uses is not the answer; every other
     // document the caller knows, and every `.orla` beside this one and
@@ -509,10 +517,14 @@ pub(crate) fn located(message: String, document: &Path, root: &Path, known: &[Pa
     });
     search.dedup();
     let Some((file, kind)) = declared_in(&name, &search) else {
-        return message;
+        return error;
     };
     let spelling = relative_to(&file, document.parent().unwrap_or_else(|| Path::new(".")));
-    format!(
-        "{message}; {kind} `{name}` is declared in {spelling}, which this document does not use: `use \"{spelling}\";`"
-    )
+    crate::Diagnostic {
+        message: format!(
+            "{}; {kind} `{name}` is declared in {spelling}, which this document does not use: `use \"{spelling}\";`",
+            error.message
+        ),
+        at: error.at,
+    }
 }

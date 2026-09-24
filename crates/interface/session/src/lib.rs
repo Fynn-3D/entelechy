@@ -172,6 +172,75 @@ impl Limits {
     }
 }
 
+/// What is wrong with a document, and where in it when that is known:
+/// the line and column from 1. Carried as it was found, so an interface
+/// hands an agent the position as data rather than reading it back out
+/// of a sentence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// What is wrong.
+    pub message: String,
+    /// Line and column, from 1, when the problem has a place.
+    pub at: Option<(u32, u32)>,
+}
+
+impl Diagnostic {
+    /// A diagnostic with no place.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            at: None,
+        }
+    }
+
+    /// A diagnostic at a place in its document.
+    pub fn at(span: orla_language::Span, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            at: Some((span.line, span.column)),
+        }
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.at {
+            Some((line, column)) => write!(f, "{line}:{column}: {}", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
+impl From<&orla_language::ParseError> for Diagnostic {
+    fn from(error: &orla_language::ParseError) -> Self {
+        Self::at(error.span, error.message.clone())
+    }
+}
+
+impl From<&orla_scene::DocumentError> for Diagnostic {
+    fn from(error: &orla_scene::DocumentError) -> Self {
+        Self::at(error.span, error.message.clone())
+    }
+}
+
+impl From<&orla_compiler::CompileError> for Diagnostic {
+    fn from(error: &orla_compiler::CompileError) -> Self {
+        match error {
+            orla_compiler::CompileError::Parse(error) => error.into(),
+            orla_compiler::CompileError::Semantic { span, message } => {
+                Self::at(*span, message.clone())
+            }
+            other => Self::new(other.to_string()),
+        }
+    }
+}
+
+impl From<String> for Diagnostic {
+    fn from(message: String) -> Self {
+        Self::new(message)
+    }
+}
+
 /// Something the session observed while synchronizing with the filesystem.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -196,8 +265,8 @@ pub enum Event {
     Rejected {
         /// Document that defines it.
         path: PathBuf,
-        /// Diagnostic.
-        error: String,
+        /// Diagnostic, placed in that document when it has a place.
+        error: Diagnostic,
     },
     /// A Kernel disappeared from its document.
     Retired {
@@ -227,7 +296,7 @@ pub enum Event {
         detail: String,
     },
     /// The scene document changed but does not parse; the previous graph stays.
-    SceneRejected(String),
+    SceneRejected(Diagnostic),
     /// An input's file is not there, and the input reads its fallback
     /// until it is.
     Absent {
@@ -279,7 +348,10 @@ impl fmt::Display for Event {
                 id,
                 generation,
             } => write!(f, "published {id} {generation} from {}", path.display()),
-            Self::Rejected { path, error } => write!(f, "rejected {}:{error}", path.display()),
+            Self::Rejected { path, error } => match error.at {
+                Some(_) => write!(f, "rejected {}:{error}", path.display()),
+                None => write!(f, "rejected {}: {error}", path.display()),
+            },
             Self::Retired { path, id } => write!(f, "retired {id} ({})", path.display()),
             Self::SceneLoaded => f.write_str("scene loaded"),
             Self::Loaded { name, path, detail } => {
