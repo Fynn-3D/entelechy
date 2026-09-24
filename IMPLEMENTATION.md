@@ -150,7 +150,10 @@ rule of each is what the backends are held to
 A reduce, scan, scatter or async node is never fused. A runtime may run
 its scans on a second backend (`Runtime::with_backends`): a `gpu` session
 hands scans to the JIT, and every module the GPU does not take
-([`Backend::takes`](crates/core/rules/src/backend.rs)): one holding a `Double`,
+([`Backend::takes`](crates/core/rules/src/backend.rs)): one binding more buffers
+at once than the device does (its inputs, the outputs it writes, its
+failure record, its uniforms, counted against the device's own limits,
+which the backend asks for in full), one holding a `Double`,
 or a `Long` outside a map, a reduction, or a scatter of `Long`s under
 `min` or `max` (64-bit atomics on keys whose unsigned order is the signed
 one), or on a device without 64-bit integers. Their inputs come to the Host and their outputs upload when

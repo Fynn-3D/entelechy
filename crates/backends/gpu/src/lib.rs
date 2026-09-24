@@ -316,27 +316,84 @@ impl Prepared for Pipeline {
 }
 
 impl GpuBackend {
-    /// Why this device does not run `module`, if it does not: a `Double`
-    /// it has no arithmetic for, or a `Long` where the device has none or
-    /// the mode folds words it would have to fold in pairs.
-    fn refusal(&self, module: &Validated) -> Option<&'static str> {
+    /// Why this device does not run `module`, if it does not: more
+    /// buffers than it binds at once, a `Double` it has no arithmetic for,
+    /// or a `Long` where the device has none or the mode folds words it
+    /// would have to fold in pairs.
+    fn refusal(&self, module: &Validated) -> Option<String> {
+        if let Some(why) = self.wider_than_device(module) {
+            return Some(why);
+        }
         if module.holds(orla_abi::Type::Double) {
-            return Some("it holds a Double, which the device does not compute");
+            return Some("it holds a Double, which the device does not compute".to_owned());
         }
         if !module.holds(orla_abi::Type::Long) {
             return None;
         }
         if !self.int64 {
-            return Some("it holds a Long, and the device has no 64-bit integers");
+            return Some("it holds a Long, and the device has no 64-bit integers".to_owned());
         }
         match module.manifest.mode {
             orla_ir::Mode::Map | orla_ir::Mode::Reduce => None,
             orla_ir::Mode::Scatter { .. } if wgsl::long_extremes(module) => (!self.int64_atomics)
-                .then_some("it scatters Longs, and the device has no 64-bit atomic min and max"),
+                .then(|| {
+                    "it scatters Longs, and the device has no 64-bit atomic min and max".to_owned()
+                }),
             _ => Some(
-                "it holds a Long, which the device computes in a map, a reduction, or a scatter of Longs under min or max only",
+                "it holds a Long, which the device computes in a map, a reduction, or a scatter of Longs under min or max only"
+                    .to_owned(),
             ),
         }
+    }
+
+    /// Why `module`'s widest pass binds more buffers than this device
+    /// does at once, if it does: its uniforms (the context and the
+    /// parameters) and its storage (every input, every output it writes,
+    /// the failure record where its arithmetic can fail, and an emitting
+    /// scatter's target), against the device's limits on storage buffers,
+    /// on uniform buffers, and on all of them together. Such a module runs
+    /// on the ordered backend; nothing about it is wrong.
+    fn wider_than_device(&self, module: &Validated) -> Option<String> {
+        let uniforms = 2usize;
+        let inputs = module.manifest.inputs.len();
+        let written = wgsl::written_outputs(module);
+        let failure = usize::from(wgsl::can_fail(module));
+        let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty());
+        let storage = inputs + written + failure + emitting;
+        let limits = self.device.limits();
+        let most_storage = limits.max_storage_buffers_per_shader_stage as usize;
+        let most_uniform = limits.max_uniform_buffers_per_shader_stage as usize;
+        let most = limits.max_buffers_and_acceleration_structures_per_shader_stage as usize;
+        let spelled = format!(
+            "{inputs} input(s), {written} output(s){}{} and {uniforms} uniforms",
+            if failure > 0 {
+                ", a failure record"
+            } else {
+                ""
+            },
+            if emitting > 0 {
+                ", an emitting target"
+            } else {
+                ""
+            },
+        );
+        if storage > most_storage {
+            return Some(format!(
+                "it binds {storage} storage buffers at once ({spelled}) and the device binds at most {most_storage}"
+            ));
+        }
+        if uniforms > most_uniform {
+            return Some(format!(
+                "it binds {uniforms} uniform buffers and the device binds at most {most_uniform}"
+            ));
+        }
+        if storage + uniforms > most {
+            return Some(format!(
+                "it binds {} buffers at once ({spelled}) and the device binds at most {most}",
+                storage + uniforms
+            ));
+        }
+        None
     }
 
     /// Opens the default adapter.
@@ -357,6 +414,12 @@ impl GpuBackend {
             max_buffer_size: adapter_limits.max_buffer_size,
             max_storage_buffers_per_shader_stage: adapter_limits
                 .max_storage_buffers_per_shader_stage,
+            // And every buffer together: the default is less than the
+            // storage buffers alone that the adapter offers.
+            max_uniform_buffers_per_shader_stage: adapter_limits
+                .max_uniform_buffers_per_shader_stage,
+            max_buffers_and_acceleration_structures_per_shader_stage: adapter_limits
+                .max_buffers_and_acceleration_structures_per_shader_stage,
             ..wgpu::Limits::default()
         };
         // Timestamps at a pass's edges, when the adapter has them: what
@@ -832,7 +895,7 @@ impl Backend for GpuBackend {
     }
 
     fn declines(&self, module: &Validated) -> Option<String> {
-        self.refusal(module).map(str::to_owned)
+        self.refusal(module)
     }
 
     fn uploaded(&self) -> u64 {
@@ -870,23 +933,17 @@ impl Backend for GpuBackend {
                 manifest.mode.name()
             ));
         }
-        // A Kernel's ports are buffers the device binds at once: one for
-        // each output the pass writes, one for each input, and a
-        // scatter's target is one of the inputs. Saying so here is the
-        // difference between a Kernel that is too wide for this device
-        // and a page of the driver's validation.
-        let written = wgsl::written_outputs(module);
-        // An entry that emits binds its target once more, as atomics.
-        let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty());
-        let wanted = module.manifest.inputs.len() + written + emitting;
-        let allowed = self.device.limits().max_storage_buffers_per_shader_stage as usize;
-        if wanted > allowed {
+        // A Kernel's ports are buffers the device binds at once. Saying so
+        // here is the difference between a Kernel that is too wide for
+        // this device and a page of the driver's validation; a session
+        // asks `declines` first and runs such a Kernel elsewhere.
+        if let Some(why) = self.wider_than_device(module) {
             return Err(format!(
-                "`{}` binds {wanted} Fields at once ({} input(s) and {written} output(s)) and this device binds at most {allowed}; the interpreter and the JIT have no such limit",
-                module.manifest.id,
-                module.manifest.inputs.len()
+                "`{}`: {why}; the interpreter and the JIT have no such limit",
+                module.manifest.id
             ));
         }
+        let written = wgsl::written_outputs(module);
         let source = wgsl::emit(module);
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = self

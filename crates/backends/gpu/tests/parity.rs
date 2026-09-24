@@ -1974,3 +1974,58 @@ fn emitted_pairs_land_as_the_references_do() {
         assert_eq!(cpu, gpu_words, "emitted floats under {rule}");
     }
 }
+
+/// A Kernel as wide as the device binds runs there, failure record and
+/// all, and the answer is the interpreter's; one wider is declined with
+/// what it binds, so a session runs it elsewhere, rather than prepared
+/// into the driver's validation. Twenty-five inputs, an output, two
+/// uniforms and the record an integer division keeps come to twenty-nine,
+/// one past the default of twenty-eight the device was once opened at,
+/// which is what an adapter that binds twenty-nine was refused.
+#[test]
+fn a_kernel_as_wide_as_the_device_runs_there_and_a_wider_one_is_declined() {
+    let Some(gpu) = gpu() else { return };
+    let source = |inputs: usize| {
+        let ports: String = (0..inputs)
+            .map(|k| format!("input f{k}: Rows<Int>; "))
+            .collect();
+        // Every input is bound whether it is read or not; two are read.
+        let last = inputs - 1;
+        format!(
+            "kernel test.wide@1 {{ requires {{ field.read; field.write; }} {ports}
+             output result: Rows<Int>;
+             compute {{ return (sample(f0) + sample(f{last})) / (element() % 7 + 1); }} }}"
+        )
+    };
+    for inputs in [25usize, 80] {
+        let module = compile(&source(inputs)).unwrap_or_else(|error| panic!("{error}"));
+        match gpu.declines(&module) {
+            None => {
+                let mut host = Host::new(1 << 22);
+                let handles: Vec<_> = (0..inputs)
+                    .map(|k| {
+                        host.adopt(
+                            orla_abi::FieldData::from_storage(
+                                orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                                Domain::Rows(64),
+                                (0..64u32).map(|i| i * 3 + k as u32).collect(),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                let (cpu, device) =
+                    on_both_inputs(&gpu, &mut host, &module, handles, Domain::Rows(64));
+                assert_eq!(cpu, device, "{inputs} inputs");
+            }
+            Some(why) => {
+                assert!(why.contains("binds") && why.contains("at most"), "{why}");
+                let error = Backend::prepare(&gpu, &module)
+                    .err()
+                    .expect("declined, so not prepared");
+                assert!(error.contains(&why), "{error}");
+            }
+        }
+    }
+}
