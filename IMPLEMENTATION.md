@@ -145,8 +145,9 @@ A reduce, scan, scatter or async node is never fused. A runtime may run
 its scans on a second backend (`Runtime::with_backends`): a `gpu` session
 hands scans to the JIT, and every module the GPU does not take
 ([`Backend::takes`](crates/core/rules/src/backend.rs)): one holding a `Double`,
-or a `Long` outside a map or a reduction or on a device without 64-bit
-integers. Their inputs come to the Host and their outputs upload when
+or a `Long` outside a map, a reduction, or a scatter of `Long`s under
+`min` or `max` (64-bit atomics on keys whose unsigned order is the signed
+one), or on a device without 64-bit integers. Their inputs come to the Host and their outputs upload when
 read ([test](crates/core/runtime/tests/mixed.rs)). A report says where every
 node ran, why when it left the main backend, and the bytes the trip
 carried ([`Runtime::placement`](crates/core/runtime/src/lib.rs),

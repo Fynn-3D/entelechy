@@ -505,6 +505,10 @@ fn to_long2(v: vec2<f32>) -> vec2<i64> {
 fn to_long3(v: vec3<f32>) -> vec3<i64> {
     return vec3<i64>(to_long(v.x), to_long(v.y), to_long(v.z));
 }
+";
+
+/// A Long's words, which the scatter passes load pairs of longs with.
+const LONG_WORDS: &str = "
 // The words of a Long, the low one first.
 fn long_low(x: i64) -> u32 {
     return u32(bitcast<u64>(x) & 0xFFFFFFFFlu);
@@ -727,6 +731,7 @@ fn settle_left() {{
     }
     if module.holds(Type::Long) {
         out.push_str(LONG_HELPERS);
+        out.push_str(LONG_WORDS);
     }
     for (index, port) in manifest.inputs.iter().enumerate() {
         let element = port.element();
@@ -1093,6 +1098,29 @@ pub enum ScatterPlan {
     },
 }
 
+/// Whether a scatter lands `Long`s under `min` or `max`: every scalar of
+/// its target a `Long`, taken whole by 64-bit atomics on their keys (the
+/// sign bit flipped, so the unsigned order is the signed one).
+pub fn long_extremes(module: &Module) -> bool {
+    let Mode::Scatter { base, combine } = module.manifest.mode else {
+        return false;
+    };
+    let scalars = module.manifest.inputs[base as usize].ty.schema.scalars();
+    matches!(combine, Combine::Min | Combine::Max)
+        && !scalars.is_empty()
+        && scalars.iter().all(|s| matches!(s, orla_abi::Scalar::Long))
+}
+
+/// The atomic array a scatter's target is bound as: words, or whole
+/// longs where [`long_extremes`] lands them.
+fn atomic_target(module: &Module) -> &'static str {
+    if long_extremes(module) {
+        "array<atomic<u64>>"
+    } else {
+        "array<atomic<i32>>"
+    }
+}
+
 /// The plan for a scatter module.
 pub fn scatter_plan(module: &Module) -> ScatterPlan {
     let Mode::Scatter { base, combine } = module.manifest.mode else {
@@ -1108,7 +1136,7 @@ pub fn scatter_plan(module: &Module) -> ScatterPlan {
         },
         Combine::Min | Combine::Max => ScatterPlan::Parallel {
             last: false,
-            keys: floats,
+            keys: floats || long_extremes(module),
         },
         Combine::Last => ScatterPlan::Parallel {
             last: true,
@@ -1120,20 +1148,25 @@ pub fn scatter_plan(module: &Module) -> ScatterPlan {
 /// The words of a value as WGSL `u32` expressions, one per word in layout
 /// order, each with its scalar type.
 fn value_words(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Type)>) {
+    let mut scalars = Vec::new();
+    value_scalars(module, ty, path, &mut scalars);
+    for (expr, kind) in scalars {
+        for word in stored_words(kind, &expr) {
+            out.push((word, Type::Scalar(kind)));
+        }
+    }
+}
+
+/// The scalars of a value as WGSL expressions, in layout order.
+fn value_scalars(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Scalar)>) {
     match ty {
         Type::Struct(index) => {
             for (k, field) in module.structs[index as usize].fields.iter().enumerate() {
                 let path = format!("{path}{}", field_path(module, index, k));
-                value_words(module, field.ty, &path, out);
+                value_scalars(module, field.ty, &path, out);
             }
         }
-        other => {
-            for (expr, kind) in scalar_parts(other, path) {
-                for word in stored_words(kind, &expr) {
-                    out.push((word, Type::Scalar(kind)));
-                }
-            }
-        }
+        other => out.extend(scalar_parts(other, path)),
     }
 }
 
@@ -1155,7 +1188,7 @@ fn scatter_header(module: &Module, target: Option<bool>, extra: &str) -> String 
     );
     if let Some(atomic) = target {
         let ty = if atomic {
-            "array<atomic<i32>>"
+            atomic_target(module)
         } else {
             "array<u32>"
         };
@@ -1167,6 +1200,10 @@ fn scatter_header(module: &Module, target: Option<bool>, extra: &str) -> String 
     out.push_str(extra);
     for index in 0..module.structs.len() {
         let _ = writeln!(out, "{}", struct_decl(module, index));
+    }
+    // Pairs of longs are loaded, and landed, through the long helpers.
+    if long_extremes(module) {
+        out.push_str(LONG_WORDS);
     }
     // The total order over floats as keys, an involution on the bits:
     // every negative below every positive, NaN beyond the infinities.
@@ -1451,16 +1488,9 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
     let element = target.element();
     let stride = target.ty.schema.value_words();
     let mut out = scatter_header(module, Some(true), &winners_binding(false));
-    let mut words = Vec::new();
-    value_words(
-        module,
-        element,
-        &format!("p.{}", member_name(1)),
-        &mut words,
-    );
     let lines = match combine {
         Combine::Last => vec!["    atomicMax(&winner[at], i + 1u);".to_owned()],
-        _ => atomic_lines(&words, combine, "out0"),
+        _ => atomic_lines(module, element, combine, "out0"),
     };
     let _ = writeln!(
         out,
@@ -1483,15 +1513,31 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     out
 }
 
-/// The atomics that combine a pair's value words into the element of
+/// The atomics that combine a pair's value `p.value` into the element of
 /// `target` at word `b`, under an order-free rule: `sum` adds, `min` and
-/// `max` compare, floats as their ordered keys.
-fn atomic_lines(words: &[(String, Type)], combine: Combine, target: &str) -> Vec<String> {
+/// `max` compare, floats as their ordered keys, longs whole as theirs.
+fn atomic_lines(module: &Module, element: Type, combine: Combine, target: &str) -> Vec<String> {
     let op = match combine {
         Combine::Sum => "atomicAdd",
         Combine::Min => "atomicMin",
         _ => "atomicMax",
     };
+    let path = format!("p.{}", member_name(1));
+    if long_extremes(module) {
+        let mut scalars = Vec::new();
+        value_scalars(module, element, &path, &mut scalars);
+        return scalars
+            .iter()
+            .enumerate()
+            .map(|(k, (expr, _))| {
+                format!(
+                    "    {op}(&{target}[b / 2u + {k}u], bitcast<u64>({expr}) ^ 0x8000000000000000lu);"
+                )
+            })
+            .collect();
+    }
+    let mut words = Vec::new();
+    value_words(module, element, &path, &mut words);
     words
         .iter()
         .enumerate()
@@ -1561,17 +1607,11 @@ fn emit_functions(module: &Module, out: &mut String) {
     let stride = target.ty.schema.value_words();
     let _ = writeln!(
         out,
-        "@group(0) @binding({EMIT_BINDING}) var<storage, read_write> emitted: array<atomic<i32>>;
-fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}"
+        "@group(0) @binding({EMIT_BINDING}) var<storage, read_write> emitted: {};
+fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}",
+        atomic_target(module)
     );
     for pair in pairs {
-        let mut words = Vec::new();
-        value_words(
-            module,
-            target.element(),
-            &format!("p.{}", member_name(1)),
-            &mut words,
-        );
         let _ = writeln!(
             out,
             "fn {}(p: {}) {{
@@ -1582,7 +1622,7 @@ fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}"
             emit_name(pair),
             wgsl_type(pair),
             scatter_address(module, "return;"),
-            atomic_lines(&words, combine, "emitted").join("\n")
+            atomic_lines(module, target.element(), combine, "emitted").join("\n")
         );
     }
 }
@@ -1652,18 +1692,26 @@ pub fn emit_scatter_keys(module: &Module, encode: bool) -> String {
     let mut out = scatter_header(module, Some(false), "");
     // The key transform is an involution, so one function serves both ways.
     let _ = encode;
-    let lines = target
-        .ty
-        .schema
-        .scalars()
-        .iter()
-        .enumerate()
-        .filter(|(_, scalar)| matches!(scalar, orla_abi::Scalar::Float))
-        .map(|(k, _)| {
-            format!("    out0[b + {k}u] = bitcast<u32>(key_of(bitcast<i32>(out0[b + {k}u])));")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    // A float's key is `key_of` of its word; a long's is its sign bit
+    // flipped, in its high word.
+    // The schema lists a scalar per word, a long twice.
+    let mut lines = Vec::new();
+    let scalars = target.ty.schema.scalars();
+    let mut k = 0;
+    while let Some(scalar) = scalars.get(k) {
+        match scalar {
+            orla_abi::Scalar::Float => lines.push(format!(
+                "    out0[b + {k}u] = bitcast<u32>(key_of(bitcast<i32>(out0[b + {k}u])));"
+            )),
+            orla_abi::Scalar::Long => lines.push(format!(
+                "    out0[b + {high}u] = out0[b + {high}u] ^ 0x80000000u;",
+                high = k + 1
+            )),
+            _ => {}
+        }
+        k += scalar.words();
+    }
+    let lines = lines.join("\n");
     let _ = writeln!(
         out,
         "

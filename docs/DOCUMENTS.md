@@ -238,7 +238,8 @@ bit operators and the shifts (the count modulo 64), `abs`, `sign`,
 `min`, `max`, `clamp`, `add_wrap`, `sub_wrap` and `mul_wrap`. The
 interpreter and the JIT compute them as Rust's own `f64` and `i64` do.
 A GPU computes a `Long` in a map or a reduction where the device has
-64-bit integers, and never a `Double` (few devices have one, and those
+64-bit integers, and in a scatter whose target is all `Long`s under
+`min` or `max` where it also takes them atomically, and never a `Double` (few devices have one, and those
 at a fraction of a float's rate); a session on the GPU runs such a node
 on the JIT, and the scene does not see the difference.
 [`examples/precision`](../examples/precision/README.md) is what they are

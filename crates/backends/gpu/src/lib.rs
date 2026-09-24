@@ -242,6 +242,9 @@ pub struct GpuBackend {
     timestamps: bool,
     /// Whether the device computes 64-bit integers.
     int64: bool,
+    /// Whether it takes the least and the greatest of them atomically,
+    /// which a scatter of `Long`s under `min` or `max` lands with.
+    int64_atomics: bool,
     /// Failure words and the buffers they are read back through, ready
     /// to be used again: a checked node takes a pair each run.
     failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
@@ -328,7 +331,11 @@ impl GpuBackend {
         }
         match module.manifest.mode {
             orla_ir::Mode::Map | orla_ir::Mode::Reduce => None,
-            _ => Some("it holds a Long, which the device computes in a map or a reduction only"),
+            orla_ir::Mode::Scatter { .. } if wgsl::long_extremes(module) => (!self.int64_atomics)
+                .then_some("it scatters Longs, and the device has no 64-bit atomic min and max"),
+            _ => Some(
+                "it holds a Long, which the device computes in a map, a reduction, or a scatter of Longs under min or max only",
+            ),
         }
     }
 
@@ -361,12 +368,19 @@ impl GpuBackend {
         // runs here; without them, and for a `Double` always, the module
         // goes to the ordered backend.
         let int64 = adapter.features().contains(wgpu::Features::SHADER_INT64);
+        let int64_atomics = int64
+            && adapter
+                .features()
+                .contains(wgpu::Features::SHADER_INT64_ATOMIC_MIN_MAX);
         let mut features = wgpu::Features::empty();
         if timestamps {
             features |= timing;
         }
         if int64 {
             features |= wgpu::Features::SHADER_INT64;
+        }
+        if int64_atomics {
+            features |= wgpu::Features::SHADER_INT64_ATOMIC_MIN_MAX;
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("orla"),
@@ -391,6 +405,7 @@ impl GpuBackend {
             measured: std::sync::atomic::AtomicBool::new(false),
             timestamps,
             int64,
+            int64_atomics,
             uploaded: std::sync::atomic::AtomicU64::new(0),
             failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),

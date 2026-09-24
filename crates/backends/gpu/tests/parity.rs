@@ -1986,6 +1986,69 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
     assert_eq!(cpu, gpu_words, "scatter with a float sum");
 }
 
+/// Longs under `min` and `max` land on the device whole, by 64-bit
+/// atomics on keys that order them as signed: negatives, values past
+/// 32 bits, and a pair of longs as one element, returned and emitted.
+#[test]
+fn long_extremes_land_as_the_references_do() {
+    let Some(gpu) = gpu() else { return };
+    let count = 50_000u32;
+    let mut host = Host::new(1 << 24);
+    for rule in ["min", "max"] {
+        let module = compile(&format!(
+            "kernel test.deep@1 {{ requires {{ field.read; field.write; }}
+             input keys: Rows<Int>; input slots: Rows<Deep>; output result: Rows<Deep>;
+             struct Deep {{ near: Long; id: Long; }}
+             struct Pair {{ at: Int; value: Deep; }}
+             scatter into slots with {rule} {{
+                 let k = sample(keys);
+                 let wide = long(k % 4001 - 2000) * 3000000001l;
+                 let _fan = loop k % 4 with j = 0 {{
+                     emit(Pair {{ at: (k * 13 + j) % 61, value: Deep {{ near: wide + long(j), id: -long(k) }} }});
+                     j + 1
+                 }};
+                 return Pair {{ at: k % 67 - 3, value: Deep {{ near: -wide, id: long(k) << 33 }} }};
+             }} }}"
+        ))
+        .unwrap();
+        let keys = host
+            .adopt(
+                orla_abi::FieldData::from_storage(
+                    orla_abi::Schema::new(vec![orla_abi::Scalar::Int]),
+                    Domain::Rows(count),
+                    (0..count)
+                        .map(|i| i.wrapping_mul(2_654_435_761) >> 5)
+                        .collect(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let slots = host
+            .adopt(
+                orla_abi::FieldData::from_storage(
+                    orla_abi::Schema::new(vec![orla_abi::Scalar::Long; 4]),
+                    Domain::Rows(61),
+                    (0..61u64)
+                        .flat_map(|i| {
+                            let v = (i as i64 - 30) * 1_000_000_007;
+                            [v as u32, (v >> 32) as u32, i as u32, 0]
+                        })
+                        .collect(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let (cpu, gpu_words) = on_both_inputs(
+            &gpu,
+            &mut host,
+            &module,
+            vec![keys, slots],
+            Domain::Rows(count),
+        );
+        assert_eq!(cpu, gpu_words, "longs under {rule}");
+    }
+}
+
 /// Pairs an entry emits land on the device as the reference lands them:
 /// the device combines them into the target as the entry runs, which an
 /// order-free rule answers the same for. Ints under every such rule;
