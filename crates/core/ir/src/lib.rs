@@ -637,11 +637,15 @@ pub enum Intrinsic {
     Mulhi,
     /// `umulhi(a, b)`: the high 32 bits of the unsigned 64-bit product.
     Umulhi,
+    /// `bits(x)`: a Float's 32 bits as an Int, unchanged.
+    Bits,
+    /// `from_bits(x)`: an Int's 32 bits as a Float, unchanged.
+    FromBits,
 }
 
 impl Intrinsic {
     /// All intrinsics with their source names.
-    pub const ALL: [(Intrinsic, &'static str); 47] = [
+    pub const ALL: [(Intrinsic, &'static str); 49] = [
         (Intrinsic::Floor, "floor"),
         (Intrinsic::Ceil, "ceil"),
         (Intrinsic::Round, "round"),
@@ -689,6 +693,8 @@ impl Intrinsic {
         (Intrinsic::Urem, "urem"),
         (Intrinsic::Mulhi, "mulhi"),
         (Intrinsic::Umulhi, "umulhi"),
+        (Intrinsic::Bits, "bits"),
+        (Intrinsic::FromBits, "from_bits"),
     ];
 
     /// Source spelling.
@@ -768,6 +774,10 @@ impl Intrinsic {
             }
             Self::Mulhi => "The high 32 bits of the signed 64-bit product of a and b.",
             Self::Umulhi => "The high 32 bits of the unsigned 64-bit product of a and b.",
+            Self::Bits => {
+                "x's 32 bits as an Int, unchanged: for a Float of no sign, the Ints order as the Floats do."
+            }
+            Self::FromBits => "x's 32 bits as a Float, unchanged; bits(from_bits(x)) is x.",
         }
     }
 
@@ -880,6 +890,8 @@ impl Intrinsic {
                 [Type::Int, Type::Int],
             ) => Some(Type::Int),
             (Self::Ult, [Type::Int, Type::Int]) => Some(Type::Bool),
+            (Self::Bits, [Type::Float]) => Some(Type::Int),
+            (Self::FromBits, [Type::Int]) => Some(Type::Float),
             _ => None,
         }
     }

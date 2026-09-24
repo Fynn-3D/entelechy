@@ -269,6 +269,11 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: q.x + q.y * 0.5 + q.z, i: s.x * 100 + s.y + w, b: s.x > s.y, v: q }",
         ),
         (
+            "float bits",
+            "let fb = bits(x); let back = from_bits(fb ^ 1);",
+            "Out { f: back, i: fb - bits(from_bits(fb)), b: bits(x * 2.0) > fb, v: vec3(from_bits(fb + 3), x, 0.0) }",
+        ),
+        (
             "hex and negatives",
             "let h = (0xFF & i) | 0x80000000; let neg = -i * -1 - -3;",
             "Out { f: -x, i: (h >>> 24) + neg, b: h < 0, v: vec3(-1.0, 0x10, -0.5) }",

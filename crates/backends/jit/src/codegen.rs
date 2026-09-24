@@ -2359,6 +2359,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Intrinsic::Mulhi => vec![self.b.ins().smulhi(w[0][0], w[1][0])],
             Intrinsic::Umulhi => vec![self.b.ins().umulhi(w[0][0], w[1][0])],
+            Intrinsic::Bits => vec![self.b.ins().bitcast(types::I32, MemFlags::new(), w[0][0])],
+            Intrinsic::FromBits => vec![self.b.ins().bitcast(types::F32, MemFlags::new(), w[0][0])],
             Intrinsic::Sin
             | Intrinsic::Cos
             | Intrinsic::Tan

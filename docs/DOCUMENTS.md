@@ -262,7 +262,9 @@ and `mul_wrap` are the arithmetic modulo 2^32 (a machine's ALU), where
 `+ - *` report an overflow as a failure, and `popcount`, `clz`, `ctz`,
 `rotl`, `rotr`, `ult`, `udiv`, `urem`, `mulhi` and `umulhi` are the bit
 counts, rotations, unsigned compare and division, and the high half of a
-64-bit product. `orla help <name>` shows any builtin's signatures.
+64-bit product. `bits` and `from_bits` carry a Float's 32 bits to an Int
+and back unchanged; the Ints of Floats of no sign order as the Floats
+do, which is how a depth and a name share one key. `orla help <name>` shows any builtin's signatures.
 
 Integer arithmetic that cannot produce a value — an overflow of `+ - *`,
 a division or remainder by zero, the least integer negated, `udiv` or

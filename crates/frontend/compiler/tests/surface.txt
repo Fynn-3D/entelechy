@@ -57,6 +57,8 @@ builtin atan
 builtin atan2
   atan2(y: Double, x: Double) -> Double
   atan2(y: Float, x: Float) -> Float
+builtin bits
+  bits(x: Float) -> Int
 builtin button requires input.read
   button(n: Int) -> Bool
 builtin ceil
@@ -252,6 +254,8 @@ builtin fract
   fract(x: Vec2) -> Vec2
   fract(x: Vec3) -> Vec3
   fract(x: Vec4) -> Vec4
+builtin from_bits
+  from_bits(x: Int) -> Float
 builtin icoord entry
   icoord() -> IVec2
   icoord() -> IVec3

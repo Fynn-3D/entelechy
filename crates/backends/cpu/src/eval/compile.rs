@@ -1264,6 +1264,8 @@ impl FunctionCompiler<'_> {
             },
             Intrinsic::Mulhi => imap2(|a, b| ((a as i64 * b as i64) >> 32) as i32),
             Intrinsic::Umulhi => imap2(|a, b| ((a as u32 as u64 * b as u32 as u64) >> 32) as i32),
+            // A word is a word: the bits go across as they are.
+            Intrinsic::Bits | Intrinsic::FromBits => imap1(|x| x),
         }
     }
 }

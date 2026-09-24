@@ -3269,6 +3269,8 @@ impl Emitter<'_> {
             Intrinsic::MulWrap => format!("({} * {})", v(&args[0]), v(&args[1])),
             Intrinsic::Popcount => format!("countOneBits({list})"),
             Intrinsic::Clz => format!("countLeadingZeros({list})"),
+            Intrinsic::Bits => format!("bitcast<i32>({list})"),
+            Intrinsic::FromBits => format!("bitcast<f32>({list})"),
             Intrinsic::Ctz => format!("countTrailingZeros({list})"),
             Intrinsic::Rotl => format!("rotl_i32({list})"),
             Intrinsic::Rotr => format!("rotr_i32({list})"),
