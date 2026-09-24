@@ -770,3 +770,122 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
     assert_eq!(cpu, run(4_000_000, &jit).unwrap());
     assert_eq!(cpu.iter().sum::<u32>(), 200_000);
 }
+
+/// A module on both backends over one input of rows: each one's words,
+/// or its failure.
+fn outcomes(
+    source: &str,
+    schema: orla_abi::Schema,
+    words: Vec<u32>,
+    domain: Domain,
+) -> [Result<Vec<u32>, ExecutionError>; 2] {
+    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let count = words.len() / schema.value_words();
+    let jit = JitBackend::new().unwrap();
+    let prepared = jit.prepare(&module).unwrap();
+    let run = |on_jit: bool| {
+        let mut host = Host::new(1 << 24);
+        let rows = host
+            .adopt(
+                orla_abi::FieldData::from_storage(
+                    schema.clone(),
+                    Domain::Rows(count as u32),
+                    words.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let invocation = Invocation {
+            inputs: vec![rows],
+            params: vec![],
+            domain,
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let out = if on_jit {
+            jit.execute(prepared.as_ref(), &module, &invocation, &mut scope)
+        } else {
+            CpuBackend.execute(&module, &invocation, &mut scope)
+        }?[0];
+        Ok(host.data(out).unwrap().storage().to_vec())
+    };
+    [run(false), run(true)]
+}
+
+/// Folds long enough to be split across workers give the walk's words
+/// and its failures: a prefix of one `Int` (its own path) and of a
+/// record (the rule's), one whose run totals overflow where the walk
+/// does not, one that overflows late, and a reduction and its overflow.
+#[test]
+fn folds_split_across_workers_are_the_walks() {
+    let n = 400_000usize;
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let mixed = (0..n)
+        .map(|i| ((i as i64 * 2_654_435_761 % 20_001) - 10_000) as i32 as u32)
+        .collect::<Vec<_>>();
+    for rule in ["sum", "min", "max"] {
+        let source = format!(
+            "kernel test.running@1 {{ requires {{ field.read; field.write; }} input rows: Rows<Int>; output result: Rows<Int>; prefix with {rule} {{ return sample(rows); }} }}"
+        );
+        let [cpu, jit] = outcomes(&source, ints.clone(), mixed.clone(), Domain::Rows(n as u32));
+        assert!(cpu.is_ok(), "{rule}: {cpu:?}");
+        assert_eq!(cpu, jit, "an Int prefix with {rule}");
+    }
+    let record = orla_abi::Schema::new(vec![
+        orla_abi::Scalar::Int,
+        orla_abi::Scalar::Long,
+        orla_abi::Scalar::Long,
+    ]);
+    let words = (0..n)
+        .flat_map(|i| {
+            let long = (i as i64 - 200_000) * 1_000_003;
+            [mixed[i], long as u32, (long >> 32) as u32]
+        })
+        .collect::<Vec<_>>();
+    let [cpu, jit] = outcomes(
+        "kernel test.pair@1 { requires { field.read; field.write; } input rows: Rows<P>; output result: Rows<P>; struct P { i: Int; l: Long; } prefix with sum { return sample(rows); } }",
+        record,
+        words,
+        Domain::Rows(n as u32),
+    );
+    assert!(cpu.is_ok(), "{cpu:?}");
+    assert_eq!(cpu, jit, "a record's prefix");
+    let sum = "kernel test.running@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(rows); } }";
+    // The first ten rows owe two billion, which the last two, three
+    // billion together, pay back: their run's own total overflows, the
+    // walk never does.
+    let mut paid = vec![0u32; n];
+    for row in paid.iter_mut().take(10) {
+        *row = (-200_000_000i32) as u32;
+    }
+    paid[n - 2] = 1_500_000_000;
+    paid[n - 1] = 1_500_000_000;
+    let [cpu, jit] = outcomes(sum, ints.clone(), paid, Domain::Rows(n as u32));
+    assert_eq!(cpu.as_ref().unwrap()[n - 1], 1_000_000_000);
+    assert_eq!(
+        cpu, jit,
+        "a run total that overflows where the walk does not"
+    );
+    // A late overflow is named at the row the walk meets it.
+    let mut late = vec![1u32; n];
+    late[n - 1000] = i32::MAX as u32;
+    let [cpu, jit] = outcomes(sum, ints.clone(), late.clone(), Domain::Rows(n as u32));
+    assert!(
+        matches!(
+            cpu,
+            Err(ExecutionError::Arithmetic {
+                error: ArithmeticError::Overflow,
+                ..
+            })
+        ),
+        "{cpu:?}"
+    );
+    assert_eq!(cpu, jit, "a late overflow");
+    let total = "kernel test.total@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows); } merge(a, b) { return a + b; } }";
+    let [cpu, jit] = outcomes(total, ints.clone(), mixed, Domain::Rows(1));
+    assert!(cpu.is_ok(), "{cpu:?}");
+    assert_eq!(cpu, jit, "a reduction");
+    let [cpu, jit] = outcomes(total, ints, late, Domain::Rows(1));
+    assert!(cpu.is_err(), "{cpu:?}");
+    assert_eq!(cpu, jit, "a reduction that overflows");
+}

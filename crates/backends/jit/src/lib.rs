@@ -597,24 +597,58 @@ fn run_reduce(
     let port = &module.manifest.outputs[0];
     let stride = port.ty.schema.value_words();
     let mut level = compute(entry, &shared, domain, stride)?;
-    let mut ctx = Ctx { ..shared.template };
     let mut count = domain.count();
+    // The tree is fixed, one level after another; the pairs of a level
+    // are merged by as many workers as they are worth, each on a run of
+    // them, and the failure the sequential walk meets first is the one
+    // of the earliest pair.
     while count > 1 {
         let pairs = count / 2;
         let mut next = vec![0u32; count.div_ceil(2) * stride];
-        for pair in 0..pairs {
-            let a = level[2 * pair * stride..].as_ptr();
-            let b = level[(2 * pair + 1) * stride..].as_ptr();
-            let out = next[pair * stride..].as_mut_ptr();
-            // `merge` reads `stride` words at `a` and `b` and writes
-            // `stride` words at `out`.
-            // A merge, a step and `init` each start their work anew.
-            ctx.work = 0;
-            unsafe { merge(&mut ctx, a, b, out) };
-            if ctx.error != 0 {
-                return Err(failure(ctx.error, 0, 0, &shared));
+        let per = pairs.div_ceil(workers(pairs)).max(1);
+        let merge_run = |first: usize, outs: &mut [u32]| -> Result<(), (usize, ExecutionError)> {
+            let mut ctx = Ctx { ..shared.template };
+            for (k, out) in outs.chunks_exact_mut(stride).enumerate() {
+                let pair = first + k;
+                let a = level[2 * pair * stride..].as_ptr();
+                let b = level[(2 * pair + 1) * stride..].as_ptr();
+                // `merge` reads `stride` words at `a` and `b` and writes
+                // `stride` words at `out`.
+                // A merge, a step and `init` each start their work anew.
+                ctx.work = 0;
+                unsafe { merge(&mut ctx, a, b, out.as_mut_ptr()) };
+                if ctx.error != 0 {
+                    return Err((pair, failure(ctx.error, 0, 0, &shared)));
+                }
+                keep_left(&mut ctx, &shared).map_err(|error| (pair, error))?;
             }
-            keep_left(&mut ctx, &shared)?;
+            hand_left(&mut ctx, &shared, 1).map_err(|error| (first, error))
+        };
+        let merged = &mut next[..pairs * stride];
+        let outcomes: Vec<Result<(), (usize, ExecutionError)>> = if per >= pairs {
+            vec![merge_run(0, merged)]
+        } else {
+            std::thread::scope(|s| {
+                let handles: Vec<_> = merged
+                    .chunks_mut(per * stride)
+                    .enumerate()
+                    .map(|(run, outs)| {
+                        let merge_run = &merge_run;
+                        s.spawn(move || merge_run(run * per, outs))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().expect("reduce worker panicked"))
+                    .collect()
+            })
+        };
+        if let Some((_, error)) = outcomes
+            .into_iter()
+            .filter_map(Result::err)
+            .min_by_key(|(pair, _)| *pair)
+        {
+            return Err(error);
         }
         if count % 2 == 1 {
             next[pairs * stride..].copy_from_slice(&level[(count - 1) * stride..count * stride]);
@@ -622,7 +656,6 @@ fn run_reduce(
         level = next;
         count = count.div_ceil(2);
     }
-    hand_left(&mut ctx, &shared, 1)?;
     shared.run.outcome()?;
     let output = scope.create(port.ty.schema.clone(), Domain::Rows(1))?;
     if let Err(error) = scope.write_values(output, &level) {
@@ -652,26 +685,136 @@ fn run_prefix(
     shared.run.outcome()?;
     drop(shared);
     let scalars = port.ty.schema.scalars();
-    let count = domain.count();
-    if count > 1 {
-        let mut running = values[..stride].to_vec();
-        for element in 1..count {
-            let at = element * stride;
-            orla_rules::combine_words(combine, scalars, &mut running, &values[at..at + stride])
-                .map_err(|error| ExecutionError::Arithmetic {
-                    x: element as u32,
-                    y: 0,
-                    error,
-                })?;
-            values[at..at + stride].copy_from_slice(&running);
+    // One `Int` an element, the common case, folds on the words
+    // directly; anything else by the rule the CPU applies. Both are the
+    // same arithmetic, overflow included.
+    let int = |f: fn(i32, i32) -> Option<i32>| {
+        move |running: &mut [u32], value: &[u32]| -> Result<(), ArithmeticError> {
+            let folded = f(running[0] as i32, value[0] as i32).ok_or(ArithmeticError::Overflow)?;
+            running[0] = folded as u32;
+            Ok(())
         }
-    }
+    };
+    let folded = match (scalars, combine) {
+        ([orla_abi::Scalar::Int], Combine::Sum) => {
+            fold_prefix(&mut values, stride, int(i32::checked_add))
+        }
+        ([orla_abi::Scalar::Int], Combine::Min) => {
+            fold_prefix(&mut values, stride, int(|a, b| Some(a.min(b))))
+        }
+        ([orla_abi::Scalar::Int], Combine::Max) => {
+            fold_prefix(&mut values, stride, int(|a, b| Some(a.max(b))))
+        }
+        _ => fold_prefix(&mut values, stride, |running, value| {
+            orla_rules::combine_words(combine, scalars, running, value)
+        }),
+    };
+    folded.map_err(|(element, error)| ExecutionError::Arithmetic {
+        x: element as u32,
+        y: 0,
+        error,
+    })?;
     let output = scope.create(port.ty.schema.clone(), domain)?;
     if let Err(error) = scope.write_values(output, &values) {
         let _ = scope.release(output);
         return Err(error.into());
     }
     Ok(vec![output])
+}
+
+/// Folds each element of `values` (`stride` words each) with everything
+/// before it, in place, as a walk in element order would, and fails
+/// where that walk first fails. Runs of elements are folded by as many
+/// workers as they are worth: each run's total, the totals folded in
+/// order into where each run starts, then each run walked from its
+/// start. The rule gives the same words in any grouping, so with no
+/// failure every word is the walk's; a failure in the totals may be one
+/// the walk never meets, and so hands the whole to the walk.
+fn fold_prefix<E: Send>(
+    values: &mut [u32],
+    stride: usize,
+    combine: impl Fn(&mut [u32], &[u32]) -> Result<(), E> + Sync,
+) -> Result<(), (usize, E)> {
+    let count = values.len() / stride.max(1);
+    let walk = |values: &mut [u32], start: Option<&[u32]>, first: usize| {
+        let mut running = match start {
+            Some(start) => start.to_vec(),
+            None => values[..stride].to_vec(),
+        };
+        let from = usize::from(start.is_none());
+        for (k, value) in values.chunks_exact_mut(stride).enumerate().skip(from) {
+            combine(&mut running, value).map_err(|error| (first + k, error))?;
+            value.copy_from_slice(&running);
+        }
+        Ok(())
+    };
+    let per = count.div_ceil(workers(count)).max(1);
+    if count <= 1 || per >= count {
+        return walk(values, None, 0);
+    }
+    // Each run's total, from its own first element.
+    let totals: Vec<Result<Vec<u32>, E>> = std::thread::scope(|s| {
+        let handles: Vec<_> = values
+            .chunks(per * stride)
+            .map(|run| {
+                let combine = &combine;
+                s.spawn(move || {
+                    let mut total = run[..stride].to_vec();
+                    for value in run.chunks_exact(stride).skip(1) {
+                        combine(&mut total, value)?;
+                    }
+                    Ok(total)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("prefix worker panicked"))
+            .collect()
+    });
+    // Where each run after the first starts: the totals before it.
+    let mut starts: Vec<Vec<u32>> = Vec::with_capacity(totals.len());
+    let mut running: Option<Vec<u32>> = None;
+    for total in totals {
+        let Ok(total) = total else {
+            return walk(values, None, 0);
+        };
+        running = Some(match running {
+            None => total,
+            Some(mut sum) => {
+                if combine(&mut sum, &total).is_err() {
+                    return walk(values, None, 0);
+                }
+                sum
+            }
+        });
+        starts.push(running.clone().expect("set above"));
+    }
+    let outcomes: Vec<Result<(), (usize, E)>> = std::thread::scope(|s| {
+        let handles: Vec<_> = values
+            .chunks_mut(per * stride)
+            .enumerate()
+            .map(|(run, slice)| {
+                let walk = &walk;
+                let start = run.checked_sub(1).map(|before| &starts[before][..]);
+                s.spawn(move || walk(slice, start, run * per))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("prefix worker panicked"))
+            .collect()
+    });
+    // With the starts the walk's own, every run folds the walk's words
+    // up to the first failure, which is the earliest.
+    match outcomes
+        .into_iter()
+        .filter_map(Result::err)
+        .min_by_key(|(element, _)| *element)
+    {
+        Some(failure) => Err(failure),
+        None => Ok(()),
+    }
 }
 
 /// A scatter: the entry over the first input into pairs of address and
