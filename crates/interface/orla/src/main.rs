@@ -100,6 +100,8 @@ usage:
   orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
       Print the flattened graph and what would execute, fused groups marked.
   orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu|jit]
+                         [--input <name>=<file.ppm>]... [--param <name>=<literal>]...
+                         [--no-fusion] [--memory <MB>] [--work <M>]
                          [--listen <host:port>] [--window <w>x<h>[@<scale>]]
                          [--allow file.read|file.write=<dir>]... [--allow-origin <origin>]...
       Serve the creation protocol: JSON requests on stdin, one response per
@@ -335,53 +337,40 @@ fn check(args: &[String]) -> Result<(), String> {
 }
 
 struct RunOptions {
-    scene: PathBuf,
-    kernels: Option<PathBuf>,
-    inputs: Vec<(String, PathBuf)>,
+    /// The session: scene, library, inputs, params, backend, fusion,
+    /// limits and allowances.
+    session: orla_session::SessionOptions,
     saves: Vec<(String, String, PathBuf)>,
     out: PathBuf,
     watch: bool,
-    backend: String,
-    params: Vec<(String, orla_runtime::Value)>,
-    fusion: bool,
     /// The window's size in pixels and scale factor, for `window()`.
     window: Option<([f32; 2], f32)>,
     /// Whether to print each executed node's time.
     profile: bool,
-    /// What the Host may hold and spend.
-    limits: orla_session::Limits,
-    /// Directories the scene's outputs may be written into.
-    allow: Vec<orla_session::Allowance>,
 }
 
 /// `render`: the scene and its session flags, and how to render.
 struct RenderOptions {
-    scene: PathBuf,
-    kernels: Option<PathBuf>,
-    inputs: Vec<(String, PathBuf)>,
-    params: Vec<(String, orla_runtime::Value)>,
-    backend: String,
-    fusion: bool,
+    session: orla_session::SessionOptions,
     render: orla::render::Options,
     /// Node outputs written after the last frame, as `run --save`.
     saves: Vec<(String, String, PathBuf)>,
-    /// What the Host may hold and spend.
-    limits: orla_session::Limits,
-    /// Directories the scene's outputs may be written into.
-    allow: Vec<orla_session::Allowance>,
+}
+
+/// `--save <node.port>=<file>`: a node of a placed graph carries dots in
+/// its name, so the port is what follows the last one.
+fn parse_save(binding: &str) -> Result<(String, String, PathBuf), String> {
+    let (target, path) = binding
+        .split_once('=')
+        .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
+    let (node, port) = target.rsplit_once('.').unwrap_or((target, "result"));
+    Ok((node.to_owned(), port.to_owned(), PathBuf::from(path)))
 }
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
     let mut options = RenderOptions {
-        scene: PathBuf::new(),
-        kernels: None,
-        inputs: Vec::new(),
-        params: Vec::new(),
-        backend: "jit".into(),
-        fusion: true,
+        session: orla_session::SessionOptions::default(),
         saves: Vec::new(),
-        limits: orla_session::Limits::default(),
-        allow: Vec::new(),
         render: orla::render::Options {
             frames: 0,
             rate: 60.0,
@@ -390,14 +379,12 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
             window: None,
         },
     };
-    let mut scene = None;
-    let mut iter = args.iter();
+    let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
-        let mut value = |flag: &str| {
-            iter.next()
-                .cloned()
-                .ok_or_else(|| format!("{flag} needs a value"))
-        };
+        if options.session.read(&arg, &mut || iter.next())? {
+            continue;
+        }
+        let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
         let number = |flag: &str, text: String| -> Result<f32, String> {
             text.parse::<f32>()
                 .ok()
@@ -405,7 +392,6 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
                 .ok_or_else(|| format!("{flag} needs a positive number"))
         };
         match arg.as_str() {
-            "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--frames" => {
                 options.render.frames =
                     value("--frames")?
@@ -422,51 +408,11 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
             "--window" => {
                 options.render.window = Some(orla_session::parse_window(&value("--window")?)?);
             }
-            "--no-fusion" => options.fusion = false,
-            "--allow" => options
-                .allow
-                .push(orla_session::parse_allow(&value("--allow")?)?),
-            "--backend" => options.backend = value("--backend")?,
-            flag if orla_session::Limits::takes(flag) => {
-                options.limits.read(flag, &value(flag)?)?;
-            }
-            "--param" => {
-                let binding = value("--param")?;
-                let (name, text) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
-                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
-                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
-                options.params.push((name.to_owned(), literal));
-            }
-            "--input" => {
-                let binding = value("--input")?;
-                let (name, path) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
-                options.inputs.push((name.to_owned(), PathBuf::from(path)));
-            }
-            "--save" => {
-                let binding = value("--save")?;
-                let (target, path) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
-                // A node of a placed graph carries dots in its name, so
-                // the port is what follows the last one.
-                let (node, port) = target.rsplit_once('.').unwrap_or((target, "result"));
-                options
-                    .saves
-                    .push((node.to_owned(), port.to_owned(), PathBuf::from(path)));
-            }
-            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
-            other => {
-                if scene.replace(PathBuf::from(other)).is_some() {
-                    return Err("render takes exactly one scene file".into());
-                }
-            }
+            "--save" => options.saves.push(parse_save(&value("--save")?)?),
+            other => return Err(format!("unknown flag {other}")),
         }
     }
-    options.scene = scene.ok_or_else(|| "render needs a scene file".to_string())?;
+    options.session.scene()?;
     if options.render.frames == 0 {
         return Err("render needs --frames <n>".into());
     }
@@ -475,20 +421,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
 
 fn render(args: &[String]) -> Result<(), String> {
     let options = parse_render(args)?;
-    let runtime = Session::runtime_for(&options.backend, options.limits)?;
-    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
-    for (name, path) in &options.inputs {
-        session
-            .bind_external(name, path)
-            .map_err(|e| e.to_string())?;
-    }
-    for (name, value) in &options.params {
-        session.set_param(name, value.clone())?;
-    }
-    session.set_fusion(options.fusion);
-    for allowance in &options.allow {
-        session.allow(allowance)?;
-    }
+    let mut session = options.session.open("jit")?;
     for (node, _, _) in &options.saves {
         session.pin(orla_graph::NodeId(node.clone()));
     }
@@ -535,98 +468,35 @@ fn render(args: &[String]) -> Result<(), String> {
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {
     let mut options = RunOptions {
-        scene: PathBuf::new(),
-        kernels: None,
-        inputs: Vec::new(),
+        session: orla_session::SessionOptions::default(),
         saves: Vec::new(),
         out: PathBuf::from("output.ppm"),
         watch: false,
-        backend: "jit".into(),
-        params: Vec::new(),
-        fusion: true,
         window: None,
         profile: false,
-        limits: orla_session::Limits::default(),
-        allow: Vec::new(),
     };
-    let mut scene = None;
-    let mut iter = args.iter();
+    let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
-        let mut value = |flag: &str| {
-            iter.next()
-                .cloned()
-                .ok_or_else(|| format!("{flag} needs a value"))
-        };
+        if options.session.read(&arg, &mut || iter.next())? {
+            continue;
+        }
+        let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
         match arg.as_str() {
-            "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
             "--window" => options.window = Some(orla_session::parse_window(&value("--window")?)?),
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
-            "--no-fusion" => options.fusion = false,
-            "--allow" => options
-                .allow
-                .push(orla_session::parse_allow(&value("--allow")?)?),
             "--profile" => options.profile = true,
-            "--backend" => options.backend = value("--backend")?,
-            flag if orla_session::Limits::takes(flag) => {
-                options.limits.read(flag, &value(flag)?)?;
-            }
-            "--param" => {
-                let binding = value("--param")?;
-                let (name, text) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
-                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
-                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
-                options.params.push((name.to_owned(), literal));
-            }
-            "--input" => {
-                let binding = value("--input")?;
-                let (name, path) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
-                options.inputs.push((name.to_owned(), PathBuf::from(path)));
-            }
-            "--save" => {
-                let binding = value("--save")?;
-                let (target, path) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
-                // A node of a placed graph carries dots in its name, so
-                // the port is what follows the last one.
-                let (node, port) = target.rsplit_once('.').unwrap_or((target, "result"));
-                options
-                    .saves
-                    .push((node.to_owned(), port.to_owned(), PathBuf::from(path)));
-            }
-            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
-            other => {
-                if scene.replace(PathBuf::from(other)).is_some() {
-                    return Err("run takes exactly one scene file".into());
-                }
-            }
+            "--save" => options.saves.push(parse_save(&value("--save")?)?),
+            other => return Err(format!("unknown flag {other}")),
         }
     }
-    options.scene = scene.ok_or_else(|| "run needs a scene file".to_string())?;
+    options.session.scene()?;
     Ok(options)
 }
 
 fn run(args: &[String]) -> Result<(), String> {
     let options = parse_run(args)?;
-    let runtime = Session::runtime_for(&options.backend, options.limits)?;
-    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
-    for (name, path) in &options.inputs {
-        session
-            .bind_external(name, path)
-            .map_err(|e| e.to_string())?;
-    }
-    for (name, value) in &options.params {
-        session.set_param(name, value.clone())?;
-    }
-    session.set_fusion(options.fusion);
-    for allowance in &options.allow {
-        session.allow(allowance)?;
-    }
+    let mut session = options.session.open("jit")?;
     // A profile waits for the device after each node, so the times are
     // the work rather than the submission.
     session.set_measured(options.profile);
@@ -751,70 +621,56 @@ fn new_scene(args: &[String]) -> Result<(), String> {
 fn measure(args: &[String]) -> Result<(), String> {
     let mut options = orla_session::bench::Options::default();
     let mut backends: Vec<String> = Vec::new();
-    let mut scene: Option<PathBuf> = None;
-    let mut index = 0;
-    while index < args.len() {
-        let arg = args[index].as_str();
-        index += 1;
-        let mut value = |flag: &str| -> Result<String, String> {
-            let value = args
-                .get(index)
-                .cloned()
-                .ok_or_else(|| format!("{flag} needs a value"))?;
-            index += 1;
-            Ok(value)
-        };
-        match arg {
+    let mut iter = args.iter().cloned();
+    while let Some(arg) = iter.next() {
+        let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
+        match arg.as_str() {
+            // Several backends, one after another: bench's own.
+            "--backend" => {
+                backends.push(value("--backend")?);
+                continue;
+            }
             "--frames" => {
                 options.frames = value("--frames")?
                     .parse()
                     .map_err(|_| "--frames needs a count".to_string())?;
+                continue;
             }
             "--repeat" => {
                 options.repeat = value("--repeat")?
                     .parse()
                     .map_err(|_| "--repeat needs a count".to_string())?;
+                continue;
             }
             "--rate" => {
                 options.rate = value("--rate")?
                     .parse()
                     .map_err(|_| "--rate needs frames a second".to_string())?;
+                continue;
             }
-            "--backend" => backends.push(value("--backend")?),
-            flag if orla_session::Limits::takes(flag) => {
-                options.limits.read(flag, &value(flag)?)?;
+            "--nodes" => {
+                options.nodes = true;
+                continue;
             }
-            "--nodes" => options.nodes = true,
-            "--no-fusion" => options.fusion = false,
-            "--library" => options.kernels = Some(PathBuf::from(value("--library")?)),
-            "--json" => options.json = Some(PathBuf::from(value("--json")?)),
-            "--compare" => options.compare = Some(PathBuf::from(value("--compare")?)),
-            "--window" => options.window = Some(orla_session::parse_window(&value("--window")?)?),
-            "--param" => {
-                let binding = value("--param")?;
-                let (name, text) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
-                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
-                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
-                options.params.push((name.to_owned(), literal));
+            "--json" => {
+                options.json = Some(PathBuf::from(value("--json")?));
+                continue;
             }
-            "--input" => {
-                let binding = value("--input")?;
-                let (name, path) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--input needs <name>=<file>".to_string())?;
-                options.inputs.push((name.to_owned(), PathBuf::from(path)));
+            "--compare" => {
+                options.compare = Some(PathBuf::from(value("--compare")?));
+                continue;
             }
-            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
-            other => {
-                if scene.replace(PathBuf::from(other)).is_some() {
-                    return Err("bench takes exactly one scene file".into());
-                }
+            "--window" => {
+                options.window = Some(orla_session::parse_window(&value("--window")?)?);
+                continue;
             }
+            _ => {}
+        }
+        if !options.session.read(&arg, &mut || iter.next())? {
+            return Err(format!("unknown flag {arg}"));
         }
     }
-    options.scene = scene.ok_or_else(|| "bench needs a scene file".to_string())?;
+    options.session.scene()?;
     // `--backend all` is every backend this build has, fastest last so
     // the table reads from the reference down to it.
     if backends.iter().any(|name| name == "all") {
@@ -918,74 +774,29 @@ fn graph(args: &[String]) -> Result<(), String> {
 }
 
 fn serve(args: &[String]) -> Result<(), String> {
-    let mut backend = "jit".to_string();
-    let mut library = None;
-    let mut scene = None;
+    let mut options = orla_session::SessionOptions::default();
     let mut listen = None;
     let mut window = None;
-    let mut limits = orla_session::Limits::default();
-    let mut allow = Vec::new();
     let mut origins = Vec::new();
-    let mut iter = args.iter();
+    let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
+        if options.read(&arg, &mut || iter.next())? {
+            continue;
+        }
+        let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
         match arg.as_str() {
-            "--backend" => {
-                backend = iter
-                    .next()
-                    .cloned()
-                    .ok_or_else(|| "--backend needs a value".to_string())?;
-            }
-            flag if orla_session::Limits::takes(flag) => {
-                let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
-                limits.read(flag, text)?;
-            }
-            "--window" => {
-                let text = iter
-                    .next()
-                    .ok_or_else(|| "--window needs <w>x<h> or <w>x<h>@<scale>".to_string())?;
-                window = Some(orla_session::parse_window(text)?);
-            }
-            "--listen" => {
-                listen = Some(
-                    iter.next()
-                        .cloned()
-                        .ok_or_else(|| "--listen needs <host:port>".to_string())?,
-                );
-            }
-            "--allow-origin" => origins.push(iter.next().cloned().ok_or_else(|| {
-                "--allow-origin needs an origin, such as https://host:port".to_string()
-            })?),
-            "--allow" => {
-                let text = iter.next().ok_or_else(|| {
-                    "--allow needs file.read=<directory> or file.write=<directory>".to_string()
-                })?;
-                allow.push(orla_session::parse_allow(text)?);
-            }
-            "--library" => {
-                library = Some(PathBuf::from(
-                    iter.next()
-                        .ok_or_else(|| "--library needs a value".to_string())?,
-                ));
-            }
-            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
-            other => {
-                if scene.replace(PathBuf::from(other)).is_some() {
-                    return Err("serve takes exactly one scene file".into());
-                }
-            }
+            "--window" => window = Some(orla_session::parse_window(&value("--window")?)?),
+            "--listen" => listen = Some(value("--listen")?),
+            "--allow-origin" => origins.push(value("--allow-origin")?),
+            other => return Err(format!("unknown flag {other}")),
         }
     }
-    let scene = scene.ok_or_else(|| "serve needs a scene file".to_string())?;
-    let runtime = Session::runtime_for(&backend, limits)?;
-    let mut session = Session::open_with(&scene, library.as_deref(), runtime);
+    // Allowed by whoever started the server, never by what connects to it.
+    let mut session = options.open("jit")?;
     session.set_window(window);
     // An agent composes this scene and reads back what it holds: what it
     // reads is held to its documents' directories and what is allowed.
     session.restrict_reads();
-    // Allowed by whoever started the server, never by what connects to it.
-    for allowance in &allow {
-        session.allow(allowance)?;
-    }
     report_events(&session.sync());
     session.set_background(true);
     let (sink, requests) = std::sync::mpsc::channel();
@@ -1175,17 +986,7 @@ fn trace(args: &[String]) -> Result<(), String> {
     let node = node.ok_or("trace needs --node <name>")?;
     let at = at.ok_or("trace needs --element <i> or --at <x> <y> [<z>]")?;
     let options = parse_run(&rest)?;
-    let runtime = Session::runtime_for(&options.backend, options.limits)?;
-    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
-    for (name, path) in &options.inputs {
-        session
-            .bind_external(name, path)
-            .map_err(|e| e.to_string())?;
-    }
-    for (name, value) in &options.params {
-        session.set_param(name, value.clone())?;
-    }
-    session.set_fusion(options.fusion);
+    let mut session = options.session.open("jit")?;
     let events = session.sync();
     report_events(&events);
     loaded(&session, &events)?;

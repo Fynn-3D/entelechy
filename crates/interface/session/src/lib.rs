@@ -30,6 +30,7 @@ pub mod bench;
 mod inputs;
 mod kernels;
 mod observe;
+mod options;
 mod scene;
 mod session;
 mod sources;
@@ -42,6 +43,7 @@ use std::path::PathBuf;
 use orla_formats::ppm;
 use orla_runtime::{Generation, KernelId};
 
+pub use options::SessionOptions;
 pub use session::Session;
 
 pub use observe::parse_target;

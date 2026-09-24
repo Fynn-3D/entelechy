@@ -23,10 +23,10 @@ use crate::Session;
 /// How to measure.
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// The scene.
-    pub scene: PathBuf,
-    /// A library directory or file beside the scene's own.
-    pub kernels: Option<PathBuf>,
+    /// The session each backend opens: the scene, its library, inputs,
+    /// params, fusion and limits. Its backend is not read; `backends`
+    /// says which.
+    pub session: crate::SessionOptions,
     /// Backends to measure, in order.
     pub backends: Vec<String>,
     /// Frames in a run, after the warm-up frame.
@@ -37,14 +37,6 @@ pub struct Options {
     pub rate: f32,
     /// The window a scene sized by `window()` fills, and its scale.
     pub window: Option<([f32; 2], f32)>,
-    /// Graph parameters to override.
-    pub params: Vec<(String, orla_runtime::Value)>,
-    /// External Fields to bind.
-    pub inputs: Vec<(String, PathBuf)>,
-    /// Whether fusion is on.
-    pub fusion: bool,
-    /// What the Host may hold and spend.
-    pub limits: crate::Limits,
     /// Whether to measure each node as well as the frame.
     pub nodes: bool,
     /// Where to write the measurement as JSON.
@@ -56,17 +48,12 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            scene: PathBuf::new(),
-            kernels: None,
+            session: crate::SessionOptions::default(),
             backends: vec!["jit".to_owned()],
             frames: 30,
             repeat: 5,
             rate: 60.0,
             window: None,
-            params: Vec::new(),
-            inputs: Vec::new(),
-            fusion: true,
-            limits: crate::Limits::default(),
             nodes: false,
             json: None,
             compare: None,
@@ -314,17 +301,7 @@ fn pattern(node: &str) -> String {
 }
 
 fn open(options: &Options, backend: &str) -> Result<Session, String> {
-    let runtime = Session::runtime_for(backend, options.limits)?;
-    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
-    for (name, path) in &options.inputs {
-        session
-            .bind_external(name, path)
-            .map_err(|e| e.to_string())?;
-    }
-    for (name, value) in &options.params {
-        session.set_param(name, value.clone())?;
-    }
-    session.set_fusion(options.fusion);
+    let mut session = options.session.open(backend)?;
     let events = session.sync();
     let rejected: Vec<String> = events
         .iter()
@@ -351,7 +328,12 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
     };
     out.push_str(&format!(
         "{}: {} frame(s) a run, {} run(s){window}\n\n",
-        options.scene.display(),
+        options
+            .session
+            .scene
+            .as_deref()
+            .unwrap_or(Path::new(""))
+            .display(),
         options.frames.max(1),
         options.repeat.max(1)
     ));
@@ -500,7 +482,13 @@ pub fn json(options: &Options, measured: &[Measured]) -> String {
         .collect();
     format!(
         "{{\n  \"scene\": {:?},\n  \"frames\": {},\n  \"repeat\": {},\n  \"backends\": [\n{}\n  ]\n}}\n",
-        options.scene.display().to_string(),
+        options
+            .session
+            .scene
+            .as_deref()
+            .unwrap_or(Path::new(""))
+            .display()
+            .to_string(),
         options.frames.max(1),
         options.repeat.max(1),
         backends.join(",\n")

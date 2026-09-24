@@ -1,7 +1,6 @@
 //! The `orla-player` command: a window over a live session.
 
 use std::num::NonZeroU32;
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -56,55 +55,36 @@ usage:
 const DEFAULT_WINDOW: (u32, u32) = (960, 540);
 
 struct Options {
-    scene: PathBuf,
-    kernels: Option<PathBuf>,
-    inputs: Vec<(String, PathBuf)>,
+    /// The session: scene, library, inputs, params, backend, limits and
+    /// allowances.
+    session: orla_session::SessionOptions,
     scale: u32,
     /// The window's logical size, when given; else the output's times `scale`.
     window: Option<(u32, u32)>,
-    backend: Option<String>,
     serve: bool,
     listen: Option<String>,
     origins: Vec<String>,
-    params: Vec<(String, orla_runtime::Value)>,
     /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
-    /// What the Host may hold and spend.
-    limits: orla_session::Limits,
-    /// Directories the scene's outputs may be written into.
-    allow: Vec<orla_session::Allowance>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
     let mut options = Options {
-        scene: PathBuf::new(),
-        kernels: None,
-        inputs: Vec::new(),
+        session: orla_session::SessionOptions::default(),
         scale: 2,
         window: None,
-        backend: None,
         serve: false,
         listen: None,
         origins: Vec::new(),
-        params: Vec::new(),
-        limits: orla_session::Limits::default(),
         no_audio: false,
-        allow: Vec::new(),
     };
-    let mut scene = None;
-    let mut iter = args.iter();
+    let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
-        let mut value = |flag: &str| {
-            iter.next()
-                .cloned()
-                .ok_or_else(|| format!("{flag} needs a value"))
-        };
+        if options.session.read(&arg, &mut || iter.next())? {
+            continue;
+        }
+        let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
         match arg.as_str() {
-            "--library" | "--kernels" => options.kernels = Some(PathBuf::from(value("--library")?)),
-            "--backend" => options.backend = Some(value("--backend")?),
-            flag if orla_session::Limits::takes(flag) => {
-                options.limits.read(flag, &value(flag)?)?;
-            }
             "--serve" => options.serve = true,
             "--listen" => {
                 options.serve = true;
@@ -112,18 +92,6 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--allow-origin" => options.origins.push(value("--allow-origin")?),
             "--no-audio" => options.no_audio = true,
-            "--allow" => options
-                .allow
-                .push(orla_session::parse_allow(&value("--allow")?)?),
-            "--param" => {
-                let binding = value("--param")?;
-                let (name, text) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
-                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
-                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
-                options.params.push((name.to_owned(), literal));
-            }
             "--scale" => {
                 options.scale = value("--scale")?
                     .parse::<u32>()
@@ -135,22 +103,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let ([w, h], _) = orla_session::parse_window(&value("--window")?)?;
                 options.window = Some((w as u32, h as u32));
             }
-            "--input" => {
-                let binding = value("--input")?;
-                let (name, path) = binding
-                    .split_once('=')
-                    .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
-                options.inputs.push((name.to_owned(), PathBuf::from(path)));
-            }
-            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
-            other => {
-                if scene.replace(PathBuf::from(other)).is_some() {
-                    return Err("exactly one scene file is expected".into());
-                }
-            }
+            other => return Err(format!("unknown flag {other}")),
         }
     }
-    options.scene = scene.ok_or_else(|| "a scene file is required".to_string())?;
+    options.session.scene()?;
     Ok(options)
 }
 
@@ -761,8 +717,8 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let budget = options.limits;
-    let runtime = match options.backend.as_deref() {
+    let budget = options.session.limits;
+    let runtime = match options.session.backend.as_deref() {
         Some(name) => Session::runtime_and_display(name, budget),
         None => Session::runtime_and_display("gpu", budget).or_else(|error| {
             eprintln!("gpu backend unavailable ({error}); using the jit");
@@ -789,24 +745,18 @@ fn main() -> ExitCode {
             None => "unavailable",
         }
     );
-    let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
+    let mut session = match options.session.open_over(runtime) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     // An agent composes a served scene and reads back what it holds:
     // what it reads is held to its documents' directories and what the
     // person allowed.
     if options.serve {
         session.restrict_reads();
-    }
-    for (name, path) in &options.inputs {
-        if let Err(error) = session.bind_external(name, path) {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-    }
-    for allowance in &options.allow {
-        if let Err(error) = session.allow(allowance) {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
     }
     for event in session.sync() {
         eprintln!("{event}");
@@ -841,12 +791,6 @@ fn main() -> ExitCode {
         stats: Stats::default(),
         panel: None,
     };
-    for (name, value) in &options.params {
-        if let Err(error) = player.session.set_param(name, value.clone()) {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-    }
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {

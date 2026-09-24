@@ -1,0 +1,125 @@
+//! The flags every command that opens a session takes, read once: the
+//! scene, its library, the inputs and params the caller binds, the
+//! backend, fusion, what the Host may hold and spend, and what the
+//! person allows. A command reads its own flags beside these and opens
+//! the session they describe; the Player, which builds its runtime with
+//! a display, opens it over that runtime.
+
+use std::path::{Path, PathBuf};
+
+use orla_runtime::{Runtime, Value};
+
+use crate::{Allowance, Limits, Session, parse_allow};
+
+/// What a command line says of the session it opens.
+#[derive(Clone, Debug)]
+pub struct SessionOptions {
+    /// The scene document.
+    pub scene: Option<PathBuf>,
+    /// A directory or file of Kernels the scene uses beside its own.
+    pub library: Option<PathBuf>,
+    /// Inputs bound to files, by name.
+    pub inputs: Vec<(String, PathBuf)>,
+    /// Graph parameters set, by name.
+    pub params: Vec<(String, Value)>,
+    /// The backend asked for; the command's own default otherwise.
+    pub backend: Option<String>,
+    /// Whether pointwise producers fuse into their consumers.
+    pub fusion: bool,
+    /// What the Host may hold and spend.
+    pub limits: Limits,
+    /// Directories the scene may read from and write into.
+    pub allow: Vec<Allowance>,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            scene: None,
+            library: None,
+            inputs: Vec::new(),
+            params: Vec::new(),
+            backend: None,
+            fusion: true,
+            limits: Limits::default(),
+            allow: Vec::new(),
+        }
+    }
+}
+
+impl SessionOptions {
+    /// Reads `arg` when it is one of these flags or the scene, taking a
+    /// flag's value from `next`; answers whether it was. A flag it does
+    /// not know is the caller's.
+    pub fn read(
+        &mut self,
+        arg: &str,
+        next: &mut dyn FnMut() -> Option<String>,
+    ) -> Result<bool, String> {
+        let mut value = |flag: &str| next().ok_or_else(|| format!("{flag} needs a value"));
+        match arg {
+            "--library" | "--kernels" => self.library = Some(PathBuf::from(value(arg)?)),
+            "--backend" => self.backend = Some(value(arg)?),
+            "--no-fusion" => self.fusion = false,
+            "--allow" => self.allow.push(parse_allow(&value(arg)?)?),
+            flag if Limits::takes(flag) => self.limits.read(flag, &value(flag)?)?,
+            "--param" => {
+                let binding = value(arg)?;
+                let (name, text) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--param needs <name>=<literal>".to_string())?;
+                let expr = orla_language::parse_literal(text).map_err(|e| e.to_string())?;
+                let literal = orla_compiler::literal(&expr).map_err(|e| e.to_string())?;
+                self.params.push((name.to_owned(), literal));
+            }
+            "--input" => {
+                let binding = value(arg)?;
+                let (name, path) = binding
+                    .split_once('=')
+                    .ok_or_else(|| "--input needs <name>=<file.ppm>".to_string())?;
+                self.inputs.push((name.to_owned(), PathBuf::from(path)));
+            }
+            flag if flag.starts_with("--") => return Ok(false),
+            scene => {
+                if self.scene.replace(PathBuf::from(scene)).is_some() {
+                    return Err("exactly one scene file is expected".into());
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// The scene, which every command needs.
+    pub fn scene(&self) -> Result<&Path, String> {
+        self.scene
+            .as_deref()
+            .ok_or_else(|| "a scene file is required".to_string())
+    }
+
+    /// Opens the session these options describe on the backend they
+    /// name, else `default`.
+    pub fn open(&self, default: &str) -> Result<Session, String> {
+        let backend = self.backend.as_deref().unwrap_or(default);
+        self.open_over(Session::runtime_for(backend, self.limits)?)
+    }
+
+    /// Opens the session these options describe over `runtime`: the
+    /// inputs bound, the params set, fusion, and what is allowed.
+    /// Nothing is read until the caller syncs.
+    pub fn open_over(&self, runtime: Runtime) -> Result<Session, String> {
+        let mut session = Session::open_with(self.scene()?, self.library.as_deref(), runtime);
+        for (name, path) in &self.inputs {
+            session
+                .bind_external(name, path)
+                .map_err(|e| e.to_string())?;
+        }
+        for (name, value) in &self.params {
+            session.set_param(name, value.clone())?;
+        }
+        session.set_fusion(self.fusion);
+        for allowance in &self.allow {
+            session.allow(allowance)?;
+        }
+        Ok(session)
+    }
+}
