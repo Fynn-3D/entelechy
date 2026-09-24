@@ -49,7 +49,7 @@ use std::path::{Path, PathBuf};
 use orla_graph::Report;
 use orla_runtime::{Context, Handle, InputState, Runtime};
 
-use orla_session::Session;
+use crate::Session;
 
 /// One scripted step.
 #[derive(Clone, Debug, PartialEq)]
@@ -328,8 +328,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             ["expect", target, sign, values @ ..]
                 if target.contains('[') && !values.is_empty() && Compare::read(sign).is_some() =>
             {
-                let (node, port, index, path) =
-                    orla_session::parse_target(target).map_err(error)?;
+                let (node, port, index, path) = crate::parse_target(target).map_err(error)?;
                 steps.push(Step::ExpectElement {
                     node,
                     port,
@@ -382,79 +381,162 @@ pub struct Outcome {
     pub failures: Vec<String>,
 }
 
-/// Runs a replay on a fresh session over `runtime`.
+/// Runs a replay on a fresh session over `runtime`: every frame
+/// evaluates what its expectations need, and nothing else.
 pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     let mut session = Session::open_with(&replay.scene, replay.kernels.as_deref(), runtime);
     let mut rejected = Vec::new();
     for event in session.sync() {
-        if let orla_session::Event::Rejected { .. } | orla_session::Event::SceneRejected(_) = &event
-        {
+        if let crate::Event::Rejected { .. } | crate::Event::SceneRejected(_) = &event {
             rejected.push(event.to_string());
         }
     }
     if !rejected.is_empty() {
         return Err(rejected.join("\n"));
     }
-    for step in &replay.steps {
-        if let Step::ExpectElement { node, .. } | Step::ExpectCount { node, .. } = step {
-            session.pin(orla_graph::NodeId(node.clone()));
+    let mut replayer = Replayer::start(replay, &mut session);
+    while let Some(frame) = replayer.next_frame(&mut session)? {
+        let report = session
+            .evaluate_for(&frame.context, &frame.demand)
+            .map_err(|error| format!("frame at {}: {error}", frame.context.time))?;
+        replayer.evaluated(report);
+    }
+    Ok(replayer.outcome)
+}
+
+/// A frame a replay asks for: the context it evaluates under, and what it
+/// must evaluate, the nodes its expectations name, and the picture when a
+/// pixel expectation follows it. A caller that shows the picture anyway
+/// (a window) evaluates everything.
+pub struct Frame {
+    /// The time, the input and the window of this frame.
+    pub context: Context,
+    /// What the expectations need.
+    pub demand: std::collections::BTreeSet<orla_graph::NodeId>,
+}
+
+/// A replay played a frame at a time over a session its caller owns: the
+/// steps between two frames are applied (inputs, the window, params,
+/// expectations of the frame before), and the next frame is handed back
+/// for the caller to evaluate however it evaluates. `orla replay` runs one
+/// to the end at once; a window plays one a frame at a time, and shows it.
+pub struct Replayer {
+    steps: Vec<Step>,
+    next: usize,
+    input: InputState,
+    window: ([f32; 2], f32),
+    last: Option<Report>,
+    named: std::collections::BTreeSet<orla_graph::NodeId>,
+    producers: Vec<orla_graph::NodeId>,
+    /// What the replay has observed so far.
+    pub outcome: Outcome,
+}
+
+impl Replayer {
+    /// Starts `replay` over `session`, which has read its scene: the nodes
+    /// the expectations name are pinned, so fusion never hides them.
+    pub fn start(replay: &Replay, session: &mut Session) -> Self {
+        let named: std::collections::BTreeSet<orla_graph::NodeId> = replay
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::ExpectElement { node, .. } | Step::ExpectCount { node, .. } => {
+                    Some(orla_graph::NodeId(node.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for node in &named {
+            session.pin(node.clone());
+        }
+        let producers = session
+            .graph()
+            .map(|graph| {
+                graph
+                    .outputs
+                    .iter()
+                    .filter_map(|(_, source)| match source {
+                        orla_graph::Source::Node { node, .. } => Some(node.clone()),
+                        orla_graph::Source::External(_) => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            steps: replay.steps.clone(),
+            next: 0,
+            input: InputState::default(),
+            window: ([0.0, 0.0], 1.0),
+            last: None,
+            named,
+            producers,
+            outcome: Outcome::default(),
         }
     }
-    let named: std::collections::BTreeSet<orla_graph::NodeId> = replay
-        .steps
-        .iter()
-        .filter_map(|step| match step {
-            Step::ExpectElement { node, .. } | Step::ExpectCount { node, .. } => {
-                Some(orla_graph::NodeId(node.clone()))
-            }
+
+    /// The time of the next frame, when there is one.
+    pub fn next_time(&self) -> Option<f32> {
+        self.steps[self.next..].iter().find_map(|step| match step {
+            Step::Frame(time) => Some(*time),
             _ => None,
         })
-        .collect();
-    let producers: Vec<orla_graph::NodeId> = session
-        .graph()
-        .map(|graph| {
-            graph
-                .outputs
-                .iter()
-                .filter_map(|(_, source)| match source {
-                    orla_graph::Source::Node { node, .. } => Some(node.clone()),
-                    orla_graph::Source::External(_) => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut input = InputState::default();
-    let mut window = ([0.0, 0.0], 1.0);
-    let mut last: Option<Report> = None;
-    let mut outcome = Outcome::default();
-    for (position, step) in replay.steps.iter().enumerate() {
-        match step {
-            Step::Window { size, scale } => window = (*size, *scale),
-            Step::Frame(time) => {
+    }
+
+    /// Whether every step has been applied.
+    pub fn finished(&self) -> bool {
+        self.next >= self.steps.len()
+    }
+
+    /// Applies the steps up to the next frame and hands that frame back;
+    /// `None` once the replay is over, every step applied. Takes the last
+    /// frame's report first ([`Replayer::evaluated`]) for the
+    /// expectations that follow it.
+    pub fn next_frame(&mut self, session: &mut Session) -> Result<Option<Frame>, String> {
+        while self.next < self.steps.len() {
+            let position = self.next;
+            self.next += 1;
+            if let Step::Frame(time) = &self.steps[position] {
                 let context = Context {
                     time: *time,
                     rate: 0.0,
-                    input,
-                    window: window.0,
-                    scale: window.1,
+                    input: self.input,
+                    window: self.window.0,
+                    scale: self.window.1,
                 };
+                // The wheel is what scrolled before this frame only.
+                self.input.wheel = [0.0, 0.0];
                 // The picture is demanded only when a pixel expectation
                 // follows this frame, before the next.
-                let mut demand = named.clone();
-                let pixels_follow = replay.steps[position + 1..]
+                let mut demand = self.named.clone();
+                let pixels_follow = self.steps[position + 1..]
                     .iter()
                     .take_while(|step| !matches!(step, Step::Frame(_)))
                     .any(|step| matches!(step, Step::Expect { .. }));
                 if pixels_follow {
-                    demand.extend(producers.iter().cloned());
+                    demand.extend(self.producers.iter().cloned());
                 }
-                let report = session
-                    .evaluate_for(&context, &demand)
-                    .map_err(|error| format!("frame at {time}: {error}"))?;
-                outcome.frames += 1;
-                last = Some(report);
-                input.wheel = [0.0, 0.0];
+                return Ok(Some(Frame { context, demand }));
             }
+            let step = self.steps[position].clone();
+            self.apply(&step, session)?;
+        }
+        Ok(None)
+    }
+
+    /// Takes the report of the frame [`Replayer::next_frame`] handed back.
+    pub fn evaluated(&mut self, report: Report) {
+        self.outcome.frames += 1;
+        self.last = Some(report);
+    }
+
+    /// One step that is not a frame.
+    fn apply(&mut self, step: &Step, session: &mut Session) -> Result<(), String> {
+        let input = &mut self.input;
+        let outcome = &mut self.outcome;
+        let last = &self.last;
+        match step {
+            Step::Frame(_) => {}
+            Step::Window { size, scale } => self.window = (*size, *scale),
             Step::Settle => {
                 session
                     .settle()
@@ -496,7 +578,7 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                     "{node}.{port}[{index}]{}",
                     path.iter().map(|p| format!(".{p}")).collect::<String>()
                 );
-                match check_element(&mut session, node, port, *index, path, *compare, values) {
+                match check_element(session, node, port, *index, path, *compare, values) {
                     Ok(None) => {}
                     Ok(Some(mismatch)) => outcome
                         .failures
@@ -576,8 +658,8 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
                 }
             }
         }
+        Ok(())
     }
-    Ok(outcome)
 }
 
 /// How an element expectation holds a value to what is written.

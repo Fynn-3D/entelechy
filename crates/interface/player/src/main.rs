@@ -24,6 +24,7 @@ use winit::window::{Window, WindowId};
 const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
+              [--replay <file.replay>]
               [--window <w>x<h>] [--backend gpu|cpu|jit] [--memory <MB>] [--work <M>]
               [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
       Open a window showing the scene output. Kernel files are republished as
@@ -43,6 +44,11 @@ usage:
       --allow file.read=<dir> lets a served scene's inputs read files
       there; with --serve a scene reads only beside its documents without
       it.
+      --replay <file.replay> plays a replay in the window: its pointer,
+      keys and window drive the scene at the replay's own times, its
+      checks run as they come, and when it ends what it observed is
+      printed and the window is yours. The replay names its scene, so
+      `orla-player --replay <file.replay>` is enough.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window, and on every connection to --listen <host:port>: an agent's
@@ -50,6 +56,16 @@ usage:
       its evaluate observes that person's input. A browser's page connects
       from this machine or from a file; a page elsewhere only from an
       origin --allow-origin <origin> names.";
+
+/// What a replay says for the frame about to be drawn.
+enum Replayed {
+    /// Its next frame's time has not come.
+    Wait,
+    /// Its next frame, under this context.
+    Frame(Context),
+    /// No replay is playing.
+    Not,
+}
 
 /// The window `window()` reads before one opens, when none was asked for.
 const DEFAULT_WINDOW: (u32, u32) = (960, 540);
@@ -66,6 +82,9 @@ struct Options {
     origins: Vec<String>,
     /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
+    /// A replay the window plays: its inputs drive the scene, frame by
+    /// frame at its own times, until it ends and the person takes over.
+    replay: Option<orla_session::replay::Replay>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -77,6 +96,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         listen: None,
         origins: Vec::new(),
         no_audio: false,
+        replay: None,
     };
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
@@ -92,6 +112,15 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--allow-origin" => options.origins.push(value("--allow-origin")?),
             "--no-audio" => options.no_audio = true,
+            "--replay" => {
+                let path = std::path::PathBuf::from(value("--replay")?);
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let base = path.parent().unwrap_or(std::path::Path::new("."));
+                let replay = orla_session::replay::parse(&text, base)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                options.replay = Some(replay);
+            }
             "--scale" => {
                 options.scale = value("--scale")?
                     .parse::<u32>()
@@ -104,6 +133,25 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 options.window = Some((w as u32, h as u32));
             }
             other => return Err(format!("unknown flag {other}")),
+        }
+    }
+    // A replay names its scene, its library and its window; what the
+    // command line says first stands.
+    if let Some(replay) = &options.replay {
+        options
+            .session
+            .scene
+            .get_or_insert_with(|| replay.scene.clone());
+        if options.session.library.is_none() {
+            options.session.library = replay.kernels.clone();
+        }
+        if options.window.is_none() {
+            options.window = replay.steps.iter().find_map(|step| match step {
+                orla_session::replay::Step::Window { size, scale } => {
+                    Some(((size[0] / scale) as u32, (size[1] / scale) as u32))
+                }
+                _ => None,
+            });
         }
     }
     options.session.scene()?;
@@ -152,6 +200,8 @@ struct Player {
     hud: bool,
     stats: Stats,
     panel: Option<Panel>,
+    /// A replay being played, and when its first frame was shown.
+    replaying: Option<(orla_session::replay::Replayer, Option<Instant>)>,
 }
 
 impl Player {
@@ -195,12 +245,24 @@ impl Player {
         for event in &events {
             eprintln!("{event}");
         }
+        // A replay, while it plays, is the input: its frame, at its time,
+        // under its pointer, keys and window; the person's hands wait.
+        let replayed = match self.replay_frame() {
+            Replayed::Wait => return None,
+            Replayed::Frame(context) => Some(context),
+            Replayed::Not => None,
+        };
         self.stats.begin();
         let started = Instant::now();
-        let context = self.context();
+        let context = replayed.unwrap_or_else(|| self.context());
         self.input.wheel = [0.0, 0.0];
         match self.session.evaluate(&context) {
             Ok(report) => {
+                if replayed.is_some()
+                    && let Some((replayer, _)) = &mut self.replaying
+                {
+                    replayer.evaluated(report.clone());
+                }
                 let elapsed = started.elapsed();
                 // The window claims the first output that is a grid of
                 // pixels; the sound card the first that is rows of one or
@@ -247,6 +309,53 @@ impl Player {
                 self.status = message;
                 self.blit();
                 None
+            }
+        }
+    }
+
+    /// The replay's next frame, once its time has come; `Wait` before,
+    /// and `Not` when no replay is playing. Past its last frame the
+    /// replay's remaining checks run, what it observed is said, and the
+    /// person has the window.
+    fn replay_frame(&mut self) -> Replayed {
+        let Some((replayer, since)) = &mut self.replaying else {
+            return Replayed::Not;
+        };
+        let clock = since
+            .get_or_insert_with(Instant::now)
+            .elapsed()
+            .as_secs_f32();
+        if replayer.next_time().is_some_and(|time| time > clock) {
+            return Replayed::Wait;
+        }
+        match replayer.next_frame(&mut self.session) {
+            Ok(Some(frame)) => {
+                self.status = format!("replaying, {:.2} s", frame.context.time);
+                Replayed::Frame(frame.context)
+            }
+            Ok(None) => {
+                let outcome = &replayer.outcome;
+                let said = if outcome.failures.is_empty() {
+                    format!(
+                        "replay: ok ({} frames, {} checks)",
+                        outcome.frames, outcome.checks
+                    )
+                } else {
+                    format!(
+                        "replay: {} of {} checks failed\n  {}",
+                        outcome.failures.len(),
+                        outcome.checks,
+                        outcome.failures.join("\n  ")
+                    )
+                };
+                eprintln!("{said}; the window is yours");
+                self.replaying = None;
+                Replayed::Not
+            }
+            Err(error) => {
+                eprintln!("replay stopped: {error}; the window is yours");
+                self.replaying = None;
+                Replayed::Not
             }
         }
     }
@@ -790,7 +899,13 @@ fn main() -> ExitCode {
         hud: false,
         stats: Stats::default(),
         panel: None,
+        replaying: None,
     };
+    if let Some(replay) = &options.replay {
+        let replayer = orla_session::replay::Replayer::start(replay, &mut player.session);
+        player.replaying = Some((replayer, None));
+        eprintln!("playing the replay: its inputs drive the window until it ends");
+    }
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {

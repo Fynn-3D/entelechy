@@ -440,8 +440,17 @@ loads.
 cargo run -- replay examples/life/tests/blinker.replay
 ```
 
+The Player plays a replay in its window: its inputs drive the scene at
+the replay's own times, its checks run as they come, and when it ends
+what it observed is printed and the window is the person's to go on
+with. The replay names its scene and its window, so it is all it needs:
+
+```sh
+cargo run --release -p orla-player -- --replay examples/voxel/tests/monolith.replay
+```
+
 The file format is documented at the top of
-[the replay module](../crates/interface/orla/src/replay.rs). Key codes follow the common
+[the replay module](../crates/interface/session/src/replay.rs). Key codes follow the common
 browser codes: letters and digits by ASCII uppercase, space 32, enter 13,
 arrows 37 to 40.
 

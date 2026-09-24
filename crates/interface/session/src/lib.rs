@@ -31,6 +31,7 @@ mod inputs;
 mod kernels;
 mod observe;
 mod options;
+pub mod replay;
 mod scene;
 mod session;
 mod sources;

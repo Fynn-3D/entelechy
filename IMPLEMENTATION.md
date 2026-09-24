@@ -50,7 +50,7 @@ backend is held to.
 | Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs), written as documents |
 | Session | [session](crates/interface/session/src/session.rs): [scene](crates/interface/session/src/scene.rs), [kernel ledger](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs.rs), [source resolution](crates/interface/session/src/sources.rs), [observation](crates/interface/session/src/observe.rs); [bench](crates/interface/session/src/bench.rs), [file formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/orla/tests/session.rs) |
 | Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire forms](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs), [contract](docs/PROTOCOL.md) | [client test](crates/interface/orla/tests/protocol.rs); [live agents](crates/interface/orla/tests/agent.rs) repair, publish and compose from the answers alone, and change what a running state carries without losing it; the op table held to the server ([contract test](crates/interface/protocol/src/lib.rs)); [an agent's record](examples/scanline/agent.jsonl) replayed |
-| Command line | [orla](crates/interface/orla/src/main.rs), [replay](crates/interface/orla/src/replay.rs), [render](crates/interface/orla/src/render.rs), [packages](crates/interface/orla/src/package.rs), [scaffold](crates/interface/orla/src/scaffold.rs) | every example replay on three backends |
+| Command line | [orla](crates/interface/orla/src/main.rs), [replay](crates/interface/session/src/replay.rs), [render](crates/interface/orla/src/render.rs), [packages](crates/interface/orla/src/package.rs), [scaffold](crates/interface/orla/src/scaffold.rs) | every example replay on three backends |
 | C ABI | [ffi](crates/interface/ffi/src/lib.rs), [header](crates/interface/ffi/include/orla.h) | [ABI tests](crates/interface/ffi/tests/abi.rs), [header held to the exports](crates/interface/ffi/tests/header.rs), [C example](bridges/c/hello.c) |
 | Player | [window loop](crates/interface/player/src/main.rs), [audio](crates/interface/player/src/audio.rs), [gamepad](crates/interface/player/src/gamepad.rs) | presentation and blit tests |
 | Import and export | [import](crates/interface/import/src/), [export](crates/interface/export/src/) | [MIDI tests](crates/interface/formats/tests/midi.rs), [round trip](crates/interface/export/tests/round_trip.rs) |
@@ -400,7 +400,7 @@ Represented in the IR, and so on every backend:
 - Bridges are clients outside the workspace, in their program's language,
   speaking only the protocol and the Host's files.
 - Application tests are data: `.replay` files, run on every backend by
-  the verification in [HANDOFF](HANDOFF.md) ([replay](crates/interface/orla/src/replay.rs)).
+  the verification in [HANDOFF](HANDOFF.md) ([replay](crates/interface/session/src/replay.rs)).
 
 ### Runtime and backends
 

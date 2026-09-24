@@ -5,5 +5,6 @@
 
 pub mod package;
 pub mod render;
-pub mod replay;
+/// Replays live in the session, where the Player plays them too.
+pub use orla_session::replay;
 pub mod scaffold;

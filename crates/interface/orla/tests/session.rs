@@ -2343,3 +2343,45 @@ fn a_documents_kernels_publish_together_or_not_at_all() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A replay played as the Player plays it: the whole scene evaluated
+/// every frame (the window shows the picture), after one frame before
+/// the window opens, holds what `orla replay` holds evaluating only what
+/// its checks need.
+#[test]
+fn a_replay_played_as_a_window_plays_it_holds_as_it_does_headless() {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/voxel/tests");
+    // The small window's replay; a larger one holds the same way, and
+    // renders each frame at its size.
+    for name in ["voxel.replay"] {
+        let text = std::fs::read_to_string(base.join(name)).unwrap();
+        let replay = orla::replay::parse(&text, &base).unwrap();
+        let runtime = Session::runtime_for("jit", Default::default()).unwrap();
+        let mut session = Session::open_with(&replay.scene, replay.kernels.as_deref(), runtime);
+        session.sync();
+        let size = replay.steps.iter().find_map(|step| match step {
+            orla::replay::Step::Window { size, scale } => Some((*size, *scale)),
+            _ => None,
+        });
+        let (window, scale) = size.unwrap_or(([0.0, 0.0], 1.0));
+        session
+            .evaluate(&Context {
+                window,
+                scale,
+                ..Context::default()
+            })
+            .unwrap();
+        let mut replayer = orla::replay::Replayer::start(&replay, &mut session);
+        while let Some(frame) = replayer.next_frame(&mut session).unwrap() {
+            let report = session.evaluate(&frame.context).unwrap();
+            replayer.evaluated(report);
+        }
+        let outcome = &replayer.outcome;
+        assert!(
+            outcome.failures.is_empty(),
+            "{name}: {:?}",
+            outcome.failures
+        );
+        assert!(outcome.checks > 30, "{name}: {} checks", outcome.checks);
+    }
+}
