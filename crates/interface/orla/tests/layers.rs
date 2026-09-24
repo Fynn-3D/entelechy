@@ -37,6 +37,11 @@ const YARDSTICKS: [&str; 3] = ["orla-compiler", "orla-cpu", "orla-conformance"];
 /// Interface crates that take nothing from outside all the same.
 const PLAIN_INTERFACES: [&str; 1] = ["orla-formats"];
 
+/// The crates allowed `unsafe`: the JIT calls the code it produces, the
+/// FFI reads what a C caller hands it. Every other crate takes the
+/// workspace's lints, which forbid it.
+const UNSAFE: [&str; 2] = ["orla-jit", "orla-ffi"];
+
 struct Crate {
     layer: &'static str,
     dir: PathBuf,
@@ -45,23 +50,70 @@ struct Crate {
     outside: Vec<String>,
     /// Development dependencies inside the workspace, by package name.
     tests: Vec<String>,
+    /// Whether it takes the workspace's lints, which forbid `unsafe`.
+    workspace_lints: bool,
 }
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
-/// A manifest's package name, its `[dependencies]` inside and outside the
-/// workspace, and its `[dev-dependencies]` inside, read as lines: a key
-/// is what comes before `=`, and a workspace crate is one given by `path`.
-fn read(manifest: &Path) -> (String, Vec<String>, Vec<String>, Vec<String>) {
+/// What a manifest says of a crate.
+struct Manifest {
+    name: String,
+    /// Dependencies of the crate itself, of any table (`[dependencies]`,
+    /// a target's, `[build-dependencies]`): workspace crates by package
+    /// name, and the rest.
+    inside: Vec<String>,
+    outside: Vec<String>,
+    /// Development dependencies (of any target) inside the workspace;
+    /// those from outside count as the crate's own.
+    tests: Vec<String>,
+    workspace_lints: bool,
+}
+
+/// A manifest read as lines: a key is what comes before `=`, a workspace
+/// crate is one given by `path`, and a dependency table is any table
+/// whose name ends in `dependencies]`, a target's and a build's included,
+/// or a dotted one that names a single dependency.
+fn read(manifest: &Path) -> Manifest {
     let text = std::fs::read_to_string(manifest).unwrap();
     let mut name = None;
-    let mut table = "";
+    let mut table = String::new();
+    // A `[dependencies.x]` table is one dependency, `x`.
+    let mut dotted: Option<(String, bool)> = None;
     let (mut inside, mut outside, mut tests) = (Vec::new(), Vec::new(), Vec::new());
+    let mut workspace_lints = false;
+    let flush = |dotted: &mut Option<(String, bool)>,
+                 inside: &mut Vec<String>,
+                 outside: &mut Vec<String>| {
+        if let Some((key, path)) = dotted.take() {
+            if path {
+                inside.push(key)
+            } else {
+                outside.push(key)
+            }
+        }
+    };
     for line in text.lines().map(str::trim) {
+        if line.starts_with('#') {
+            continue;
+        }
         if line.starts_with('[') {
-            table = line;
+            flush(&mut dotted, &mut inside, &mut outside);
+            table = line.to_owned();
+            if let Some(key) = table
+                .strip_prefix("[dependencies.")
+                .or_else(|| table.strip_prefix("[build-dependencies."))
+                .and_then(|rest| rest.strip_suffix(']'))
+            {
+                dotted = Some((key.to_owned(), false));
+            }
+            assert!(
+                !table.contains("dev-dependencies."),
+                "{}: write a development dependency inline",
+                manifest.display()
+            );
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
@@ -71,23 +123,35 @@ fn read(manifest: &Path) -> (String, Vec<String>, Vec<String>, Vec<String>) {
         if table == "[package]" && key == "name" {
             name = Some(value.trim().trim_matches('"').to_owned());
         }
-        if table == "[dependencies]" && !key.starts_with('#') {
+        if table == "[lints]" && key == "workspace" && value.trim() == "true" {
+            workspace_lints = true;
+        }
+        if let Some((_, path)) = &mut dotted {
+            *path |= key == "path";
+            continue;
+        }
+        if table.ends_with("dev-dependencies]") {
+            if value.contains("path") {
+                tests.push(key.to_owned());
+            } else {
+                outside.push(key.to_owned());
+            }
+        } else if table.ends_with("dependencies]") {
             if value.contains("path") {
                 inside.push(key.to_owned());
             } else {
                 outside.push(key.to_owned());
             }
         }
-        if table == "[dev-dependencies]" && !key.starts_with('#') && value.contains("path") {
-            tests.push(key.to_owned());
-        }
     }
-    (
-        name.unwrap_or_else(|| panic!("{} names no package", manifest.display())),
+    flush(&mut dotted, &mut inside, &mut outside);
+    Manifest {
+        name: name.unwrap_or_else(|| panic!("{} names no package", manifest.display())),
         inside,
         outside,
         tests,
-    )
+        workspace_lints,
+    }
 }
 
 fn crates() -> BTreeMap<String, Crate> {
@@ -114,7 +178,13 @@ fn crates() -> BTreeMap<String, Crate> {
                 "{} is not a crate; a layer holds crates only",
                 dir.display()
             );
-            let (package, inside, outside, tests) = read(&manifest);
+            let Manifest {
+                name: package,
+                inside,
+                outside,
+                tests,
+                workspace_lints,
+            } = read(&manifest);
             let dir = Path::new("crates")
                 .join(layer)
                 .join(dir.file_name().unwrap());
@@ -126,6 +196,7 @@ fn crates() -> BTreeMap<String, Crate> {
                     inside,
                     outside,
                     tests,
+                    workspace_lints,
                 },
             );
         }
@@ -216,6 +287,33 @@ fn only_the_interface_and_two_machines_take_outside_dependencies() {
                     krate.dir.display()
                 ));
             }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// `unsafe` is forbidden by the workspace's lints; a crate that does not
+/// take them could use it unseen. Only the two named crates set their
+/// own, and the workspace's still forbid it.
+#[test]
+fn only_the_jit_and_the_ffi_may_be_unsafe() {
+    let workspace = std::fs::read_to_string(root().join("Cargo.toml")).unwrap();
+    assert!(
+        workspace.contains("[workspace.lints.rust]\nunsafe_code = \"forbid\""),
+        "the workspace's lints forbid unsafe code"
+    );
+    let mut wrong = Vec::new();
+    for (name, krate) in &crates() {
+        let allowed = UNSAFE.contains(&name.as_str());
+        if krate.workspace_lints == allowed {
+            wrong.push(if allowed {
+                format!("{name} takes the workspace's lints, yet it is one allowed `unsafe`")
+            } else {
+                format!(
+                    "{name} ({}) does not take the workspace's lints (`[lints] workspace = true`), which forbid `unsafe`",
+                    krate.dir.display()
+                )
+            });
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
