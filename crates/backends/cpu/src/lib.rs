@@ -67,7 +67,7 @@ impl CpuBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        check_invocation(module, invocation)?;
+        check_invocation(module, invocation, scope)?;
         let code = match code {
             Some(code) => code.0.clone(),
             None => Code::of(module).0,
@@ -424,7 +424,7 @@ pub fn trace(
     scope: &mut Scope<'_>,
     at: [u32; 3],
 ) -> Result<Trace, ExecutionError> {
-    check_invocation(module, invocation)?;
+    check_invocation(module, invocation, scope)?;
     let mode = module.manifest.mode;
     let domain = match mode {
         Mode::Map => invocation.domain,

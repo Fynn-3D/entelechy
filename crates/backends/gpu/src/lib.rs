@@ -1258,7 +1258,7 @@ impl Backend for GpuBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<orla_rules::backend::Checked, ExecutionError> {
-        check_invocation(module, invocation)?;
+        check_invocation(module, invocation, scope)?;
         let Some(pipeline) = prepared.as_any().downcast_ref::<Pipeline>() else {
             return Err(ExecutionError::Device(
                 "kernel was prepared by a different backend".into(),
@@ -1680,7 +1680,7 @@ impl GpuBackend {
                 "kernel was prepared by a different backend".into(),
             ));
         };
-        check_invocation(module, invocation)?;
+        check_invocation(module, invocation, scope)?;
         let _guard = self
             .lock
             .lock()

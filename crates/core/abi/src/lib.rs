@@ -1139,6 +1139,17 @@ impl<'a> Scope<'a> {
             .saturating_sub(self.host.used_words())
     }
 
+    /// What a handle a caller bound to a port is: its shape and element
+    /// layout, for checking the binding against the port before a run
+    /// reads anything. A check, not an access: it needs no capability
+    /// and reads no word.
+    pub fn bound(&self, field: Handle) -> Result<(Shape, Schema), AbiError> {
+        Ok((
+            self.host.domain(field)?.shape(),
+            self.host.schema(field)?.clone(),
+        ))
+    }
+
     /// The extent of an input. Requires `field.read`.
     pub fn size(&self, field: Handle) -> Result<Domain, AbiError> {
         self.require(Capability::FieldRead)?;

@@ -915,3 +915,51 @@ fn at_linear_blends_an_element_wider_than_64_words() {
     assert_eq!(cpu.len(), 9);
     assert_eq!(cpu, jit);
 }
+
+/// Whoever calls a backend, not only the Graph, an input bound to a
+/// Field of another shape or layout than its port's is refused before a
+/// word is read: the JIT's code reads an input by its port's layout, so
+/// this check is what keeps a wrong binding from reading past a Field.
+#[test]
+fn an_input_of_the_wrong_layout_is_refused_by_every_backend() {
+    let module = compile(
+        "kernel t.wide@1 { requires { field.read; field.write; } struct W { a: Vec4; b: Vec4; } input rows: Rows<W>; output result: Rows<Float>; compute { return sample(rows).b.w; } }",
+    )
+    .unwrap();
+    let mut host = Host::new(1 << 16);
+    let narrow = host
+        .create(
+            orla_abi::Schema::new(vec![orla_abi::Scalar::Float]),
+            Domain::Rows(4),
+        )
+        .unwrap();
+    let grid = host
+        .create(
+            orla_abi::Schema::new(vec![orla_abi::Scalar::Float; 8]),
+            Domain::Grid(2, 2),
+        )
+        .unwrap();
+    let jit = JitBackend::new().unwrap();
+    let prepared = jit.prepare(&module).unwrap();
+    for (input, said) in [
+        (narrow, "expects an element of"),
+        (grid, "but is bound to a Grid"),
+    ] {
+        let invocation = Invocation {
+            inputs: vec![input],
+            params: vec![],
+            domain: Domain::Rows(4),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let error = jit
+            .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+            .unwrap_err();
+        assert!(error.to_string().contains(said), "{error}");
+        let mut scope = Scope::new(&mut host, all());
+        let error = CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap_err();
+        assert!(error.to_string().contains(said), "{error}");
+    }
+}

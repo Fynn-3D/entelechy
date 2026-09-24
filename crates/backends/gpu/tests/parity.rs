@@ -858,8 +858,8 @@ fn scatters_match_between_backends() {
     // Ints alone sum with atomics, in parallel; and floats with NaN and
     // both zeros meet `min` and `max` in the one total order both
     // backends use, whichever order the pairs arrive in.
-    let source = "kernel test.count@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Tally>; output result: Grid<Tally>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Tally { hits: Int; ids: Int; } struct Splat { cell: Vec2; value: Tally; } scatter into grid with sum { let d = sample(drops); return Splat { cell: d.at, value: Tally { hits: 1, ids: d.id } }; } }";
-    let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let counting = "kernel test.count@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Tally>; output result: Grid<Tally>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Tally { hits: Int; ids: Int; } struct Splat { cell: Vec2; value: Tally; } scatter into grid with sum { let d = sample(drops); return Splat { cell: d.at, value: Tally { hits: 1, ids: d.id } }; } }";
+    let module = compile(counting).unwrap_or_else(|error| panic!("{error}"));
     let tally_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Int]);
     let mut odd_words = drop_words.clone();
     for i in 0..count as usize {
@@ -881,7 +881,7 @@ fn scatters_match_between_backends() {
         ),
         (
             "min with NaN",
-            compile(&source.replace("with sum", "with min").replace(
+            compile(&counting.replace("with sum", "with min").replace(
                 "Tally { hits: 1, ids: d.id }",
                 "Tally { hits: d.id, ids: 0 }",
             ))

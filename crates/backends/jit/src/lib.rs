@@ -198,7 +198,7 @@ impl Backend for JitBackend {
                 "kernel was prepared by a different backend".into(),
             ));
         };
-        check_invocation(module, invocation)?;
+        check_invocation(module, invocation, scope)?;
         match module.manifest.mode {
             Mode::Map => run(compiled.entry, module, invocation, scope),
             Mode::Scan => {

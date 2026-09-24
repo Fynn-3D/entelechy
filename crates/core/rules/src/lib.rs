@@ -63,6 +63,14 @@ pub enum ExecutionError {
         /// The value supplied.
         actual: String,
     },
+    /// An input is bound to a Field whose shape or element layout is not
+    /// its port's.
+    InputType {
+        /// Input name.
+        name: String,
+        /// What differs.
+        message: String,
+    },
     /// The output domain has no elements.
     EmptyDomain,
     /// The output domain's shape is not the output port's.
@@ -256,6 +264,7 @@ impl fmt::Display for ExecutionError {
                 "parameter `{name}` expects {expected}, received {actual}"
             ),
             Self::EmptyDomain => write!(f, "output domain has no elements"),
+            Self::InputType { name, message } => write!(f, "input `{name}` {message}"),
             Self::DomainShape { expected, actual } => {
                 write!(f, "output is a {expected} but the domain is a {actual}")
             }
@@ -432,14 +441,38 @@ pub fn double_order_key(bits: u64) -> i64 {
 }
 
 /// Checks that an invocation matches the manifest: input and parameter
-/// counts, parameter types, and a non-empty domain. Every backend applies
-/// the same rule.
-pub fn check_invocation(module: &Validated, invocation: &Invocation) -> Result<(), ExecutionError> {
+/// counts, each input's shape and element layout, parameter types, and a
+/// non-empty domain. Every backend applies the same rule, and a backend
+/// that reads an input's words by its port's layout (the JIT's code
+/// does) is safe whoever called it, not only when the Graph did.
+pub fn check_invocation(
+    module: &Validated,
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+) -> Result<(), ExecutionError> {
     let manifest = &module.manifest;
     if invocation.inputs.len() != manifest.inputs.len() {
         return Err(ExecutionError::InputCount {
             expected: manifest.inputs.len(),
             actual: invocation.inputs.len(),
+        });
+    }
+    for (port, handle) in manifest.inputs.iter().zip(&invocation.inputs) {
+        let (shape, schema) = scope.bound(*handle)?;
+        let message = if shape != port.ty.shape {
+            format!("expects {} but is bound to a {shape}", port.ty.shape)
+        } else if schema != port.ty.schema {
+            format!(
+                "expects an element of {} but is bound to a Field of {}",
+                port.ty.schema.describe(),
+                schema.describe()
+            )
+        } else {
+            continue;
+        };
+        return Err(ExecutionError::InputType {
+            name: port.name.clone(),
+            message,
         });
     }
     if invocation.params.len() != manifest.params.len() {
