@@ -2137,3 +2137,30 @@ output result <- w.result;",
         }
     }
 }
+
+/// The raster package's cutout and `native.rasterize@2` draw the same
+/// surface on the interpreter and the JIT — which triangle at every
+/// pixel, and its depth to the bit — since there the fast path is the
+/// package's rule written in Rust. (`examples/mesh/tests/cutout.replay`
+/// holds all three backends, a device's rasterizer to an edge pixel or
+/// two.)
+#[test]
+fn the_package_cutout_is_the_fast_paths_to_the_bit_off_the_device() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let base = root.join("examples/mesh/tests");
+    let replay = orla::replay::parse(
+        "scene cutout.osn\nwindow 320 240\nframe 0.0\nexpect differ.result[0] = 0\nexpect deeper.result[0] = 0\nexpect taken.result[0] > 1000\n",
+        &base,
+    )
+    .unwrap();
+    for backend in ["cpu", "jit"] {
+        let runtime = Session::runtime_for(backend, Default::default()).unwrap();
+        let outcome = orla::replay::run(&replay, runtime).unwrap();
+        assert!(
+            outcome.failures.is_empty(),
+            "{backend}: {:?}",
+            outcome.failures
+        );
+        assert_eq!(outcome.checks, 3, "{backend}");
+    }
+}

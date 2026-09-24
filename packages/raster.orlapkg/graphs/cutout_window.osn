@@ -1,0 +1,27 @@
+// The cutout preset at the window's size, as `window.osn` is the plain
+// one's: the surface follows the window when it is resized.
+use "../kernels/raster.orla";
+
+input vertices: Rows<Corner>;
+input triangles: Rows<Face>;
+input mask: Image;
+param cutout: Float = 0.5;
+
+// What a pixel holds before anything is drawn on it: the key no
+// fragment gives.
+node empty: Grid<Long> { domain = window(); value = 9223372036854775807l; }
+
+node cover: raster.cover_cutout@1 {
+    triangles <- triangles;
+    vertices <- vertices;
+    mask <- mask;
+    keys <- empty.result;
+    cutout = cutout;
+}
+node resolved: raster.resolve@2 {
+    keys <- cover.result;
+    triangles <- triangles;
+    vertices <- vertices;
+}
+
+output surface <- resolved.result;

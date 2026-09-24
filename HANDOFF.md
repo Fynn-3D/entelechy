@@ -40,22 +40,22 @@ done
 
 ## Next
 
-Decide whether the CPU and the JIT still need a native rasterizer. The
-rig is driven now (`skin.aim@1` and `examples/reach` for a joint a
-Kernel writes; `skin.stride@1`, `skin.travel@1` and `examples/stride`
-for root motion), and the raster package is within about 1.1 times the
-device's rasterizer on the GPU and 1.4 times the Rust fast path on the
-JIT. `native.rasterize@1` on the CPU and the JIT is the rasterizer's
-rule written a second time, in Rust, held to the package by a test;
-the GPU's is the hardware, which the typed-field architecture allows.
+Let the raster package draw a large triangle across many invocations.
+Whether the CPU and the JIT keep a native rasterizer is decided (they
+do; `docs/DECISIONS.md` has the measurements), and the package now has
+the fast path's cutout too. What the measurements turned up is the
+package's own weakness: `raster.cover@1` gives each triangle one
+invocation, which walks every pixel of its box, so a mesh of few large
+triangles — the model example — draws 9.6 times as slow on the GPU as
+the device's rasterizer, where a mesh of small ones is within 1.1 times.
 
 Done when:
 
-- the package and the fast path are measured side by side on the JIT
-  and the interpreter over the mesh, culled and model examples, small
-  meshes and large;
-- either the fast path is kept, with the measurements that justify it
-  written where the decision lives, or it is retired on the CPU and the
-  JIT and every scene that named it runs the package there, its replays
-  unchanged;
+- a triangle whose box is large is covered by many invocations, each a
+  tile of its box, by Kernels in the package and nothing in the engine;
+- the model example's frame on the GPU with the package is within a
+  small factor of the device's rasterizer, measured and written where
+  the decision lives, and the torus and culled scenes lose nothing;
+- `edges.replay`, `cutout.replay` and the session test that holds the
+  package to the fast path to the bit still pass, unchanged;
 - the verification above is clean.

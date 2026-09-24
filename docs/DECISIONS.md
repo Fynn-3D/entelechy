@@ -206,35 +206,53 @@ beside the first, which would need both held.
 ## The rasterizer is a package; the native one is its fast path
 
 A scene places `packages/raster.orlapkg` to turn triangles into a
-surface, and binds `native.rasterize@1` in its place, one node for
-another, where it wants speed. Both keep one rule: a pixel is covered
-where its centre is inside the triangle's box and on or inside all three
-edges, holds the nearest fragment in `[0, 1)`, the earlier triangle on a
-tie, with attributes interpolated by `1 / w`.
+surface — `raster.osn` or `window.osn`, and `cutout.osn` or
+`cutout_window.osn` where a mask's alpha cuts fragments away — and binds
+`native.rasterize@1` or `@2` in its place, one node for another, where
+it wants speed. Both keep one rule: a pixel is covered where its centre
+is inside the triangle's box and on or inside all three edges, holds the
+nearest fragment in `[0, 1)`, the earlier triangle on a tie, with
+attributes interpolated by `1 / w`; with a cutout, a fragment whose
+alpha in the mask at its own uv is below the cutout is not drawn.
 
 **Why.** Written as Kernels, rasterization is what the rest of Orla is:
 typed, traced, hot-reloaded, and the same on every backend, edges
-included, because every backend runs the same IR. A native rasterizer on
-a GPU is the device's, whose coverage at an edge and whose precision are
-its own, so the three backends drew different surfaces; and a
-rasterizer in Rust is a feature an author cannot change. The package is
-slower — a frame of the culled example's world is 18 ms on the GPU
-against 11 with the device's rasterizer, and on the JIT the Rust fast
-path draws in 22 ms what the package draws in about 90 — so the fast
-path stays, as an acceleration of the package rather than a second
-definition of it.
+included, because every backend runs the same IR; and a rasterizer in
+Rust is a feature an author cannot change. The fast path stays, as an
+acceleration of the package rather than a second definition of it,
+because it is faster where it matters and costs little to keep:
+
+- On the interpreter, the reference every test leans on, the package
+  draws a frame about three times as slow (the torus, from nine thousand
+  triangles to two million: 2.9 to 3.3 times; the culled world 2.4; the
+  model 3.1).
+- On the JIT, 1.1 to 2.4 times as slow, the most where the rasterizer is
+  most of a frame (a small mesh).
+- On a GPU the fast path is the device's rasterizer, which the documents
+  call approximate: the package is within 1.1 times of it on meshes of
+  small triangles, and 9.6 times as slow on the model, whose few large
+  triangles each take one invocation the whole of.
+- Taking it away on the CPU and the JIT would make `native.rasterize` a
+  device's alone, and a scene that named it would stop running there;
+  choosing the package for it would need the Graph to know that a placed
+  graph and a native operation are one computation, which it does not.
+
+Measured on an M4 at 320 by 240 (the culled world at 640 by 400, the
+model at 640 by 480), 2026-09-24.
 
 **Where.** The package and its presets; every example places it. On the
 interpreter and the JIT the fast path is `orla_rules::raster`, held bit
 for bit to the rule by a test that writes the rule plainly; on the GPU it
-is the device's rasterizer, which the documents call approximate.
-`examples/mesh/tests/edges.replay` pins the package's surface at edge
-pixels on all three backends, and `native.replay` the fast path's
-inside them.
+is the device's rasterizer. `examples/mesh/tests/edges.replay` pins the
+package's surface at edge pixels on all three backends and `native.replay`
+the fast path's inside them; `cutout.replay` holds the package's cutout
+to `native.rasterize@2` on all three, and a session test holds them equal
+to the bit on the interpreter and the JIT.
 
 **What would change it.** A GPU fast path exact to the rule (a compute
 rasterizer as fast as the device's, or integer coverage the device
 honours), which would make the fast path a pure acceleration on every
-backend; or a scene that needs the fast path chosen for it, which would
-need the Graph to know that a placed graph and a native operation are
-one computation.
+backend; the package drawing a large triangle across many invocations,
+which would close most of the gap on the GPU; or a scene that needs the
+fast path chosen for it, which would need the Graph to know that a placed
+graph and a native operation are one computation.

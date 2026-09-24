@@ -1,0 +1,13 @@
+scene cutout.osn
+window 320 240
+
+# The torus through a checker mask, half its texels clear. The package's
+# cutout and the fast path pick the same triangle at every pixel on the
+# interpreter and the JIT (and place it at the same depth to the bit,
+# which crates/interface/orla/tests/session.rs holds); on a GPU the
+# device's rasterizer takes an edge pixel or a texel's border the other
+# way now and then, fifteen of some twenty thousand here.
+frame 0.0
+expect differ.result[0] <= 64
+# And the mask takes the same pixels from the torus on every backend.
+expect taken.result[0] = 6728

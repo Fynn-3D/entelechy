@@ -69,7 +69,10 @@ use "picture.orlapkg";
 - **raster** — triangles turned into the surface a camera sees, as
   Kernels: for every pixel the nearest triangle's depth, normal and uv,
   perspective-correct, and its row as `id`. `graphs/raster.osn` draws at
-  a `width` and `height`, `graphs/window.osn` at the window's size. It
+  a `width` and `height`, `graphs/window.osn` at the window's size;
+  `graphs/cutout.osn` and `graphs/cutout_window.osn` take a `mask` and
+  leave out a fragment whose alpha there is below `cutout`, which is how
+  leaves and fences are drawn. It
   is the rasterizer every example places; `native.rasterize@1` in its
   place is the fast path, bit for bit the same on the interpreter and
   the JIT and the device's approximate rasterizer on a GPU
