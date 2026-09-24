@@ -1869,3 +1869,119 @@ fn a_kernel_of_many_helpers_and_fields_runs_on_the_device() {
     let (cpu, gpu_pixels) = both(&gpu, &source, &[], (1, 1), vec![], Domain::Grid(4, 2));
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-4), 0.0);
 }
+
+/// Runs `module` over `inputs` on both backends and returns each one's
+/// output words.
+fn on_both_inputs(
+    gpu: &GpuBackend,
+    host: &mut Host,
+    module: &orla_compiler::Validated,
+    inputs: Vec<orla_abi::Handle>,
+    domain: Domain,
+) -> (Vec<u32>, Vec<u32>) {
+    let invocation = orla_abi::Invocation {
+        inputs,
+        params: Vec::new(),
+        domain,
+        context: orla_abi::Context::default(),
+    };
+    let mut scope = Scope::new(host, all());
+    let cpu_out = orla_cpu::CpuBackend
+        .execute(module, &invocation, &mut scope)
+        .unwrap()[0];
+    let cpu_words = host.data(cpu_out).unwrap().storage().to_vec();
+    let prepared = Backend::prepare(gpu, module).unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = Scope::new(host, all());
+    let gpu_out = Backend::execute(gpu, prepared.as_ref(), module, &invocation, &mut scope)
+        .unwrap_or_else(|error| panic!("{error}"))[0];
+    let byte_len = host
+        .schema(gpu_out)
+        .unwrap()
+        .storage_words(host.domain(gpu_out).unwrap().count())
+        * 4;
+    let device = host.resident(gpu_out).unwrap().expect("resident");
+    let bytes = Backend::download(gpu, device, byte_len).unwrap();
+    let gpu_words = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    (cpu_words, gpu_words)
+}
+
+/// A scatter, a prefix and a reduction over more elements than one
+/// dimension of workgroups reaches (65,535 of 64 is 4,194,240) were
+/// dispatched in that one dimension, and the device refused them. The
+/// dispatch folds into rows now, as a map's does, and every element is
+/// the reference's.
+#[test]
+fn passes_over_more_rows_than_one_dimension_holds_match() {
+    let Some(gpu) = gpu() else { return };
+    let count = 5_000_000u32;
+    let mut host = Host::new(1 << 26);
+    let ints = |host: &mut Host, words: Vec<u32>| {
+        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+        let n = words.len() as u32;
+        host.adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
+            .unwrap()
+    };
+    let floats = |host: &mut Host, words: Vec<u32>| {
+        let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Float]);
+        let n = words.len() as u32;
+        host.adopt(orla_abi::FieldData::from_storage(schema, Domain::Rows(n), words).unwrap())
+            .unwrap()
+    };
+    // Each run takes fresh inputs: one the device ran on is resident there.
+    let source = |host: &mut Host| ints(host, (0..count).map(|i| i % 7).collect());
+
+    let prefix = compile(
+        "kernel test.rank@1 { requires { field.read; field.write; } input flags: Rows<Int>;
+         output result: Rows<Int>; prefix with sum { return sample(flags) % 3; } }",
+    )
+    .unwrap();
+    let inputs = vec![source(&mut host)];
+    let (cpu, gpu_words) = on_both_inputs(&gpu, &mut host, &prefix, inputs, Domain::Rows(count));
+    assert_eq!(cpu, gpu_words, "prefix");
+
+    let reduce = compile(
+        "kernel test.most@1 { requires { field.read; field.write; } input flags: Rows<Int>;
+         output result: Rows<Int>; compute { return sample(flags) * 3 + element() % 5; }
+         merge(a, b) { return max(a, b); } }",
+    )
+    .unwrap();
+    let inputs = vec![source(&mut host)];
+    let (cpu, gpu_words) = on_both_inputs(&gpu, &mut host, &reduce, inputs, Domain::Rows(1));
+    assert_eq!(cpu, gpu_words, "reduce");
+
+    for rule in ["max", "last"] {
+        let scatter = compile(&format!(
+            "kernel test.spread@1 {{ requires {{ field.read; field.write; }}
+             input flags: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+             struct Put {{ slot: Int; value: Int; }}
+             scatter into slots with {rule} {{
+                 return Put {{ slot: element() % 1000, value: element() + sample(flags) }};
+             }} }}"
+        ))
+        .unwrap();
+        let inputs = vec![source(&mut host), ints(&mut host, vec![0; 1000])];
+        let (cpu, gpu_words) =
+            on_both_inputs(&gpu, &mut host, &scatter, inputs, Domain::Rows(count));
+        assert_eq!(cpu, gpu_words, "scatter with {rule}");
+    }
+
+    // A float sum, which the device sorts by target and source first.
+    let summed = compile(
+        "kernel test.pile@1 { requires { field.read; field.write; }
+         input flags: Rows<Int>; input sums: Rows<Float>; output result: Rows<Float>;
+         struct Add { slot: Int; value: Float; }
+         scatter into sums with sum {
+             return Add { slot: element() % 1000, value: float(sample(flags)) * 0.5 };
+         } }",
+    )
+    .unwrap();
+    let inputs = vec![
+        source(&mut host),
+        floats(&mut host, vec![0.0f32.to_bits(); 1000]),
+    ];
+    let (cpu, gpu_words) = on_both_inputs(&gpu, &mut host, &summed, inputs, Domain::Rows(count));
+    assert_eq!(cpu, gpu_words, "scatter with a float sum");
+}

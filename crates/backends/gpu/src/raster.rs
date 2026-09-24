@@ -284,7 +284,10 @@ fn build(device: &wgpu::Device) -> Result<RasterPipelines, String> {
         cache: None,
     });
     if let Some(error) = pollster::block_on(guard.pop()) {
-        return Err(format!("rasterize pipeline: {error}"));
+        return Err(format!(
+            "rasterize pipeline: {}",
+            crate::device_error(&error)
+        ));
     }
     Ok(RasterPipelines {
         render,
@@ -516,7 +519,10 @@ pub(crate) fn rasterize(
     let submission = gpu.queue.submit(Some(encoder.finish()));
     gpu.settle_measured(submission, timing);
     if let Some(error) = pollster::block_on(guard.pop()) {
-        return Err(ExecutionError::Device(format!("rasterize: {error}")));
+        return Err(ExecutionError::Device(format!(
+            "rasterize: {}",
+            crate::device_error(&error)
+        )));
     }
     let output = scope.adopt_resident(
         surface_schema(),

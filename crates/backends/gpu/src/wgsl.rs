@@ -203,6 +203,19 @@ pub const OPAQUE_ONE: &str = "ctx[5].z";
 /// The most workgroups one dispatch dimension takes.
 pub const MAX_GROUPS: u32 = 65535;
 
+/// The workgroups a one-dimensional pass of `groups` dispatches: one row
+/// while they fit in a dimension, rows of `MAX_GROUPS` beyond. A pass
+/// reads its index as `gid.x + gid.y * span`, the span being its
+/// workgroup size times `MAX_GROUPS`, and its bounds check turns away
+/// the threads past the end of the last row.
+pub fn folded(groups: u32) -> (u32, u32) {
+    if groups <= MAX_GROUPS {
+        (groups, 1)
+    } else {
+        (MAX_GROUPS, groups.div_ceil(MAX_GROUPS))
+    }
+}
+
 /// How a map over `domain` is dispatched: the workgroups in x, y and z,
 /// and the fold (elements per unit of `gid.y`) when rows are too many
 /// for one dimension.
@@ -1056,6 +1069,8 @@ fn combine_expr(module: &Module, ty: Type, combine: Combine, a: &str, b: &str) -
 pub const SCATTER_WINNER_BINDING: u32 = 3;
 /// Workgroup length of the parallel scatter passes.
 pub const SCATTER_WORKGROUP: u32 = 64;
+/// Threads a row of scatter workgroups covers; see [`folded`].
+pub const SCATTER_SPAN: u32 = MAX_GROUPS * SCATTER_WORKGROUP;
 
 /// How a scatter's combine runs on the GPU: order-free rules apply the
 /// pairs in parallel with atomics; a float sum, whose rounding is the
@@ -1245,6 +1260,8 @@ pub const PREFIX_OUT_BINDING: u32 = 1;
 pub const PREFIX_SUMS_BINDING: u32 = 2;
 /// Invocations a workgroup in the prefix passes.
 pub const PREFIX_WORKGROUP: u32 = 64;
+/// Threads a row of prefix workgroups covers; see [`folded`].
+pub const PREFIX_SPAN: u32 = MAX_GROUPS * PREFIX_WORKGROUP;
 
 /// One of the three passes a prefix fold takes on a device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1373,7 +1390,7 @@ fn store_sum(index: u32, v: Element) {{
             "
 @compute @workgroup_size({PREFIX_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let block = gid.x;
+    let block = gid.x + gid.y * {PREFIX_SPAN}u;
     if (block >= plan.z) {{
         return;
     }}
@@ -1404,7 +1421,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             "
 @compute @workgroup_size({PREFIX_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let i = gid.x;
+    let i = gid.x + gid.y * {PREFIX_SPAN}u;
     if (i >= plan.x) {{
         return;
     }}
@@ -1472,7 +1489,7 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let n = u32(ctx[0].x) * u32(ctx[0].y) * u32(ctx[1].z);
-    let i = gid.x;
+    let i = gid.x + gid.y * {SCATTER_SPAN}u;
     if (i >= n) {{
         return;
     }}
@@ -1516,7 +1533,7 @@ pub fn emit_scatter_gather(module: &Module) -> String {
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
-    let e = gid.x;
+    let e = gid.x + gid.y * {SCATTER_SPAN}u;
     if (e >= count) {{
         return;
     }}
@@ -1562,7 +1579,7 @@ pub fn emit_scatter_keys(module: &Module, encode: bool) -> String {
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
-    let e = gid.x;
+    let e = gid.x + gid.y * {SCATTER_SPAN}u;
     if (e >= count) {{
         return;
     }}
@@ -1583,7 +1600,7 @@ pub fn emit_scatter_sort_keys(module: &Module) -> String {
         "
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let i = gid.x;
+    let i = gid.x + gid.y * {SCATTER_SPAN}u;
     if (i >= sort.x) {{
         return;
     }}
@@ -1609,7 +1626,7 @@ pub fn emit_scatter_sort_step() -> String {
         "{}
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let i = gid.x;
+    let i = gid.x + gid.y * {SCATTER_SPAN}u;
     let partner = i ^ sort.z;
     if (i >= sort.x || partner <= i) {{
         return;
@@ -1675,7 +1692,7 @@ pub fn emit_scatter_fold(module: &Module) -> String {
 @compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let count = u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z);
-    let e = gid.x;
+    let e = gid.x + gid.y * {SCATTER_SPAN}u;
     if (e >= count) {{
         return;
     }}
@@ -1743,6 +1760,8 @@ fn result_type_of(function: &Function, id: ValueId) -> Type {
 
 /// Workgroup length of the reduce step.
 pub const REDUCE_WORKGROUP: u32 = 64;
+/// Threads a row of reduce workgroups covers; see [`folded`].
+pub const REDUCE_SPAN: u32 = MAX_GROUPS * REDUCE_WORKGROUP;
 
 /// Emits the reduce step of a reduce module: element `i` of the output
 /// level is the run of at most [`orla_rules::reduce::FOLD`] elements
@@ -1810,7 +1829,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let n = level.x;
     // A merge that fails fails at the first element, as the reference's.
     current = 0u;
-    let start = gid.x * {fold}u;
+    let index = gid.x + gid.y * {REDUCE_SPAN}u;
+    let start = index * {fold}u;
     if (start >= n) {{
         return;
     }}
@@ -1839,7 +1859,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         run = (run + 1u) / 2u;
     }}
     {settle}
-    store_level(gid.x, held[0]);
+    store_level(index, held[0]);
 }}",
         keep = keep_left(module),
         settle = settle_left(module),

@@ -593,7 +593,10 @@ impl GpuBackend {
                 cache: None,
             });
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
-            return Err(format!("{error}\n--- emitted WGSL ---\n{source}"));
+            return Err(format!(
+                "{}\n--- emitted WGSL ---\n{source}",
+                device_error(&error)
+            ));
         }
         Ok((pipeline, layout))
     }
@@ -912,7 +915,10 @@ impl Backend for GpuBackend {
                 cache: None,
             });
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
-            return Err(format!("{error}\n--- emitted WGSL ---\n{source}"));
+            return Err(format!(
+                "{}\n--- emitted WGSL ---\n{source}",
+                device_error(&error)
+            ));
         }
         let reduce = if module.manifest.mode == orla_ir::Mode::Reduce {
             let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -964,7 +970,10 @@ impl Backend for GpuBackend {
                     cache: None,
                 });
             if let Some(error) = pollster::block_on(scope_guard.pop()) {
-                return Err(format!("{error}\n--- emitted WGSL ---\n{reduce_source}"));
+                return Err(format!(
+                    "{}\n--- emitted WGSL ---\n{reduce_source}",
+                    device_error(&error)
+                ));
             }
             Some((pipeline, layout))
         } else {
@@ -1214,7 +1223,7 @@ impl Backend for GpuBackend {
         // `set_measured`, this call waits, so what times it is the work.
         self.settle_measured(submission, timing);
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
-            return Err(ExecutionError::Device(error.to_string()));
+            return Err(ExecutionError::Device(device_error(&error)));
         }
         let outputs = adopt_outputs(
             scope,
@@ -1589,7 +1598,7 @@ impl GpuBackend {
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::Poll);
         if let Some(error) = pollster::block_on(scope_guard.pop()) {
-            return Err(ExecutionError::Device(error.to_string()));
+            return Err(ExecutionError::Device(device_error(&error)));
         }
         // What the last time wrote is what the run gives.
         adopt_outputs(
@@ -1878,7 +1887,8 @@ impl GpuBackend {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(threads.div_ceil(wgsl::PREFIX_WORKGROUP), 1, 1);
+            let (x, y) = wgsl::folded(threads.div_ceil(wgsl::PREFIX_WORKGROUP));
+            pass.dispatch_workgroups(x, y, 1);
         }
         self.spare.keep(sums);
         output
@@ -1982,7 +1992,8 @@ impl GpuBackend {
             pass.set_pipeline(reduce_pipeline);
             pass.set_bind_group(0, &group, &[]);
             let ahead = orla_rules::reduce::after_fold(count as usize) as u32;
-            pass.dispatch_workgroups(ahead.div_ceil(wgsl::REDUCE_WORKGROUP), 1, 1);
+            let (x, y) = wgsl::folded(ahead.div_ceil(wgsl::REDUCE_WORKGROUP));
+            pass.dispatch_workgroups(x, y, 1);
             drop(pass);
             count = u64::from(ahead);
             std::mem::swap(&mut current, &mut next);
@@ -2074,7 +2085,8 @@ impl GpuBackend {
             });
             compute.set_pipeline(&pass.0);
             compute.set_bind_group(0, group, offsets);
-            compute.dispatch_workgroups(groups, 1, 1);
+            let (x, y) = wgsl::folded(groups);
+            compute.dispatch_workgroups(x, y, 1);
         };
         match scatter {
             Scatter::Sorted { keys, step, fold } => {
@@ -2163,7 +2175,8 @@ impl GpuBackend {
                     compute.set_pipeline(&step.0);
                     for index in 1..records.len() {
                         compute.set_bind_group(0, &step_group, &[(index * alignment) as u32]);
-                        compute.dispatch_workgroups(over_padded, 1, 1);
+                        let (x, y) = wgsl::folded(over_padded);
+                        compute.dispatch_workgroups(x, y, 1);
                     }
                 }
                 dispatch(encoder, fold, &fold_group, &[0], over_target);
@@ -2271,5 +2284,17 @@ impl Check for FailureCheck {
                 error: ArithmeticError::Overflow,
             },
         })
+    }
+}
+
+/// What the device said, in full. A validation error's `to_string` is
+/// "Validation Error" and nothing else; what failed, and against which
+/// limit, is in its description.
+pub(crate) fn device_error(error: &wgpu::Error) -> String {
+    match error {
+        wgpu::Error::Validation { description, .. } | wgpu::Error::Internal { description, .. } => {
+            description.trim().to_owned()
+        }
+        other => other.to_string(),
     }
 }
