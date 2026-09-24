@@ -1,0 +1,41 @@
+language 1
+// sized
+param size: Int = 16;
+
+node literal.blank: tile.blank@1 {
+    value = 0.5;
+    domain = vec2(4, 8);
+}
+
+node passed.blank: tile.blank@1 {
+    value = 1.0;
+    domain = vec2(size, size * 2);
+}
+
+node defaulted.blank: tile.blank@1 {
+    value = 1.0;
+    domain = vec2(8, 16);
+}
+
+output result <- literal.blank.result;
+// inline literal.blank tile.blank@1 from parts/tile.osn
+//   kernel tile.blank@1 {
+//       requires { field.write; }
+//       param value: Float = 0.5;
+//       output result: Grid<Float>;
+//       compute { return value; }
+//   }
+// inline passed.blank tile.blank@1 from parts/tile.osn
+//   kernel tile.blank@1 {
+//       requires { field.write; }
+//       param value: Float = 1.0;
+//       output result: Grid<Float>;
+//       compute { return value; }
+//   }
+// inline defaulted.blank tile.blank@1 from parts/tile.osn
+//   kernel tile.blank@1 {
+//       requires { field.write; }
+//       param value: Float = 1.0;
+//       output result: Grid<Float>;
+//       compute { return value; }
+//   }

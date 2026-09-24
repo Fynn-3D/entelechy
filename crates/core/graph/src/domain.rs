@@ -201,6 +201,30 @@ impl DomainExpr {
         }
     }
 
+    /// The expression with every name `given` answers for replaced by
+    /// what it gives, and every other name kept: how a placed graph's own
+    /// parameters become the values its parent passed.
+    pub fn with_names(&self, given: &dyn Fn(&str) -> Option<DomainExpr>) -> Self {
+        let inner = |parts: &[Self]| -> Vec<Self> {
+            parts.iter().map(|part| part.with_names(given)).collect()
+        };
+        match self {
+            Self::Name(name) => given(name).unwrap_or_else(|| Self::Name(name.clone())),
+            Self::Int(_) | Self::Float(_) | Self::Count(_) | Self::Size(_) | Self::Value(..) => {
+                self.clone()
+            }
+            Self::Context(_) => self.clone(),
+            Self::Vector(parts) => Self::Vector(inner(parts)),
+            Self::Call(name, parts) => Self::Call(name.clone(), inner(parts)),
+            Self::Neg(expr) => Self::Neg(Box::new(expr.with_names(given))),
+            Self::Binary(op, a, b) => Self::Binary(
+                *op,
+                Box::new(a.with_names(given)),
+                Box::new(b.with_names(given)),
+            ),
+        }
+    }
+
     /// Whether the expression refers to nothing: a literal extent.
     pub fn is_constant(&self) -> bool {
         match self {

@@ -83,7 +83,7 @@ fn lowered(path: &Path) -> Result<String, String> {
             "// inline {} {} from {}\n",
             inline.node,
             inline.id,
-            inline.document.display()
+            relative(&inline.document, &base)
         ));
         for line in inline.text.lines() {
             out.push_str(&format!("//   {line}\n"));

@@ -27,7 +27,8 @@ use orla_language::{
 };
 
 use orla_graph::{
-    Asset, Binding, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source, literal_text,
+    Asset, Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
+    literal_text,
 };
 
 /// The port type an alias stands for, following aliases as far as they
@@ -223,11 +224,27 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
 /// A node's `domain` as written: a literal resolves now, an expression
 /// over the node's inputs and parameters resolves when the node binds.
 fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> {
-    let domain = domain_expr(expr)?;
+    spec_of(domain_expr(expr)?, expr.span)
+}
+
+/// A parameter's value as a domain term, when it is a number.
+fn number(value: &Value) -> Option<DomainExpr> {
+    match value {
+        Value::Int(v) => Some(DomainExpr::Int(i64::from(*v))),
+        Value::Long(v) => Some(DomainExpr::Int(*v)),
+        Value::Float(v) => Some(DomainExpr::Float(f64::from(*v))),
+        Value::Double(v) => Some(DomainExpr::Float(*v)),
+        _ => None,
+    }
+}
+
+/// A domain expression as a node keeps it: an extent when nothing in it
+/// is left to resolve, the expression otherwise.
+fn spec_of(domain: DomainExpr, span: Span) -> Result<DomainSpec, DocumentError> {
     if domain.is_constant() {
         let literal = domain
             .resolve(&|_| None, &|_| None, &|_| None, &|_, _| None)
-            .map_err(|e| error(expr.span, e.message))?;
+            .map_err(|e| error(span, e.message))?;
         Ok(DomainSpec::Literal(literal))
     } else {
         Ok(DomainSpec::Expr(domain))
@@ -734,6 +751,29 @@ impl Lowering<'_, '_> {
                     .unwrap_or(Value::Float(0.0)),
             }
         };
+        // A domain written in a placed graph may name that graph's params,
+        // which do not exist once it is flattened: each becomes what the
+        // parent passed, a number or the root's param, as a value does. A
+        // name the node sets itself stays the node's.
+        let placed_domain = |domain: Option<DomainSpec>,
+                             node_params: &BTreeMap<String, ParamValue>|
+         -> Result<Option<DomainSpec>, DocumentError> {
+            let (Some(placement), Some(DomainSpec::Expr(expr))) = (placement, &domain) else {
+                return Ok(domain);
+            };
+            let given = |name: &str| -> Option<DomainExpr> {
+                if node_params.contains_key(name) {
+                    return None;
+                }
+                let declared = params.iter().find(|p| p.name == name)?;
+                match placement.params.get(name) {
+                    Some(ParamValue::Graph(root)) => Some(DomainExpr::Name(root.clone())),
+                    Some(ParamValue::Literal(value)) => number(value),
+                    None => number(&declared.default),
+                }
+            };
+            spec_of(expr.with_names(&given), Span::default()).map(Some)
+        };
         // Rewrites a source written in this document into the flattened
         // space: prefixes node names, replaces this document's inputs with
         // the parent's bindings (as a source when they are `Now`).
@@ -854,6 +894,7 @@ impl Lowering<'_, '_> {
                         .value
                         .parse::<KernelId>()
                         .map_err(|e| error(kernel.span, e.to_string()))?;
+                    let domain = placed_domain(domain, &node_params)?;
                     self.out.graph.nodes.push(Node {
                         at: Some(written_at(path, decl.name.span)),
                         id,
@@ -922,6 +963,7 @@ impl Lowering<'_, '_> {
                         text,
                         document: path.to_path_buf(),
                     });
+                    let domain = placed_domain(domain, &node_params)?;
                     self.out.graph.nodes.push(Node {
                         at: Some(written_at(path, decl.name.span)),
                         id,
@@ -995,6 +1037,7 @@ impl Lowering<'_, '_> {
                         text,
                         document: path.to_path_buf(),
                     });
+                    let domain = placed_domain(domain, &node_params)?;
                     self.out.graph.nodes.push(Node {
                         at: Some(written_at(path, decl.name.span)),
                         id,
