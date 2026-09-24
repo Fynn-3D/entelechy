@@ -31,6 +31,49 @@ pub const INPUT_BINDING: u32 = 3;
 /// third is the most it may take ([`orla_rules::Run`]).
 pub const FAILURE_BINDING: u32 = 90;
 
+/// How deeply WGSL lets braces nest: a shader past it does not compile.
+pub const BRACE_LIMIT: usize = 127;
+
+/// How deeply the module's shader nests its braces, at most: a function's
+/// body is one, an `if` one more for its arms, a loop one more for its
+/// body and its `until`, a `match` two, for the switch and its cases.
+/// An `if` the emitter turns into a `select` opens none, but is counted
+/// all the same, so this is never less than what is emitted.
+pub fn brace_depth(module: &Module) -> usize {
+    fn nest(instructions: &[Instruction]) -> usize {
+        instructions
+            .iter()
+            .map(|instruction| match &instruction.op {
+                Op::If {
+                    then, otherwise, ..
+                } => 1 + nest(&then.body).max(nest(&otherwise.body)),
+                Op::Loop { until, body, .. } => {
+                    1 + nest(&body.body).max(until.as_ref().map_or(0, |until| nest(&until.body)))
+                }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    2 + arms
+                        .iter()
+                        .map(|(_, arm)| nest(&arm.body))
+                        .fold(nest(&otherwise.body), usize::max)
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+    module
+        .functions
+        .iter()
+        .chain([&module.entry])
+        .chain(module.merge.iter())
+        .chain(module.init.iter())
+        .map(|function| 1 + nest(&function.body))
+        .max()
+        .unwrap_or(1)
+}
+
 /// Binding index of the inputs a pass packs into one buffer when it
 /// binds more than the device does at once; see [`packed_inputs`].
 pub const PACKED_BINDING: u32 = 91;

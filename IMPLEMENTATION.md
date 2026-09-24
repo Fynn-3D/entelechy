@@ -155,7 +155,9 @@ at once than the device does even with its read-only inputs packed (a
 Kernel wider than the device's bindings reads the inputs past them from
 one buffer, each at its offset, copied there before its passes run —
 [packing](crates/backends/gpu/src/wgsl.rs); what cannot be packed is a
-memory, which its steps write), one holding a `Double`,
+memory, which its steps write), one whose branches and loops nest past
+the 127 braces a shader may (known from the IR before a shader is
+emitted), one holding a `Double`,
 or a `Long` outside a map, a reduction, or a scatter of `Long`s under
 `min` or `max` (64-bit atomics on keys whose unsigned order is the signed
 one), or on a device without 64-bit integers. Their inputs come to the Host and their outputs upload when

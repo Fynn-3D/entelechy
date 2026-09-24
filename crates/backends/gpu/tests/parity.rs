@@ -2104,3 +2104,111 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
         .expect("declined, so not prepared");
     assert!(error.contains(&why), "{error}");
 }
+
+/// A shader nests its braces at most as deep as WGSL lets it, and the
+/// backend knows before it emits one how deep a module's would go: never
+/// less than the emitted shader's, at most one more, for branches,
+/// ladders, loops and matches. A module past the limit is declined with
+/// why, and a session runs it on the ordered backend: a hundred and fifty
+/// nested branches and a ladder of as many, the interpreter's words
+/// either way, rather than a scene that stops evaluating.
+#[test]
+fn branches_nested_past_what_a_shader_holds_run_off_the_device() {
+    let Some(gpu) = gpu() else { return };
+    fn source(shape: &str, n: usize) -> String {
+        let body = match shape {
+            "nested" => format!(
+                "let x = element(); return {}x{};",
+                (0..n)
+                    .map(|k| format!("if x > {k} {{ "))
+                    .collect::<String>(),
+                " } else { 0 }".repeat(n)
+            ),
+            "ladder" => format!(
+                "let x = element(); return {} else {{ -1 }};",
+                (0..n)
+                    .map(|k| format!("if x < {k} {{ {k} }}"))
+                    .collect::<Vec<_>>()
+                    .join(" else ")
+            ),
+            "loops" => format!(
+                "let x = element(); return {}x{};",
+                (0..n)
+                    .map(|k| format!("loop 2 with a{k} = 0 {{ a{k} + "))
+                    .collect::<String>(),
+                " }".repeat(n)
+            ),
+            _ => format!(
+                "let x = element(); return {}x{};",
+                "match x { 0 => 1, _ => ".repeat(n),
+                " }".repeat(n)
+            ),
+        };
+        format!(
+            "kernel t.deep@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ {body} }} }}"
+        )
+    }
+    let braces = |shader: &str| {
+        let (mut depth, mut deepest) = (0usize, 0usize);
+        for c in shader.chars() {
+            if c == '{' {
+                depth += 1;
+                deepest = deepest.max(depth);
+            } else if c == '}' {
+                depth = depth.saturating_sub(1);
+            }
+        }
+        deepest
+    };
+    for shape in ["nested", "ladder", "loops", "match"] {
+        for n in [1usize, 10, 40, 60] {
+            let module = compile(&source(shape, n)).unwrap_or_else(|error| panic!("{error}"));
+            let estimate = orla_gpu::wgsl::brace_depth(&module);
+            let emitted = braces(&orla_gpu::wgsl::emit(&module));
+            assert!(
+                (emitted..=emitted + 1).contains(&estimate),
+                "{shape} {n}: estimated {estimate}, emitted {emitted}"
+            );
+        }
+    }
+    for shape in ["nested", "ladder"] {
+        let source = source(shape, 150);
+        let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
+        let why = gpu.declines(&module).expect("past the brace limit");
+        assert!(why.contains("nest"), "{why}");
+        let mut runtime = orla_runtime::Runtime::with_backends(
+            1 << 20,
+            Box::new(GpuBackend::new().unwrap()),
+            Some(Box::new(CpuBackend)),
+        );
+        let candidate = runtime.prepare_module(module.clone(), &source).unwrap();
+        let version = runtime
+            .publish(candidate, orla_runtime::Expect::Absent)
+            .unwrap();
+        assert!(runtime.placement(&version).routed.is_some(), "{shape}");
+        let outputs = runtime
+            .execute(
+                &version,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![],
+                    domain: Domain::Rows(200),
+                    context: Context::default(),
+                },
+            )
+            .unwrap();
+        let routed = runtime.host().data(outputs[0]).unwrap().storage().to_vec();
+        let mut host = Host::new(1 << 20);
+        let invocation = Invocation {
+            inputs: vec![],
+            params: vec![],
+            domain: Domain::Rows(200),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let reference = CpuBackend
+            .execute(&module, &invocation, &mut scope)
+            .unwrap()[0];
+        assert_eq!(routed, host.data(reference).unwrap().storage(), "{shape}");
+    }
+}

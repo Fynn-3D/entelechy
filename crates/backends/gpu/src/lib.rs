@@ -328,6 +328,13 @@ impl GpuBackend {
         if let Some(why) = self.wider_than_device(module) {
             return Some(why);
         }
+        let braces = wgsl::brace_depth(module);
+        if braces > wgsl::BRACE_LIMIT {
+            return Some(format!(
+                "its branches and loops nest {braces} deep, and a shader nests at most {}",
+                wgsl::BRACE_LIMIT
+            ));
+        }
         if module.holds(orla_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
         }
@@ -953,7 +960,7 @@ impl Backend for GpuBackend {
         // here is the difference between a Kernel that is too wide for
         // this device and a page of the driver's validation; a session
         // asks `declines` first and runs such a Kernel elsewhere.
-        if let Some(why) = self.wider_than_device(module) {
+        if let Some(why) = self.refusal(module) {
             return Err(format!(
                 "`{}`: {why}; the interpreter and the JIT have no such limit",
                 module.manifest.id
