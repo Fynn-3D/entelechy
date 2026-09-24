@@ -22,19 +22,25 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
     }))
 }
 
+/// A published version's manifest, its structs named: a Kernel's from
+/// its module, a native operation's from its own table.
+fn version_json(version: &orla_runtime::KernelVersion) -> Json {
+    let native = version.native().map(|op| op.structs());
+    let structs = match (version.module(), &native) {
+        (Some(module), _) => &module.structs[..],
+        (None, Some(structs)) => &structs[..],
+        (None, None) => &[][..],
+    };
+    manifest_json(version.manifest(), version.generation(), structs)
+}
+
 /// Every published Kernel and native operation, by its manifest.
 pub(crate) fn kernels(session: &Session) -> Result<Json, Json> {
     Ok(json!({
         "kernels": session
             .runtime()
             .kernels()
-            .map(|version| {
-                manifest_json(
-                    version.manifest(),
-                    version.generation(),
-                    version.module().map_or(&[][..], |m| &m.structs),
-                )
-            })
+            .map(|version| version_json(version))
             .collect::<Vec<_>>()
     }))
 }
@@ -46,11 +52,7 @@ pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json>
         .runtime()
         .kernel(&id)
         .ok_or_else(|| failure(format!("{id} is not published")))?;
-    let mut json = manifest_json(
-        version.manifest(),
-        version.generation(),
-        version.module().map_or(&[][..], |m| &m.structs),
-    );
+    let mut json = version_json(&version);
     json["source"] = Json::String(version.source().to_owned());
     Ok(json)
 }

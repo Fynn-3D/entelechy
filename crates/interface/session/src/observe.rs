@@ -265,10 +265,13 @@ pub(crate) fn element_field(
         .iter()
         .find(|o| o.name == port)
         .ok_or_else(|| format!("`{kernel}` has no output `{port}`"))?;
-    let structs: Vec<orla_ir::StructDef> = version
-        .module()
-        .map(|m| m.structs.clone())
-        .unwrap_or_default();
+    // A Kernel names its structs in its module; a native operation, in
+    // its own table.
+    let structs: Vec<orla_ir::StructDef> = match (version.module(), version.native()) {
+        (Some(module), _) => module.structs.clone(),
+        (None, Some(op)) => op.structs(),
+        (None, None) => Vec::new(),
+    };
     // Follow the field path through the struct table to a word offset
     // and a type.
     let mut ty = output.element();
@@ -287,7 +290,9 @@ pub(crate) fn element_field(
                 "`{field}` names a field or a component, but the value is a {ty}"
             ));
         };
-        let def = &structs[id as usize];
+        let def = structs
+            .get(id as usize)
+            .ok_or_else(|| format!("`{kernel}` does not name the fields of its `{port}`"))?;
         let mut found = None;
         for f in &def.fields {
             if &f.name == field {

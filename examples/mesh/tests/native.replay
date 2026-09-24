@@ -1,0 +1,31 @@
+scene native.osn
+
+# The fast path's surface, read by field as a Kernel's would be: the
+# owner, the depth and the uv at pixels inside a triangle, away from
+# its edges, where every rasterizer agrees. Reading a native operation's
+# element by name once took the session down.
+frame 0.0
+expect raster.surface[46319].id = 1592
+expect raster.surface[46319].depth = 0.963913 0.0001
+expect raster.surface[46319].uv = 0.15352 0.17251 0.001
+expect raster.surface[50034].id = 1648
+expect raster.surface[50034].depth = 0.960911 0.0001
+expect raster.surface[50034].uv = 0.29961 0.17143 0.001
+expect raster.surface[52637].id = 1254
+expect raster.surface[52637].depth = 0.959391 0.0001
+expect raster.surface[52637].uv = 0.25257 0.16102 0.001
+expect raster.surface[54917].id = 1232
+expect raster.surface[54917].depth = 0.959429 0.0001
+expect raster.surface[54917].uv = 0.21343 0.13006 0.001
+expect raster.surface[57186].id = 833
+expect raster.surface[57186].depth = 0.960639 0.0001
+expect raster.surface[57186].uv = 0.18549 0.08807 0.001
+expect raster.surface[59659].id = 865
+expect raster.surface[59659].depth = 0.958529 0.0001
+expect raster.surface[59659].uv = 0.2687 0.092068 0.001
+expect raster.surface[62232].id = 487
+expect raster.surface[62232].depth = 0.95847 0.0001
+expect raster.surface[62232].uv = 0.25676 0.069163 0.001
+expect raster.surface[65749].id = 103
+expect raster.surface[65749].depth = 0.959064 0.0001
+expect raster.surface[65749].uv = 0.2593 0.031203 0.001

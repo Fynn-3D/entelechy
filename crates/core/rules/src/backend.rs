@@ -36,6 +36,56 @@ impl NativeOp {
         }
     }
 
+    /// The structs the manifest's ports name, by the index it names them
+    /// with, so an element's field is read by name as a Kernel's would
+    /// be: a vertex, a triangle, a surface texel and, for the cutout, a
+    /// mask pixel.
+    pub fn structs(self) -> Vec<orla_ir::StructDef> {
+        let def = |name: &str, fields: &[(&str, Type)]| orla_ir::StructDef {
+            name: name.to_owned(),
+            fields: fields
+                .iter()
+                .map(|(name, ty)| orla_ir::Field {
+                    name: (*name).to_owned(),
+                    ty: *ty,
+                })
+                .collect(),
+            element: None,
+        };
+        vec![
+            def(
+                "Vertex",
+                &[
+                    ("clip", Type::Vec4),
+                    ("normal", Type::Vec3),
+                    ("uv", Type::Vec2),
+                ],
+            ),
+            def(
+                "Triangle",
+                &[("a", Type::Int), ("b", Type::Int), ("c", Type::Int)],
+            ),
+            def(
+                "Surface",
+                &[
+                    ("depth", Type::Float),
+                    ("normal", Type::Vec3),
+                    ("uv", Type::Vec2),
+                    ("id", Type::Int),
+                ],
+            ),
+            def(
+                "Pixel",
+                &[
+                    ("r", Type::Float),
+                    ("g", Type::Float),
+                    ("b", Type::Float),
+                    ("a", Type::Float),
+                ],
+            ),
+        ]
+    }
+
     /// The manifest: ports by layout and shape, capabilities as a Kernel
     /// would declare them. Element types are anonymous structs.
     pub fn manifest(self) -> Manifest {
@@ -300,5 +350,26 @@ pub trait Backend: Send + Sync {
     ) -> Result<Vec<u8>, String> {
         let _ = (device, byte_len);
         Err("this backend keeps no resident resources".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every struct a native manifest's port names is one `structs`
+    /// defines, laid out as the port is: a field read by name reads the
+    /// words the port holds.
+    #[test]
+    fn every_struct_a_native_port_names_is_defined_as_it_is_laid_out() {
+        for op in NativeOp::ALL {
+            let structs = op.structs();
+            let manifest = op.manifest();
+            for port in manifest.inputs.iter().chain(&manifest.outputs) {
+                let schema = orla_ir::schema_of(port.ty.element, &structs)
+                    .unwrap_or_else(|| panic!("{} names an undefined struct", port.name));
+                assert_eq!(schema, port.ty.schema, "{:?} port {}", op, port.name);
+            }
+        }
     }
 }
