@@ -366,14 +366,14 @@ fn compute(
 }
 
 /// The same, with what a scatter's elements emitted: each run of elements
-/// gives its pairs, each after the element it came from, and the runs
-/// come in order.
+/// gives its first element, the element after its last, and its pairs,
+/// each after the element it came from; the runs come in order.
 fn compute_emitting(
     entry: Entry,
     shared: &Shared,
     domain: Domain,
     stride: usize,
-) -> Result<(Vec<u32>, Vec<Vec<u32>>), ExecutionError> {
+) -> Result<(Vec<u32>, Vec<Emitted>), ExecutionError> {
     let mut results = vec![0u32; domain.count() * stride];
     let emitted = compute_into(entry, shared, domain, stride, &mut results)?;
     Ok((results, emitted))
@@ -382,13 +382,27 @@ fn compute_emitting(
 /// The same, into words the caller owns: a Field it just created, so a
 /// map's output is written once instead of into a buffer that is then
 /// copied into the Field.
+/// How many threads `items` pieces of work are worth: every core, but
+/// no fewer than `PARALLEL_THRESHOLD` pieces a thread.
+fn workers(items: usize) -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(items.div_ceil(PARALLEL_THRESHOLD))
+        .max(1)
+}
+
+/// A run of elements' first element, the element after its last, and
+/// the pairs its elements emitted, each after the element it came from.
+type Emitted = (usize, usize, Vec<u32>);
+
 fn compute_into(
     entry: Entry,
     shared: &Shared,
     domain: Domain,
     stride: usize,
     results: &mut [u32],
-) -> Result<Vec<Vec<u32>>, ExecutionError> {
+) -> Result<Vec<Emitted>, ExecutionError> {
     let width = domain.width() as usize;
     let height = domain.height();
     let rows = height as usize * domain.depth() as usize;
@@ -428,7 +442,7 @@ fn compute_into(
     };
     // One call a run of elements that share a row: a `Rows` domain is
     // one run of a million, a grid one run a row.
-    let run_elements = |first: usize, chunk: &mut [u32]| -> Result<Vec<u32>, ExecutionError> {
+    let run_elements = |first: usize, chunk: &mut [u32]| -> Result<Emitted, ExecutionError> {
         let mut ctx = fresh(&shared.template);
         let mut emitted: Vec<u32> = Vec::new();
         ctx.emitted = &mut emitted;
@@ -460,14 +474,14 @@ fn compute_into(
             done += run;
         }
         hand_left(&mut ctx, shared, 1)?;
-        Ok(emitted)
+        Ok((first, first + elements, emitted))
     };
     if threads == 1 {
         return Ok(vec![run_elements(0, results)?]);
     }
     {
         let chunk_len = per_thread * stride.max(1);
-        let outcomes: Vec<Result<Vec<u32>, ExecutionError>> = std::thread::scope(|s| {
+        let outcomes: Vec<Result<Emitted, ExecutionError>> = std::thread::scope(|s| {
             let handles: Vec<_> = results
                 .chunks_mut(chunk_len)
                 .enumerate()
@@ -668,38 +682,109 @@ fn run_scatter(
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, sources)?;
     let pair_words = address + stride;
-    let (pairs, emitted) = compute_emitting(entry, &shared, sources, pair_words)?;
+    let (pairs, runs) = compute_emitting(entry, &shared, sources, pair_words)?;
     shared.run.outcome()?;
     drop(shared);
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let scalars = port.ty.schema.scalars();
-    let mut apply = |pair: &[u32], index: usize| -> Result<(), ExecutionError> {
-        let Some(at) = orla_rules::scatter_index(target, &pair[..address]) else {
-            return Ok(());
+    // The target is cut into parts, one a worker. Each run of elements
+    // sorts its pairs, in element order, into the part each lands in:
+    // the pairs it emitted before the one it returned, as the
+    // interpreter applies them. Each part then takes its pairs run by
+    // run, so every element of the target sees its pairs in the
+    // sequential order, whatever the rule, and no two workers touch one
+    // element.
+    let count = target.count();
+    let pair_count = pairs.len() / pair_words.max(1)
+        + runs
+            .iter()
+            .map(|(_, _, emitted)| emitted.len() / (pair_words + 1))
+            .sum::<usize>();
+    let parts = workers(pair_count).min(count.max(1));
+    let span = count.div_ceil(parts).max(1);
+    // A record: where the pair lands, the element it came from, the value.
+    let record = stride + 2;
+    let sort = |(first, end, emitted): &Emitted| -> Vec<Vec<u32>> {
+        let mut buckets = vec![Vec::new(); parts];
+        let mut put = |pair: &[u32], index: usize| {
+            if let Some(at) = orla_rules::scatter_index(target, &pair[..address]) {
+                let bucket = &mut buckets[at / span];
+                bucket.push(at as u32);
+                bucket.push(index as u32);
+                bucket.extend_from_slice(&pair[address..]);
+            }
         };
-        orla_rules::combine_words(
-            combine,
-            scalars,
-            &mut words[at * stride..(at + 1) * stride],
-            &pair[address..],
-        )
-        .map_err(|error| ExecutionError::Arithmetic {
+        let mut kept = emitted.chunks_exact(pair_words + 1).peekable();
+        for index in *first..*end {
+            while let Some(emitted) = kept.next_if(|emitted| emitted[0] as usize == index) {
+                put(&emitted[1..], index);
+            }
+            put(&pairs[index * pair_words..(index + 1) * pair_words], index);
+        }
+        buckets
+    };
+    let sorted: Vec<Vec<Vec<u32>>> = if runs.len() == 1 {
+        vec![sort(&runs[0])]
+    } else {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = runs
+                .iter()
+                .map(|run| {
+                    let sort = &sort;
+                    s.spawn(move || sort(run))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("scatter worker panicked"))
+                .collect()
+        })
+    };
+    let apply = |part: usize, slice: &mut [u32]| -> Result<(), (usize, ArithmeticError)> {
+        for run in &sorted {
+            for pair in run[part].chunks_exact(record) {
+                let at = pair[0] as usize - part * span;
+                orla_rules::combine_words(
+                    combine,
+                    scalars,
+                    &mut slice[at * stride..(at + 1) * stride],
+                    &pair[2..],
+                )
+                .map_err(|error| (pair[1] as usize, error))?;
+            }
+        }
+        Ok(())
+    };
+    let outcomes: Vec<Result<(), (usize, ArithmeticError)>> = if parts == 1 {
+        vec![apply(0, &mut words)]
+    } else {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = words
+                .chunks_mut(span * stride)
+                .enumerate()
+                .map(|(part, slice)| {
+                    let apply = &apply;
+                    s.spawn(move || apply(part, slice))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("scatter worker panicked"))
+                .collect()
+        })
+    };
+    // Of the parts that failed, the failure the sequential order meets
+    // first: the one from the earliest element.
+    if let Some((index, error)) = outcomes
+        .into_iter()
+        .filter_map(Result::err)
+        .min_by_key(|(index, _)| *index)
+    {
+        return Err(ExecutionError::Arithmetic {
             x: (index % sources.width() as usize) as u32,
             y: (index / sources.width() as usize) as u32,
             error,
-        })
-    };
-    // Element by element: the pairs it emitted, each kept after its
-    // index, then the one it returned.
-    let mut kept = emitted
-        .iter()
-        .flat_map(|run| run.chunks_exact(pair_words + 1))
-        .peekable();
-    for (index, returned) in pairs.chunks_exact(pair_words).enumerate() {
-        while let Some(record) = kept.next_if(|record| record[0] as usize == index) {
-            apply(&record[1..], index)?;
-        }
-        apply(returned, index)?;
+        });
     }
     let output = scope.create(port.ty.schema.clone(), target)?;
     if let Err(error) = scope.write_values(output, &words) {

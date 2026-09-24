@@ -625,3 +625,79 @@ fn keys_emitted_from_nested_loops_land_as_the_interpreters_do() {
         .count();
     assert_eq!(differ, 0, "{differ} pixels differ");
 }
+
+/// A scatter over enough pairs that the target is cut into parts, each
+/// applied by its own worker, lands as the interpreter's one pass does:
+/// a float sum, whose rounding is its order, and `last`, which is its
+/// order, as much as the rules that ignore it; and an overflow names the
+/// element the sequential order fails at.
+#[test]
+fn a_target_cut_into_parts_sees_its_pairs_in_order() {
+    let count = 200_000u32;
+    let keys: Vec<u32> = (0..count)
+        .map(|i| i.wrapping_mul(2_654_435_761) >> 8)
+        .collect();
+    let ints = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
+    let cells = orla_abi::Schema::new(vec![orla_abi::Scalar::Float, orla_abi::Scalar::Int]);
+    for rule in ["sum", "last", "min", "max"] {
+        let source = format!(
+            "kernel test.parts@1 {{ requires {{ field.read; field.write; }}
+            input keys: Rows<Int>; input cells: Rows<Cell>; output result: Rows<Cell>;
+            struct Cell {{ mass: Float; id: Int; }}
+            struct Pair {{ at: Int; value: Cell; }}
+            scatter into cells with {rule} {{
+                let k = sample(keys);
+                return Pair {{ at: k % 5003 - 2, value: Cell {{ mass: float(k % 977) * 0.013 + 0.1, id: element() % 1000 }} }};
+            }} }}"
+        );
+        let (cpu, jit) = both_all(
+            &source,
+            &[
+                (ints.clone(), Domain::Rows(count), keys.clone()),
+                (cells.clone(), Domain::Rows(5000), vec![0; 10_000]),
+            ],
+            Domain::Rows(count),
+        );
+        assert_eq!(cpu, jit, "{rule}");
+    }
+    // An integer sum that overflows at several places: the failure named
+    // is the earliest element's, as one pass in order meets it.
+    let module = compile(
+        "kernel test.over@1 { requires { field.read; field.write; }
+         input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
+         struct Pair { at: Int; value: Int; }
+         scatter into slots with sum {
+             let k = sample(keys);
+             return Pair { at: k % 4999, value: 1000000000 };
+         } }",
+    )
+    .unwrap();
+    let mut host = Host::new(1 << 22);
+    let inputs = vec![
+        host.adopt(
+            orla_abi::FieldData::from_storage(ints.clone(), Domain::Rows(count), keys).unwrap(),
+        )
+        .unwrap(),
+        host.adopt(
+            orla_abi::FieldData::from_storage(ints, Domain::Rows(4999), vec![0; 4999]).unwrap(),
+        )
+        .unwrap(),
+    ];
+    let invocation = Invocation {
+        inputs,
+        params: vec![],
+        domain: Domain::Rows(count),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let cpu = CpuBackend
+        .execute(&module, &invocation, &mut scope)
+        .unwrap_err();
+    let jit = JitBackend::new().unwrap();
+    let prepared = jit.prepare(&module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let got = jit
+        .execute(prepared.as_ref(), &module, &invocation, &mut scope)
+        .unwrap_err();
+    assert_eq!(cpu.to_string(), got.to_string());
+}
