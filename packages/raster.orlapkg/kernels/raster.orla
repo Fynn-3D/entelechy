@@ -7,9 +7,9 @@
 // - A triangle is three vertex rows, clamped into range. One with a
 //   corner at `w <= 0`, a component that is not finite, or no area is
 //   skipped whole: nothing is clipped at the near plane here.
-// - A pixel is covered where its centre is on or inside all three edges,
-//   and holds the nearest covered fragment whose depth is in `[0, 1)`;
-//   of two at one depth, the earlier triangle.
+// - A pixel is covered where its centre is inside the triangle's box and
+//   on or inside all three edges, and holds the nearest covered fragment
+//   whose depth is in `[0, 1)`; of two at one depth, the earlier triangle.
 // - Attributes are interpolated perspective-correct, by `1 / w`.
 //
 // It goes in six steps, the middle ones the compact package's shape: a

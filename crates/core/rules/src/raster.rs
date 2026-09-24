@@ -1,7 +1,10 @@
 //! The native `rasterize` operation's contract, which every backend
-//! keeps, and the reference rasterizer a backend with no rasterizer of
-//! its own runs: the interpreter and the JIT alike, neither through the
-//! other. It is device emulation, not a product algorithm; shading,
+//! keeps, and the rasterizer a backend with no rasterizer of its own
+//! runs: the interpreter and the JIT alike, neither through the other.
+//! The `raster` package writes the same rule as Kernels, and this is
+//! its fast path: it sets triangles up and draws bands of rows in
+//! parallel, and gives the surface the rule gives bit for bit, which a
+//! test holds against the rule written plainly. It is device emulation, not a product algorithm; shading,
 //! projection, and geometry live in Kernels on either side of it.
 //!
 //! Contract:
@@ -24,6 +27,12 @@
 //! draws a varying number of them. Triangles are drawn in row order; a
 //! nearer fragment replaces a farther one, and an equal depth keeps the
 //! earlier triangle.
+//!
+//! A pixel is covered where its centre, at `x + 0.5, y + 0.5`, is inside
+//! the triangle's box and on or inside all three of its edges, the edge
+//! functions taken in floats. The box is part of the rule: where a
+//! corner is far off screen the edge functions lose precision, and a
+//! centre outside the box is outside the triangle whatever they say.
 //!
 //! The cutout form takes one more input and one parameter:
 //! - input 2, `mask`: an `Image` whose alpha says what the surface
@@ -193,12 +202,11 @@ pub fn rasterize(
     scope: &mut Scope<'_>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let (vertices, triangles) = check_rasterize(invocation, scope)?;
-    let vertex_words = scope.values(vertices)?.into_owned();
-    let triangle_words = scope.values(triangles)?.into_owned();
     let domain = invocation.domain;
+    // The rows are read where the Host keeps them, not copied.
     let words = rasterize_words(
-        &vertex_words,
-        &triangle_words,
+        &scope.values(vertices)?,
+        &scope.values(triangles)?,
         domain.width(),
         domain.height(),
     );
@@ -210,17 +218,6 @@ pub fn rasterize(
     Ok(vec![output])
 }
 
-/// One vertex after the perspective divide, in pixel space.
-struct Screen {
-    x: f32,
-    y: f32,
-    z: f32,
-    /// `1 / w`, for perspective-correct interpolation.
-    inv_w: f32,
-    normal: [f32; 3],
-    uv: [f32; 2],
-}
-
 /// Rasterizes with a cutout: a fragment whose alpha in the mask is
 /// below the parameter is not drawn at all.
 pub fn rasterize_cutout(
@@ -228,14 +225,12 @@ pub fn rasterize_cutout(
     scope: &mut Scope<'_>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let (vertices, triangles, mask, alpha) = check_rasterize_cutout(invocation, scope)?;
-    let vertex_words = scope.values(vertices)?.into_owned();
-    let triangle_words = scope.values(triangles)?.into_owned();
-    let mask_words = scope.values(mask)?.into_owned();
     let mask_size = scope.size(mask)?;
+    let mask_words = scope.values(mask)?;
     let domain = invocation.domain;
     let words = rasterize_masked(
-        &vertex_words,
-        &triangle_words,
+        &scope.values(vertices)?,
+        &scope.values(triangles)?,
         domain.width(),
         domain.height(),
         Some(Cutout {
@@ -267,89 +262,244 @@ pub fn rasterize_masked(
     height: u32,
     cutout: Option<Cutout<'_>>,
 ) -> Vec<u32> {
-    let vertex_count = vertices.len() / VERTEX_WORDS;
     let pixel_count = width as usize * height as usize;
     let mut out = vec![0u32; pixel_count * SURFACE_WORDS];
     let mut depth = vec![1.0f32; pixel_count];
-    for pixel in 0..pixel_count {
-        out[pixel * SURFACE_WORDS] = 1.0f32.to_bits();
-        out[pixel * SURFACE_WORDS + SURFACE_WORDS - 1] = (-1i32) as u32;
-    }
-    if vertex_count == 0 {
+    let drawn = if vertices.len() < VERTEX_WORDS || pixel_count == 0 {
+        Vec::new()
+    } else {
+        set_up(vertices, triangles, width, height)
+    };
+    let many: usize = drawn.iter().map(Vec::len).sum();
+    // Bands of rows, one to a thread. Every pixel is drawn by one thread
+    // taking the triangles in row order, as one thread taking them all
+    // would, so the surface is the same bit for bit however many there
+    // are.
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(height as usize)
+        .min(many.div_ceil(BAND_TRIANGLES))
+        .max(1);
+    let band = (height as usize).div_ceil(threads).max(1);
+    let row = width as usize;
+    let cutout = cutout.as_ref();
+    let draw = |first: usize, out: &mut [u32], depth: &mut [f32]| {
+        // Nothing covers a pixel until something does.
+        for pixel in out.chunks_exact_mut(SURFACE_WORDS) {
+            pixel[0] = 1.0f32.to_bits();
+            pixel[SURFACE_WORDS - 1] = (-1i32) as u32;
+        }
+        let rows = first as u32..(first + depth.len() / row.max(1)) as u32;
+        for chunk in &drawn {
+            draw_band(chunk, vertices, width, rows.clone(), out, depth, cutout);
+        }
+    };
+    if threads == 1 {
+        draw(0, &mut out, &mut depth);
         return out;
     }
+    std::thread::scope(|s| {
+        for (index, (out, depth)) in out
+            .chunks_mut(band * row * SURFACE_WORDS)
+            .zip(depth.chunks_mut(band * row))
+            .enumerate()
+        {
+            let draw = &draw;
+            s.spawn(move || draw(index * band, out, depth));
+        }
+    });
+    out
+}
+
+/// Triangles a thread of a band takes at the least: below this, one
+/// thread draws them all.
+const BAND_TRIANGLES: usize = 256;
+
+/// A corner in pixels: `x` and `y` from the top left, `z` after the
+/// divide, and `1 / w`.
+#[derive(Clone, Copy)]
+struct Point {
+    x: f32,
+    y: f32,
+    z: f32,
+    inv_w: f32,
+}
+
+/// A triangle ready to draw: its corners in pixels and the rows they
+/// came from, wound so the edge functions are positive inside, its area,
+/// its row, and the pixels whose centres its box holds. The corners'
+/// normals and uvs stay in the vertex rows, read when a fragment is kept.
+struct Drawn {
+    a: Point,
+    b: Point,
+    c: Point,
+    rows: [u32; 3],
+    area: f32,
+    id: u32,
+    x0: u32,
+    x1: u32,
+    y0: u32,
+    y1: u32,
+}
+
+/// Where `(px, py)` is against the edge from `a` to `b`: positive to its
+/// left.
+fn edge(a: &Point, b: &Point, px: f32, py: f32) -> f32 {
+    (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)
+}
+
+/// Every triangle that may cover a pixel's centre, in row order, as the
+/// runs the setup threads made. One with a corner at `w <= 0` or not
+/// finite, with no area, or whose box holds no pixel centre is left out:
+/// it would draw nothing.
+fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<Vec<Drawn>> {
+    let vertex_count = vertices.len() / VERTEX_WORDS;
     let float = |w: u32| f32::from_bits(w);
-    let vertex = |index: u32| -> Option<Screen> {
+    let point = |index: u32| -> Option<Point> {
         let base = index as usize * VERTEX_WORDS;
         let clip: [f32; 4] = std::array::from_fn(|k| float(vertices[base + k]));
         if clip.iter().any(|v| !v.is_finite()) || clip[3] <= 0.0 {
             return None;
         }
         let inv_w = 1.0 / clip[3];
-        Some(Screen {
+        Some(Point {
             x: (clip[0] * inv_w * 0.5 + 0.5) * width as f32,
             y: (0.5 - clip[1] * inv_w * 0.5) * height as f32,
             z: clip[2] * inv_w,
             inv_w,
-            normal: std::array::from_fn(|k| float(vertices[base + 4 + k])),
-            uv: std::array::from_fn(|k| float(vertices[base + 7 + k])),
         })
     };
-    let edge = |a: &Screen, b: &Screen, px: f32, py: f32| -> f32 {
-        (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)
-    };
-    for (id, tri) in triangles.chunks_exact(TRIANGLE_WORDS).enumerate() {
+    let one = |id: usize, tri: &[u32]| -> Option<Drawn> {
         let index = |word: u32| (word as i32).clamp(0, vertex_count as i32 - 1) as u32;
-        let (Some(a), Some(b), Some(c)) = (
-            vertex(index(tri[0])),
-            vertex(index(tri[1])),
-            vertex(index(tri[2])),
-        ) else {
-            continue;
-        };
+        let (ia, ib, ic) = (index(tri[0]), index(tri[1]), index(tri[2]));
+        let a = point(ia)?;
+        let b = point(ib)?;
+        let c = point(ic)?;
         // Wind consistently so the edge functions are positive inside.
-        let (b, c) = if edge(&a, &b, c.x, c.y) < 0.0 {
-            (c, b)
+        let (b, c, ib, ic) = if edge(&a, &b, c.x, c.y) < 0.0 {
+            (c, b, ic, ib)
         } else {
-            (b, c)
+            (b, c, ib, ic)
         };
         let area = edge(&a, &b, c.x, c.y);
         if area.is_nan() || area <= 0.0 {
+            return None;
+        }
+        // The first and last pixel whose centre, at `x + 0.5`, is in the
+        // box: no other is covered.
+        let x0 = (a.x.min(b.x).min(c.x) - 0.5).ceil().max(0.0);
+        let y0 = (a.y.min(b.y).min(c.y) - 0.5).ceil().max(0.0);
+        let x1 = (a.x.max(b.x).max(c.x) - 0.5)
+            .floor()
+            .min(width as f32 - 1.0);
+        let y1 = (a.y.max(b.y).max(c.y) - 0.5)
+            .floor()
+            .min(height as f32 - 1.0);
+        if x1 < x0 || y1 < y0 {
+            return None;
+        }
+        Some(Drawn {
+            a,
+            b,
+            c,
+            rows: [ia, ib, ic],
+            area,
+            id: id as u32,
+            x0: x0 as u32,
+            x1: x1 as u32,
+            y0: y0 as u32,
+            y1: y1 as u32,
+        })
+    };
+    let count = triangles.len() / TRIANGLE_WORDS;
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(count.div_ceil(SETUP_TRIANGLES))
+        .max(1);
+    let per_thread = count.div_ceil(threads).max(1);
+    let set_up_run = |first: usize, words: &[u32]| -> Vec<Drawn> {
+        words
+            .chunks_exact(TRIANGLE_WORDS)
+            .enumerate()
+            .filter_map(|(k, tri)| one(first + k, tri))
+            .collect()
+    };
+    let words = &triangles[..count * TRIANGLE_WORDS];
+    if threads == 1 {
+        return vec![set_up_run(0, words)];
+    }
+    // Runs set up in parallel and kept in order: row order is theirs.
+    std::thread::scope(|s| {
+        let handles: Vec<_> = words
+            .chunks(per_thread * TRIANGLE_WORDS)
+            .enumerate()
+            .map(|(index, words)| {
+                let set_up_run = &set_up_run;
+                s.spawn(move || set_up_run(index * per_thread, words))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("raster setup panicked"))
+            .collect()
+    })
+}
+
+/// Triangles a setup thread takes at the least.
+const SETUP_TRIANGLES: usize = 16_384;
+
+/// Draws `drawn` into the rows `rows` of the surface: `out` and `depth`
+/// hold those rows and nothing else.
+fn draw_band(
+    drawn: &[Drawn],
+    vertices: &[u32],
+    width: u32,
+    rows: std::ops::Range<u32>,
+    out: &mut [u32],
+    depth: &mut [f32],
+    cutout: Option<&Cutout<'_>>,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let float = |w: u32| f32::from_bits(w);
+    for t in drawn {
+        let y0 = t.y0.max(rows.start);
+        let y1 = t.y1.min(rows.end - 1);
+        if y0 > y1 {
             continue;
         }
-        let min_x = a.x.min(b.x).min(c.x).floor().max(0.0) as u32;
-        let max_x = (a.x.max(b.x).max(c.x).ceil() as i64).min(width as i64 - 1);
-        let min_y = a.y.min(b.y).min(c.y).floor().max(0.0) as u32;
-        let max_y = (a.y.max(b.y).max(c.y).ceil() as i64).min(height as i64 - 1);
-        if max_x < 0 || max_y < 0 {
-            continue;
-        }
-        for y in min_y..=max_y as u32 {
-            for x in min_x..=max_x as u32 {
+        let (a, b, c, area) = (&t.a, &t.b, &t.c, t.area);
+        let attribute =
+            |corner: usize, k: usize| float(vertices[t.rows[corner] as usize * VERTEX_WORDS + k]);
+        for y in y0..=y1 {
+            for x in t.x0..=t.x1 {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-                let w0 = edge(&b, &c, px, py);
-                let w1 = edge(&c, &a, px, py);
-                let w2 = edge(&a, &b, px, py);
+                let w0 = edge(b, c, px, py);
+                let w1 = edge(c, a, px, py);
+                let w2 = edge(a, b, px, py);
                 if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                     continue;
                 }
                 let (l0, l1, l2) = (w0 / area, w1 / area, w2 / area);
                 let z = l0 * a.z + l1 * b.z + l2 * c.z;
-                let pixel = y as usize * width as usize + x as usize;
+                let pixel = (y - rows.start) as usize * width as usize + x as usize;
                 if !(0.0..=1.0).contains(&z) || z >= depth[pixel] {
                     continue;
                 }
                 let inv_w = l0 * a.inv_w + l1 * b.inv_w + l2 * c.inv_w;
-                let lerp = |va: f32, vb: f32, vc: f32| {
-                    (l0 * va * a.inv_w + l1 * vb * b.inv_w + l2 * vc * c.inv_w) / inv_w
+                let lerp = |k: usize| {
+                    (l0 * attribute(0, k) * a.inv_w
+                        + l1 * attribute(1, k) * b.inv_w
+                        + l2 * attribute(2, k) * c.inv_w)
+                        / inv_w
                 };
                 // A fragment the mask does not cover is not drawn: it
                 // settles no depth either, so what is behind it is seen.
-                if let Some(cutout) = &cutout {
-                    let uv = [
-                        lerp(a.uv[0], b.uv[0], c.uv[0]),
-                        lerp(a.uv[1], b.uv[1], c.uv[1]),
-                    ];
+                if let Some(cutout) = cutout {
+                    let uv = [lerp(7), lerp(8)];
                     if mask_alpha(cutout.words, cutout.width, cutout.height, uv) < cutout.alpha {
                         continue;
                     }
@@ -358,21 +508,255 @@ pub fn rasterize_masked(
                 let base = pixel * SURFACE_WORDS;
                 out[base] = z.to_bits();
                 for k in 0..3 {
-                    out[base + 1 + k] = lerp(a.normal[k], b.normal[k], c.normal[k]).to_bits();
+                    out[base + 1 + k] = lerp(4 + k).to_bits();
                 }
                 for k in 0..2 {
-                    out[base + 4 + k] = lerp(a.uv[k], b.uv[k], c.uv[k]).to_bits();
+                    out[base + 4 + k] = lerp(7 + k).to_bits();
                 }
-                out[base + 6] = id as u32;
+                out[base + 6] = t.id;
             }
         }
     }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One vertex after the perspective divide, in pixel space.
+    struct Screen {
+        x: f32,
+        y: f32,
+        z: f32,
+        /// `1 / w`, for perspective-correct interpolation.
+        inv_w: f32,
+        normal: [f32; 3],
+        uv: [f32; 2],
+    }
+
+    /// The rule as it reads, and nothing done to make it fast: every
+    /// triangle in turn, every pixel of a box larger than it needs, on one
+    /// thread, each pixel tested against the triangle's box and its three
+    /// edges. The one the backends run must give its surface bit for bit.
+    fn definition(
+        vertices: &[u32],
+        triangles: &[u32],
+        width: u32,
+        height: u32,
+        cutout: Option<Cutout<'_>>,
+    ) -> Vec<u32> {
+        let vertex_count = vertices.len() / VERTEX_WORDS;
+        let pixel_count = width as usize * height as usize;
+        let mut out = vec![0u32; pixel_count * SURFACE_WORDS];
+        let mut depth = vec![1.0f32; pixel_count];
+        for pixel in 0..pixel_count {
+            out[pixel * SURFACE_WORDS] = 1.0f32.to_bits();
+            out[pixel * SURFACE_WORDS + SURFACE_WORDS - 1] = (-1i32) as u32;
+        }
+        if vertex_count == 0 {
+            return out;
+        }
+        let float = |w: u32| f32::from_bits(w);
+        let vertex = |index: u32| -> Option<Screen> {
+            let base = index as usize * VERTEX_WORDS;
+            let clip: [f32; 4] = std::array::from_fn(|k| float(vertices[base + k]));
+            if clip.iter().any(|v| !v.is_finite()) || clip[3] <= 0.0 {
+                return None;
+            }
+            let inv_w = 1.0 / clip[3];
+            Some(Screen {
+                x: (clip[0] * inv_w * 0.5 + 0.5) * width as f32,
+                y: (0.5 - clip[1] * inv_w * 0.5) * height as f32,
+                z: clip[2] * inv_w,
+                inv_w,
+                normal: std::array::from_fn(|k| float(vertices[base + 4 + k])),
+                uv: std::array::from_fn(|k| float(vertices[base + 7 + k])),
+            })
+        };
+        let edge = |a: &Screen, b: &Screen, px: f32, py: f32| -> f32 {
+            (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)
+        };
+        for (id, tri) in triangles.chunks_exact(TRIANGLE_WORDS).enumerate() {
+            let index = |word: u32| (word as i32).clamp(0, vertex_count as i32 - 1) as u32;
+            let (Some(a), Some(b), Some(c)) = (
+                vertex(index(tri[0])),
+                vertex(index(tri[1])),
+                vertex(index(tri[2])),
+            ) else {
+                continue;
+            };
+            // Wind consistently so the edge functions are positive inside.
+            let (b, c) = if edge(&a, &b, c.x, c.y) < 0.0 {
+                (c, b)
+            } else {
+                (b, c)
+            };
+            let area = edge(&a, &b, c.x, c.y);
+            if area.is_nan() || area <= 0.0 {
+                continue;
+            }
+            let min_x = a.x.min(b.x).min(c.x).floor().max(0.0) as u32;
+            let max_x = (a.x.max(b.x).max(c.x).ceil() as i64).min(width as i64 - 1);
+            let min_y = a.y.min(b.y).min(c.y).floor().max(0.0) as u32;
+            let max_y = (a.y.max(b.y).max(c.y).ceil() as i64).min(height as i64 - 1);
+            if max_x < 0 || max_y < 0 {
+                continue;
+            }
+            for y in min_y..=max_y as u32 {
+                for x in min_x..=max_x as u32 {
+                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    // A centre outside the triangle's box is outside the
+                    // triangle, whatever the edge functions say where the
+                    // corners are too far apart for a float.
+                    if px < a.x.min(b.x).min(c.x)
+                        || px > a.x.max(b.x).max(c.x)
+                        || py < a.y.min(b.y).min(c.y)
+                        || py > a.y.max(b.y).max(c.y)
+                    {
+                        continue;
+                    }
+                    let w0 = edge(&b, &c, px, py);
+                    let w1 = edge(&c, &a, px, py);
+                    let w2 = edge(&a, &b, px, py);
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                        continue;
+                    }
+                    let (l0, l1, l2) = (w0 / area, w1 / area, w2 / area);
+                    let z = l0 * a.z + l1 * b.z + l2 * c.z;
+                    let pixel = y as usize * width as usize + x as usize;
+                    if !(0.0..=1.0).contains(&z) || z >= depth[pixel] {
+                        continue;
+                    }
+                    let inv_w = l0 * a.inv_w + l1 * b.inv_w + l2 * c.inv_w;
+                    let lerp = |va: f32, vb: f32, vc: f32| {
+                        (l0 * va * a.inv_w + l1 * vb * b.inv_w + l2 * vc * c.inv_w) / inv_w
+                    };
+                    // A fragment the mask does not cover is not drawn: it
+                    // settles no depth either, so what is behind it is seen.
+                    if let Some(cutout) = &cutout {
+                        let uv = [
+                            lerp(a.uv[0], b.uv[0], c.uv[0]),
+                            lerp(a.uv[1], b.uv[1], c.uv[1]),
+                        ];
+                        if mask_alpha(cutout.words, cutout.width, cutout.height, uv) < cutout.alpha
+                        {
+                            continue;
+                        }
+                    }
+                    depth[pixel] = z;
+                    let base = pixel * SURFACE_WORDS;
+                    out[base] = z.to_bits();
+                    for k in 0..3 {
+                        out[base + 1 + k] = lerp(a.normal[k], b.normal[k], c.normal[k]).to_bits();
+                    }
+                    for k in 0..2 {
+                        out[base + 4 + k] = lerp(a.uv[k], b.uv[k], c.uv[k]).to_bits();
+                    }
+                    out[base + 6] = id as u32;
+                }
+            }
+        }
+        out
+    }
+
+    /// A small generator, so the soups are the same on every run.
+    struct Soup(u64);
+
+    impl Soup {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn float(&mut self, low: f32, high: f32) -> f32 {
+            low + (high - low) * (self.next() % 1_000_000) as f32 / 1_000_000.0
+        }
+        /// A clip position, now and then one a rasterizer must skip.
+        fn clip(&mut self) -> [f32; 4] {
+            let w = match self.next() % 40 {
+                0 => -0.5,
+                1 => 0.0,
+                2 => f32::NAN,
+                3 => 1e-6,
+                _ => self.float(0.3, 3.0),
+            };
+            [
+                self.float(-2.5, 2.5),
+                self.float(-2.5, 2.5),
+                self.float(-0.2, 1.2),
+                w,
+            ]
+        }
+    }
+
+    #[test]
+    fn the_rasterizer_draws_what_its_definition_draws() {
+        let mut soup = Soup(0x9E37_79B9_7F4A_7C15);
+        let mask: Vec<u32> = (0..16 * 16)
+            .flat_map(|k| {
+                let alpha = ((k * 37) % 100) as f32 / 100.0;
+                [0.0f32, 0.0, 0.0, alpha].map(f32::to_bits)
+            })
+            .collect();
+        for (width, height, count) in [
+            (1, 1, 20),
+            (37, 23, 300),
+            (64, 64, 2000),
+            (200, 3, 500),
+            (3, 200, 500),
+            (320, 240, 5000),
+        ] {
+            // Tiny triangles among large ones: most of a far-off mesh
+            // covers no pixel centre at all.
+            let vertex_count = 3 * count / 2 + 3;
+            let mut vertices = Vec::new();
+            for k in 0..vertex_count {
+                let mut clip = soup.clip();
+                if k % 3 == 1 && soup.next().is_multiple_of(2) {
+                    let scale = soup.float(0.0005, 0.02);
+                    let base = &vertices[(k - 1) * VERTEX_WORDS..(k - 1) * VERTEX_WORDS + 4];
+                    let base: Vec<f32> = base.iter().map(|w| f32::from_bits(*w)).collect();
+                    clip = [base[0] + scale, base[1] - scale, base[2], base[3]];
+                }
+                vertices.extend(vertex(
+                    clip,
+                    [
+                        soup.float(-1.0, 1.0),
+                        soup.float(-1.0, 1.0),
+                        soup.float(-1.0, 1.0),
+                    ],
+                    [soup.float(0.0, 1.0), soup.float(0.0, 1.0)],
+                ));
+            }
+            let triangles: Vec<u32> = (0..count * 3)
+                .map(|_| match soup.next() % 50 {
+                    // Out of range, both ways: clamped.
+                    0 => (-3i32) as u32,
+                    1 => vertex_count as u32 + 7,
+                    _ => (soup.next() % vertex_count as u64) as u32,
+                })
+                .collect();
+            assert_eq!(
+                rasterize_masked(&vertices, &triangles, width, height, None),
+                definition(&vertices, &triangles, width, height, None),
+                "{width}x{height}, {count} triangles"
+            );
+            fn cut(mask: &[u32]) -> Cutout<'_> {
+                Cutout {
+                    words: mask,
+                    width: 16,
+                    height: 16,
+                    alpha: 0.4,
+                }
+            }
+            assert_eq!(
+                rasterize_masked(&vertices, &triangles, width, height, Some(cut(&mask))),
+                definition(&vertices, &triangles, width, height, Some(cut(&mask))),
+                "{width}x{height}, {count} triangles, cut out"
+            );
+        }
+    }
 
     fn vertex(clip: [f32; 4], normal: [f32; 3], uv: [f32; 2]) -> Vec<u32> {
         clip.iter()
