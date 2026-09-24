@@ -1,0 +1,36 @@
+// The mesh example's torus drawn by the backend's rasterizer and by the
+// package's, and the two surfaces compared.
+use "../../../examples/mesh/kernels/";
+use "compare.orla";
+
+param level: Int = 1;
+
+node torus: mesh.torus@1 { domain = 1152; }
+node faces: mesh.torus_faces@1 { domain = 2304; }
+node subdivided: graph "../../../examples/mesh/level.osn" {
+    times = level;
+    carry mesh <- vertices;
+    carry faces <- triangles;
+    mesh <- torus.result;
+    faces <- faces.result;
+}
+node project: mesh.project@1 { mesh <- subdivided.vertices; }
+node native: native.rasterize@1 {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    domain = vec2(320, 240);
+}
+node kernels: graph "../graphs/raster.osn" {
+    vertices <- project.result;
+    triangles <- subdivided.triangles;
+    width = 320;
+    height = 240;
+}
+node difference: raster_test.difference@1 {
+    one <- native.surface;
+    other <- kernels.surface;
+}
+node view: mesh.shade@1 { surface <- kernels.surface; }
+
+output result <- view.result;
+output difference <- difference.result;
