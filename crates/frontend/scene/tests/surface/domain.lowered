@@ -78,7 +78,7 @@ output result <- drawn.result;
 // inline halves domain.halves@1 from domain
 //   kernel domain.halves@1 {
 //       requires { field.write; }
-//       param value: Double = 0.5;
+//       param value: Float = 0.5;
 //       output result: Rows<Float>;
 //       compute { return value; }
 //   }

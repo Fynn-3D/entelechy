@@ -944,17 +944,33 @@ impl Lowering<'_, '_> {
                     // literal is the Kernel's default, so the node with
                     // no `value` is the zero of the element.
                     let spelled = resolved(&ty.value, &self.aliases);
+                    let zero = zero_of(&spelled).ok_or_else(|| {
+                        error(
+                            ty.span,
+                            format!(
+                                "a filled Field holds Float, Int, Bool, Vec2, Vec3 or Vec4 (and `Image` holds a pixel); `{}` holds something else, so a Kernel fills it",
+                                ty.value
+                            ),
+                        )
+                    })?;
+                    // A written number has no width until it meets one,
+                    // and here the Field's element is the width: `1.0`
+                    // fills a `Grid<Float>` as a Float.
                     let value = match node_params.get("value") {
-                        Some(given) => default_of(given),
-                        None => zero_of(&spelled).ok_or_else(|| {
-                            error(
-                                ty.span,
-                                format!(
-                                    "a filled Field holds Float, Int, Bool, Vec2, Vec3 or Vec4 (and `Image` holds a pixel); `{}` holds something else, so a Kernel fills it",
-                                    ty.value
-                                ),
-                            )
-                        })?,
+                        Some(given) => {
+                            let given = default_of(given);
+                            given.shaped_like(&zero).ok_or_else(|| {
+                                error(
+                                    ty.span,
+                                    format!(
+                                        "`value = {}` does not fill a `{}`: give one of its elements",
+                                        literal_text(&given),
+                                        ty.value
+                                    ),
+                                )
+                            })?
+                        }
+                        None => zero,
                     };
                     let text = format!(
                         "kernel {kernel_id} {{\n    requires {{ field.write; }}\n    param value: {} = {};\n    output result: {};\n    compute {{ return value; }}\n}}\n",

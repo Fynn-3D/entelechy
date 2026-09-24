@@ -6,7 +6,9 @@
 //! `LANGUAGE_VERSION`.
 //!
 //! A document that stops lowering, or lowers to something else, breaks
-//! scenes already written, and waits for a new `LANGUAGE_VERSION`. A new
+//! scenes already written, and waits for a new `LANGUAGE_VERSION`. Every
+//! Kernel a document writes in place, a filled Field's included, must
+//! compile: a lowering that does not was never a scene. A new
 //! document is the surface growing. `ORLA_BLESS=1` records what is new
 //! and refuses to record a change to what was recorded until the version
 //! is raised. `parts/` holds documents the others place, which are not
@@ -50,6 +52,12 @@ fn lowered(path: &Path) -> Result<String, String> {
         &BTreeMap::new(),
     )
     .map_err(|e| e.to_string())?;
+    // A lowering is only a scene if what it wrote compiles: every Kernel
+    // written in place, a filled Field's among them.
+    for inline in &lowered.inline {
+        orla_compiler::compile_kernel(&inline.kernel, Some(&inline.id))
+            .map_err(|e| format!("the Kernel `{}` it writes does not compile: {e}", inline.id))?;
+    }
     let graph = &lowered.graph;
     let mut out = graph.to_string();
     for asset in &graph.assets {
