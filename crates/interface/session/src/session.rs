@@ -9,13 +9,14 @@ use orla_formats::ppm;
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_runtime::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
 
-use crate::{Event, Limits, SessionError, Trace, inputs, kernels, observe, scene};
+use crate::{Event, Limits, SessionError, Trace, inputs, kernels, observe, scene, writes};
 
 /// A scene, the libraries it uses, and the runtime state built from them.
 pub struct Session {
     scene: scene::Scene,
     kernels: kernels::Kernels,
     inputs: inputs::Inputs,
+    writes: writes::Writes,
     runtime: Runtime,
     evaluator: Evaluator,
     /// Where each node was last said to run, so a change is said once.
@@ -50,6 +51,7 @@ impl Session {
             scene: scene::Scene::new(scene, library),
             kernels: kernels::Kernels::default(),
             inputs: inputs::Inputs::default(),
+            writes: writes::Writes::default(),
             runtime,
             evaluator: Evaluator::new(),
             placed: BTreeMap::new(),
@@ -171,7 +173,15 @@ impl Session {
             .sync(self.scene.graph(), self.runtime.host_mut(), &mut events);
         self.sync_placements(&mut events);
         events.append(&mut self.inputs.take_frame_events());
+        events.append(&mut self.writes.take_events());
         events
+    }
+
+    /// Allows the scene's outputs to be written to files in `dir` and
+    /// under it (`output name <- source to "file";`). Nothing is written
+    /// anywhere else, and nothing at all until something is allowed.
+    pub fn allow_writes(&mut self, dir: &Path) -> Result<(), String> {
+        self.writes.allow(dir)
     }
 
     /// Where every node of the scene runs: the backend, and why it is not
@@ -284,13 +294,16 @@ impl Session {
         self.inputs
             .select_frames(self.runtime.host_mut(), context.time);
         let graph = self.scene.graph().ok_or_else(no_scene)?;
-        self.evaluator.evaluate(
+        let report = self.evaluator.evaluate(
             graph,
             &mut self.runtime,
             self.inputs.handles(),
             context,
             self.scene.params(),
-        )
+        )?;
+        // Committed: what the evaluation changed may now leave the session.
+        self.writes.after(graph, &report, &mut self.runtime);
+        Ok(report)
     }
 
     /// Evaluates only what `demand` needs; see

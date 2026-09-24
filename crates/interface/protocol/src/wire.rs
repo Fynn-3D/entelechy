@@ -374,6 +374,9 @@ pub(crate) fn events_json(events: &[Event]) -> Vec<Json> {
             Event::Routed { node, backend, why } => {
                 json!({ "kind": "routed", "node": node, "backend": backend, "why": why })
             }
+            Event::Absent { name, path } => json!({ "kind": "absent", "name": name, "path": path.display().to_string() }),
+            Event::Wrote { output, path, bytes } => json!({ "kind": "wrote", "output": output, "path": path.display().to_string(), "bytes": bytes }),
+            Event::WriteRefused { output, path, why } => json!({ "kind": "write_refused", "output": output, "path": path.display().to_string(), "why": why }),
         })
         .collect()
 }

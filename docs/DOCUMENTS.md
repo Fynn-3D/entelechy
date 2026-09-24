@@ -621,6 +621,7 @@ node display: graph "../shared/display.osn" {   // another graph placed as a nod
 
 output result <- display.result;      // named graph output; sub-graph outputs
                                       // are read as node.output
+output kept <- state.result to "saves/state.field";   // also written to a file
 ```
 
 ### Rules
@@ -710,6 +711,19 @@ output result <- display.result;      // named graph output; sub-graph outputs
    inline Kernel's `param x: Float = amount;` takes the graph param `amount`
    as its value. The caller overrides a graph's params at evaluation; nested
    graphs cannot place themselves.
+   An output of the scene itself may be written to a file as well:
+   `output kept <- state.result to "saves/state.field";` in the format
+   the extension names (as `run --save` writes them), or `to bytes
+   "f.bin"` for a `Rows<Int>` of bytes. A Kernel never writes a file: the
+   session writes the output once an evaluation that changed it has
+   committed, whole or not at all, and only into a directory the person
+   running it allowed with `--allow file.write=<dir>`; a failed evaluation
+   writes nothing. A placed graph's outputs are wired, never written. An
+   input read from a file may fall back on a source while the file is not
+   there: `input saved: Rows<Tally> = "saves/tally.field" else
+   fresh.result;` reads `fresh.result` until the file exists, which is how
+   a scene starts from nothing and later from what it saved
+   (`examples/save`).
 10. A node placed more than once is written once: `times = N;` on a
    Kernel node or a placed graph stands for `name/1` to `name/N`, each
    wired as written, and `carry port <- output;` feeds the port from the

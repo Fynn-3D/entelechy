@@ -40,24 +40,10 @@ done
 
 ## Next
 
-Give the ten-million-triangle frame room. The package draws
-[`ten_million.osn`](examples/mesh/tests/ten_million.osn) on the GPU in
-19.7 to 20.0 ms (the device's rasterizer: 32), which meets the bound
-with half a millisecond to spare, and the frame is near what its memory
-traffic allows (the rasterizer's decision in `docs/DECISIONS.md`). The
-largest share is the mesh, not the rasterizer: `mesh.split_vertices`
-makes three new vertices a face and shares no midpoint, so level 6 has
-9.4 million vertices for 9.4 million triangles, and `project` writes
-and the cover gathers twice what a shared mesh would need.
-
-Done when:
-
-- the torus at `level = 6` draws at 3840 by 2160 on the GPU in 17 ms a
-  frame or less with the package, measured where the decision lives;
-- the way there is Kernels and presets (a subdivision that shares its
-  midpoints, or what measuring shows), and anything the engine needs for
-  it is fixed with a test of its own;
-- the mesh replays (`torus`, `edges`, `cutout`, `native`, `near`) still
-  pass, or change only where the mesh itself is meant to, and the small
-  scenes (torus, culled, model) lose nothing;
-- the verification above is clean.
+Open: the user ranked the remaining gaps and has not chosen the next.
+Portability (a second platform: Vulkan or DX12, Linux or Windows; only
+macOS with Metal is verified) and a WASM backend are both pending their
+word. Ask before starting either. Effects grow from
+`docs/DECISIONS.md#a-kernels-effects-are-data-the-host-carries-out-after-a-commit`:
+a target a Kernel chooses while running, or a second kind of effect, is
+where that decision says it would change.

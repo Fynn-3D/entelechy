@@ -101,8 +101,25 @@ pub struct Document {
     pub params: Vec<ParamDecl>,
     /// Named results: `output name <- source;`.
     pub outputs: Vec<(Spanned<String>, SourceRef)>,
+    /// Outputs written to a file as well: `output name <- source to
+    /// "file";`, by the output's name.
+    pub writes: Vec<WriteDecl>,
     /// Nodes in document order.
     pub nodes: Vec<NodeDecl>,
+}
+
+/// `to "file"` or `to bytes "file"` after an output: the file the Host
+/// writes the output's Field to, relative to the document, once an
+/// evaluation that changed it has committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WriteDecl {
+    /// The output written.
+    pub output: String,
+    /// The file.
+    pub path: Spanned<String>,
+    /// Whether the Field is written as its bytes, one to an element of a
+    /// `Rows<Int>`, rather than in the format the file's extension names.
+    pub bytes: bool,
 }
 
 impl Document {
@@ -393,6 +410,10 @@ pub struct PortDecl {
     /// A file the input reads as its bytes, one to an element, only on a
     /// document's inputs: `input level: Rows<Int> = bytes "level.bin";`.
     pub bytes: Option<Spanned<String>>,
+    /// What an input read from a file reads while the file is absent or
+    /// cannot be read: `input saved: Rows<Int> = bytes "saved.bin" else
+    /// fresh.result;`.
+    pub otherwise: Option<SourceRef>,
     /// Byte range of the wiring (`<- source`, `<~ source from initial`)
     /// in the document, so a Kernel's text can be given without it.
     pub binding_range: Option<Range<usize>>,

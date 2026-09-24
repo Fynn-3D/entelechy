@@ -827,6 +827,10 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
         demand: Option<&BTreeSet<NodeId>>,
     ) -> Result<Report, EvaluateError> {
+        // An external the caller supplies nothing for reads its fallback,
+        // written into a copy of the graph only when one is in use.
+        let substituted = substitute_fallbacks(graph, externals);
+        let graph = substituted.as_ref().unwrap_or(graph);
         let order = graph.order()?;
         self.prune(graph, runtime);
         let landed = self.land(runtime)?;
@@ -2326,4 +2330,39 @@ fn window_context(context: &Context) -> impl Fn(&str) -> Option<Value> + '_ {
         "scale" => Some(Value::Float(context.scale)),
         _ => None,
     }
+}
+
+/// The graph with every external the caller did not supply, and that has
+/// a fallback, read from its fallback instead; `None` when there is
+/// nothing to substitute, which is every graph whose files are all there.
+fn substitute_fallbacks(graph: &Graph, externals: &BTreeMap<String, Handle>) -> Option<Graph> {
+    let missing: BTreeMap<&str, &Source> = graph
+        .fallbacks
+        .iter()
+        .filter(|(name, _)| !externals.contains_key(name))
+        .map(|(name, source)| (name.as_str(), source))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let swap = |source: &mut Source| {
+        if let Source::External(name) = source
+            && let Some(fallback) = missing.get(name.as_str())
+        {
+            *source = (*fallback).clone();
+        }
+    };
+    let mut graph = graph.clone();
+    for node in &mut graph.nodes {
+        for binding in node.inputs.values_mut() {
+            match binding {
+                Binding::Now(source) => swap(source),
+                Binding::Previous { initial, .. } => swap(initial),
+            }
+        }
+    }
+    for (_, source) in &mut graph.outputs {
+        swap(source);
+    }
+    Some(graph)
 }

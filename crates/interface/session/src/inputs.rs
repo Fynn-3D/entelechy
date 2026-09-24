@@ -157,6 +157,13 @@ impl Inputs {
             });
             let (data, detail) = match read {
                 Ok(loaded) => loaded,
+                // An input with somewhere else to read reads it while its
+                // file is not there: that is a state, not a failure.
+                Err(_) if !path.exists() && graph.is_some_and(|g| g.fallback(&name).is_some()) => {
+                    self.forget(host, &name);
+                    events.push(Event::Absent { name, path });
+                    continue;
+                }
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.clone(),

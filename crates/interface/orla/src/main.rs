@@ -18,6 +18,7 @@ usage:
                        [--out <file.ppm>] [--watch] [--backend cpu|gpu|jit]
                        [--param <name>=<literal>]... [--no-fusion]
                        [--window <w>x<h>[@<scale>]] [--profile] [--memory <MB>] [--work <M>]
+                       [--allow file.write=<dir>]...
       Evaluate a scene and write its output. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version. --window is the window a scene sized by `window()`
@@ -34,11 +35,16 @@ usage:
       measuring a node costs before it does anything is taken off every
       line; a node runs alone under a profile, so the lines add up to
       more than a frame, and the sum says by how much.
+      --allow file.write=<dir> lets the scene's outputs written `to` a file
+      land in that directory and under it, once an evaluation that changed
+      them commits; nothing is written without it. `render`, `serve` and
+      the Player take it too.
   orla render <scene.osn> --frames <n> [--rate <fps>] [--sound-rate <hz>]
                           [--out <dir>] [--library <dir|file>] [--input <name>=<file.ppm>]...
                           [--param <name>=<literal>]... [--window <w>x<h>[@<scale>]]
                           [--backend cpu|gpu|jit] [--no-fusion]
                           [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
+                          [--allow file.write=<dir>]...
       Step the scene for n frames at the rate (60 by default) and write each
       frame's picture as <dir>/0000.png, 0001.png, ... and the sound output,
       block after block, as <dir>/sound.wav at the sound rate (48000 by
@@ -92,6 +98,7 @@ usage:
       Print the flattened graph and what would execute, fused groups marked.
   orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu|jit]
                          [--listen <host:port>] [--window <w>x<h>[@<scale>]]
+                         [--allow file.write=<dir>]...
       Serve the creation protocol: JSON requests on stdin, one response per
       line on stdout, and on every connection to --listen, where a client's
       quit ends only its connection. --window is what evaluations that name
@@ -335,6 +342,8 @@ struct RunOptions {
     profile: bool,
     /// What the Host may hold and spend.
     limits: orla_session::Limits,
+    /// Directories the scene's outputs may be written into.
+    allow: Vec<PathBuf>,
 }
 
 /// `render`: the scene and its session flags, and how to render.
@@ -350,6 +359,8 @@ struct RenderOptions {
     saves: Vec<(String, String, PathBuf)>,
     /// What the Host may hold and spend.
     limits: orla_session::Limits,
+    /// Directories the scene's outputs may be written into.
+    allow: Vec<PathBuf>,
 }
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
@@ -362,6 +373,7 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
         fusion: true,
         saves: Vec::new(),
         limits: orla_session::Limits::default(),
+        allow: Vec::new(),
         render: orla::render::Options {
             frames: 0,
             rate: 60.0,
@@ -403,6 +415,9 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
                 options.render.window = Some(orla_session::parse_window(&value("--window")?)?);
             }
             "--no-fusion" => options.fusion = false,
+            "--allow" => options
+                .allow
+                .push(orla_session::parse_allow(&value("--allow")?)?),
             "--backend" => options.backend = value("--backend")?,
             flag if orla_session::Limits::takes(flag) => {
                 options.limits.read(flag, &value(flag)?)?;
@@ -463,6 +478,9 @@ fn render(args: &[String]) -> Result<(), String> {
         session.set_param(name, value.clone())?;
     }
     session.set_fusion(options.fusion);
+    for dir in &options.allow {
+        session.allow_writes(dir)?;
+    }
     for (node, _, _) in &options.saves {
         session.pin(orla_graph::NodeId(node.clone()));
     }
@@ -493,6 +511,8 @@ fn render(args: &[String]) -> Result<(), String> {
             orla::render::SOUND_NAME
         );
     }
+    // What the frames wrote, and what they were not allowed to.
+    report_events(&session.sync());
     for (node, port, path) in &options.saves {
         session
             .save(&orla_graph::NodeId(node.clone()), port, path)
@@ -519,6 +539,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         window: None,
         profile: false,
         limits: orla_session::Limits::default(),
+        allow: Vec::new(),
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -534,6 +555,9 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
             "--out" => options.out = PathBuf::from(value("--out")?),
             "--watch" => options.watch = true,
             "--no-fusion" => options.fusion = false,
+            "--allow" => options
+                .allow
+                .push(orla_session::parse_allow(&value("--allow")?)?),
             "--profile" => options.profile = true,
             "--backend" => options.backend = value("--backend")?,
             flag if orla_session::Limits::takes(flag) => {
@@ -592,6 +616,9 @@ fn run(args: &[String]) -> Result<(), String> {
         session.set_param(name, value.clone())?;
     }
     session.set_fusion(options.fusion);
+    for dir in &options.allow {
+        session.allow_writes(dir)?;
+    }
     // A profile waits for the device after each node, so the times are
     // the work rather than the submission.
     session.set_measured(options.profile);
@@ -616,6 +643,8 @@ fn run(args: &[String]) -> Result<(), String> {
     );
     let _ = &clock;
     if !options.watch {
+        // What the evaluation wrote, and what it was not allowed to.
+        report_events(&session.sync());
         return if healthy {
             Ok(())
         } else {
@@ -887,6 +916,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut listen = None;
     let mut window = None;
     let mut limits = orla_session::Limits::default();
+    let mut allow = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -913,6 +943,12 @@ fn serve(args: &[String]) -> Result<(), String> {
                         .ok_or_else(|| "--listen needs <host:port>".to_string())?,
                 );
             }
+            "--allow" => {
+                let text = iter
+                    .next()
+                    .ok_or_else(|| "--allow needs file.write=<directory>".to_string())?;
+                allow.push(orla_session::parse_allow(text)?);
+            }
             "--library" => {
                 library = Some(PathBuf::from(
                     iter.next()
@@ -931,6 +967,10 @@ fn serve(args: &[String]) -> Result<(), String> {
     let runtime = Session::runtime_for(&backend, limits)?;
     let mut session = Session::open_with(&scene, library.as_deref(), runtime);
     session.set_window(window);
+    // Allowed by whoever started the server, never by what connects to it.
+    for dir in &allow {
+        session.allow_writes(dir)?;
+    }
     report_events(&session.sync());
     session.set_background(true);
     let (sink, requests) = std::sync::mpsc::channel();

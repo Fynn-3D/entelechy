@@ -94,6 +94,17 @@ line measures the frame, which costs nothing and is the honest total.
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
 ```
 
+A scene's output written `to` a file (`output kept <- tally.result to
+"saves/tally.field";`) is written only into a directory given with
+`--allow file.write=<dir>`, which `run`, `render`, `serve` and the Player
+take; without it the session says what was not written and why. A server
+takes its allowances from the command line that started it, never from
+what connects to it. `bench` and `replay` write nothing.
+
+```sh
+cargo run -p orla-player -- examples/save/scene.osn --allow file.write=examples/save/saves
+```
+
 ## Render frames
 
 `orla render <scene.osn> --frames <n>` steps the scene at a fixed rate

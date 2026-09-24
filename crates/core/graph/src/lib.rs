@@ -206,6 +206,26 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     /// Named results in document order; interfaces present the first.
     pub outputs: Vec<(String, Source)>,
+    /// Outputs the Host writes to files once an evaluation that changed
+    /// them commits; only the root document's.
+    pub writes: Vec<Write>,
+    /// What an external read from a file reads while the caller supplies
+    /// nothing for it (the file absent or unreadable): the external's
+    /// name and the source.
+    pub fallbacks: Vec<(String, Source)>,
+}
+
+/// An output the Host writes to a file: `output name <- source to
+/// "file";`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Write {
+    /// The output's name.
+    pub output: String,
+    /// The file, resolved against the document's directory.
+    pub path: PathBuf,
+    /// Whether the Field goes out as its bytes, one to an element of a
+    /// `Rows<Int>`, rather than in the format the extension names.
+    pub bytes: bool,
 }
 
 /// Structural problems with a graph.
@@ -303,6 +323,14 @@ impl Graph {
             .collect()
     }
 
+    /// What an external reads while the caller supplies nothing for it.
+    pub fn fallback(&self, external: &str) -> Option<&Source> {
+        self.fallbacks
+            .iter()
+            .find(|(name, _)| name == external)
+            .map(|(_, source)| source)
+    }
+
     /// Checks names and dependencies and returns node indices in an order
     /// where every producer precedes its consumers.
     pub fn order(&self) -> Result<Vec<usize>, GraphError> {
@@ -363,6 +391,16 @@ impl Graph {
                 }
             }
         }
+        for (name, source) in &self.fallbacks {
+            let known = self.externals.contains(name)
+                && match source {
+                    Source::External(other) => self.externals.contains(other),
+                    Source::Node { node, .. } => index_of(node).is_some(),
+                };
+            if !known {
+                return Err(GraphError::UnknownOutput(source.clone()));
+            }
+        }
         if self.outputs.is_empty() {
             return Err(GraphError::NoOutput);
         }
@@ -386,6 +424,15 @@ impl Graph {
         // What each node waits for, worked out once. It used to be
         // gathered again on every step of the walk below, which for a
         // graph of any size is most of what the sort cost.
+        // An external with a fallback waits for the node the fallback
+        // reads, whether or not the caller supplies it this time.
+        let producer = |source: &Source| match source {
+            Source::Node { node, .. } => index_of(node),
+            Source::External(name) => match self.fallback(name) {
+                Some(Source::Node { node, .. }) => index_of(node),
+                _ => None,
+            },
+        };
         let waits_for: Vec<Vec<usize>> = self
             .nodes
             .iter()
@@ -393,12 +440,10 @@ impl Graph {
                 node.inputs
                     .values()
                     .filter_map(|binding| match binding {
-                        Binding::Now(Source::Node { node, .. })
+                        Binding::Now(source)
                         | Binding::Previous {
-                            initial: Source::Node { node, .. },
-                            ..
-                        } => index_of(node),
-                        _ => None,
+                            initial: source, ..
+                        } => producer(source),
                     })
                     .collect()
             })

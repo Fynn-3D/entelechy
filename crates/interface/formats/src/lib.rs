@@ -128,6 +128,30 @@ pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), Stri
     }
 }
 
+/// A `Rows<Int>` of bytes, one to an element, 0 to 255, as those bytes:
+/// what `read_bytes` reads, written back.
+pub fn encode_bytes(data: &FieldData) -> Result<Vec<u8>, String> {
+    if data.schema().scalars() != [Scalar::Int] || data.domain().shape() != Shape::Rows {
+        return Err(format!(
+            "written as bytes, the output must be a Rows<Int>, not {} {}",
+            data.domain().shape(),
+            data.schema()
+        ));
+    }
+    data.values()
+        .iter()
+        .enumerate()
+        .map(|(row, word)| {
+            u8::try_from(*word as i32).map_err(|_| {
+                format!(
+                    "row {row} holds {}, which is not a byte (0 to 255)",
+                    *word as i32
+                )
+            })
+        })
+        .collect()
+}
+
 /// A Field's words as the file `extension` names: `rate` is the frames
 /// a second of a WAV and the quarter notes a minute of a MIDI file, and
 /// is ignored otherwise.

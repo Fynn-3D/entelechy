@@ -286,3 +286,44 @@ backend; the package drawing a large triangle across many invocations,
 which would close most of the gap on the GPU; or a scene that needs the
 fast path chosen for it, which would need the Graph to know that a placed
 graph and a native operation are one computation.
+
+## A Kernel's effects are data the Host carries out after a commit
+
+A Kernel never writes a file. A scene declares that one of its outputs is
+also written to a file, `output kept <- state.result to "saves/state.field";`,
+and the session writes it once an evaluation that changed it has
+committed: whole (written beside and renamed over), into a directory the
+person running the session allowed with `--allow file.write=<dir>`, and
+nowhere else. Reading needs nothing new: an input already reads a file
+and reads it again when it changes, and one that may be absent falls
+back on a source meanwhile (`input saved: … = "saves/state.field" else
+fresh.result;`). When and what to save is the Kernels': an output that
+changes only when a Kernel says so is written only then.
+
+**Why.** An effect inside a Kernel would break what makes a Kernel one:
+the same words on the interpreter, the JIT and a device (a device has no
+files); an evaluation that fails committing nothing (a file written by a
+node before a later node failed cannot be taken back); and a replay being
+the same every time. As data, the effect is a Field like any other,
+typed and traced, the three backends compute it alike, and the Host
+carries it out at the one moment nothing can undo: after the commit. The
+plan's `requires file.write` is the allowance, given by the person
+running the scene rather than claimed by the Kernel, so a generated
+Kernel or a connected agent gets no reach it was not handed; a server
+takes its allowances from the command line that started it.
+
+**Where.** [`writes.rs`](../crates/interface/session/src/writes.rs) in the
+session; `to` and `else` in the document
+([parser](../crates/frontend/language/src/parser.rs),
+[lowering](../crates/frontend/scene/src/lib.rs)); a fallback in use
+substitutes for its input when the evaluation starts
+([evaluator](../crates/core/graph/src/evaluate.rs)). Held by
+[the session's write tests](../crates/interface/session/tests/writes.rs),
+[the lowering's](../crates/frontend/scene/src/lib.rs) and
+[`examples/save`](../examples/save/README.md).
+
+**What would change it.** An effect whose target the Kernel must choose
+while running (a file named by a Field, a network request), which would
+make the target part of the data as well; a second effect beside files,
+which would get its own allowance; or an effect that must happen before a
+frame commits, which this model refuses on purpose.

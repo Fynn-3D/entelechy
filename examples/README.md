@@ -236,3 +236,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [clip](clip/README.md): an input read frame by frame from a directory,
   `frames "clip/" at 2`, the frame of the moment at each evaluation; with
   `render`, the video pipeline's input half.
+- [save](save/README.md): a tally saved to a file whenever it changes and
+  read back when the scene starts again, from nothing when there is no
+  file yet; the Kernels compute it, the session writes it after the
+  commit, into the directory `--allow file.write` names.

@@ -34,6 +34,7 @@ mod scene;
 mod session;
 mod sources;
 mod stamp;
+mod writes;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -53,6 +54,17 @@ pub use sources::{
 /// element, which only the interpreter keeps, so an interface reads it
 /// here rather than reaching for that backend itself.
 pub use orla_cpu::{CALL_RECORDS, Trace, TraceValue};
+
+/// Parses an allowance given on a command line: `file.write=<dir>`, the
+/// directory a scene's outputs may be written into.
+pub fn parse_allow(text: &str) -> Result<PathBuf, String> {
+    match text.split_once('=') {
+        Some(("file.write", dir)) if !dir.is_empty() => Ok(PathBuf::from(dir)),
+        _ => Err(format!(
+            "--allow takes file.write=<directory>, found `{text}`"
+        )),
+    }
+}
 
 /// Parses a window given on a command line: `<w>x<h>` or `<w>x<h>@<scale>`,
 /// returning the size in pixels and the scale factor (one when absent).
@@ -203,6 +215,34 @@ pub enum Event {
     },
     /// The scene document changed but does not parse; the previous graph stays.
     SceneRejected(String),
+    /// An input's file is not there, and the input reads its fallback
+    /// until it is.
+    Absent {
+        /// The input.
+        name: String,
+        /// The file.
+        path: PathBuf,
+    },
+    /// An output was written to its file, after an evaluation that
+    /// changed it committed.
+    Wrote {
+        /// The output.
+        output: String,
+        /// The file.
+        path: PathBuf,
+        /// How many bytes.
+        bytes: usize,
+    },
+    /// An output was not written to its file, and why; said once until
+    /// the reason changes or a write succeeds.
+    WriteRefused {
+        /// The output.
+        output: String,
+        /// The file.
+        path: PathBuf,
+        /// Why.
+        why: String,
+    },
     /// A node will run off the session's main backend, and why: what it
     /// costs a frame to take its inputs there and its outputs back is
     /// the scene's to know before it measures anything. Said once, when
@@ -234,6 +274,19 @@ impl fmt::Display for Event {
             }
             Self::Text { name, chars } => write!(f, "text {name}: {chars} characters"),
             Self::SceneRejected(error) => write!(f, "scene rejected: {error}"),
+            Self::Absent { name, path } => write!(
+                f,
+                "input `{name}`: {} is not there; reading its fallback",
+                path.display()
+            ),
+            Self::Wrote {
+                output,
+                path,
+                bytes,
+            } => write!(f, "wrote `{output}` to {} ({bytes} bytes)", path.display()),
+            Self::WriteRefused { output, path, why } => {
+                write!(f, "did not write `{output}` to {}: {why}", path.display())
+            }
             Self::Routed { node, backend, why } => {
                 write!(f, "node `{node}` runs on {backend} ({why})")
             }

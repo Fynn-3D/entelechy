@@ -5,6 +5,7 @@ use crate::{
     BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl, Kernel,
     MatchArm, MergeDecl, NodeDecl, NodeKind, NodeMember, PackageDecl, ParamDecl, ParseError,
     PortDecl, PrefixDecl, ScatterDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
+    WriteDecl,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
@@ -31,6 +32,7 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
         inputs: Vec::new(),
         params: Vec::new(),
         outputs: Vec::new(),
+        writes: Vec::new(),
         nodes: Vec::new(),
     };
     loop {
@@ -88,6 +90,28 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
                 let name = parser.ident("an output name")?;
                 parser.expect_punct("<-")?;
                 let source = parser.source_ref()?;
+                if parser.is_keyword("to") {
+                    parser.next();
+                    let bytes = parser.is_keyword("bytes");
+                    if bytes {
+                        parser.next();
+                    }
+                    let (token, span) = parser.next();
+                    let Token::Str(path) = token else {
+                        return Err(ParseError {
+                            span,
+                            message: format!(
+                                "an output is written `to` a quoted path, or `to bytes` and a quoted path, found {}",
+                                token.describe()
+                            ),
+                        });
+                    };
+                    document.writes.push(WriteDecl {
+                        output: name.value.clone(),
+                        path: Spanned { value: path, span },
+                        bytes,
+                    });
+                }
                 parser.expect_punct(";")?;
                 document.outputs.push((name, source));
             }
@@ -1009,6 +1033,13 @@ impl Parser {
                 file = Some(Spanned { value, span });
             }
         }
+        // A file that may be absent reads something else meanwhile.
+        let otherwise = if (file.is_some() || bytes.is_some()) && self.is_keyword("else") {
+            self.next();
+            Some(self.source_ref()?)
+        } else {
+            None
+        };
         self.expect_punct(";")?;
         Ok(PortDecl {
             name,
@@ -1018,6 +1049,7 @@ impl Parser {
             text,
             frames,
             bytes,
+            otherwise,
             binding_range,
         })
     }

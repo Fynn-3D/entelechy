@@ -26,6 +26,7 @@ const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--window <w>x<h>] [--backend gpu|cpu|jit] [--memory <MB>] [--work <M>]
+              [--allow file.write=<dir>]...
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
       and keys reach Kernels that declare `input.read`, and so do the
@@ -38,6 +39,8 @@ usage:
       2048 by default; a scene of millions of triangles wants more.
       --work says how many million loop iterations one run of a Kernel may
       take, all its elements together, 4000 by default.
+      --allow file.write=<dir> lets the scene's outputs written `to` a file
+      land in that directory; nothing is written without it.
       Press Escape or close the window to quit.
       With --serve, the creation protocol runs on stdin and stdout inside the
       window, and on every connection to --listen <host:port>: an agent's
@@ -62,6 +65,8 @@ struct Options {
     no_audio: bool,
     /// What the Host may hold and spend.
     limits: orla_session::Limits,
+    /// Directories the scene's outputs may be written into.
+    allow: Vec<PathBuf>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -77,6 +82,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         params: Vec::new(),
         limits: orla_session::Limits::default(),
         no_audio: false,
+        allow: Vec::new(),
     };
     let mut scene = None;
     let mut iter = args.iter();
@@ -98,6 +104,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 options.listen = Some(value("--listen")?);
             }
             "--no-audio" => options.no_audio = true,
+            "--allow" => options
+                .allow
+                .push(orla_session::parse_allow(&value("--allow")?)?),
             "--param" => {
                 let binding = value("--param")?;
                 let (name, text) = binding
@@ -775,6 +784,12 @@ fn main() -> ExitCode {
     let mut session = Session::open_with(&options.scene, options.kernels.as_deref(), runtime);
     for (name, path) in &options.inputs {
         if let Err(error) = session.bind_external(name, path) {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    for dir in &options.allow {
+        if let Err(error) = session.allow_writes(dir) {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }

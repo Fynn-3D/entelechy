@@ -321,6 +321,8 @@ fn lower(
                 times_params: Vec::new(),
                 nodes: Vec::new(),
                 outputs: Vec::new(),
+                writes: Vec::new(),
+                fallbacks: Vec::new(),
             },
             inline: Vec::new(),
             uses: Vec::new(),
@@ -342,6 +344,8 @@ fn lower(
     lowering.out.graph.sequences = level.sequences;
     lowering.out.graph.params = level.params;
     lowering.out.graph.outputs = level.outputs;
+    lowering.out.graph.fallbacks = level.fallbacks;
+    lowering.out.graph.writes = level.writes;
     Ok(lowering.out)
 }
 
@@ -354,6 +358,10 @@ struct Level {
     params: Vec<GraphParam>,
     /// Outputs in declaration order; the first is the primary.
     outputs: Vec<(String, Source)>,
+    /// What each input read from a file falls back on.
+    fallbacks: Vec<(String, Source)>,
+    /// The outputs written to files (the root's only).
+    writes: Vec<orla_graph::Write>,
 }
 
 impl Lowering<'_, '_> {
@@ -388,6 +396,7 @@ impl Lowering<'_, '_> {
         document: &Document,
         placement: Option<&Placement>,
         params: &[GraphParam],
+        fallbacks: &mut [SourceRef],
     ) -> Result<Expanded, DocumentError> {
         let mut nodes: Vec<NodeDecl> = Vec::new();
         let mut renames: BTreeMap<String, String> = BTreeMap::new();
@@ -616,6 +625,9 @@ impl Lowering<'_, '_> {
         }
         let mut outputs = document.outputs.clone();
         for (_, reference) in &mut outputs {
+            rename(reference)?;
+        }
+        for reference in fallbacks {
             rename(reference)?;
         }
         Ok((nodes, outputs))
@@ -891,7 +903,15 @@ impl Lowering<'_, '_> {
         };
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
-        let (nodes, declared_outputs) = self.expand_times(document, placement, &params)?;
+        // What an input read from a file reads while the file is absent,
+        // renamed with the nodes it may name.
+        let mut fallback_refs: Vec<SourceRef> = document
+            .inputs
+            .iter()
+            .filter_map(|input| input.otherwise.clone())
+            .collect();
+        let (nodes, declared_outputs) =
+            self.expand_times(document, placement, &params, &mut fallback_refs)?;
         for decl in &nodes {
             let id = NodeId(format!("{prefix}{}", decl.name.value));
             let mut inputs = BTreeMap::new();
@@ -1239,6 +1259,50 @@ impl Lowering<'_, '_> {
             }
             outputs.push((output.value.clone(), source));
         }
+        let mut fallbacks = Vec::new();
+        let otherwise = document
+            .inputs
+            .iter()
+            .filter_map(|input| input.otherwise.as_ref().map(|_| &input.name.value));
+        for (input, reference) in otherwise.zip(&fallback_refs) {
+            let mut source = match rewrite_now(reference)? {
+                Binding::Now(source) => source,
+                Binding::Previous { .. } => {
+                    return Err(error(reference.span, "a fallback must be a current value"));
+                }
+            };
+            resolve(&mut source)?;
+            if source == Source::External(input.clone()) {
+                return Err(error(
+                    reference.span,
+                    format!("input `{input}` cannot fall back on itself"),
+                ));
+            }
+            fallbacks.push((input.clone(), source));
+        }
+        let mut writes = Vec::new();
+        for write in &document.writes {
+            if placement.is_some() {
+                return Err(error(
+                    write.path.span,
+                    "only the scene itself writes files; a placed graph's outputs are wired by the placing graph",
+                ));
+            }
+            if writes
+                .iter()
+                .any(|w: &orla_graph::Write| w.path == base.join(&write.path.value))
+            {
+                return Err(error(
+                    write.path.span,
+                    format!("`{}` is written by two outputs", write.path.value),
+                ));
+            }
+            writes.push(orla_graph::Write {
+                output: write.output.clone(),
+                path: base.join(&write.path.value),
+                bytes: write.bytes,
+            });
+        }
         Ok(Level {
             externals,
             assets,
@@ -1246,6 +1310,8 @@ impl Lowering<'_, '_> {
             sequences,
             params,
             outputs,
+            fallbacks,
+            writes,
         })
     }
 }
@@ -1758,6 +1824,86 @@ output result <- a.result;",
         )
         .unwrap_err();
         assert!(stateful.message.contains("bound with `<~`"), "{stateful}");
+    }
+
+    /// An output written `to` a file, and an input that falls back on a
+    /// node while its file is absent: the fallback follows the node's
+    /// times to its last, orders before what reads the input, and never
+    /// names the input itself; only the scene itself writes.
+    #[test]
+    fn writes_and_fallbacks_lower_into_the_graph() {
+        let graph = parse(
+            "input saved: Rows<Int> = \"saved.field\" else seed.result;
+node seed: test.zero@1 { times = 2; carry previous <- result; previous <- first.result; }
+node first: test.zero@1 { domain = 4; }
+node show: test.show@1 { source <- saved; }
+output result <- show.result;
+output kept <- show.result to \"saves/kept.field\";
+output raw <- first.result to bytes \"raw.bin\";",
+        )
+        .unwrap();
+        assert_eq!(
+            graph.fallback("saved"),
+            Some(&Source::Node {
+                node: NodeId("seed/2".into()),
+                port: "result".into()
+            })
+        );
+        let order: Vec<&str> = graph
+            .order()
+            .unwrap()
+            .into_iter()
+            .map(|at| graph.nodes[at].id.0.as_str())
+            .collect();
+        let at = |name: &str| order.iter().position(|id| *id == name).unwrap();
+        assert!(at("seed/2") < at("show"), "{order:?}");
+        assert_eq!(
+            graph.writes,
+            [
+                orla_graph::Write {
+                    output: "kept".into(),
+                    path: PathBuf::from("./saves/kept.field"),
+                    bytes: false,
+                },
+                orla_graph::Write {
+                    output: "raw".into(),
+                    path: PathBuf::from("./raw.bin"),
+                    bytes: true,
+                },
+            ]
+        );
+        let itself = parse(
+            "input saved: Rows<Int> = \"saved.field\" else saved;\nnode show: test.show@1 { source <- saved; }\noutput result <- show.result;",
+        )
+        .unwrap_err();
+        assert!(itself.message.contains("fall back on itself"), "{itself}");
+        let twice = parse(
+            "node a: test.zero@1 { domain = 1; }\noutput x <- a.result to \"f.field\";\noutput y <- a.result to \"f.field\";",
+        )
+        .unwrap_err();
+        assert!(twice.message.contains("written by two outputs"), "{twice}");
+        let placed = orla_language::parse_document(
+            "node inner: graph \"inner.osn\" { }\noutput result <- inner.result;",
+        )
+        .unwrap();
+        let mut loader = |_: &Path| -> Result<String, String> {
+            Ok(
+                "node a: test.zero@1 { domain = 1; }\noutput result <- a.result to \"f.field\";"
+                    .into(),
+            )
+        };
+        let refused = load(&placed, "", "main", Path::new("."), &mut loader).unwrap_err();
+        assert!(
+            refused.message.contains("only the scene itself writes"),
+            "{refused}"
+        );
+        // `to` and `else` are words of the document, not of any Kernel.
+        let error =
+            parse("node a: test.zero@1 { domain = 1; }\noutput x <- a.result to 3;").unwrap_err();
+        assert!(
+            error.message.contains("written `to` a quoted path"),
+            "{error}"
+        );
     }
 
     #[test]

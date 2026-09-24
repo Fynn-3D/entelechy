@@ -1,0 +1,21 @@
+scene tally.osn
+
+# Cells are 16 pixels, ten to a row; cell n's centre is (16n + 8, 8).
+# Nothing saved: the tally starts empty.
+frame 0.0
+expect 8 8 = 0.12 0.13 0.18 0.01
+
+# A press counts once, however many frames it is held.
+key 32 down
+frame 0.1
+expect 8 8 = 0.95 0.75 0.3 0.01
+frame 0.2
+expect 24 8 = 0.12 0.13 0.18 0.01
+
+# Released and pressed again: the second cell.
+key 32 up
+frame 0.3
+key 32 down
+frame 0.4
+expect 24 8 = 0.95 0.75 0.3 0.01
+expect 40 8 = 0.12 0.13 0.18 0.01

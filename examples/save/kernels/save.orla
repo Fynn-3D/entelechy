@@ -1,0 +1,40 @@
+// A tally kept across runs: how many times space was pressed, and
+// whether it was held the frame before, so a press counts once however
+// long it is held.
+struct Tally { count: Int; held: Bool; }
+
+// Where a tally starts when nothing was saved.
+kernel save.fresh@1 {
+    requires { field.write; }
+    output result: Rows<Tally>;
+    compute { return Tally { count: 0, held: false }; }
+}
+
+// One more on each press of space.
+kernel save.tally@1 {
+    requires { field.read; field.write; input.read; }
+    input last: Rows<Tally>;
+    output result: Rows<Tally>;
+    compute {
+        let t = sample(last);
+        let down = key(32);
+        let pressed = down && !t.held;
+        return Tally { count: if pressed { t.count + 1 } else { t.count }, held: down };
+    }
+}
+
+// The count as lit cells of 16 pixels, ten to a row.
+kernel save.show@1 {
+    requires { field.read; field.write; }
+    input tally: Rows<Tally>;
+    output result: Image;
+    compute {
+        let n = at(tally, 0).count;
+        let c = icoord();
+        let cell = c.x / 16 + c.y / 16 * 10;
+        let edge = c.x % 16 == 0 || c.y % 16 == 0;
+        return if edge { vec4(0.05, 0.05, 0.07, 1.0) }
+            else if cell < n { vec4(0.95, 0.75, 0.3, 1.0) }
+            else { vec4(0.12, 0.13, 0.18, 1.0) };
+    }
+}
