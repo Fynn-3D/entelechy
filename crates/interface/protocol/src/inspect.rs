@@ -69,7 +69,8 @@ pub(crate) fn graph(session: &Session) -> Result<Json, Json> {
 pub(crate) fn document(session: &Session) -> Result<Json, Json> {
     let text = std::fs::read_to_string(session.root())
         .map_err(|e| failure(format!("{}: {e}", session.root().display())))?;
-    Ok(json!({ "path": session.root().display().to_string(), "text": text }))
+    let version = crate::create::document_version(&text);
+    Ok(json!({ "path": session.root().display().to_string(), "text": text, "version": version }))
 }
 
 /// Every builtin and form, or the one named.

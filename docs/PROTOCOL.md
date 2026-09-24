@@ -28,10 +28,18 @@ The loop an agent runs:
 inspect   status, kernels, kernel, graph, document
 propose   prepare (diagnostics, nothing published)
 publish   publish with expect = "absent" | "any" | <generation>
-compose   compose (rewrites the scene document and syncs), param
+compose   compose with expect = <version> (checks, then rewrites the scene document and syncs), param
 observe   evaluate, read (rgba32f or ppm, base64)
 repair    the same operations again; retire; reset
 ```
+
+`compose` checks the text before it writes it: a text that does not lower,
+or defines a Kernel that does not compile, is answered with a
+`scene_rejected` event as a sync would answer it, and the document on disk
+and the scene running stay as they were. `document` answers the scene's
+`version`, a digest of its text; `compose` answers the version it wrote,
+and with `expect` set to a version it writes only if the document is
+still that one, otherwise it refuses with the version it is at.
 
 The same protocol runs inside the Player with `orla-player --serve
 <scene.osn>`: requests arrive on stdin while the window runs, an `evaluate`

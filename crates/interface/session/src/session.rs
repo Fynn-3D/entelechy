@@ -184,6 +184,15 @@ impl Session {
         self.writes.allow(dir)
     }
 
+    /// Whether `text`, as the scene document, would be taken whole: it
+    /// lowers, the documents it places load, and every Kernel it defines
+    /// itself compiles. Nothing is written, published or run: what a
+    /// caller asks before it replaces the document, so a rejected text
+    /// never reaches the disk.
+    pub fn check_scene(&self, text: &str) -> Result<(), String> {
+        self.scene.check(text)
+    }
+
     /// Where a write to `path` lands, once it is known to be inside a
     /// directory [`Session::allow_writes`] allowed: what a caller acting
     /// for someone other than the person running the session, an agent

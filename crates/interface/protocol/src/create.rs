@@ -11,12 +11,59 @@ use orla_session::Session;
 use crate::request::Request;
 use crate::wire::{events_json, failure, manifest_json, positioned, value_from_json, value_json};
 
-/// Writes the scene document and syncs.
+/// Replaces the scene document and syncs: checked first, so a text that
+/// would be rejected never reaches the disk, and with `expect`, only if
+/// the document is still the version the agent read.
 pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let text = request.text("text")?;
-    std::fs::write(session.root(), text)
-        .map_err(|e| failure(format!("{}: {e}", session.root().display())))?;
-    Ok(json!({ "events": events_json(&session.sync()) }))
+    let root = session.root().to_path_buf();
+    let current = std::fs::read_to_string(&root)
+        .map(|text| document_version(&text))
+        .unwrap_or_default();
+    if let Some(expect) = request.get("expect") {
+        let expect = expect
+            .as_str()
+            .ok_or_else(|| failure("`expect` is the `version` `document` answered"))?;
+        if current != expect {
+            let mut refused = failure(format!(
+                "the scene is at version {current}, not {expect}: it changed since it was read"
+            ));
+            refused["version"] = json!(current);
+            return Err(refused);
+        }
+    }
+    // Rejected as a sync would reject it, and the document on disk, and
+    // so the scene running, left as they were.
+    if let Err(why) = session.check_scene(&text) {
+        return Ok(json!({
+            "events": events_json(&[orla_session::Event::SceneRejected(why)]),
+            "version": current,
+        }));
+    }
+    // Replaced whole: a reader, the session's own watcher included, never
+    // sees half of it.
+    let beside = root.with_extension("osn.composing");
+    std::fs::write(&beside, &text)
+        .and_then(|()| std::fs::rename(&beside, &root))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&beside);
+            failure(format!("{}: {e}", root.display()))
+        })?;
+    Ok(json!({
+        "events": events_json(&session.sync()),
+        "version": document_version(&text),
+    }))
+}
+
+/// A document's version: a digest of its text, FNV-1a, the same in every
+/// build and on every platform.
+pub(crate) fn document_version(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 /// Reads again what changed on disk.

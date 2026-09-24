@@ -21,8 +21,8 @@
 //! | `kernels` | | list of manifests with generations |
 //! | `kernel` | `kernel` (the Kernel's id) | manifest, generation, source, as `publish` takes it |
 //! | `graph` | | inputs, params, nodes, outputs |
-//! | `document` | | path, text of the scene |
-//! | `compose` | `text` | writes the scene, syncs; events |
+//! | `document` | | path, text and version of the scene |
+//! | `compose` | `text`, `expect`? (a version) | checks, then writes the scene and syncs; events, version |
 //! | `sync` | | events |
 //! | `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |

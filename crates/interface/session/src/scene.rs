@@ -120,6 +120,57 @@ impl Scene {
             .to_owned()
     }
 
+    fn base(&self) -> PathBuf {
+        self.root
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    }
+
+    /// The root's text read and lowered, the documents it places
+    /// loaded: what a sync publishes from, nothing published yet.
+    fn lower(&self, text: &str) -> Result<(orla_language::Document, orla_scene::Lowered), String> {
+        let document = orla_language::parse_document(text).map_err(|e| e.to_string())?;
+        let mut loader = |path: &Path| read_document(path);
+        let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
+        let lowered = orla_scene::load_with_params(
+            &document,
+            text,
+            &self.document_name(),
+            &self.base(),
+            &mut loader,
+            &mut declare,
+            &self.params,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok((document, lowered))
+    }
+
+    /// Whether `text`, as the root, would be taken whole: it lowers, and
+    /// every Kernel it defines itself compiles. Nothing is written,
+    /// published or run; see [`crate::Session::check_scene`].
+    pub(crate) fn check(&self, text: &str) -> Result<(), String> {
+        let (mut document, lowered) = self.lower(text)?;
+        let (structs, types, functions) =
+            declarations_for(&self.base(), &document.uses).map_err(|e| e.to_string())?;
+        document.inherit(&structs, &types, &functions);
+        let root_key = PathBuf::from(self.document_name());
+        let inline = lowered
+            .inline
+            .iter()
+            .filter(|inline| inline.document == root_key)
+            .map(|inline| (Ok(inline.id.clone()), &inline.kernel));
+        let top = document
+            .kernels
+            .iter()
+            .map(|kernel| (named_id(kernel), kernel));
+        for (id, kernel) in top.chain(inline) {
+            let id = id?;
+            orla_compiler::compile_kernel(kernel, Some(&id)).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     fn sync_root(&mut self, kernels: &mut Kernels, runtime: &mut Runtime, events: &mut Vec<Event>) {
         let current = stamp(&self.root);
         let sub_graph_changed = self
@@ -137,36 +188,15 @@ impl Scene {
                 return;
             }
         };
-        let document = match orla_language::parse_document(&text) {
-            Ok(document) => document,
+        let (document, lowered) = match self.lower(&text) {
+            Ok(read) => read,
             Err(error) => {
-                events.push(Event::SceneRejected(error.to_string()));
+                events.push(Event::SceneRejected(error));
                 return;
             }
         };
         let name = self.document_name();
-        let base = self
-            .root
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
-        let mut loader = |path: &Path| read_document(path);
-        let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
-        let lowered = match orla_scene::load_with_params(
-            &document,
-            &text,
-            &name,
-            &base,
-            &mut loader,
-            &mut declare,
-            &self.params,
-        ) {
-            Ok(lowered) => lowered,
-            Err(error) => {
-                events.push(Event::SceneRejected(error.to_string()));
-                return;
-            }
-        };
+        let base = self.base();
         // Kernels defined by the root: its top-level ones and the inline
         // ones of its own nodes. Inline Kernels of sub-graphs belong to
         // their documents.

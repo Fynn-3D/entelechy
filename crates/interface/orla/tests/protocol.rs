@@ -1211,3 +1211,84 @@ fn advance_saves_only_where_writes_are_allowed() {
     );
     assert!(inside.exists());
 }
+
+/// A composed scene is checked before it is written: a text that would
+/// be rejected, by its syntax or by a Kernel it defines, is answered as
+/// a sync answers it and never reaches the disk, so the document an
+/// agent reads back is the scene running. With `expect`, a writer that
+/// read an older version is refused.
+#[test]
+fn compose_checks_before_it_writes_and_against_the_version_read() {
+    let dir = scratch_in("-compose");
+    let scene = dir.join("scene.osn");
+    let original = std::fs::read_to_string(&scene).unwrap();
+    let inline_broken = original.replace(
+        "node show: life.show@1 {",
+        "node bad: kernel { requires { field.write; } output result: Image; compute { return nope; } }\nnode show: life.show@1 {",
+    );
+    let grown = original.replace("brush = 2.0;", "brush = 3.0;");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "document" }),
+            json!({ "id": 2, "op": "compose", "text": "node broken: {" }),
+            json!({ "id": 3, "op": "compose", "text": inline_broken }),
+            json!({ "id": 4, "op": "compose", "text": grown, "expect": "0000000000000000" }),
+            json!({ "id": 5, "op": "document" }),
+            json!({ "id": 6, "op": "evaluate", "time": 0.0 }),
+        ],
+    );
+    let version = responses[0]["ok"]["version"].as_str().unwrap().to_owned();
+    assert_eq!(responses[0]["ok"]["text"], original);
+    for (index, what) in [(1, "syntax"), (2, "an inline Kernel")] {
+        let answer = &responses[index]["ok"];
+        assert_eq!(
+            answer["events"][0]["kind"], "scene_rejected",
+            "{what}: {answer}"
+        );
+        assert_eq!(answer["version"], version, "{what}");
+    }
+    assert!(
+        responses[2]["ok"]["events"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("`nope` is not defined"),
+        "{}",
+        responses[2]
+    );
+    let stale = &responses[3]["error"];
+    assert!(
+        stale["message"]
+            .as_str()
+            .unwrap()
+            .contains("changed since it was read"),
+        "{stale}"
+    );
+    assert_eq!(stale["version"], version);
+    // Nothing that was refused reached the disk.
+    assert_eq!(responses[4]["ok"]["text"], original);
+    assert_eq!(std::fs::read_to_string(&scene).unwrap(), original);
+    assert!(responses[5].get("error").is_none(), "{}", responses[5]);
+
+    // Against the version it read, the change is taken.
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "text": grown, "expect": version }),
+            json!({ "id": 2, "op": "document" }),
+        ],
+    );
+    let taken = &responses[0]["ok"];
+    assert!(
+        taken["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "scene_loaded"),
+        "{taken}"
+    );
+    assert_ne!(taken["version"], json!(version));
+    assert_eq!(responses[1]["ok"]["version"], taken["version"]);
+    assert_eq!(responses[1]["ok"]["text"], grown);
+    let _ = std::fs::remove_dir_all(&dir);
+}
