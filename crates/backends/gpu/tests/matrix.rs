@@ -152,6 +152,54 @@ fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String
     failures
 }
 
+/// Every element shape a scatter's target may hold, on the device where
+/// it takes it. It declines only a target of Longs, and of those takes
+/// every one under `min` or `max` whose scalars are all Longs, where it
+/// has 64-bit atomics.
+#[test]
+fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
+    let Some(gpu) = GpuBackend::new().ok() else {
+        return;
+    };
+    let cases = orla_conformance::shape_cases();
+    let mut taken = Vec::new();
+    for case in &cases {
+        let module = compile(&case.source).unwrap();
+        match gpu.declines(&module) {
+            None => taken.push(case.clone()),
+            Some(why) => assert!(
+                case.name.contains("Long")
+                    && !case.name.contains("with min")
+                    && !case.name.contains("with max")
+                    || !gpu_takes_long_extremes(&gpu),
+                "{}: declined: {why}",
+                case.name
+            ),
+        }
+    }
+    let failures = differences(&gpu, &taken);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        taken.len(),
+        failures.join("\n")
+    );
+}
+
+/// Whether the device lands Longs under `min` and `max`: whether it takes
+/// the smallest such scatter.
+fn gpu_takes_long_extremes(gpu: &GpuBackend) -> bool {
+    let module = compile(
+        "kernel probe.low@1 { requires { field.read; field.write; }
+         input keys: Rows<Int>; input target: Rows<Long>; output result: Rows<Long>;
+         struct Pair { at: Int; value: Long; }
+         scatter into target with min { return Pair { at: sample(keys), value: 0l }; } }",
+    )
+    .unwrap();
+    gpu.declines(&module).is_none()
+}
+
 #[test]
 fn a_64_bit_feature_is_not_taken_and_says_why() {
     let Some(gpu) = GpuBackend::new().ok() else {

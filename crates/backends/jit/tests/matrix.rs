@@ -50,6 +50,19 @@ fn every_long_feature_matches_the_interpreter() {
     );
 }
 
+#[test]
+fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
+    let cases = orla_conformance::shape_cases();
+    let failures = differences(&cases);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
 /// What each case's JIT run says against the interpreter's, bit for bit.
 fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
     let jit = JitBackend::new().unwrap();

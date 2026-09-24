@@ -1265,3 +1265,170 @@ pub fn narrow_cases() -> Vec<Case> {
     }
     out
 }
+
+/// An element a scatter's target may hold: its name, the declarations
+/// it needs, its type, a value of it built from `{k}`, and the scalars
+/// of its words, a 64-bit one twice.
+struct ElementShape {
+    name: &'static str,
+    decls: &'static str,
+    ty: &'static str,
+    value: &'static str,
+    scalars: Vec<Scalar>,
+}
+
+fn element_shapes() -> Vec<ElementShape> {
+    vec![
+        ElementShape {
+            name: "an Int",
+            decls: "",
+            ty: "Int",
+            value: "{k} % 2001 - 1000",
+            scalars: vec![Scalar::Int],
+        },
+        ElementShape {
+            name: "a Float",
+            decls: "",
+            ty: "Float",
+            value: "float({k} % 2001 - 1000) * 0.125",
+            scalars: vec![Scalar::Float],
+        },
+        ElementShape {
+            name: "a Long",
+            decls: "",
+            ty: "Long",
+            value: "long({k} % 2001 - 1000) * 3000000001l",
+            scalars: vec![Scalar::Long; 2],
+        },
+        ElementShape {
+            name: "a Vec3",
+            decls: "",
+            ty: "Vec3",
+            value: "vec3(float({k} % 17) - 8.0, float({k} % 5), -0.5 * float({k} % 11))",
+            scalars: vec![Scalar::Float; 3],
+        },
+        ElementShape {
+            name: "two Longs",
+            decls: "struct Deep { near: Long; id: Long; }",
+            ty: "Deep",
+            value: "Deep { near: long({k} % 97) << 33, id: -long({k}) }",
+            scalars: vec![Scalar::Long; 4],
+        },
+        ElementShape {
+            name: "a wide record",
+            decls: "struct Wide { a: Vec4; b: IVec3; c: Float; d: Vec4; e: Int; f: Vec4; g: Vec4; }",
+            ty: "Wide",
+            value: "Wide { a: vec4(float({k} % 7), 1.0, -2.0, float({k} % 3)), b: ivec3({k} % 9, -({k} % 4), 5), c: float({k} % 13) * 0.5, d: vec4(0.25, float({k} % 5), 3.0, -1.0), e: {k} % 1000 - 500, f: vec4(float({k} % 11), 0.0, 0.0, 1.0), g: vec4(-float({k} % 6), 2.0, float({k} % 8), 0.5) }",
+            scalars: {
+                let mut scalars = vec![Scalar::Float; 4];
+                scalars.extend([Scalar::Int; 3]);
+                scalars.push(Scalar::Float);
+                scalars.extend([Scalar::Float; 4]);
+                scalars.push(Scalar::Int);
+                scalars.extend([Scalar::Float; 8]);
+                scalars
+            },
+        },
+    ]
+}
+
+/// The count of elements a shape case runs over: enough that the
+/// interpreter and the JIT split them among threads, and the JIT cuts
+/// the target into parts.
+pub const SHAPE_COUNT: u32 = 20_000;
+
+/// Every element shape a scatter's target may hold, under every rule,
+/// into rows and into a volume, returning its pairs and emitting more
+/// where the rule lets it. The one input is a row of Ints, so every pair
+/// is wider than anything the Kernel reads: what the matrix above, whose
+/// inputs are wide, cannot show.
+pub fn shape_cases() -> Vec<Case> {
+    let keys = (
+        Schema::new(vec![Scalar::Int]),
+        Domain::Rows(SHAPE_COUNT),
+        (0..SHAPE_COUNT)
+            .map(|i| i.wrapping_mul(2_654_435_761) >> 8)
+            .collect::<Vec<u32>>(),
+    );
+    // The target's shape: its declaration, its extent, and an address
+    // from `{k}`, some of them outside.
+    let targets = [
+        ("rows", "Rows", "Int", Domain::Rows(61), "{k} % 67 - 3"),
+        (
+            "a volume",
+            "Volume",
+            "Vec3",
+            Domain::Volume(4, 3, 5),
+            "vec3(float({k} % 5), float({k} % 4), float({k} % 6))",
+        ),
+    ];
+    let mut out = Vec::new();
+    for shape in element_shapes() {
+        let floats = shape.scalars.contains(&Scalar::Float);
+        for (where_, kind, address_ty, extent, address) in &targets {
+            for rule in ["sum", "min", "max", "last"] {
+                let order_free = rule == "min" || rule == "max" || (rule == "sum" && !floats);
+                for emits in [false, true] {
+                    if emits && !order_free {
+                        continue;
+                    }
+                    let fan = if emits {
+                        format!(
+                            "let _fan = loop {{k}} % 3 with j = 0 {{ emit(Pair {{ at: {}, value: {} }}); j + 1 }};",
+                            address.replace("{k}", "({k} + j * 7)"),
+                            shape.value.replace("{k}", "({k} + j)"),
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let source = format!(
+                        "kernel shape.scatter@1 {{ requires {{ field.read; field.write; }}
+    {decls}
+    input keys: Rows<Int>; input target: {kind}<{ty}>; output result: {kind}<{ty}>;
+    struct Pair {{ at: {address_ty}; value: {ty}; }}
+    scatter into target with {rule} {{
+        let k = sample(keys);
+        {fan}
+        return Pair {{ at: {at}, value: {value} }};
+    }} }}",
+                        decls = shape.decls,
+                        ty = shape.ty,
+                        at = address.replace("{k}", "k"),
+                        value = shape.value.replace("{k}", "k"),
+                        fan = fan.replace("{k}", "k"),
+                    );
+                    // A target that starts in the middle, so that every
+                    // rule has something to keep and something to take.
+                    let start: Vec<u32> = shape
+                        .scalars
+                        .iter()
+                        .enumerate()
+                        .map(|(k, scalar)| match scalar {
+                            Scalar::Float => 0.25f32.to_bits(),
+                            Scalar::Long if k % 2 == 1 => 0,
+                            _ => 5,
+                        })
+                        .collect();
+                    let target = (
+                        Schema::new(shape.scalars.clone()),
+                        *extent,
+                        start.repeat(extent.count()),
+                    );
+                    out.push(Case {
+                        name: format!(
+                            "{} into {where_} with {rule}{}",
+                            shape.name,
+                            if emits { ", emitting" } else { "" }
+                        ),
+                        source,
+                        inputs: vec![keys.clone(), target],
+                        params: Vec::new(),
+                        domain: Domain::Rows(SHAPE_COUNT),
+                        context: Context::default(),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
