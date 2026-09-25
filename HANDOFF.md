@@ -7,7 +7,6 @@
 | Fact | What follows from it |
 | --- | --- |
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
-| `../bak/orla` is the previous implementation, read-only. | Consult it; take nothing from it unchecked. |
 
 Verified surface, as of `main`:
 
@@ -30,10 +29,33 @@ Verified surface, as of `main`:
 
 ## Next
 
-Open: the user has not chosen the next round. The page's GPU runs in
-Firefox (156, by hand in a window); WASI's thread waits for shared-
-everything threads (docs/DECISIONS.md). Candidates: Safari 27's WebGPU
-and JavaScript Promise Integration, once this machine has macOS 27 or
-Safari Technology Preview; a second native platform (Vulkan or DX12,
-Linux or Windows; needs the CI workflow run by hand). Ask before
-starting any.
+Converge the code on the architecture, one round at a time, each on its
+own branch and merged on the user's word. The evaluation behind it: the
+soul holds (hot reload, capabilities, a backend-neutral IR, KernelIDs,
+one Field model, layering held by `layers.rs`); what drifts is
+behaviour each interface decides for itself, and IR knowledge each
+backend derives again.
+
+1. Bugs and holes. One `node.port` parser, split at the last dot, for
+   every caller (replay's `reset` and `expect count` split at the
+   first, so a placed node's dotted id breaks). `save` and `export` go
+   through the session's store and write allowance, not around them.
+2. The IR owns what every backend repeats: a function's result type,
+   a walk over an op's blocks; the JIT's failure codes and layout shared
+   by its native and WebAssembly code, named.
+3. Thin interfaces: the session reads a Field or a picture back, so a
+   front no longer reaches into the runtime; one rule for the picture
+   and the sound an output is; one way to open a session (backend,
+   fallback, grants); `check` in the session; no backend types in the
+   session's API. Whether the frame loops become one is decided there.
+4. God files: the GPU backend's `lib.rs` and `wgsl.rs` split by mode,
+   named alike; the scene's `Lowering::level` split into phases.
+5. God objects: the runtime's background preparation and telemetry
+   their own types; the evaluator's handle ledger a type whose fields
+   only it touches.
+6. Odds: codecs in `orla-formats`, one home for name suggestions, the
+   `.osn` printer beside its parser, unused dependencies, AGENTS and
+   `layers.rs` saying the same about backend tests.
+
+Afterwards the user chooses among: Safari 27's WebGPU, once this machine
+has it; a second native platform.
