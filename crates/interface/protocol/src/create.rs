@@ -200,6 +200,15 @@ pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, 
 /// Retires a published Kernel.
 pub(crate) fn retire(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let id = request.kernel()?;
+    if session
+        .runtime()
+        .kernel(&id)
+        .is_some_and(|version| version.native().is_some())
+    {
+        return Err(failure(format!(
+            "`{id}` is a native operation of the Host: it is neither retired nor replaced"
+        )));
+    }
     Ok(json!({ "retired": session.retire_kernel(&id) }))
 }
 

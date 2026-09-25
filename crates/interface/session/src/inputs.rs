@@ -69,8 +69,14 @@ pub(crate) struct Inputs {
     allowed: Vec<PathBuf>,
     /// The directories the scene names ([`crate::scene::Scene::read_from`]),
     /// resolved: each document reads beside itself, and a scene reads in
-    /// what it uses.
+    /// what it uses. Where reads are held, these are the directories of the
+    /// scene the person opened, as it first loaded, and nothing a later
+    /// document says widens them: an agent that composes the scene cannot
+    /// grant itself reads by what it writes.
     beside: Vec<PathBuf>,
+    /// Whether `beside` holds what the opened scene read from, so it no
+    /// longer follows the documents.
+    settled: bool,
 }
 
 impl Inputs {
@@ -98,7 +104,9 @@ impl Inputs {
     /// Whether `path` may be read: it is inside an allowed directory once
     /// `..` and links are followed, so no spelling reaches past one.
     pub(crate) fn readable(&self, store: &dyn Store, path: &Path) -> Result<(), String> {
-        if !self.restricted {
+        // Until the opened scene has loaded once, what it reads is the
+        // person's own; from then on it is held.
+        if !self.restricted || !self.settled {
             return Ok(());
         }
         let target = crate::writes::resolve(store, path)?;
@@ -155,10 +163,13 @@ impl Inputs {
         host: &mut Host,
         events: &mut Vec<Event>,
     ) {
-        self.beside = read_from
-            .iter()
-            .filter_map(|dir| store.canonical(dir).ok())
-            .collect();
+        if !(self.restricted && self.settled) {
+            self.beside = read_from
+                .iter()
+                .filter_map(|dir| store.canonical(dir).ok())
+                .collect();
+            self.settled = self.restricted;
+        }
         self.sync_assets(store, graph, files, host, events);
         self.sync_sequences(store, files, host, events);
         self.sync_texts(graph, host, events);

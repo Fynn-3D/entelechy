@@ -583,7 +583,10 @@ impl Runtime {
     }
 
     /// Whether everything `module` requires is granted.
-    fn granted(&self, module: &Validated) -> Result<(), PrepareError> {
+    /// Whether this runtime grants every capability `module` requires:
+    /// what preparing it checks first, and what a caller asks before it
+    /// commits to a module it would have refused.
+    pub fn granted(&self, module: &Validated) -> Result<(), PrepareError> {
         let missing: Capabilities = module
             .manifest
             .requires
@@ -826,7 +829,18 @@ impl Runtime {
     }
 
     /// Removes a Kernel from the registry. Pinned versions stay executable.
+    /// A native operation is not removed: it answers `None`.
     pub fn retire(&mut self, id: &KernelId) -> Option<Arc<KernelVersion>> {
+        // A native operation is the Host's own, published from the start
+        // and never replaced; retiring it would leave its id for any
+        // Kernel to take.
+        if self
+            .kernels
+            .get(id)
+            .is_some_and(|version| version.native().is_some())
+        {
+            return None;
+        }
         self.kernels.remove(id)
     }
 

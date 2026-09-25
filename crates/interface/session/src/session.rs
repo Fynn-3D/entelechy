@@ -226,8 +226,11 @@ impl Session {
     pub fn sync(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         self.kernels.collect_pending(&mut self.runtime, &mut events);
+        let store = Arc::clone(self.scene.store());
+        let inputs = &self.inputs;
+        let readable = |path: &Path| inputs.readable(store.as_ref(), path);
         self.scene
-            .sync(&mut self.kernels, &mut self.runtime, &mut events);
+            .sync(&mut self.kernels, &mut self.runtime, &mut events, &readable);
         let documents = self.scene.read_from();
         self.inputs.sync(
             self.scene.store().as_ref(),
@@ -283,11 +286,18 @@ impl Session {
 
     /// Whether `text`, as the scene document, would be taken whole: it
     /// lowers, the documents it places load, and every Kernel it defines
-    /// itself compiles. Nothing is written, published or run: what a
+    /// itself compiles and requires only what the session grants. Nothing
+    /// is written, published or run: what a
     /// caller asks before it replaces the document, so a rejected text
     /// never reaches the disk.
     pub fn check_scene(&self, text: &str) -> Result<(), crate::Diagnostic> {
-        self.scene.check(text)
+        let granted = |module: &orla_ir::Validated| {
+            self.runtime
+                .granted(module)
+                .map_err(|why| crate::Diagnostic::new(why.to_string()))
+        };
+        let readable = |path: &Path| self.allowed_read(path);
+        self.scene.check(text, &readable, &granted)
     }
 
     /// Whether `path` may be read on the session's behalf: anywhere,

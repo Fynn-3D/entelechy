@@ -35,9 +35,14 @@ repair    the same operations again; retire; reset
 
 `compose` checks the text before it writes it: a text that does not lower,
 names a source no node or input provides, wires nodes round in a cycle,
-or defines a Kernel that does not compile, is answered with a
-`scene_rejected` event as a sync would answer it, and the document on disk
-and the scene running stay as they were. `document` answers the scene's
+defines a Kernel that does not compile or requires what the session does
+not grant, or uses or places a document it may not read, is answered with
+a `scene_rejected` event as a sync would answer it, and the document on
+disk and the scene running stay as they were. A document saved on the
+disk is held to the same: a scene whose own Kernels are refused does not
+replace the scene running. A native operation (`native.rasterize@1`) is
+the Host's own: `retire` refuses it, and no Kernel is published in its
+place. `document` answers the scene's
 `version`, a digest of its text; `compose` answers the version it wrote,
 and with `expect` set to a version it writes only if the document is
 still that one, otherwise it refuses with the version it is at.
@@ -66,10 +71,13 @@ nothing; the result is then checked as any text is.
 ```
 
 A served scene is composed by an agent and read back through `read`, so
-its inputs read files only beside the documents that declare them (the
-scene and the graphs it places) and in directories the person started the
-server with `--allow file.read=<dir>` for; a file elsewhere is a
-`rejected` event naming it. Writes take `--allow file.write=<dir>` in the
+what it reads is the person's to say: beside the documents of the scene
+they opened, as it first loaded (the scene, the graphs it places, what it
+uses), in every package, and in directories the person started the
+server with `--allow file.read=<dir>` for. A document the agent composes
+does not widen that by what it uses or places; a file elsewhere is a
+`rejected` event naming it, and a `use` or a `graph` naming one refuses
+the scene before anything of it is read. Writes take `--allow file.write=<dir>` in the
 same way. Neither is ever granted over the wire.
 
 The same protocol runs inside the Player with `orla-player --serve

@@ -162,11 +162,12 @@ impl Scene {
         kernels: &mut Kernels,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
-        self.sync_root(kernels, runtime, events);
+        self.sync_root(kernels, runtime, events, readable);
         if self.sync_libraries(kernels, runtime, events) {
             self.stamp = None;
-            self.sync_root(kernels, runtime, events);
+            self.sync_root(kernels, runtime, events, readable);
         }
     }
 
@@ -190,8 +191,21 @@ impl Scene {
     fn lower(
         &self,
         text: &str,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
     ) -> Result<(orla_language::Document, orla_scene::Lowered), Diagnostic> {
         let document = orla_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
+        // What the root reads beyond itself, the documents it uses and the
+        // graphs it places, is asked of the session before any is read:
+        // where reads are held, a document names no file outside them.
+        let base = self.base();
+        let placed = document.nodes.iter().filter_map(|node| match &node.kind {
+            orla_language::NodeKind::SubGraph(path) => Some(path),
+            _ => None,
+        });
+        for path in document.uses.iter().map(|item| &item.path).chain(placed) {
+            readable(&base.join(&path.value))
+                .map_err(|why| Diagnostic::new(format!("`{}` is not read: {why}", path.value)))?;
+        }
         let store = self.store.as_ref();
         let mut loader = |path: &Path| read_document(store, path);
         let mut declare =
@@ -231,8 +245,13 @@ impl Scene {
     /// graph whose every source is there, and every Kernel it defines
     /// itself compiles. Nothing is written,
     /// published or run; see [`crate::Session::check_scene`].
-    pub(crate) fn check(&self, text: &str) -> Result<(), Diagnostic> {
-        let (mut document, lowered) = self.lower(text)?;
+    pub(crate) fn check(
+        &self,
+        text: &str,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+        granted: &dyn Fn(&orla_ir::Validated) -> Result<(), Diagnostic>,
+    ) -> Result<(), Diagnostic> {
+        let (mut document, lowered) = self.lower(text, readable)?;
         let (structs, types, functions) =
             declarations_for(self.store.as_ref(), &self.base(), &document.uses)
                 .map_err(Diagnostic::new)?;
@@ -249,13 +268,20 @@ impl Scene {
             .map(|kernel| (named_id(kernel), kernel));
         for (id, kernel) in top.chain(inline) {
             let id = id?;
-            orla_compiler::compile_kernel(kernel, Some(&id))
+            let module = orla_compiler::compile_kernel(kernel, Some(&id))
                 .map_err(|error| Diagnostic::from(&error))?;
+            granted(&module)?;
         }
         Ok(())
     }
 
-    fn sync_root(&mut self, kernels: &mut Kernels, runtime: &mut Runtime, events: &mut Vec<Event>) {
+    fn sync_root(
+        &mut self,
+        kernels: &mut Kernels,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+        readable: &dyn Fn(&Path) -> Result<(), String>,
+    ) {
         let current = self.store.stamp(&self.root);
         let sub_graph_changed = self
             .sub_graphs
@@ -272,13 +298,21 @@ impl Scene {
                 return;
             }
         };
-        let (document, lowered) = match self.lower(&text) {
+        let (document, lowered) = match self.lower(&text, readable) {
             Ok(read) => read,
             Err(error) => {
                 events.push(Event::SceneRejected(error));
                 return;
             }
         };
+        // What this update says of its own documents, from here: any of
+        // them refused, and the update does not replace the scene running.
+        let said_from = events.len();
+        let declared = (
+            self.structs.clone(),
+            self.types.clone(),
+            self.functions.clone(),
+        );
         let name = self.document_name();
         let base = self.base();
         // Kernels defined by the root: its top-level ones and the inline
@@ -346,9 +380,6 @@ impl Scene {
             .filter(|path| !sub_graphs.contains_key(*path))
             .cloned()
             .collect();
-        for path in gone {
-            kernels.retire_document(&path, runtime, events);
-        }
         for (path, defined) in by_document {
             let current = if path == root {
                 current
@@ -382,6 +413,27 @@ impl Scene {
                 runtime,
                 events,
             );
+        }
+        // The scene's own documents, the root and the graphs it places,
+        // publish whole or not at all; one refused leaves every Kernel of
+        // it as it was, and the scene running stays the one that runs, as
+        // a Kernel's failed update leaves the running version.
+        let refused = events[said_from..].iter().any(|event| {
+            matches!(event, Event::Rejected { path, .. }
+                if *path == root || sub_graphs.contains_key(path))
+        });
+        if refused {
+            (self.structs, self.types, self.functions) = declared;
+            events.push(Event::SceneRejected(Diagnostic::new(
+                "the scene's own Kernels were refused, so it does not replace the scene running",
+            )));
+            return;
+        }
+        // Only now do the documents it no longer places let go of their
+        // Kernels: until it replaces the scene running, that scene may
+        // still run them.
+        for path in gone {
+            kernels.retire_document(&path, runtime, events);
         }
         self.sub_graphs = sub_graphs;
         self.uses = lowered.uses;

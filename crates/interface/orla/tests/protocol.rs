@@ -2377,3 +2377,112 @@ fn a_nodes_own_value_is_the_documents() {
     assert!(near.contains("did you mean `size`?"), "{near}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A scene update that cannot run whole does not replace the scene
+/// running: a composed text whose own Kernel requires what the session
+/// does not grant is refused before it reaches the disk.
+#[test]
+fn a_scene_update_that_cannot_run_leaves_the_scene_running() {
+    let dir = scratch_in("-atomic-scene");
+    let scene = dir.join("scene.osn");
+    let original = std::fs::read_to_string(&scene).unwrap();
+    let wanting = original.replace(
+        "output result <- show.result;",
+        "node t: kernel { requires { field.read; field.write; time.read; } input source: Image <- show.result; output result: Image; compute { let c = sample(source); return vec4(c.r * time(), c.g, c.b, 1.0); } }\noutput result <- t.result;",
+    );
+    assert_ne!(wanting, original);
+    let responses = talk_with(
+        &scene,
+        &["--grant", "field.read,field.write,input.read"],
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "compose", "text": wanting }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
+        ],
+    );
+    let refused = &responses[1]["ok"];
+    assert_eq!(refused["events"][0]["kind"], "scene_rejected", "{refused}");
+    assert!(
+        refused["events"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("does not grant")),
+        "{refused}"
+    );
+    assert!(responses[2].get("error").is_none(), "{}", responses[2]);
+    assert_eq!(std::fs::read_to_string(&scene).unwrap(), original);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Where a served scene may read is the person's to say: the scene they
+/// opened and what they allowed. A document an agent composes cannot
+/// widen it by what it uses or places, and naming a file outside is
+/// refused before anything of it is read.
+#[test]
+fn a_composed_scene_cannot_widen_what_it_may_read() {
+    let dir = scratch_in("-held-reads");
+    let outside = std::env::temp_dir().join(format!("orla-outside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("far.orla"), "kernel far.away@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }").unwrap();
+    std::fs::write(outside.join("secret.txt"), "not for the agent").unwrap();
+    let scene = dir.join("scene.osn");
+    let original = std::fs::read_to_string(&scene).unwrap();
+    let using = format!("use \"{}/\";\n{original}", outside.display());
+    let placing = format!(
+        "{original}\nnode far: graph \"{}\" {{ }}\n",
+        outside.join("secret.txt").display()
+    );
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "text": using }),
+            json!({ "id": 2, "op": "compose", "text": placing }),
+            json!({ "id": 3, "op": "kernels" }),
+        ],
+    );
+    for response in &responses[..2] {
+        let answer = &response["ok"];
+        assert_eq!(answer["events"][0]["kind"], "scene_rejected", "{answer}");
+        let message = answer["events"][0]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("is not read"), "{message}");
+        assert!(
+            !message.contains("not for the agent"),
+            "nothing of the file is said: {message}"
+        );
+    }
+    assert!(
+        !responses[2].to_string().contains("far.away"),
+        "{}",
+        responses[2]
+    );
+    assert_eq!(std::fs::read_to_string(&scene).unwrap(), original);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// A native operation is the Host's own: no request retires it, and no
+/// Kernel takes its id.
+#[test]
+fn a_native_operation_is_neither_retired_nor_replaced() {
+    let dir = scratch_in("-native-kept");
+    let replacement = "kernel native.rasterize@1 { requires { field.read; field.write; } input source: Image; output result: Image; compute { return sample(source); } }";
+    let responses = talk(
+        &dir.join("scene.osn"),
+        &[
+            json!({ "id": 1, "op": "retire", "kernel": "native.rasterize@1" }),
+            json!({ "id": 2, "op": "publish", "source": replacement, "expect": "any" }),
+            json!({ "id": 3, "op": "publish", "source": replacement, "expect": "absent" }),
+            json!({ "id": 4, "op": "kernel", "kernel": "native.rasterize@1" }),
+        ],
+    );
+    let retired = responses[0]["error"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(retired.contains("native operation"), "{}", responses[0]);
+    for i in [1, 2] {
+        assert!(responses[i].get("error").is_some(), "{}", responses[i]);
+    }
+    assert_eq!(responses[3]["ok"]["generation"], 0, "{}", responses[3]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

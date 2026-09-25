@@ -2518,3 +2518,49 @@ fn save_and_export_write_only_where_the_session_may() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A scene edited on the disk whose own Kernel is refused does not replace
+/// the scene running, and the Kernels it no longer places stay published
+/// while that scene may run them.
+#[test]
+fn a_refused_scene_edit_leaves_the_scene_running() {
+    let dir = scratch("atomic-scene");
+    let scene = dir.join("scene.osn");
+    let original = std::fs::read_to_string(&scene).unwrap();
+    let mut runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
+    runtime.set_grants(
+        [
+            orla_runtime::Capability::FieldRead,
+            orla_runtime::Capability::FieldWrite,
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut session = Session::open_with(&scene, None, runtime);
+    session.sync();
+    assert!(original.contains("output result <- blocks.result;"));
+    let before = session.evaluate(&Context::default()).unwrap();
+    let nodes = session.graph().unwrap().nodes.len();
+    std::fs::write(
+        &scene,
+        original.replace(
+            "output result <- blocks.result;",
+            "node t: kernel { requires { field.read; field.write; time.read; } input source: Image <- blocks.result; output result: Image; compute { let c = sample(source); return vec4(c.r * time(), c.g, c.b, 1.0); } }\noutput result <- t.result;",
+        ),
+    )
+    .unwrap();
+    let events = session.sync();
+    assert!(
+        events.iter().any(|e| matches!(e, Event::SceneRejected(why) if why.message.contains("does not replace the scene running"))),
+        "{events:?}"
+    );
+    assert!(!events.contains(&Event::SceneLoaded), "{events:?}");
+    assert_eq!(
+        session.graph().unwrap().nodes.len(),
+        nodes,
+        "the graph running stays"
+    );
+    let after = session.evaluate(&Context::default()).unwrap();
+    assert_eq!(after.outputs.len(), before.outputs.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
