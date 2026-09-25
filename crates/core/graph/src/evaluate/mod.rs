@@ -197,20 +197,9 @@ pub struct PlanEntry {
 /// Evaluates graphs and owns the cached node outputs and committed state.
 #[derive(Default)]
 pub struct Evaluator {
-    cache: BTreeMap<NodeId, Cached>,
-    /// How many cached entries hold each handle. Asking whether a
-    /// handle is still cached used to walk every entry's outputs, and a
-    /// scene of state asks once a binding a frame, which for a graph of
-    /// a thousand is a walk of a thousand a thousand times. The two
-    /// counts below are kept by the four methods that touch the maps,
-    /// so nothing else has to remember.
-    cached_handles: BTreeMap<Handle, usize>,
-    /// State as of the last successful evaluation, by producing node and
-    /// port. A committed handle may also be a node's current cached output;
-    /// it is released only when neither refers to it any more.
-    committed: BTreeMap<(NodeId, String), Handle>,
-    /// How many committed ports hold each handle; see `cached_handles`.
-    committed_handles: BTreeMap<Handle, usize>,
+    /// The cached node outputs and the committed state, and the counts
+    /// that say when a Field may be released ([`ledger::Ledger`]).
+    ledger: ledger::Ledger,
     epoch: u64,
     fusion: bool,
     pinned: BTreeSet<NodeId>,
@@ -229,8 +218,8 @@ pub struct Evaluator {
 impl fmt::Debug for Evaluator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Evaluator")
-            .field("cached", &self.cache.len())
-            .field("committed", &self.committed.len())
+            .field("cached", &self.ledger.sizes().0)
+            .field("committed", &self.ledger.sizes().1)
             .field("fusion", &self.fusion)
             .finish()
     }
@@ -272,10 +261,7 @@ impl Evaluator {
 
     /// Releases every cached image and all committed state.
     pub fn clear(&mut self, runtime: &mut Runtime) {
-        let cache = std::mem::take(&mut self.cache);
-        let committed = std::mem::take(&mut self.committed);
-        self.cached_handles.clear();
-        self.committed_handles.clear();
+        let (cache, committed) = self.ledger.take_all();
         self.fused.clear();
         for (_, pending) in std::mem::take(&mut self.pending) {
             runtime.discard(pending.ticket);
@@ -307,7 +293,11 @@ impl Evaluator {
         for (_, running) in std::mem::take(&mut self.running) {
             runtime.discard_run(running.run);
         }
-        let ports: Vec<(NodeId, String)> = self.committed.keys().cloned().collect();
+        let ports: Vec<(NodeId, String)> = self
+            .ledger
+            .committed_ports()
+            .map(|(key, _)| key.clone())
+            .collect();
         for key in ports {
             self.forget_state(&key, runtime);
         }
@@ -315,13 +305,13 @@ impl Evaluator {
 
     /// Whether any state has been committed.
     pub fn has_state(&self) -> bool {
-        !self.committed.is_empty()
+        self.ledger.sizes().1 > 0
     }
 
     /// The cached image for a node's output port, if it was evaluated and
     /// materialized. Absorbed nodes have none; pin them to observe them.
     pub fn cached(&self, node: &NodeId, port: &str) -> Option<Handle> {
-        let cached = self.cache.get(node)?;
+        let cached = self.ledger.entry(node)?;
         let index = cached.output_names.iter().position(|name| name == port)?;
         Some(cached.outputs[index])
     }
@@ -485,8 +475,8 @@ impl Evaluator {
             let absorbed: BTreeSet<&NodeId> =
                 groups.iter().flat_map(|g| g.absorbed.iter()).collect();
             let stale: Vec<NodeId> = self
-                .cache
-                .keys()
+                .ledger
+                .cached_nodes()
                 .filter(|id| absorbed.contains(id))
                 .cloned()
                 .collect();
@@ -525,8 +515,8 @@ impl Evaluator {
                     fused.push((node.id.clone(), group.absorbed.clone()));
                 }
                 if self
-                    .cache
-                    .get(&node.id)
+                    .ledger
+                    .entry(&node.id)
                     .is_some_and(|cached| cached.key == key)
                 {
                     reused.push(node.id.clone());
@@ -542,7 +532,7 @@ impl Evaluator {
                 // A restore's trial runs every node on the frame: what it
                 // proves is the world restored, whole, and it leaves no run
                 // going that would land a world it may refuse.
-                if node.is_async && !self.trial && self.cache.contains_key(&node.id) {
+                if node.is_async && !self.trial && self.ledger.entry(&node.id).is_some() {
                     // One run at a time; while it goes, the frame carries the
                     // last output and the state this node feeds stays.
                     if !self.running.contains_key(&node.id) {
@@ -615,7 +605,7 @@ impl Evaluator {
                         self.cached(node, port).ok_or_else(|| {
                             // What that node does write, so a port named
                             // slightly wrong is named.
-                            let near = self.cache.get(node).and_then(|cached| {
+                            let near = self.ledger.entry(node).and_then(|cached| {
                                 orla_abi::names::nearest(
                                     port,
                                     cached.output_names.iter().map(String::as_str),
@@ -688,7 +678,7 @@ impl Evaluator {
             output_names,
             epoch: self.epoch,
         };
-        if let Some(previous) = self.cache_put(id.clone(), fresh) {
+        if let Some(previous) = self.ledger.cache_put(id.clone(), fresh) {
             for output in previous.outputs {
                 if !self.is_kept(output) {
                     release(runtime, output);

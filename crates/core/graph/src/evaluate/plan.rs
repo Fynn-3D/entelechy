@@ -545,9 +545,9 @@ impl Evaluator {
                     .and_then(|at| graph.nodes[*at].inputs.get(port))
                 {
                     Some(Binding::Previous { initial, .. }) => self
-                        .committed
-                        .get(&(node.clone(), port.clone()))
-                        .and_then(|h| size(*h))
+                        .ledger
+                        .committed(&(node.clone(), port.clone()))
+                        .and_then(size)
                         .or_else(|| plain(initial)),
                     _ => plain(source),
                 }
@@ -561,9 +561,9 @@ impl Evaluator {
                 initial,
                 ..
             } => self
-                .committed
-                .get(&(node.clone(), port.clone()))
-                .and_then(|h| size(*h))
+                .ledger
+                .committed(&(node.clone(), port.clone()))
+                .and_then(size)
                 .or_else(|| of_source(initial)),
             Binding::Previous { .. } => None,
         };

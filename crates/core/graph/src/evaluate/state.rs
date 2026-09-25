@@ -55,7 +55,7 @@ impl Evaluator {
                     continue;
                 };
                 let key = (producer.clone(), port.clone());
-                let Some(current) = self.committed.get(&key).copied() else {
+                let Some(current) = self.ledger.committed(&key) else {
                     continue;
                 };
                 let shape = runtime.host().domain(current)?.shape();
@@ -101,13 +101,13 @@ impl Evaluator {
                         None
                     }
                 };
-                self.commit_take(&key);
+                self.ledger.commit_take(&key);
                 self.replaced.push(Replaced {
                     key: key.clone(),
                     previous: Some(current),
                 });
                 if let Some(carried) = carried {
-                    self.commit_put(key, carried);
+                    self.ledger.commit_put(key, carried);
                 }
             }
         }
@@ -122,12 +122,12 @@ impl Evaluator {
         // never released between them.
         while let Some(Replaced { key, previous }) = self.replaced.pop() {
             let carried = match previous {
-                Some(previous) => self.commit_put(key, previous),
-                None => self.commit_take(&key),
+                Some(previous) => self.ledger.commit_put(key, previous),
+                None => self.ledger.commit_take(&key),
             };
             if let Some(carried) = carried
                 && Some(carried) != previous
-                && !self.is_cached(carried)
+                && !self.ledger.is_cached(carried)
                 && !self.is_kept(carried)
             {
                 release(runtime, carried);
@@ -140,7 +140,7 @@ impl Evaluator {
     pub(super) fn release_replaced(&mut self, runtime: &mut Runtime) {
         while let Some(Replaced { previous, .. }) = self.replaced.pop() {
             if let Some(previous) = previous
-                && !self.is_cached(previous)
+                && !self.ledger.is_cached(previous)
                 && !self.is_kept(previous)
             {
                 release(runtime, previous);
@@ -217,13 +217,13 @@ impl Evaluator {
             .map(|(node, port, handle)| ((node, port), handle))
             .collect();
         for key in &ports {
-            let previous = self.commit_take(key);
+            let previous = self.ledger.commit_take(key);
             self.replaced.push(Replaced {
                 key: key.clone(),
                 previous,
             });
             if let Some(handle) = installed.get(key) {
-                self.commit_put(key.clone(), *handle);
+                self.ledger.commit_put(key.clone(), *handle);
             }
         }
         self.trial = true;
@@ -291,11 +291,11 @@ impl Evaluator {
             }
         }
         for (key, current) in staged {
-            let previous = self.commit_put(key.clone(), current);
+            let previous = self.ledger.commit_put(key.clone(), current);
             if previous != Some(current) {
                 advanced.push(key);
                 if let Some(previous) = previous
-                    && !self.is_cached(previous)
+                    && !self.ledger.is_cached(previous)
                     && !self.is_kept(previous)
                 {
                     release(runtime, previous);
@@ -337,8 +337,8 @@ impl Evaluator {
     /// Takes one port's committed state, releasing the Field when nothing
     /// else holds it: a handle two ports share is released with the last.
     pub(super) fn forget_state(&mut self, key: &(NodeId, String), runtime: &mut Runtime) {
-        if let Some(handle) = self.commit_take(key)
-            && !self.is_cached(handle)
+        if let Some(handle) = self.ledger.commit_take(key)
+            && !self.ledger.is_cached(handle)
             && !self.is_kept(handle)
         {
             release(runtime, handle);
@@ -367,9 +367,8 @@ impl Evaluator {
         }
         let key = (node.clone(), port.to_owned());
         let current = self
-            .committed
-            .get(&key)
-            .copied()
+            .ledger
+            .committed(&key)
             .or_else(|| self.cached(node, port))
             .ok_or_else(|| EvaluateError::UnknownOutput {
                 node: node.clone(),
@@ -391,8 +390,8 @@ impl Evaluator {
         }
         let data = FieldData::from_values(schema, domain, &words)?;
         let handle = runtime.host_mut().adopt(data)?;
-        if let Some(previous) = self.commit_put(key, handle)
-            && !self.is_cached(previous)
+        if let Some(previous) = self.ledger.commit_put(key, handle)
+            && !self.ledger.is_cached(previous)
             && !self.is_kept(previous)
         {
             release(runtime, previous);

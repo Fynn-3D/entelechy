@@ -54,8 +54,8 @@ impl Evaluator {
                         },
                     initial,
                     ..
-                } => match self.committed.get(&(producer.clone(), port.clone())) {
-                    Some(handle) => (*handle, InputKey::State(*handle)),
+                } => match self.ledger.committed(&(producer.clone(), port.clone())) {
+                    Some(handle) => (handle, InputKey::State(handle)),
                     None => {
                         let (handle, _) = self.resolve(node, initial, externals)?;
                         (handle, InputKey::State(handle))
@@ -278,8 +278,8 @@ impl Evaluator {
                 // The producer precedes this node in topological order, so a
                 // missing entry means it never produced this port.
                 let cached =
-                    self.cache
-                        .get(producer)
+                    self.ledger
+                        .entry(producer)
                         .ok_or_else(|| EvaluateError::UnknownOutput {
                             node: producer.clone(),
                             port: port.clone(),
