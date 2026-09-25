@@ -20,8 +20,6 @@ orla-protocol = { path = "../../interface/protocol" }
 orla-runtime = { path = "../../core/runtime" }
 orla-gpu = { path = "../../backends/gpu" }
 orla-graph = { path = "../../core/graph" }
-orla-compiler = { path = "../../frontend/compiler" }
-orla-language = { path = "../../frontend/language" }
 winit = "0.30.13"
 softbuffer = "0.4"
 cpal = "0.18"

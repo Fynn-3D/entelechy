@@ -305,7 +305,9 @@ authored `tests/`. Demo-specific documentation belongs in that directory. Follow
 The crates sit by layer in `crates/core`, `crates/frontend`,
 `crates/backends` and `crates/interface`. Core depends on core alone,
 frontend on core, and a backend on core alone, never on another backend;
-only the interface layer may depend on everything.
+a backend's tests may also measure it against the compiler, the
+reference interpreter and the conformance matrix. Only the interface
+layer may depend on everything.
 Keep core, frontend, the interpreter and the conformance matrix free of
 external dependencies. Two backends take the one dependency their machine
 needs and keep it behind the `Backend` boundary: `orla-gpu` takes wgpu (and

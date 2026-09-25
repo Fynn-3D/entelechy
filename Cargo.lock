@@ -1851,10 +1851,8 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "gilrs",
- "orla-compiler",
  "orla-gpu",
  "orla-graph",
- "orla-language",
  "orla-protocol",
  "orla-runtime",
  "orla-session",
