@@ -308,13 +308,14 @@ pub unsafe extern "C" fn orla_open(
     unsafe { open(None, scene, backend, library) }
 }
 
-// In a page, Orla waits for the device by giving the page a turn: the
-// page's `orla.wait` suspends Orla (JavaScript Promise Integration) until
-// the browser has had one.
+// In a page, Orla waits for the device by parking: the page's
+// `orla.wait` suspends Orla (JavaScript Promise Integration) until the
+// device's answer calls `orla.wake`.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[link(wasm_import_module = "orla")]
 unsafe extern "C" {
     fn wait();
+    fn wake();
 }
 
 // A page's clock: `performance.now()`, in milliseconds.
@@ -344,10 +345,13 @@ fn clock() -> f64 {
 fn waiting() -> orla_session::Wait {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     {
-        fn turn() {
+        fn park() {
             unsafe { wait() }
         }
-        orla_session::Wait::turns(turn)
+        fn woken() {
+            unsafe { wake() }
+        }
+        orla_session::Wait::parks(park, woken)
     }
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     {

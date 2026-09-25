@@ -80,6 +80,10 @@ class OrlaPlayer {
     this.block = 0;
     this.said = [];
     this.onsaid = (line) => console.log(line);
+    // What the person did, handed to the play between frames: a frame
+    // waiting on the device has Orla suspended, and nothing may reach
+    // into it until it is done.
+    this.hands = [];
     this.listen();
   }
 
@@ -113,38 +117,56 @@ class OrlaPlayer {
     return this.orla.withText(name, (at) => this.x.orla_play_key(this.session, at, down ? 1 : 0)) === 1;
   }
 
+  /// What the person did since the last frame, handed to the play now.
+  handOver() {
+    const hands = this.hands;
+    this.hands = [];
+    for (const hand of hands) {
+      if (hand() === "stop") {
+        this.stop();
+        return false;
+      }
+    }
+    return true;
+  }
+
   listen() {
     window.addEventListener("keydown", (event) => {
       if (event.repeat) return;
       if (HELD.has(event.key)) event.preventDefault();
       this.startSound().catch(() => {});
-      if (this.key(event.key, true)) this.stop();
-      else if (!this.running && event.key !== "Escape") this.run();
-      this.say();
+      const key = event.key;
+      this.hands.push(() => (this.key(key, true) ? "stop" : null));
+      if (!this.running && key !== "Escape") this.run();
     });
     window.addEventListener("keyup", (event) => {
       if (HELD.has(event.key)) event.preventDefault();
-      this.key(event.key, false);
+      const key = event.key;
+      this.hands.push(() => this.key(key, false));
     });
     const scale = () => window.devicePixelRatio || 1;
     this.canvas.addEventListener("pointermove", (event) => {
-      this.x.orla_play_pointer(this.session, event.offsetX * scale(), event.offsetY * scale());
+      const [x, y] = [event.offsetX * scale(), event.offsetY * scale()];
+      this.hands.push(() => this.x.orla_play_pointer(this.session, x, y));
     });
     this.canvas.addEventListener("pointerdown", (event) => {
       this.startSound().catch(() => {});
       this.canvas.setPointerCapture(event.pointerId);
-      this.x.orla_play_button(this.session, BUTTON[event.button] ?? 0, 1);
+      const button = BUTTON[event.button] ?? 0;
+      this.hands.push(() => this.x.orla_play_button(this.session, button, 1));
       if (!this.running) this.run();
     });
     this.canvas.addEventListener("pointerup", (event) => {
-      this.x.orla_play_button(this.session, BUTTON[event.button] ?? 0, 0);
+      const button = BUTTON[event.button] ?? 0;
+      this.hands.push(() => this.x.orla_play_button(this.session, button, 0));
     });
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     this.canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 1 : 1 / 40;
       // Lines, y positive away from the person.
-      this.x.orla_play_wheel(this.session, event.deltaX * unit, -event.deltaY * unit);
+      const [x, y] = [event.deltaX * unit, -event.deltaY * unit];
+      this.hands.push(() => this.x.orla_play_wheel(this.session, x, y));
     }, { passive: false });
     const fit = () => {
       for (const canvas of [this.canvas, this.shown]) {
@@ -197,7 +219,9 @@ class OrlaPlayer {
 
   /// One frame: the play's, shown on the page.
   async step() {
+    if (!this.handOver()) return;
     this.pollPads();
+    this.say();
     // With sound, the card sets the pace: a block is made when it has
     // room, as the Player's ring does.
     if (this.audio && this.block && this.held > this.block * 3) return;
@@ -249,7 +273,8 @@ class OrlaPlayer {
     }
   }
 
-  /// Opens the sound card at the person's first touch, as a page may.
+  /// Opens the sound card at the person's first touch, as a page may; the
+  /// play hears of it between frames.
   async startSound() {
     if (this.audio) return;
     const context = new AudioContext();
@@ -260,7 +285,8 @@ class OrlaPlayer {
     node.port.onmessage = (event) => (this.held = event.data);
     node.connect(context.destination);
     this.audio.node = node;
-    this.orla.withText(`${context.sampleRate} Hz`, (text) => this.x.orla_play_sound_opened(this.session, text));
+    const described = `${context.sampleRate} Hz`;
+    this.hands.push(() => this.orla.withText(described, (text) => this.x.orla_play_sound_opened(this.session, text)));
   }
 
   /// Frame after frame, a frame each time the page draws.
@@ -298,7 +324,8 @@ class OrlaPlayer {
         if (stamps) {
           for (const [path, stamp] of Object.entries(now)) {
             if (stamps[path] !== stamp) {
-              this.orla.put(path, new Uint8Array(await (await fetch(`/${path}`)).arrayBuffer()));
+              const bytes = new Uint8Array(await (await fetch(`/${path}`)).arrayBuffer());
+              this.hands.push(() => this.orla.put(path, bytes));
             }
           }
         }

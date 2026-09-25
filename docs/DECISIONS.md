@@ -567,11 +567,14 @@ the device itself, only once the page's script has had a turn, and
 Orla's evaluation waits for such answers in the middle of a frame: a
 scan handed to the JIT reads what the GPU made, as does a `value(port)`,
 an async node's inputs, a `read`. In a page, then, the GPU backend waits
-by giving the page turns: Orla calls `orla.wait`, which the page gives
-as a suspending import (JavaScript Promise Integration), and Orla is
-suspended until the browser has done what it had to. The GPU backend is
+by parking: Orla calls `orla.wait`, which the page gives as a
+suspending import (JavaScript Promise Integration), and Orla is
+suspended until the device's answer, or a future's waker, calls
+`orla.wake`. Nothing spins while it waits; while it is suspended the
+page hands it nothing, and what the person does waits for the frame to
+end. The GPU backend is
 the same everywhere; only how it waits differs (`orla_gpu::Wait`: block,
-or give turns), and `orla-ffi`, which takes `unsafe`, supplies the turn.
+or park), and `orla-ffi`, which takes `unsafe`, supplies the turn.
 The browser is reached through wgpu's own WebGPU backend, whose glue
 `wasm-bindgen` writes; its import of `orla` is the page's
 `orla-host.mjs`, through an import map.

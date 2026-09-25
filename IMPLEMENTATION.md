@@ -465,9 +465,8 @@ Represented in the IR, and so on every backend:
   end's and the interpreter's, run as 32-bit WebAssembly in node
   ([wasm test](crates/interface/orla/tests/wasm.rs)).
 - In a page the GPU backend is the browser's WebGPU through wgpu, and it
-  waits for the device by giving the page turns
-  ([wait](crates/backends/gpu/src/wait.rs)), which the page offers by
-  suspending Orla. A picture it holds is drawn on a page's canvas with
+  waits for the device by parking ([wait](crates/backends/gpu/src/wait.rs)):
+  the page suspends Orla until the device's answer wakes it. A picture it holds is drawn on a page's canvas with
   the Player's own presenter (`orla_present`), nothing read back. Held
   by the web bridge's test in a headless Chrome.
 - A session reads and writes its documents through a

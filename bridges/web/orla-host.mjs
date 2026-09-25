@@ -10,6 +10,7 @@ const hosted = globalThis.Orla.host(() => instance);
 export const load = hosted.load;
 export const unload = hosted.unload;
 export const wait = hosted.wait;
+export const wake = hosted.wake;
 export const now = hosted.now;
 
 /// Names the instance the functions work on.

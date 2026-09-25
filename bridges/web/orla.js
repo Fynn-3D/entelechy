@@ -75,26 +75,48 @@ class OrlaClient {
   }
 }
 
-/// A turn for the page: resolves once everything the browser had to do
-/// in the meantime (a device's answer among it) has been done.
-function turn() {
-  return new Promise((done) => {
-    const channel = new MessageChannel();
-    channel.port1.onmessage = () => done();
-    channel.port2.postMessage(0);
-  });
+/// Parking for Orla while it waits for the device: `park` resolves once
+/// `wake` has been called since it last resolved, which the device's
+/// answer does; a second, at most, when nothing wakes it, so a wait the
+/// device never answers is not a page stopped for good.
+function parking() {
+  let woken = false;
+  let waiting = null;
+  return {
+    park() {
+      if (woken) {
+        woken = false;
+        return Promise.resolve();
+      }
+      return new Promise((done) => {
+        const resume = () => {
+          if (waiting !== resume) return;
+          waiting = null;
+          woken = false;
+          done();
+        };
+        waiting = resume;
+        setTimeout(resume, 1000);
+      });
+    },
+    wake() {
+      woken = true;
+      if (waiting) waiting();
+    },
+  };
 }
 
 /// What Orla built as WebAssembly imports from its host: `orla.load`,
 /// which compiles a Kernel's code (WebAssembly the JIT wrote) over Orla's
 /// memory and function table and puts its functions into the table;
 /// `orla.unload`, which gives their slots back; `orla.wait`, which
-/// suspends Orla until the page has had a turn (JavaScript Promise
-/// Integration), which is how Orla waits for a device; and `orla.now`,
-/// the page's clock in milliseconds. `instance()` answers the Orla
-/// instance, once there is one.
+/// suspends Orla (JavaScript Promise Integration) until `orla.wake`,
+/// which the device's answer calls, which is how Orla waits for a
+/// device; and `orla.now`, the page's clock in milliseconds.
+/// `instance()` answers the Orla instance, once there is one.
 function host(instance) {
   const free = [];
+  const parked = parking();
   const table = () => instance().exports.__indirect_function_table;
   return {
     load(bytes, length, slots, most) {
@@ -125,9 +147,10 @@ function host(instance) {
       }
     },
     now: () => performance.now(),
+    wake: () => parked.wake(),
     wait:
       typeof WebAssembly.Suspending === "function"
-        ? new WebAssembly.Suspending(turn)
+        ? new WebAssembly.Suspending(() => parked.park())
         : () => {
             throw new Error("this browser cannot suspend WebAssembly (JavaScript Promise Integration)");
           },
@@ -159,6 +182,10 @@ class OrlaInPage {
     this.files = exports.orla_files();
     this.session = 0;
     this.onclose = null;
+    // One call at a time: a call waiting on the device has Orla
+    // suspended, and another reaching into it then would find a session
+    // half through its frame.
+    this.line = Promise.resolve();
     this.encoder = new TextEncoder();
     this.decoder = new TextDecoder();
   }
@@ -247,7 +274,18 @@ class OrlaInPage {
   /// One request, answered in place; the same promise a connection's
   /// `call` gives. A panic inside the module ends it, as a closed
   /// connection ends a session.
-  async call(op, fields = {}) {
+  call(op, fields = {}) {
+    return this.inTurn(() => this.callNow(op, fields));
+  }
+
+  /// `work` once every call before it has settled.
+  inTurn(work) {
+    const done = this.line.then(work);
+    this.line = done.catch(() => {});
+    return done;
+  }
+
+  async callNow(op, fields) {
     if (!this.session) throw new Error("no scene is open");
     let response;
     try {
@@ -274,7 +312,11 @@ class OrlaInPage {
   /// element id is `canvas`, from where the GPU holds it: whether it was
   /// drawn. Not drawn (a session not on the GPU, an output that is not a
   /// picture), it is to be read instead.
-  async present(canvas, name) {
+  present(canvas, name) {
+    return this.inTurn(() => this.presentNow(canvas, name));
+  }
+
+  async presentNow(canvas, name) {
     if (!this.session) throw new Error("no scene is open");
     const done = await this.withText(canvas, (id) =>
       name === undefined
