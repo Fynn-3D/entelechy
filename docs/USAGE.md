@@ -299,6 +299,20 @@ cargo build --release -p orla --target wasm32-wasip1
 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay examples/ant/tests/ant.replay --backend cpu
 ```
 
+In a page, Orla is the C ABI built for `wasm32-unknown-unknown`: a
+module that imports nothing, whose documents are the files the page
+hands in (`orla_files`, `orla_files_put`, `orla_open_files`) and which
+answers the protocol in place (`orla_request`). The web bridge's page
+runs it: add the `examples` and `packages` folders, pick a scene, and
+Open here. It runs on the interpreter, on the page's one thread, and a
+page has no clock of its own, so nothing is timed and history is not
+dated.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo build --release -p orla-ffi --target wasm32-unknown-unknown
+```
+
 ## Hot reload
 
 Keep the scene running and republish Kernels as their files change:
@@ -502,8 +516,9 @@ language, outside the workspace, speaking only the public contracts.
 
 The same session is a library: `orla-ffi` builds `liborla_ffi`
 (a dynamic and a static library) behind the C header
-[`crates/interface/ffi/include/orla.h`](../crates/interface/ffi/include/orla.h), ten
-functions any language binds. A host opens a scene on a backend,
+[`crates/interface/ffi/include/orla.h`](../crates/interface/ffi/include/orla.h), any
+language binds. A host opens a scene on a backend, from its path or
+from files it hands in with no disk read,
 evaluates it under its own input (time, pointer, buttons, keys, the
 window and its scale), and reads an output or a pinned node as a
 pointer into the Host's words with its extent, stride, shape and schema:

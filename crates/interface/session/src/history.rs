@@ -144,11 +144,9 @@ pub(crate) struct History {
     current: BTreeMap<KernelId, Generation>,
 }
 
+/// Seconds since the Unix epoch; zero where the machine has no clock.
 fn wall() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .unwrap_or(0)
+    orla_runtime::clock::wall().unwrap_or(0)
 }
 
 impl History {

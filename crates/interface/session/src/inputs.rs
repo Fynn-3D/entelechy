@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use orla_graph::Graph;
 use orla_runtime::{FieldData, Handle, Host};
 
-use crate::stamp::{Stamp, stamp};
+use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
 /// A file an input is read from.
@@ -33,10 +33,11 @@ struct Sequence {
 const FRAME_EXTENSIONS: [&str; 5] = ["png", "ppm", "pgm", "field", "wav"];
 
 /// The files of `dir` that can be frames, in name order.
-fn frame_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+fn frame_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files: Vec<PathBuf> = store
+        .list(dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .into_iter()
         .filter(|path| {
             path.extension()
                 .and_then(|e| e.to_str())
@@ -80,10 +81,11 @@ impl Inputs {
     }
 
     /// Allows files in `dir` and under it to be read into inputs.
-    pub(crate) fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
-        let resolved = crate::paths::canonical(dir)
+    pub(crate) fn allow_reads(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
+        let resolved = store
+            .canonical(dir)
             .map_err(|e| format!("cannot allow reads from {}: {e}", dir.display()))?;
-        if !resolved.is_dir() {
+        if !store.is_dir(&resolved) {
             return Err(format!(
                 "cannot allow reads from {}: not a directory",
                 dir.display()
@@ -95,12 +97,12 @@ impl Inputs {
 
     /// Whether `path` may be read: it is inside an allowed directory once
     /// `..` and links are followed, so no spelling reaches past one.
-    pub(crate) fn readable(&self, path: &Path) -> Result<(), String> {
+    pub(crate) fn readable(&self, store: &dyn Store, path: &Path) -> Result<(), String> {
         if !self.restricted {
             return Ok(());
         }
-        let target = crate::writes::resolve(path)?;
-        if crate::sources::in_a_package(&target)
+        let target = crate::writes::resolve(store, path)?;
+        if crate::sources::in_a_package(store, &target)
             || self
                 .beside
                 .iter()
@@ -146,6 +148,7 @@ impl Inputs {
     /// and inputs the scene no longer declares forgotten.
     pub(crate) fn sync(
         &mut self,
+        store: &dyn Store,
         graph: Option<&Graph>,
         files: &orla_scene::Files,
         read_from: &[PathBuf],
@@ -154,10 +157,10 @@ impl Inputs {
     ) {
         self.beside = read_from
             .iter()
-            .filter_map(|dir| crate::paths::canonical(dir).ok())
+            .filter_map(|dir| store.canonical(dir).ok())
             .collect();
-        self.sync_assets(graph, files, host, events);
-        self.sync_sequences(files, host, events);
+        self.sync_assets(store, graph, files, host, events);
+        self.sync_sequences(store, files, host, events);
         self.sync_texts(graph, host, events);
     }
 
@@ -170,6 +173,7 @@ impl Inputs {
     /// read, and forgets inputs the scene no longer declares.
     fn sync_assets(
         &mut self,
+        store: &dyn Store,
         graph: Option<&Graph>,
         files: &orla_scene::Files,
         host: &mut Host,
@@ -193,7 +197,7 @@ impl Inputs {
             bytes,
         } in wanted
         {
-            let current = stamp(&path);
+            let current = store.stamp(&path);
             if self
                 .assets
                 .get(&name)
@@ -210,7 +214,7 @@ impl Inputs {
             );
             // Asked when the file is read, so a refusal is said once until
             // the file or the scene changes.
-            if let Err(why) = self.readable(&path) {
+            if let Err(why) = self.readable(store, &path) {
                 self.forget(host, &name);
                 events.push(Event::Rejected {
                     path,
@@ -218,11 +222,11 @@ impl Inputs {
                 });
                 continue;
             }
-            let read = if bytes {
-                orla_formats::read_bytes(&path)
-            } else {
-                orla_formats::read(&path, Some(&ty))
-            };
+            let read = store.read(&path).map_err(|e| e.to_string());
+            let read = read.and_then(|found| match bytes {
+                true => orla_formats::decode_bytes(&found),
+                false => orla_formats::decode(&found, &path, Some(&ty)),
+            });
             let read = read.and_then(|(data, detail)| {
                 let data = kept_as(data, &ty)?;
                 let detail = match data.schema().uniform_encoding() {
@@ -237,7 +241,10 @@ impl Inputs {
                 Ok(loaded) => loaded,
                 // An input with somewhere else to read reads it while its
                 // file is not there: that is a state, not a failure.
-                Err(_) if !path.exists() && graph.is_some_and(|g| g.fallback(&name).is_some()) => {
+                Err(_)
+                    if !store.exists(&path)
+                        && graph.is_some_and(|g| g.fallback(&name).is_some()) =>
+                {
                     self.forget(host, &name);
                     events.push(Event::Absent { name, path });
                     continue;
@@ -268,6 +275,7 @@ impl Inputs {
     /// the frame whose turn it is comes in at the next evaluation.
     fn sync_sequences(
         &mut self,
+        store: &dyn Store,
         files: &orla_scene::Files,
         host: &mut Host,
         events: &mut Vec<Event>,
@@ -284,7 +292,10 @@ impl Inputs {
             self.forget(host, &name);
         }
         for (name, dir, ty, rate) in wanted {
-            let files = match self.readable(&dir).and_then(|()| frame_files(&dir)) {
+            let files = match self
+                .readable(store, &dir)
+                .and_then(|()| frame_files(store, &dir))
+            {
                 Ok(files) => files,
                 Err(error) => {
                     if self.sequences.remove(&name).is_some() {
@@ -336,7 +347,7 @@ impl Inputs {
     /// input: frame `floor(time * rate)`, wrapping at the end. A frame
     /// that cannot be read is reported by the next sync and the input
     /// keeps the frame it had.
-    pub(crate) fn select_frames(&mut self, host: &mut Host, time: f32) {
+    pub(crate) fn select_frames(&mut self, store: &dyn Store, host: &mut Host, time: f32) {
         let names: Vec<String> = self.sequences.keys().cloned().collect();
         for name in names {
             let Some(sequence) = self.sequences.get(&name) else {
@@ -352,10 +363,14 @@ impl Inputs {
             }
             let path = sequence.files[index].clone();
             let ty = sequence.ty.clone();
-            let loaded = orla_formats::read(&path, Some(&ty)).and_then(|(data, _)| {
-                let data = kept_as(data, &ty)?;
-                host.adopt(data).map_err(|e| e.to_string())
-            });
+            let loaded = store
+                .read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|found| orla_formats::decode(&found, &path, Some(&ty)))
+                .and_then(|(data, _)| {
+                    let data = kept_as(data, &ty)?;
+                    host.adopt(data).map_err(|e| e.to_string())
+                });
             match loaded {
                 Ok(handle) => {
                     self.hold(host, &name, handle);

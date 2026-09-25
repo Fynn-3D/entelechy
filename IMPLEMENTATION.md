@@ -452,9 +452,19 @@ Represented in the IR, and so on every backend:
   `start_run` returns ([later](crates/core/runtime/src/later.rs)), the
   preparation worker is not started, and `serve` reads each request in
   turn; where links cannot be resolved, a file's one name is its path
-  folded ([paths](crates/interface/session/src/paths.rs)); where native
-  code cannot run, the session has no JIT. The replays run under
-  `wasmtime` on the interpreter (HANDOFF's verification).
+  folded ([store](crates/interface/session/src/store.rs)); where native
+  code cannot run, the session has no JIT; where there is no clock (a
+  page), nothing is timed ([clock](crates/core/runtime/src/clock.rs)).
+  The replays run under `wasmtime` on the interpreter (HANDOFF's
+  verification).
+- A session reads and writes its documents through a
+  [`Store`](crates/interface/session/src/store.rs): the disk, or the
+  files its caller handed in (`Memory`), which is how Orla runs in a
+  page with no disk; the C ABI opens a session on them (`orla_open_files`)
+  and the web bridge's test runs the text example in a headless Chrome
+  that way, composing it and handing a changed document in
+  ([bridges test](crates/interface/orla/tests/bridges.rs),
+  [ABI test](crates/interface/ffi/tests/abi.rs)).
 
 ### Measuring
 

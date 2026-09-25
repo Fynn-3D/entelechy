@@ -4,11 +4,13 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use orla_formats::ppm;
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_runtime::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
 
+use crate::store::Store;
 use crate::{Event, Limits, SessionError, Trace, inputs, kernels, observe, scene, writes};
 
 mod time;
@@ -57,8 +59,20 @@ impl Session {
     /// Creates a session over a runtime built by the caller, for choosing
     /// the backend.
     pub fn open_with(scene: &Path, library: Option<&Path>, runtime: Runtime) -> Self {
+        Self::open_in(Arc::new(crate::Disk), scene, library, runtime)
+    }
+
+    /// Creates a session whose documents are in `store`: the disk, or
+    /// the files a caller with none (a page) hands in
+    /// ([`crate::Memory`]).
+    pub fn open_in(
+        store: Arc<dyn Store>,
+        scene: &Path,
+        library: Option<&Path>,
+        runtime: Runtime,
+    ) -> Self {
         Self {
-            scene: scene::Scene::new(scene, library),
+            scene: scene::Scene::new(store, scene, library),
             kernels: kernels::Kernels::default(),
             inputs: inputs::Inputs::default(),
             writes: writes::Writes::default(),
@@ -70,6 +84,12 @@ impl Session {
             origin: crate::Origin::Local,
             claimed: false,
         }
+    }
+
+    /// Where the session's documents are, for what its caller reads and
+    /// writes on its behalf.
+    pub fn store(&self) -> &dyn Store {
+        self.scene.store().as_ref()
     }
 
     /// The runtime, for inspection.
@@ -187,7 +207,7 @@ impl Session {
         Ok(())
     }
 
-    /// Reconciles the runtime with the files on disk and reports what
+    /// Reconciles the runtime with the files in its store and reports what
     /// changed: replacements the worker finished publish first, then the
     /// documents are read, then the inputs, and last where each node runs.
     pub fn sync(&mut self) -> Vec<Event> {
@@ -197,6 +217,7 @@ impl Session {
             .sync(&mut self.kernels, &mut self.runtime, &mut events);
         let documents = self.scene.read_from();
         self.inputs.sync(
+            self.scene.store().as_ref(),
             self.scene.graph(),
             self.scene.files(),
             &documents,
@@ -214,7 +235,7 @@ impl Session {
     /// under it (`output name <- source to "file";`). Nothing is written
     /// anywhere else, and nothing at all until something is allowed.
     pub fn allow_writes(&mut self, dir: &Path) -> Result<(), String> {
-        self.writes.allow(dir)
+        self.writes.allow(self.scene.store().as_ref(), dir)
     }
 
     /// Holds what the scene's inputs read to the directories the scene
@@ -229,7 +250,7 @@ impl Session {
     /// Allows the scene's inputs to be read from files in `dir` and under
     /// it, where reads are restricted ([`Session::restrict_reads`]).
     pub fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
-        self.inputs.allow_reads(dir)
+        self.inputs.allow_reads(self.scene.store().as_ref(), dir)
     }
 
     /// Grants what a command line's `--allow` said.
@@ -253,7 +274,7 @@ impl Session {
     /// unless reads are restricted ([`Session::restrict_reads`]), and then
     /// where the scene's documents are, in a package, or where allowed.
     pub fn allowed_read(&self, path: &Path) -> Result<(), String> {
-        self.inputs.readable(path)
+        self.inputs.readable(self.scene.store().as_ref(), path)
     }
 
     /// Where a write to `path` lands, once it is known to be inside a
@@ -261,7 +282,7 @@ impl Session {
     /// for someone other than the person running the session, an agent
     /// over the protocol, asks before it writes anywhere.
     pub fn allowed_write(&self, path: &Path) -> Result<std::path::PathBuf, String> {
-        self.writes.place(path)
+        self.writes.place(self.scene.store().as_ref(), path)
     }
 
     /// Where every node of the scene runs: the backend, and why it is not
@@ -396,8 +417,11 @@ impl Session {
     /// Evaluates the current graph under `context`. Unchanged nodes are
     /// reused; state commits only when the whole evaluation succeeds.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
-        self.inputs
-            .select_frames(self.runtime.host_mut(), context.time);
+        self.inputs.select_frames(
+            self.scene.store().as_ref(),
+            self.runtime.host_mut(),
+            context.time,
+        );
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self.evaluator.evaluate(
             graph,
@@ -407,8 +431,12 @@ impl Session {
             self.scene.params(),
         )?;
         // Committed: what the evaluation changed may now leave the session.
-        self.writes
-            .after(&self.scene.files().writes, &report, &mut self.runtime);
+        self.writes.after(
+            self.scene.store().as_ref(),
+            &self.scene.files().writes,
+            &report,
+            &mut self.runtime,
+        );
         self.history.ran();
         Ok(report)
     }
@@ -420,8 +448,11 @@ impl Session {
         context: &Context,
         demand: &std::collections::BTreeSet<orla_graph::NodeId>,
     ) -> Result<Report, EvaluateError> {
-        self.inputs
-            .select_frames(self.runtime.host_mut(), context.time);
+        self.inputs.select_frames(
+            self.scene.store().as_ref(),
+            self.runtime.host_mut(),
+            context.time,
+        );
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self.evaluator.evaluate_for(
             graph,
@@ -542,6 +573,7 @@ impl Session {
         path: &Path,
     ) -> Result<(), String> {
         observe::save(
+            self.scene.store().as_ref(),
             self.scene.graph(),
             &self.evaluator,
             &mut self.runtime,

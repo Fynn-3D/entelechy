@@ -568,7 +568,7 @@ impl Evaluator {
                 }
                 let placement = runtime.placement(&group.version);
                 runtime.take_moved();
-                let started = std::time::Instant::now();
+                let started = orla_runtime::clock::now();
                 let outputs = match group.chain {
                     Some(chain) => {
                         runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
@@ -581,7 +581,9 @@ impl Evaluator {
                 })?;
                 // What the device says it took, when it measures; the call's
                 // own time otherwise.
-                let took = runtime.last_measured().unwrap_or_else(|| started.elapsed());
+                let took = runtime
+                    .last_measured()
+                    .unwrap_or_else(|| orla_runtime::clock::since(started));
                 timings.push((node.id.clone(), took));
                 checks.push((node.id.clone(), runtime.take_checks()));
                 let moved = runtime.take_moved();

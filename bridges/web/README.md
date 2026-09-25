@@ -39,22 +39,38 @@ session sizes window-shaped scenes by it.
   graph resizes the running scene.
 - **Reset state** is the Player's F5.
 
+The page also runs Orla itself, with no session to connect to: Orla
+built as WebAssembly (`cargo build --release -p orla-ffi --target
+wasm32-unknown-unknown`), its documents the files the page hands in.
+**Add folder** takes a folder's files by the paths they have under it,
+so adding `examples` and then `packages` keeps the repository's
+`../../packages/...`; **Module** picks `orla_ffi.wasm`, which a page
+served beside the repository finds by itself; **Open here** opens the
+scene picked on the interpreter, and everything above works on it, the
+same protocol answered in the page. It runs on the page's one thread,
+so a heavy scene holds the page while a frame is made.
+
 `orla.js` is the client on its own: `OrlaClient` (a request, its answer;
 the session answers in order, so answers are matched first in, first
 out), `decodePpm` and `decodeWords` (a frame, a Field's words), and
-`Driver` (a canvas as the window and the input). It is a classic script,
+`Driver` (a canvas as the window and the input), and `OrlaInPage`, the
+same `call` answered by Orla in the page. It is a classic script,
 not a module, because browsers refuse module imports between file URLs.
 
-`test.html` checks the bridge against two serving sessions, and
-`test.mjs` runs it headless: it serves the text and voxel examples,
-opens the page in a headless Chrome over the DevTools protocol, and
-prints the page's log, which ends with `RESULT: ok`. It reads the text
-example's picture and republishes its background, then drives the voxel
-editor with a window and a pointer, places a voxel, and resizes the
-window; then it opens `index.html`, connects it, and loads a Kernel into
-its editor. Node 22 or later and a Chrome, nothing installed:
+`test.html` checks the bridge against two serving sessions and Orla in
+the page, and `test.mjs` runs it headless: it serves the text and voxel
+examples, serves the repository's files to the page, opens the page in a
+headless Chrome over the DevTools protocol, and prints the page's log,
+which ends with `RESULT: ok`. It reads the text example's picture and
+republishes its background, over the socket and in the page alike; in
+the page it composes the scene and hands a changed one in; then it
+drives the voxel editor with a window and a pointer, places a voxel,
+and resizes the window; then it opens `index.html`, connects it, loads a
+Kernel into its editor, and opens the text example in it in the page.
+Node 22 or later and a Chrome, nothing installed:
 
 ```sh
 cargo build --release
+cargo build --release -p orla-ffi --target wasm32-unknown-unknown
 node bridges/web/test.mjs
 ```

@@ -14,7 +14,7 @@ use orla_language::Kernel;
 use orla_runtime::{Candidate, Expect, KernelId, Runtime, Ticket};
 
 use crate::sources::located;
-use crate::stamp::Stamp;
+use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
 /// A Kernel a document defines: its id, its source text, and the parse.
@@ -108,8 +108,14 @@ impl Kernels {
 
     /// A diagnostic with the file that declares what it could not find,
     /// searched among the documents this ledger knows.
-    pub(crate) fn located(&self, error: Diagnostic, document: &Path, root: &Path) -> Diagnostic {
-        located(error, document, root, &self.documents())
+    pub(crate) fn located(
+        &self,
+        store: &dyn Store,
+        error: Diagnostic,
+        document: &Path,
+        root: &Path,
+    ) -> Diagnostic {
+        located(store, error, document, root, &self.documents())
     }
 
     /// Publishes every document's change whose Kernels the worker has
@@ -253,6 +259,7 @@ impl Kernels {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn publish_document(
         &mut self,
+        store: &dyn Store,
         path: &Path,
         current: Option<Stamp>,
         defined: Vec<Defined>,
@@ -307,7 +314,7 @@ impl Kernels {
                 Err(error) => {
                     events.push(Event::Rejected {
                         path: path.to_path_buf(),
-                        error: self.located((&error).into(), path, root),
+                        error: self.located(store, (&error).into(), path, root),
                     });
                     failed = true;
                     continue;

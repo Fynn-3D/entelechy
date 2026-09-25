@@ -107,6 +107,7 @@ fn why_not_saved(graph: Option<&Graph>, node: &NodeId, port: &str) -> String {
 
 /// Writes a node's output as a file; see [`crate::Session::save`].
 pub(crate) fn save(
+    store: &dyn crate::Store,
     graph: Option<&Graph>,
     evaluator: &Evaluator,
     runtime: &mut Runtime,
@@ -134,7 +135,9 @@ pub(crate) fn save(
             }
         },
     )?;
-    std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+    store
+        .write(path, &bytes)
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// How many elements a node's output holds; see

@@ -36,6 +36,7 @@ pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding, file};
 pub use orla_ir::{KernelId, Manifest, Validated};
 pub use orla_rules::{Backend, Check, ExecutionError, NativeOp, Prepared};
 
+pub mod clock;
 mod later;
 pub use later::Run;
 

@@ -33,6 +33,36 @@ fn tool(paths: &[&str]) -> Option<PathBuf> {
         })
 }
 
+/// Orla built for a page (`wasm32-unknown-unknown`), from the source as
+/// it stands, into a target directory of its own so the build does not
+/// wait on the one running this test; `None` when this machine's Rust
+/// has no such target.
+fn page_module() -> Option<PathBuf> {
+    let sysroot = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
+    let sysroot = PathBuf::from(String::from_utf8_lossy(&sysroot.stdout).trim());
+    if !sysroot.join("lib/rustlib/wasm32-unknown-unknown").exists() {
+        return None;
+    }
+    let target = root().join("target/web");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let built = Command::new(cargo)
+        .current_dir(root())
+        .args(["build", "--release", "-p", "orla-ffi"])
+        .args(["--target", "wasm32-unknown-unknown", "--target-dir"])
+        .arg(&target)
+        .output()
+        .expect("cargo runs");
+    assert!(
+        built.status.success(),
+        "orla-ffi does not build for a page:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    Some(target.join("wasm32-unknown-unknown/release/orla_ffi.wasm"))
+}
+
 /// Runs a bridge's own runner and says what it said. The runners print
 /// a line for every thing they checked and end with `RESULT: ok`.
 fn passed(mut command: Command, what: &str, marker: &str) {
@@ -79,7 +109,20 @@ fn the_web_bridge_passes_its_own_test() {
         .arg(env!("CARGO_BIN_EXE_orla"))
         .arg("--chrome")
         .arg(chrome);
-    passed(command, "the web bridge", "voxel: a click places a voxel");
+    match page_module() {
+        Some(module) => {
+            command.arg("--wasm").arg(module);
+            passed(
+                command,
+                "the web bridge",
+                "text in the page: a file handed in again is read",
+            );
+        }
+        None => {
+            eprintln!("in the page: skipped, no wasm32-unknown-unknown target");
+            passed(command, "the web bridge", "voxel: a click places a voxel");
+        }
+    }
 }
 
 #[test]

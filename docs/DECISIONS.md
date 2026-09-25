@@ -482,11 +482,42 @@ browser) is a separate step, with its own evidence.
 
 **Where.** [`later.rs`](../crates/core/runtime/src/later.rs) and
 `set_background` in the runtime,
-[`paths.rs`](../crates/interface/session/src/paths.rs) in the session,
+[`store.rs`](../crates/interface/session/src/store.rs) in the session,
 `stdin_into` in the protocol's transport. Held by the example replays,
 run under `wasmtime` on the interpreter.
 
 **What would change it.** WebAssembly threads (`wasm32-wasip1-threads`),
 which would bring back the thread where it can be had, with nothing
 else to change.
+
+## A session's documents are wherever its caller keeps them
+
+A session reads its scene, the documents the scene uses, the files its
+inputs name, and writes what its outputs and its requests write, all
+through one `Store`: the disk, or the files its caller handed in and
+may hand in again. The C ABI opens a session on files handed in, and a
+page that runs Orla as WebAssembly, with no disk at all, does exactly
+that. Where a machine has no clock, a page's, nothing is timed and
+history is not dated.
+
+**Why.** Source resolution belongs to the caller or the file loader
+(AGENTS.md); the session had it by reading the disk wherever it needed
+a file, which is the one thing a page does not have. A store is the
+boundary that was always there, made explicit: what `use` reaches,
+what a package holds, when a document changed, and where a write lands
+are the same questions in memory as on disk, answered once. A file
+handed in again is a file changed on disk, read at the next sync, so
+hot reload is the same act in a page.
+
+**Where.** [`store.rs`](../crates/interface/session/src/store.rs) in
+the session; `orla_files`, `orla_files_put` and `orla_open_files` in
+the [C ABI](../crates/interface/ffi/include/orla.h);
+[`clock.rs`](../crates/core/runtime/src/clock.rs) in the runtime;
+`OrlaInPage` in the web bridge. Held by the ABI's test (a scene from
+paths no disk has, a Kernel put again) and the web bridge's, which runs
+the text example in a headless Chrome in the page.
+
+**What would change it.** A page that must see files change without
+being told (a folder the person edits live): the page would watch and
+hand them in again, and the store would not change.
 

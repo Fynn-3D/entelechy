@@ -273,3 +273,81 @@ fn serde_json_string(text: &str) -> String {
     out.push('"');
     out
 }
+
+/// A scene opened on files handed in reads no disk: its document and
+/// the file a `use` reaches come from what was put, by the paths they
+/// were put at. A file put again after
+/// the session opened is read by the next evaluate, as a file changed on
+/// disk is.
+#[test]
+fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
+    let put = |files: *mut orla_ffi::OrlaFiles, path: &str, bytes: &[u8]| {
+        let path = c(path);
+        let done =
+            unsafe { orla_ffi::orla_files_put(files, path.as_ptr(), bytes.as_ptr(), bytes.len()) };
+        assert_eq!(done, 0);
+    };
+    let back = |colour: &str| {
+        format!(
+            "use \"kernels/\";\nnode back: fill.flat@1 {{ domain = vec2(4, 2); }}\noutput result <- back.result;\n// {colour}\n"
+        )
+    };
+    let kernel = |colour: &str| {
+        format!(
+            "kernel fill.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4({colour}, 1.0); }} }}\n"
+        )
+    };
+    let files = orla_ffi::orla_files();
+    // Paths no disk has: nothing here may be read from one.
+    put(files, "nowhere/scene.osn", back("first").as_bytes());
+    put(
+        files,
+        "nowhere/kernels/fill.orla",
+        kernel("0.2, 0.4, 0.6").as_bytes(),
+    );
+    let session = unsafe {
+        orla_ffi::orla_open_files(files, c("nowhere/scene.osn").as_ptr(), c("cpu").as_ptr())
+    };
+    assert!(!session.is_null(), "{}", unsafe {
+        str_of(orla_ffi::orla_open_error())
+    });
+    let picture = |session: *mut orla_ffi::OrlaSession| {
+        assert_eq!(
+            unsafe { orla_ffi::orla_evaluate(session, std::ptr::null()) },
+            0,
+            "{}",
+            unsafe { str_of(orla_ffi::orla_error(session)) }
+        );
+        let mut field = OrlaField {
+            words: std::ptr::null(),
+            width: 0,
+            height: 0,
+            depth: 0,
+            count: 0,
+            stride: 0,
+            shape: 0,
+            pixels: 0,
+            schema: std::ptr::null(),
+        };
+        assert_eq!(
+            unsafe { orla_ffi::orla_output(session, std::ptr::null(), &mut field) },
+            0
+        );
+        pixel(&field, 1, 1)
+    };
+    assert!(near(picture(session), [0.2, 0.4, 0.6]));
+    // The caller's hold goes; the session keeps its own, and a Kernel's
+    // file put again before that is read by the next evaluate.
+    put(
+        files,
+        "nowhere/kernels/fill.orla",
+        kernel("0.7, 0.1, 0.3").as_bytes(),
+    );
+    unsafe { orla_ffi::orla_files_free(files) };
+    assert!(near(picture(session), [0.7, 0.1, 0.3]));
+    unsafe { orla_ffi::orla_close(session) };
+    // Room in Orla's memory, as a page asks for it, and given back.
+    let room = orla_ffi::orla_alloc(64);
+    assert!(!room.is_null());
+    unsafe { orla_ffi::orla_free(room, 64) };
+}

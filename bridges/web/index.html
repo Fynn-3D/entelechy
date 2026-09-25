@@ -7,7 +7,10 @@
   :root { color-scheme: dark; }
   body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #15161a; color: #d8dae0; display: grid; grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr; height: 100vh; }
   header { grid-column: 1 / 3; display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #2a2c33; }
-  header input { width: 200px; }
+  header input[type=text] { width: 200px; }
+  header input[type=file] { display: none; }
+  header .sep { width: 1px; align-self: stretch; background: #2a2c33; margin: 0 4px; }
+  header label.pick { cursor: pointer; background: #23252c; border: 1px solid #3a3d47; border-radius: 4px; padding: 4px 8px; }
   #status { color: #9a9ea8; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   main { position: relative; min-width: 0; min-height: 0; }
   canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
@@ -29,6 +32,12 @@
 <header>
   <label>Session <input id="url" type="text" value="ws://127.0.0.1:7788" spellcheck="false"></label>
   <button id="connect">Connect</button>
+  <span class="sep"></span>
+  <label class="pick" title="Orla in this page: add the folders a scene reads, as the repository has them (examples, packages)">Add folder<input id="folders" type="file" webkitdirectory multiple></label>
+  <label class="pick" title="orla_ffi.wasm, from cargo build --release -p orla-ffi --target wasm32-unknown-unknown; found by itself when the page is served beside the repository">Module<input id="module" type="file" accept=".wasm"></label>
+  <select id="scenes" disabled></select>
+  <button id="here" disabled>Open here</button>
+  <span class="sep"></span>
   <button id="run" disabled>Run</button>
   <button id="reset" disabled title="Forget committed state (F5 in the Player)">Reset state</button>
   <span id="status">not connected</span>
@@ -57,7 +66,7 @@
 </aside>
 <script src="orla.js"></script>
 <script>
-const { OrlaClient, Driver } = Orla;
+const { OrlaClient, OrlaInPage, Driver } = Orla;
 
 const $ = (id) => document.getElementById(id);
 const status = (text) => { $("status").textContent = text; };
@@ -131,23 +140,94 @@ const showParams = async () => {
   }
 };
 
+// A session, over a socket or in the page, driven the same way.
+const attach = async (opened) => {
+  if (driver) driver.stop();
+  if (client && client !== opened) client.close();
+  client = opened;
+  client.onclose = () => { status("session closed"); enable(false); if (driver) driver.stop(); };
+  const about = await client.call("status");
+  status(`${about.backend}: ${about.scene}`);
+  driver = new Driver(client, canvas);
+  driver.onframe = (report, millis) => {
+    const ran = report.executed.length ? report.executed.join(" ") : "nothing ran";
+    status(`${millis.toFixed(0)} ms  ${driver.frame.width}x${driver.frame.height}  ${ran}`);
+  };
+  driver.onerror = (error) => { status(`frame: ${error.message}`); $("run").textContent = "Run"; };
+  $("run").textContent = "Run";
+  enable(true);
+  await showKernels();
+  await showParams();
+  await driver.step();
+};
+
 $("connect").onclick = async () => {
   try {
-    if (client) client.close();
-    client = await OrlaClient.open($("url").value);
-    client.onclose = () => { status("connection closed"); enable(false); if (driver) driver.stop(); };
-    const about = await client.call("status");
-    status(`${about.backend}: ${about.scene}`);
-    driver = new Driver(client, canvas);
-    driver.onframe = (report, millis) => {
-      const ran = report.executed.length ? report.executed.join(" ") : "nothing ran";
-      status(`${millis.toFixed(0)} ms  ${driver.frame.width}x${driver.frame.height}  ${ran}`);
-    };
-    driver.onerror = (error) => { status(`frame: ${error.message}`); $("run").textContent = "Run"; };
-    enable(true);
-    await showKernels();
-    await showParams();
-    await driver.step();
+    await attach(await OrlaClient.open($("url").value));
+  } catch (error) {
+    status(error.message);
+  }
+};
+
+// Orla in the page. The folders added are its documents, by the paths
+// they have under the folder picked, so `examples` and `packages` picked
+// one after the other keep the repository's `../../packages/...`.
+const picked = new Map();
+const skipped = (path) => path.split("/").some((part) => part.startsWith(".") || part === "target" || part === "node_modules");
+const listScenes = () => {
+  const scenes = [...picked.keys()].filter((path) => path.endsWith(".osn") && !path.endsWith("/package.osn")).sort();
+  const select = $("scenes");
+  select.innerHTML = "";
+  for (const path of scenes) {
+    const option = document.createElement("option");
+    option.value = option.textContent = path;
+    select.appendChild(option);
+  }
+  select.disabled = $("here").disabled = scenes.length === 0;
+};
+$("folders").onchange = (event) => {
+  for (const file of event.target.files) {
+    if (!skipped(file.webkitRelativePath)) picked.set(file.webkitRelativePath, file);
+  }
+  event.target.value = "";
+  listScenes();
+  status(`${picked.size} files to hand in`);
+};
+
+// The module: the one picked, else beside the page, else where the
+// repository builds it.
+const moduleBytes = async () => {
+  const chosen = $("module").files[0];
+  if (chosen) return chosen.arrayBuffer();
+  for (const url of ["orla_ffi.wasm", "../../target/wasm32-unknown-unknown/release/orla_ffi.wasm"]) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return response.arrayBuffer();
+    } catch (error) {
+      // A page opened from a file fetches nothing; the module is picked.
+    }
+  }
+  throw new Error("no orla_ffi.wasm: pick it with Module");
+};
+
+/// Opens `scene` in the page over `files`, [path, bytes] pairs; what
+/// Open here does with the folders added, and what a test calls.
+const openInPage = async (bytes, files, scene) => {
+  const orla = await OrlaInPage.load(bytes);
+  for (const [path, data] of files) orla.put(path, data);
+  orla.open(scene);
+  await attach(orla);
+  return orla;
+};
+globalThis.openInPage = openInPage;
+
+$("here").onclick = async () => {
+  try {
+    status("loading Orla into the page");
+    const files = await Promise.all(
+      [...picked].map(async ([path, file]) => [path, new Uint8Array(await file.arrayBuffer())]),
+    );
+    await openInPage(await moduleBytes(), files, $("scenes").value);
   } catch (error) {
     status(error.message);
   }

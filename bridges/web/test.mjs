@@ -1,14 +1,18 @@
 // Runs the bridge's test page headless: serves the text and voxel examples,
-// opens test.html in a headless Chrome over the DevTools protocol, waits
-// for its RESULT line, prints the page's log, and exits 0 when it passed.
-// Node 22 or later (for its WebSocket) and a Chrome; nothing installed.
+// serves the repository's files to the page over HTTP (for Orla in the
+// page, when `--wasm` names a built `orla_ffi.wasm`), opens test.html in a
+// headless Chrome over the DevTools protocol, waits for its RESULT line,
+// prints the page's log, and exits 0 when it passed. Node 22 or later
+// (for its WebSocket) and a Chrome; nothing installed.
 //
 //   node bridges/web/test.mjs [--orla target/release/orla] [--chrome <path>]
+//                             [--wasm target/wasm32-unknown-unknown/release/orla_ffi.wasm]
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +45,35 @@ function serve(scene, backend) {
     });
     child.on("exit", (code) => reject(new Error(`${scene} exited with ${code}: ${text}`)));
   });
+}
+
+/// Serves the repository's files, read only, on a free port of this
+/// machine, with `/list?roots=a,b` answering every file under them; the
+/// page fetches Orla and the documents it hands in from here.
+function files() {
+  const list = (dir) =>
+    readdirSync(dir).flatMap((name) => {
+      if (name.startsWith(".")) return [];
+      const path = join(dir, name);
+      return statSync(path).isDirectory() ? list(path) : [relative(root, path).split(sep).join("/")];
+    });
+  const server = createServer((request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (request.method !== "GET") return response.writeHead(405).end();
+    if (url.pathname === "/list") {
+      const roots = (url.searchParams.get("roots") || "").split(",").filter(Boolean);
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end(JSON.stringify(roots.flatMap((dir) => list(resolve(root, dir)))));
+    }
+    const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
+    if (!path.startsWith(root + sep) || !existsSync(path) || statSync(path).isDirectory()) {
+      return response.writeHead(404).end();
+    }
+    const type = path.endsWith(".html") ? "text/html" : path.endsWith(".js") ? "text/javascript" : path.endsWith(".wasm") ? "application/wasm" : "application/octet-stream";
+    response.writeHead(200, { "content-type": type });
+    response.end(readFileSync(path));
+  });
+  return new Promise((resolveServer) => server.listen(0, "127.0.0.1", () => resolveServer(server)));
 }
 
 /// Launches Chrome headless with remote debugging and resolves with the
@@ -104,6 +137,7 @@ class DevTools {
 const sleep = (millis) => new Promise((done) => setTimeout(done, millis));
 
 const children = [];
+const closers = [];
 const profile = mkdtempSync(join(tmpdir(), "orla-web-"));
 let status = 1;
 try {
@@ -115,11 +149,18 @@ try {
   const browser = await launch(profile);
   children.push(browser.child);
   const devtools = await DevTools.open(browser.url);
-  const page = `${pathToFileURL(join(here, "test.html")).href}?text=${text.port}&voxel=${voxel.port}`;
+  const served = await files();
+  closers.push(() => served.close());
+  const origin = `http://127.0.0.1:${served.address().port}`;
+  const wasm = option("--wasm", "target/wasm32-unknown-unknown/release/orla_ffi.wasm");
+  const inPage = existsSync(resolve(root, wasm));
+  if (!inPage) console.log(`in the page: skipped, no ${wasm}`);
+  const wasmQuery = inPage ? `&wasm=${encodeURIComponent(relative(root, resolve(root, wasm)).split(sep).join("/"))}` : "";
+  const page = `${origin}/bridges/web/test.html?text=${text.port}&voxel=${voxel.port}${wasmQuery}`;
   const { targetId } = await devtools.send("Target.createTarget", { url: page });
   const { sessionId } = await devtools.send("Target.attachToTarget", { targetId, flatten: true });
   await devtools.send("Runtime.enable", {}, sessionId);
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 60_000;
   let log = "";
   while (Date.now() < deadline) {
     await sleep(250);
@@ -159,6 +200,26 @@ try {
     console.log(`index.html: ${ok ? "connected, framed, and loaded a Kernel" : `status "${page}", ${kernels} kernels, loaded ${loaded}`}`);
     if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: index.html");
   }
+  // The page again, served, with Orla opened in it over the text
+  // example's files: the status line frames, the Kernels list.
+  if (log.includes("RESULT: ok") && inPage) {
+    const created = await devtools.send("Target.createTarget", { url: `${origin}/bridges/web/index.html` });
+    const attached = await devtools.send("Target.attachToTarget", { targetId: created.targetId, flatten: true });
+    await devtools.send("Runtime.enable", {}, attached.sessionId);
+    const run = (expression) =>
+      devtools.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, attached.sessionId).then((r) => r.result.value);
+    await sleep(500);
+    const opened = await run(`(async () => {
+      const bytes = async (path) => new Uint8Array(await (await fetch("/" + path)).arrayBuffer());
+      const list = await (await fetch("/list?roots=examples/text,packages")).json();
+      const files = await Promise.all(list.map(async (path) => [path, await bytes(path)]));
+      await openInPage(await bytes(${JSON.stringify(relative(root, resolve(root, wasm)).split(sep).join("/"))}), files, "examples/text/scene.osn");
+      return document.getElementById("status").textContent + " | " + document.getElementById("kernels").options.length;
+    })().catch((error) => "failed: " + error.message)`);
+    const ok = / ms .*\| [1-9]/.test(opened);
+    console.log(`index.html in the page: ${ok ? "opened, framed, and listed the Kernels" : opened}`);
+    if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: index.html in the page");
+  }
   for (const problem of devtools.problems) console.log(`page: ${problem}`);
   if (!log.includes("RESULT:")) console.log("RESULT: timed out");
   status = log.includes("RESULT: ok") ? 0 : 1;
@@ -172,6 +233,7 @@ try {
 } catch (error) {
   console.error(`error: ${error.message}`);
 } finally {
+  for (const close of closers) close();
   await Promise.all(
     children.map(
       (child) =>

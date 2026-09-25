@@ -33,8 +33,12 @@ fn one_declaration_written_in_two_files_is_one() {
             ),
         ],
     );
-    let (structs, _, _) =
-        declarations_for(&dir, &uses("use \"a.orla\";\nuse \"b.orla\";")).unwrap();
+    let (structs, _, _) = declarations_for(
+        &orla_session::Disk,
+        &dir,
+        &uses("use \"a.orla\";\nuse \"b.orla\";"),
+    )
+    .unwrap();
     assert_eq!(structs.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -48,7 +52,12 @@ fn two_declarations_of_one_name_are_refused() {
             ("b.orla", "struct Surface { depth: Float; }\n"),
         ],
     );
-    let error = declarations_for(&dir, &uses("use \"a.orla\";\nuse \"b.orla\";")).unwrap_err();
+    let error = declarations_for(
+        &orla_session::Disk,
+        &dir,
+        &uses("use \"a.orla\";\nuse \"b.orla\";"),
+    )
+    .unwrap_err();
     assert!(error.contains("declared differently"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }

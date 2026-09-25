@@ -19,6 +19,7 @@ Verified surface, as of `main`:
 | --- | --- |
 | macOS, Apple M4, Metal | every round |
 | WebAssembly under WASI (`wasmtime`), the interpreter | the example replays, `serve` on standard input |
+| A page: Orla as WebAssembly in headless Chrome, the interpreter, files handed in | the web bridge's test, from `cargo test --workspace` |
 | Interpreter, JIT, GPU | `examples/*/tests/*.replay` on all three |
 | 36 language features × 7 execution forms (the modes, and a map of several outputs), and 8 narrow encodings read and written | `crates/backends/conformance`, JIT and GPU against the interpreter |
 | 8 features of `Double` and `Long` × 6 modes; 5 of `Long` alone in maps and reductions | the same: the JIT against the interpreter, the GPU for `Long` |
@@ -48,10 +49,12 @@ done
 
 ## Next
 
-Open: the user has not chosen the next round. WebAssembly's first step
-is done (WASI, the interpreter). Pending their word: a browser
-(`wasm32-unknown-unknown`: sources handed in rather than read from
-disk, WebGPU, whose device answers asynchronously), a WebAssembly
-backend (IR compiled to WebAssembly, the JIT's place in a browser), or
-a second native platform (Vulkan or DX12, Linux or Windows; needs the
-CI workflow run by hand). Ask before starting any.
+Open: the user has not chosen the next round. Orla runs in a page on
+the interpreter, its documents handed in. The recommended next step is
+the GPU in a page: WebGPU answers asynchronously, and the GPU backend
+blocks on its device (pollster) wherever it reads back, so its
+readbacks and `materialize` must stop blocking; that touches the
+`Backend` boundary and wants a design agreed first. After it, a
+WebAssembly backend (IR compiled to WebAssembly, the JIT's place in a
+page), or a second native platform (Vulkan or DX12, Linux or Windows;
+needs the CI workflow run by hand). Ask before starting any.

@@ -2,13 +2,15 @@
 //! `.orla`, a package found beside the document or by name in
 //! `ORLA_PACKAGES`), the declarations a document inherits through its
 //! `use`s, and where a name a diagnostic could not find is declared.
-//! It reads files and holds nothing; the session and the command line
-//! both ask it.
+//! It reads files through the store it is handed and holds nothing; the
+//! session and the command line both ask it.
 
 use std::path::{Path, PathBuf};
 
 use orla_language::{Document, Kernel};
 use orla_runtime::KernelId;
+
+use crate::store::Store;
 
 /// The format of an `.orlapkg` archive and of a package's manifest.
 pub const PACKAGE_VERSION: u32 = 1;
@@ -17,31 +19,32 @@ pub const PACKAGE_VERSION: u32 = 1;
 /// a package, a directory with a `package.osn` (found beside the
 /// document, or by name in the directories `ORLA_PACKAGES` lists),
 /// whose manifest's own `use`s are followed once its versions fit.
-pub(crate) fn expand_use(path: &Path, trailing_slash: bool) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn expand_use(
+    store: &dyn Store,
+    path: &Path,
+    trailing_slash: bool,
+) -> Result<Vec<PathBuf>, String> {
     // One file, one path: a Kernel reached by two spellings (a scene's
     // `use` of a package and its preset's `use "../kernels/"`, say) is
     // owned by one document, not published twice.
-    let canonical = |file: PathBuf| crate::paths::canonical(&file).unwrap_or(file);
-    let path = resolve_package(path);
+    let canonical = |file: PathBuf| store.canonical(&file).unwrap_or(file);
+    let path = resolve_package(store, path);
     // A `use` written inside a package, reached by the package's name:
     // the way through it is the same, wherever the package itself is.
-    let path = match path.exists() {
+    let path = match store.exists(&path) {
         true => path,
-        false => in_package(&path).unwrap_or(path),
+        false => in_package(store, &path).unwrap_or(path),
     };
-    if path.join("package.osn").is_file() {
-        return package_files(&path).map(|files| files.into_iter().map(canonical).collect());
+    if store.is_file(&path.join("package.osn")) {
+        return package_files(store, &path).map(|files| files.into_iter().map(canonical).collect());
     }
-    if trailing_slash || path.is_dir() {
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&path)
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .map(|entry| entry.path())
-                    .filter(|path| path.extension().is_some_and(|ext| ext == "orla"))
-                    .collect()
-            })
-            .unwrap_or_default();
+    if trailing_slash || store.is_dir(&path) {
+        let mut files: Vec<PathBuf> = store
+            .list(&path)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|ext| ext == "orla"))
+            .collect();
         files.sort();
         Ok(files.into_iter().map(canonical).collect())
     } else {
@@ -53,11 +56,11 @@ pub(crate) fn expand_use(path: &Path, trailing_slash: bool) -> Result<Vec<PathBu
 /// is none and the path runs through a package's name, the file inside
 /// the package `ORLA_PACKAGES` finds. A preset is reached the way the
 /// package that holds it is.
-pub fn read_document(path: &Path) -> Result<String, String> {
-    match std::fs::read_to_string(path) {
+pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
+    match store.read_text(path) {
         Ok(text) => Ok(text),
-        Err(missing) => match in_package(path) {
-            Some(inside) => std::fs::read_to_string(inside).map_err(|error| error.to_string()),
+        Err(missing) => match in_package(store, path) {
+            Some(inside) => store.read_text(&inside).map_err(|error| error.to_string()),
             None => Err(missing.to_string()),
         },
     }
@@ -66,16 +69,17 @@ pub fn read_document(path: &Path) -> Result<String, String> {
 /// Whether `path` is inside a package: a directory above it that ends
 /// in `.orlapkg` and holds a `package.osn`. What a package ships, its
 /// font or its meshes, is there to be read by whatever uses it.
-pub(crate) fn in_a_package(path: &Path) -> bool {
+pub(crate) fn in_a_package(store: &dyn Store, path: &Path) -> bool {
     path.ancestors().skip(1).any(|dir| {
-        dir.extension().is_some_and(|ext| ext == "orlapkg") && dir.join("package.osn").is_file()
+        dir.extension().is_some_and(|ext| ext == "orlapkg")
+            && store.is_file(&dir.join("package.osn"))
     })
 }
 
 /// A path whose first part names a package: `picture.orlapkg/graphs/x.osn`
 /// where the package is one `ORLA_PACKAGES` lists. `None` when no part of
 /// it names a package that is there.
-fn in_package(path: &Path) -> Option<PathBuf> {
+fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     let mut parts = path.components();
     let mut rest = PathBuf::new();
     // The package's name is the last part that ends in `.orlapkg`; what
@@ -91,15 +95,15 @@ fn in_package(path: &Path) -> Option<PathBuf> {
         }
     }
     let name = name?;
-    let root = resolve_package(&name);
+    let root = resolve_package(store, &name);
     let inside = root.join(rest);
-    inside.exists().then_some(inside)
+    store.exists(&inside).then_some(inside)
 }
 
 /// A `use` that names nothing beside the document is looked for by its
 /// name in each directory of `ORLA_PACKAGES`, `:`-separated.
-fn resolve_package(path: &Path) -> PathBuf {
-    if path.exists() {
+fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
+    if store.exists(path) {
         return path.to_path_buf();
     }
     let Some(name) = path.file_name() else {
@@ -110,7 +114,7 @@ fn resolve_package(path: &Path) -> PathBuf {
     };
     for dir in std::env::split_paths(&dirs) {
         let candidate = dir.join(name);
-        if candidate.join("package.osn").is_file() {
+        if store.is_file(&candidate.join("package.osn")) {
             return candidate;
         }
     }
@@ -119,34 +123,39 @@ fn resolve_package(path: &Path) -> PathBuf {
 
 /// The Kernel files a package brings in: what its manifest uses, once
 /// the manifest's versions fit this Orla.
-fn package_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+fn package_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
     let manifest = dir.join("package.osn");
-    let declared = package_manifest(&manifest)?;
-    let text =
-        std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let declared = package_manifest(store, &manifest)?;
+    let text = store
+        .read_text(&manifest)
+        .map_err(|e| format!("{}: {e}", manifest.display()))?;
     let document =
         orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", manifest.display()))?;
     let mut files = Vec::new();
     for item in &document.uses {
         let path = dir.join(&item.path.value);
-        if path.join("package.osn").is_file()
-            && crate::paths::canonical(&path).ok() == crate::paths::canonical(dir).ok()
+        if store.is_file(&path.join("package.osn"))
+            && store.canonical(&path).ok() == store.canonical(dir).ok()
         {
             return Err(format!(
                 "{}: a package cannot use itself",
                 declared.id.value
             ));
         }
-        files.extend(expand_use(&path, item.path.value.ends_with('/'))?);
+        files.extend(expand_use(store, &path, item.path.value.ends_with('/'))?);
     }
     Ok(files)
 }
 
 /// A package's manifest, checked: it declares a package, and needs no
 /// newer language or IR than this Orla has.
-pub fn package_manifest(manifest: &Path) -> Result<orla_language::PackageDecl, String> {
-    let text =
-        std::fs::read_to_string(manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+pub fn package_manifest(
+    store: &dyn Store,
+    manifest: &Path,
+) -> Result<orla_language::PackageDecl, String> {
+    let text = store
+        .read_text(manifest)
+        .map_err(|e| format!("{}: {e}", manifest.display()))?;
     let document =
         orla_language::parse_document(&text).map_err(|e| format!("{}:{e}", manifest.display()))?;
     let Some(declared) = document.package else {
@@ -184,8 +193,13 @@ pub type Declarations = (
 
 /// Every document a `use` list reaches, recursively, each once, in the
 /// order reached: what a check compiles beyond the file it was given.
-pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<PathBuf>, String> {
+pub fn used_documents(
+    store: &dyn Store,
+    base: &Path,
+    uses: &[orla_language::Use],
+) -> Result<Vec<PathBuf>, String> {
     fn gather(
+        store: &dyn Store,
         base: &Path,
         uses: &[orla_language::Use],
         visited: &mut std::collections::BTreeSet<PathBuf>,
@@ -193,12 +207,13 @@ pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<Pa
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
-            for file in expand_use(&path, item.path.value.ends_with('/'))? {
-                let key = crate::paths::canonical(&file).unwrap_or_else(|_| file.clone());
+            for file in expand_use(store, &path, item.path.value.ends_with('/'))? {
+                let key = store.canonical(&file).unwrap_or_else(|_| file.clone());
                 if !visited.insert(key) {
                     continue;
                 }
-                let text = std::fs::read_to_string(&file)
+                let text = store
+                    .read_text(&file)
                     .map_err(|e| format!("{}: {e}", file.display()))?;
                 let document = orla_language::parse_document(&text)
                     .map_err(|e| format!("{}:{e}", file.display()))?;
@@ -206,14 +221,20 @@ pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<Pa
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
-                gather(&dir, &document.uses, visited, out)?;
+                gather(store, &dir, &document.uses, visited, out)?;
                 out.push(file);
             }
         }
         Ok(())
     }
     let mut out = Vec::new();
-    gather(base, uses, &mut std::collections::BTreeSet::new(), &mut out)?;
+    gather(
+        store,
+        base,
+        uses,
+        &mut std::collections::BTreeSet::new(),
+        &mut out,
+    )?;
     Ok(out)
 }
 
@@ -221,20 +242,26 @@ pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<Pa
 /// the used files and directories and, recursively, what they use. The
 /// same declaration reached twice is one; two different declarations of
 /// one name are refused.
-pub fn declarations_for(base: &Path, uses: &[orla_language::Use]) -> Result<Declarations, String> {
-    declarations_within(None, base, uses)
+pub fn declarations_for(
+    store: &dyn Store,
+    base: &Path,
+    uses: &[orla_language::Use],
+) -> Result<Declarations, String> {
+    declarations_within(store, None, base, uses)
 }
 
 /// The declarations a document at `origin` inherits from what it uses.
 /// Naming the origin is what lets a `use` that comes back to it be
 /// reported as the cycle it is rather than as a name declared twice.
 pub fn declarations_within(
+    store: &dyn Store,
     origin: Option<&Path>,
     base: &Path,
     uses: &[orla_language::Use],
 ) -> Result<Declarations, String> {
     #[allow(clippy::too_many_arguments)]
     fn gather(
+        store: &dyn Store,
         base: &Path,
         uses: &[orla_language::Use],
         visited: &mut std::collections::BTreeSet<PathBuf>,
@@ -245,8 +272,8 @@ pub fn declarations_within(
     ) -> Result<(), String> {
         for item in uses {
             let path = base.join(&item.path.value);
-            for file in expand_use(&path, item.path.value.ends_with('/'))? {
-                let key = crate::paths::canonical(&file).unwrap_or_else(|_| file.clone());
+            for file in expand_use(store, &path, item.path.value.ends_with('/'))? {
+                let key = store.canonical(&file).unwrap_or_else(|_| file.clone());
                 if let Some(at) = stack.iter().position(|open| *open == key) {
                     let names: Vec<String> = stack[at..]
                         .iter()
@@ -270,7 +297,8 @@ pub fn declarations_within(
                     continue;
                 }
                 stack.push(key);
-                let text = std::fs::read_to_string(&file)
+                let text = store
+                    .read_text(&file)
                     .map_err(|e| format!("{}: {e}", file.display()))?;
                 let document = orla_language::parse_document(&text)
                     .map_err(|e| format!("{}:{e}", file.display()))?;
@@ -279,6 +307,7 @@ pub fn declarations_within(
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
                 let nested = gather(
+                    store,
                     &dir,
                     &document.uses,
                     visited,
@@ -351,10 +380,11 @@ pub fn declarations_within(
     }
     let mut visited = std::collections::BTreeSet::new();
     let mut stack: Vec<PathBuf> = origin
-        .map(|path| vec![crate::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf())])
+        .map(|path| vec![store.canonical(path).unwrap_or_else(|_| path.to_path_buf())])
         .unwrap_or_default();
     let (mut structs, mut types, mut functions) = (Vec::new(), Vec::new(), Vec::new());
     gather(
+        store,
         base,
         uses,
         &mut visited,
@@ -385,9 +415,13 @@ fn missing_name(message: &str) -> Option<String> {
 
 /// Where a name is declared, among the documents `search` names: the
 /// file, and whether it declares it as a function, a struct or a type.
-fn declared_in(name: &str, search: &[PathBuf]) -> Option<(PathBuf, &'static str)> {
+fn declared_in(
+    store: &dyn Store,
+    name: &str,
+    search: &[PathBuf],
+) -> Option<(PathBuf, &'static str)> {
     for path in search {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = store.read_text(path) else {
             continue;
         };
         let Ok(document) = orla_language::parse_document(&text) else {
@@ -412,10 +446,10 @@ fn declared_in(name: &str, search: &[PathBuf]) -> Option<(PathBuf, &'static str)
 }
 
 /// `path` as a `use` would spell it from `from`, when they share a root.
-fn relative_to(path: &Path, from: &Path) -> String {
+fn relative_to(store: &dyn Store, path: &Path, from: &Path) -> String {
     let (path, from) = (
-        crate::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf()),
-        crate::paths::canonical(from).unwrap_or_else(|_| from.to_path_buf()),
+        store.canonical(path).unwrap_or_else(|_| path.to_path_buf()),
+        store.canonical(from).unwrap_or_else(|_| from.to_path_buf()),
     );
     if let Ok(rest) = path.strip_prefix(&from) {
         return rest.display().to_string();
@@ -466,6 +500,7 @@ pub(crate) fn is_library(document: &Document) -> bool {
 /// file says what to write. `known` are the documents the caller reads
 /// already, and `root` the scene they belong to.
 pub(crate) fn located(
+    store: &dyn Store,
     error: crate::Diagnostic,
     document: &Path,
     root: &Path,
@@ -477,11 +512,13 @@ pub(crate) fn located(
     // What this document already uses is not the answer; every other
     // document the caller knows, and every `.orla` beside this one and
     // beside the scene, is where to look.
-    let used: Vec<PathBuf> = std::fs::read_to_string(document)
+    let used: Vec<PathBuf> = store
+        .read_text(document)
         .ok()
         .and_then(|text| orla_language::parse_document(&text).ok())
         .map(|parsed| {
             used_documents(
+                store,
                 document.parent().unwrap_or_else(|| Path::new(".")),
                 &parsed.uses,
             )
@@ -490,10 +527,9 @@ pub(crate) fn located(
         .unwrap_or_default();
     let mut search: Vec<PathBuf> = Vec::new();
     let siblings = |dir: &Path, search: &mut Vec<PathBuf>| {
-        if let Ok(entries) = std::fs::read_dir(dir) {
+        if let Ok(entries) = store.list(dir) {
             let mut files: Vec<PathBuf> = entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
+                .into_iter()
                 .filter(|path| path.extension().is_some_and(|ext| ext == "orla"))
                 .collect();
             files.sort();
@@ -517,10 +553,14 @@ pub(crate) fn located(
             && path.extension().is_some_and(|ext| ext == "orla")
     });
     search.dedup();
-    let Some((file, kind)) = declared_in(&name, &search) else {
+    let Some((file, kind)) = declared_in(store, &name, &search) else {
         return error;
     };
-    let spelling = relative_to(&file, document.parent().unwrap_or_else(|| Path::new(".")));
+    let spelling = relative_to(
+        store,
+        &file,
+        document.parent().unwrap_or_else(|| Path::new(".")),
+    );
     crate::Diagnostic {
         message: format!(
             "{}; {kind} `{name}` is declared in {spelling}, which this document does not use: `use \"{spelling}\";`",

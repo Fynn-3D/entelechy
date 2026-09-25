@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use orla_graph::Graph;
 use orla_runtime::{Runtime, Value};
@@ -15,11 +16,13 @@ use crate::sources::{
     declarations_for, declarations_key, declarations_within, expand_use, is_library, named_id,
     read_document,
 };
-use crate::stamp::{Stamp, stamp};
+use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
 /// A scene document and what was built from it.
 pub(crate) struct Scene {
+    /// Where the documents are.
+    store: Arc<dyn Store>,
     root: PathBuf,
     /// Libraries the caller adds to what the document uses.
     extra_uses: Vec<PathBuf>,
@@ -46,8 +49,9 @@ pub(crate) struct Scene {
 }
 
 impl Scene {
-    pub(crate) fn new(root: &Path, library: Option<&Path>) -> Self {
+    pub(crate) fn new(store: Arc<dyn Store>, root: &Path, library: Option<&Path>) -> Self {
         Self {
+            store,
             root: root.to_path_buf(),
             extra_uses: library.map(Path::to_path_buf).into_iter().collect(),
             stamp: None,
@@ -79,7 +83,7 @@ impl Scene {
             .map(|(path, _)| path)
             .chain(&self.extra_uses)
             .map(|path| {
-                if path.is_dir() {
+                if self.store.is_dir(path) {
                     path.clone()
                 } else {
                     beside(path)
@@ -89,6 +93,10 @@ impl Scene {
             .chain(self.sub_graphs.keys().map(|path| beside(path)))
             .chain(used)
             .collect()
+    }
+
+    pub(crate) fn store(&self) -> &Arc<dyn Store> {
+        &self.store
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -179,8 +187,10 @@ impl Scene {
         text: &str,
     ) -> Result<(orla_language::Document, orla_scene::Lowered), Diagnostic> {
         let document = orla_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
-        let mut loader = |path: &Path| read_document(path);
-        let mut declare = |base: &Path, uses: &[orla_language::Use]| declarations_for(base, uses);
+        let store = self.store.as_ref();
+        let mut loader = |path: &Path| read_document(store, path);
+        let mut declare =
+            |base: &Path, uses: &[orla_language::Use]| declarations_for(store, base, uses);
         let lowered = orla_scene::load_with_params(
             &document,
             text,
@@ -200,7 +210,8 @@ impl Scene {
     pub(crate) fn check(&self, text: &str) -> Result<(), Diagnostic> {
         let (mut document, lowered) = self.lower(text)?;
         let (structs, types, functions) =
-            declarations_for(&self.base(), &document.uses).map_err(Diagnostic::new)?;
+            declarations_for(self.store.as_ref(), &self.base(), &document.uses)
+                .map_err(Diagnostic::new)?;
         document.inherit(&structs, &types, &functions);
         let root_key = PathBuf::from(self.document_name());
         let inline = lowered
@@ -221,16 +232,16 @@ impl Scene {
     }
 
     fn sync_root(&mut self, kernels: &mut Kernels, runtime: &mut Runtime, events: &mut Vec<Event>) {
-        let current = stamp(&self.root);
+        let current = self.store.stamp(&self.root);
         let sub_graph_changed = self
             .sub_graphs
             .iter()
-            .any(|(path, loaded)| stamp(path) != *loaded);
+            .any(|(path, loaded)| self.store.stamp(path) != *loaded);
         if current == self.stamp && self.graph.is_some() && !sub_graph_changed {
             return;
         }
         self.stamp = current;
-        let text = match std::fs::read_to_string(&self.root) {
+        let text = match self.store.read_text(&self.root) {
             Ok(text) => text,
             Err(error) => {
                 events.push(Event::SceneRejected(Diagnostic::new(error.to_string())));
@@ -255,7 +266,7 @@ impl Scene {
         // The root's own top-level Kernels see the shared declarations too.
         let mut document = document;
         let mut declarations = String::new();
-        match declarations_for(&base, &document.uses) {
+        match declarations_for(self.store.as_ref(), &base, &document.uses) {
             Ok((structs, types, functions)) => {
                 declarations = declarations_key(&structs, &types, &functions);
                 self.structs = structs.iter().chain(&document.structs).cloned().collect();
@@ -299,7 +310,7 @@ impl Scene {
         }
         let mut sub_graphs = BTreeMap::new();
         for path in &lowered.documents {
-            sub_graphs.insert(path.clone(), stamp(path));
+            sub_graphs.insert(path.clone(), self.store.stamp(path));
             by_document.entry(path.clone()).or_default();
         }
         by_document.entry(root.clone()).or_default();
@@ -315,7 +326,11 @@ impl Scene {
             kernels.retire_document(&path, runtime, events);
         }
         for (path, defined) in by_document {
-            let current = if path == root { current } else { stamp(&path) };
+            let current = if path == root {
+                current
+            } else {
+                self.store.stamp(&path)
+            };
             let key = if path == root {
                 declarations.clone()
             } else {
@@ -325,14 +340,24 @@ impl Scene {
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
-                std::fs::read_to_string(&path)
+                self.store
+                    .read_text(&path)
                     .ok()
                     .and_then(|text| orla_language::parse_document(&text).ok())
-                    .and_then(|doc| declarations_for(&dir, &doc.uses).ok())
+                    .and_then(|doc| declarations_for(self.store.as_ref(), &dir, &doc.uses).ok())
                     .map(|(s, t, f)| declarations_key(&s, &t, &f))
                     .unwrap_or_default()
             };
-            kernels.publish_document(&path, current, defined, &key, &root, runtime, events);
+            kernels.publish_document(
+                self.store.as_ref(),
+                &path,
+                current,
+                defined,
+                &key,
+                &root,
+                runtime,
+                events,
+            );
         }
         self.sub_graphs = sub_graphs;
         self.uses = lowered.uses;
@@ -352,10 +377,11 @@ impl Scene {
         let mut changed = false;
         let mut wanted: Vec<PathBuf> = Vec::new();
         for (path, trailing_slash) in &self.uses {
-            wanted.extend(expand_use(path, *trailing_slash).unwrap_or_default());
+            wanted
+                .extend(expand_use(self.store.as_ref(), path, *trailing_slash).unwrap_or_default());
         }
         for path in &self.extra_uses {
-            wanted.extend(expand_use(path, false).unwrap_or_default());
+            wanted.extend(expand_use(self.store.as_ref(), path, false).unwrap_or_default());
         }
         wanted.retain(|path| *path != self.root && !self.sub_graphs.contains_key(path));
         wanted.sort();
@@ -371,12 +397,12 @@ impl Scene {
             kernels.retire_document(&path, runtime, events);
         }
         for path in wanted {
-            let current = stamp(&path);
+            let current = self.store.stamp(&path);
             if kernels.read_at(&path, current) {
                 continue;
             }
             changed = true;
-            let text = match std::fs::read_to_string(&path) {
+            let text = match self.store.read_text(&path) {
                 Ok(text) => text,
                 Err(error) => {
                     events.push(Event::Rejected {
@@ -415,20 +441,21 @@ impl Scene {
                 .unwrap_or_else(|| Path::new("."))
                 .to_path_buf();
             let mut document = document;
-            let declarations = match declarations_within(Some(&path), &dir, &document.uses) {
-                Ok((structs, types, functions)) => {
-                    document.inherit(&structs, &types, &functions);
-                    declarations_key(&structs, &types, &functions)
-                }
-                Err(error) => {
-                    events.push(Event::Rejected {
-                        path: path.clone(),
-                        error: Diagnostic::new(error),
-                    });
-                    kernels.mark_read(path, current);
-                    continue;
-                }
-            };
+            let declarations =
+                match declarations_within(self.store.as_ref(), Some(&path), &dir, &document.uses) {
+                    Ok((structs, types, functions)) => {
+                        document.inherit(&structs, &types, &functions);
+                        declarations_key(&structs, &types, &functions)
+                    }
+                    Err(error) => {
+                        events.push(Event::Rejected {
+                            path: path.clone(),
+                            error: Diagnostic::new(error),
+                        });
+                        kernels.mark_read(path, current);
+                        continue;
+                    }
+                };
             let mut defined = Vec::new();
             for kernel in &document.kernels {
                 match named_id(kernel) {
@@ -445,6 +472,7 @@ impl Scene {
             }
             let root = self.root.clone();
             kernels.publish_document(
+                self.store.as_ref(),
                 &path,
                 current,
                 defined,
@@ -477,7 +505,7 @@ impl Scene {
         let (mut structs, mut types, mut functions) = if document.uses.is_empty() {
             (Vec::new(), Vec::new(), Vec::new())
         } else {
-            declarations_for(base, &document.uses).map_err(Diagnostic::new)?
+            declarations_for(self.store.as_ref(), base, &document.uses).map_err(Diagnostic::new)?
         };
         // The scene's shared declarations come after the source's own,
         // and a name the source declares, at its top or inside its
@@ -511,8 +539,14 @@ impl Scene {
             }
         }
         document.inherit(&structs, &types, &functions);
-        let module = orla_compiler::compile_kernel(&document.kernels[0], None)
-            .map_err(|e| kernels.located(Diagnostic::from(&e), &self.root, &self.root))?;
+        let module = orla_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| {
+            kernels.located(
+                self.store.as_ref(),
+                Diagnostic::from(&e),
+                &self.root,
+                &self.root,
+            )
+        })?;
         runtime
             .prepare_module(module, source)
             .map_err(|e| Diagnostic::new(e.to_string()))

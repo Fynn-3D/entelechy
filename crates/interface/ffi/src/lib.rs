@@ -184,18 +184,32 @@ pub unsafe extern "C" fn orla_open(
     backend: *const c_char,
     library: *const c_char,
 ) -> *mut OrlaSession {
+    unsafe { open(None, scene, backend, library) }
+}
+
+/// Opens a scene over `store`, the disk when `None`.
+///
+/// # Safety
+/// As `orla_open`.
+unsafe fn open(
+    store: Option<std::sync::Arc<dyn orla_session::Store>>,
+    scene: *const c_char,
+    backend: *const c_char,
+    library: *const c_char,
+) -> *mut OrlaSession {
     let set_error = |message: String| {
         OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string(&message));
         std::ptr::null_mut()
     };
-    let opened = catch_unwind(|| {
+    let opened = catch_unwind(AssertUnwindSafe(|| {
         let Some(scene) = (unsafe { text(scene) }) else {
             return Err("orla_open needs a scene path".to_owned());
         };
         let backend = unsafe { text(backend) }.unwrap_or("jit");
         let library = unsafe { text(library) }.map(Path::new);
         let runtime = Session::runtime_for(backend, orla_session::Limits::default())?;
-        let mut session = Session::open_with(Path::new(scene), library, runtime);
+        let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk));
+        let mut session = Session::open_in(store, Path::new(scene), library, runtime);
         let events = session.sync();
         if session.graph().is_none() {
             let reason = events
@@ -209,7 +223,7 @@ pub unsafe extern "C" fn orla_open(
             return Err(reason);
         }
         Ok(session)
-    });
+    }));
     match opened {
         Ok(Ok(session)) => Box::into_raw(Box::new(OrlaSession {
             session,
@@ -221,6 +235,103 @@ pub unsafe extern "C" fn orla_open(
         })),
         Ok(Err(message)) => set_error(message),
         Err(_) => set_error("a panic inside Orla while opening".to_owned()),
+    }
+}
+
+/// Files handed in: a store in memory that a session opened on it reads
+/// instead of a disk. The caller keeps it and may put files after the
+/// session opened; the session reads them on its next evaluate.
+pub struct OrlaFiles {
+    files: std::sync::Arc<orla_session::Memory>,
+}
+
+/// A new, empty set of files.
+#[unsafe(no_mangle)]
+pub extern "C" fn orla_files() -> *mut OrlaFiles {
+    Box::into_raw(Box::new(OrlaFiles {
+        files: std::sync::Arc::default(),
+    }))
+}
+
+/// Puts a file's bytes at `path`, replacing what was there.
+///
+/// # Safety
+/// `files` is a pointer `orla_files` returned, not freed yet; `path` is a
+/// NUL-terminated string; `data` is NULL when `len` is 0, or points to
+/// `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orla_files_put(
+    files: *mut OrlaFiles,
+    path: *const c_char,
+    data: *const u8,
+    len: usize,
+) -> c_int {
+    let (Some(files), Some(path)) = (unsafe { files.as_ref() }, unsafe { text(path) }) else {
+        return -1;
+    };
+    let bytes = match (data.is_null(), len) {
+        (_, 0) => Vec::new(),
+        (true, _) => return -1,
+        (false, len) => unsafe { std::slice::from_raw_parts(data, len) }.to_vec(),
+    };
+    files.files.put(Path::new(path), bytes);
+    0
+}
+
+/// Lets go of the caller's hold on a set of files; a session opened on
+/// them keeps its own.
+///
+/// # Safety
+/// `files` is NULL or a pointer `orla_files` returned, not freed yet.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orla_files_free(files: *mut OrlaFiles) {
+    if !files.is_null() {
+        drop(unsafe { Box::from_raw(files) });
+    }
+}
+
+/// Opens a scene whose documents are `files`: as `orla_open`, with no
+/// disk read.
+///
+/// # Safety
+/// `files` is a pointer `orla_files` returned, not freed yet; `scene`
+/// and `backend` are NULL or NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orla_open_files(
+    files: *mut OrlaFiles,
+    scene: *const c_char,
+    backend: *const c_char,
+) -> *mut OrlaSession {
+    let Some(files) = (unsafe { files.as_ref() }) else {
+        OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string("orla_open_files needs files"));
+        return std::ptr::null_mut();
+    };
+    let store: std::sync::Arc<dyn orla_session::Store> = files.files.clone();
+    unsafe { open(Some(store), scene, backend, std::ptr::null()) }
+}
+
+/// Room for `size` bytes in Orla's memory, for a caller that shares no
+/// allocator with it (a page, where Orla is WebAssembly) to write a
+/// string or a file into; NULL when there is none.
+#[unsafe(no_mangle)]
+pub extern "C" fn orla_alloc(size: usize) -> *mut u8 {
+    let Ok(layout) = std::alloc::Layout::from_size_align(size.max(1), 8) else {
+        return std::ptr::null_mut();
+    };
+    unsafe { std::alloc::alloc(layout) }
+}
+
+/// Gives back what `orla_alloc` gave, with the size it was asked for.
+///
+/// # Safety
+/// `pointer` is NULL or what `orla_alloc(size)` returned, not freed yet.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orla_free(pointer: *mut u8, size: usize) {
+    if let (false, Ok(layout)) = (
+        pointer.is_null(),
+        std::alloc::Layout::from_size_align(size.max(1), 8),
+    ) {
+        unsafe { std::alloc::dealloc(pointer, layout) };
     }
 }
 

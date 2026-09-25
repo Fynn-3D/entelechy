@@ -7,12 +7,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use orla_graph::Report;
 use orla_runtime::{Handle, Runtime};
 
 use crate::Event;
+use crate::store::Store;
 
 /// The directories writes may land in, and what was last written.
 #[derive(Default)]
@@ -29,10 +30,11 @@ pub(crate) struct Writes {
 impl Writes {
     /// Allows writes into `dir` and anything under it. The directory
     /// must exist: an allowance names a place, it does not make one.
-    pub(crate) fn allow(&mut self, dir: &Path) -> Result<(), String> {
-        let resolved = crate::paths::canonical(dir)
+    pub(crate) fn allow(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
+        let resolved = store
+            .canonical(dir)
             .map_err(|e| format!("cannot allow writes into {}: {e}", dir.display()))?;
-        if !resolved.is_dir() {
+        if !store.is_dir(&resolved) {
             return Err(format!(
                 "cannot allow writes into {}: not a directory",
                 dir.display()
@@ -46,6 +48,7 @@ impl Writes {
     /// changed. Called once the evaluation has committed.
     pub(crate) fn after(
         &mut self,
+        store: &dyn Store,
         writes: &[orla_scene::Write],
         report: &Report,
         runtime: &mut Runtime,
@@ -67,7 +70,7 @@ impl Writes {
             {
                 continue;
             }
-            let outcome = self.place(&write.path).and_then(|target| {
+            let outcome = self.place(store, &write.path).and_then(|target| {
                 encode(runtime, handle, &write.path, write.bytes).map(|b| (target, b))
             });
             let (target, bytes) = match outcome {
@@ -82,15 +85,16 @@ impl Writes {
             // before it has written, the file as it was found.
             let there = match self.written.get(&write.path) {
                 Some((_, last)) => Some(*last),
-                None => std::fs::read(&target)
-                    .ok()
-                    .map(|found| self::digest(&found)),
+                None => store.read(&target).ok().map(|found| self::digest(&found)),
             };
             if there == Some(digest) {
                 self.written.insert(write.path.clone(), (handle, digest));
                 continue;
             }
-            match replace(&target, &bytes) {
+            match store
+                .write(&target, &bytes)
+                .map_err(|e| format!("{}: {e}", target.display()))
+            {
                 Ok(()) => {
                     self.written.insert(write.path.clone(), (handle, digest));
                     self.said.retain(|(path, _)| path != &write.path);
@@ -113,14 +117,14 @@ impl Writes {
     /// Where `path` lands, once it is known to be inside an allowed
     /// directory: `..` and links are followed before the test, so no
     /// spelling reaches past one.
-    pub(crate) fn place(&self, path: &Path) -> Result<PathBuf, String> {
+    pub(crate) fn place(&self, store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
         if self.allowed.is_empty() {
             return Err(format!(
                 "writing files is not allowed; run with `--allow file.write={}`",
                 path.parent().unwrap_or(Path::new(".")).display()
             ));
         }
-        let target = resolve(path)?;
+        let target = resolve(store, path)?;
         if !self.allowed.iter().any(|dir| target.starts_with(dir)) {
             return Err(format!(
                 "{} is outside every directory allowed with `--allow file.write`",
@@ -162,54 +166,22 @@ fn encode(
     })
 }
 
-/// A file replaced whole: written beside it, then renamed over it, so a
-/// reader, the scene's own input included, never sees half of it.
-fn replace(target: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = target.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    let name = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let beside = parent.join(format!(".{name}.writing"));
-    std::fs::write(&beside, bytes).map_err(|e| format!("{}: {e}", beside.display()))?;
-    std::fs::rename(&beside, target).map_err(|e| {
-        let _ = std::fs::remove_file(&beside);
-        format!("{}: {e}", target.display())
-    })
-}
-
-/// `path` made absolute with `.` and `..` taken away, and the longest
+/// `path` made whole with `.` and `..` taken away, and the longest
 /// part of it that exists resolved through its links.
-pub(crate) fn resolve(path: &Path) -> Result<PathBuf, String> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|e| e.to_string())?
-            .join(path)
-    };
-    let mut plain = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::ParentDir => {
-                plain.pop();
-            }
-            Component::CurDir => {}
-            other => plain.push(other),
-        }
-    }
+pub(crate) fn resolve(store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
+    let plain = store.whole(path);
     let mut existing = plain.as_path();
     let mut rest = Vec::new();
-    while !existing.exists() {
+    while !store.exists(existing) {
         let Some(parent) = existing.parent() else {
             break;
         };
         rest.push(existing.file_name().map(PathBuf::from).unwrap_or_default());
         existing = parent;
     }
-    let mut resolved =
-        crate::paths::canonical(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
+    let mut resolved = store
+        .canonical(existing)
+        .map_err(|e| format!("{}: {e}", existing.display()))?;
     for part in rest.iter().rev() {
         resolved.push(part);
     }

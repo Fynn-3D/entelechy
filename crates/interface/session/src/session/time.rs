@@ -223,8 +223,10 @@ impl Session {
                 .ok_or("the snapshot holds no scene to restore")?;
             // The document as it is on disk, which is what goes back.
             let root = self.scene.root().to_path_buf();
-            let before =
-                std::fs::read_to_string(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+            let before = self
+                .store()
+                .read_text(&root)
+                .map_err(|e| format!("{}: {e}", root.display()))?;
             if before != text {
                 self.check_scene(text)
                     .map_err(|e| format!("its scene does not load: {e}"))?;
@@ -297,13 +299,9 @@ impl Session {
     /// it writes in place before it answers; refused, it says why.
     pub(super) fn replace_scene(&mut self, text: &str) -> Result<(), String> {
         let root = self.scene.root().to_path_buf();
-        let beside = root.with_extension("osn.restoring");
-        std::fs::write(&beside, text)
-            .and_then(|()| std::fs::rename(&beside, &root))
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&beside);
-                format!("{}: {e}", root.display())
-            })?;
+        self.store()
+            .write(&root, text.as_bytes())
+            .map_err(|e| format!("{}: {e}", root.display()))?;
         let mut events = self.sync();
         // The scene's own Kernels, prepared off the thread where one ran
         // before, must stand before the world that runs in it does.

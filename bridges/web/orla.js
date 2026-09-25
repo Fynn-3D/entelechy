@@ -1,7 +1,8 @@
 // Orla's creation protocol from a browser. A client of the public
-// contract and nothing more: JSON lines as WebSocket text frames to a
+// contracts and nothing more: JSON lines as WebSocket text frames to a
 // session serving with `--listen`, the same lines Blender or a shell
-// would send on the socket. Nothing here knows how Orla is built.
+// would send on the socket; or the same lines answered in the page by
+// Orla built as WebAssembly, through its C ABI.
 //
 // A classic script, not a module, so a page opened from a file works:
 // browsers refuse module imports between file URLs. It defines `Orla`.
@@ -71,6 +72,104 @@ class OrlaClient {
 
   close() {
     this.socket.close();
+  }
+}
+
+/// Orla itself in the page: the session as WebAssembly (the C ABI,
+/// `orla_ffi.wasm` built for `wasm32-unknown-unknown`), its documents the
+/// files handed in, no disk and no server. It answers the same protocol
+/// lines a socket carries, through `orla_request`, so a Driver runs it as
+/// it runs a connection. The module imports nothing.
+class OrlaInPage {
+  constructor(exports) {
+    this.x = exports;
+    this.files = exports.orla_files();
+    this.session = 0;
+    this.onclose = null;
+    this.encoder = new TextEncoder();
+    this.decoder = new TextDecoder();
+  }
+
+  /// Instantiates the module from its bytes.
+  static async load(bytes) {
+    const { instance } = await WebAssembly.instantiate(bytes, {});
+    return new OrlaInPage(instance.exports);
+  }
+
+  memory() {
+    return new Uint8Array(this.x.memory.buffer);
+  }
+
+  /// `bytes` copied into Orla's memory for one call.
+  withBytes(bytes, use) {
+    const pointer = this.x.orla_alloc(bytes.length);
+    if (!pointer) throw new Error("Orla has no room for the call");
+    this.memory().set(bytes, pointer);
+    try {
+      return use(pointer, bytes.length);
+    } finally {
+      this.x.orla_free(pointer, bytes.length);
+    }
+  }
+
+  withText(text, use) {
+    return this.withBytes(this.encoder.encode(`${text}\0`), (pointer) => use(pointer));
+  }
+
+  text(pointer) {
+    const memory = this.memory();
+    let end = pointer;
+    while (memory[end]) end++;
+    return this.decoder.decode(memory.subarray(pointer, end));
+  }
+
+  /// Puts a file at `path` (`examples/text/scene.osn`), replacing what
+  /// was there; an open session reads the change when asked to `sync`,
+  /// as it reads a file changed on disk.
+  put(path, bytes) {
+    this.withText(path, (name) =>
+      this.withBytes(bytes, (data, length) => this.x.orla_files_put(this.files, name, data, length)),
+    );
+  }
+
+  /// Opens `scene`, a path among the files put, on the interpreter.
+  open(scene, backend = "cpu") {
+    if (this.session) this.x.orla_close(this.session);
+    this.session = this.withText(scene, (name) =>
+      this.withText(backend, (on) => this.x.orla_open_files(this.files, name, on)),
+    );
+    if (!this.session) throw new Error(this.text(this.x.orla_open_error()));
+  }
+
+  /// One request, answered in place; the same promise a connection's
+  /// `call` gives. A panic inside the module ends it, as a closed
+  /// connection ends a session.
+  call(op, fields = {}) {
+    if (!this.session) return Promise.reject(new Error("no scene is open"));
+    let response;
+    try {
+      const line = JSON.stringify({ op, ...fields });
+      response = JSON.parse(this.withText(line, (request) => this.text(this.x.orla_request(this.session, request))));
+    } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) {
+        this.session = 0;
+        if (this.onclose) this.onclose();
+      }
+      return Promise.reject(error);
+    }
+    if ("error" in response) {
+      const error = new Error(response.error.message);
+      error.line = response.error.line;
+      error.column = response.error.column;
+      return Promise.reject(error);
+    }
+    return Promise.resolve(response.ok);
+  }
+
+  close() {
+    if (this.session) this.x.orla_close(this.session);
+    this.session = 0;
+    if (this.onclose) this.onclose();
   }
 }
 
@@ -302,5 +401,5 @@ class Driver {
   }
 }
 
-globalThis.Orla = { OrlaClient, Driver, decodePpm, decodeWords, placement, bytesOf };
+globalThis.Orla = { OrlaClient, OrlaInPage, Driver, decodePpm, decodeWords, placement, bytesOf };
 })();

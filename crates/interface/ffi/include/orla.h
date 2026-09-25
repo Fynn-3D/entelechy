@@ -10,6 +10,7 @@
 #ifndef ORLA_H
 #define ORLA_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -75,6 +76,29 @@ const char *orla_version(void);
  * events. */
 OrlaSession *orla_open(const char *scene, const char *backend, const char *library);
 
+/* Files handed in: a store in memory a session reads instead of a disk,
+ * for a caller that has none (a page) or keeps its scenes inside itself.
+ * A path is its name with "." and ".." folded; a directory is whatever
+ * some file is under. */
+typedef struct OrlaFiles OrlaFiles;
+/* A new, empty set of files. */
+OrlaFiles *orla_files(void);
+/* Puts `len` bytes at `path`, replacing what was there. A session opened
+ * on these files reads the change on its next evaluate, as it reads a
+ * file changed on disk. Returns 0, or -1 for a NULL argument. */
+int orla_files_put(OrlaFiles *files, const char *path, const uint8_t *data, size_t len);
+/* Lets go of the caller's hold; a session opened on the files keeps its
+ * own. */
+void orla_files_free(OrlaFiles *files);
+/* Opens `scene`, a path among `files`, on `backend` as orla_open does,
+ * reading no disk. */
+OrlaSession *orla_open_files(OrlaFiles *files, const char *scene, const char *backend);
+/* Room for `size` bytes in Orla's memory, for a caller that shares no
+ * allocator with it (a page, where Orla is WebAssembly) to write a
+ * string or a file into before a call; NULL when there is none. */
+uint8_t *orla_alloc(size_t size);
+/* Gives back what orla_alloc gave, with the size it was asked for. */
+void orla_free(uint8_t *pointer, size_t size);
 /* Why the last orla_open on this thread returned NULL. */
 const char *orla_open_error(void);
 

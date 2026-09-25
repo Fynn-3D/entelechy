@@ -300,13 +300,10 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
     let target = session
         .allowed_write(&path)
         .map_err(|why| failure(format!("cannot write the snapshot: {why}")))?;
-    let beside = target.with_extension("snapshot-writing");
-    std::fs::write(&beside, json.to_string())
-        .and_then(|()| std::fs::rename(&beside, &target))
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&beside);
-            failure(format!("{}: {e}", target.display()))
-        })?;
+    session
+        .store()
+        .write(&target, json.to_string().as_bytes())
+        .map_err(|e| failure(format!("{}: {e}", target.display())))?;
     Ok(json!({
         "path": target.display().to_string(),
         "revision": snapshot.revision,
@@ -347,7 +344,9 @@ pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, 
             session
                 .allowed_read(&path)
                 .map_err(|why| failure(format!("cannot read the snapshot: {why}")))?;
-            let text = std::fs::read_to_string(&path)
+            let text = session
+                .store()
+                .read_text(&path)
                 .map_err(|e| failure(format!("{}: {e}", path.display())))?;
             read = serde_json::from_str::<Json>(&text)
                 .map_err(|e| failure(format!("{}: not a snapshot: {e}", path.display())))?;

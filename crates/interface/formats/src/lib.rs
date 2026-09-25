@@ -51,6 +51,11 @@ pub fn extension(path: &Path) -> String {
 /// how a scene reads a format nothing here knows.
 pub fn read_bytes(path: &Path) -> Result<(FieldData, String), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    decode_bytes(&bytes)
+}
+
+/// Bytes already read, as [`read_bytes`] takes a file's.
+pub fn decode_bytes(bytes: &[u8]) -> Result<(FieldData, String), String> {
     if bytes.is_empty() {
         return Err("the file is empty; a Field has no empty extent".into());
     }
@@ -72,6 +77,16 @@ pub fn read_bytes(path: &Path) -> Result<(FieldData, String), String> {
 /// came in.
 pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    decode(&bytes, path, want)
+}
+
+/// A file's bytes already read, as [`read`] takes them; `path` names
+/// the format by its extension.
+pub fn decode(
+    bytes: &[u8],
+    path: &Path,
+    want: Option<&str>,
+) -> Result<(FieldData, String), String> {
     let gray = want.is_some_and(|ty| without_encoding(ty) == "Grid<Float>");
     let describe = |data: &FieldData| {
         format!(
@@ -83,17 +98,17 @@ pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), Stri
     };
     match extension(path).as_str() {
         "field" => {
-            let data = orla_host::file::decode(&bytes).map_err(|e| e.to_string())?;
+            let data = orla_host::file::decode(bytes).map_err(|e| e.to_string())?;
             let detail = describe(&data);
             Ok((data, detail))
         }
         "png" => {
-            let data = png::decode_field(&bytes, gray).map_err(|e| e.to_string())?;
+            let data = png::decode_field(bytes, gray).map_err(|e| e.to_string())?;
             let detail = describe(&data);
             Ok((data, detail))
         }
         "ppm" | "pgm" => {
-            let data = ppm::decode_field(&bytes).map_err(|e| e.to_string())?;
+            let data = ppm::decode_field(bytes).map_err(|e| e.to_string())?;
             let data = if gray && data.schema().is_pixel() {
                 let words = data
                     .storage()
@@ -114,12 +129,12 @@ pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), Stri
             Ok((data, detail))
         }
         "wav" => {
-            let sound = wav::decode(&bytes).map_err(|e| e.to_string())?;
+            let sound = wav::decode(bytes).map_err(|e| e.to_string())?;
             let detail = format!("{} at {} Hz", describe(&sound.field), sound.rate);
             Ok((sound.field, detail))
         }
         "mid" | "midi" => {
-            let song = midi::read(&bytes)?;
+            let song = midi::read(bytes)?;
             let data = midi::field(&song)?;
             let detail = format!("{} ({} track(s))", describe(&data), song.tracks);
             Ok((data, detail))

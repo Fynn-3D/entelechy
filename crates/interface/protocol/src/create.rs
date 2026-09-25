@@ -19,7 +19,9 @@ use crate::wire::{
 pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let text = request.text("text")?;
     let root = session.root().to_path_buf();
-    let current = std::fs::read_to_string(&root)
+    let current = session
+        .store()
+        .read_text(&root)
         .map(|text| document_version(&text))
         .unwrap_or_default();
     if let Some(expect) = request.get("expect") {
@@ -44,13 +46,10 @@ pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, 
     }
     // Replaced whole: a reader, the session's own watcher included, never
     // sees half of it.
-    let beside = root.with_extension("osn.composing");
-    std::fs::write(&beside, &text)
-        .and_then(|()| std::fs::rename(&beside, &root))
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&beside);
-            failure(format!("{}: {e}", root.display()))
-        })?;
+    session
+        .store()
+        .write(&root, text.as_bytes())
+        .map_err(|e| failure(format!("{}: {e}", root.display())))?;
     // The scene this reads is this request's change.
     session.claim_scene();
     Ok(json!({

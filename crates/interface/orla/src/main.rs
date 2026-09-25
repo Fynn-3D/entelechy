@@ -210,9 +210,10 @@ fn check(args: &[String]) -> Result<(), String> {
             .and_then(|stem| stem.to_str())
             .unwrap_or("scene");
         let base = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
-        let mut loader = |path: &Path| orla_session::read_document(path);
-        let mut declare =
-            |base: &Path, uses: &[orla_language::Use]| orla_session::declarations_for(base, uses);
+        let mut loader = |path: &Path| orla_session::read_document(&orla_session::Disk, path);
+        let mut declare = |base: &Path, uses: &[orla_language::Use]| {
+            orla_session::declarations_for(&orla_session::Disk, base, uses)
+        };
         let lowered =
             match orla_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
                 Ok(lowered) => lowered,
@@ -224,7 +225,7 @@ fn check(args: &[String]) -> Result<(), String> {
             };
         let mut document = document;
         if let Ok((structs, types, functions)) =
-            orla_session::declarations_for(base, &document.uses)
+            orla_session::declarations_for(&orla_session::Disk, base, &document.uses)
         {
             document.inherit(&structs, &types, &functions);
         }
@@ -264,7 +265,7 @@ fn check(args: &[String]) -> Result<(), String> {
         }
         // The documents it uses, with their own declarations: a scene is
         // not checked until its libraries are.
-        match orla_session::used_documents(base, &document.uses) {
+        match orla_session::used_documents(&orla_session::Disk, base, &document.uses) {
             Ok(used) => {
                 let mut compiled = 0;
                 for path in &used {
@@ -280,7 +281,12 @@ fn check(args: &[String]) -> Result<(), String> {
                         continue; // reported by `used_documents`
                     };
                     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-                    match orla_session::declarations_within(Some(path), dir, &used_document.uses) {
+                    match orla_session::declarations_within(
+                        &orla_session::Disk,
+                        Some(path),
+                        dir,
+                        &used_document.uses,
+                    ) {
                         Ok((structs, types, functions)) => {
                             used_document.inherit(&structs, &types, &functions)
                         }

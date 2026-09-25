@@ -32,12 +32,11 @@ mod inputs;
 mod kernels;
 mod observe;
 mod options;
-mod paths;
 pub mod replay;
 mod scene;
 mod session;
 mod sources;
-mod stamp;
+pub mod store;
 mod writes;
 
 use std::fmt;
@@ -48,6 +47,7 @@ use orla_runtime::{Generation, KernelId};
 
 pub use history::{Attempt, Change, Origin, Record};
 pub use options::SessionOptions;
+pub use store::{Disk, Memory, Store};
 
 /// The world at one moment, taken for its caller to keep
 /// ([`Session::snapshot`]).
