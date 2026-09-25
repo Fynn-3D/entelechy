@@ -24,3 +24,8 @@ opt-level = 3
 # debug info.
 [profile.dev]
 debug = "line-tables-only"
+# On macOS debug info otherwise stays in the object files beside each
+# binary, and every build leaves new ones: target/debug/deps had grown to
+# a million files, and rustc searching it made a test build after touching
+# orla-graph take 113 s. Packed into a .dSYM, no object file stays (7 s).
+split-debuginfo = "packed"
