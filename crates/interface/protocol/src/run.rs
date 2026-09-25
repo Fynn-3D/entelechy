@@ -158,8 +158,7 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
         None | Some(Json::Null) => {}
         Some(Json::Object(items)) => {
             for (target, path) in items {
-                let (node, port) = target
-                    .rsplit_once('.')
+                let (node, port) = orla_graph::split_port(target)
                     .ok_or_else(|| failure("`save` names `node.port`"))?;
                 let path = path
                     .as_str()
@@ -179,11 +178,7 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
                 let resolved = session
                     .allowed_write(&resolved)
                     .map_err(|why| failure(format!("cannot save {target}: {why}")))?;
-                saves.push((
-                    orla_graph::NodeId(node.to_owned()),
-                    port.to_owned(),
-                    resolved,
-                ));
+                saves.push((node, port, resolved));
             }
         }
         Some(_) => return Err(failure("`save` is an object of `node.port` to a path")),

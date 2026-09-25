@@ -293,13 +293,9 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
             }),
             ["reset"] => steps.push(Step::Reset),
             ["reset", target] => {
-                let (node, port) = target
-                    .split_once('.')
+                let (node, port) = orla_graph::split_port(target)
                     .ok_or_else(|| error("`reset` takes nothing or `node.port`".to_owned()))?;
-                steps.push(Step::ResetPort {
-                    node: node.to_owned(),
-                    port: port.to_owned(),
-                });
+                steps.push(Step::ResetPort { node: node.0, port });
             }
             ["param", name, value @ ..] if !value.is_empty() => {
                 let text = value.join(" ");
@@ -313,12 +309,11 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 });
             }
             ["expect", "count", target, "=", count] => {
-                let (node, port) = target
-                    .split_once('.')
+                let (node, port) = orla_graph::split_port(target)
                     .ok_or_else(|| error("`expect count` takes `node.port`".to_owned()))?;
                 steps.push(Step::ExpectCount {
-                    node: node.to_owned(),
-                    port: port.to_owned(),
+                    node: node.0,
+                    port,
                     count: count.parse::<usize>().map_err(|_| {
                         error(format!("`{count}` is not a whole number of elements"))
                     })?,

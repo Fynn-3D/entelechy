@@ -369,14 +369,15 @@ struct RenderOptions {
     saves: Vec<(String, String, PathBuf)>,
 }
 
-/// `--save <node.port>=<file>`: a node of a placed graph carries dots in
-/// its name, so the port is what follows the last one.
+/// `--save <node.port>=<file>`, or `<node>=<file>` for its `result`.
 fn parse_save(binding: &str) -> Result<(String, String, PathBuf), String> {
     let (target, path) = binding
         .split_once('=')
         .ok_or_else(|| "--save needs <node.port>=<file>".to_string())?;
-    let (node, port) = target.rsplit_once('.').unwrap_or((target, "result"));
-    Ok((node.to_owned(), port.to_owned(), PathBuf::from(path)))
+    let (node, port) = orla_graph::split_port(target)
+        .map(|(node, port)| (node.0, port))
+        .unwrap_or_else(|| (target.to_owned(), "result".to_owned()));
+    Ok((node, port, PathBuf::from(path)))
 }
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {

@@ -45,9 +45,8 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
     let (index, tail) = rest
         .split_once(']')
         .ok_or_else(|| "name an element as `node.port[index]`".to_string())?;
-    let (node, port) = head
-        .rsplit_once('.')
-        .ok_or_else(|| "name `node.port`".to_string())?;
+    let (node, port) =
+        orla_graph::split_port(head).ok_or_else(|| "name `node.port`".to_string())?;
     let index = index
         .parse::<u32>()
         .map_err(|_| format!("element index `{index}` is not a whole number"))?;
@@ -56,7 +55,7 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
         .filter(|part| !part.is_empty())
         .map(str::to_owned)
         .collect();
-    Ok((node.to_owned(), port.to_owned(), index, path))
+    Ok((node.0, port, index, path))
 }
 
 /// What a scene output of this name is wired to, when the name is an
@@ -325,6 +324,7 @@ pub(crate) fn element_field(
 
 /// Writes a cached image to a PPM file; see [`crate::Session::export`].
 pub(crate) fn export(
+    store: &dyn crate::Store,
     runtime: &mut Runtime,
     image: Handle,
     path: &Path,
@@ -332,7 +332,9 @@ pub(crate) fn export(
     let image = runtime
         .image(image)
         .map_err(|e| SessionError::Observe(e.to_string()))?;
-    ppm::write(path, &image).map_err(|e| SessionError::Image(path.to_path_buf(), e))
+    store
+        .write(path, &ppm::encode(&image))
+        .map_err(|e| SessionError::Io(path.to_path_buf(), e))
 }
 
 /// One pixel of a cached image; see [`crate::Session::read_pixel`].

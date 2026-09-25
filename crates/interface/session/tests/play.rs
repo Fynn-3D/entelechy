@@ -257,3 +257,28 @@ fn a_press_lasts_a_frame_however_quick() {
     play.button(0, false);
     assert!(!play.context(VIEW).input.pointer_down);
 }
+
+/// A placed graph's node carries its place in its id (`fx.gray`), so a
+/// replay naming its port means the last dot: every step that names a
+/// port reads it the same way.
+#[test]
+fn a_placed_nodes_port_is_what_follows_the_last_dot() {
+    use orla_session::replay::{Step, parse};
+    let text = "scene scene.osn\nframe 0.0\nreset fx.gray.result\nexpect count fx.gray.result = 4\nexpect fx.gray.result[0].size = 1\n";
+    let replay = parse(text, Path::new(".")).unwrap();
+    let named: Vec<(String, String)> = replay
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::ResetPort { node, port } | Step::ExpectCount { node, port, .. } => {
+                Some((node.clone(), port.clone()))
+            }
+            Step::ExpectElement { node, port, .. } => Some((node.clone(), port.clone())),
+            _ => None,
+        })
+        .collect();
+    let placed = ("fx.gray".to_owned(), "result".to_owned());
+    assert_eq!(named, vec![placed.clone(), placed.clone(), placed]);
+    // A name with no port is refused where a port is needed.
+    assert!(parse("scene scene.osn\nreset gray\n", Path::new(".")).is_err());
+}

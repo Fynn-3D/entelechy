@@ -34,6 +34,18 @@ impl fmt::Display for NodeId {
     }
 }
 
+/// A node's port as text names it, `node.port`: the node and the port,
+/// or nothing when the text names no port. A node of a placed graph
+/// carries its place in its id (`fx.gray`), so the port is what follows
+/// the last dot, and the node everything before it.
+pub fn split_port(text: &str) -> Option<(NodeId, String)> {
+    let (node, port) = text.rsplit_once('.')?;
+    if node.is_empty() || port.is_empty() {
+        return None;
+    }
+    Some((NodeId(node.to_owned()), port.to_owned()))
+}
+
 /// Where an input port receives its image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
