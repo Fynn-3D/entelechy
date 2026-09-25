@@ -639,8 +639,5 @@ pub(super) fn graph_param(
 /// `; did you mean `x`?` where there is one; see
 /// [`orla_abi::names::nearest`], which found it.
 pub(super) fn suggest(near: &Option<String>) -> String {
-    match near {
-        Some(name) => format!("; did you mean `{name}`?"),
-        None => String::new(),
-    }
+    orla_abi::names::suggestion(near.as_deref())
 }

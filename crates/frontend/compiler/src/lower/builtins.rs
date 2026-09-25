@@ -714,10 +714,7 @@ impl Builder<'_> {
                     .or_else(|| {
                         orla_language::nearest(name, crate::help::similar(name)).map(str::to_owned)
                     });
-                let suggestion = match near {
-                    Some(near) => format!("; did you mean `{near}`?"),
-                    None => String::new(),
-                };
+                let suggestion = orla_language::suggestion(near.as_deref());
                 Err(semantic(
                     span,
                     format!(

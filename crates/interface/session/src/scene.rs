@@ -588,8 +588,8 @@ impl Scene {
 fn undeclared(graph: &Graph, name: &str) -> String {
     let mut why = format!("`{name}` is not a param the scene declares");
     let near = orla_language::nearest(name, graph.params.iter().map(|p| p.name.as_str()));
-    if let Some(near) = near {
-        why.push_str(&format!("; did you mean `{near}`?"));
+    if near.is_some() {
+        why.push_str(&orla_language::suggestion(near));
         return why;
     }
     let setters: Vec<&str> = graph

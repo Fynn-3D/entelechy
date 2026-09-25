@@ -35,7 +35,13 @@ pub fn nearest<'a>(wanted: &str, known: impl IntoIterator<Item = &'a str>) -> Op
 /// `; did you mean `x`?` where there is one, and nothing where there is
 /// not, so a message can end with it either way.
 pub fn did_you_mean<'a>(wanted: &str, known: impl IntoIterator<Item = &'a str>) -> String {
-    match nearest(wanted, known) {
+    suggestion(nearest(wanted, known))
+}
+
+/// `; did you mean `name`?` for a near miss already found, and nothing
+/// without one: how every message ends that names one.
+pub fn suggestion(near: Option<&str>) -> String {
+    match near {
         Some(name) => format!("; did you mean `{name}`?"),
         None => String::new(),
     }
@@ -47,7 +53,7 @@ pub fn did_you_mean<'a>(wanted: &str, known: impl IntoIterator<Item = &'a str>) 
 /// The swap counts as one and not two, because two letters the wrong
 /// way round is the commonest typing there is: `resutl` for `result`,
 /// `Flaot` for `Float`.
-fn edit_distance(a: &str, b: &str) -> usize {
+pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut grid = vec![vec![0usize; b.len() + 1]; a.len() + 1];

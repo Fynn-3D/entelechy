@@ -403,7 +403,9 @@ pub fn builtin(name: &str) -> Option<Builtin> {
 /// Builtins and forms whose names are close to `name`, for a miss.
 pub fn similar(name: &str) -> Vec<&'static str> {
     let close = |candidate: &str| {
-        candidate.contains(name) || name.contains(candidate) || distance(candidate, name) <= 2
+        candidate.contains(name)
+            || name.contains(candidate)
+            || orla_language::edit_distance(candidate, name) <= 2
     };
     builtins()
         .into_iter()
@@ -416,26 +418,6 @@ pub fn similar(name: &str) -> Vec<&'static str> {
                 .map(|f| f.name),
         )
         .collect()
-}
-
-/// The edit distance between two short names.
-fn distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut previous: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.iter().enumerate() {
-        let mut current = vec![i + 1];
-        for (j, cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            current.push(
-                (previous[j] + cost)
-                    .min(previous[j + 1] + 1)
-                    .min(current[j] + 1),
-            );
-        }
-        previous = current;
-    }
-    previous[b.len()]
 }
 
 #[cfg(test)]
