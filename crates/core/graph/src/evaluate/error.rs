@@ -83,8 +83,8 @@ pub enum EvaluateError {
         /// What is wrong.
         message: String,
     },
-    /// A write named an output no `<~` binding reads, so it holds no
-    /// state to replace.
+    /// A write or a reset named an output no `<~` binding reads, so it
+    /// holds no state.
     NotState {
         /// The producer.
         node: NodeId,
@@ -203,10 +203,9 @@ impl fmt::Display for EvaluateError {
                 write!(f, "fused group at `{node}` was rejected: {message}")
             }
             Self::Domain { node, message } => write!(f, "node `{node}`: {message}"),
-            Self::NotState { node, port } => write!(
-                f,
-                "`{node}.{port}` is not state: no `<~` binding reads it, so there is nothing to replace"
-            ),
+            Self::NotState { node, port } => {
+                write!(f, "`{node}.{port}` is not state: no `<~` binding reads it")
+            }
             Self::WordCount {
                 node,
                 port,

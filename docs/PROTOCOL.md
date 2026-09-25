@@ -256,6 +256,15 @@ first), whatever the port keeps: a Field kept narrow
 (`Grid<Vec4 as unorm8>`) is read widened and written narrowed by the
 Host's rule, and only the `field` format carries its packed bytes.
 
+`reset` forgets committed state, so the next evaluation's `<~` readers
+start again from their initial sources. With a `node` (and a `port`,
+`result` when none is named) it forgets that port's alone: the rest of
+the world keeps its state, and the port must be state as it must for
+`write`. A run off the frame that began from the state forgotten, or
+from what was computed from it, is let go rather than left to land it
+again; other runs go on. History records which: `{kind: "reset"}`, with
+the `node` and `port` for one.
+
 A value in a request is JSON: a number (an integer is an `Int`, a `Long`
 past 32 bits, and stands in for a float; a number with a fraction is
 exact until the parameter it is given to says its width), a string of

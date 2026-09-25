@@ -99,6 +99,13 @@ pub enum Step {
     },
     /// Forget committed state.
     Reset,
+    /// Forget one port's committed state; the rest keeps its own.
+    ResetPort {
+        /// The producer.
+        node: String,
+        /// Its port.
+        port: String,
+    },
     /// Override a graph parameter.
     Param {
         /// Parameter name.
@@ -285,6 +292,15 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                 down: *state == "down",
             }),
             ["reset"] => steps.push(Step::Reset),
+            ["reset", target] => {
+                let (node, port) = target
+                    .split_once('.')
+                    .ok_or_else(|| error("`reset` takes nothing or `node.port`".to_owned()))?;
+                steps.push(Step::ResetPort {
+                    node: node.to_owned(),
+                    port: port.to_owned(),
+                });
+            }
             ["param", name, value @ ..] if !value.is_empty() => {
                 let text = value.join(" ");
                 let expr = orla_language::parse_literal(&text)
@@ -557,6 +573,11 @@ impl Replayer {
             }
             Step::Wheel(delta) => input.wheel = *delta,
             Step::Reset => session.reset_state(),
+            Step::ResetPort { node, port } => {
+                session
+                    .reset_port(&orla_graph::NodeId(node.clone()), port)
+                    .map_err(|error| format!("reset {node}.{port}: {error}"))?;
+            }
             Step::Param { name, value } => {
                 session.set_param(name, value.clone())?;
                 let _ = session.sync();

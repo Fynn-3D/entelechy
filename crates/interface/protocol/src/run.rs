@@ -267,10 +267,27 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
     outcome
 }
 
-/// Forgets committed state.
-pub(crate) fn reset(session: &mut Session) -> Result<Json, Json> {
-    session.reset_state();
-    Ok(json!({ "reset": true }))
+/// Forgets committed state: all of it, or one port's with `node` (and
+/// `port`, `result` when not named).
+pub(crate) fn reset(session: &mut Session, request: &Request) -> Result<Json, Json> {
+    if request.get("node").is_none() {
+        if request.get("port").is_some() {
+            return Err(failure("`port` names a port of `node`; name the node too"));
+        }
+        session.reset_state();
+        return Ok(json!({ "reset": true }));
+    }
+    let node = request.text("node")?;
+    let port = match request.get("port") {
+        None => "result",
+        Some(port) => port
+            .as_str()
+            .ok_or_else(|| failure("`port` must be a string"))?,
+    };
+    session
+        .reset_port(&orla_graph::NodeId(node.clone()), port)
+        .map_err(|e| failure(e.to_string()))?;
+    Ok(json!({ "reset": true, "node": node, "port": port }))
 }
 
 /// Sets the window a headless session reports.

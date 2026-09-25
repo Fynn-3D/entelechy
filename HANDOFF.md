@@ -30,8 +30,10 @@ Verified surface, as of `main`:
 
 ## Next
 
-Open: the user has not chosen the next round. The Player plays in a
-page as in its window, one play under both. Candidates: a second native
-platform (Vulkan or DX12, Linux or Windows; needs the CI workflow run by
-hand); the page's GPU in Firefox and Safari, which have no JavaScript
-Promise Integration yet. Ask before starting any.
+A live world is changed through three doors (docs/DECISIONS.md): the
+structure by its document, the state a committed port at a time, the
+parameters its document declares. Next on that line: `compose` that
+edits the document where it changes (a node, a binding) and keeps
+everything else of the text as written, comments included, rather than
+a whole new text an agent must write; then a node's own value is held
+to the document by tests and a note, with no new operation.

@@ -2129,3 +2129,73 @@ fn a_change_found_on_disk_is_its_documents_and_versions_name_scenes() {
     );
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
+
+/// `reset` with a `node` starts that one port again from its initial
+/// source and leaves the rest of the world's state; history says which.
+#[test]
+fn a_reset_can_start_one_port_again_and_leave_the_rest() {
+    let dir = std::env::temp_dir().join(format!("orla-protocol-reset-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("scene.osn");
+    std::fs::write(
+        &scene,
+        "kernel t.zero@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }
+kernel t.count@1 { requires { field.read; field.write; } input previous: Rows<Float>; output result: Rows<Float>; compute { return sample(previous) + 1.0; } }
+node seed: t.zero@1 { domain = 1; }
+node a: t.count@1 { previous <~ a.result from seed.result; }
+node b: t.count@1 { previous <~ b.result from seed.result; }
+output a <- a.result;
+output b <- b.result;
+",
+    )
+    .unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "advance", "frames": 3 }),
+            json!({ "id": 2, "op": "reset", "node": "a" }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 4, "op": "read", "node": "a" }),
+            json!({ "id": 5, "op": "read", "node": "b" }),
+            json!({ "id": 6, "op": "reset", "node": "seed" }),
+            json!({ "id": 7, "op": "reset", "port": "result" }),
+            json!({ "id": 8, "op": "reset", "node": "a", "port": 3 }),
+            json!({ "id": 9, "op": "reset" }),
+            json!({ "id": 10, "op": "history" }),
+        ],
+    );
+    let ok = |i: usize| -> &Json {
+        assert!(responses[i].get("error").is_none(), "{}", responses[i]);
+        &responses[i]["ok"]
+    };
+    let failed = |i: usize| -> &str {
+        responses[i]["error"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{}", responses[i]))
+    };
+    assert_eq!(
+        ok(1),
+        &json!({ "reset": true, "node": "a", "port": "result" })
+    );
+    let value = |i: usize| {
+        let bytes = orla_formats::base64::unbase64(ok(i)["data"].as_str().unwrap()).unwrap();
+        f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    };
+    assert_eq!((value(3), value(4)), (1.0, 4.0), "a again, b on");
+    assert!(failed(5).contains("is not state"), "{}", failed(5));
+    assert!(failed(6).contains("name the node"), "{}", failed(6));
+    assert!(failed(7).contains("must be a string"), "{}", failed(7));
+    assert_eq!(ok(8), &json!({ "reset": true }));
+    let changes = ok(9)["changes"].as_array().unwrap();
+    let resets: Vec<&Json> = changes.iter().filter(|c| c["kind"] == "reset").collect();
+    assert_eq!(
+        resets.len(),
+        2,
+        "the refused ones moved nothing: {changes:?}"
+    );
+    assert_eq!(resets[0]["node"], "a");
+    assert_eq!(resets[0]["port"], "result");
+    assert!(resets[1].get("node").is_none(), "{}", resets[1]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -208,12 +208,18 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                     Err(why) => log.push(format!("{step}: restore refused: {why}")),
                 }
             }
-            // A reset: the state starts again from the seed.
+            // A reset, of all the state or of the count's port, which is
+            // all of it here: the state starts again from the seed.
             _ => {
-                session.reset_state();
+                if rng.below(2) == 0 {
+                    session.reset_state();
+                    log.push(format!("{step}: reset"));
+                } else {
+                    session.reset_port(&count_node, "result").unwrap();
+                    log.push(format!("{step}: reset count.result"));
+                }
                 committed = 0;
                 kept_as = None;
-                log.push(format!("{step}: reset"));
             }
         }
         let held = session.runtime().host().used_words();

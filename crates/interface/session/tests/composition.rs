@@ -2258,3 +2258,138 @@ output result <- check.result;
         .evaluate(&graph, &mut runtime, &none, &ctx, &params)
         .unwrap();
 }
+
+const TWO_COUNTERS: &str = "
+node seed: test.zero@1 { domain = vec2(2, 2); }
+node a: test.increment@1 { previous <~ a.result from seed.result; }
+node b: test.increment@1 { previous <~ b.result from seed.result; }
+output a <- a.result;
+output b <- b.result;
+";
+
+#[test]
+fn one_port_starts_again_and_the_others_keep_their_state() {
+    let mut runtime = cpu(1024);
+    load(&mut runtime, ZERO);
+    load(&mut runtime, INCREMENT);
+    let graph = orla_scene::parse(TWO_COUNTERS).unwrap();
+    let mut evaluator = Evaluator::new();
+    let none = BTreeMap::new();
+    let defaults = BTreeMap::new();
+    let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
+        let report = evaluator
+            .evaluate(&graph, runtime, &none, &Context::default(), &defaults)
+            .unwrap();
+        let counts: Vec<f32> = report
+            .outputs
+            .iter()
+            .map(|(_, handle)| red(runtime, *handle))
+            .collect();
+        (report, counts)
+    };
+    for _ in 0..3 {
+        evaluate(&mut evaluator, &mut runtime);
+    }
+    let a = NodeId("a".into());
+    evaluator
+        .reset_port(&graph, &mut runtime, &a, "result")
+        .unwrap();
+    let (report, counts) = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(counts, vec![1.0, 4.0], "a started again, b counted on");
+    assert_eq!(report.executed, ids(&["a", "b"]));
+    assert_eq!(runtime.host().live(), 3, "the seed and the two states");
+
+    // Only state can start again: an output no `<~` reads holds none,
+    // and a refused reset moves nothing.
+    let seed = NodeId("seed".into());
+    let error = evaluator
+        .reset_port(&graph, &mut runtime, &seed, "result")
+        .unwrap_err();
+    assert!(matches!(error, EvaluateError::NotState { .. }), "{error}");
+    let error = evaluator
+        .reset_port(&graph, &mut runtime, &a, "nothing")
+        .unwrap_err();
+    assert!(matches!(error, EvaluateError::NotState { .. }), "{error}");
+    let (_, counts) = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(counts, vec![2.0, 5.0]);
+
+    // A port not committed yet is left as it is.
+    evaluator.reset_state(&mut runtime);
+    evaluator
+        .reset_port(&graph, &mut runtime, &a, "result")
+        .unwrap();
+    let (_, counts) = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(counts, vec![1.0, 1.0]);
+    evaluator.clear(&mut runtime);
+    assert_eq!(runtime.host().live(), 0);
+}
+
+const TWO_OFF_FRAME: &str = "
+node source: image.gradient@1 { domain = vec2(2, 2); }
+node count: test.count@1 { previous <~ count.result from source.result; async = true; }
+node shown: image.invert@1 { source <- count.result; async = true; }
+node other: test.count@1 { previous <~ other.result from source.result; async = true; }
+output result <- shown.result;
+output other <- other.result;
+";
+
+#[test]
+fn a_reset_lets_go_of_the_runs_that_began_from_the_state_it_forgot() {
+    let graph = orla_scene::parse(TWO_OFF_FRAME).unwrap();
+    let mut runtime = runtime();
+    load(&mut runtime, COUNT);
+    let mut evaluator = Evaluator::new();
+    let none = BTreeMap::new();
+    let defaults = BTreeMap::new();
+    let red = |runtime: &Runtime, handle| runtime.host().read_pixel(handle, 0, 0).unwrap()[0];
+    let mut frame = 0.0;
+    let mut evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
+        frame += 1.0;
+        let report = evaluator
+            .evaluate(&graph, runtime, &none, &at(frame), &defaults)
+            .unwrap();
+        let values: Vec<f32> = report
+            .outputs
+            .iter()
+            .map(|(_, handle)| red(runtime, *handle))
+            .collect();
+        (report, values)
+    };
+    // On the frame first, then both counts off it, from the state 1.
+    let (_, values) = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(values, vec![1.0 - 1.0, 1.0]);
+    let (report, _) = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(report.pending, ids(&["count", "other"]));
+
+    // One port starts again: the run that read it is let go, the other
+    // goes on and lands.
+    let count = NodeId("count".into());
+    evaluator
+        .reset_port(&graph, &mut runtime, &count, "result")
+        .unwrap();
+    assert_eq!(evaluator.settle(&mut runtime).unwrap(), ids(&["other"]));
+    // The count's first run read its initial source, so the frame after
+    // the reset finds it cached and commits it: the count is 1 again. A
+    // stale run landed here would have been carried instead, a 2.
+    let (report, values) = evaluate(&mut evaluator, &mut runtime);
+    assert!(report.reused.contains(&count), "{report:?}");
+    assert!(report.committed.contains(&(count.clone(), "result".into())));
+    assert_eq!(values, vec![1.0 - 1.0, 2.0]);
+    // And it counts on from there.
+    let (report, _) = evaluate(&mut evaluator, &mut runtime);
+    assert!(report.pending.contains(&count), "{report:?}");
+    evaluator.settle(&mut runtime).unwrap();
+    evaluate(&mut evaluator, &mut runtime);
+    evaluator.settle(&mut runtime).unwrap();
+    let (_, values) = evaluate(&mut evaluator, &mut runtime);
+    assert_eq!(values[0], 1.0 - 2.0, "{values:?}");
+    assert!(values[1] > 2.0, "the other counted on: {values:?}");
+
+    // All state at once lets every run go: none lands the world forgotten.
+    let (report, _) = evaluate(&mut evaluator, &mut runtime);
+    assert!(!report.pending.is_empty());
+    evaluator.reset_state(&mut runtime);
+    assert!(!evaluator.has_running());
+    evaluator.clear(&mut runtime);
+    assert_eq!(runtime.host().live(), 0);
+}

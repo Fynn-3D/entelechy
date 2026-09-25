@@ -426,6 +426,41 @@ the protocol. Held by the protocol's tests and the history's own.
 **What would change it.** A second person on a session, which would add
 who to where.
 
+## A live world is changed through three doors, each at its own grain
+
+The structure changes as its document does: `compose` writes the scene
+text and the scene is read again, as an edit on disk is. The state
+changes a committed port at a time: `write` replaces one, `reset` with a
+`node` and `port` starts one again from its initial source, `reset`
+alone starts them all, and `restore` installs a world. The parameters a
+running graph takes from outside are the ones its document declares
+(`param` in the scene); a node's own value is part of the structure and
+changes with the document. Nothing else reaches in.
+
+**Why.** Each door is where the thing it changes is kept whole. A node's
+value set from outside would be a structure the document does not say,
+lost at the next read and invisible to `document` and history. State is
+kept by port, so a port is the smallest part of it that can start again
+without inventing a state no evaluation committed; a port restarted
+alone is what an agent wants when one part of a world went wrong (a
+camera, a score) and the rest (a built world) is the work. A run off the
+frame that began from the state forgotten, or from what was computed
+from it, is let go: landing after the reset, it would put back what was
+forgotten. Runs that read none of it go on.
+
+**Where.** `Evaluator::reset_port` and `reset_state` in the
+[graph's state](../crates/core/graph/src/evaluate/state.rs);
+`Session::reset_port`, recorded in history as a reset with its port;
+`reset` in the protocol and `reset node.port` in a replay. Held by the
+graph's tests (one port starts again and the others keep theirs; a
+reset lets go of the runs that began from what it forgot, and only
+those), the protocol's, and the voxel replay, which brings the camera
+home and keeps the world.
+
+**What would change it.** A kind of state finer than a port (an
+element, a region) that an agent must start again alone, which would
+make it a write computed by a Kernel rather than a new door.
+
 ## A world is restored only when the whole world can live again
 
 `restore` installs a snapshot's state in every state port at once, the
