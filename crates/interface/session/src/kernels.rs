@@ -152,6 +152,17 @@ impl Kernels {
         }
     }
 
+    /// Waits until every change being prepared has been published or
+    /// refused: what must stand before a world that depends on it runs.
+    pub(crate) fn wait_pending(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) {
+        while !self.pending.is_empty() {
+            self.collect_pending(runtime, events);
+            if !self.pending.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+
     /// Swaps a ready batch in, all at once, and retires what left.
     fn publish_batch(
         &mut self,

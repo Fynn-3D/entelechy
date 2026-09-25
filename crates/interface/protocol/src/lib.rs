@@ -21,7 +21,7 @@
 //! | `kernels` | | list of manifests with generations |
 //! | `kernel` | `kernel` (the Kernel's id), `generation`? (one the session remembers) | manifest, generation, source, as `publish` takes it |
 //! | `graph` | | inputs, params, nodes, outputs |
-//! | `document` | | path, text and version of the scene |
+//! | `document` | `version`? (one the session remembers) | path, text and version of the scene |
 //! | `history` | `since`? (a revision) | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
 //! | `compose` | `text`, `expect`? (a version) | checks, then writes the scene and syncs; events, version |
 //! | `sync` | | events |
@@ -36,7 +36,7 @@
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
 //! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `snapshot` | `to`? (a file, where `--allow file.write` allows) | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
-//! | `restore` | `snapshot` (as `snapshot` gave it) or `from` (its file), `laws` = `"current"` / `"snapshot"`, the context `evaluate` takes | the world restored after a trial frame that commits nothing; revision, report |
+//! | `restore` | `snapshot` (as `snapshot` gave it) or `from` (its file), `laws` = `"current"` / `"snapshot"`, `structure`? = `"current"` / `"snapshot"`, the context `evaluate` takes | the world restored after a trial frame that commits nothing; revision, report |
 //! | `reset` | | ok |
 //! | `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
 //! | `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
@@ -140,7 +140,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "kernels" => inspect::kernels(session),
         "kernel" => inspect::kernel(session, &request),
         "graph" => inspect::graph(session),
-        "document" => inspect::document(session),
+        "document" => inspect::document(session, &request),
         "history" => inspect::history(session, &request),
         "help" => inspect::help(&request),
         "compose" => create::compose(session, &request),

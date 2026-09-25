@@ -39,6 +39,8 @@ pub(crate) struct Scene {
     graph: Option<Graph>,
     /// What the lowered document reads from and writes to files.
     files: orla_scene::Files,
+    /// The root's text as last lowered: the structure that runs.
+    text: Option<String>,
     /// Caller overrides of graph parameters.
     params: BTreeMap<String, Value>,
 }
@@ -56,6 +58,7 @@ impl Scene {
             functions: Vec::new(),
             graph: None,
             files: orla_scene::Files::default(),
+            text: None,
             params: BTreeMap::new(),
         }
     }
@@ -90,6 +93,12 @@ impl Scene {
 
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The root document's text as last lowered: the structure the
+    /// graph that runs was built from.
+    pub(crate) fn text(&self) -> Option<&str> {
+        self.text.as_deref()
     }
 
     /// What the scene reads from and writes to files.
@@ -328,6 +337,7 @@ impl Scene {
         self.sub_graphs = sub_graphs;
         self.uses = lowered.uses;
         self.graph = Some(lowered.graph);
+        self.text = Some(text);
         self.files = lowered.files;
         events.push(Event::SceneLoaded);
     }

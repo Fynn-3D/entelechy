@@ -189,7 +189,12 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                 let Some((snapshot, count, kept)) = &taken else {
                     continue;
                 };
-                match session.restore(snapshot, orla_session::Laws::Current, &Context::default()) {
+                match session.restore(
+                    snapshot,
+                    orla_session::Laws::Current,
+                    orla_session::Structure::Current,
+                    &Context::default(),
+                ) {
                     Ok(_) => {
                         restored += 1;
                         (committed, kept_as) = match kept {

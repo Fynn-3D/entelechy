@@ -430,7 +430,10 @@ who to where.
 
 `restore` installs a snapshot's state in every state port at once, the
 ports it does not name restarting from their initial sources, and with
-`laws: "snapshot"` publishes its Kernels back first, all together. Then
+`laws: "snapshot"` publishes its Kernels back first, all together, and
+with `structure: "snapshot"` writes back the scene document the snapshot
+ran in before either (the laws and the structure keep their pasts alike:
+old sources and old documents by digest). Then
 it proves the world by one frame. The frame runs as any does,
 migrating a state whose layout the Kernels now running no longer take,
 and commits nothing: when it succeeds the world is the snapshot's (the

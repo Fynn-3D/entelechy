@@ -101,7 +101,9 @@ pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json
                 orla_session::Change::Retired { id, from } => {
                     json!({ "kind": "retired", "kernel": id.to_string(), "from": generation(from) })
                 }
-                orla_session::Change::Scene => json!({ "kind": "scene" }),
+                orla_session::Change::Scene { document } => {
+                    json!({ "kind": "scene", "version": format!("{document:016x}") })
+                }
                 orla_session::Change::Param { name } => json!({ "kind": "param", "name": name }),
                 orla_session::Change::Written { node, port } => {
                     json!({ "kind": "written", "node": node, "port": port })
@@ -140,8 +142,22 @@ pub(crate) fn graph(session: &Session) -> Result<Json, Json> {
     Ok(graph_json(graph, session.params(), &session.placements()))
 }
 
-/// The scene document as it is on disk.
-pub(crate) fn document(session: &Session) -> Result<Json, Json> {
+/// The scene document as it is on disk, or, with `version`, a version
+/// the session remembers from a change that loaded it.
+pub(crate) fn document(session: &Session, request: &Request) -> Result<Json, Json> {
+    if let Some(version) = request.get("version").and_then(Json::as_str) {
+        let text = u64::from_str_radix(version, 16)
+            .ok()
+            .and_then(|digest| session.source_by_digest(digest))
+            .ok_or_else(|| {
+                failure(format!(
+                    "version {version} is not one the session remembers"
+                ))
+            })?;
+        return Ok(
+            json!({ "path": session.root().display().to_string(), "text": text, "version": version }),
+        );
+    }
     let text = std::fs::read_to_string(session.root())
         .map_err(|e| failure(format!("{}: {e}", session.root().display())))?;
     let version = crate::create::document_version(&text);

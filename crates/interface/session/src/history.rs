@@ -67,8 +67,12 @@ pub enum Change {
         /// The generation that left.
         from: Option<Generation>,
     },
-    /// The scene was read again and its graph rebuilt.
-    Scene,
+    /// The scene was read again and its graph rebuilt from a version of
+    /// its document, kept by digest ([`History::source`]).
+    Scene {
+        /// The document's text, by digest.
+        document: u64,
+    },
     /// A graph param was set.
     Param {
         /// Its name.
@@ -191,6 +195,12 @@ impl History {
         );
     }
 
+    /// The scene rebuilt from `text`, which is kept.
+    pub(crate) fn scene(&mut self, text: &str, origin: Origin) {
+        let document = self.keep(text);
+        self.record(origin, Change::Scene { document });
+    }
+
     /// Anything else that changed the world.
     pub(crate) fn changed(&mut self, change: Change, origin: Origin) {
         self.record(origin, change);
@@ -267,9 +277,12 @@ impl History {
         });
         if self.changes.len() > CHANGES
             && let Some(gone) = self.changes.pop_front()
-            && let Change::Published { source, .. } = gone.change
         {
-            self.forget(source);
+            match gone.change {
+                Change::Published { source, .. } => self.forget(source),
+                Change::Scene { document } => self.forget(document),
+                _ => {}
+            }
         }
     }
 

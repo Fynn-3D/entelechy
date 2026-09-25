@@ -144,6 +144,7 @@ impl Session {
             frame,
             laws,
             states,
+            scene: self.scene.text().map(str::to_owned),
         })
     }
 
@@ -159,10 +160,34 @@ impl Session {
         &mut self,
         snapshot: &crate::Snapshot,
         laws: crate::Laws,
+        structure: crate::Structure,
         context: &Context,
     ) -> Result<Report, String> {
         let origin = self.origin.clone();
-        let restored = self.restore_world(snapshot, laws, context);
+        // The structure first: the graph the laws and the state go into.
+        let replaced_scene = match structure {
+            crate::Structure::Current => None,
+            crate::Structure::Snapshot => match self.restore_structure(snapshot) {
+                Ok(replaced) => replaced,
+                Err(why) => {
+                    self.history.refused(
+                        format!("the snapshot of revision {}", snapshot.revision),
+                        why.clone(),
+                        None,
+                        origin,
+                    );
+                    return Err(why);
+                }
+            },
+        };
+        let mut restored = self.restore_world(snapshot, laws, context);
+        if restored.is_err()
+            && let Some(before) = replaced_scene
+            && let Err(why) = self.replace_scene(&before)
+        {
+            restored =
+                restored.map_err(|e| format!("{e}; and the scene could not be put back: {why}"));
+        }
         match &restored {
             Ok(_) => self.history.changed(
                 crate::Change::Restored {
@@ -179,6 +204,55 @@ impl Session {
             ),
         }
         restored
+    }
+
+    /// Writes the snapshot's scene document back when it differs from
+    /// what runs, checked first as `compose` checks it; answers the text
+    /// it replaced, to put back if what follows fails.
+    fn restore_structure(&mut self, snapshot: &crate::Snapshot) -> Result<Option<String>, String> {
+        let text = snapshot
+            .scene
+            .as_deref()
+            .ok_or("the snapshot holds no scene to restore")?;
+        let before = self.scene.text().map(str::to_owned);
+        if before.as_deref() == Some(text) {
+            return Ok(None);
+        }
+        self.check_scene(text)
+            .map_err(|e| format!("its scene does not load: {e}"))?;
+        self.replace_scene(text)?;
+        Ok(before)
+    }
+
+    /// Replaces the scene document whole and reads it again.
+    fn replace_scene(&mut self, text: &str) -> Result<(), String> {
+        let root = self.scene.root().to_path_buf();
+        let beside = root.with_extension("osn.restoring");
+        std::fs::write(&beside, text)
+            .and_then(|()| std::fs::rename(&beside, &root))
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&beside);
+                format!("{}: {e}", root.display())
+            })?;
+        let mut events = self.sync();
+        // The scene's own Kernels, prepared off the thread where one ran
+        // before, must stand before the world that runs in it does.
+        let mut landed = Vec::new();
+        self.kernels.wait_pending(&mut self.runtime, &mut landed);
+        self.remember(&landed);
+        events.extend(landed);
+        // What the scene document itself was refused: its lowering, or a
+        // Kernel it writes. An input's file is another matter.
+        let root = self.scene.root().to_path_buf();
+        let refused = events.iter().find(|event| match event {
+            Event::SceneRejected(_) => true,
+            Event::Rejected { path, .. } => *path == root,
+            _ => false,
+        });
+        match refused {
+            Some(refused) => Err(refused.to_string()),
+            None => Ok(()),
+        }
     }
 
     fn restore_world(
@@ -318,7 +392,8 @@ impl Session {
                 }
                 Event::SceneLoaded => {
                     let origin = origin_of(self.scene.root(), &self.origin);
-                    self.history.changed(crate::Change::Scene, origin);
+                    let text = self.scene.text().unwrap_or_default().to_owned();
+                    self.history.scene(&text, origin);
                 }
                 Event::Rejected { path, error } => {
                     let origin = origin_of(path, &self.origin);

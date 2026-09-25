@@ -61,6 +61,19 @@ pub struct Snapshot {
     pub laws: Vec<(KernelId, Generation, String)>,
     /// Every port's committed state.
     pub states: Vec<StateCopy>,
+    /// The scene document the running graph was built from, when one
+    /// was: the structure, which a restore may bring back too.
+    pub scene: Option<String>,
+}
+
+/// What structure a restored snapshot runs in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Structure {
+    /// The scene as it stands.
+    #[default]
+    Current,
+    /// The snapshot's scene document, written back first.
+    Snapshot,
 }
 
 /// What laws a restored snapshot runs under.

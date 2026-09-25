@@ -1832,3 +1832,134 @@ fn a_world_restored_with_its_laws_runs_as_it_ran() {
     assert!(source.contains("+ 1;"), "{source}");
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
+
+/// Structure has a past as the laws do: every scene the session loaded
+/// is kept by its version, `document` reads an old one, and composing it
+/// again, against the version that stands, rolls the structure back.
+#[test]
+fn a_scene_has_a_history_and_rolls_back_by_compose() {
+    let scene = tally_world("structure", 1_000_000);
+    let first = std::fs::read_to_string(&scene).unwrap();
+    let second = first.replace("100 / (at(count, 0) - 1000000)", "7 + at(count, 0)");
+    assert_ne!(first, second);
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "document" }),
+            json!({ "id": 2, "op": "compose", "text": second }),
+            json!({ "id": 3, "op": "history" }),
+        ],
+    );
+    let old = responses[0]["ok"]["version"].as_str().unwrap().to_owned();
+    let now = responses[1]["ok"]["version"].as_str().unwrap().to_owned();
+    let scenes: Vec<&Json> = responses[2]["ok"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "scene")
+        .collect();
+    assert_eq!(scenes.first().unwrap()["version"], old.as_str());
+    assert_eq!(scenes.last().unwrap()["version"], now.as_str());
+    assert_eq!(
+        scenes.last().unwrap()["origin"],
+        json!({ "protocol": "stdin" })
+    );
+    // The old structure read back and composed again: rolled back.
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "text": first }),
+            json!({ "id": 2, "op": "compose", "text": second }),
+            json!({ "id": 3, "op": "document", "version": old }),
+        ],
+    );
+    let text = responses[2]["ok"]["text"].as_str().unwrap().to_owned();
+    assert_eq!(text, first);
+    let responses = talk(
+        &scene,
+        &[json!({ "id": 1, "op": "compose", "text": text, "expect": now })],
+    );
+    assert!(responses[0].get("error").is_none(), "{}", responses[0]);
+    assert_eq!(std::fs::read_to_string(&scene).unwrap(), first);
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}
+
+/// With `structure: "snapshot"` the scene the snapshot ran in comes back
+/// before its state; when the world then cannot run, the scene that
+/// stood is put back with the state.
+#[test]
+fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
+    let scene = tally_world("restructure", 3);
+    let first = std::fs::read_to_string(&scene).unwrap();
+    let relaxed = first.replace("- 3)", "- 1000000)");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "text": relaxed }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 4, "op": "snapshot" }),
+        ],
+    );
+    let relaxed_at_two = responses[3]["ok"].clone();
+    assert_eq!(counted(&relaxed_at_two), 2);
+    assert!(
+        relaxed_at_two["scene"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("1000000")
+    );
+    // The scene on disk is strict again (the check fails at 3): restoring
+    // the relaxed structure with the state runs, and the scene is the
+    // snapshot's.
+    std::fs::write(&scene, &first).unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "restore", "snapshot": relaxed_at_two, "laws": "current", "structure": "snapshot" }),
+            json!({ "id": 2, "op": "document" }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.2 }),
+        ],
+    );
+    assert!(responses[0].get("error").is_none(), "{}", responses[0]);
+    assert!(
+        responses[1]["ok"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("1000000")
+    );
+    assert!(responses[2].get("error").is_none(), "{}", responses[2]);
+    // A snapshot of the strict scene at two, restored with its structure:
+    // its trial counts to three and divides by zero, so the relaxed scene
+    // that stood is put back, and the state with it.
+    std::fs::write(&scene, &first).unwrap();
+    let strict = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 3, "op": "snapshot" }),
+        ],
+    );
+    let strict_at_two = strict[2]["ok"].clone();
+    std::fs::write(&scene, &relaxed).unwrap();
+    let ten = orla_formats::base64::base64(&10u32.to_le_bytes());
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "write", "node": "tally", "data": ten }),
+            json!({ "id": 3, "op": "restore", "snapshot": strict_at_two, "laws": "current", "structure": "snapshot" }),
+            json!({ "id": 4, "op": "document" }),
+            json!({ "id": 5, "op": "snapshot" }),
+        ],
+    );
+    assert!(responses[2].get("error").is_some(), "{}", responses[2]);
+    assert_eq!(
+        responses[3]["ok"]["text"].as_str().unwrap(),
+        relaxed,
+        "the scene that stood"
+    );
+    assert_eq!(counted(&responses[4]["ok"]), 10, "the state that stood");
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}

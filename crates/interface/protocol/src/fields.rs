@@ -277,6 +277,10 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
         "frame": snapshot.frame,
         "laws": laws,
         "states": states,
+        "scene": snapshot.scene.as_ref().map(|text| json!({
+            "version": crate::create::document_version(text),
+            "text": text,
+        })),
     });
     let Some(to) = request.get("to") else {
         return Ok(json);
@@ -351,10 +355,21 @@ pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, 
         }
         _ => return Err(failure("`restore` takes a `snapshot`, or a file `from`")),
     };
+    // The structure is the scene as it stands unless the restore asks
+    // for the snapshot's.
+    let structure = match request.get("structure").and_then(Json::as_str) {
+        None | Some("current") => orla_session::Structure::Current,
+        Some("snapshot") => orla_session::Structure::Snapshot,
+        Some(other) => {
+            return Err(failure(format!(
+                "`structure` is \"current\" or \"snapshot\", not `{other}`"
+            )));
+        }
+    };
     let snapshot = snapshot_from(json)?;
     let context = context_of(session, request.json());
     let report = session
-        .restore(&snapshot, laws, &context)
+        .restore(&snapshot, laws, structure, &context)
         .map_err(failure)?;
     let (revision, frame) = session.position();
     Ok(json!({
@@ -442,10 +457,16 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
             words,
         });
     }
+    let scene = json
+        .get("scene")
+        .and_then(|scene| scene.get("text"))
+        .and_then(Json::as_str)
+        .map(str::to_owned);
     Ok(orla_session::Snapshot {
         revision: number("revision")?,
         frame: number("frame")?,
         laws,
         states,
+        scene,
     })
 }

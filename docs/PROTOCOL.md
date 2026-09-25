@@ -89,7 +89,10 @@ it came from: a document on disk, or the protocol and its channel
 (`stdin`, `socket 3`, `websocket 4`), a fact about how it arrived, not
 who sent it; and the attempts refused since, with why, which move
 nothing. `kernel` with a `generation` reads the source a Kernel had then,
-while the session remembers the change that published it. What it
+while the session remembers the change that published it, and
+`document` with a `version` the scene document a `scene` change loaded:
+composing it again, against the version that stands, rolls the
+structure back as publishing an old source rolls a law back. What it
 remembers is bounded; the session remembers changes, never whole worlds.
 
 `snapshot` takes the world whole for its caller to keep: the revision and
@@ -112,7 +115,11 @@ one frame, under the context given as `evaluate` takes it, which commits
 nothing: when it runs, the world is the snapshot's, and the next
 `evaluate` is the frame after it; when it fails, the state and the laws
 are what they were, and the attempt is in `history`. Runs off the frame
-are let go either way.
+are let go either way. `structure` (`"current"` when absent) brings the
+snapshot's scene document back too, with `"snapshot"`: checked as
+`compose` checks it and written first, its own Kernels in place before
+the trial frame, and put back with everything else when the world does
+not run.
 
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0 (a manifest's `memories` names the ports that
