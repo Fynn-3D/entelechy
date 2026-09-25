@@ -305,6 +305,46 @@ impl Evaluator {
         Ok(advanced)
     }
 
+    /// Forgets the committed state of `node.port` alone, so its `<~`
+    /// readers read their initial sources again on the next evaluation
+    /// while every other port keeps its state. Runs off the frame that
+    /// read it, or read what was computed from it, are let go: one that
+    /// landed after would commit the forgotten state again. Other runs go
+    /// on. The port must be state; one not committed yet is left as it is.
+    pub fn reset_port(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        node: &NodeId,
+        port: &str,
+    ) -> Result<(), EvaluateError> {
+        if !is_state(graph, node, port) {
+            return Err(EvaluateError::NotState {
+                node: node.clone(),
+                port: port.to_owned(),
+            });
+        }
+        self.recover(runtime);
+        for id in downstream_of_state(graph, node, port) {
+            if let Some(running) = self.running.remove(&id) {
+                runtime.discard_run(running.run);
+            }
+        }
+        self.forget_state(&(node.clone(), port.to_owned()), runtime);
+        Ok(())
+    }
+
+    /// Takes one port's committed state, releasing the Field when nothing
+    /// else holds it: a handle two ports share is released with the last.
+    pub(super) fn forget_state(&mut self, key: &(NodeId, String), runtime: &mut Runtime) {
+        if let Some(handle) = self.commit_take(key)
+            && !self.is_cached(handle)
+            && !self.is_kept(handle)
+        {
+            release(runtime, handle);
+        }
+    }
+
     /// Replaces the committed state of `node.port` with `words`, laid out
     /// as the port's current value is, so the next evaluation's `<~`
     /// readers start from it: how a Field comes in from outside, a saved
@@ -319,13 +359,7 @@ impl Evaluator {
         port: &str,
         words: Vec<u32>,
     ) -> Result<(), EvaluateError> {
-        let is_state = graph.nodes.iter().any(|reader| {
-            reader.inputs.values().any(|binding| {
-                matches!(binding, Binding::Previous { source: Source::Node { node: producer, port: read }, .. }
-                    if producer == node && read == port)
-            })
-        });
-        if !is_state {
+        if !is_state(graph, node, port) {
             return Err(EvaluateError::NotState {
                 node: node.clone(),
                 port: port.to_owned(),
@@ -419,4 +453,53 @@ pub(super) fn migrate(
         release(runtime, extra);
     }
     Ok(carried)
+}
+
+/// Whether `node.port` is state: some `<~` binding reads it.
+fn is_state(graph: &Graph, node: &NodeId, port: &str) -> bool {
+    graph
+        .nodes
+        .iter()
+        .any(|reader| reads_state(reader, node, port))
+}
+
+/// Whether `reader` reads the state of `node.port` through a `<~`.
+fn reads_state(reader: &Node, node: &NodeId, port: &str) -> bool {
+    reader.inputs.values().any(|binding| {
+        matches!(binding, Binding::Previous { source: Source::Node { node: producer, port: read }, .. }
+            if producer == node && read == port)
+    })
+}
+
+/// The nodes whose outputs depend, within one evaluation, on the state
+/// of `node.port`: its `<~` readers and everything that reads them now.
+fn downstream_of_state(graph: &Graph, node: &NodeId, port: &str) -> BTreeSet<NodeId> {
+    let mut reached = BTreeSet::new();
+    let mut frontier: Vec<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|reader| reads_state(reader, node, port))
+        .map(|reader| reader.id.clone())
+        .collect();
+    // Who reads each node now, found once rather than a walk of the
+    // graph for every node reached.
+    let mut readers: BTreeMap<&NodeId, Vec<&NodeId>> = BTreeMap::new();
+    for reader in &graph.nodes {
+        for binding in reader.inputs.values() {
+            if let Binding::Now(Source::Node { node: producer, .. }) = binding {
+                readers.entry(producer).or_default().push(&reader.id);
+            }
+        }
+    }
+    while let Some(id) = frontier.pop() {
+        if !reached.insert(id.clone()) {
+            continue;
+        }
+        for reader in readers.get(&id).into_iter().flatten() {
+            if !reached.contains(*reader) {
+                frontier.push((*reader).clone());
+            }
+        }
+    }
+    reached
 }

@@ -87,6 +87,13 @@ pub enum Change {
     },
     /// Committed state was forgotten.
     Reset,
+    /// One port's committed state was forgotten; the rest kept theirs.
+    ResetPort {
+        /// The node.
+        node: String,
+        /// Its port.
+        port: String,
+    },
     /// A snapshot's world was restored.
     Restored {
         /// The revision the snapshot was taken at.

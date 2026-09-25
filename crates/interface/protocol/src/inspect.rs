@@ -109,6 +109,9 @@ pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json
                     json!({ "kind": "written", "node": node, "port": port })
                 }
                 orla_session::Change::Reset => json!({ "kind": "reset" }),
+                orla_session::Change::ResetPort { node, port } => {
+                    json!({ "kind": "reset", "node": node, "port": port })
+                }
                 orla_session::Change::Restored { revision, laws } => {
                     json!({ "kind": "restored", "snapshot_revision": revision, "laws": if *laws { "snapshot" } else { "current" } })
                 }

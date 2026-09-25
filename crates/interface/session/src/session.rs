@@ -514,6 +514,27 @@ impl Session {
             .changed(crate::Change::Reset, self.origin.clone());
     }
 
+    /// Forgets the committed state of `node.port` alone; its `<~` readers
+    /// restart from their initial sources on the next evaluation, and
+    /// every other port keeps its state. The port must be state.
+    pub fn reset_port(
+        &mut self,
+        node: &orla_graph::NodeId,
+        port: &str,
+    ) -> Result<(), EvaluateError> {
+        let graph = self.scene.graph().ok_or_else(no_scene)?;
+        self.evaluator
+            .reset_port(graph, &mut self.runtime, node, port)?;
+        self.history.changed(
+            crate::Change::ResetPort {
+                node: node.to_string(),
+                port: port.to_owned(),
+            },
+            self.origin.clone(),
+        );
+        Ok(())
+    }
+
     /// Sets the window a headless session reports when an evaluation names
     /// none: the size in pixels and the scale factor; `None` for no window.
     pub fn set_window(&mut self, window: Option<([f32; 2], f32)>) {

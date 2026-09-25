@@ -122,6 +122,15 @@ frame 0.48
 frame 0.5
 button right up
 frame 0.52
+
+# Starting the view's state alone again brings the camera home and
+# leaves the world as it is: the erase stays, and Z still undoes it.
+reset state.result
+frame 0.525
+expect state.result[0].yaw = 0.7 0.001
+expect state.result[0].pan = 0 0 0
+expect state.result[0].zoom = 0.8 0.001
+expect world.result[50688] = 0
 key 90 down
 frame 0.53
 expect world.result[50688] = 8                # undo restores the stroke

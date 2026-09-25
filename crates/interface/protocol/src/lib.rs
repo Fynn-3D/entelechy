@@ -37,7 +37,7 @@
 //! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `snapshot` | `to`? (a file, where `--allow file.write` allows) | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
 //! | `restore` | `snapshot` (as `snapshot` gave it) or `from` (its file), `laws` = `"current"` / `"snapshot"`, `structure`? = `"current"` / `"snapshot"`, the context `evaluate` takes | the world restored after a trial frame that commits nothing; revision, report |
-//! | `reset` | | ok |
+//! | `reset` | `node`?, `port`? (`result` when not named) | forgets the committed state, or that one port's alone; `<~` readers restart from their initial sources |
 //! | `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
 //! | `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
 //! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
@@ -152,7 +152,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "evaluate" => run::evaluate(session, &request),
         "advance" => run::advance(session, &request),
         "bench" => run::bench(session, &request),
-        "reset" => run::reset(session),
+        "reset" => run::reset(session, &request),
         "window" => run::window(session, &request),
         "read" => fields::read(session, &request),
         "snapshot" => fields::snapshot(session, &request),

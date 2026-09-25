@@ -299,14 +299,17 @@ impl Evaluator {
     }
 
     /// Forgets committed state so `<~` bindings read their initial sources
-    /// again on the next evaluation. Cached outputs stay.
+    /// again on the next evaluation. Cached outputs stay. Runs off the
+    /// frame are let go: they began from the state forgotten, and one
+    /// that landed after would commit it again.
     pub fn reset_state(&mut self, runtime: &mut Runtime) {
-        let committed = std::mem::take(&mut self.committed);
-        self.committed_handles.clear();
-        for (_, handle) in committed {
-            if !self.is_cached(handle) {
-                release(runtime, handle);
-            }
+        self.recover(runtime);
+        for (_, running) in std::mem::take(&mut self.running) {
+            runtime.discard_run(running.run);
+        }
+        let ports: Vec<(NodeId, String)> = self.committed.keys().cloned().collect();
+        for key in ports {
+            self.forget_state(&key, runtime);
         }
     }
 
