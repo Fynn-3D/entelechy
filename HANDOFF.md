@@ -30,10 +30,10 @@ Verified surface, as of `main`:
 
 ## Next
 
-Open: the user has not chosen the next round. The three doors of a live
-world (docs/DECISIONS.md) are done: structure by `compose` edits, state a
-port at a time, params only as declared. Candidates: WebAssembly threads
-under WASI (`wasm32-wasip1-threads`), which the WASI replays wait on; a
-second native platform (Vulkan or DX12, Linux or Windows; needs the CI
-workflow run by hand); the page's GPU in Firefox and Safari, which have
-no JavaScript Promise Integration yet. Ask before starting any.
+Open: the user has not chosen the next round. The page's GPU runs in
+Firefox (156, by hand in a window); WASI's thread waits for shared-
+everything threads (docs/DECISIONS.md). Candidates: Safari 27's WebGPU
+and JavaScript Promise Integration, once this machine has macOS 27 or
+Safari Technology Preview; a second native platform (Vulkan or DX12,
+Linux or Windows; needs the CI workflow run by hand). Ask before
+starting any.
