@@ -209,6 +209,11 @@ pub struct Play {
     began: f64,
     input: InputState,
     pad: Pad,
+    /// Buttons and keys pressed since the last frame, and those released
+    /// before a frame saw them pressed: a press lasts a frame at least,
+    /// however quick the hand, or the scene would never see it.
+    pressed: Vec<Held>,
+    late: Vec<Held>,
     /// The pointer in window pixels, as the device last said.
     cursor: (f32, f32),
     /// Where the picture landed in the window, and its size.
@@ -240,6 +245,8 @@ impl Play {
             began: clock(),
             input: InputState::default(),
             pad: Pad::default(),
+            pressed: Vec::new(),
+            late: Vec::new(),
             cursor: (0.0, 0.0),
             placement: Placement::default(),
             shown_size: (0, 0),
@@ -312,11 +319,39 @@ impl Play {
             }
             _ => {
                 if let Some(code) = key_code(name) {
-                    self.input.set_key(code, down);
+                    self.hold(Held::Key(code), down);
                 }
             }
         }
         None
+    }
+
+    /// A button or a key pressed or released; one released before any
+    /// frame saw it pressed is released after the next.
+    fn hold(&mut self, held: Held, down: bool) {
+        if down {
+            self.late.retain(|late| *late != held);
+            if !self.pressed.contains(&held) {
+                self.pressed.push(held);
+            }
+            self.set(held, true);
+        } else if self.pressed.contains(&held) {
+            if !self.late.contains(&held) {
+                self.late.push(held);
+            }
+        } else {
+            self.set(held, false);
+        }
+    }
+
+    fn set(&mut self, held: Held, down: bool) {
+        match held {
+            Held::Key(code) => self.input.set_key(code, down),
+            Held::Button(0) => self.input.pointer_down = down,
+            Held::Button(1) => self.input.pointer_right = down,
+            Held::Button(2) => self.input.pointer_middle = down,
+            Held::Button(_) => {}
+        }
     }
 
     /// The pointer at `(x, y)` in window pixels.
@@ -327,12 +362,7 @@ impl Play {
 
     /// A pointer button, 0 left, 1 right, 2 middle.
     pub fn button(&mut self, which: u8, down: bool) {
-        match which {
-            0 => self.input.pointer_down = down,
-            1 => self.input.pointer_right = down,
-            2 => self.input.pointer_middle = down,
-            _ => {}
-        }
+        self.hold(Held::Button(which), down);
         self.update_pointer();
     }
 
@@ -376,6 +406,12 @@ impl Play {
         let started = (self.clock)();
         let context = replayed.unwrap_or_else(|| self.context(view));
         self.input.wheel = [0.0, 0.0];
+        // This frame has seen what was pressed; what was let go before it
+        // did is let go now, for the next.
+        self.pressed.clear();
+        for held in std::mem::take(&mut self.late) {
+            self.set(held, false);
+        }
         match session.evaluate(&context) {
             Ok(report) => {
                 if replayed.is_some()
@@ -626,6 +662,13 @@ impl Play {
         );
         hud::panel(&self.stats.line(&rest), context.scale.round() as u32)
     }
+}
+
+/// A button (0 left, 1 right, 2 middle) or a key, by its code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    Button(u8),
+    Key(i32),
 }
 
 /// What a replay says for the frame about to be made.

@@ -210,7 +210,11 @@ try {
           await devtools.send("Input.dispatchKeyEvent", { type, key, code: key }, attached.sessionId);
         }
       };
-      return act({ said, key });
+      const run = (expression) =>
+        devtools
+          .send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, attached.sessionId)
+          .then((r) => r.result.value);
+      return act({ said, key, run });
     };
     const until = async (said, pattern, seconds) => {
       const deadline = Date.now() + seconds * 1000;
@@ -230,15 +234,18 @@ try {
       console.log(`play.html on the ${on}: ${ok ? "the replay played to its end, every check held" : text}`);
       if (!ok) log = log.replace("RESULT: ok", `RESULT: failed: play.html on the ${on}`);
     }
-    const keys = await play("scene=examples/ant/scene.osn&on=jit", async ({ said, key }) => {
+    const keys = await play("scene=examples/ant/scene.osn&on=jit", async ({ said, key, run }) => {
       await until(said, /scene loaded/, 30);
       await sleep(500);
       await key("F5");
       await key("Tab");
-      return until(said, /state reset[\s\S]*previewing/, 10);
+      const pressed = await until(said, /state reset[\s\S]*previewing/, 10);
+      // An agent in the page, answered between frames as `--serve` is.
+      const backend = await run("player.call('status').then((s) => s.backend)");
+      return backend === "jit" ? pressed : `the protocol in the page answered ${backend}`;
     });
     const ok = /previewing/.test(keys);
-    console.log(`play.html keys: ${ok ? "F5 and Tab reached the play" : keys}`);
+    console.log(`play.html keys: ${ok ? "F5 and Tab reached the play, and the protocol was answered between frames" : keys}`);
     if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: play.html keys");
   }
   for (const problem of devtools.problems) console.log(`page: ${problem}`);

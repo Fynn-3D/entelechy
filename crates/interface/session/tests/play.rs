@@ -223,3 +223,37 @@ fn a_replay_plays_to_its_end_and_says_what_it_saw() {
         "{said:?}"
     );
 }
+
+/// A press shorter than a frame is seen by the next frame, and released
+/// after it: a quick hand is not lost between two frames.
+#[test]
+fn a_press_lasts_a_frame_however_quick() {
+    let dir = scratch("quick");
+    let mut session = open(&dir);
+    let mut play = Play::new(still);
+    shown(&mut play, &mut session);
+    play.button(0, true);
+    play.button(0, false);
+    play.key(&mut session, "a", true);
+    play.key(&mut session, "a", false);
+    let pressed = shown(&mut play, &mut session);
+    session.runtime_mut().materialize(pressed.picture).unwrap();
+    let green = f32::from_bits(
+        session
+            .runtime()
+            .host()
+            .element(pressed.picture, 0)
+            .unwrap()[1],
+    );
+    assert_eq!(green, 1.0, "the frame after a quick tap saw the key");
+    let after = play.context(VIEW).input;
+    assert!(
+        !after.pointer_down && !after.key(65),
+        "and the next one sees it let go"
+    );
+    // A press held across frames is released when it is let go.
+    play.button(0, true);
+    shown(&mut play, &mut session);
+    play.button(0, false);
+    assert!(!play.context(VIEW).input.pointer_down);
+}

@@ -32,7 +32,7 @@ export function serve(port = 0) {
     if (url.pathname === "/list") {
       const roots = (url.searchParams.get("roots") || "").split(",").filter(Boolean);
       const inside = roots.map((dir) => resolve(root, dir)).filter((dir) => dir.startsWith(root + sep) && existsSync(dir));
-      response.writeHead(200, { "content-type": "application/json" });
+      response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       return response.end(JSON.stringify(inside.flatMap(list)));
     }
     // What each file under the roots was last changed at, for a page
@@ -41,7 +41,7 @@ export function serve(port = 0) {
       const roots = (url.searchParams.get("roots") || "").split(",").filter(Boolean);
       const inside = roots.map((dir) => resolve(root, dir)).filter((dir) => dir.startsWith(root + sep) && existsSync(dir));
       const stamps = Object.fromEntries(inside.flatMap(list).map((path) => [path, statSync(resolve(root, path)).mtimeMs]));
-      response.writeHead(200, { "content-type": "application/json" });
+      response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       return response.end(JSON.stringify(stamps));
     }
     const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
@@ -49,7 +49,9 @@ export function serve(port = 0) {
       return response.writeHead(404).end();
     }
     const type = types[path.slice(path.lastIndexOf("."))] || "application/octet-stream";
-    response.writeHead(200, { "content-type": type });
+    // Never kept: what is served is what is on disk now, as a page that
+    // watches the files, and Orla rebuilt, must find.
+    response.writeHead(200, { "content-type": type, "cache-control": "no-store" });
     response.end(readFileSync(path));
   });
   return new Promise((done) => server.listen(port, "127.0.0.1", () => done(server)));

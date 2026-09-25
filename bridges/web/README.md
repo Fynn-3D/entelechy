@@ -71,7 +71,11 @@ as a page may), the canvas, and the served files it watches and hands in
 again when they change. What F5, Tab, F10 and Escape mean, how a pad is
 a keyboard, what the line of frame data says and how a replay drives the
 scene are the play's (`orla_play_*`), not the page's; Escape stops,
-since a page does not close itself, and a key or a click goes on.
+since a page does not close itself, and a key or a click goes on. An
+agent in the page creates through `player.call(op, fields)`, the
+creation protocol answered between frames as the Player's window
+answers `--serve`: `write` a volume into the voxel editor's `world` and
+the next frame carries on from it.
 
 `orla.js` is the client on its own: `OrlaClient` (a request, its answer;
 the session answers in order, so answers are matched first in, first

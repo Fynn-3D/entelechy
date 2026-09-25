@@ -84,6 +84,10 @@ class OrlaPlayer {
     // waiting on the device has Orla suspended, and nothing may reach
     // into it until it is done.
     this.hands = [];
+    // Requests of the creation protocol, answered between frames as the
+    // Player's window answers `--serve`: an agent in the page creates in
+    // the world a person is playing.
+    this.requests = [];
     this.listen();
   }
 
@@ -115,6 +119,23 @@ class OrlaPlayer {
   /// Hands a key to the play; true when it asks to stop.
   key(name, down) {
     return this.orla.withText(name, (at) => this.x.orla_play_key(this.session, at, down ? 1 : 0)) === 1;
+  }
+
+  /// One request of the creation protocol (`write`, `publish`, `read`,
+  /// ...), answered between frames, or at once while the scene is
+  /// stopped; the same promise `OrlaInPage.call` gives.
+  call(op, fields = {}) {
+    if (!this.running) return this.orla.call(op, fields);
+    return new Promise((resolve, reject) => this.requests.push({ op, fields, resolve, reject }));
+  }
+
+  /// Answers the requests that came since the last frame.
+  async answer() {
+    const requests = this.requests;
+    this.requests = [];
+    for (const { op, fields, resolve, reject } of requests) {
+      await this.orla.call(op, fields).then(resolve, reject);
+    }
   }
 
   /// What the person did since the last frame, handed to the play now.
@@ -168,10 +189,14 @@ class OrlaPlayer {
       const [x, y] = [event.deltaX * unit, -event.deltaY * unit];
       this.hands.push(() => this.x.orla_play_wheel(this.session, x, y));
     }, { passive: false });
+    // Both canvases are the window: sized by the one always shown, since
+    // the other is hidden, and so sizeless, until the device draws on it.
     const fit = () => {
+      const width = Math.max(1, Math.round(this.canvas.clientWidth * scale()));
+      const height = Math.max(1, Math.round(this.canvas.clientHeight * scale()));
       for (const canvas of [this.canvas, this.shown]) {
-        canvas.width = Math.max(1, Math.round(canvas.clientWidth * scale()));
-        canvas.height = Math.max(1, Math.round(canvas.clientHeight * scale()));
+        canvas.width = width;
+        canvas.height = height;
       }
     };
     new ResizeObserver(fit).observe(this.canvas);
@@ -221,6 +246,7 @@ class OrlaPlayer {
   async step() {
     if (!this.handOver()) return;
     this.pollPads();
+    await this.answer();
     this.say();
     // With sound, the card sets the pace: a block is made when it has
     // room, as the Player's ring does.
@@ -310,6 +336,8 @@ class OrlaPlayer {
   /// a click goes on.
   stop() {
     this.running = false;
+    // Between frames: what waits is answered now, not at the next run.
+    this.answer();
     document.title = "Orla Player (stopped: a key or a click goes on)";
   }
 
