@@ -310,7 +310,11 @@ carries it out at the one moment nothing can undo: after the commit. The
 plan's `requires file.write` is the allowance, given by the person
 running the scene rather than claimed by the Kernel, so a generated
 Kernel or a connected agent gets no reach it was not handed; a server
-takes its allowances from the command line that started it.
+takes its allowances from the command line that started it. The session
+decides every write, not the interface that asks: `save` and `export`
+check its allowance whoever calls them and write through its store, and
+a file the person names on a command line (`--save`, `--out`) is
+allowed alone, not the directory it is in.
 
 **Where.** [`writes.rs`](../crates/interface/session/src/writes.rs) in the
 session; `to` and `else` in the document

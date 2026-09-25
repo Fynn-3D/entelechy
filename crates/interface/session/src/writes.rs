@@ -20,6 +20,9 @@ use crate::store::Store;
 pub(crate) struct Writes {
     /// Allowed directories, resolved.
     allowed: Vec<PathBuf>,
+    /// Allowed files, resolved: each named by the person running the
+    /// session, as a command line's `--save` or `--out` names one.
+    files: Vec<PathBuf>,
     /// Per file: the Field last written, and a digest of its bytes.
     written: BTreeMap<PathBuf, (Handle, u64)>,
     /// Refusals already said, so each is said once until it changes.
@@ -41,6 +44,13 @@ impl Writes {
             ));
         }
         self.allowed.push(resolved);
+        Ok(())
+    }
+
+    /// Allows a write to the one file `path`, wherever it is.
+    pub(crate) fn allow_file(&mut self, store: &dyn Store, path: &Path) -> Result<(), String> {
+        let resolved = resolve(store, path)?;
+        self.files.push(resolved);
         Ok(())
     }
 
@@ -118,13 +128,16 @@ impl Writes {
     /// directory: `..` and links are followed before the test, so no
     /// spelling reaches past one.
     pub(crate) fn place(&self, store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
-        if self.allowed.is_empty() {
+        if self.allowed.is_empty() && self.files.is_empty() {
             return Err(format!(
                 "writing files is not allowed; run with `--allow file.write={}`",
                 path.parent().unwrap_or(Path::new(".")).display()
             ));
         }
         let target = resolve(store, path)?;
+        if self.files.contains(&target) {
+            return Ok(target);
+        }
         if !self.allowed.iter().any(|dir| target.starts_with(dir)) {
             return Err(format!(
                 "{} is outside every directory allowed with `--allow file.write`",

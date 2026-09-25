@@ -57,6 +57,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(report.executed.len(), 3);
     let out = dir.join("out.ppm");
+    session.allow_write_to(&out).unwrap();
     session.export(report.output, &out).unwrap();
     assert!(
         std::fs::read(&out)
@@ -210,6 +211,7 @@ fn scene_edits_inline_kernels_and_externals_flow_through_the_session() {
     // A self-contained scene: an inline named kernel, an anonymous one, and
     // an external input. Nothing is used from the kernels directory.
     let photo = dir.join("photo.ppm");
+    session.allow_write_to(&photo).unwrap();
     session.export(report.output, &photo).unwrap();
     std::fs::write(
         &scene,
@@ -1846,6 +1848,7 @@ fn narrow_fields_land_live_and_leave_as_their_bytes() {
 
     let dir = scratch("narrow-save");
     let file = dir.join("normal.field");
+    session.allow_write_to(&file).unwrap();
     session
         .save(&orla_graph::NodeId("normal".into()), "result", &file)
         .unwrap();
@@ -2472,6 +2475,45 @@ output result <- gray.result;
         .unwrap_err();
     assert!(
         refused.contains("`level` is not a param the scene declares"),
+        "{refused}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A session writes a file only where it may: `save` and `export` ask
+/// the session's allowance whoever calls them, and a file the person
+/// named is allowed alone, not the directory around it.
+#[test]
+fn save_and_export_write_only_where_the_session_may() {
+    let dir = scratch("guarded-writes");
+    let mut session = Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    session.sync();
+    session.pin(orla_graph::NodeId("show".into()));
+    let report = session.evaluate(&Context::default()).unwrap();
+    let out = dir.join("out.ppm");
+    let refused = session.export(report.output, &out).unwrap_err().to_string();
+    assert!(
+        refused.contains("writing files is not allowed"),
+        "{refused}"
+    );
+    let field = dir.join("show.field");
+    let refused = session
+        .save(&orla_graph::NodeId("show".into()), "result", &field)
+        .unwrap_err();
+    assert!(
+        refused.contains("writing files is not allowed"),
+        "{refused}"
+    );
+    assert!(!out.exists() && !field.exists(), "nothing was written");
+    // Named, the one file is written; its neighbour still is not.
+    session.allow_write_to(&out).unwrap();
+    session.export(report.output, &out).unwrap();
+    assert!(out.exists());
+    let refused = session
+        .save(&orla_graph::NodeId("show".into()), "result", &field)
+        .unwrap_err();
+    assert!(
+        refused.contains("outside every directory allowed"),
         "{refused}"
     );
     let _ = std::fs::remove_dir_all(&dir);

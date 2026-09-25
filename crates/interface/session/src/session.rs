@@ -272,6 +272,13 @@ impl Session {
         self.inputs.allow_reads(self.scene.store().as_ref(), dir)
     }
 
+    /// Allows a write to the one file `path`: a file the person running
+    /// the session named themselves, as a command line's `--save` or
+    /// `--out` does. Nothing else under its directory is allowed by it.
+    pub fn allow_write_to(&mut self, path: &Path) -> Result<(), String> {
+        self.writes.allow_file(self.scene.store().as_ref(), path)
+    }
+
     /// Grants what a command line's `--allow` said.
     pub fn allow(&mut self, allowance: &crate::Allowance) -> Result<(), String> {
         match allowance {
@@ -605,13 +612,15 @@ impl Session {
     /// `.ppm` for a grid of pixels (a `Grid<Float>` as gray), `.pgm` for a
     /// `Grid<Float>`, `.wav` at 48 kHz for rows of one or two floats, `.mid`
     /// for rows of notes. The node must have been evaluated and kept
-    /// materialized (pinned).
+    /// materialized (pinned). The file must be one the session may write
+    /// ([`Session::allowed_write`]), whoever asks.
     pub fn save(
         &mut self,
         node: &orla_graph::NodeId,
         port: &str,
         path: &Path,
     ) -> Result<(), String> {
+        let path = self.allowed_write(path)?;
         observe::save(
             self.scene.store().as_ref(),
             self.scene.graph(),
@@ -619,7 +628,7 @@ impl Session {
             &mut self.runtime,
             node,
             port,
-            path,
+            &path,
         )
     }
 
@@ -695,9 +704,11 @@ impl Session {
     }
 
     /// Writes a cached image to a PPM file, materializing it if it was
-    /// resident on the device.
+    /// resident on the device. The file must be one the session may
+    /// write ([`Session::allowed_write`]), whoever asks.
     pub fn export(&mut self, image: Handle, path: &Path) -> Result<(), SessionError> {
-        observe::export(&mut self.runtime, image, path)
+        let path = self.allowed_write(path).map_err(SessionError::Observe)?;
+        observe::export(self.scene.store().as_ref(), &mut self.runtime, image, &path)
     }
 
     /// Reads one pixel of a cached image, materializing it if needed.

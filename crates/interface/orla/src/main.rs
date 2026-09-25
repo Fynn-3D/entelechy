@@ -435,8 +435,10 @@ fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
 fn render(args: &[String]) -> Result<(), String> {
     let options = parse_render(args)?;
     let mut session = options.session.open("jit")?;
-    for (node, _, _) in &options.saves {
+    // A file named on the command line is the person's own allowance.
+    for (node, _, path) in &options.saves {
         session.pin(orla_graph::NodeId(node.clone()));
+        session.allow_write_to(path)?;
     }
     let events = session.sync();
     report_events(&events);
@@ -513,9 +515,12 @@ fn run(args: &[String]) -> Result<(), String> {
     // A profile waits for the device after each node, so the times are
     // the work rather than the submission.
     session.set_measured(options.profile);
-    for (node, _, _) in &options.saves {
+    // A file named on the command line is the person's own allowance.
+    for (node, _, path) in &options.saves {
         session.pin(orla_graph::NodeId(node.clone()));
+        session.allow_write_to(path)?;
     }
+    session.allow_write_to(&options.out)?;
     let events = session.sync();
     report_events(&events);
     // Watching, a scene that does not load yet may be fixed and saved.
