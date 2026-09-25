@@ -189,6 +189,23 @@ fn scene_edits_inline_kernels_and_externals_flow_through_the_session() {
         report.executed.is_empty(),
         "previous graph is still evaluated"
     );
+    // A text that parses and lowers but reads a node that is not there
+    // runs no frame: it is refused, and the graph running goes on.
+    let dangling = format!(
+        "{}\noutput extra <- nowhere.result;\n",
+        text.replace("size = 8;", "size = 32;")
+    );
+    std::fs::write(&scene, dangling).unwrap();
+    let events = session.sync();
+    assert!(
+        matches!(&events[..], [Event::SceneRejected(why)] if why.message.contains("unknown source `nowhere.result`")),
+        "{events:?}"
+    );
+    let report = session.evaluate(&Context::default()).unwrap();
+    assert!(
+        report.executed.is_empty(),
+        "the graph running is still evaluated"
+    );
 
     // A self-contained scene: an inline named kernel, an anonymous one, and
     // an external input. Nothing is used from the kernels directory.

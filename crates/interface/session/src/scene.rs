@@ -201,11 +201,19 @@ impl Scene {
             &self.params,
         )
         .map_err(|e| Diagnostic::from(&e))?;
+        // A graph whose nodes read what is not there, or read each other
+        // round, runs no frame: it is refused here, where the scene it
+        // would replace is still running, not found at the next frame.
+        lowered
+            .graph
+            .order()
+            .map_err(|e| Diagnostic::new(e.to_string()))?;
         Ok((document, lowered))
     }
 
-    /// Whether `text`, as the root, would be taken whole: it lowers, and
-    /// every Kernel it defines itself compiles. Nothing is written,
+    /// Whether `text`, as the root, would be taken whole: it lowers to a
+    /// graph whose every source is there, and every Kernel it defines
+    /// itself compiles. Nothing is written,
     /// published or run; see [`crate::Session::check_scene`].
     pub(crate) fn check(&self, text: &str) -> Result<(), Diagnostic> {
         let (mut document, lowered) = self.lower(text)?;
