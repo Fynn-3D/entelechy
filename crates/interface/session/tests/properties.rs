@@ -95,13 +95,16 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
     let mut committed = 0i32;
     // The layout the committed state is in; `None` while it is the seed.
     let mut kept_as: Option<u32> = None;
+    // A snapshot taken, and what the model said of the world then.
+    let mut taken: Option<(orla_session::Snapshot, i32, Option<u32>)> = None;
+    let mut restored = 0;
     let mut rng = Rng::new(0x57a7e);
     let mut most_held = 0usize;
     let mut held_after_warmup = None;
     let mut log = Vec::new();
     let (mut succeeded, mut failed, mut migrated) = (0, 0, 0);
     for step in 0..steps() {
-        let choice = rng.below(10);
+        let choice = rng.below(13);
         match choice {
             // Evaluate, most of the time.
             0..=4 => {
@@ -172,6 +175,34 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                 session.sync();
                 log.push(format!("{step}: broken and mended"));
             }
+            // A snapshot of the world as it stands.
+            10 => {
+                let snapshot = session.snapshot().unwrap();
+                log.push(format!("{step}: snapshot at {committed}"));
+                taken = Some((snapshot, committed, kept_as));
+            }
+            // A restore under the laws that run: it stands only if its
+            // trial frame runs, and then the world is the snapshot's, its
+            // state migrated or restarted as the current layout takes it;
+            // refused, the world is as it was.
+            11 | 12 => {
+                let Some((snapshot, count, kept)) = &taken else {
+                    continue;
+                };
+                match session.restore(snapshot, orla_session::Laws::Current, &Context::default()) {
+                    Ok(_) => {
+                        restored += 1;
+                        (committed, kept_as) = match kept {
+                            // Into the narrow layout nothing carries it.
+                            Some(old) if *old != layout && layout == 1 => (0, None),
+                            Some(_) => (*count, Some(layout)),
+                            None => (0, None),
+                        };
+                        log.push(format!("{step}: restored {count} as {committed}"));
+                    }
+                    Err(why) => log.push(format!("{step}: restore refused: {why}")),
+                }
+            }
             // A reset: the state starts again from the seed.
             _ => {
                 session.reset_state();
@@ -188,8 +219,8 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
     }
     // The life went through each of what it is about.
     assert!(
-        succeeded > steps() / 10 && failed > 0 && migrated > 0,
-        "{succeeded} succeeded, {failed} failed, {migrated} migrated"
+        succeeded > steps() / 10 && failed > 0 && migrated > 0 && restored > 0,
+        "{succeeded} succeeded, {failed} failed, {migrated} migrated, {restored} restored"
     );
     // A leak grows with the steps; what the scene holds does not.
     let warm = held_after_warmup.unwrap();

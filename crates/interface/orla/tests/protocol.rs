@@ -1636,3 +1636,199 @@ fn a_snapshot_takes_committed_state_and_the_laws_it_ran_under() {
     assert!(!dir.join("elsewhere.json").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A tally in a library of its own, so a publish can replace it by id,
+/// and a check that fails when the count reaches `fail_at`.
+fn tally_world(name: &str, fail_at: i32) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("orla-protocol-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("lib.orla"),
+        "kernel t.tally@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return at(previous, 0) + 1; } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        format!(
+            "use \"lib.orla\";\n\
+             node zero: Rows<Int> {{ domain = 1; }}\n\
+             node tally: t.tally@1 {{ previous <~ tally.result from zero.result; domain = 1; }}\n\
+             node check: kernel {{\n\
+                 requires {{ field.read; field.write; }}\n\
+                 input count: Rows<Int> <- tally.result;\n\
+                 output result: Rows<Int>;\n\
+                 domain = 1;\n\
+                 compute {{ return 100 / (at(count, 0) - {fail_at}); }}\n\
+             }}\n\
+             output result <- check.result;\n"
+        ),
+    )
+    .unwrap();
+    dir.join("scene.osn")
+}
+
+fn counted(snapshot: &Json) -> u32 {
+    let tally = snapshot["states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["node"] == "tally")
+        .unwrap();
+    let bytes = orla_formats::base64::unbase64(tally["data"].as_str().unwrap()).unwrap();
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+/// A snapshot's world restored under the laws that run: the trial frame
+/// proves it and commits nothing, so the world is the snapshot's and the
+/// next frame counts on from it. A restore says which laws, or is
+/// refused.
+#[test]
+fn a_restored_world_is_the_snapshots_and_counts_on_from_it() {
+    let scene = tally_world("restore", 1_000_000);
+    // The snapshot is taken in a first session and restored in a second:
+    // it is data its holder keeps, and needs nothing of the session.
+    let first = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.2 }),
+            json!({ "id": 4, "op": "snapshot" }),
+        ],
+    );
+    let taken = first[3]["ok"].clone();
+    assert_eq!(counted(&taken), 3);
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "restore", "snapshot": taken }),
+            json!({ "id": 3, "op": "restore", "snapshot": taken, "laws": "current" }),
+            json!({ "id": 4, "op": "snapshot" }),
+            json!({ "id": 5, "op": "evaluate", "time": 0.3 }),
+            json!({ "id": 6, "op": "snapshot" }),
+            json!({ "id": 7, "op": "history" }),
+        ],
+    );
+    let why = responses[1]["error"]["message"].as_str().unwrap();
+    assert!(why.contains("`laws`"), "{why}");
+    assert!(responses[2].get("error").is_none(), "{}", responses[2]);
+    // The trial frame committed nothing: the world is the snapshot's...
+    assert_eq!(counted(&responses[3]["ok"]), 3);
+    // ...and the next frame is the one after it.
+    assert_eq!(counted(&responses[5]["ok"]), 4);
+    let changes = responses[6]["ok"]["changes"].as_array().unwrap();
+    let restored = changes.iter().find(|c| c["kind"] == "restored").unwrap();
+    assert_eq!(restored["laws"], "current");
+    assert_eq!(restored["origin"], json!({ "protocol": "stdin" }));
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}
+
+/// A world that cannot run is not restored: its trial frame fails, the
+/// state that stood stands, and the attempt is recorded with why.
+#[test]
+fn a_world_that_cannot_run_is_refused_and_the_world_stands() {
+    // The check divides by zero when the count reaches 3.
+    let scene = tally_world("refused", 3);
+    let ten = orla_formats::base64::base64(&10u32.to_le_bytes());
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 3, "op": "snapshot" }),
+            json!({ "id": 4, "op": "write", "node": "tally", "data": ten }),
+            json!({ "id": 5, "op": "status" }),
+        ],
+    );
+    let at_two = responses[2]["ok"].clone();
+    assert_eq!(counted(&at_two), 2);
+    let revision = responses[4]["ok"]["revision"].clone();
+    // Restored, the count of 2 would step to 3 and divide by zero.
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "write", "node": "tally", "data": ten }),
+            json!({ "id": 3, "op": "restore", "snapshot": at_two, "laws": "current" }),
+            json!({ "id": 4, "op": "snapshot" }),
+            json!({ "id": 5, "op": "history" }),
+        ],
+    );
+    let why = responses[2]["error"]["message"].as_str().unwrap();
+    assert!(why.contains("does not run"), "{why}");
+    assert_eq!(
+        counted(&responses[3]["ok"]),
+        10,
+        "the state that stood stands"
+    );
+    let attempts = responses[4]["ok"]["attempts"].as_array().unwrap();
+    assert!(
+        attempts.last().unwrap()["subject"]
+            .as_str()
+            .unwrap()
+            .contains("snapshot")
+    );
+    let _ = revision;
+    // With its laws, the same: the law the snapshot would bring back is
+    // taken back with the state, and the law that ran runs.
+    let faster = "kernel t.tally@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return at(previous, 0) + 10; } }";
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "publish", "source": faster, "expect": "any" }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 3, "op": "restore", "snapshot": at_two, "laws": "snapshot" }),
+            json!({ "id": 4, "op": "kernel", "kernel": "t.tally@1" }),
+            json!({ "id": 5, "op": "snapshot" }),
+        ],
+    );
+    assert!(responses[2].get("error").is_some(), "{}", responses[2]);
+    let source = responses[3]["ok"]["source"].as_str().unwrap();
+    assert!(source.contains("+ 10;"), "the law that ran runs: {source}");
+    assert_eq!(counted(&responses[4]["ok"]), 10);
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}
+
+/// With its laws, a snapshot brings back the Kernels that ran when it was
+/// taken: a tally changed since goes back to what it was, all together
+/// with the state, and counts on as it counted then.
+#[test]
+fn a_world_restored_with_its_laws_runs_as_it_ran() {
+    let scene = tally_world("laws", 1_000_000);
+    let faster = "kernel t.tally@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return at(previous, 0) + 10; } }";
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "snapshot" }),
+            json!({ "id": 3, "op": "publish", "source": faster, "expect": "any" }),
+            json!({ "id": 4, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 5, "op": "snapshot" }),
+        ],
+    );
+    let at_one = responses[1]["ok"].clone();
+    assert_eq!(counted(&at_one), 1);
+    assert_eq!(counted(&responses[4]["ok"]), 11, "the faster law ran");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "publish", "source": faster, "expect": "any" }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 3, "op": "restore", "snapshot": at_one, "laws": "snapshot" }),
+            json!({ "id": 4, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 5, "op": "snapshot" }),
+            json!({ "id": 6, "op": "kernel", "kernel": "t.tally@1" }),
+        ],
+    );
+    assert!(responses[2].get("error").is_none(), "{}", responses[2]);
+    assert_eq!(
+        counted(&responses[4]["ok"]),
+        2,
+        "one, and one step of the old law"
+    );
+    let source = responses[5]["ok"]["source"].as_str().unwrap();
+    assert!(source.contains("+ 1;"), "{source}");
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}

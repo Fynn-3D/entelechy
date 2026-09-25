@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use orla_formats::ppm;
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
-use orla_runtime::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
+use orla_runtime::{Backend, Context, Expect, FieldData, Handle, KernelId, Runtime, Value};
 
 use crate::{Event, Limits, SessionError, Trace, inputs, kernels, observe, scene, writes};
 
@@ -145,6 +145,143 @@ impl Session {
             laws,
             states,
         })
+    }
+
+    /// Restores a snapshot's world as one change. With [`crate::Laws::Snapshot`]
+    /// its Kernels are published back first, all together, where their
+    /// sources differ from what runs; with [`crate::Laws::Current`] its
+    /// state goes under the laws that run, migrated where a layout
+    /// changed. Either way the world is proved by one frame evaluated
+    /// under `context` and not committed ([`orla_graph::Evaluator::restore`]),
+    /// and stands only if that frame succeeds; otherwise the state, and
+    /// the laws, are what they were, and the attempt is recorded.
+    pub fn restore(
+        &mut self,
+        snapshot: &crate::Snapshot,
+        laws: crate::Laws,
+        context: &Context,
+    ) -> Result<Report, String> {
+        let origin = self.origin.clone();
+        let restored = self.restore_world(snapshot, laws, context);
+        match &restored {
+            Ok(_) => self.history.changed(
+                crate::Change::Restored {
+                    revision: snapshot.revision,
+                    laws: laws == crate::Laws::Snapshot,
+                },
+                origin,
+            ),
+            Err(why) => self.history.refused(
+                format!("the snapshot of revision {}", snapshot.revision),
+                why.clone(),
+                None,
+                origin,
+            ),
+        }
+        restored
+    }
+
+    fn restore_world(
+        &mut self,
+        snapshot: &crate::Snapshot,
+        laws: crate::Laws,
+        context: &Context,
+    ) -> Result<Report, String> {
+        if self.scene.graph().is_none() {
+            return Err("no scene is loaded".into());
+        }
+        // The laws first, all or none, and what they replace kept to go
+        // back to.
+        let mut replaced_laws: Vec<(KernelId, Option<String>)> = Vec::new();
+        if laws == crate::Laws::Snapshot {
+            let mut candidates = Vec::new();
+            for (id, _, source) in &snapshot.laws {
+                let current = self.runtime.kernel(id);
+                if current
+                    .as_ref()
+                    .is_some_and(|version| version.source() == source)
+                {
+                    continue;
+                }
+                let candidate = self
+                    .prepare_source(source)
+                    .map_err(|e| format!("its {id} does not prepare: {e}"))?;
+                let expect = match &current {
+                    Some(version) => Expect::Generation(version.generation()),
+                    None => Expect::Absent,
+                };
+                replaced_laws.push((
+                    id.clone(),
+                    current.map(|version| version.source().to_owned()),
+                ));
+                candidates.push((candidate, expect));
+            }
+            let versions = self
+                .runtime
+                .publish_all(candidates)
+                .map_err(|e| e.to_string())?;
+            for version in versions {
+                self.history.published(
+                    version.id(),
+                    version.generation(),
+                    version.source(),
+                    self.origin.clone(),
+                );
+            }
+        }
+        let proved = self.restore_state(snapshot, context);
+        if proved.is_err() {
+            // The laws go back to what ran, as they came: all together.
+            for (id, source) in replaced_laws {
+                match source {
+                    Some(source) => {
+                        let _ = self.publish_source(&source, Expect::Any);
+                    }
+                    None => {
+                        self.runtime.retire(&id);
+                        self.history.retired(&id, self.origin.clone());
+                    }
+                }
+            }
+        }
+        proved
+    }
+
+    /// The snapshot's state installed and proved.
+    fn restore_state(
+        &mut self,
+        snapshot: &crate::Snapshot,
+        context: &Context,
+    ) -> Result<Report, String> {
+        let mut states = Vec::new();
+        for copy in &snapshot.states {
+            let adopted = FieldData::from_values(copy.schema.clone(), copy.domain, &copy.words)
+                .and_then(|data| self.runtime.host_mut().adopt(data));
+            match adopted {
+                Ok(handle) => states.push((
+                    orla_graph::NodeId(copy.node.clone()),
+                    copy.port.clone(),
+                    handle,
+                )),
+                Err(error) => {
+                    for (_, _, handle) in states {
+                        let _ = self.runtime.host_mut().release(handle);
+                    }
+                    return Err(format!("{}.{}: {error}", copy.node, copy.port));
+                }
+            }
+        }
+        let graph = self.scene.graph().ok_or("no scene is loaded")?;
+        self.evaluator
+            .restore(
+                graph,
+                &mut self.runtime,
+                self.inputs.handles(),
+                context,
+                self.scene.params(),
+                states,
+            )
+            .map_err(|error| format!("the restored world does not run: {error}"))
     }
 
     /// A remembered source by its digest.
@@ -372,6 +509,13 @@ impl Session {
     /// never reaches the disk.
     pub fn check_scene(&self, text: &str) -> Result<(), crate::Diagnostic> {
         self.scene.check(text)
+    }
+
+    /// Whether `path` may be read on the session's behalf: anywhere,
+    /// unless reads are restricted ([`Session::restrict_reads`]), and then
+    /// where the scene's documents are, in a package, or where allowed.
+    pub fn allowed_read(&self, path: &Path) -> Result<(), String> {
+        self.inputs.readable(path)
     }
 
     /// Where a write to `path` lands, once it is known to be inside a

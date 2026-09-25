@@ -423,10 +423,36 @@ its holder keeps, so the session stays the present.
 the session; `history`, `kernel` with `generation` and `snapshot` in
 the protocol. Held by the protocol's tests and the history's own.
 
-**What would change it.** Restoring (a snapshot's state under the laws
-that run now, migrated where layouts differ, or the whole world, its
-laws with it), each as one change that commits only if a trial frame of
-it evaluates and is not itself committed: the next steps, when a need
-asks for them. A second person on a session, which would add who to
-where.
+**What would change it.** A second person on a session, which would add
+who to where.
+
+## A world is restored only when the whole world can live again
+
+`restore` installs a snapshot's state in every state port at once, the
+ports it does not name restarting from their initial sources, and with
+`laws: "snapshot"` publishes its Kernels back first, all together. Then
+it proves the world by one frame. The frame runs as any does,
+migrating a state whose layout the Kernels now running no longer take,
+and commits nothing: when it succeeds the world is the snapshot's (the
+next frame, which finds the trial's outputs in the cache, is the one
+after it), and when it fails the state and the laws are put back as
+they were. `laws` has no default.
+
+**Why.** Every change in Orla is prepared, validated and proved before
+it is real: a Kernel's publish, a document's Kernels together, a
+composed scene, an evaluation's state. A restore is the largest change
+there is, a whole world at once, and a world that cannot run a frame is
+not one to return to. The trial is not committed because a snapshot is
+a moment; restoring one is being there, not one frame past it. Old state
+under current laws and the old world whole are different acts, so a
+restore names which.
+
+**Where.** `Evaluator::restore` in the
+[graph's state](../crates/core/graph/src/evaluate/state.rs), reusing
+what an evaluation replaces and puts back; `Session::restore` for the
+laws; `restore` in the protocol. Held by the protocol's tests (a world
+restored counts on from the snapshot; one that cannot run is refused
+with its laws taken back; one restored with its laws runs as it ran)
+and by the session's random life, which restores among everything else
+and was checked against a trial that commits.
 

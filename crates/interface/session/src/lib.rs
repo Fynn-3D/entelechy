@@ -63,6 +63,16 @@ pub struct Snapshot {
     pub states: Vec<StateCopy>,
 }
 
+/// What laws a restored snapshot runs under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Laws {
+    /// The laws that run now: the snapshot's state goes under them,
+    /// migrated where a layout changed.
+    Current,
+    /// The snapshot's own: its Kernels are published back with it.
+    Snapshot,
+}
+
 /// One port's committed state in a snapshot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StateCopy {

@@ -45,11 +45,5 @@ done
 
 Open: the user has not chosen the next round. Pending their word:
 portability (a second platform: Vulkan or DX12, Linux or Windows; only
-macOS with Metal is verified) and a WASM backend. Restoring a snapshot
-is designed and waits for a use that needs it (a game's load, a
-training run's rollback, an agent's trial and error): an atomic restore
-of every state port, with a trial frame evaluated and not committed;
-under the current laws with migration; and the whole world, its laws
-republished from the snapshot's sources. See
-`docs/DECISIONS.md#reality-changes-atomically-history-records-why`.
-Ask before starting any of them.
+macOS with Metal is verified) and a WASM backend. Ask before starting
+either.

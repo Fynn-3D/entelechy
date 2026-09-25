@@ -309,3 +309,143 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
         "frame": snapshot.frame,
     }))
 }
+
+/// Restores a snapshot's world: given inline, as `snapshot` gave it, or
+/// read `from` a file where the session may read. `laws` says whether
+/// the snapshot's Kernels come back with it or its state goes under the
+/// laws that run; there is no default, so a restore says which. The
+/// world stands only if a trial frame, under the context given as
+/// `evaluate` takes it, succeeds, and that frame commits nothing.
+pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, Json> {
+    let laws = match request.get("laws").and_then(Json::as_str) {
+        Some("current") => orla_session::Laws::Current,
+        Some("snapshot") => orla_session::Laws::Snapshot,
+        _ => {
+            return Err(failure(
+                "`laws` says what the restored world runs under: \"current\" or \"snapshot\"",
+            ));
+        }
+    };
+    let read;
+    let json = match (request.get("snapshot"), request.get("from")) {
+        (Some(json), None) => json,
+        (None, Some(Json::String(from))) => {
+            let path = std::path::Path::new(from);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                session
+                    .root()
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(path)
+            };
+            session
+                .allowed_read(&path)
+                .map_err(|why| failure(format!("cannot read the snapshot: {why}")))?;
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| failure(format!("{}: {e}", path.display())))?;
+            read = serde_json::from_str::<Json>(&text)
+                .map_err(|e| failure(format!("{}: not a snapshot: {e}", path.display())))?;
+            &read
+        }
+        _ => return Err(failure("`restore` takes a `snapshot`, or a file `from`")),
+    };
+    let snapshot = snapshot_from(json)?;
+    let context = context_of(session, request.json());
+    let report = session
+        .restore(&snapshot, laws, &context)
+        .map_err(failure)?;
+    let (revision, frame) = session.position();
+    Ok(json!({
+        "revision": revision,
+        "frame": frame,
+        "report": crate::report_json(session, &report),
+    }))
+}
+
+/// A snapshot read back from what `snapshot` wrote.
+fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
+    let bad = |what: &str| failure(format!("not a snapshot: {what}"));
+    if json.get("snapshot").and_then(Json::as_u64) != Some(u64::from(SNAPSHOT_VERSION)) {
+        return Err(bad(&format!(
+            "`snapshot` is the format's version, {SNAPSHOT_VERSION}"
+        )));
+    }
+    let number = |key: &str| json.get(key).and_then(Json::as_u64).ok_or_else(|| bad(key));
+    let mut laws = Vec::new();
+    for law in json
+        .get("laws")
+        .and_then(Json::as_array)
+        .ok_or_else(|| bad("laws"))?
+    {
+        let id = law
+            .get("kernel")
+            .and_then(Json::as_str)
+            .and_then(|id| id.parse().ok())
+            .ok_or_else(|| bad("a law's kernel"))?;
+        let generation = law
+            .get("generation")
+            .and_then(Json::as_u64)
+            .ok_or_else(|| bad("a law's generation"))?;
+        let source = law
+            .get("source")
+            .and_then(Json::as_str)
+            .ok_or_else(|| bad("a law's source"))?;
+        laws.push((id, orla_runtime::Generation(generation), source.to_owned()));
+    }
+    let mut states = Vec::new();
+    for state in json
+        .get("states")
+        .and_then(Json::as_array)
+        .ok_or_else(|| bad("states"))?
+    {
+        let text = |key: &str| {
+            state
+                .get(key)
+                .and_then(Json::as_str)
+                .ok_or_else(|| bad(&format!("a state's {key}")))
+        };
+        let schema: orla_runtime::Schema = text("layout")?
+            .parse()
+            .map_err(|e: String| bad(&format!("a state's layout: {e}")))?;
+        let extent: Vec<u32> = state
+            .get("extent")
+            .and_then(Json::as_array)
+            .map(|sides| {
+                sides
+                    .iter()
+                    .filter_map(|s| s.as_u64())
+                    .map(|s| s as u32)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let [w, h, d] = extent[..] else {
+            return Err(bad("a state's extent is three sides"));
+        };
+        let domain = match text("shape")? {
+            "Rows" => orla_runtime::Domain::Rows(w),
+            "Grid" => orla_runtime::Domain::Grid(w, h),
+            "Volume" => orla_runtime::Domain::Volume(w, h, d),
+            other => return Err(bad(&format!("`{other}` is no shape"))),
+        };
+        let bytes = unbase64(text("data")?).map_err(|e| bad(&format!("a state's data: {e}")))?;
+        let words = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        states.push(orla_session::StateCopy {
+            node: text("node")?.to_owned(),
+            port: text("port")?.to_owned(),
+            schema,
+            domain,
+            words,
+        });
+    }
+    Ok(orla_session::Snapshot {
+        revision: number("revision")?,
+        frame: number("frame")?,
+        laws,
+        states,
+    })
+}

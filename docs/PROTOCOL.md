@@ -99,7 +99,20 @@ under `"snapshot": 1`, the format's version. Only committed state is
 taken: after an evaluation that failed, `read` shows the output it
 computed, the snapshot the state that stands. With `to`, the snapshot is
 written to that file instead, where the server was started with `--allow
-file.write`. Restoring one is not yet an operation.
+file.write`.
+
+`restore` brings a snapshot's world back, given as `snapshot` gave it
+or read `from` its file (where the session may read). `laws` has no
+default: `"current"` puts the snapshot's state under the Kernels that run
+now, migrated where a layout changed, restarted where nothing carries
+it; `"snapshot"` publishes the snapshot's Kernels back first, all
+together, where their sources differ. A state port the snapshot does not
+name starts again from its initial source. The world is then proved by
+one frame, under the context given as `evaluate` takes it, which commits
+nothing: when it runs, the world is the snapshot's, and the next
+`evaluate` is the frame after it; when it fails, the state and the laws
+are what they were, and the attempt is in `history`. Runs off the frame
+are let go either way.
 
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0 (a manifest's `memories` names the ports that

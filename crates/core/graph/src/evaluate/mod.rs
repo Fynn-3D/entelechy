@@ -106,7 +106,9 @@ pub type Reset = Vec<(NodeId, String, String)>;
 /// put it back.
 struct Replaced {
     key: (NodeId, String),
-    previous: Handle,
+    /// What was committed there, or nothing: a restore that installs a
+    /// port the world had not committed yet.
+    previous: Option<Handle>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -219,6 +221,9 @@ pub struct Evaluator {
     /// restart), kept until it commits or put back when it fails; while
     /// here it is held as committed state is.
     replaced: Vec<Replaced>,
+    /// Whether the evaluation running is a restore's trial: it runs as
+    /// any does and commits nothing ([`Evaluator::restore`]).
+    trial: bool,
 }
 
 impl fmt::Debug for Evaluator {
@@ -622,7 +627,13 @@ impl Evaluator {
                 .map(|(_, handle)| *handle)
                 .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
             self.wait_for_checks(checks, runtime)?;
-            let committed = self.commit(graph, runtime)?;
+            // A trial proves the world can run; the frame it ran is not
+            // the world's, and commits nothing.
+            let committed = if self.trial {
+                Vec::new()
+            } else {
+                self.commit(graph, runtime)?
+            };
             Ok(Report {
                 output,
                 executed,

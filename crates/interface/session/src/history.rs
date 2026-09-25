@@ -83,6 +83,14 @@ pub enum Change {
     },
     /// Committed state was forgotten.
     Reset,
+    /// A snapshot's world was restored.
+    Restored {
+        /// The revision the snapshot was taken at.
+        revision: u64,
+        /// Whether its laws came with it, or its state alone went under
+        /// the laws that ran.
+        laws: bool,
+    },
 }
 
 /// A change and where the world was when it happened.

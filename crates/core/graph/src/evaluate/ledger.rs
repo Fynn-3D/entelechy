@@ -130,7 +130,7 @@ impl Evaluator {
     /// Whether `handle` is state: committed, or replaced by an evaluation
     /// that may yet put it back. What is kept is never released.
     pub(super) fn is_kept(&self, handle: Handle) -> bool {
-        self.is_committed(handle) || self.replaced.iter().any(|r| r.previous == handle)
+        self.is_committed(handle) || self.replaced.iter().any(|r| r.previous == Some(handle))
     }
 
     pub(super) fn is_committed(&self, handle: Handle) -> bool {

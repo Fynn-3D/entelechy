@@ -104,7 +104,7 @@ impl Evaluator {
                 self.commit_take(&key);
                 self.replaced.push(Replaced {
                     key: key.clone(),
-                    previous: current,
+                    previous: Some(current),
                 });
                 if let Some(carried) = carried {
                     self.commit_put(key, carried);
@@ -119,9 +119,12 @@ impl Evaluator {
     pub(super) fn restore_replaced(&mut self, runtime: &mut Runtime) {
         let replaced = std::mem::take(&mut self.replaced);
         for Replaced { key, previous } in replaced.into_iter().rev() {
-            let carried = self.commit_put(key, previous);
+            let carried = match previous {
+                Some(previous) => self.commit_put(key, previous),
+                None => self.commit_take(&key),
+            };
             if let Some(carried) = carried
-                && carried != previous
+                && Some(carried) != previous
                 && !self.is_cached(carried)
                 && !self.is_kept(carried)
             {
@@ -135,10 +138,90 @@ impl Evaluator {
     pub(super) fn release_replaced(&mut self, runtime: &mut Runtime) {
         let replaced = std::mem::take(&mut self.replaced);
         for Replaced { previous, .. } in replaced {
-            if !self.is_cached(previous) && !self.is_kept(previous) {
+            if let Some(previous) = previous
+                && !self.is_cached(previous)
+                && !self.is_kept(previous)
+            {
                 release(runtime, previous);
             }
         }
+    }
+
+    /// Makes `states` the whole committed world, as one change: every
+    /// `<~` port is given its state from `states`, and a port `states`
+    /// does not name starts again from its initial source. The world is
+    /// proved first: one frame is evaluated over it under `context`, a
+    /// port whose layout the Kernel no longer takes migrated as any
+    /// evaluation migrates it, and only when that frame succeeds does the
+    /// world stand. The frame itself commits nothing, so the next
+    /// evaluation is the one after the world `states` holds, and finds
+    /// what the trial computed in the cache. When the frame fails, or a
+    /// name is not a state port, the world is as it was and `states`
+    /// are released. Runs off the frame are let go either way: they
+    /// began in a world that is no longer the one restored from.
+    #[allow(clippy::too_many_arguments)]
+    pub fn restore(
+        &mut self,
+        graph: &Graph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+        states: Vec<(NodeId, String, Handle)>,
+    ) -> Result<Report, EvaluateError> {
+        let ports: BTreeSet<(NodeId, String)> = graph
+            .nodes
+            .iter()
+            .flat_map(|reader| reader.inputs.values())
+            .filter_map(|binding| match binding {
+                Binding::Previous {
+                    source: Source::Node { node, port },
+                    ..
+                } => Some((node.clone(), port.clone())),
+                _ => None,
+            })
+            .collect();
+        if let Some((node, port, _)) = states
+            .iter()
+            .find(|(node, port, _)| !ports.contains(&(node.clone(), port.clone())))
+        {
+            let refused = EvaluateError::NotState {
+                node: node.clone(),
+                port: port.clone(),
+            };
+            for (_, _, handle) in states {
+                release(runtime, handle);
+            }
+            return Err(refused);
+        }
+        for (_, running) in std::mem::take(&mut self.running) {
+            runtime.discard_run(running.run);
+        }
+        // Every port the world has or will have is replaced: what stood
+        // there kept, to be put back if the trial fails.
+        let installed: BTreeMap<(NodeId, String), Handle> = states
+            .into_iter()
+            .map(|(node, port, handle)| ((node, port), handle))
+            .collect();
+        for key in &ports {
+            let previous = self.commit_take(key);
+            self.replaced.push(Replaced {
+                key: key.clone(),
+                previous,
+            });
+            if let Some(handle) = installed.get(key) {
+                self.commit_put(key.clone(), *handle);
+            }
+        }
+        self.trial = true;
+        let proved = self.evaluate_with(graph, runtime, externals, context, params, None);
+        self.trial = false;
+        // An evaluation that failed before it reached the state left what
+        // this replaced for its caller to put back.
+        if proved.is_err() && !self.replaced.is_empty() {
+            self.restore_replaced(runtime);
+        }
+        proved
     }
 
     /// Makes every `<~` source's current output the committed state.

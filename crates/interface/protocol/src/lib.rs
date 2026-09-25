@@ -36,6 +36,7 @@
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
 //! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
 //! | `snapshot` | `to`? (a file, where `--allow file.write` allows) | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
+//! | `restore` | `snapshot` (as `snapshot` gave it) or `from` (its file), `laws` = `"current"` / `"snapshot"`, the context `evaluate` takes | the world restored after a trial frame that commits nothing; revision, report |
 //! | `reset` | | ok |
 //! | `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
 //! | `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
@@ -124,10 +125,10 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
 /// Every operation the protocol answers, in the order the table above
 /// lists them. A request naming another is refused with this list, so an
 /// agent that guessed wrong learns what there is.
-pub const OPERATIONS: [&str; 25] = [
+pub const OPERATIONS: [&str; 26] = [
     "status", "kernels", "kernel", "graph", "document", "history", "compose", "sync", "prepare",
     "publish", "retire", "param", "evaluate", "advance", "bench", "window", "read", "write",
-    "snapshot", "reset", "help", "trace", "pin", "unpin", "quit",
+    "snapshot", "restore", "reset", "help", "trace", "pin", "unpin", "quit",
 ];
 
 /// Handles one request: the operation it names, answered by the function
@@ -155,6 +156,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "window" => run::window(session, &request),
         "read" => fields::read(session, &request),
         "snapshot" => fields::snapshot(session, &request),
+        "restore" => fields::restore(session, &request),
         "write" => fields::write(session, &request),
         "trace" => fields::trace(session, &request),
         "pin" => fields::pin(session, &request),

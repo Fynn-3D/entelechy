@@ -96,7 +96,7 @@ impl Inputs {
 
     /// Whether `path` may be read: it is inside an allowed directory once
     /// `..` and links are followed, so no spelling reaches past one.
-    fn readable(&self, path: &Path) -> Result<(), String> {
+    pub(crate) fn readable(&self, path: &Path) -> Result<(), String> {
         if !self.restricted {
             return Ok(());
         }
