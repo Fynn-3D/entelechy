@@ -30,10 +30,11 @@ Verified surface, as of `main`:
 
 ## Next
 
-A live world is changed through three doors (docs/DECISIONS.md): the
-structure by its document, the state a committed port at a time, the
-parameters its document declares. Next on that line: `compose` that
-edits the document where it changes (a node, a binding) and keeps
-everything else of the text as written, comments included, rather than
-a whole new text an agent must write; then a node's own value is held
-to the document by tests and a note, with no new operation.
+A live world is changed through three doors (docs/DECISIONS.md); the
+structure's is now `compose` with `edits`, a statement at a time. Next on
+that line: a node's own value is the document's, held there by tests and
+a note and no new operation: `param` over the protocol reaches a node only
+through a `param` the document declares, a value set on a node is changed
+by an edit of its member, and neither survives in any other form across a
+sync. Accepted when a test shows each, and PROTOCOL says it where `param`
+is described.
