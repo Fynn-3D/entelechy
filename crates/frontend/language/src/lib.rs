@@ -57,7 +57,7 @@ use std::fmt;
 use std::ops::Range;
 
 pub use orla_abi::names::{did_you_mean, nearest};
-pub use parser::{parse, parse_document, parse_literal};
+pub use parser::{outline, parse, parse_document, parse_literal};
 
 /// The version of the Kernel language and the document format. Bumped
 /// when a document of the old one would no longer parse or mean the
@@ -106,6 +106,94 @@ pub struct Document {
     pub writes: Vec<WriteDecl>,
     /// Nodes in document order.
     pub nodes: Vec<NodeDecl>,
+}
+
+/// Where each statement of a document was written, in its text: what an
+/// edit of the document names, and the bytes it replaces. The document
+/// itself says what the statements mean; this says only where they are.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Outline {
+    /// Top-level statements in document order.
+    pub statements: Vec<Statement>,
+}
+
+/// One top-level statement: its kind, the name it declares, and its bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Statement {
+    /// What it declares.
+    pub kind: StatementKind,
+    /// The name it declares as written: a node's, an output's, a Kernel's
+    /// id, a `use`'s path; empty for the one `package`.
+    pub name: String,
+    /// From its first token to its last, the `;` or `}` included.
+    pub range: Range<usize>,
+    /// A node's block of members, when it has one; an inline Kernel's
+    /// node has none.
+    pub block: Option<NodeBlock>,
+}
+
+/// The kinds of top-level statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatementKind {
+    /// `use "path";`
+    Use,
+    /// `package name@version { ... }`
+    Package,
+    /// `struct Name { ... }`
+    Struct,
+    /// `type Name = ...;`
+    Type,
+    /// `fn name(...) { ... }`
+    Fn,
+    /// `kernel id@version { ... }`
+    Kernel,
+    /// `input name: Type ...;`
+    Input,
+    /// `param name: Type = value;`
+    Param,
+    /// `output name <- source ...;`
+    Output,
+    /// `node name: ...`
+    Node,
+}
+
+impl StatementKind {
+    /// The keyword that begins it.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Use => "use",
+            Self::Package => "package",
+            Self::Struct => "struct",
+            Self::Type => "type",
+            Self::Fn => "fn",
+            Self::Kernel => "kernel",
+            Self::Input => "input",
+            Self::Param => "param",
+            Self::Output => "output",
+            Self::Node => "node",
+        }
+    }
+}
+
+/// Where a node's `{ ... }` and the members in it were written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeBlock {
+    /// The byte of its `{`.
+    pub open: usize,
+    /// The byte of its `}`.
+    pub close: usize,
+    /// Its members in order.
+    pub members: Vec<NodeMemberAt>,
+}
+
+/// Where one member of a node's block was written: `name = value;`, `port <- source;`,
+/// `port <~ ...;` or `carry port <- output;`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeMemberAt {
+    /// The parameter or port it sets or wires.
+    pub name: String,
+    /// From its first token to its `;`.
+    pub range: Range<usize>,
 }
 
 /// `to "file"` or `to bytes "file"` after an output: the file the Host

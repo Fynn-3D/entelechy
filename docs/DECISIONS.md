@@ -428,8 +428,12 @@ who to where.
 
 ## A live world is changed through three doors, each at its own grain
 
-The structure changes as its document does: `compose` writes the scene
-text and the scene is read again, as an edit on disk is. The state
+The structure changes as its document does, a statement at a time:
+`compose` edits the scene text where a node, a member of a node, an
+output or a declaration is written, and only there, or writes it whole;
+the scene is then read again, as an edit on disk is, and a text whose
+graph cannot run a frame (a source not there, a cycle) is refused before
+it replaces the one running. The state
 changes a committed port at a time: `write` replaces one, `reset` with a
 `node` and `port` starts one again from its initial source, `reset`
 alone starts them all, and `restore` installs a world. The parameters a
@@ -439,7 +443,11 @@ changes with the document. Nothing else reaches in.
 
 **Why.** Each door is where the thing it changes is kept whole. A node's
 value set from outside would be a structure the document does not say,
-lost at the next read and invisible to `document` and history. State is
+lost at the next read and invisible to `document` and history. The
+document is also a person's: its comments and layout say what its
+structure is for, so an agent names what it changes and the rest of the
+text is left as it was, rather than written again from the agent's
+reading of it. State is
 kept by port, so a port is the smallest part of it that can start again
 without inventing a state no evaluation committed; a port restarted
 alone is what an agent wants when one part of a world went wrong (a
@@ -448,14 +456,19 @@ frame that began from the state forgotten, or from what was computed
 from it, is let go: landing after the reset, it would put back what was
 forgotten. Runs that read none of it go on.
 
-**Where.** `Evaluator::reset_port` and `reset_state` in the
+**Where.** [`edit`](../crates/frontend/scene/src/edit.rs) in the scene,
+over the language's `outline` (where each statement and member was
+written), and `compose` in the protocol; the graph's own check
+(`Graph::order`) where the session lowers a scene, for `compose` and a
+sync alike. `Evaluator::reset_port` and `reset_state` in the
 [graph's state](../crates/core/graph/src/evaluate/state.rs);
 `Session::reset_port`, recorded in history as a reset with its port;
 `reset` in the protocol and `reset node.port` in a replay. Held by the
 graph's tests (one port starts again and the others keep theirs; a
 reset lets go of the runs that began from what it forgot, and only
 those), the protocol's, and the voxel replay, which brings the camera
-home and keeps the world.
+home and keeps the world; the scene's edit tests, which hold every byte
+an edit does not name, and the protocol's.
 
 **What would change it.** A kind of state finer than a port (an
 element, a region) that an agent must start again alone, which would

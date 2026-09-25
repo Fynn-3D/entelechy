@@ -3,17 +3,23 @@
 use crate::lexer::{Lexeme, Token, tokenize};
 use crate::{
     BinaryOp, BindingDecl, Block, CarryDecl, Document, Expr, ExprKind, FnDecl, FramesDecl, Kernel,
-    MatchArm, MergeDecl, NodeDecl, NodeKind, NodeMember, PackageDecl, ParamDecl, ParseError,
-    PortDecl, PrefixDecl, ScatterDecl, SourceRef, Span, Spanned, StructDecl, TypeAlias, Use,
-    WriteDecl,
+    MatchArm, MergeDecl, NodeBlock, NodeDecl, NodeKind, NodeMember, NodeMemberAt, Outline,
+    PackageDecl, ParamDecl, ParseError, PortDecl, PrefixDecl, ScatterDecl, SourceRef, Span,
+    Spanned, Statement, StatementKind, StructDecl, TypeAlias, Use, WriteDecl,
 };
 
 /// Parses a document: `use`, `kernel`, `input`, `output`, and `node` items.
 pub fn parse_document(source: &str) -> Result<Document, ParseError> {
-    crate::on_a_deep_stack(|| read_document(source))
+    crate::on_a_deep_stack(|| read_document(source)).map(|(document, _)| document)
 }
 
-fn read_document(source: &str) -> Result<Document, ParseError> {
+/// Where each statement of a document was written: parses it as
+/// [`parse_document`] does, and fails where that fails.
+pub fn outline(source: &str) -> Result<Outline, ParseError> {
+    crate::on_a_deep_stack(|| read_document(source)).map(|(_, outline)| outline)
+}
+
+fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
     let tokens = tokenize(source)?;
     let mut parser = Parser {
         tokens,
@@ -21,7 +27,9 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
         temporaries: 0,
         depth: 0,
         read_ifs: std::collections::HashMap::new(),
+        block: None,
     };
+    let mut outline = Outline::default();
     let mut document = Document {
         package: None,
         uses: Vec::new(),
@@ -36,7 +44,8 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
         nodes: Vec::new(),
     };
     loop {
-        match parser.peek().clone() {
+        let start = parser.start();
+        let kind = match parser.peek().clone() {
             Token::Eof => break,
             Token::Ident(word) if word == "use" => {
                 parser.next();
@@ -51,6 +60,7 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
                 document.uses.push(Use {
                     path: Spanned { value: path, span },
                 });
+                StatementKind::Use
             }
             Token::Ident(word) if word == "package" => {
                 let span = parser.next().1;
@@ -61,29 +71,36 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
                     });
                 }
                 document.package = Some(parser.package()?);
+                StatementKind::Package
             }
             Token::Ident(word) if word == "kernel" => {
                 document.kernels.push(parser.kernel(false)?);
+                StatementKind::Kernel
             }
             Token::Ident(word) if word == "struct" => {
                 parser.next();
                 document.structs.push(parser.struct_decl()?);
+                StatementKind::Struct
             }
             Token::Ident(word) if word == "type" => {
                 parser.next();
                 document.types.push(parser.type_alias()?);
+                StatementKind::Type
             }
             Token::Ident(word) if word == "fn" => {
                 parser.next();
                 document.functions.push(parser.function()?);
+                StatementKind::Fn
             }
             Token::Ident(word) if word == "input" => {
                 parser.next();
                 document.inputs.push(parser.port(false)?);
+                StatementKind::Input
             }
             Token::Ident(word) if word == "param" => {
                 parser.next();
                 document.params.push(parser.param()?);
+                StatementKind::Param
             }
             Token::Ident(word) if word == "output" => {
                 parser.next();
@@ -114,17 +131,44 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
                 }
                 parser.expect_punct(";")?;
                 document.outputs.push((name, source));
+                StatementKind::Output
             }
             Token::Ident(word) if word == "node" => {
                 parser.next();
                 document.nodes.push(parser.node()?);
+                StatementKind::Node
             }
             _ => {
                 return Err(parser.unexpected(
                     "`use`, `struct`, `type`, `fn`, `kernel`, `input`, `param`, `output`, or `node`",
                 ));
             }
-        }
+        };
+        let name = match kind {
+            StatementKind::Use => document.uses.last().map(|u| u.path.value.clone()),
+            StatementKind::Package => Some(String::new()),
+            StatementKind::Struct => document.structs.last().map(|d| d.name.value.clone()),
+            StatementKind::Type => document.types.last().map(|d| d.name.value.clone()),
+            StatementKind::Fn => document.functions.last().map(|d| d.name.value.clone()),
+            StatementKind::Kernel => document
+                .kernels
+                .last()
+                .and_then(|k| k.id.as_ref())
+                .map(|id| id.value.clone()),
+            StatementKind::Input => document.inputs.last().map(|d| d.name.value.clone()),
+            StatementKind::Param => document.params.last().map(|d| d.name.value.clone()),
+            StatementKind::Output => document.outputs.last().map(|(name, _)| name.value.clone()),
+            StatementKind::Node => document.nodes.last().map(|d| d.name.value.clone()),
+        };
+        // A node's block is the one the node just read; any other
+        // statement leaves none.
+        let block = parser.block.take().filter(|_| kind == StatementKind::Node);
+        outline.statements.push(Statement {
+            kind,
+            name: name.unwrap_or_default(),
+            range: start..parser.previous_end(),
+            block,
+        });
     }
     // Document structs and aliases come first in every Kernel, so a
     // Rows<Particle> declared once means the same layout in all of them.
@@ -153,7 +197,7 @@ fn read_document(source: &str) -> Result<Document, ParseError> {
             }
         }
     }
-    Ok(document)
+    Ok((document, outline))
 }
 
 /// Parses one literal expression, as written in a document value position.
@@ -169,6 +213,7 @@ fn read_literal(source: &str) -> Result<Expr, ParseError> {
         temporaries: 0,
         depth: 0,
         read_ifs: std::collections::HashMap::new(),
+        block: None,
     };
     let expr = parser.expr()?;
     if parser.peek() != &Token::Eof {
@@ -218,6 +263,8 @@ struct Parser {
     /// here rather than reading the arm again, which, an `if` in an arm
     /// of an `if`, would read the innermost twice a level.
     read_ifs: std::collections::HashMap<usize, (Expr, Block, usize)>,
+    /// Where the last node block read was written, for the outline.
+    block: Option<NodeBlock>,
 }
 
 impl Parser {
@@ -812,46 +859,70 @@ impl Parser {
     }
 
     fn node_members(&mut self) -> Result<Vec<NodeMember>, ParseError> {
+        let open = self.start();
         self.expect_punct("{")?;
         let mut members = Vec::new();
+        let mut written = Vec::new();
         while !self.is_punct("}") {
-            let port = self.ident("a parameter or port name")?;
-            if port.value == "carry"
-                && !(self.is_punct("=") || self.is_punct("<-") || self.is_punct("<~"))
-            {
-                let carried = self.ident("a port to carry")?;
-                self.expect_punct("<-")?;
-                let output = self.ident("an output to carry from")?;
-                self.expect_punct(";")?;
-                members.push(NodeMember::Carry(carried, output));
-                continue;
-            }
-            if self.eat_punct("=") {
-                let value = self.expr()?;
-                self.expect_punct(";")?;
-                members.push(NodeMember::Set(port, value));
-            } else if self.eat_punct("<-") {
-                let source = self.source_ref()?;
-                self.expect_punct(";")?;
-                members.push(NodeMember::Bind(port, source));
-            } else if self.eat_punct("<~") {
-                let source = self.source_ref()?;
-                self.keyword("from")?;
-                let initial = self.source_ref()?;
-                let migration = self.migration()?;
-                self.expect_punct(";")?;
-                members.push(NodeMember::Previous {
-                    port,
-                    source,
-                    initial,
-                    migration,
-                });
-            } else {
-                return Err(self.unexpected("`=`, `<-`, or `<~`"));
-            }
+            let start = self.start();
+            let member = self.node_member()?;
+            let name = match &member {
+                NodeMember::Set(name, _)
+                | NodeMember::Bind(name, _)
+                | NodeMember::Carry(name, _)
+                | NodeMember::Previous { port: name, .. } => name.value.clone(),
+            };
+            written.push(NodeMemberAt {
+                name,
+                range: start..self.previous_end(),
+            });
+            members.push(member);
         }
+        let close = self.start();
         self.expect_punct("}")?;
+        self.block = Some(NodeBlock {
+            open,
+            close,
+            members: written,
+        });
         Ok(members)
+    }
+
+    /// One member of a node's block, its `;` included.
+    fn node_member(&mut self) -> Result<NodeMember, ParseError> {
+        let port = self.ident("a parameter or port name")?;
+        if port.value == "carry"
+            && !(self.is_punct("=") || self.is_punct("<-") || self.is_punct("<~"))
+        {
+            let carried = self.ident("a port to carry")?;
+            self.expect_punct("<-")?;
+            let output = self.ident("an output to carry from")?;
+            self.expect_punct(";")?;
+            return Ok(NodeMember::Carry(carried, output));
+        }
+        if self.eat_punct("=") {
+            let value = self.expr()?;
+            self.expect_punct(";")?;
+            Ok(NodeMember::Set(port, value))
+        } else if self.eat_punct("<-") {
+            let source = self.source_ref()?;
+            self.expect_punct(";")?;
+            Ok(NodeMember::Bind(port, source))
+        } else if self.eat_punct("<~") {
+            let source = self.source_ref()?;
+            self.keyword("from")?;
+            let initial = self.source_ref()?;
+            let migration = self.migration()?;
+            self.expect_punct(";")?;
+            Ok(NodeMember::Previous {
+                port,
+                source,
+                initial,
+                migration,
+            })
+        } else {
+            Err(self.unexpected("`=`, `<-`, or `<~`"))
+        }
     }
 
     /// `name@version { language = N; ir = N; }` after `package`: the

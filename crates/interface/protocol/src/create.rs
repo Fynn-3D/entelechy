@@ -15,14 +15,15 @@ use crate::wire::{
 
 /// Replaces the scene document and syncs: checked first, so a text that
 /// would be rejected never reaches the disk, and with `expect`, only if
-/// the document is still the version the agent read.
+/// the document is still the version the agent read. The new text is
+/// given whole (`text`), or as `edits` of the one on disk, each naming a
+/// statement or a node's member and only its bytes changing.
 pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, Json> {
-    let text = request.text("text")?;
     let root = session.root().to_path_buf();
-    let current = session
-        .store()
-        .read_text(&root)
-        .map(|text| document_version(&text))
+    let written = session.store().read_text(&root);
+    let current = written
+        .as_ref()
+        .map(|text| document_version(text))
         .unwrap_or_default();
     if let Some(expect) = request.get("expect") {
         let expect = expect
@@ -36,6 +37,17 @@ pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, 
             return Err(refused);
         }
     }
+    let text = match (request.get("text"), request.get("edits")) {
+        (Some(_), Some(_)) => {
+            return Err(failure("`compose` takes `text` or `edits`, not both"));
+        }
+        (None, Some(edits)) => {
+            let written = written.map_err(|e| failure(format!("{}: {e}", root.display())))?;
+            orla_scene::edit::edit(&written, &edits_from_json(edits)?)
+                .map_err(|e| failure(e.to_string()))?
+        }
+        _ => request.text("text")?,
+    };
     // Rejected as a sync would reject it, and the document on disk, and
     // so the scene running, left as they were.
     if let Err(why) = session.check_scene(&text) {
@@ -56,6 +68,78 @@ pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, 
         "events": events_json(&session.sync()),
         "version": document_version(&text),
     }))
+}
+
+/// `edits` as the scene takes them: each an object naming its target by
+/// its kind (`node`, `output`, `param`, `input`, `kernel`, `struct`,
+/// `type`, `fn`, `use`), with `member` for a member of a node's block,
+/// and `text`, the statement or member whole, or null to remove it.
+fn edits_from_json(edits: &Json) -> Result<Vec<orla_scene::edit::Edit>, Json> {
+    use orla_scene::edit::{Edit, StatementKind, Target};
+    const KINDS: [(&str, StatementKind); 9] = [
+        ("node", StatementKind::Node),
+        ("output", StatementKind::Output),
+        ("param", StatementKind::Param),
+        ("input", StatementKind::Input),
+        ("kernel", StatementKind::Kernel),
+        ("struct", StatementKind::Struct),
+        ("type", StatementKind::Type),
+        ("fn", StatementKind::Fn),
+        ("use", StatementKind::Use),
+    ];
+    let edits = edits
+        .as_array()
+        .ok_or_else(|| failure("`edits` is an array of edits"))?;
+    edits
+        .iter()
+        .enumerate()
+        .map(|(index, edit)| {
+            let bad = |message: String| failure(format!("edit {index}: {message}"));
+            let object = edit
+                .as_object()
+                .ok_or_else(|| bad("an edit is an object".into()))?;
+            let named: Vec<(StatementKind, &str)> = KINDS
+                .iter()
+                .filter_map(|(key, kind)| {
+                    object.get(*key).map(|name| (*kind, name.as_str().unwrap_or("")))
+                })
+                .collect();
+            let [(kind, name)] = named.as_slice() else {
+                return Err(bad(
+                    "an edit names one thing: `node`, `output`, `param`, `input`, `kernel`, `struct`, `type`, `fn`, or `use`, and its name".into(),
+                ));
+            };
+            if name.is_empty() {
+                return Err(bad(format!("`{}` is a name", kind.keyword())));
+            }
+            let target = match object.get("member") {
+                None => Target::Statement {
+                    kind: *kind,
+                    name: (*name).to_owned(),
+                },
+                Some(member) if *kind == StatementKind::Node => Target::Member {
+                    node: (*name).to_owned(),
+                    member: member
+                        .as_str()
+                        .filter(|m| !m.is_empty())
+                        .ok_or_else(|| bad("`member` is a name".into()))?
+                        .to_owned(),
+                },
+                Some(_) => return Err(bad("only a node has members".into())),
+            };
+            let text = match object.get("text") {
+                Some(Json::Null) => None,
+                Some(Json::String(text)) => Some(text.clone()),
+                Some(_) => return Err(bad("`text` is a string, or null to remove".into())),
+                None => {
+                    return Err(bad(
+                        "`text` is what stands there from now on, or null to remove it".into(),
+                    ));
+                }
+            };
+            Ok(Edit { target, text })
+        })
+        .collect()
 }
 
 /// A document's version: a digest of its text

@@ -10,6 +10,7 @@
 //! from is the caller's: every function takes a [`Loader`] or refuses.
 
 mod domain;
+pub mod edit;
 
 pub use domain::domain_expr;
 

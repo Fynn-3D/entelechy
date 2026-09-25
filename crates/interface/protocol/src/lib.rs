@@ -23,7 +23,7 @@
 //! | `graph` | | inputs, params, nodes, outputs |
 //! | `document` | `version`? (one the session remembers) | path, text and version of the scene |
 //! | `history` | `since`? (a revision) | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
-//! | `compose` | `text`, `expect`? (a version) | checks, then writes the scene and syncs; events, version |
+//! | `compose` | `text` or `edits` (each names a statement, or a node's `member`, with its `text` or null), `expect`? (a version) | checks, then writes the scene and syncs; events, version |
 //! | `sync` | | events |
 //! | `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |

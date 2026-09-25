@@ -2199,3 +2199,87 @@ output b <- b.result;
     assert!(resets[1].get("node").is_none(), "{}", resets[1]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `compose` with `edits` changes what they name and keeps the rest of
+/// the text as written; an edit that cannot be made, or a result that
+/// does not load, leaves the document as it was.
+#[test]
+fn compose_edits_the_document_where_it_changes() {
+    let dir = scratch_in("-compose-edits");
+    let scene = dir.join("scene.osn");
+    let original = std::fs::read_to_string(&scene).unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "document" }),
+            // A member changed, a node added, the output moved to it.
+            json!({ "id": 2, "op": "compose", "edits": [
+                { "node": "life", "member": "brush", "text": "brush = 3.0;" },
+                { "node": "dim", "text": "node dim: life.show@1 { cells <- life.result; }" },
+                { "output": "result", "text": "output result <- dim.result;" },
+            ] }),
+            json!({ "id": 3, "op": "document" }),
+            json!({ "id": 4, "op": "evaluate", "time": 0.0 }),
+            // Removing what another node reads loads nothing.
+            json!({ "id": 5, "op": "compose", "edits": [ { "node": "life", "text": null } ] }),
+            // An edit that cannot be made writes nothing, the others with it.
+            json!({ "id": 6, "op": "compose", "edits": [
+                { "node": "life", "member": "brush", "text": "brush = 9.0;" },
+                { "node": "nowhere", "text": null },
+            ] }),
+            json!({ "id": 7, "op": "compose", "edits": [ { "node": "life", "member": "brush" } ] }),
+            json!({ "id": 8, "op": "compose", "edits": [ { "output": "result", "member": "x", "text": "x = 1;" } ] }),
+            json!({ "id": 9, "op": "compose", "text": original, "edits": [] }),
+            json!({ "id": 10, "op": "document" }),
+        ],
+    );
+    let ok = |i: usize| -> &Json {
+        assert!(responses[i].get("error").is_none(), "{}", responses[i]);
+        &responses[i]["ok"]
+    };
+    let failed = |i: usize| -> &str {
+        responses[i]["error"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{}", responses[i]))
+    };
+    let edited = original
+        .replace("brush = 2.0;", "brush = 3.0;")
+        .replace(
+            "node show: life.show@1 {\n    cells <- life.result;\n}\n",
+            "node show: life.show@1 {\n    cells <- life.result;\n}\nnode dim: life.show@1 { cells <- life.result; }\n",
+        )
+        .replace("output result <- show.result;", "output result <- dim.result;");
+    assert!(
+        ok(1)["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "scene_loaded"),
+        "{}",
+        ok(1)
+    );
+    // Written as the edits say, the comment at the top as it was.
+    assert_eq!(ok(2)["text"], edited);
+    assert_eq!(ok(2)["version"], ok(1)["version"]);
+    ok(3);
+    assert_eq!(ok(4)["events"][0]["kind"], "scene_rejected", "{}", ok(4));
+    assert!(
+        failed(5).contains("edit 1: there is no node `nowhere` to remove"),
+        "{}",
+        failed(5)
+    );
+    assert!(
+        failed(6).contains("`text` is what stands there"),
+        "{}",
+        failed(6)
+    );
+    assert!(
+        failed(7).contains("only a node has members"),
+        "{}",
+        failed(7)
+    );
+    assert!(failed(8).contains("not both"), "{}", failed(8));
+    assert_eq!(ok(9)["text"], edited, "nothing refused reached the disk");
+    assert_eq!(std::fs::read_to_string(&scene).unwrap(), edited);
+    let _ = std::fs::remove_dir_all(&dir);
+}
