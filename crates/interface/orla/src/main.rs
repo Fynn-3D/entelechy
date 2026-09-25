@@ -196,150 +196,11 @@ fn check(args: &[String]) -> Result<(), String> {
     }
     let mut failures = 0;
     for file in files {
-        let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
-        let document = match orla_language::parse_document(&text) {
-            Ok(document) => document,
-            Err(error) => {
-                failures += 1;
-                println!("{file}:{error}");
-                continue;
-            }
-        };
-        let name = Path::new(file)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("scene");
-        let base = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
-        let mut loader = |path: &Path| orla_session::read_document(&orla_session::Disk, path);
-        let mut declare = |base: &Path, uses: &[orla_language::Use]| {
-            orla_session::declarations_for(&orla_session::Disk, base, uses)
-        };
-        let lowered =
-            match orla_scene::load_with(&document, &text, name, base, &mut loader, &mut declare) {
-                Ok(lowered) => lowered,
-                Err(error) => {
-                    failures += 1;
-                    println!("{file}:{error}");
-                    continue;
-                }
-            };
-        let mut document = document;
-        if let Ok((structs, types, functions)) =
-            orla_session::declarations_for(&orla_session::Disk, base, &document.uses)
-        {
-            document.inherit(&structs, &types, &functions);
+        let checked = orla_session::check_document(&orla_session::Disk, Path::new(file), show_ir);
+        for (_, line) in &checked.lines {
+            println!("{line}");
         }
-        let mut kernels: Vec<(Option<orla_ir::KernelId>, &orla_language::Kernel)> = document
-            .kernels
-            .iter()
-            .map(|kernel| (None, kernel))
-            .collect();
-        kernels.extend(
-            lowered
-                .inline
-                .iter()
-                .map(|inline| (Some(inline.id.clone()), &inline.kernel)),
-        );
-        for (id, kernel) in kernels {
-            match orla_compiler::compile_kernel(kernel, id.as_ref()) {
-                Ok(module) => {
-                    print!(
-                        "{file}: {}\n{}",
-                        module.manifest.id,
-                        module.manifest.named(&module.structs)
-                    );
-                    // What a backend runs, not a step before it: the
-                    // module with its work accounted.
-                    if show_ir {
-                        match orla_ir::account(&module) {
-                            Ok(run) => println!("{run}"),
-                            Err(error) => println!("{file}: accounting: {error}"),
-                        }
-                    }
-                }
-                Err(error) => {
-                    failures += 1;
-                    println!("{file}:{error}");
-                }
-            }
-        }
-        // The documents it uses, with their own declarations: a scene is
-        // not checked until its libraries are.
-        match orla_session::used_documents(&orla_session::Disk, base, &document.uses) {
-            Ok(used) => {
-                let mut compiled = 0;
-                for path in &used {
-                    let text = match std::fs::read_to_string(path) {
-                        Ok(text) => text,
-                        Err(error) => {
-                            failures += 1;
-                            println!("{}: {error}", path.display());
-                            continue;
-                        }
-                    };
-                    let Ok(mut used_document) = orla_language::parse_document(&text) else {
-                        continue; // reported by `used_documents`
-                    };
-                    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-                    match orla_session::declarations_within(
-                        &orla_session::Disk,
-                        Some(path),
-                        dir,
-                        &used_document.uses,
-                    ) {
-                        Ok((structs, types, functions)) => {
-                            used_document.inherit(&structs, &types, &functions)
-                        }
-                        Err(error) => {
-                            failures += 1;
-                            println!("{}: {error}", path.display());
-                        }
-                    }
-                    for kernel in &used_document.kernels {
-                        match orla_compiler::compile_kernel(kernel, None) {
-                            Ok(module) => {
-                                compiled += 1;
-                                if show_ir {
-                                    println!(
-                                        "{}: {}\n{module}",
-                                        path.display(),
-                                        module.manifest.id
-                                    );
-                                }
-                            }
-                            Err(error) => {
-                                failures += 1;
-                                println!("{}:{error}", path.display());
-                            }
-                        }
-                    }
-                }
-                if !used.is_empty() {
-                    println!(
-                        "{file}: {compiled} kernel(s) compiled from {} used document(s)",
-                        used.len()
-                    );
-                }
-            }
-            Err(error) => {
-                failures += 1;
-                println!("{file}: {error}");
-            }
-        }
-        if !document.nodes.is_empty() {
-            match lowered.graph.order() {
-                Ok(order) => println!(
-                    "{file}: graph `{}` with {} node(s), {} use(s)",
-                    lowered.graph.name,
-                    order.len(),
-                    document.uses.len()
-                ),
-                Err(error) => {
-                    failures += 1;
-                    println!("{file}: {error}");
-                }
-            }
-        }
+        failures += checked.problems();
     }
     if failures > 0 {
         Err(format!("{failures} problem(s) found"))
@@ -719,36 +580,19 @@ fn measure(args: &[String]) -> Result<(), String> {
 }
 
 fn graph(args: &[String]) -> Result<(), String> {
-    let mut library = None;
-    let mut scene = None;
-    let mut fusion = true;
-    let mut limits = orla_session::Limits::default();
-    let mut iter = args.iter();
+    // The session's own flags, as `run` reads them: the plan printed is
+    // the one `run` would execute with the same params and inputs.
+    let mut options = orla_session::SessionOptions::default();
+    let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--library" => {
-                library = Some(PathBuf::from(
-                    iter.next()
-                        .ok_or_else(|| "--library needs a value".to_string())?,
-                ));
-            }
-            "--no-fusion" => fusion = false,
-            flag if orla_session::Limits::takes(flag) => {
-                let text = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
-                limits.read(flag, text)?;
-            }
-            other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
-            other => {
-                if scene.replace(PathBuf::from(other)).is_some() {
-                    return Err("graph takes exactly one scene file".into());
-                }
-            }
+        if !options.read(&arg, &mut || iter.next())? {
+            return Err(format!("unknown flag {arg}"));
         }
     }
-    let scene = scene.ok_or_else(|| "graph needs a scene file".to_string())?;
-    let runtime = Session::runtime_for("cpu", limits)?;
-    let mut session = Session::open_with(&scene, library.as_deref(), runtime);
-    session.set_fusion(fusion);
+    options
+        .scene()
+        .map_err(|_| "graph needs a scene file".to_string())?;
+    let mut session = options.open("cpu")?;
     let events = session.sync();
     for event in &events {
         if matches!(event, Event::Rejected { .. } | Event::SceneRejected(_)) {
@@ -1223,25 +1067,18 @@ fn evaluate_and_export(
             if !report.pending.is_empty() {
                 eprintln!("still running off the frame: [{}]", names(&report.pending));
             }
-            // volume are reached with `--save`.
-            let is_picture = {
-                let host = session.runtime().host();
-                host.schema(report.output)
-                    .is_ok_and(|schema| schema.is_pixel())
-                    && host
-                        .domain(report.output)
-                        .is_ok_and(|domain| domain.shape() == orla_runtime::Shape::Grid)
-            };
-            if !is_picture {
+            // The scene's picture goes to `--out`; any other output (rows,
+            // a volume) is reached with `--save`.
+            let Some(picture) = session.picture_of(&report) else {
                 eprintln!(
-                    "evaluated in {:?}: executed [{executed}], reused {}; the output is not a picture, so nothing went to {}",
+                    "evaluated in {:?}: executed [{executed}], reused {}; no output is a picture, so nothing went to {}",
                     started.elapsed(),
                     report.reused.len(),
                     out.display()
                 );
                 return true;
-            }
-            match session.export(report.output, out) {
+            };
+            match session.export(picture, out) {
                 Ok(()) => {
                     eprintln!(
                         "evaluated in {:?}: executed [{executed}], reused {} -> {}",

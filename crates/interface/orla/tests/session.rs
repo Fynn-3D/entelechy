@@ -1313,7 +1313,7 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
     );
     session.sync();
     let read = |session: &mut Session, handle| {
-        session.runtime_mut().materialize(handle).unwrap();
+        session.field(handle).unwrap();
         session
             .runtime()
             .host()
@@ -1437,7 +1437,7 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
         "{events:?}"
     );
     let words = |session: &mut Session, handle| {
-        session.runtime_mut().materialize(handle).unwrap();
+        session.field(handle).unwrap();
         session
             .runtime()
             .host()

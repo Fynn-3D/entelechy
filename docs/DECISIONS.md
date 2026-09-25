@@ -683,6 +683,19 @@ scene, is its devices only: it hands the play its person's hands and
 its clock, shows the picture on its own device and plays the sound on
 its own, and tells the play where the picture landed.
 
+What every interface asks of a session is the session's to answer, not
+each interface's: which output is the picture and which the sound
+(`Session::picture_of`, `sound_of`), a Field or a picture read back
+from the device (`Session::field`, `picture`; no interface reaches
+into the runtime to change it), the backend that runs when none is
+named (`best`: the GPU, else the JIT, else the interpreter, and the
+ones passed over said), the session's own flags for every command
+(`SessionOptions`, `graph` too), and what checking a document finds
+(`check_document`, through the store). How each drives its frames
+stays its own: a replay at its written times, a window at its clock,
+`advance` at a rate until a value says stop, `render` at a fixed rate;
+what a frame is, `Session::evaluate`, is one.
+
 **Why.** ARCHITECTURE-PLAN §34: interfaces are many, and "all of them
 operate on the same underlying Runtime". A second Player written for a
 page would have been the first one again, and the two would have

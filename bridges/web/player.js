@@ -97,19 +97,12 @@ class OrlaPlayer {
   static async open({ glue, files, scene, replay, backend, canvas, shown }) {
     const orla = await OrlaInPage.load(glue);
     for (const [path, bytes] of files) orla.put(path, bytes);
-    const tried = backend ? [backend] : ["gpu", "jit", "cpu"];
-    let failure = null;
-    for (const on of tried) {
-      try {
-        if (replay) await orla.openReplay(replay, on);
-        else await orla.open(scene, on);
-        return new OrlaPlayer(orla, canvas, shown);
-      } catch (error) {
-        failure = error;
-        console.log(`${on} backend unavailable (${error.message})`);
-      }
-    }
-    throw failure;
+    // "best" is Orla's to decide, as for the Player: the backends it
+    // passed over are among what the play says.
+    const on = backend || "best";
+    if (replay) await orla.openReplay(replay, on);
+    else await orla.open(scene, on);
+    return new OrlaPlayer(orla, canvas, shown);
   }
 
   get session() {

@@ -273,7 +273,7 @@ pub unsafe extern "C" fn orla_play_pixels(
         // The picture brought home; one that cannot come shows the last.
         let mut downloaded = false;
         if let Some((picture, _)) = s.shown
-            && let Ok(image) = s.session.runtime_mut().image(picture)
+            && let Ok(image) = s.session.picture(picture)
         {
             s.picture = (image.pixels().to_vec(), (image.width(), image.height()));
             downloaded = true;

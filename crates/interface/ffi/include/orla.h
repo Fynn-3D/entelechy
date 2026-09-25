@@ -67,9 +67,11 @@ typedef struct OrlaField {
 /* The library's version, e.g. "0.1.0". */
 const char *orla_version(void);
 
-/* Opens `scene` (a `.osn` path) on `backend` ("cpu", "gpu" or "jit";
- * NULL for cpu), with `library` an extra file or directory of Kernels
- * or NULL, reads its documents and inputs, and returns the session; NULL
+/* Opens `scene` (a `.osn` path) on `backend` ("cpu", "gpu", "jit", or
+ * "best": the GPU where there is a device, else the JIT, else the
+ * interpreter; NULL for "best"), with `library` an extra file or
+ * directory of Kernels or NULL, reads its documents and inputs, and
+ * returns the session; NULL
  * when the backend cannot be opened or the scene does not load, with
  * the reason in orla_open_error(). A scene whose Kernels are partly
  * rejected still opens; ask {"op":"sync"} through orla_request for the

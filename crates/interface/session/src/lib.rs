@@ -27,6 +27,7 @@
 #![warn(missing_docs)]
 
 pub mod bench;
+mod check;
 pub mod history;
 mod inputs;
 mod kernels;
@@ -125,6 +126,20 @@ pub enum Allowance {
     FileRead(PathBuf),
     /// Outputs may be written to files in this directory and under it.
     FileWrite(PathBuf),
+}
+
+pub use check::{Checked, check_document};
+
+/// A runtime built for a session ([`Session::build`]): the runtime, the
+/// display a device shows what stays on it through, and the backends
+/// `best` passed over for it, each with why.
+pub struct Built {
+    /// The runtime.
+    pub runtime: orla_runtime::Runtime,
+    /// The device's display, when the backend has one.
+    pub display: Option<orla_gpu::present::Display>,
+    /// The backends tried first and passed over, as `name: why`.
+    pub passed_over: Vec<String>,
 }
 
 /// Parses an allowance given on a command line: `file.read=<dir>` or

@@ -97,46 +97,43 @@ impl Session {
         &self.runtime
     }
 
-    /// Builds a runtime over a named backend: `cpu`, or `gpu` when a device
-    /// is available.
+    /// Builds a runtime over a named backend ([`Session::build`]), the
+    /// device, if any, waited for by blocking.
     pub fn runtime_for(backend: &str, limits: Limits) -> Result<Runtime, String> {
-        Self::runtime_waiting(backend, limits, orla_gpu::Wait::blocking())
+        Self::build(backend, limits, orla_gpu::Wait::blocking()).map(|built| built.runtime)
     }
 
-    /// The same, where the device is waited for as `wait` says: a page,
-    /// which cannot block, gives its host turns until the device answers.
-    pub fn runtime_waiting(
+    /// Builds a runtime over the backend named: `cpu`, `gpu`, `jit`, or
+    /// `best`, the GPU where there is a device, else the JIT, else the
+    /// interpreter, which is what an interface that names none runs on.
+    /// The device, if any, is waited for as `wait` says: a page, which
+    /// cannot block, gives its host turns until the device answers.
+    pub fn build(
         backend: &str,
         limits: Limits,
         wait: orla_gpu::Wait,
-    ) -> Result<Runtime, String> {
-        Self::runtime_and_display_waiting(backend, limits, wait).map(|(runtime, _)| runtime)
-    }
-
-    /// The runtime and the display, where the device is waited for as
-    /// `wait` says: what a page presents on its canvas through.
-    pub fn runtime_and_display_waiting(
-        backend: &str,
-        limits: Limits,
-        wait: orla_gpu::Wait,
-    ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
-        let (mut runtime, display) = Self::backend_runtime(backend, limits.words, wait)?;
-        runtime.host_mut().set_work(limits.work);
-        Ok((runtime, display))
-    }
-
-    /// The same, with the display a window presents what the backend
-    /// leaves resident through, when the backend has a device to show.
-    /// It is taken before the backend goes into the runtime, which knows
-    /// only a `Backend` from then on.
-    pub fn runtime_and_display(
-        backend: &str,
-        limits: Limits,
-    ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
-        let (mut runtime, display) =
-            Self::backend_runtime(backend, limits.words, orla_gpu::Wait::blocking())?;
-        runtime.host_mut().set_work(limits.work);
-        Ok((runtime, display))
+    ) -> Result<crate::Built, String> {
+        let mut passed_over = Vec::new();
+        let one = [backend];
+        let named: &[&str] = match backend {
+            "best" => &["gpu", "jit", "cpu"],
+            _ => &one,
+        };
+        for name in named {
+            match Self::backend_runtime(name, limits.words, wait) {
+                Ok((mut runtime, display)) => {
+                    runtime.host_mut().set_work(limits.work);
+                    return Ok(crate::Built {
+                        runtime,
+                        display,
+                        passed_over,
+                    });
+                }
+                Err(why) if named.len() > 1 => passed_over.push(format!("{name}: {why}")),
+                Err(why) => return Err(why),
+            }
+        }
+        Err(format!("no backend opens: {}", passed_over.join("; ")))
     }
 
     fn backend_runtime(
@@ -163,7 +160,9 @@ impl Session {
                 ))
             }
             "jit" => Ok((Runtime::with_backend(budget_words, Self::jit()?), None)),
-            other => Err(format!("unknown backend `{other}`; use cpu, gpu, or jit")),
+            other => Err(format!(
+                "unknown backend `{other}`; use cpu, gpu, jit, or best"
+            )),
         }
     }
 
@@ -171,11 +170,6 @@ impl Session {
     /// machine itself, or where Orla is WebAssembly, a host that loads it.
     fn jit() -> Result<Box<dyn Backend>, String> {
         orla_jit::JitBackend::new().map(|jit| Box::new(jit) as Box<dyn Backend>)
-    }
-
-    /// Mutable runtime access for interfaces that need to observe images.
-    pub fn runtime_mut(&mut self) -> &mut Runtime {
-        &mut self.runtime
     }
 
     /// The current graph, if the scene loaded.
@@ -709,6 +703,60 @@ impl Session {
     pub fn export(&mut self, image: Handle, path: &Path) -> Result<(), SessionError> {
         let path = self.allowed_write(path).map_err(SessionError::Observe)?;
         observe::export(self.scene.store().as_ref(), &mut self.runtime, image, &path)
+    }
+
+    /// A Field's data as the Host holds it, brought back from the device
+    /// first when one holds it: what a front reads to answer or show,
+    /// asking the session rather than reaching into its runtime.
+    pub fn field(&mut self, handle: Handle) -> Result<&orla_runtime::FieldData, SessionError> {
+        self.runtime
+            .materialize(handle)
+            .map_err(|e| SessionError::Observe(e.to_string()))?;
+        self.runtime.host().data(handle).map_err(SessionError::Host)
+    }
+
+    /// The output of `report` a scene shows: the first that is a picture,
+    /// a grid of pixels one deep. Every interface that shows a scene
+    /// shows this one.
+    pub fn picture_of(&self, report: &orla_graph::Report) -> Option<Handle> {
+        let host = self.runtime.host();
+        report
+            .outputs
+            .iter()
+            .map(|(_, handle)| *handle)
+            .find(|handle| {
+                host.schema(*handle).is_ok_and(|s| s.is_pixel())
+                    && host
+                        .domain(*handle)
+                        .is_ok_and(|d| d.shape() == orla_runtime::Shape::Grid && d.depth() == 1)
+            })
+    }
+
+    /// The output of `report` a scene sounds, and its channels: the first
+    /// that is rows of one float (mono) or two (stereo). Every interface
+    /// that plays a scene's sound plays this one.
+    pub fn sound_of(&self, report: &orla_graph::Report) -> Option<(Handle, usize)> {
+        let host = self.runtime.host();
+        report.outputs.iter().find_map(|(_, handle)| {
+            let rows = host
+                .domain(*handle)
+                .is_ok_and(|d| d.shape() == orla_runtime::Shape::Rows);
+            let schema = host.schema(*handle).ok()?;
+            let floats = schema
+                .scalars()
+                .iter()
+                .all(|c| *c == orla_runtime::Scalar::Float);
+            let channels = schema.value_words();
+            (rows && floats && (1..=2).contains(&channels)).then_some((*handle, channels))
+        })
+    }
+
+    /// A Field of pixels as an image, brought back from the device first
+    /// when one holds it.
+    pub fn picture(&mut self, handle: Handle) -> Result<orla_runtime::Image, SessionError> {
+        self.runtime
+            .image(handle)
+            .map_err(|e| SessionError::Observe(e.to_string()))
     }
 
     /// Reads one pixel of a cached image, materializing it if needed.

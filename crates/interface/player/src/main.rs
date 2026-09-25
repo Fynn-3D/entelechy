@@ -27,7 +27,7 @@ const USAGE: &str = "\
 usage:
   orla-player <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]... [--scale <n>]
               [--replay <file.replay>]
-              [--window <w>x<h>] [--backend gpu|cpu|jit] [--memory <MB>] [--work <M>]
+              [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
               [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
       Open a window showing the scene output. Kernel files are republished as
       they change; a rejected change keeps the running version. The pointer
@@ -332,7 +332,7 @@ impl Player {
                 }
             }
         }
-        let downloaded = match self.session.runtime_mut().image(output) {
+        let downloaded = match self.session.picture(output) {
             Ok(image) => {
                 self.last_size = (image.width(), image.height());
                 self.last_frame.clear();
@@ -377,10 +377,7 @@ impl Player {
         // Materializing is the observation boundary: on the GPU this is
         // one small download per frame, on the frame thread, never in the
         // device callback.
-        if self.session.runtime_mut().materialize(handle).is_err() {
-            return;
-        }
-        let words: Vec<u32> = match self.session.runtime().host().data(handle) {
+        let words: Vec<u32> = match self.session.field(handle) {
             Ok(data) => data.values().to_vec(),
             Err(_) => return,
         };
@@ -564,24 +561,18 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let budget = options.session.limits;
-    let runtime = match options.session.backend.as_deref() {
-        Some(name) => Session::runtime_and_display(name, budget),
-        None => Session::runtime_and_display("gpu", budget).or_else(|error| {
-            eprintln!("gpu backend unavailable ({error}); using the jit");
-            Session::runtime_and_display("jit", budget).or_else(|error| {
-                eprintln!("jit backend unavailable ({error}); using the interpreter");
-                Session::runtime_and_display("cpu", budget)
-            })
-        }),
-    };
-    let (runtime, display) = match runtime {
+    let backend = options.session.backend.as_deref().unwrap_or("best");
+    let built = match Session::build(backend, options.session.limits, orla_gpu::Wait::blocking()) {
         Ok(built) => built,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
+    for passed in &built.passed_over {
+        eprintln!("backend passed over: {passed}");
+    }
+    let (runtime, display) = (built.runtime, built.display);
     eprintln!("backend: {}", runtime.backend_name());
     let gamepad = Gamepad::open();
     eprintln!(

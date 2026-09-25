@@ -511,6 +511,12 @@ impl Play {
         &self.status
     }
 
+    /// Adds to what there is to say: what the interface that plays found
+    /// before the play began, the backends it passed over.
+    pub fn say(&mut self, line: String) {
+        self.said.push(line);
+    }
+
     /// What there is to say since the last call: events, failures, the
     /// preview, a replay's outcome. A device prints them, or shows them.
     pub fn said(&mut self) -> Vec<String> {
@@ -678,39 +684,16 @@ enum Replayed {
     Not,
 }
 
-/// The output a device shows: the first grid of pixels, or the graph's
-/// first output when there is none.
+/// The output a device shows: the scene's picture
+/// ([`Session::picture_of`]), or the graph's first output when it has
+/// none.
 fn displayed(session: &Session, report: &Report) -> Handle {
-    let host = session.runtime().host();
-    report
-        .outputs
-        .iter()
-        .map(|(_, handle)| *handle)
-        .find(|handle| {
-            host.schema(*handle).is_ok_and(|s| s.is_pixel())
-                && host.domain(*handle).is_ok_and(|d| d.depth() == 1)
-        })
-        .unwrap_or(report.output)
+    session.picture_of(report).unwrap_or(report.output)
 }
 
-/// The output a sound device plays: the first that is rows of one float
-/// (mono) or two (stereo).
+/// The output a sound device plays ([`Session::sound_of`]).
 fn sound(session: &Session, report: &Report) -> Option<Handle> {
-    let host = session.runtime().host();
-    report
-        .outputs
-        .iter()
-        .map(|(_, handle)| *handle)
-        .find(|handle| {
-            host.domain(*handle)
-                .is_ok_and(|d| d.shape() == orla_runtime::Shape::Rows)
-                && host.schema(*handle).is_ok_and(|s| {
-                    (1..=2).contains(&s.value_words())
-                        && s.scalars()
-                            .iter()
-                            .all(|c| *c == orla_runtime::Scalar::Float)
-                })
-        })
+    session.sound_of(report).map(|(handle, _)| handle)
 }
 
 #[cfg(test)]

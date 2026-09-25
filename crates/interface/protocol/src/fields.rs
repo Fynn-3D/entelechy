@@ -171,15 +171,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
     };
     let as_file = request.get("format").and_then(Json::as_str) == Some("field");
     if as_file || !schema.is_pixel() || domain.shape() == Shape::Volume {
-        session
-            .runtime_mut()
-            .materialize(handle)
-            .map_err(|e| failure(e.to_string()))?;
-        let data = session
-            .runtime()
-            .host()
-            .data(handle)
-            .map_err(|e| failure(e.to_string()))?;
+        let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
         let bytes: Vec<u8> = if as_file {
             orla_runtime::file::encode_data(data)
         } else {
@@ -195,8 +187,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
         }));
     }
     let image = session
-        .runtime_mut()
-        .image(handle)
+        .picture(handle)
         .map_err(|e| failure(e.to_string()))?;
     let format = request
         .get("format")

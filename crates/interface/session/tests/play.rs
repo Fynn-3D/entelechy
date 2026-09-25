@@ -70,7 +70,7 @@ fn shown(play: &mut Play, session: &mut Session) -> Box<orla_session::play::Show
 
 /// The red of the picture's first pixel: the count over a hundred.
 fn red(session: &mut Session, picture: orla_runtime::Handle) -> f32 {
-    session.runtime_mut().materialize(picture).unwrap();
+    session.field(picture).unwrap();
     f32::from_bits(session.runtime().host().element(picture, 0).unwrap()[0])
 }
 
@@ -99,7 +99,7 @@ fn the_keys_mean_what_they_mean_in_every_interface() {
 
     play.key(&mut session, "a", true);
     let pressed = shown(&mut play, &mut session);
-    session.runtime_mut().materialize(pressed.picture).unwrap();
+    session.field(pressed.picture).unwrap();
     let green = f32::from_bits(
         session
             .runtime()
@@ -237,7 +237,7 @@ fn a_press_lasts_a_frame_however_quick() {
     play.key(&mut session, "a", true);
     play.key(&mut session, "a", false);
     let pressed = shown(&mut play, &mut session);
-    session.runtime_mut().materialize(pressed.picture).unwrap();
+    session.field(pressed.picture).unwrap();
     let green = f32::from_bits(
         session
             .runtime()

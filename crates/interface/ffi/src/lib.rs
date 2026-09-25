@@ -236,12 +236,10 @@ impl OrlaSession {
 
     /// The words of a materialized Field and the layout around them.
     fn field(&mut self, handle: Handle, field: &mut OrlaField) -> Result<(), String> {
-        self.session
-            .runtime_mut()
-            .materialize(handle)
+        let data = self
+            .session
+            .field(handle)
             .map_err(|error| error.to_string())?;
-        let host = self.session.runtime().host();
-        let data = host.data(handle).map_err(|error| error.to_string())?;
         let domain = data.domain();
         let schema = data.schema();
         // Whole words are read where they lie; a Field kept narrower is
@@ -369,7 +367,7 @@ unsafe fn open(
     backend: *const c_char,
     library: *const c_char,
 ) -> *mut OrlaSession {
-    let backend = unsafe { text(backend) }.unwrap_or("jit");
+    let backend = unsafe { text(backend) }.unwrap_or("best");
     let library = unsafe { text(library) }.map(Path::new);
     match unsafe { text(scene) } {
         Some(scene) => opened(store, Opening::Scene(Path::new(scene), library), backend),
@@ -413,11 +411,8 @@ fn opened(
                 (replay.scene.clone(), replay.kernels.clone(), Some(replay))
             }
         };
-        let (runtime, display) = Session::runtime_and_display_waiting(
-            backend,
-            orla_session::Limits::default(),
-            waiting(),
-        )?;
+        let built = Session::build(backend, orla_session::Limits::default(), waiting())?;
+        let (runtime, display, passed_over) = (built.runtime, built.display, built.passed_over);
         let mut session = Session::open_in(store, &scene, library.as_deref(), runtime);
         let events = session.sync();
         if session.graph().is_none() {
@@ -432,6 +427,9 @@ fn opened(
             return Err(reason);
         }
         let mut play = orla_session::play::Play::new(clock);
+        for passed in passed_over {
+            play.say(format!("backend passed over: {passed}"));
+        }
         if let Some(replay) = &replay {
             play.replay(replay, &mut session);
         }

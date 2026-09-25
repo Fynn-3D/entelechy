@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_runtime::{Context, Handle, Shape};
+use orla_runtime::{Context, Handle};
 
 use orla_formats::{png, wav};
 use orla_session::Session;
@@ -76,16 +76,8 @@ pub fn render(
         let report = session
             .evaluate(&context)
             .map_err(|e| format!("frame {index}: {e}"))?;
-        let picture = report
-            .outputs
-            .iter()
-            .map(|(_, handle)| *handle)
-            .find(|handle| is_picture(session, *handle));
-        let block = report
-            .outputs
-            .iter()
-            .map(|(_, handle)| *handle)
-            .find(|handle| sound_channels(session, *handle).is_some());
+        let picture = session.picture_of(&report);
+        let block = session.sound_of(&report);
         if picture.is_none() && block.is_none() {
             return Err("the scene has no picture output and no sound output".into());
         }
@@ -97,8 +89,7 @@ pub fn render(
             summary.pictures += 1;
             summary.size.get_or_insert((width, height));
         }
-        if let Some(handle) = block {
-            let channels = sound_channels(session, handle).unwrap_or(1);
+        if let Some((handle, channels)) = block {
             let words = words_of(session, handle)?;
             summary.sound_frames += words.len() / channels;
             summary.channels = channels;
@@ -120,43 +111,16 @@ pub fn render(
     Ok(summary)
 }
 
-fn is_picture(session: &Session, handle: Handle) -> bool {
-    let host = session.runtime().host();
-    host.schema(handle).is_ok_and(|s| s.is_pixel())
-        && host
-            .domain(handle)
-            .is_ok_and(|d| d.shape() == Shape::Grid && d.depth() == 1)
-}
-
-fn sound_channels(session: &Session, handle: Handle) -> Option<usize> {
-    let host = session.runtime().host();
-    let rows = host.domain(handle).is_ok_and(|d| d.shape() == Shape::Rows);
-    let schema = host.schema(handle).ok()?;
-    let floats = schema
-        .scalars()
-        .iter()
-        .all(|c| *c == orla_runtime::Scalar::Float);
-    (rows && floats && (1..=2).contains(&schema.value_words())).then_some(schema.value_words())
-}
-
 fn words_of(session: &mut Session, handle: Handle) -> Result<Vec<u32>, String> {
-    session
-        .runtime_mut()
-        .materialize(handle)
-        .map_err(|e| e.to_string())?;
-    let host = session.runtime().host();
-    Ok(host
-        .data(handle)
+    Ok(session
+        .field(handle)
         .map_err(|e| e.to_string())?
         .values()
         .to_vec())
 }
 
 fn pixels_of(session: &mut Session, handle: Handle) -> Result<(u32, u32, Vec<[f32; 4]>), String> {
-    let image = session
-        .runtime_mut()
-        .image(handle)
-        .map_err(|e| e.to_string())?;
+    let image = session.picture(handle).map_err(|e| e.to_string())?;
     Ok((image.width(), image.height(), image.pixels().to_vec()))
 }
 
