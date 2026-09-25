@@ -88,10 +88,11 @@ function turn() {
 /// What Orla built as WebAssembly imports from its host: `orla.load`,
 /// which compiles a Kernel's code (WebAssembly the JIT wrote) over Orla's
 /// memory and function table and puts its functions into the table;
-/// `orla.unload`, which gives their slots back; and `orla.wait`, which
+/// `orla.unload`, which gives their slots back; `orla.wait`, which
 /// suspends Orla until the page has had a turn (JavaScript Promise
-/// Integration), which is how Orla waits for a device. `instance()`
-/// answers the Orla instance, once there is one.
+/// Integration), which is how Orla waits for a device; and `orla.now`,
+/// the page's clock in milliseconds. `instance()` answers the Orla
+/// instance, once there is one.
 function host(instance) {
   const free = [];
   const table = () => instance().exports.__indirect_function_table;
@@ -123,6 +124,7 @@ function host(instance) {
         free.push(at);
       }
     },
+    now: () => performance.now(),
     wait:
       typeof WebAssembly.Suspending === "function"
         ? new WebAssembly.Suspending(turn)
@@ -151,6 +153,7 @@ class OrlaInPage {
     const promising = (name) =>
       typeof WebAssembly.promising === "function" ? WebAssembly.promising(exports[name]) : exports[name];
     this.open_files = promising("orla_open_files");
+    this.open_replay = promising("orla_open_replay");
     this.request = promising("orla_request");
     this.presenting = promising("orla_present");
     this.files = exports.orla_files();
@@ -227,6 +230,16 @@ class OrlaInPage {
     if (this.session) this.x.orla_close(this.session);
     this.session = await this.withText(scene, (name) =>
       this.withText(backend, (on) => this.open_files(this.files, name, on)),
+    );
+    if (!this.session) throw new Error(this.text(this.x.orla_open_error()));
+  }
+
+  /// Opens the scene the replay at `path` (among the files put) names,
+  /// and plays it: see `OrlaPlayer`.
+  async openReplay(path, backend = "jit") {
+    if (this.session) this.x.orla_close(this.session);
+    this.session = await this.withText(path, (name) =>
+      this.withText(backend, (on) => this.open_replay(this.files, name, on)),
     );
     if (!this.session) throw new Error(this.text(this.x.orla_open_error()));
   }

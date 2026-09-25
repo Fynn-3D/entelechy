@@ -324,6 +324,15 @@ wasm-bindgen --target web --keep-lld-exports --no-typescript --out-dir target/pa
 node bridges/web/serve.mjs     # then http://127.0.0.1:7789/bridges/web/index.html
 ```
 
+The Player plays in a page too, as it plays in its window: the same
+frame, keys, pads, line of frame data and replays, the page only its
+devices. Served, `play.html` plays what its address names:
+
+```text
+http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.osn
+http://127.0.0.1:7789/bridges/web/play.html?replay=examples/voxel/tests/monolith.replay&on=gpu
+```
+
 ## Hot reload
 
 Keep the scene running and republish Kernels as their files change:

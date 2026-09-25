@@ -135,7 +135,7 @@ fn the_web_bridge_passes_its_own_test() {
             passed(
                 command,
                 "the web bridge",
-                "voxel in the page: a frame on the GPU",
+                "play.html keys: F5 and Tab reached the play",
             );
         }
         Err(why) => {

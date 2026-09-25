@@ -371,3 +371,72 @@ fn presenting_is_for_a_page() {
     assert!(why.contains("orla_output"), "{why}");
     unsafe { orla_ffi::orla_close(session) };
 }
+
+/// The play through the C ABI, as a host with no GPU of its own plays a
+/// scene: a replay handed in as files plays to its end and says so, and
+/// each frame draws on the CPU with the line of frame data over it once
+/// F10 asks.
+#[test]
+fn a_host_plays_a_replay_through_the_play() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/ant");
+    let files = orla_ffi::orla_files();
+    for relative in ["scene.osn", "kernels/ant.orla", "tests/ant.replay"] {
+        let bytes = std::fs::read(root.join(relative)).unwrap();
+        let path = c(&format!("ant/{relative}"));
+        let put =
+            unsafe { orla_ffi::orla_files_put(files, path.as_ptr(), bytes.as_ptr(), bytes.len()) };
+        assert_eq!(put, 0);
+    }
+    let session = unsafe {
+        orla_ffi::orla_open_replay(files, c("ant/tests/ant.replay").as_ptr(), c("cpu").as_ptr())
+    };
+    assert!(!session.is_null(), "{}", unsafe {
+        str_of(orla_ffi::orla_open_error())
+    });
+    unsafe { orla_ffi::orla_files_free(files) };
+    let mut said = String::new();
+    let mut frames = 0;
+    // The replay's frames come at its own times, by the host's clock.
+    while unsafe { orla_ffi::orla_play_replaying(session) } == 1 && frames < 2000 {
+        let framed = unsafe { orla_ffi::orla_play_frame(session, 400.0, 300.0, 1.0, 0.0) };
+        assert!(framed >= 0, "{}", unsafe {
+            str_of(orla_ffi::orla_error(session))
+        });
+        said.push_str(&unsafe { str_of(orla_ffi::orla_play_said(session)) });
+        said.push('\n');
+        if framed == 1 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        frames += 1;
+    }
+    assert!(said.contains("replay: ok (2 frames, 14 checks)"), "{said}");
+    // The person's now: F10, and a frame drawn on the CPU with its line.
+    assert_eq!(
+        unsafe { orla_ffi::orla_play_key(session, c("F10").as_ptr(), 1) },
+        0
+    );
+    assert_eq!(
+        unsafe { orla_ffi::orla_play_frame(session, 400.0, 300.0, 1.0, 0.0) },
+        0
+    );
+    let pixels = unsafe { orla_ffi::orla_play_pixels(session, 400, 300) };
+    assert!(!pixels.is_null());
+    let frame = unsafe { std::slice::from_raw_parts(pixels, 400 * 300) };
+    assert!(
+        frame[..400 * 9].contains(&0x00E0_E0E0),
+        "the line's ink in the top rows"
+    );
+    assert_eq!(
+        unsafe { orla_ffi::orla_play_key(session, c("Escape").as_ptr(), 1) },
+        1
+    );
+    assert_eq!(
+        unsafe { orla_ffi::orla_play_pad(session, c("south").as_ptr(), 1) },
+        0
+    );
+    assert_eq!(
+        unsafe { orla_ffi::orla_play_pad(session, c("nowhere").as_ptr(), 1) },
+        -1
+    );
+    unsafe { orla_ffi::orla_close(session) };
+}

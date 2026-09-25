@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orla Player</title>
+<!-- Orla in the page imports its host's functions as `orla`. -->
+<script type="importmap">{ "imports": { "orla": "./orla-host.mjs" } }</script>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  #shown { pointer-events: none; display: none; }
+</style>
+</head>
+<body>
+<!--
+The Player in a page: the picture and nothing else, as the Player's
+window is. Served (node bridges/web/serve.mjs), it plays what its address
+names:
+  play.html?scene=examples/voxel/scene.osn
+  play.html?replay=examples/ant/tests/ant.replay
+with `on=gpu|jit|cpu` for what runs it (the GPU, else the JIT, else the
+interpreter, when none is named), `roots=a,b` for the directories handed
+in and watched (the scene's example and the packages when none are
+named), and `glue=` for where Orla built for a page is. F5 resets the
+state, Tab moves the preview, F10 shows the line of frame data, Escape
+stops; what the play says is on the page's console.
+-->
+<canvas id="view" tabindex="0"></canvas>
+<canvas id="shown"></canvas>
+<script src="orla.js"></script>
+<script src="player.js"></script>
+<script>
+(async () => {
+  const query = new URLSearchParams(location.search);
+  const scene = query.get("scene");
+  const replay = query.get("replay");
+  const named = scene || replay;
+  if (!named) {
+    document.title = "Orla Player: name a scene or a replay in the address";
+    return;
+  }
+  const top = named.split("/").slice(0, 2).join("/");
+  const roots = (query.get("roots") || `${top},packages`).split(",");
+  try {
+    const list = await (await fetch(`/list?roots=${roots.join(",")}`)).json();
+    const files = await Promise.all(
+      list.map(async (path) => [path, new Uint8Array(await (await fetch(`/${path}`)).arrayBuffer())]),
+    );
+    const player = await OrlaPlayer.open({
+      glue: query.get("glue") || "../../target/page/orla_ffi.js",
+      files,
+      scene,
+      replay,
+      backend: query.get("on"),
+      canvas: document.getElementById("view"),
+      shown: document.getElementById("shown"),
+    });
+    globalThis.player = player;
+    player.say();
+    player.watch(roots);
+    document.getElementById("view").focus();
+    player.run();
+  } catch (error) {
+    document.title = `Orla Player: ${error.message}`;
+    console.error(error);
+  }
+})();
+</script>
+</body>
+</html>

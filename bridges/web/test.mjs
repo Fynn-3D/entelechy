@@ -193,6 +193,54 @@ try {
     console.log(`index.html in the page: ${ok ? "opened, framed, and listed the Kernels" : opened}`);
     if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: index.html in the page");
   }
+  // The Player in a page: a replay played to its end on the page's GPU
+  // and on its JIT, and the person's keys reaching the play.
+  if (log.includes("RESULT: ok") && inPage) {
+    const glued = encodeURIComponent(`/${gluePath}`);
+    const play = async (query, act) => {
+      const created = await devtools.send("Target.createTarget", { url: `${origin}/bridges/web/play.html?${query}&glue=${glued}` });
+      const attached = await devtools.send("Target.attachToTarget", { targetId: created.targetId, flatten: true });
+      await devtools.send("Runtime.enable", {}, attached.sessionId);
+      const said = () =>
+        devtools
+          .send("Runtime.evaluate", { expression: "globalThis.player ? player.said.join('\\n') : ''", returnByValue: true }, attached.sessionId)
+          .then((r) => r.result.value || "");
+      const key = async (key) => {
+        for (const type of ["keyDown", "keyUp"]) {
+          await devtools.send("Input.dispatchKeyEvent", { type, key, code: key }, attached.sessionId);
+        }
+      };
+      return act({ said, key });
+    };
+    const until = async (said, pattern, seconds) => {
+      const deadline = Date.now() + seconds * 1000;
+      let text = "";
+      while (Date.now() < deadline) {
+        text = await said();
+        if (pattern.test(text)) return text;
+        await sleep(250);
+      }
+      return `timed out: ${text}`;
+    };
+    for (const on of ["gpu", "jit"]) {
+      const text = await play(`replay=examples/ant/tests/ant.replay&on=${on}`, ({ said }) =>
+        until(said, /replay: ok \(2 frames, 14 checks\)/, 30),
+      );
+      const ok = /replay: ok/.test(text);
+      console.log(`play.html on the ${on}: ${ok ? "the replay played to its end, every check held" : text}`);
+      if (!ok) log = log.replace("RESULT: ok", `RESULT: failed: play.html on the ${on}`);
+    }
+    const keys = await play("scene=examples/ant/scene.osn&on=jit", async ({ said, key }) => {
+      await until(said, /scene loaded/, 30);
+      await sleep(500);
+      await key("F5");
+      await key("Tab");
+      return until(said, /state reset[\s\S]*previewing/, 10);
+    });
+    const ok = /previewing/.test(keys);
+    console.log(`play.html keys: ${ok ? "F5 and Tab reached the play" : keys}`);
+    if (!ok) log = log.replace("RESULT: ok", "RESULT: failed: play.html keys");
+  }
   for (const problem of devtools.problems) console.log(`page: ${problem}`);
   if (!log.includes("RESULT:")) console.log("RESULT: timed out");
   status = log.includes("RESULT: ok") ? 0 : 1;

@@ -2,8 +2,9 @@
 // what Orla in the page needs, since a page that loads modules (the glue
 // `wasm-bindgen` writes) is served rather than opened from a file.
 // `/list?roots=a,b` answers every file under those directories, which a
-// test hands in; nothing but GET is answered, and nothing outside the
-// repository.
+// test hands in, and `/stamps?roots=a,b` when each was last changed,
+// which a page watches; nothing but GET is answered, and nothing outside
+// the repository.
 //
 //   node bridges/web/serve.mjs [port]     then open
 //   http://127.0.0.1:<port>/bridges/web/index.html
@@ -33,6 +34,15 @@ export function serve(port = 0) {
       const inside = roots.map((dir) => resolve(root, dir)).filter((dir) => dir.startsWith(root + sep) && existsSync(dir));
       response.writeHead(200, { "content-type": "application/json" });
       return response.end(JSON.stringify(inside.flatMap(list)));
+    }
+    // What each file under the roots was last changed at, for a page
+    // that watches them as a window's session watches its disk.
+    if (url.pathname === "/stamps") {
+      const roots = (url.searchParams.get("roots") || "").split(",").filter(Boolean);
+      const inside = roots.map((dir) => resolve(root, dir)).filter((dir) => dir.startsWith(root + sep) && existsSync(dir));
+      const stamps = Object.fromEntries(inside.flatMap(list).map((path) => [path, statSync(resolve(root, path)).mtimeMs]));
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end(JSON.stringify(stamps));
     }
     const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
     if (!path.startsWith(root + sep) || !existsSync(path) || statSync(path).isDirectory()) {

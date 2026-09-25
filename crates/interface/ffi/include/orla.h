@@ -93,6 +93,59 @@ void orla_files_free(OrlaFiles *files);
 /* Opens `scene`, a path among `files`, on `backend` as orla_open does,
  * reading no disk. */
 OrlaSession *orla_open_files(OrlaFiles *files, const char *scene, const char *backend);
+/* A scene played, as every interface that shows one plays it: the host
+ * hands its person's keys, pointer, wheel and pads to the play, asks it
+ * for a frame, shows the picture on its own device and plays the sound
+ * on its own. What F5, Tab, F10 and Escape mean, how a pad is a
+ * keyboard, what the line of frame data says and how a replay drives the
+ * scene are the play's. */
+/* Opens the scene a replay names, `replay` a path among `files`, with the
+ * library it names, on `backend`, and plays it: its inputs drive the
+ * frames at its own times until it ends. NULL with orla_open_error()
+ * set on failure. */
+OrlaSession *orla_open_replay(OrlaFiles *files, const char *replay, const char *backend);
+/* A key by its name ("a", "ArrowLeft", "F5", "Escape") pressed (1) or
+ * released (0). Returns 1 when it asks the host to stop (Escape), 0
+ * otherwise. */
+int orla_play_key(OrlaSession *session, const char *name, int down);
+/* The pointer at (x, y) in the window's pixels. */
+void orla_play_pointer(OrlaSession *session, float x, float y);
+/* A pointer button, 0 left, 1 right, 2 middle, pressed or released. */
+void orla_play_button(OrlaSession *session, int which, int down);
+/* The wheel turned by (x, y) lines, y positive away from the person. */
+void orla_play_wheel(OrlaSession *session, float x, float y);
+/* A pad's button by name: "south", "east", "west", "north",
+ * "left_shoulder", "right_shoulder", "left_thumb", "right_thumb",
+ * "start", "select", "left", "up", "right", "down". -1 for another. */
+int orla_play_pad(OrlaSession *session, const char *name, int down);
+/* A pad's axis by name, "left_x", "left_y", "right_x", "right_y" (a
+ * stick's up positive, -1 to 1), "left_trigger", "right_trigger" (0 to
+ * 1). -1 for another. */
+int orla_play_axis(OrlaSession *session, const char *name, float value);
+/* One frame on a window of `width` by `height` pixels at `scale`, the
+ * sound device at `rate` (zero without one). Returns 0 with a frame to
+ * show (the report in orla_report()), 1 when a replay's next frame has
+ * not come, -1 with orla_error() set when the evaluation failed (the
+ * last picture stays). */
+int orla_play_frame(OrlaSession *session, float width, float height, float scale, float rate);
+/* In a page, draws the frame's picture, and the line of frame data F10
+ * shows, on the canvas whose element id is `canvas`, from the device:
+ * 0 drawn, 1 not (draw orla_play_pixels instead), -1 on failure. */
+int orla_play_present(OrlaSession *session, const char *canvas);
+/* The frame's picture drawn on the CPU into a window of `width` by
+ * `height`, letterboxed, with the line of frame data over it:
+ * 0x00RRGGBB pixels, row after row, valid until the next call. NULL
+ * with orla_error() set on failure. */
+const uint32_t *orla_play_pixels(OrlaSession *session, uint32_t width, uint32_t height);
+/* The frame's sound, rows of one or two floats, read in place: 0 and
+ * `field` filled, 1 when there is none, -1 on failure. */
+int orla_play_sound(OrlaSession *session, OrlaField *field);
+/* The sound device is open, as the host describes it. */
+void orla_play_sound_opened(OrlaSession *session, const char *description);
+/* What the play said since the last call, a line each; "" for nothing. */
+const char *orla_play_said(OrlaSession *session);
+/* Whether a replay is playing, 1 or 0. */
+int orla_play_replaying(const OrlaSession *session);
 /* Room for `size` bytes in Orla's memory, for a caller that shares no
  * allocator with it (a page, where Orla is WebAssembly) to write a
  * string or a file into before a call; NULL when there is none. */

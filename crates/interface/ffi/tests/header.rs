@@ -6,7 +6,10 @@
 //! only on purpose.
 
 const HEADER: &str = include_str!("../include/orla.h");
-const SOURCE: &str = include_str!("../src/lib.rs");
+const SOURCE: &str = concat!(
+    include_str!("../src/lib.rs"),
+    include_str!("../src/play.rs")
+);
 
 /// The header without its comments, which name functions in prose.
 fn header_code() -> String {

@@ -620,7 +620,14 @@ already what "every interface drives"; playing a scene is part of it.
 its [pad](../crates/interface/session/src/play/pad.rs) and
 [line of frame data](../crates/interface/session/src/play/hud.rs); the
 window, sound card and pads of [the Player](../crates/interface/player/src/main.rs).
-Held by [the play's tests](../crates/interface/session/tests/play.rs),
+A page's Player is its devices over the same play, through the C ABI
+(`orla_play_*`, [play.rs](../crates/interface/ffi/src/play.rs)):
+[player.js](../bridges/web/player.js) hands it the page's keys, pointer,
+wheel and pads and its clock (`orla.now`), and shows, plays and watches
+on the page. Held by [the play's tests](../crates/interface/session/tests/play.rs),
 headless: the keys, the preview, the pointer, the sound output, a
-failure said once, a replay played to its end.
+failure said once, a replay played to its end; by the ABI's test, a
+replay played through `orla_play_*`; and by the web bridge's test, a
+replay played in `play.html` on the page's GPU and JIT, and F5 and Tab
+pressed there.
 

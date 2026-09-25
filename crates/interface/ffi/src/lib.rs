@@ -86,7 +86,25 @@ pub struct OrlaSession {
     /// surface.
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     presenter: Option<(String, orla_gpu::present::Presenter)>,
+    /// The scene played: see `play.rs`.
+    play: orla_session::play::Play,
+    /// The last frame's picture and sound, as the play named them.
+    shown: Option<(Handle, Option<Handle>)>,
+    /// What the play said, for `orla_play_said`.
+    said: CString,
+    /// A frame drawn on the CPU, `0x00RRGGBB`, for `orla_play_pixels`.
+    pixels: Vec<u32>,
+    /// The last picture brought home, and its size: what a frame that
+    /// failed, or a picture that could not come home, shows again.
+    picture: (Vec<[f32; 4]>, (u32, u32)),
 }
+
+mod play;
+pub use play::*;
+
+/// Where a presented picture landed (`None`: the canvas took no frame)
+/// and its size.
+type Presented = (Option<orla_session::play::Placement>, (u32, u32));
 
 thread_local! {
     static OPEN_ERROR: RefCell<CString> = RefCell::new(CString::default());
@@ -137,12 +155,25 @@ impl OrlaSession {
     /// Presents an output on the canvas `canvas`: whether it was drawn.
     /// A picture drawn is one the GPU holds as a grid of float pixels;
     /// anything else is not, and its caller reads it instead.
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     fn present(&mut self, canvas: &str, name: Option<&str>) -> Result<bool, String> {
-        use wasm_bindgen::JsCast;
         let handle = self.output(name)?;
+        Ok(self.present_on(canvas, handle, None)?.is_some())
+    }
+
+    /// Draws `handle` on the page's canvas `canvas`, with `overlay` over
+    /// its corner, from where the GPU holds it: where it landed (`None`
+    /// when the canvas could not take a frame) and its size, or `None`
+    /// when it is not a picture the device holds.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    fn present_on(
+        &mut self,
+        canvas: &str,
+        handle: Handle,
+        overlay: Option<orla_gpu::present::Overlay<'_>>,
+    ) -> Result<Option<Presented>, String> {
+        use wasm_bindgen::JsCast;
         let Some(display) = &self.display else {
-            return Ok(false);
+            return Ok(None);
         };
         let host = self.session.runtime().host();
         let pixels = host
@@ -154,7 +185,7 @@ impl OrlaSession {
             host.image_size(handle),
             pixels,
         ) else {
-            return Ok(false);
+            return Ok(None);
         };
         let element: web_sys::HtmlCanvasElement = web_sys::window()
             .and_then(|window| window.document())
@@ -176,14 +207,19 @@ impl OrlaSession {
             height,
             window_width,
             window_height,
-            None,
+            overlay,
         )?;
-        Ok(placed.is_some())
+        Ok(Some((placed, (width, height))))
     }
 
     /// Only a page has a canvas.
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-    fn present(&mut self, _canvas: &str, _name: Option<&str>) -> Result<bool, String> {
+    fn present_on(
+        &mut self,
+        _canvas: &str,
+        _handle: Handle,
+        _overlay: Option<orla_gpu::present::Overlay<'_>>,
+    ) -> Result<Option<Presented>, String> {
         Err("a picture is presented on a page's canvas; a program reads it with orla_output".into())
     }
 
@@ -281,6 +317,29 @@ unsafe extern "C" {
     fn wait();
 }
 
+// A page's clock: `performance.now()`, in milliseconds.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[link(wasm_import_module = "orla")]
+unsafe extern "C" {
+    fn now() -> f64;
+}
+
+/// This process's clock, in seconds: the host's own.
+fn clock() -> f64 {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        unsafe { now() / 1000.0 }
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_secs_f64()
+    }
+}
+
 /// How this process waits for a device.
 fn waiting() -> orla_session::Wait {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -306,23 +365,56 @@ unsafe fn open(
     backend: *const c_char,
     library: *const c_char,
 ) -> *mut OrlaSession {
+    let backend = unsafe { text(backend) }.unwrap_or("jit");
+    let library = unsafe { text(library) }.map(Path::new);
+    match unsafe { text(scene) } {
+        Some(scene) => opened(store, Opening::Scene(Path::new(scene), library), backend),
+        None => {
+            OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string("orla_open needs a scene path"));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// What a session opens on: a scene and a library, or a replay, which
+/// names its own and is played.
+enum Opening<'a> {
+    Scene(&'a Path, Option<&'a Path>),
+    Replay(&'a Path),
+}
+
+/// Opens a session; NULL with `orla_open_error` set on failure.
+fn opened(
+    store: Option<std::sync::Arc<dyn orla_session::Store>>,
+    opening: Opening<'_>,
+    backend: &str,
+) -> *mut OrlaSession {
     let set_error = |message: String| {
         OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string(&message));
         std::ptr::null_mut()
     };
-    let opened = catch_unwind(AssertUnwindSafe(|| {
-        let Some(scene) = (unsafe { text(scene) }) else {
-            return Err("orla_open needs a scene path".to_owned());
+    let made = catch_unwind(AssertUnwindSafe(|| {
+        let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk));
+        let (scene, library, replay) = match opening {
+            Opening::Scene(scene, library) => {
+                (scene.to_path_buf(), library.map(Path::to_path_buf), None)
+            }
+            Opening::Replay(path) => {
+                let text = store
+                    .read_text(path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let base = path.parent().unwrap_or(Path::new(""));
+                let replay = orla_session::replay::parse(&text, base)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                (replay.scene.clone(), replay.kernels.clone(), Some(replay))
+            }
         };
-        let backend = unsafe { text(backend) }.unwrap_or("jit");
-        let library = unsafe { text(library) }.map(Path::new);
         let (runtime, display) = Session::runtime_and_display_waiting(
             backend,
             orla_session::Limits::default(),
             waiting(),
         )?;
-        let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk));
-        let mut session = Session::open_in(store, Path::new(scene), library, runtime);
+        let mut session = Session::open_in(store, &scene, library.as_deref(), runtime);
         let events = session.sync();
         if session.graph().is_none() {
             let reason = events
@@ -332,13 +424,17 @@ unsafe fn open(
                     Event::Rejected { path, error } => Some(format!("{}: {error}", path.display())),
                     _ => None,
                 })
-                .unwrap_or_else(|| format!("{scene} did not load"));
+                .unwrap_or_else(|| format!("{} did not load", scene.display()));
             return Err(reason);
         }
-        Ok((session, display))
+        let mut play = orla_session::play::Play::new(clock);
+        if let Some(replay) = &replay {
+            play.replay(replay, &mut session);
+        }
+        Ok((session, display, play))
     }));
-    match opened {
-        Ok(Ok((session, display))) => Box::into_raw(Box::new(OrlaSession {
+    match made {
+        Ok(Ok((session, display, play))) => Box::into_raw(Box::new(OrlaSession {
             session,
             error: CString::default(),
             report: CString::default(),
@@ -348,6 +444,11 @@ unsafe fn open(
             display,
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             presenter: None,
+            play,
+            shown: None,
+            said: CString::default(),
+            pixels: Vec::new(),
+            picture: (Vec::new(), (0, 0)),
         })),
         Ok(Err(message)) => set_error(message),
         Err(_) => set_error("a panic inside Orla while opening".to_owned()),
