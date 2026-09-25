@@ -538,9 +538,15 @@ browser) is a separate step, with its own evidence.
 `stdin_into` in the protocol's transport. Held by the example replays,
 run under `wasmtime` on the interpreter.
 
-**What would change it.** WebAssembly threads (`wasm32-wasip1-threads`),
-which would bring back the thread where it can be had, with nothing
-else to change.
+**What would change it.** Threads under WASI a runtime runs, which would
+bring back the thread where it can be had, with nothing else to change.
+Not `wasm32-wasip1-threads`: Orla builds for it as it is, but it rests on
+the wasi-threads proposal, which wasmtime no longer runs (49 refuses
+`-S threads`, and the module does not start without it), so it would be a
+second runtime kept for a withdrawn proposal. The thread comes back with
+WASI's shared-everything threads, once a Rust target and wasmtime both
+have them. Until then the verification runs the WASI replays eight at
+once, each on its one core.
 
 ## A session's documents are wherever its caller keeps them
 
