@@ -124,9 +124,9 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     // a rounding of where they were.
     for name in ["swing", "curl"] {
         let before =
-            orla_host::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())
+            orla_formats::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())
                 .unwrap();
-        let after = orla_host::file::decode(
+        let after = orla_formats::file::decode(
             &std::fs::read(back.join(format!("arm.{name}.clip.field"))).unwrap(),
         )
         .unwrap();

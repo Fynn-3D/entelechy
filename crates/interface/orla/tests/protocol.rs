@@ -330,7 +330,7 @@ output stirred <- stir.result;
             json!({ "id": 2, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&file) }),
             json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
             json!({ "id": 4, "op": "read", "node": "count" }),
-            json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&orla_runtime::file::encode(&"f".parse().unwrap(), orla_runtime::Domain::Rows(3), &[0, 0, 0])) }),
+            json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&orla_formats::file::encode(&"f".parse().unwrap(), orla_runtime::Domain::Rows(3), &[0, 0, 0])) }),
             json!({ "id": 6, "op": "quit" }),
         ],
     );

@@ -1856,7 +1856,7 @@ fn narrow_fields_land_live_and_leave_as_their_bytes() {
     let header = b"ORLAFIELD 1\nGrid 160 90 1 f:snorm8,f:snorm8,f:snorm8\n";
     assert!(bytes.starts_with(header));
     assert_eq!(bytes.len(), header.len() + 160 * 90 * 3);
-    let back = orla_runtime::file::decode(&bytes).unwrap();
+    let back = orla_formats::file::decode(&bytes).unwrap();
     let host = session.runtime().host();
     assert_eq!(&back, host.data(normal).unwrap());
 }

@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
-pub use orla_host::{DEFAULT_WORK, MAX_WORK, encoding, file};
+pub use orla_host::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_host::{
     Domain, Encoding, FieldData, Handle, Host, HostError, Image, Pixel, Scalar, Schema, Shape,
 };

@@ -18,10 +18,12 @@
 #![warn(missing_docs)]
 
 pub mod base64;
+pub mod file;
 pub mod inflate;
 pub mod midi;
 pub mod png;
 pub mod ppm;
+pub mod rig;
 pub mod wav;
 
 use std::path::Path;
@@ -98,7 +100,7 @@ pub fn decode(
     };
     match extension(path).as_str() {
         "field" => {
-            let data = orla_host::file::decode(bytes).map_err(|e| e.to_string())?;
+            let data = crate::file::decode(bytes).map_err(|e| e.to_string())?;
             let detail = describe(&data);
             Ok((data, detail))
         }
@@ -179,7 +181,7 @@ pub fn encode(
     let domain = data.domain();
     let floats = |words: &[u32]| -> Vec<f32> { words.iter().map(|w| f32::from_bits(*w)).collect() };
     match extension {
-        "field" => Ok(orla_host::file::encode_data(data)),
+        "field" => Ok(crate::file::encode_data(data)),
         "ppm" => {
             if !data.schema().is_pixel() || domain.shape() != Shape::Grid {
                 return unfit("not a grid of pixels");

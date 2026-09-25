@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use orla_export::gltf;
+use orla_formats::rig::Part;
 use orla_host::{FieldData, Shape};
 
 const USAGE: &str = "\
@@ -99,18 +100,17 @@ fn export(args: &[String]) -> Result<String, String> {
                     "png" => texture = Some(input.clone()),
                     "field" => {
                         let data = read_field(input)?;
-                        let integer = |k: usize| {
-                            data.schema().scalars().get(k) == Some(&orla_host::Scalar::Int)
-                        };
                         // A rig's rows say which they are by their
                         // layout, as `docs/RIGS.md` has them.
-                        match (data.domain().shape(), data.schema().value_words()) {
-                            (Shape::Rows, 8) if integer(0) => rig.push(input.clone()),
-                            (Shape::Rows, 8) => vertices = Some(input.clone()),
-                            (Shape::Rows, 3) => triangles = Some(input.clone()),
-                            (Shape::Rows, 17) => rig.push(input.clone()),
-                            (Shape::Rows, 10) => clips.push(input.clone()),
-                            _ => {
+                        let part = (data.domain().shape() == Shape::Rows)
+                            .then(|| Part::of(data.schema()))
+                            .flatten();
+                        match part {
+                            Some(Part::Weights | Part::Skeleton) => rig.push(input.clone()),
+                            Some(Part::Vertices) => vertices = Some(input.clone()),
+                            Some(Part::Triangles) => triangles = Some(input.clone()),
+                            Some(Part::Clip) => clips.push(input.clone()),
+                            None => {
                                 return Err(format!(
                                     "{}: no part of a mesh or a rig",
                                     input.display()

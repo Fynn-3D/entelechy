@@ -35,7 +35,7 @@ backend is held to.
 
 | Layer | Implementation | Evidence |
 | --- | --- | --- |
-| Host Core | [host](crates/core/host/src/lib.rs), [files](crates/core/host/src/file.rs) | handles, budgets, bounds; [the `.field` bytes pinned](crates/core/host/tests/format.rs) |
+| Host Core | [host](crates/core/host/src/lib.rs) | handles, budgets, bounds; the `.field` file is a codec of [orla-formats](crates/interface/formats/src/file.rs), [its bytes pinned](crates/interface/formats/tests/field_file.rs) |
 | Capability ABI | [abi](crates/core/abi/src/lib.rs), [names](crates/core/abi/src/names.rs) | grants checked before every Host call; [the capability set pinned to `ABI_VERSION`](crates/core/abi/tests/contract.rs) |
 | Orla IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | typing, SSA order, capability coverage; [fusion bit-identity](crates/backends/cpu/tests/fusion.rs) |
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs) | syntax, precedence, positioned errors, near misses |
@@ -44,7 +44,7 @@ backend is held to.
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [the `Backend` contract](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer contract and fast path](crates/core/rules/src/raster.rs) | every backend's parity test runs by them |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution tests](crates/backends/cpu/tests/execute.rs), [optimizer tests](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), every replay on `jit` |
-| GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL emission](crates/backends/gpu/src/wgsl.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs); both skip without an adapter; [the names a shader declares](crates/backends/gpu/tests/names.rs), without one |
+| GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL emission](crates/backends/gpu/src/wgsl/mod.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs); both skip without an adapter; [the names a shader declares](crates/backends/gpu/tests/names.rs), without one |
 | Kernel Runtime | [runtime](crates/core/runtime/src/lib.rs), [off-frame runs](crates/core/runtime/src/later.rs); takes validated IR and the backend it is given | [hot swap](crates/interface/session/tests/hot_swap.rs), [async](crates/interface/session/tests/later.rs), [mixed clocks](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain expressions](crates/frontend/scene/src/domain.rs) | [lowering tests](crates/frontend/scene/src/lib.rs), [every form lowered as recorded](crates/frontend/scene/tests/surface.rs) |
 | Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs), written as documents |
@@ -142,10 +142,10 @@ rule of each is what the backends are held to
 
 | Mode | Determinism rule | Not obvious |
 | --- | --- | --- |
-| map | per element | the only mode that may write several outputs: `compute` gives them by name as a record, the entry gives one value per output, and each lands in a Field of its own over the one domain ([lowering](crates/frontend/compiler/src/lower/mod.rs)); the GPU binds the further outputs after the inputs and the entry stores each itself ([WGSL](crates/backends/gpu/src/wgsl.rs)) |
+| map | per element | the only mode that may write several outputs: `compute` gives them by name as a record, the entry gives one value per output, and each lands in a Field of its own over the one domain ([lowering](crates/frontend/compiler/src/lower/mod.rs)); the GPU binds the further outputs after the inputs and the entry stores each itself ([WGSL](crates/backends/gpu/src/wgsl/map.rs)) |
 | reduce (`merge`) | a fixed pairwise tree, an odd last element carried up, [whatever the thread count](crates/core/rules/src/reduce.rs) | the GPU folds sixteen at a time, which reaches the same expressions as four levels; the CPU and JIT walk one level at a time on purpose, the JIT merging a level's pairs across workers ([parity](crates/backends/jit/tests/parity.rs)). A `merge` may read Fields, params and time: the fold pass carries the map pass's bindings |
 | scan (`scan with`) | element order, one thread / one invocation | a memory port is input and output at once; the bound Field is copied, never written, so a failed evaluation commits nothing. `init` may not `put`, checked over the call graph |
-| scatter (`scatter into … with`) | as if the pairs were applied in source order; outside addresses drop | the GPU applies order-free rules with atomics (floats as one total order of keys, `last` as the greatest source index) and a float `sum` by a bitonic sort of pairs, the CPU's sequence exactly. A scatter may set its own `domain`; its output keeps the target's extent. `emit` gives more pairs under an order-free rule only, and the GPU lands them, and the pair the entry returns, with atomics from the entry itself, the target written from its base before the entry runs (float and `Long` words turned to keys as they are written) ([WGSL](crates/backends/gpu/src/wgsl.rs); [a keyed target from its base](crates/backends/gpu/tests/parity.rs)) |
+| scatter (`scatter into … with`) | as if the pairs were applied in source order; outside addresses drop | the GPU applies order-free rules with atomics (floats as one total order of keys, `last` as the greatest source index) and a float `sum` by a bitonic sort of pairs, the CPU's sequence exactly. A scatter may set its own `domain`; its output keeps the target's extent. `emit` gives more pairs under an order-free rule only, and the GPU lands them, and the pair the entry returns, with atomics from the entry itself, the target written from its base before the entry runs (float and `Long` words turned to keys as they are written) ([WGSL](crates/backends/gpu/src/wgsl/scatter.rs); [a keyed target from its base](crates/backends/gpu/tests/parity.rs)) |
 | prefix (`prefix with`) | any grouping, so only rules that give the same words in any: integer `sum`, `min`, `max` | a float `sum` is refused (that is `scan`), `last` too (that is a map). The GPU folds in three passes over blocks of about √n ([block](crates/core/rules/src/lib.rs)) — no shared memory, no barrier; the JIT folds runs across workers the same way, and hands a run whose total fails to the walk, which names the failure ([JIT](crates/backends/jit/src/lib.rs)) |
 
 A reduce, scan, scatter or async node is never fused. A runtime may run
@@ -155,7 +155,7 @@ hands scans to the JIT, and every module the GPU does not take
 at once than the device does even with its read-only inputs packed (a
 Kernel wider than the device's bindings reads the inputs past them from
 one buffer, each at its offset, copied there before its passes run —
-[packing](crates/backends/gpu/src/wgsl.rs); what cannot be packed is a
+[packing](crates/backends/gpu/src/wgsl/mod.rs); what cannot be packed is a
 memory, which its steps write), one whose branches and loops nest past
 the 127 braces a shader may (known from the IR before a shader is
 emitted), one holding a `Double`,
@@ -171,7 +171,7 @@ and a replay can pin it (`expect placed`). On the device a `Long` is
 WGSL's `i64`; naga's own 64-bit `/` and `%` go through `select`, which
 Metal cannot pick for a `long`, so the preamble writes its own division
 and nothing emitted for a `Long` may use `select`
-([WGSL](crates/backends/gpu/src/wgsl.rs)).
+([WGSL](crates/backends/gpu/src/wgsl/prelude.rs)).
 
 ### Fusion, repetition, native operations
 
@@ -258,7 +258,7 @@ and nothing emitted for a `Long` may use `select`
   The interpreter and the JIT read a parameter's words where the params
   are laid end to end; the GPU keeps them as `vec4<u32>` slots, each
   parameter from a slot of its own, and builds the value from its words
-  ([wgsl](crates/backends/gpu/src/wgsl.rs) `param_slots`), held by the
+  ([wgsl](crates/backends/gpu/src/wgsl/storage.rs) `param_slots`), held by the
   [conformance matrix](crates/backends/conformance/src/lib.rs) row of such parameters under every
   mode and the [cube](examples/cube/README.md) replay.
 - `size(port)` of another node's memory port is the memory's extent, not
@@ -317,7 +317,7 @@ Represented in the IR, and so on every backend:
   ([IR tests](crates/frontend/compiler/tests/compile.rs),
   [session tests](crates/interface/orla/tests/session.rs)).
 - Integer failures are the reference's on every backend. The GPU emits
-  checked arithmetic for a module that can fail ([`can_fail`](crates/backends/gpu/src/wgsl.rs)),
+  checked arithmetic for a module that can fail ([`can_fail`](crates/backends/gpu/src/wgsl/mod.rs)),
   each invocation recording its first failure into one word by
   `atomicMax`, so the least element wins; `execute_checked` hands back a
   [`Check`](crates/core/rules/src/backend.rs) and the evaluator waits on every
@@ -336,7 +336,7 @@ Represented in the IR, and so on every backend:
   [determinant and inverse](crates/frontend/compiler/src/lower/matrix.rs)), so a
   backend implements none of them and all three compute one formula in
   one order. The GPU chooses between two short arms of plain arithmetic
-  with `select` rather than a branch ([WGSL](crates/backends/gpu/src/wgsl.rs)),
+  with `select` rather than a branch ([WGSL](crates/backends/gpu/src/wgsl/emitter.rs)),
   which is what keeps `normalize` as fast as the device's own.
 - A table (an array known at compile time) is read-only data on the JIT
   and one `Words` instruction on the interpreter.
@@ -369,7 +369,7 @@ Represented in the IR, and so on every backend:
 ### Files and tools
 
 - Assets are inputs with files, re-read when their stamp changes
-  ([file](crates/core/host/src/file.rs)): PNG, PPM, PGM, WAV, MIDI, `.field`, `text`,
+  ([formats](crates/interface/formats/src/lib.rs)): PNG, PPM, PGM, WAV, MIDI, `.field`, `text`,
   `bytes` and `frames`. PNG, WAV and inflate are written with no
   dependency and checked against reference vectors
   ([png](crates/interface/formats/src/png.rs), [wav](crates/interface/formats/src/wav.rs),
@@ -503,7 +503,7 @@ remove one without running it on the device.
   ([parity](crates/backends/gpu/tests/parity.rs)).
 - One dispatch dimension allows 65,535 workgroups: long `Rows` are
   dispatched as a grid, the fold carried in the context
-  ([wgsl](crates/backends/gpu/src/wgsl.rs)).
+  ([wgsl](crates/backends/gpu/src/wgsl/mod.rs)).
 - Metal divided a sixteen-bit slice of a word by a constant wrongly:
   every `/` and `%` multiplies in a one read from the context
   (`OPAQUE_ONE`) so the compiler cannot narrow it (matrix row `narrow division`).
@@ -517,7 +517,7 @@ remove one without running it on the device.
   elements of a narrow output that share a word would race: those
   outputs are declared `atomic<u32>`, cleared, and stored by `atomicOr`;
   outputs whose elements fill whole words are stored a word at a time
-  ([wgsl](crates/backends/gpu/src/wgsl.rs) `narrow_store_body`). The encodings are
+  ([wgsl](crates/backends/gpu/src/wgsl/storage.rs) `narrow_store_body`). The encodings are
   integer arithmetic and bit-exact constants rather than `pack2x16float`
   and division, which a driver's fast math may round its own way.
 - wgpu's error scopes are thread-local only with its `std` feature, which

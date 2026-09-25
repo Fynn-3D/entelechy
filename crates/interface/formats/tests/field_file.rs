@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use orla_host::file::{decode, encode_data};
+use orla_formats::file::{decode, encode_data};
 use orla_host::{Domain, Encoding, FieldData, Schema};
 
 /// A Field from its layout as a file spells it and its values as words.

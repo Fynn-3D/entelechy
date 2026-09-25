@@ -15,7 +15,6 @@
 //! case, not a second store.
 
 pub mod encoding;
-pub mod file;
 
 pub use encoding::Encoding;
 

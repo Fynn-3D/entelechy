@@ -33,7 +33,7 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
         .to_owned();
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     let file_path = out_dir.join(format!("{stem}.notes.field"));
-    std::fs::write(&file_path, orla_host::file::encode_data(&data))
+    std::fs::write(&file_path, orla_formats::file::encode_data(&data))
         .map_err(|e| format!("{}: {e}", file_path.display()))?;
     let seconds = song
         .notes

@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value as Json;
 
-use orla_host::{Domain, Scalar, Schema, file};
+use orla_formats::file;
+use orla_host::Domain;
 
 use orla_formats::base64::unbase64;
 
@@ -37,22 +38,11 @@ pub struct Imported {
     pub files: Vec<PathBuf>,
 }
 
-type Matrix = [f32; 16];
+use orla_formats::rig::{self, Matrix, multiply};
 
 const IDENTITY: Matrix = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
-
-/// Column-major product `a * b`.
-fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
-    let mut out = [0.0; 16];
-    for column in 0..4 {
-        for row in 0..4 {
-            out[column * 4 + row] = (0..4).map(|k| a[k * 4 + row] * b[column * 4 + k]).sum();
-        }
-    }
-    out
-}
 
 fn transform_point(m: &Matrix, p: [f32; 3]) -> [f32; 3] {
     let w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
@@ -908,7 +898,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     std::fs::write(
         &vertices_path,
         file::encode(
-            &Schema::new(vec![Scalar::Float; 8]),
+            &rig::Part::Vertices.schema(),
             Domain::Rows(points.len() as u32),
             &vertex_words,
         ),
@@ -920,7 +910,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     std::fs::write(
         &triangles_path,
         file::encode(
-            &Schema::new(vec![Scalar::Int; 3]),
+            &rig::Part::Triangles.schema(),
             Domain::Rows(triangles.len() as u32),
             &triangle_words,
         ),
@@ -981,7 +971,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
         std::fs::write(
             &weights_path,
             file::encode(
-                &Schema::new([vec![Scalar::Int; 4], vec![Scalar::Float; 4]].concat()),
+                &rig::Part::Weights.schema(),
                 Domain::Rows(bounds.len() as u32),
                 &weight_words,
             ),
@@ -1003,7 +993,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
         std::fs::write(
             &skeleton_path,
             file::encode(
-                &Schema::new([vec![Scalar::Int], vec![Scalar::Float; 16]].concat()),
+                &rig::Part::Skeleton.schema(),
                 Domain::Rows(joints as u32),
                 &skeleton_words,
             ),
@@ -1033,7 +1023,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
             std::fs::write(
                 &clip_path,
                 file::encode(
-                    &Schema::new(vec![Scalar::Float; 10]),
+                    &rig::Part::Clip.schema(),
                     Domain::Rows((frames * joints) as u32),
                     &values.iter().map(|v| v.to_bits()).collect::<Vec<u32>>(),
                 ),

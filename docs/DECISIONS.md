@@ -181,7 +181,7 @@ stays valid, or its version changes.
 | Protocol operations | the table in [the protocol module](../crates/interface/protocol/src/lib.rs), held to `OPERATIONS` and to the server answering each |
 | C ABI | [`header.rs`](../crates/interface/ffi/tests/header.rs): the header's functions, version and struct layouts against the library's |
 | Capabilities | [`contract.rs`](../crates/core/abi/tests/contract.rs): the set, pinned to `ABI_VERSION` |
-| `.field` | [`format.rs`](../crates/core/host/tests/format.rs): every scalar and a spread of encodings pinned byte for byte, and every file in the repository still read |
+| `.field` | [`field_file.rs`](../crates/interface/formats/tests/field_file.rs): every scalar and a spread of encodings pinned byte for byte, and every file in the repository still read |
 | Language surface | [`surface.txt`](../crates/frontend/compiler/tests/surface.txt) at `LANGUAGE_VERSION`, held by [`surface.rs`](../crates/frontend/compiler/tests/surface.rs) |
 | Scene documents | [`surface/`](../crates/frontend/scene/tests/surface/): documents writing every form a scene has, each beside the Graph it lowers to at `LANGUAGE_VERSION`, held by [`surface.rs`](../crates/frontend/scene/tests/surface.rs) |
 

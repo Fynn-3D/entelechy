@@ -12,7 +12,7 @@
 
 use std::fmt;
 
-use crate::{Domain, FieldData, HostError, Schema, Shape};
+use orla_host::{Domain, FieldData, HostError, Schema, Shape};
 
 /// Why bytes are not a Field file.
 #[derive(Debug)]
@@ -171,7 +171,7 @@ mod tests {
         // Three elements of two unorm8 floats: six bytes, and the Field's
         // two words of storage hold them with two bytes to spare.
         let schema = Schema::new(vec![Scalar::Float; 2])
-            .with_encoding(crate::Encoding::Unorm8)
+            .with_encoding(orla_host::Encoding::Unorm8)
             .unwrap();
         let values: Vec<u32> = [0.0f32, 1.0, 0.5, 0.25, 1.0, 0.0]
             .iter()
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(back, data);
         assert_eq!(
             back.element(1).unwrap()[1],
-            crate::Encoding::Unorm8.decode(Scalar::Float, 64)
+            orla_host::Encoding::Unorm8.decode(Scalar::Float, 64)
         );
     }
 }

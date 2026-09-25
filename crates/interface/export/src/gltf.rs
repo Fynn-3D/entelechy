@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use orla_formats::rig::multiply;
 use orla_host::{FieldData, Scalar};
 use serde_json::{Value as Json, json};
 
@@ -72,17 +73,6 @@ fn affine_inverse(m: &[f32; 16]) -> [f32; 16] {
         moved[2],
         1.0,
     ]
-}
-
-/// `a * b`, both by columns.
-fn multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
-    let mut out = [0.0; 16];
-    for column in 0..4 {
-        for row in 0..4 {
-            out[column * 4 + row] = (0..4).map(|k| a[k * 4 + row] * b[column * 4 + k]).sum();
-        }
-    }
-    out
 }
 
 /// An affine matrix as the translation, rotation and scale a glTF node
@@ -502,7 +492,7 @@ pub fn export_rig(
 ) -> Result<(), String> {
     let read = |path: &Path| -> Result<FieldData, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        orla_host::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+        orla_formats::file::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     };
     let png = match texture {
         Some(path) => {

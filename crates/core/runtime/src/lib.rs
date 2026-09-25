@@ -30,7 +30,7 @@ pub use orla_abi::{
     ABI_VERSION, Capabilities, Capability, Context, Domain, Encoding, FieldData, Handle, Host,
     HostError, Image, InputState, Invocation, Pixel, Scalar, Schema, Scope, Shape, Value,
 };
-pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding, file};
+pub use orla_abi::{DEFAULT_WORK, MAX_WORK, encoding};
 pub use orla_ir::{KernelId, Manifest, Validated};
 pub use orla_rules::{Backend, Check, ExecutionError, NativeOp, Prepared};
 
