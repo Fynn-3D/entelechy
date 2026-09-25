@@ -461,3 +461,60 @@ fn a_request_through_the_abi_is_recorded_as_the_protocols() {
     );
     unsafe { orla_ffi::orla_close(session) };
 }
+
+/// Requests through `orla_request` are an agent's, as `serve`'s are: what
+/// the scene they compose reads is held to its documents' directories,
+/// and to the ones the program embedding Orla allows with `orla_allow`.
+#[test]
+fn a_request_reads_beside_the_scene_or_where_the_program_allowed() {
+    let base = std::env::temp_dir().join(format!("orla-ffi-reads-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (dir, elsewhere) = (base.join("scene"), base.join("elsewhere"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(dir.join("beside.bin"), b"ab").unwrap();
+    std::fs::write(elsewhere.join("secret.bin"), b"xyz").unwrap();
+    let text = |path: &str| {
+        format!(
+            "input data: Rows<Int> = bytes \"{path}\";\n\
+             node copy: kernel {{ requires {{ field.read; field.write; }} input bytes: Rows<Int> <- data; output result: Rows<Int>; domain = 1; compute {{ return at(bytes, 0); }} }}\n\
+             output result <- copy.result;\n"
+        )
+    };
+    let scene = dir.join("scene.osn");
+    std::fs::write(&scene, text("beside.bin")).unwrap();
+    let session = unsafe {
+        orla_ffi::orla_open(
+            c(scene.to_str().unwrap()).as_ptr(),
+            c("cpu").as_ptr(),
+            std::ptr::null(),
+        )
+    };
+    assert!(!session.is_null(), "{}", unsafe {
+        str_of(orla_ffi::orla_open_error())
+    });
+    let secret = elsewhere.join("secret.bin").display().to_string();
+    let quoted = text(&secret)
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    let request = c(&format!(
+        "{{\"id\":1,\"op\":\"compose\",\"text\":\"{quoted}\"}}"
+    ));
+    let refused = unsafe { str_of(orla_ffi::orla_request(session, request.as_ptr())) };
+    assert!(
+        refused.contains("outside the directories the scene's documents are in or use"),
+        "{refused}"
+    );
+    let allow = c(&format!("file.read={}", elsewhere.display()));
+    assert_eq!(unsafe { orla_ffi::orla_allow(session, allow.as_ptr()) }, 0);
+    let taken = unsafe { str_of(orla_ffi::orla_request(session, request.as_ptr())) };
+    assert!(taken.contains("\"scene_loaded\""), "{taken}");
+    assert_eq!(
+        unsafe { orla_ffi::orla_allow(session, c("file.everything=/").as_ptr()) },
+        -1
+    );
+    assert!(unsafe { str_of(orla_ffi::orla_error(session)) }.contains("--allow"));
+    unsafe { orla_ffi::orla_close(session) };
+    let _ = std::fs::remove_dir_all(&base);
+}

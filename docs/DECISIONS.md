@@ -334,9 +334,12 @@ frame commits, which this model refuses on purpose.
 
 ## What a served scene reaches is what the person running it gave
 
-A session an agent drives, `orla serve` or the Player's `--serve`, holds
-the scene to what the person who started it allowed, and nothing that
-arrives over the wire widens it. An agent's `save` and a scene's `to`
+A session an agent drives, `orla serve`, the Player's `--serve`, or a
+program's `orla_request`, holds the scene to what the person who started
+it allowed, and nothing that arrives over the wire widens it. The
+session decides this itself, the first time it acts for the protocol,
+whichever interface the request came through; a program embedding Orla
+allows more with `orla_allow`, as a command line does with `--allow`. An agent's `save` and a scene's `to`
 land only where `--allow file.write` says. An input reads a file only
 beside the documents the scene reads (the root, the graphs it places,
 what it uses), inside a package, or where `--allow file.read` says. A
@@ -347,9 +350,9 @@ granted, not taken: what it `requires` must be among what the runtime
 grants (every capability, unless `--grant` names fewer) for it to be
 prepared at all, and it runs with what it requires of those. A Kernel or a scene an agent
 sends is bounded before it costs anything: a domain is charged against
-the Host's budget before it is allocated, an `[each]` and a `times`
-before they are written out, and a rejected scene never reaches the
-disk.
+the Host's budget before it is allocated, on the frame or off it, an
+`[each]` and a `times` before they are written out, a request on a
+socket before it is held, and a rejected scene never reaches the disk.
 
 **Why.** An agent composes the scene and reads back what it holds, so a
 file it could read is a file it could send away, and any web page the
@@ -366,7 +369,9 @@ make every test scene name its own assets again.
 [WebSocket](../crates/interface/protocol/src/websocket.rs); the Host's
 [budget](../crates/core/host/src/lib.rs). Held by the protocol's tests
 ([`protocol.rs`](../crates/interface/orla/tests/protocol.rs)): saves,
-reads, origins and compose.
+reads, origins and compose; and by the C ABI's
+([`abi.rs`](../crates/interface/ffi/tests/abi.rs)) for reads through
+`orla_request`.
 
 **What would change it.** A second person on the same session, which
 would want who asked, not only what; a network listener beyond this

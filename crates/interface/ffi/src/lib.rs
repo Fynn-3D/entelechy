@@ -735,6 +735,28 @@ pub unsafe extern "C" fn orla_node(
     })
 }
 
+/// Allows the scene a directory beyond its own, as a command line's
+/// `--allow` does: `file.read=<dir>` or `file.write=<dir>`. What a
+/// protocol request reads or writes is held to the scene's directories
+/// and these.
+///
+/// # Safety
+/// `session` is a live session; `allowance` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orla_allow(session: *mut OrlaSession, allowance: *const c_char) -> c_int {
+    let Some(session) = (unsafe { session.as_mut() }) else {
+        return -1;
+    };
+    let allowance = unsafe { text(allowance) }.unwrap_or("").to_owned();
+    guarded(session, |s| {
+        s.clear();
+        match orla_session::parse_allow(&allowance).and_then(|a| s.session.allow(&a)) {
+            Ok(()) => 0,
+            Err(error) => s.fail(error),
+        }
+    })
+}
+
 /// One protocol request line; the response line.
 ///
 /// # Safety

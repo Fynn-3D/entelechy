@@ -191,6 +191,12 @@ int orla_present(OrlaSession *session, const char *canvas, const char *output);
  * Fills `field` and returns 0, or -1 with orla_error() set. */
 int orla_node(OrlaSession *session, const char *node, const char *port, OrlaField *field);
 
+/* Allows the scene a directory beyond its own, as the command line's
+ * --allow does: "file.read=<dir>" or "file.write=<dir>". What a protocol
+ * request reads or writes is held to the scene's own directories and
+ * the ones allowed here. Returns 0, or -1 with orla_error() set. */
+int orla_allow(OrlaSession *session, const char *allowance);
+
 /* One request of the creation protocol as a JSON line (see
  * docs/PROTOCOL.md: status, kernels, kernel, graph, prepare, publish,
  * param, compose, pin, read, write, reset, window, sync, ...) and its

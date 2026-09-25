@@ -656,9 +656,6 @@ fn serve(args: &[String]) -> Result<(), String> {
     // Allowed by whoever started the server, never by what connects to it.
     let mut session = options.open("jit")?;
     session.set_window(window);
-    // An agent composes this scene and reads back what it holds: what it
-    // reads is held to its documents' directories and what is allowed.
-    session.restrict_reads();
     report_events(&session.sync());
     session.set_background(true);
     let (sink, requests) = std::sync::mpsc::channel();

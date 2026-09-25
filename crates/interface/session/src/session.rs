@@ -256,9 +256,10 @@ impl Session {
 
     /// Holds what the scene's inputs read to the directories the scene
     /// names, its own, the graphs' it places and the libraries and
-    /// packages it uses, and the ones [`Session::allow_reads`] allowed. For a session an
-    /// agent composes and reads back from (`serve`, the Player's
-    /// `--serve`): a scene a person runs reads what it names.
+    /// packages it uses, and the ones [`Session::allow_reads`] allowed. A
+    /// session does this itself once it acts for the protocol
+    /// ([`Session::act_for`]), which an agent composes through: a scene a
+    /// person runs reads what it names.
     pub fn restrict_reads(&mut self) {
         self.inputs.restrict_reads();
     }

@@ -18,7 +18,15 @@ impl Session {
     /// Says where what the session is asked to do from here comes from,
     /// and answers where it came from before: a protocol request's
     /// channel while it is answered. What it records carries it.
+    ///
+    /// A session that has acted for the protocol holds its reads from
+    /// then on ([`Session::restrict_reads`]): what an agent composes reads
+    /// what the scene's documents are beside and what the person running
+    /// it allowed, whichever interface its requests came through.
     pub fn act_for(&mut self, origin: crate::Origin) -> crate::Origin {
+        if matches!(origin, crate::Origin::Protocol(_)) {
+            self.inputs.restrict_reads();
+        }
         std::mem::replace(&mut self.origin, origin)
     }
 
