@@ -43,11 +43,13 @@ done
 
 ## Next
 
-Open: the user has not chosen the next round. Still pending their word:
+Open: the user has not chosen the next round. Pending their word:
 portability (a second platform: Vulkan or DX12, Linux or Windows; only
-macOS with Metal is verified) and a WASM backend, which the core now
-allows without files (`the_core_knows_no_file`). Capability grants are
-one set for every Kernel; a grant that differs by who published it (a
-document or an agent) waits for the first capability with an effect
-outside the Host. Ask before starting any of them. Effects grow from
-`docs/DECISIONS.md#a-kernels-effects-are-data-the-host-carries-out-after-a-commit`.
+macOS with Metal is verified) and a WASM backend. Restoring a snapshot
+is designed and waits for a use that needs it (a game's load, a
+training run's rollback, an agent's trial and error): an atomic restore
+of every state port, with a trial frame evaluated and not committed;
+under the current laws with migration; and the whole world, its laws
+republished from the snapshot's sources. See
+`docs/DECISIONS.md#reality-changes-atomically-history-records-why`.
+Ask before starting any of them.

@@ -57,15 +57,11 @@ pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, 
     }))
 }
 
-/// A document's version: a digest of its text, FNV-1a, the same in every
-/// build and on every platform.
+/// A document's version: a digest of its text
+/// ([`orla_session::history::digest`]), the same in every build and on
+/// every platform.
 pub(crate) fn document_version(text: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    format!("{:016x}", orla_session::history::digest(text))
 }
 
 /// Reads again what changed on disk.

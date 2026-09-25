@@ -17,11 +17,12 @@
 //!
 //! | op | request fields | ok |
 //! | --- | --- | --- |
-//! | `status` | | backend, scene, watched, kernels, nodes |
+//! | `status` | | backend, scene, watched, kernels, nodes, revision, frame |
 //! | `kernels` | | list of manifests with generations |
-//! | `kernel` | `kernel` (the Kernel's id) | manifest, generation, source, as `publish` takes it |
+//! | `kernel` | `kernel` (the Kernel's id), `generation`? (one the session remembers) | manifest, generation, source, as `publish` takes it |
 //! | `graph` | | inputs, params, nodes, outputs |
 //! | `document` | | path, text and version of the scene |
+//! | `history` | `since`? (a revision) | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
 //! | `compose` | `text`, `expect`? (a version) | checks, then writes the scene and syncs; events, version |
 //! | `sync` | | events |
 //! | `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
@@ -34,6 +35,7 @@
 //! | `window` | `size` (`[w, h]` in pixels, or null for none), `scale`? | the window a headless session reports to evaluations that name none |
 //! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
 //! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
+//! | `snapshot` | `to`? (a file, where `--allow file.write` allows) | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
 //! | `reset` | | ok |
 //! | `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
 //! | `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
@@ -74,12 +76,21 @@ pub use wire::{
 /// (a `quit` on standard input). A `quit` on a socket answers, then
 /// closes that connection.
 pub fn answer(session: &mut Session, incoming: Incoming) -> bool {
-    let (response, quit) = respond_line(session, &incoming.line);
+    let (response, quit) = respond_from(session, &incoming);
     incoming.reply.send(response);
     if quit && !incoming.local {
         incoming.reply.send(String::new());
     }
     quit && incoming.local
+}
+
+/// Answers one incoming request as [`respond_line`] does, what it
+/// changes recorded as coming from its channel.
+pub fn respond_from(session: &mut Session, incoming: &Incoming) -> (String, bool) {
+    let before = session.act_for(orla_session::Origin::Protocol(incoming.from.clone()));
+    let answered = respond_line(session, &incoming.line);
+    session.act_for(before);
+    answered
 }
 
 /// Parses one request line and returns the request and its echoed id, or
@@ -113,10 +124,10 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
 /// Every operation the protocol answers, in the order the table above
 /// lists them. A request naming another is refused with this list, so an
 /// agent that guessed wrong learns what there is.
-pub const OPERATIONS: [&str; 23] = [
-    "status", "kernels", "kernel", "graph", "document", "compose", "sync", "prepare", "publish",
-    "retire", "param", "evaluate", "advance", "bench", "window", "read", "write", "reset", "help",
-    "trace", "pin", "unpin", "quit",
+pub const OPERATIONS: [&str; 25] = [
+    "status", "kernels", "kernel", "graph", "document", "history", "compose", "sync", "prepare",
+    "publish", "retire", "param", "evaluate", "advance", "bench", "window", "read", "write",
+    "snapshot", "reset", "help", "trace", "pin", "unpin", "quit",
 ];
 
 /// Handles one request: the operation it names, answered by the function
@@ -129,6 +140,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "kernel" => inspect::kernel(session, &request),
         "graph" => inspect::graph(session),
         "document" => inspect::document(session),
+        "history" => inspect::history(session, &request),
         "help" => inspect::help(&request),
         "compose" => create::compose(session, &request),
         "sync" => create::sync(session),
@@ -142,6 +154,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "reset" => run::reset(session),
         "window" => run::window(session, &request),
         "read" => fields::read(session, &request),
+        "snapshot" => fields::snapshot(session, &request),
         "write" => fields::write(session, &request),
         "trace" => fields::trace(session, &request),
         "pin" => fields::pin(session, &request),

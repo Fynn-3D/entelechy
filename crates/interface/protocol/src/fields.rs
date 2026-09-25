@@ -238,3 +238,74 @@ pub(crate) fn unpin(session: &mut Session, request: &Request) -> Result<Json, Js
     session.unpin(&orla_graph::NodeId(node.clone()));
     Ok(json!({ "unpinned": node }))
 }
+
+/// The version of a snapshot's format: what a reader of one checks.
+pub const SNAPSHOT_VERSION: u32 = 1;
+
+/// The world as it stands, whole: the position, every published Kernel
+/// with its generation and source, every port's committed state with its
+/// layout, extent and words. Given back, or written to `to` where the
+/// session was started with `--allow file.write` for it; either way the
+/// session keeps nothing of it. Only committed state is taken.
+pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json, Json> {
+    let snapshot = session.snapshot().map_err(failure)?;
+    let laws: Vec<Json> = snapshot
+        .laws
+        .iter()
+        .map(|(id, generation, source)| {
+            json!({ "kernel": id.to_string(), "generation": generation.0, "source": source })
+        })
+        .collect();
+    let states: Vec<Json> = snapshot
+        .states
+        .iter()
+        .map(|state| {
+            let bytes: Vec<u8> = state.words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            json!({
+                "node": state.node,
+                "port": state.port,
+                "layout": state.schema.to_string(),
+                "shape": state.domain.shape().to_string(),
+                "extent": [state.domain.width(), state.domain.height(), state.domain.depth()],
+                "data": base64(&bytes),
+            })
+        })
+        .collect();
+    let json = json!({
+        "snapshot": SNAPSHOT_VERSION,
+        "revision": snapshot.revision,
+        "frame": snapshot.frame,
+        "laws": laws,
+        "states": states,
+    });
+    let Some(to) = request.get("to") else {
+        return Ok(json);
+    };
+    let to = to.as_str().ok_or_else(|| failure("`to` is a file path"))?;
+    let path = std::path::Path::new(to);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        session
+            .root()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(path)
+    };
+    // Written where the person running the session allowed, whole.
+    let target = session
+        .allowed_write(&path)
+        .map_err(|why| failure(format!("cannot write the snapshot: {why}")))?;
+    let beside = target.with_extension("snapshot-writing");
+    std::fs::write(&beside, json.to_string())
+        .and_then(|()| std::fs::rename(&beside, &target))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&beside);
+            failure(format!("{}: {e}", target.display()))
+        })?;
+    Ok(json!({
+        "path": target.display().to_string(),
+        "revision": snapshot.revision,
+        "frame": snapshot.frame,
+    }))
+}

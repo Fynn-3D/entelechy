@@ -380,7 +380,7 @@ impl Player {
                     };
                     (orla_protocol::envelope(&id, result), false)
                 }
-                _ => orla_protocol::respond_line(&mut self.session, &incoming.line),
+                _ => orla_protocol::respond_from(&mut self.session, &incoming),
             };
             incoming.reply.send(response);
             // A quit on standard input closes the window; on a socket it

@@ -24,6 +24,10 @@ pub struct Session {
     /// The window a headless session reports when an evaluation names
     /// none: its size in pixels and its scale factor.
     window: Option<([f32; 2], f32)>,
+    /// What changed the world, and what was refused.
+    history: crate::history::History,
+    /// Where what the session is asked to do comes from now.
+    origin: crate::Origin,
 }
 
 /// The error an evaluation returns when no scene has loaded.
@@ -56,6 +60,146 @@ impl Session {
             evaluator: Evaluator::new(),
             placed: BTreeMap::new(),
             window: None,
+            history: crate::history::History::default(),
+            origin: crate::Origin::Local,
+        }
+    }
+
+    /// Says where what the session is asked to do from here comes from,
+    /// and answers where it came from before: a protocol request's
+    /// channel while it is answered. What it records carries it.
+    pub fn act_for(&mut self, origin: crate::Origin) -> crate::Origin {
+        std::mem::replace(&mut self.origin, origin)
+    }
+
+    /// The world's position: its revision, which moves when the world
+    /// changes other than by running, and the frames committed since.
+    pub fn position(&self) -> (u64, u64) {
+        self.history.position()
+    }
+
+    /// The changes that made revisions after `since`, oldest first, as
+    /// far back as the session remembers.
+    pub fn changes_since(&self, since: u64) -> Vec<crate::Record> {
+        self.history.changes(since).cloned().collect()
+    }
+
+    /// The attempts refused at or after revision `since`, oldest first.
+    pub fn attempts_since(&self, since: u64) -> Vec<crate::Attempt> {
+        self.history.attempts(since).cloned().collect()
+    }
+
+    /// A Kernel's source at `generation`: the registry's when that is
+    /// the one running, else the remembered one, when a change the
+    /// session remembers published it.
+    pub fn source_at(&self, id: &KernelId, generation: orla_runtime::Generation) -> Option<String> {
+        match self.runtime.kernel(id) {
+            Some(version) if version.generation() == generation => {
+                Some(version.source().to_owned())
+            }
+            _ => self.history.source_of(id, generation).map(str::to_owned),
+        }
+    }
+
+    /// The world as it stands, taken whole for its caller to keep: the
+    /// position, every published Kernel with its generation and source,
+    /// and every port's committed state with its layout, extent and
+    /// words. Only committed state is taken, never an output an
+    /// evaluation computed and did not commit. A Field on a device comes
+    /// home first.
+    pub fn snapshot(&mut self) -> Result<crate::Snapshot, String> {
+        let (revision, frame) = self.history.position();
+        let laws = self
+            .runtime
+            .kernels()
+            .filter(|version| version.native().is_none())
+            .map(|version| {
+                (
+                    version.id().clone(),
+                    version.generation(),
+                    version.source().to_owned(),
+                )
+            })
+            .collect();
+        let mut states = Vec::new();
+        for (node, port, handle) in self.evaluator.committed_states() {
+            self.runtime
+                .materialize(handle)
+                .map_err(|e| format!("{node}.{port}: {e}"))?;
+            let data = self
+                .runtime
+                .host()
+                .data(handle)
+                .map_err(|e| format!("{node}.{port}: {e}"))?;
+            states.push(crate::StateCopy {
+                node: node.to_string(),
+                port,
+                schema: data.schema().clone(),
+                domain: data.domain(),
+                words: data.values().into_owned(),
+            });
+        }
+        Ok(crate::Snapshot {
+            revision,
+            frame,
+            laws,
+            states,
+        })
+    }
+
+    /// A remembered source by its digest.
+    pub fn source_by_digest(&self, digest: u64) -> Option<String> {
+        self.history.source(digest).map(str::to_owned)
+    }
+
+    /// Records what a sync's events say changed or was refused. A change
+    /// a protocol request made (a compose) is the request's; one found on
+    /// disk is its document's.
+    fn remember(&mut self, events: &[Event]) {
+        let origin_of = |path: &Path, origin: &crate::Origin| match origin {
+            crate::Origin::Protocol(_) => origin.clone(),
+            _ => crate::Origin::Document(path.to_path_buf()),
+        };
+        for event in events {
+            match event {
+                Event::Published {
+                    path,
+                    id,
+                    generation,
+                } => {
+                    let source = self
+                        .runtime
+                        .kernel(id)
+                        .map(|version| version.source().to_owned())
+                        .unwrap_or_default();
+                    let origin = origin_of(path, &self.origin);
+                    self.history.published(id, *generation, &source, origin);
+                }
+                Event::Retired { path, id } => {
+                    let origin = origin_of(path, &self.origin);
+                    self.history.retired(id, origin);
+                }
+                Event::SceneLoaded => {
+                    let origin = origin_of(self.scene.root(), &self.origin);
+                    self.history.changed(crate::Change::Scene, origin);
+                }
+                Event::Rejected { path, error } => {
+                    let origin = origin_of(path, &self.origin);
+                    self.history.refused(
+                        path.display().to_string(),
+                        error.to_string(),
+                        None,
+                        origin,
+                    );
+                }
+                Event::SceneRejected(error) => {
+                    let origin = origin_of(self.scene.root(), &self.origin);
+                    let subject = self.scene.root().display().to_string();
+                    self.history
+                        .refused(subject, error.to_string(), None, origin);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -135,7 +279,14 @@ impl Session {
     /// float. A value of another layout is refused. Unknown names are kept
     /// as given and take effect if the graph later declares them.
     pub fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
-        self.scene.set_param(name, value)
+        self.scene.set_param(name, value)?;
+        self.history.changed(
+            crate::Change::Param {
+                name: name.to_owned(),
+            },
+            self.origin.clone(),
+        );
+        Ok(())
     }
 
     /// Current graph parameter overrides.
@@ -180,6 +331,7 @@ impl Session {
         self.sync_placements(&mut events);
         events.append(&mut self.inputs.take_frame_events());
         events.append(&mut self.writes.take_events());
+        self.remember(&events);
         events
     }
 
@@ -291,10 +443,28 @@ impl Session {
         source: &str,
         expect: Expect,
     ) -> Result<std::sync::Arc<orla_runtime::KernelVersion>, crate::Diagnostic> {
-        let candidate = self.prepare_source(source)?;
-        self.runtime
-            .publish(candidate, expect)
-            .map_err(|e| crate::Diagnostic::new(e.to_string()))
+        let published = self.prepare_source(source).and_then(|candidate| {
+            self.runtime
+                .publish(candidate, expect)
+                .map_err(|e| crate::Diagnostic::new(e.to_string()))
+        });
+        let origin = self.origin.clone();
+        match &published {
+            Ok(version) => {
+                self.history
+                    .published(version.id(), version.generation(), source, origin)
+            }
+            Err(error) => {
+                // The id the source names, when it names one it can.
+                let subject = orla_language::parse_document(source)
+                    .ok()
+                    .and_then(|document| document.kernels.first().and_then(|k| k.id.clone()))
+                    .map_or_else(|| "a Kernel".to_owned(), |id| id.value);
+                self.history
+                    .refused(subject, error.to_string(), Some(source), origin);
+            }
+        }
+        published
     }
 
     /// Prepares `source`, a document holding one Kernel, without
@@ -311,7 +481,11 @@ impl Session {
 
     /// Retires a published Kernel; returns whether one was registered.
     pub fn retire_kernel(&mut self, id: &KernelId) -> bool {
-        self.kernels.retire_kernel(id, &mut self.runtime)
+        let retired = self.kernels.retire_kernel(id, &mut self.runtime);
+        if retired {
+            self.history.retired(id, self.origin.clone());
+        }
+        retired
     }
 
     /// The Field an input of the scene holds now: a file's, a text's, a
@@ -353,6 +527,7 @@ impl Session {
         // Committed: what the evaluation changed may now leave the session.
         self.writes
             .after(&self.scene.files().writes, &report, &mut self.runtime);
+        self.history.ran();
         Ok(report)
     }
 
@@ -366,14 +541,16 @@ impl Session {
         self.inputs
             .select_frames(self.runtime.host_mut(), context.time);
         let graph = self.scene.graph().ok_or_else(no_scene)?;
-        self.evaluator.evaluate_for(
+        let report = self.evaluator.evaluate_for(
             graph,
             &mut self.runtime,
             self.inputs.handles(),
             context,
             self.scene.params(),
             demand,
-        )
+        )?;
+        self.history.ran();
+        Ok(report)
     }
 
     /// Replaces the committed state of `node.port` with `words`; see
@@ -386,13 +563,23 @@ impl Session {
     ) -> Result<(), EvaluateError> {
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         self.evaluator
-            .write(graph, &mut self.runtime, node, port, words)
+            .write(graph, &mut self.runtime, node, port, words)?;
+        self.history.changed(
+            crate::Change::Written {
+                node: node.to_string(),
+                port: port.to_owned(),
+            },
+            self.origin.clone(),
+        );
+        Ok(())
     }
 
     /// Forgets committed state; `<~` bindings restart from their initial
     /// sources on the next evaluation.
     pub fn reset_state(&mut self) {
         self.evaluator.reset_state(&mut self.runtime);
+        self.history
+            .changed(crate::Change::Reset, self.origin.clone());
     }
 
     /// Sets the window a headless session reports when an evaluation names

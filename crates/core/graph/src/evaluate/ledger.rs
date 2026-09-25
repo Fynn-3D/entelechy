@@ -5,6 +5,16 @@
 use super::*;
 
 impl Evaluator {
+    /// Every port's committed state, by producing node and port: the
+    /// world as the last successful evaluation left it, never a cached
+    /// output a failed evaluation computed after it.
+    pub fn committed_states(&self) -> Vec<(NodeId, String, Handle)> {
+        self.committed
+            .iter()
+            .map(|((node, port), handle)| (node.clone(), port.clone(), *handle))
+            .collect()
+    }
+
     /// Puts a node's outputs in the cache, keeping the count of what
     /// the cache holds; answers what was there.
     pub(super) fn cache_put(&mut self, id: NodeId, fresh: Cached) -> Option<Cached> {

@@ -395,3 +395,38 @@ there; the GPU's scenes measured within noise.
 constant, lets the check go; that is an optimization of the rule, not a
 change to it.
 
+## Reality changes atomically; history records why
+
+A session's position is `(revision, frame)`: the revision moves when the
+world changes other than by running (a Kernel published or retired, the
+scene read again, a param set, state written or reset), the frame counts
+the evaluations committed within it. Every change is recorded with where
+it came from (its document, the protocol and its channel, or the program
+itself) and the Kernel's sources are kept once each by digest, so an old
+generation can be read and published again; the attempts refused are
+recorded apart, with why, and move nothing. A snapshot takes the world
+whole, committed state only, with the sources of the laws it ran under,
+and is kept by whoever asked for it, or written to a file where writes
+are allowed.
+
+**Why.** An agent changing a live world needs to know how it came to be
+as it is, and what was tried and refused; before, a replaced Kernel was
+gone. The frame is its own coordinate because most scenes change their
+state every frame: a revision per frame would bury the changes that are
+discontinuous under the ones that are not. Only committed state is
+taken because the cache may hold what a failed evaluation computed and
+never committed; a snapshot of that is a world that never existed. The
+session remembers changes, bounded, and never worlds: the past is data
+its holder keeps, so the session stays the present.
+
+**Where.** [`history.rs`](../crates/interface/session/src/history.rs) in
+the session; `history`, `kernel` with `generation` and `snapshot` in
+the protocol. Held by the protocol's tests and the history's own.
+
+**What would change it.** Restoring (a snapshot's state under the laws
+that run now, migrated where layouts differ, or the whole world, its
+laws with it), each as one change that commits only if a trial frame of
+it evaluates and is not itself committed: the next steps, when a need
+asks for them. A second person on a session, which would add who to
+where.
+

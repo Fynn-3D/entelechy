@@ -1477,3 +1477,162 @@ fn a_served_kernel_gets_only_what_the_server_grants() {
     assert!(responses[3].get("error").is_none(), "{}", responses[3]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The world's history over the wire: a publish is a change with where it
+/// came from, a refused one is an attempt that moves nothing, an old
+/// generation's source can still be read, and frames count within a
+/// revision.
+#[test]
+fn history_says_what_changed_the_world_and_what_was_refused() {
+    let dir = scratch_in("-history");
+    // The example's own show, its dead cells a little lighter; `Cells`
+    // is the scene's, which a published Kernel inherits.
+    let lighter = "kernel life.show@1 { requires { field.read; field.write; } input cells: Cells; output result: Image; compute { let cell = sample(cells); let dead = vec3(0.2, 0.2, 0.25); let color = if cell.alive { vec3(1.0, 0.85, 0.45) } else { dead }; return vec4(color.x, color.y, color.z, 1.0); } }";
+    let broken = lighter.replace("sample(cells)", "nope");
+    let responses = talk(
+        &dir.join("scene.osn"),
+        &[
+            json!({ "id": 1, "op": "status" }),
+            json!({ "id": 2, "op": "publish", "source": lighter, "expect": "any" }),
+            json!({ "id": 3, "op": "publish", "source": broken, "expect": "any" }),
+            json!({ "id": 4, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 5, "op": "evaluate", "time": 0.1 }),
+            json!({ "id": 6, "op": "status" }),
+            json!({ "id": 7, "op": "history", "since": 0 }),
+            json!({ "id": 8, "op": "kernel", "kernel": "life.show@1", "generation": 3 }),
+            json!({ "id": 9, "op": "kernel", "kernel": "life.show@1", "generation": 99 }),
+        ],
+    );
+    let ok = |i: usize| -> &Json {
+        assert!(responses[i].get("error").is_none(), "{}", responses[i]);
+        &responses[i]["ok"]
+    };
+    let before = ok(0)["revision"].as_u64().unwrap();
+    ok(3);
+    ok(4);
+    // The publish made one revision; the refused one made none; two
+    // frames ran in it.
+    assert_eq!(ok(5)["revision"], before + 1, "{}", ok(5));
+    assert_eq!(ok(5)["frame"], 2);
+    let history = ok(6);
+    let changes = history["changes"].as_array().unwrap();
+    let published = changes.last().unwrap();
+    assert_eq!(published["kind"], "published", "{published}");
+    assert_eq!(published["kernel"], "life.show@1");
+    assert_eq!(published["from"], 3);
+    assert_eq!(published["to"], 4);
+    assert_eq!(published["origin"], json!({ "protocol": "stdin" }));
+    // What loaded the scene came from its documents.
+    assert!(
+        changes.iter().any(|c| c["kind"] == "published"
+            && c["origin"]["document"]
+                .as_str()
+                .is_some_and(|d| d.ends_with("life.orla"))),
+        "{history}"
+    );
+    let attempt = history["attempts"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(attempt["subject"], "life.show@1", "{attempt}");
+    assert!(
+        attempt["why"].as_str().unwrap().contains("`nope`"),
+        "{attempt}"
+    );
+    assert_eq!(attempt["revision"], before + 1);
+    // The document's own show, generation 3, which the publish replaced.
+    let old = ok(7)["source"].as_str().unwrap();
+    assert!(
+        old.contains("kernel life.show@1") && old.contains("0.07"),
+        "{old}"
+    );
+    let forgotten = responses[8]["error"]["message"].as_str().unwrap();
+    assert!(
+        forgotten.contains("not one the session remembers"),
+        "{forgotten}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A snapshot takes the world as committed: after an evaluation that
+/// failed, `read` shows the output it computed and did not commit, and
+/// the snapshot shows the state that stands. It carries every Kernel's
+/// source, and is written to a file only where writes are allowed.
+#[test]
+fn a_snapshot_takes_committed_state_and_the_laws_it_ran_under() {
+    let dir = std::env::temp_dir().join(format!("orla-protocol-snapshot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("saves")).unwrap();
+    std::fs::write(
+        dir.join("scene.osn"),
+        "node zero: Rows<Int> { domain = 1; }\n\
+         node tally: kernel {\n\
+             requires { field.read; field.write; }\n\
+             input previous: Rows<Int> <~ tally.result from zero.result;\n\
+             output result: Rows<Int>;\n\
+             domain = 1;\n\
+             compute { return at(previous, 0) + 1; }\n\
+         }\n\
+         node check: kernel {\n\
+             requires { field.read; field.write; }\n\
+             input count: Rows<Int> <- tally.result;\n\
+             output result: Rows<Int>;\n\
+             domain = 1;\n\
+             compute { return 100 / (at(count, 0) - 3); }\n\
+         }\n\
+         output result <- check.result;\n",
+    )
+    .unwrap();
+    let words = |response: &Json| -> Vec<u32> {
+        let data = response["data"].as_str().unwrap();
+        let bytes = orla_formats::base64::unbase64(data).unwrap();
+        bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    };
+    let allow = format!("file.write={}", dir.join("saves").display());
+    let responses = talk_with(
+        &dir.join("scene.osn"),
+        &["--allow", &allow],
+        &[
+            json!({ "id": 1, "op": "pin", "node": "tally" }),
+            json!({ "id": 2, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
+            // The third count divides by zero: nothing of it commits.
+            json!({ "id": 4, "op": "evaluate", "time": 0.2 }),
+            json!({ "id": 5, "op": "read", "node": "tally" }),
+            json!({ "id": 6, "op": "snapshot" }),
+            json!({ "id": 7, "op": "snapshot", "to": "saves/world.json" }),
+            json!({ "id": 8, "op": "snapshot", "to": "elsewhere.json" }),
+        ],
+    );
+    assert!(responses[3].get("error").is_some(), "{}", responses[3]);
+    // The cache holds the count the failed evaluation computed...
+    assert_eq!(words(&responses[4]["ok"]), [3], "{}", responses[4]);
+    // ...and the snapshot the count that stands.
+    let snapshot = &responses[5]["ok"];
+    assert_eq!(snapshot["snapshot"], 1);
+    let states = snapshot["states"].as_array().unwrap();
+    let tally = states.iter().find(|s| s["node"] == "tally").unwrap();
+    assert_eq!(words(tally), [2], "{tally}");
+    assert_eq!(tally["shape"], "Rows");
+    assert_eq!(tally["extent"], json!([1, 1, 1]));
+    let laws = snapshot["laws"].as_array().unwrap();
+    assert!(
+        laws.iter().any(|l| l["source"]
+            .as_str()
+            .is_some_and(|s| s.contains("at(previous, 0) + 1"))),
+        "{snapshot}"
+    );
+    let written = &responses[6]["ok"];
+    let file = std::fs::read_to_string(written["path"].as_str().unwrap()).unwrap();
+    let file: Json = serde_json::from_str(&file).unwrap();
+    assert_eq!(file["states"], snapshot["states"]);
+    let refused = responses[7]["error"]["message"].as_str().unwrap();
+    assert!(refused.contains("outside every directory"), "{refused}");
+    assert!(!dir.join("elsewhere.json").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

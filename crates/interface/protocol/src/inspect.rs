@@ -19,6 +19,8 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
         "kernels": session.runtime().kernels().count(),
         "nodes": session.graph().map_or(0, |graph| graph.nodes.len()),
         "fusion": session.fusion(),
+        "revision": session.position().0,
+        "frame": session.position().1,
         "grants": session.runtime().grants().iter().map(|c| c.name()).collect::<Vec<_>>(),
     }))
 }
@@ -49,6 +51,18 @@ pub(crate) fn kernels(session: &Session) -> Result<Json, Json> {
 /// One Kernel's manifest and the source `publish` takes.
 pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json> {
     let id = request.kernel()?;
+    // A generation the registry has let go, from what the session
+    // remembers of the change that published it.
+    if let Some(generation) = request.get("generation").and_then(Json::as_u64) {
+        let source = session
+            .source_at(&id, orla_runtime::Generation(generation))
+            .ok_or_else(|| {
+                failure(format!(
+                    "{id} generation {generation} is not one the session remembers"
+                ))
+            })?;
+        return Ok(json!({ "id": id.to_string(), "generation": generation, "source": source }));
+    }
     let version = session
         .runtime()
         .kernel(&id)
@@ -56,6 +70,63 @@ pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json>
     let mut json = version_json(&version);
     json["source"] = Json::String(version.source().to_owned());
     Ok(json)
+}
+
+/// How the world came to be as it is: the changes that made revisions
+/// after `since`, and the attempts refused since, each with where it came
+/// from, as far back as the session remembers.
+pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json> {
+    let since = request.get("since").and_then(Json::as_u64).unwrap_or(0);
+    let (revision, frame) = session.position();
+    let origin = |origin: &orla_session::Origin| match origin {
+        orla_session::Origin::Document(path) => json!({ "document": path.display().to_string() }),
+        orla_session::Origin::Protocol(channel) => json!({ "protocol": channel }),
+        orla_session::Origin::Local => json!("local"),
+    };
+    let generation = |g: &Option<orla_runtime::Generation>| g.map(|g| g.0);
+    let changes: Vec<Json> = session
+        .changes_since(since)
+        .iter()
+        .map(|record| {
+            let mut json = match &record.change {
+                orla_session::Change::Published {
+                    id,
+                    from,
+                    to,
+                    source,
+                } => json!({
+                    "kind": "published", "kernel": id.to_string(), "from": generation(from),
+                    "to": to.0, "source": format!("{source:016x}"),
+                }),
+                orla_session::Change::Retired { id, from } => {
+                    json!({ "kind": "retired", "kernel": id.to_string(), "from": generation(from) })
+                }
+                orla_session::Change::Scene => json!({ "kind": "scene" }),
+                orla_session::Change::Param { name } => json!({ "kind": "param", "name": name }),
+                orla_session::Change::Written { node, port } => {
+                    json!({ "kind": "written", "node": node, "port": port })
+                }
+                orla_session::Change::Reset => json!({ "kind": "reset" }),
+            };
+            json["revision"] = json!(record.revision);
+            json["after_frames"] = json!(record.after_frames);
+            json["wall"] = json!(record.wall);
+            json["origin"] = origin(&record.origin);
+            json
+        })
+        .collect();
+    let attempts: Vec<Json> = session
+        .attempts_since(since)
+        .iter()
+        .map(|attempt| {
+            json!({
+                "revision": attempt.revision, "frame": attempt.frame, "wall": attempt.wall,
+                "origin": origin(&attempt.origin), "subject": attempt.subject, "why": attempt.why,
+                "source": attempt.source.map(|s| format!("{s:016x}")),
+            })
+        })
+        .collect();
+    Ok(json!({ "revision": revision, "frame": frame, "changes": changes, "attempts": attempts }))
 }
 
 /// The Graph the scene lowered to.

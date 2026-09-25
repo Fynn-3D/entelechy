@@ -80,6 +80,27 @@ person started the server with `--grant` naming fewer. A Kernel that
 requires one not granted is refused when it is prepared, with the ones
 it lacks, and whatever ran before goes on running.
 
+The world has a position, `revision` and `frame` in `status`: the
+revision moves when the world changes other than by running (a Kernel
+published or retired, the scene read again, a param set, state written
+or reset), the frame counts the evaluations committed since. `history`
+(`since` a revision) says what made each revision after it, and where
+it came from: a document on disk, or the protocol and its channel
+(`stdin`, `socket 3`, `websocket 4`), a fact about how it arrived, not
+who sent it; and the attempts refused since, with why, which move
+nothing. `kernel` with a `generation` reads the source a Kernel had then,
+while the session remembers the change that published it. What it
+remembers is bounded; the session remembers changes, never whole worlds.
+
+`snapshot` takes the world whole for its caller to keep: the revision and
+frame, every Kernel with its generation and source, and every port's
+committed state (`layout`, `shape`, `extent`, `data` as base64 words),
+under `"snapshot": 1`, the format's version. Only committed state is
+taken: after an evaluation that failed, `read` shows the output it
+computed, the snapshot the state that stands. With `to`, the snapshot is
+written to that file instead, where the server was started with `--allow
+file.write`. Restoring one is not yet an operation.
+
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0 (a manifest's `memories` names the ports that
 are an input and an output at once, and `budget` the loop iterations one

@@ -41,6 +41,10 @@ pub struct Incoming {
     /// Whether it came on standard input, where `quit` ends the process;
     /// on a socket, `quit` ends that connection.
     pub local: bool,
+    /// The channel it came on: `stdin`, `socket 3`, `websocket 4`,
+    /// numbered in the order connections opened. What the session
+    /// records of a change it made says so.
+    pub from: String,
 }
 
 /// Where an answer goes.
@@ -85,6 +89,7 @@ pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) {
                 line,
                 reply: Reply::Stdout,
                 local: true,
+                from: "stdin".into(),
             };
             if sink.send(incoming).is_err() {
                 break;
@@ -114,19 +119,20 @@ pub fn listen(
     let listener = std::net::TcpListener::bind(address)?;
     let bound = listener.local_addr()?;
     std::thread::spawn(move || {
-        for stream in listener.incoming().map_while(Result::ok) {
+        for (number, stream) in listener.incoming().map_while(Result::ok).enumerate() {
             let sink = sink.clone();
             let origins = origins.clone();
+            let number = number + 1;
             std::thread::spawn(move || {
                 let mut opening = [0u8; 8];
                 let peeked = stream.peek(&mut opening).unwrap_or(0);
                 let opening = &opening[..peeked];
                 if opening.starts_with(b"GET ") {
-                    serve_websocket(stream, sink, &origins);
+                    serve_websocket(stream, sink, &origins, format!("websocket {number}"));
                 } else if is_http(opening) {
                     refuse_http(stream);
                 } else {
-                    serve_lines(stream, sink);
+                    serve_lines(stream, sink, format!("socket {number}"));
                 }
             });
         }
@@ -158,7 +164,7 @@ fn refuse_http(mut stream: std::net::TcpStream) {
 }
 
 /// One connection of JSON lines.
-fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incoming>) {
+fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incoming>, from: String) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -186,6 +192,7 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
             line,
             reply: Reply::Connection(reply.clone()),
             local: false,
+            from: from.clone(),
         };
         if sink.send(incoming).is_err() {
             break;
@@ -200,6 +207,7 @@ fn serve_websocket(
     stream: std::net::TcpStream,
     sink: std::sync::mpsc::Sender<Incoming>,
     origins: &crate::websocket::Origins,
+    from: String,
 ) {
     use crate::websocket::{self, Message};
     let Ok(writer) = stream.try_clone() else {
@@ -248,6 +256,7 @@ fn serve_websocket(
                     line,
                     reply: Reply::Connection(reply.clone()),
                     local: false,
+                    from: from.clone(),
                 };
                 if sink.send(incoming).is_err() {
                     break;

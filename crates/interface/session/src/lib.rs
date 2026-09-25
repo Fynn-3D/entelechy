@@ -27,6 +27,7 @@
 #![warn(missing_docs)]
 
 pub mod bench;
+pub mod history;
 mod inputs;
 mod kernels;
 mod observe;
@@ -44,7 +45,38 @@ use std::path::PathBuf;
 use orla_formats::ppm;
 use orla_runtime::{Generation, KernelId};
 
+pub use history::{Attempt, Change, Origin, Record};
 pub use options::SessionOptions;
+
+/// The world at one moment, taken for its caller to keep
+/// ([`Session::snapshot`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Snapshot {
+    /// The revision it was taken at.
+    pub revision: u64,
+    /// The frames the revision had run.
+    pub frame: u64,
+    /// Every published Kernel: its id, generation and source, so the
+    /// snapshot needs no memory of the session's to be read.
+    pub laws: Vec<(KernelId, Generation, String)>,
+    /// Every port's committed state.
+    pub states: Vec<StateCopy>,
+}
+
+/// One port's committed state in a snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StateCopy {
+    /// The producing node.
+    pub node: String,
+    /// Its port.
+    pub port: String,
+    /// The element layout.
+    pub schema: orla_runtime::Schema,
+    /// The extent.
+    pub domain: orla_runtime::Domain,
+    /// The Kernel's words, one per scalar.
+    pub words: Vec<u32>,
+}
 pub use session::Session;
 
 pub use observe::parse_target;
