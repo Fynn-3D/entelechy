@@ -164,7 +164,7 @@ The roadmaps describe acceptance criteria, not a promise of universal support.
 
 ## Design references
 
-- [Typed Field architecture](TYPED-FIELD-ARCHITECTURE.md): resource
+- [Typed Field architecture](docs/TYPED-FIELD-ARCHITECTURE.md): resource
   convergence, domain extension boundaries, and cross-session acceptance rules.
 
 - [Architecture plan](ARCHITECTURE-PLAN.md): the broader system roadmap.

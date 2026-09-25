@@ -10,7 +10,7 @@ Read in this order; each document answers one question.
 | 2 | `README.md` | What it looks like from outside |
 | 3 | `ARCHITECTURE-PLAN.md` | Which phase the work is in, and what accepts it |
 | 4 | `CORE-ARCHITECTURE.md` | Where the boundaries are |
-| 5 | `TYPED-FIELD-ARCHITECTURE.md` | Why there is one resource |
+| 5 | `docs/TYPED-FIELD-ARCHITECTURE.md` | Why there is one resource |
 | 6 | `IMPLEMENTATION.md` | Where the code and its evidence are |
 | 7 | `PROCESS.md` | How to write, verify, commit and hand over |
 | 8 | `HANDOFF.md` | What this repository holds, and the next action |
@@ -289,7 +289,7 @@ The safe path is the powerful path.
 
 ## Engineering Rules
 
-Follow `TYPED-FIELD-ARCHITECTURE.md` for types, ports, resource storage and
+Follow `docs/TYPED-FIELD-ARCHITECTURE.md` for types, ports, resource storage and
 execution. Numerical domains share typed Field storage and GPU residency; Image
 is a compatibility view with explicit sampling/presentation semantics. Do not add
 parallel resource lifecycles or execution engines for new element types, audio,

@@ -119,9 +119,9 @@ domain, typed CPU columns, and GPU storage; `gpu.rs` reuses resident Fields and
 explicit readback. Its native device exposure and process-wide context are not
 part of this decision. Its audio tone adapter is not a general Kernel DSP model.
 
-In this repository, start with the [resource ABI](crates/core/abi/src/lib.rs),
-the [Host that owns every Field](crates/core/host/src/lib.rs), the
-[GPU backend](crates/backends/gpu/src/lib.rs), and the
-[residency and parity tests](crates/backends/gpu/tests/parity.rs). The failure and
+In this repository, start with the [resource ABI](../crates/core/abi/src/lib.rs),
+the [Host that owns every Field](../crates/core/host/src/lib.rs), the
+[GPU backend](../crates/backends/gpu/src/lib.rs), and the
+[residency and parity tests](../crates/backends/gpu/tests/parity.rs). The failure and
 authority contracts are kept in
-[IMPLEMENTATION](IMPLEMENTATION.md) under *Resource and residency*.
+[IMPLEMENTATION](../IMPLEMENTATION.md) under *Resource and residency*.
