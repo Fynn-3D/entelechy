@@ -830,7 +830,7 @@ impl<'a> Checker<'a> {
                         )));
                     }
                 }
-                result_type(callee)
+                callee.result_type()
             }
             Op::Intrinsic(intrinsic, args) => {
                 let types = args
@@ -1227,38 +1227,6 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// Type of a helper function's single result.
-fn result_type(function: &Function) -> Type {
-    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                Op::Match {
-                    arms, otherwise, ..
-                } => arms
-                    .iter()
-                    .find_map(|(_, block)| find(&block.body, id))
-                    .or_else(|| find(&otherwise.body, id)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
-    }
-    find(&function.body, function.results[0]).unwrap_or(Type::Float)
-}
-
 /// The address type of a linear interpolation: a fractional position, so
 /// `Float` over rows where `at` takes an `Int`.
 pub fn linear_index_type(shape: Shape) -> Type {
@@ -1295,23 +1263,10 @@ fn block_writes(instructions: &[Instruction], writers: &[bool]) -> bool {
         .any(|instruction| match &instruction.op {
             Op::Put(..) | Op::Emit(_) => true,
             Op::Call(callee, _) => writers[*callee as usize],
-            Op::If {
-                then, otherwise, ..
-            } => block_writes(&then.body, writers) || block_writes(&otherwise.body, writers),
-            Op::Match {
-                arms, otherwise, ..
-            } => {
-                arms.iter()
-                    .any(|(_, block)| block_writes(&block.body, writers))
-                    || block_writes(&otherwise.body, writers)
-            }
-            Op::Loop { until, body, .. } => {
-                until
-                    .as_ref()
-                    .is_some_and(|block| block_writes(&block.body, writers))
-                    || block_writes(&body.body, writers)
-            }
-            _ => false,
+            other => other
+                .blocks()
+                .into_iter()
+                .any(|block| block_writes(&block.body, writers)),
         })
 }
 
@@ -1321,21 +1276,10 @@ fn first_writing_call(instructions: &[Instruction], writers: &[bool]) -> Option<
         .iter()
         .find_map(|instruction| match &instruction.op {
             Op::Call(callee, _) if writers[*callee as usize] => Some(*callee as usize),
-            Op::If {
-                then, otherwise, ..
-            } => first_writing_call(&then.body, writers)
-                .or_else(|| first_writing_call(&otherwise.body, writers)),
-            Op::Match {
-                arms, otherwise, ..
-            } => arms
-                .iter()
-                .find_map(|(_, block)| first_writing_call(&block.body, writers))
-                .or_else(|| first_writing_call(&otherwise.body, writers)),
-            Op::Loop { until, body, .. } => until
-                .as_ref()
-                .and_then(|block| first_writing_call(&block.body, writers))
-                .or_else(|| first_writing_call(&body.body, writers)),
-            _ => None,
+            other => other
+                .blocks()
+                .into_iter()
+                .find_map(|block| first_writing_call(&block.body, writers)),
         })
 }
 

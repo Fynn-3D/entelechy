@@ -72,27 +72,11 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
                 {
                     use_.addressed = true
                 }
-                Op::If {
-                    then, otherwise, ..
-                } => {
-                    walk(&then.body, input, use_);
-                    walk(&otherwise.body, input, use_);
-                }
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    for (_, block) in arms {
+                op => {
+                    for block in op.blocks() {
                         walk(&block.body, input, use_);
                     }
-                    walk(&otherwise.body, input, use_);
                 }
-                Op::Loop { until, body, .. } => {
-                    if let Some(until) = until {
-                        walk(&until.body, input, use_);
-                    }
-                    walk(&body.body, input, use_);
-                }
-                _ => {}
             }
         }
     }

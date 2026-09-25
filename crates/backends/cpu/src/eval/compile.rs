@@ -408,28 +408,8 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                 }
                 _ => {}
             }
-            match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => {
-                    walk(&then.body, counts);
-                    walk(&otherwise.body, counts);
-                }
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    for (_, block) in arms {
-                        walk(&block.body, counts);
-                    }
-                    walk(&otherwise.body, counts);
-                }
-                Op::Loop { until, body, .. } => {
-                    if let Some(until) = until {
-                        walk(&until.body, counts);
-                    }
-                    walk(&body.body, counts);
-                }
-                _ => {}
+            for block in instruction.op.blocks() {
+                walk(&block.body, counts);
             }
         }
     }

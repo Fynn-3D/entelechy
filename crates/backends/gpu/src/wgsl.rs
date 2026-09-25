@@ -182,17 +182,11 @@ fn fails_within(instruction: &Instruction) -> bool {
             .iter()
             .any(|block| block.body.iter().any(fails_within))
     };
-    match &instruction.op {
-        Op::If {
-            then, otherwise, ..
-        } => nested(&[then, otherwise]),
-        Op::Match {
-            arms, otherwise, ..
-        } => arms.iter().any(|(_, block)| nested(&[block])) || nested(&[otherwise]),
-        Op::Loop { until, body, .. } => {
-            until.as_ref().is_some_and(|block| nested(&[block])) || nested(&[body])
-        }
-        other => fails(other, instruction.ty),
+    let blocks = instruction.op.blocks();
+    if blocks.is_empty() {
+        fails(&instruction.op, instruction.ty)
+    } else {
+        nested(&blocks)
     }
 }
 
@@ -1076,7 +1070,7 @@ pub fn emit_packed(module: &Module, packed: &[usize]) -> String {
         .take(written_outputs(module))
     {
         let element = if scattering {
-            result_type(&module.entry)
+            module.entry.result_type()
         } else {
             port.element()
         };
@@ -1139,7 +1133,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             wgsl_type(
                 init.results
                     .first()
-                    .map_or(Type::Float, |r| result_type_of(init, *r))
+                    .map_or(Type::Float, |r| init.type_of(*r).unwrap_or(Type::Float))
             ),
             keep = keep_left(module),
             settle = settle_left(module),
@@ -1155,7 +1149,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     } else {
         Some(format!(
             "{}(entry(coord, element));",
-            emit_name(result_type(&module.entry))
+            emit_name(module.entry.result_type())
         ))
     };
     let store = if let Some(landing) = &landing {
@@ -1426,7 +1420,7 @@ fn scatter_header(module: &Module, target: Option<bool>, extra: &str) -> String 
         out,
         "fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}"
     );
-    let pair = result_type(&module.entry);
+    let pair = module.entry.result_type();
     let pair_stride = type_words(module, pair);
     let (expr, _) = load_expr(module, pair, "pairs", "b", 0, Encoding::Word);
     let _ = writeln!(
@@ -1778,27 +1772,11 @@ pub fn emitted_pairs(module: &Module) -> Vec<Type> {
         for instruction in instructions {
             match &instruction.op {
                 Op::Emit(_) if !found.contains(&instruction.ty) => found.push(instruction.ty),
-                Op::If {
-                    then, otherwise, ..
-                } => {
-                    walk(&then.body, found);
-                    walk(&otherwise.body, found);
-                }
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    for (_, block) in arms {
+                op => {
+                    for block in op.blocks() {
                         walk(&block.body, found);
                     }
-                    walk(&otherwise.body, found);
                 }
-                Op::Loop { until, body, .. } => {
-                    if let Some(until) = until {
-                        walk(&until.body, found);
-                    }
-                    walk(&body.body, found);
-                }
-                _ => {}
             }
         }
     }
@@ -1819,7 +1797,7 @@ fn emit_functions(module: &Module, out: &mut String) {
         return;
     }
     // The pair the entry returns is landed the same way.
-    let returned = result_type(&module.entry);
+    let returned = module.entry.result_type();
     if !pairs.contains(&returned) {
         pairs.push(returned);
     }
@@ -2095,38 +2073,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         value = member_name(1),
     );
     out
-}
-
-/// The type of one result of a function.
-fn result_type_of(function: &Function, id: ValueId) -> Type {
-    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                Op::Match {
-                    arms, otherwise, ..
-                } => arms
-                    .iter()
-                    .find_map(|(_, block)| find(&block.body, id))
-                    .or_else(|| find(&otherwise.body, id)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
-    }
-    find(&function.body, id).unwrap_or(Type::Float)
 }
 
 /// Workgroup length of the reduce step.
@@ -2858,7 +2804,7 @@ fn emit_function(
     if stores {
         let _ = writeln!(out, "fn {name}({args}) {{");
     } else {
-        let ret = result_type(function);
+        let ret = function.result_type();
         let _ = writeln!(out, "fn {name}({args}) -> {} {{", wgsl_type(ret));
     }
     let mut emitter = Emitter {
@@ -2877,37 +2823,6 @@ fn emit_function(
         let _ = writeln!(out, "    return v{};", function.results[0].0);
     }
     let _ = writeln!(out, "}}");
-}
-
-pub(crate) fn result_type(function: &Function) -> Type {
-    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                Op::Match {
-                    arms, otherwise, ..
-                } => arms
-                    .iter()
-                    .find_map(|(_, block)| find(&block.body, id))
-                    .or_else(|| find(&otherwise.body, id)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
-    }
-    find(&function.body, function.results[0]).unwrap_or(Type::Float)
 }
 
 /// Whether a block is short plain arithmetic, which costs less computed
@@ -3611,34 +3526,7 @@ impl Emitter<'_> {
     }
 
     fn type_of(&self, id: ValueId) -> Type {
-        fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
-            for instruction in instructions {
-                if instruction.id == id {
-                    return Some(instruction.ty);
-                }
-                let nested = match &instruction.op {
-                    Op::If {
-                        then, otherwise, ..
-                    } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                    Op::Match {
-                        arms, otherwise, ..
-                    } => arms
-                        .iter()
-                        .find_map(|(_, block)| find(&block.body, id))
-                        .or_else(|| find(&otherwise.body, id)),
-                    Op::Loop { until, body, .. } => until
-                        .as_ref()
-                        .and_then(|block| find(&block.body, id))
-                        .or_else(|| find(&body.body, id)),
-                    _ => None,
-                };
-                if nested.is_some() {
-                    return nested;
-                }
-            }
-            None
-        }
-        find(&self.function.body, id).unwrap_or(Type::Float)
+        self.function.type_of(id).unwrap_or(Type::Float)
     }
 }
 

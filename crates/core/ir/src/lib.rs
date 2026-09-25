@@ -1030,6 +1030,48 @@ pub struct Block {
     pub result: ValueId,
 }
 
+impl Op {
+    /// The blocks the op carries, in order: an `if`'s two, a `match`'s
+    /// arms and then its default, a `loop`'s test and then its body; none
+    /// for any other op. A walk over a function's nested instructions
+    /// goes through here, so an op that comes to carry a block is walked
+    /// by every walk at once.
+    pub fn blocks(&self) -> Vec<&Block> {
+        match self {
+            Op::If {
+                then, otherwise, ..
+            } => vec![then, otherwise],
+            Op::Match {
+                arms, otherwise, ..
+            } => arms
+                .iter()
+                .map(|(_, block)| block)
+                .chain(std::iter::once(otherwise))
+                .collect(),
+            Op::Loop { until, body, .. } => until.iter().chain(std::iter::once(body)).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// [`Op::blocks`], to change them.
+    pub fn blocks_mut(&mut self) -> Vec<&mut Block> {
+        match self {
+            Op::If {
+                then, otherwise, ..
+            } => vec![then, otherwise],
+            Op::Match {
+                arms, otherwise, ..
+            } => arms
+                .iter_mut()
+                .map(|(_, block)| block)
+                .chain(std::iter::once(otherwise))
+                .collect(),
+            Op::Loop { until, body, .. } => until.iter_mut().chain(std::iter::once(body)).collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 /// Largest iteration bound a `loop` may declare.
 pub const MAX_LOOP_COUNT: u32 = 65_536;
 
@@ -1306,27 +1348,45 @@ impl Function {
             instructions
                 .iter()
                 .map(|instruction| {
-                    1 + match &instruction.op {
-                        Op::If {
-                            then, otherwise, ..
-                        } => count(&then.body) + count(&otherwise.body),
-                        Op::Match {
-                            arms, otherwise, ..
-                        } => {
-                            arms.iter()
-                                .map(|(_, block)| count(&block.body))
-                                .sum::<usize>()
-                                + count(&otherwise.body)
-                        }
-                        Op::Loop { until, body, .. } => {
-                            until.as_ref().map_or(0, |block| count(&block.body)) + count(&body.body)
-                        }
-                        _ => 0,
-                    }
+                    1 + instruction
+                        .op
+                        .blocks()
+                        .iter()
+                        .map(|block| count(&block.body))
+                        .sum::<usize>()
                 })
                 .sum()
         }
         count(&self.body)
+    }
+
+    /// The type of the instruction that defines `id`, however deep in the
+    /// function's blocks; none when an instruction does not define it (an
+    /// argument, or no value of the function).
+    pub fn type_of(&self, id: ValueId) -> Option<Type> {
+        fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
+            instructions.iter().find_map(|instruction| {
+                if instruction.id == id {
+                    return Some(instruction.ty);
+                }
+                instruction
+                    .op
+                    .blocks()
+                    .into_iter()
+                    .find_map(|block| find(&block.body, id))
+            })
+        }
+        find(&self.body, id)
+    }
+
+    /// The type of the function's first result, wherever it is defined:
+    /// what a caller of it receives. A result no instruction defines is
+    /// read as a `Float`.
+    pub fn result_type(&self) -> Type {
+        self.results
+            .first()
+            .and_then(|&result| self.type_of(result))
+            .unwrap_or(Type::Float)
     }
 }
 
@@ -1337,22 +1397,11 @@ impl Function {
         fn walk(instructions: &[Instruction], holds: &dyn Fn(Type) -> bool) -> bool {
             instructions.iter().any(|instruction| {
                 holds(instruction.ty)
-                    || match &instruction.op {
-                        Op::If {
-                            then, otherwise, ..
-                        } => walk(&then.body, holds) || walk(&otherwise.body, holds),
-                        Op::Match {
-                            arms, otherwise, ..
-                        } => {
-                            arms.iter().any(|(_, block)| walk(&block.body, holds))
-                                || walk(&otherwise.body, holds)
-                        }
-                        Op::Loop { until, body, .. } => {
-                            until.as_ref().is_some_and(|block| walk(&block.body, holds))
-                                || walk(&body.body, holds)
-                        }
-                        _ => false,
-                    }
+                    || instruction
+                        .op
+                        .blocks()
+                        .iter()
+                        .any(|block| walk(&block.body, holds))
             })
         }
         self.args.iter().any(|ty| holds(*ty)) || walk(&self.body, holds)

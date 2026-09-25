@@ -361,7 +361,7 @@ fn values_of(
         .iter()
         .map(|(id, name)| TraceValue {
             name: name.clone(),
-            ty: type_of(function, *id).unwrap_or(Type::Float),
+            ty: function.type_of(*id).unwrap_or(Type::Float),
             words: value(*id),
             ran: ran[id.0 as usize],
         })
@@ -373,44 +373,12 @@ fn values_of(
         .enumerate()
         .map(|(index, (id, name))| TraceValue {
             name,
-            ty: type_of(function, *id).unwrap_or(Type::Float),
+            ty: function.type_of(*id).unwrap_or(Type::Float),
             words: result(index),
             ran: true,
         })
         .collect();
     (bindings, results)
-}
-
-/// The type of a value of a function, by id, nested blocks included.
-fn type_of(function: &orla_ir::Function, id: orla_ir::ValueId) -> Option<Type> {
-    fn find(instructions: &[orla_ir::Instruction], id: orla_ir::ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                orla_ir::Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                orla_ir::Op::Match {
-                    arms, otherwise, ..
-                } => arms
-                    .iter()
-                    .find_map(|(_, block)| find(&block.body, id))
-                    .or_else(|| find(&otherwise.body, id)),
-                orla_ir::Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
-    }
-    find(&function.body, id)
 }
 
 /// Runs one element of `module` on the interpreter and returns every

@@ -1909,7 +1909,7 @@ impl GpuBackend {
             // one it returns too: its pairs buffer is never written.
             16
         } else if matches!(module.manifest.mode, Mode::Scatter { .. }) {
-            element_count * wgsl::type_words(module, wgsl::result_type(&module.entry)) * 4
+            element_count * wgsl::type_words(module, module.entry.result_type()) * 4
         } else {
             output_schema.storage_words(element_count) * 4
         };

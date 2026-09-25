@@ -102,27 +102,11 @@ fn prune(mut module: Module) -> Module {
         for instruction in body {
             match &instruction.op {
                 Op::Call(callee, _) => found[*callee as usize] = true,
-                Op::If {
-                    then, otherwise, ..
-                } => {
-                    calls(&then.body, found);
-                    calls(&otherwise.body, found);
-                }
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    for (_, arm) in arms {
-                        calls(&arm.body, found);
+                op => {
+                    for block in op.blocks() {
+                        calls(&block.body, found);
                     }
-                    calls(&otherwise.body, found);
                 }
-                Op::Loop { until, body, .. } => {
-                    if let Some(until) = until {
-                        calls(&until.body, found);
-                    }
-                    calls(&body.body, found);
-                }
-                _ => {}
             }
         }
     }
@@ -130,27 +114,11 @@ fn prune(mut module: Module) -> Module {
         for instruction in body {
             match &mut instruction.op {
                 Op::Call(callee, _) => *callee = to[*callee as usize],
-                Op::If {
-                    then, otherwise, ..
-                } => {
-                    renumber(&mut then.body, to);
-                    renumber(&mut otherwise.body, to);
-                }
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    for (_, arm) in arms {
-                        renumber(&mut arm.body, to);
+                op => {
+                    for block in op.blocks_mut() {
+                        renumber(&mut block.body, to);
                     }
-                    renumber(&mut otherwise.body, to);
                 }
-                Op::Loop { until, body, .. } => {
-                    if let Some(until) = until {
-                        renumber(&mut until.body, to);
-                    }
-                    renumber(&mut body.body, to);
-                }
-                _ => {}
             }
         }
     }
@@ -200,23 +168,12 @@ fn prune(mut module: Module) -> Module {
 fn size(body: &[Instruction]) -> usize {
     body.iter()
         .map(|instruction| {
-            1 + match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => size(&then.body) + size(&otherwise.body),
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    arms.iter()
-                        .map(|(_, block)| size(&block.body))
-                        .sum::<usize>()
-                        + size(&otherwise.body)
-                }
-                Op::Loop { until, body, .. } => {
-                    until.as_ref().map_or(0, |block| size(&block.body)) + size(&body.body)
-                }
-                _ => 0,
-            }
+            1 + instruction
+                .op
+                .blocks()
+                .iter()
+                .map(|block| size(&block.body))
+                .sum::<usize>()
         })
         .sum()
 }
@@ -225,24 +182,13 @@ fn size(body: &[Instruction]) -> usize {
 fn highest(body: &[Instruction]) -> u32 {
     body.iter()
         .map(|instruction| {
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => highest(&then.body).max(highest(&otherwise.body)),
-                Op::Match {
-                    arms, otherwise, ..
-                } => arms
-                    .iter()
-                    .map(|(_, block)| highest(&block.body))
-                    .max()
-                    .unwrap_or(0)
-                    .max(highest(&otherwise.body)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .map_or(0, |block| highest(&block.body))
-                    .max(highest(&body.body)),
-                _ => 0,
-            };
+            let nested = instruction
+                .op
+                .blocks()
+                .iter()
+                .map(|block| highest(&block.body))
+                .max()
+                .unwrap_or(0);
             instruction.id.0.max(nested)
         })
         .max()
@@ -495,22 +441,11 @@ fn find_op(body: &[Instruction], id: ValueId) -> Option<&Op> {
         if instruction.id == id {
             return Some(&instruction.op);
         }
-        let nested = match &instruction.op {
-            Op::If {
-                then, otherwise, ..
-            } => find_op(&then.body, id).or_else(|| find_op(&otherwise.body, id)),
-            Op::Match {
-                arms, otherwise, ..
-            } => arms
-                .iter()
-                .find_map(|(_, block)| find_op(&block.body, id))
-                .or_else(|| find_op(&otherwise.body, id)),
-            Op::Loop { until, body, .. } => until
-                .as_ref()
-                .and_then(|block| find_op(&block.body, id))
-                .or_else(|| find_op(&body.body, id)),
-            _ => None,
-        };
+        let nested = instruction
+            .op
+            .blocks()
+            .into_iter()
+            .find_map(|block| find_op(&block.body, id));
         if nested.is_some() {
             return nested;
         }
@@ -958,20 +893,10 @@ impl Ctx<'_> {
         match op {
             Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look => true,
             Op::Call(callee, _) => self.writers[*callee as usize],
-            Op::If {
-                then, otherwise, ..
-            } => self.block_has_effects(then) || self.block_has_effects(otherwise),
-            Op::Match {
-                arms, otherwise, ..
-            } => {
-                arms.iter().any(|(_, block)| self.block_has_effects(block))
-                    || self.block_has_effects(otherwise)
-            }
-            Op::Loop { until, body, .. } => {
-                until.as_ref().is_some_and(|b| self.block_has_effects(b))
-                    || self.block_has_effects(body)
-            }
-            _ => false,
+            other => other
+                .blocks()
+                .into_iter()
+                .any(|block| self.block_has_effects(block)),
         }
     }
 
@@ -1086,28 +1011,8 @@ fn defined(body: &[Instruction]) -> HashSet<u32> {
     fn walk(body: &[Instruction], ids: &mut HashSet<u32>) {
         for instruction in body {
             ids.insert(instruction.id.0);
-            match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => {
-                    walk(&then.body, ids);
-                    walk(&otherwise.body, ids);
-                }
-                Op::Match {
-                    arms, otherwise, ..
-                } => {
-                    for (_, block) in arms {
-                        walk(&block.body, ids);
-                    }
-                    walk(&otherwise.body, ids);
-                }
-                Op::Loop { until, body, .. } => {
-                    if let Some(until) = until {
-                        walk(&until.body, ids);
-                    }
-                    walk(&body.body, ids);
-                }
-                _ => {}
+            for block in instruction.op.blocks() {
+                walk(&block.body, ids);
             }
         }
     }

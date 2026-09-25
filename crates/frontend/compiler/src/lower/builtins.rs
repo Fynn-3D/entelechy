@@ -11,7 +11,7 @@ use orla_language::{Expr, Span};
 
 use crate::CompileError;
 
-use super::{Builder, result_type, semantic};
+use super::{Builder, semantic};
 
 /// The builtins that are formulas over the arithmetic, written into the
 /// IR as it; see [`composite`](super::composite).
@@ -612,7 +612,7 @@ impl Builder<'_> {
                         (
                             index,
                             functions[index].1.args.clone(),
-                            result_type(&functions[index].1),
+                            functions[index].1.result_type(),
                         )
                     })
                 };

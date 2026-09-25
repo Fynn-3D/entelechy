@@ -1029,7 +1029,7 @@ impl<'a> Builder<'a> {
         };
         let ret = {
             let functions = self.shared.functions.borrow();
-            result_type(&functions[index as usize].1)
+            functions[index as usize].1.result_type()
         };
         Ok(self.emit(ret, Op::Call(index, values)))
     }
@@ -1136,30 +1136,4 @@ impl<'a> Builder<'a> {
             ))
         }
     }
-}
-
-/// Type of a lowered helper function's result.
-fn result_type(function: &Function) -> Type {
-    fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
-    }
-    find(&function.body, function.results[0]).unwrap_or(Type::Float)
 }
