@@ -810,4 +810,6 @@ Application tests are `.replay` files: `scene <path>`, optional
 `reset node.port` for one port's), and `expect` lines — a pixel, a field of an element (`expect step.result[0].score =
 1`), or how many elements an output holds (`expect count ground.result
 = 576`, which is what a `domain` came out as). See [the replay
-module](../crates/interface/session/src/replay.rs).
+module](../crates/interface/session/src/replay.rs). A replay is a test,
+not a way to keep a piece made with a scene; see `docs/DECISIONS.md`,
+*A replay is a test*.

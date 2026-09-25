@@ -701,3 +701,44 @@ replay played through `orla_play_*`; and by the web bridge's test, a
 replay played in `play.html` on the page's GPU and JIT, and F5 and Tab
 pressed there.
 
+
+## A replay is a test; a piece is made of laws, structure and state
+
+A replay is input played into a scene over time, and what it expects
+of the scene: a test. It lives under its example's `tests/`, and every
+one there is a test of what that example promises. Played headless
+(`orla replay`), it holds the scene: frame after frame as fast as they
+compute, which is what the verification runs. Played by the play the
+Player and a page share (`orla-player --replay`, `play.html?replay=`),
+it holds the interface as well: the keys and pads mapped, the pointer
+found in the picture, the picture shown, a page's device waited for;
+and it can be watched, a failure seen where it happens, an interaction
+shown to someone. The window is handed over when it ends, for looking
+around, not as a way back to a world.
+
+A piece made with a scene is kept as what makes it, never as the
+clicks that made it: its laws as Kernels (`publish`), its structure as
+the scene document (`compose` and its `edits`), and what it came to as
+state: a port's Field (`read`, `write`, `save`) or the whole world (a
+`snapshot`, and `restore`).
+
+**Why.** A replay of clicks is a test of the editor clicked: move its
+bar, its camera or its picking, and the piece is gone, while the test
+fails as a test should. The voxel monolith, built by hand as a replay,
+was that: kept among the tests, it cost more than any of them (31 s of
+the WASI replays' 79) and held nothing a test holds. Headless and
+played are one replay and one play, not two: headless is the faster
+and checks the scene; only played does the interface run, and a fault
+that is the interface's (Firefox answering a mapping a tenth of a
+second late) is found there and nowhere else.
+
+**Where.** [The replay module](../crates/interface/session/src/replay.rs)
+reads and runs a replay; [`play`](../crates/interface/session/src/play/mod.rs)
+plays one. Held by the example replays under the verification, the
+Player's test that a replay played in a window holds as it does
+headless, the ABI's through `orla_play_*`, and the web bridge's in
+`play.html` on the page's GPU and JIT.
+
+**What would change it.** A piece that is its making, a recorded
+performance kept for its own sake, which would be data a scene reads,
+not a replay among the tests.
