@@ -468,7 +468,10 @@ graph's tests (one port starts again and the others keep theirs; a
 reset lets go of the runs that began from what it forgot, and only
 those), the protocol's, and the voxel replay, which brings the camera
 home and keeps the world; the scene's edit tests, which hold every byte
-an edit does not name, and the protocol's.
+an edit does not name, and the protocol's, which show a node's own value
+refused by `param`, changed by an edit and kept by the document, and a
+declared param reaching the node that names it with the document as
+written.
 
 **What would change it.** A kind of state finer than a port (an
 element, a region) that an agent must start again alone, which would

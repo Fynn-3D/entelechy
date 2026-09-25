@@ -128,11 +128,16 @@ impl Scene {
             .graph
             .as_ref()
             .and_then(|graph| graph.params.iter().find(|p| p.name == name));
-        let value = match declared {
-            Some(param) => value
+        let value = match (declared, &self.graph) {
+            (Some(param), _) => value
                 .shaped_like(&param.default)
                 .ok_or_else(|| format!("param `{name}` is a {}; `{value}` is not one", param.ty))?,
-            None => value,
+            // A loaded scene takes from outside only the params it
+            // declares: a node's own value is the document's, and changes
+            // with it. Before a scene is loaded (a command line's params)
+            // the value is held for the scene that will declare it.
+            (None, Some(graph)) => return Err(undeclared(graph, name)),
+            (None, None) => value,
         };
         let previous = self.params.insert(name.to_owned(), value.clone());
         // A parameter that sizes the graph (a node's `times`) changes its
@@ -208,6 +213,17 @@ impl Scene {
             .graph
             .order()
             .map_err(|e| Diagnostic::new(e.to_string()))?;
+        // Params set before any scene was loaded (a command line's) were
+        // held for the scene to declare; one it does not declare would
+        // reach nothing, and is refused rather than left unsaid.
+        if self.graph.is_none()
+            && let Some(name) = self
+                .params
+                .keys()
+                .find(|name| !lowered.graph.params.iter().any(|p| &p.name == *name))
+        {
+            return Err(Diagnostic::new(undeclared(&lowered.graph, name)));
+        }
         Ok((document, lowered))
     }
 
@@ -369,7 +385,12 @@ impl Scene {
         }
         self.sub_graphs = sub_graphs;
         self.uses = lowered.uses;
-        self.graph = Some(lowered.graph);
+        // A value held for a param the document no longer declares
+        // reaches nothing now, and is let go with the declaration.
+        let graph = lowered.graph;
+        self.params
+            .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
+        self.graph = Some(graph);
         self.text = Some(text);
         self.files = lowered.files;
         events.push(Event::SceneLoaded);
@@ -559,4 +580,38 @@ impl Scene {
             .prepare_module(module, source)
             .map_err(|e| Diagnostic::new(e.to_string()))
     }
+}
+
+/// Why `name` is refused as a param of `graph`, which does not declare
+/// it: a declared param named nearly so, or the nodes that set a value of
+/// that name themselves, which change as the document does.
+fn undeclared(graph: &Graph, name: &str) -> String {
+    let mut why = format!("`{name}` is not a param the scene declares");
+    let near = orla_language::nearest(name, graph.params.iter().map(|p| p.name.as_str()));
+    if let Some(near) = near {
+        why.push_str(&format!("; did you mean `{near}`?"));
+        return why;
+    }
+    let setters: Vec<&str> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.params.contains_key(name))
+        .map(|node| node.id.0.as_str())
+        .collect();
+    let who = match setters.as_slice() {
+        [] => return why,
+        [one] => format!("node `{one}` sets its own"),
+        many => format!(
+            "nodes {} set their own",
+            many.iter()
+                .map(|node| format!("`{node}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    why.push_str(&format!(
+        "; {who} `{name}`, which is the document's: change it there (over the protocol, `compose` with `edits`, node `{}`, member `{name}`), or declare a `param` there for the node to name",
+        setters[0]
+    ));
+    why
 }

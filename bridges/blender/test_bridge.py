@@ -85,7 +85,7 @@ assert bridge.watch_once(bpy.context) == "unchanged"
 bridge._watch["client"] = None
 frame = bridge.pull_image(client)
 assert frame.size[0] == 320 and frame.size[1] == 240, frame.size
-client.call("param", name="exposure", value=1.5)
+client.call("param", name="level", value=1)
 client.close()
 print("pull: ok")
 print("bridge: ok")

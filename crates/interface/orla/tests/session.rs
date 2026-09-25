@@ -761,6 +761,7 @@ fn a_param_that_sizes_the_graph_lowers_it_again() {
         dir.join("scene.osn"),
         "use \"kernels/\";
 param level: Int = 1;
+param other: Int = 0;
 node seed: image.gradient@1 { domain = vec2(8, 8); }
 node gray: image.grayscale@1 { times = level; carry source <- result; source <- seed.result; }
 node blocks: image.pixelate@1 { source <- gray.result; }
@@ -798,7 +799,7 @@ output result <- blocks.result;
     );
     // A param that does not size the graph does not lower it again.
     session
-        .set_param("nothing", orla_runtime::Value::Int(1))
+        .set_param("other", orla_runtime::Value::Int(1))
         .unwrap();
     assert!(
         !session
@@ -2401,4 +2402,77 @@ fn a_replay_played_as_a_window_plays_it_holds_as_it_does_headless() {
         );
         assert!(outcome.checks > 30, "{name}: {} checks", outcome.checks);
     }
+}
+
+/// A param reaches the scene only as one its document declares: one set
+/// before the scene loads that it does not declare stops the load with
+/// why, and a value held for a param goes when the document stops
+/// declaring it.
+#[test]
+fn a_param_is_one_the_document_declares() {
+    let dir = scratch("declared");
+    let scene = dir.join("scene.osn");
+    let text = "use \"kernels/\";
+param level: Float = 0.5;
+node seed: image.gradient@1 { domain = vec2(8, 8); }
+node gray: image.grayscale@1 { source <- seed.result; amount = level; }
+output result <- gray.result;
+";
+    std::fs::write(&scene, text).unwrap();
+    // On the command line, a node's own value is not a param.
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let output = Command::new(orla)
+        .arg("run")
+        .arg(&scene)
+        .args(["--param", "amount=1.0", "--out"])
+        .arg(dir.join("out.ppm"))
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        said.contains(
+            "`amount` is not a param the scene declares; node `gray` sets its own `amount`"
+        ),
+        "{said}"
+    );
+    let output = Command::new(orla)
+        .arg("run")
+        .arg(&scene)
+        .args(["--param", "level=1.0", "--out"])
+        .arg(dir.join("out.ppm"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut session = Session::open(&scene, None, 1 << 20);
+    session.sync();
+    session
+        .set_param("level", orla_runtime::Value::Float(1.0))
+        .unwrap();
+    assert_eq!(
+        session.params().get("level"),
+        Some(&orla_runtime::Value::Float(1.0))
+    );
+    // The document stops declaring it: the value held goes with it.
+    std::fs::write(
+        &scene,
+        text.replace("param level: Float = 0.5;\n", "")
+            .replace("amount = level;", "amount = 0.5;"),
+    )
+    .unwrap();
+    assert!(session.sync().contains(&Event::SceneLoaded));
+    assert!(session.params().is_empty(), "{:?}", session.params());
+    let refused = session
+        .set_param("level", orla_runtime::Value::Float(1.0))
+        .unwrap_err();
+    assert!(
+        refused.contains("`level` is not a param the scene declares"),
+        "{refused}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

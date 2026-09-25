@@ -298,8 +298,18 @@ order, which the parameter it is given to takes in its own shape: a
 vector's components, a matrix's columns (`[[3, 0, 0, 0], [0, 3, 0, 0],
 [0, 0, 1, -1], [0, 0, 0, 0]]` for a `Mat4`), a struct's fields or an
 array's elements. A value of another layout is refused with the
-parameter's type; a parameter the scene does not declare keeps what it
-was given. Replies spell values the same way (a `Double` as the number
+parameter's type.
+
+`param` sets a parameter the scene declares (`param name: Type = value;`
+in its document), and only such a one: the session holds the value, the
+nodes that name the param read it, and the document stays as written. A
+value a node sets itself (`brush = 2.0;` in its block) is the
+document's, not a param: `param` refuses its name, naming the nodes that
+set it, and it changes by an edit of the document (`compose` with the
+node and the `member`), where it stays across every sync. To let it be
+set from outside, the document declares a `param` and the node names it
+(`brush = size;`). A value held for a param goes when the document
+stops declaring it. Replies spell values the same way (a `Double` as the number
 that reads back as it, a `Long` past 2^53 as its digits), and `kernel`
 and `graph` name each parameter's type.
 

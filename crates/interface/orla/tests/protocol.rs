@@ -223,9 +223,14 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
     let data = read["data"].as_str().unwrap();
     assert_eq!(data.len(), (160 * 120 * 16usize).div_ceil(3) * 4);
 
-    // A param the scene does not declare has no type to shape it: kept
-    // as given.
-    assert_eq!(ok(8)["value"], json!([1, 2]));
+    // A param the scene does not declare reaches nothing, and is refused.
+    assert!(
+        responses[8]["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("`nothing` is not a param the scene declares")),
+        "{}",
+        responses[8]
+    );
 
     let events = ok(9)["events"].as_array().unwrap();
     assert_eq!(events[0]["kind"], "scene_rejected");
@@ -2281,5 +2286,94 @@ fn compose_edits_the_document_where_it_changes() {
     assert!(failed(8).contains("not both"), "{}", failed(8));
     assert_eq!(ok(9)["text"], edited, "nothing refused reached the disk");
     assert_eq!(std::fs::read_to_string(&scene).unwrap(), edited);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A node's own value is the document's: `param` reaches a node only
+/// through a `param` the document declares, a value a node sets itself
+/// changes by an edit of the document, and the document is where it
+/// stays.
+#[test]
+fn a_nodes_own_value_is_the_documents() {
+    let dir = scratch_in("-node-values");
+    let scene = dir.join("scene.osn");
+    let brush = |graph: &Json| {
+        graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == "life")
+            .map(|n| n["params"]["brush"].clone())
+            .unwrap()
+    };
+    let responses = talk(
+        &scene,
+        &[
+            // `brush` is life's own value, not a param of the scene.
+            json!({ "id": 1, "op": "param", "name": "brush", "value": 5.0 }),
+            json!({ "id": 2, "op": "graph" }),
+            // An edit of the node changes it, in the document.
+            json!({ "id": 3, "op": "compose", "edits": [
+                { "node": "life", "member": "brush", "text": "brush = 5.0;" },
+            ] }),
+            json!({ "id": 4, "op": "graph" }),
+            json!({ "id": 5, "op": "sync" }),
+            json!({ "id": 6, "op": "graph" }),
+            // Declared, a param reaches the node that names it, and the
+            // document stays as written.
+            json!({ "id": 7, "op": "compose", "edits": [
+                { "param": "size", "text": "param size: Float = 2.0;" },
+                { "node": "life", "member": "brush", "text": "brush = size;" },
+            ] }),
+            json!({ "id": 8, "op": "document" }),
+            json!({ "id": 9, "op": "param", "name": "size", "value": 7.0 }),
+            json!({ "id": 10, "op": "graph" }),
+            json!({ "id": 11, "op": "document" }),
+            json!({ "id": 12, "op": "param", "name": "sise", "value": 7.0 }),
+        ],
+    );
+    let ok = |i: usize| -> &Json {
+        assert!(responses[i].get("error").is_none(), "{}", responses[i]);
+        &responses[i]["ok"]
+    };
+    let refused = responses[0]["error"]["message"].as_str().unwrap();
+    assert!(
+        refused.contains("`brush` is not a param the scene declares")
+            && refused.contains("node `life` sets its own `brush`")
+            && refused.contains("member `brush`"),
+        "{refused}"
+    );
+    assert_eq!(
+        brush(ok(1)),
+        json!(2.0),
+        "the refused param reached nothing"
+    );
+    ok(2);
+    assert_eq!(brush(ok(3)), json!(5.0));
+    assert!(ok(4)["events"].as_array().unwrap().is_empty(), "{}", ok(4));
+    assert_eq!(brush(ok(5)), json!(5.0), "read again, the document says 5");
+    ok(6);
+    let version = ok(7)["version"].clone();
+    assert!(ok(7)["text"].as_str().unwrap().contains("brush = size;"));
+    assert_eq!(ok(8)["value"], json!(7.0));
+    assert_eq!(brush(ok(9)), json!({ "param": "size" }));
+    let size = ok(9)["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "size")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (size["default"].clone(), size["value"].clone()),
+        (json!(2.0), json!(7.0))
+    );
+    assert_eq!(
+        ok(10)["version"],
+        version,
+        "a param is not written into the document"
+    );
+    let near = responses[11]["error"]["message"].as_str().unwrap();
+    assert!(near.contains("did you mean `size`?"), "{near}");
     let _ = std::fs::remove_dir_all(&dir);
 }

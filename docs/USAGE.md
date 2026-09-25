@@ -66,7 +66,9 @@ read as bytes (`input level: Rows<Int> = bytes "level.bin";`, one
 integer an element, for a format a Kernel reads itself), or
 read frame by frame from a directory (`input clip: Image = frames
 "clip/" at 30;`, the frame of the moment at each evaluation); graph
-parameters are overridden with `--param <name>=<literal>`; a scene sized
+parameters are overridden with `--param <name>=<literal>`, a name the
+scene declares with `param` (a node's own value is changed in the
+document, and naming one stops the command with why); a scene sized
 by the window (`domain = window();`) takes `--window <w>x<h>` in pixels,
 with `@<scale>` for a scale factor other than one. `--save
 <node.port>=<file>` writes any node's output after the evaluation: `.field`

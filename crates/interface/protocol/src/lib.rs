@@ -28,7 +28,7 @@
 //! | `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
 //! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
 //! | `retire` | `kernel` (the Kernel's id) | retired |
-//! | `param` | `name`, `value` | ok |
+//! | `param` | `name` (a param the scene declares), `value` | name, value, events; a node's own value is refused, and changes by `compose` |
 //! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `window`? (`[w, h]` in pixels), `scale`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
 //! | `advance` | `frames`, `fps`?, `time`?, the context `evaluate` takes, `until`? (`{target, below / above / equals}`), `save`? | frames, stopped, target, value, saved, millis, report |
 //! | `bench` | `frames`?, `fps`?, `repeat`?, `nodes`? | backend, frames, repeat, best_ms, median_ms, nodes, ran |
