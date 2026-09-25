@@ -59,7 +59,7 @@ fn lowered(path: &Path) -> Result<String, String> {
             .map_err(|e| format!("the Kernel `{}` it writes does not compile: {e}", inline.id))?;
     }
     let graph = &lowered.graph;
-    let mut out = graph.to_string();
+    let mut out = orla_scene::print(graph);
     for asset in &lowered.files.assets {
         let kind = if asset.bytes { " bytes" } else { "" };
         out.push_str(&format!(

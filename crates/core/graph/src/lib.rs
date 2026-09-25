@@ -240,10 +240,7 @@ impl fmt::Display for GraphError {
                 source,
                 near,
             } => {
-                let hint = match near {
-                    Some(name) => format!("; did you mean `{name}`?"),
-                    None => String::new(),
-                };
+                let hint = orla_abi::names::suggestion(near.as_deref());
                 write!(
                     f,
                     "node `{node}` port `{port}` refers to unknown source `{source}`{hint}"
@@ -461,72 +458,5 @@ impl Graph {
             }
         }
         Ok(order)
-    }
-}
-
-impl fmt::Display for Graph {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "// {}", self.name)?;
-        for external in &self.externals {
-            match self.texts.iter().find(|(name, _)| name == external) {
-                Some((_, text)) => writeln!(f, "input {external}: Rows<Int> = text \"{text}\";")?,
-                None => writeln!(f, "input {external}: Image;")?,
-            }
-        }
-        for param in &self.params {
-            writeln!(
-                f,
-                "param {}: {} = {};",
-                param.name,
-                param.ty,
-                literal_text(&param.default)
-            )?;
-        }
-        for node in &self.nodes {
-            writeln!(f)?;
-            writeln!(f, "node {}: {} {{", node.id, node.kernel)?;
-            for (port, binding) in &node.inputs {
-                writeln!(f, "    {port} {binding};")?;
-            }
-            for (name, value) in &node.params {
-                match value {
-                    ParamValue::Literal(value) => {
-                        writeln!(f, "    {name} = {};", literal_text(value))?
-                    }
-                    ParamValue::Graph(param) => writeln!(f, "    {name} = {param};")?,
-                }
-            }
-            if let Some(domain) = &node.domain {
-                writeln!(f, "    domain = {domain};")?;
-            }
-            if node.is_async {
-                writeln!(f, "    async = true;")?;
-            }
-            writeln!(f, "}}")?;
-        }
-        writeln!(f)?;
-        for (name, source) in &self.outputs {
-            writeln!(f, "output {name} <- {source};")?;
-        }
-        Ok(())
-    }
-}
-
-/// Renders a value in the literal grammar shared with `.orla`.
-pub fn literal_text(value: &Value) -> String {
-    // A number a scene wrote is exact and has no width until a Kernel's
-    // param gives it one, so it reads back as written, without `d`.
-    match value {
-        Value::Double(v) => format!("{v:?}"),
-        Value::Long(v) => v.to_string(),
-        Value::Record(members) => format!(
-            "[{}]",
-            members
-                .iter()
-                .map(literal_text)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        other => other.to_string(),
     }
 }

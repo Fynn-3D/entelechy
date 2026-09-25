@@ -422,7 +422,10 @@ fn feedback_bindings_read_committed_state_and_advance_per_evaluation() {
     load(&mut runtime, ZERO);
     load(&mut runtime, INCREMENT);
     let graph = orla_scene::parse(COUNTER).unwrap();
-    assert_eq!(orla_scene::parse(&graph.to_string()).unwrap(), graph);
+    assert_eq!(
+        orla_scene::parse(&orla_scene::print(&graph)).unwrap(),
+        graph
+    );
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     for expected in 1..=3 {
@@ -1355,8 +1358,11 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
         load(&mut runtime, source);
     }
     let graph = orla_scene::parse(TALLY_SCENE).unwrap();
-    assert_eq!(orla_scene::parse(&graph.to_string()).unwrap(), graph);
-    assert!(graph.to_string().contains("migrate tally.upgrade@1"));
+    assert_eq!(
+        orla_scene::parse(&orla_scene::print(&graph)).unwrap(),
+        graph
+    );
+    assert!(orla_scene::print(&graph).contains("migrate tally.upgrade@1"));
     let mut evaluator = Evaluator::new();
     let ctx = Context::default();
     let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime, graph: &Graph| {
@@ -1519,7 +1525,7 @@ output result <- final.result;
 #[test]
 fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
     let graph = orla_scene::parse(OFF_FRAME).unwrap();
-    assert!(graph.to_string().contains("async = true;"));
+    assert!(orla_scene::print(&graph).contains("async = true;"));
     let mut runtime = runtime();
     load(&mut runtime, COUNT);
     let mut evaluator = Evaluator::new();

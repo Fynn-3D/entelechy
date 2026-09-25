@@ -602,7 +602,7 @@ fn graph(args: &[String]) -> Result<(), String> {
     let graph = session
         .graph()
         .ok_or_else(|| "the scene did not load".to_string())?;
-    print!("{graph}");
+    print!("{}", orla_scene::print(graph));
     let kernels: Vec<String> = session
         .runtime()
         .kernels()

@@ -29,7 +29,6 @@ use orla_language::{
 
 use orla_graph::{
     Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
-    literal_text,
 };
 
 /// The port type an alias stands for, following aliases as far as they
@@ -1689,7 +1688,7 @@ output result <- a.result;
         // and it reads back as written.
         let value = &graph.nodes[0].params["x"];
         assert_eq!(value, &ParamValue::Literal(Value::Double(0.001)));
-        assert!(graph.to_string().contains("x = 0.001;"), "{graph}");
+        assert!(print(&graph).contains("x = 0.001;"), "{}", print(&graph));
     }
 
     #[test]
@@ -1713,7 +1712,7 @@ output result <- a.result;
             graph.nodes[1].domain,
             Some(DomainSpec::Literal(Domain::Grid(64, 32)))
         );
-        let text = graph.to_string();
+        let text = print(&graph);
         assert_eq!(parse(&text).unwrap(), graph);
     }
 
@@ -2129,5 +2128,83 @@ output raw <- first.result to bytes \"raw.bin\";";
                 "`{member}` was accepted or refused for another reason: {error}"
             );
         }
+    }
+}
+
+/// A graph written as a scene document: every node with its bindings,
+/// values and domain, the params and inputs it declares, its outputs. A
+/// scene read back from it lowers to the same graph; an input read from a
+/// file is written as the image the caller supplies.
+pub fn print(graph: &Graph) -> String {
+    Printed(graph).to_string()
+}
+
+/// A graph as [`print`] writes it.
+struct Printed<'a>(&'a Graph);
+
+impl std::fmt::Display for Printed<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "// {}", self.0.name)?;
+        for external in &self.0.externals {
+            match self.0.texts.iter().find(|(name, _)| name == external) {
+                Some((_, text)) => writeln!(f, "input {external}: Rows<Int> = text \"{text}\";")?,
+                None => writeln!(f, "input {external}: Image;")?,
+            }
+        }
+        for param in &self.0.params {
+            writeln!(
+                f,
+                "param {}: {} = {};",
+                param.name,
+                param.ty,
+                literal_text(&param.default)
+            )?;
+        }
+        for node in &self.0.nodes {
+            writeln!(f)?;
+            writeln!(f, "node {}: {} {{", node.id, node.kernel)?;
+            for (port, binding) in &node.inputs {
+                writeln!(f, "    {port} {binding};")?;
+            }
+            for (name, value) in &node.params {
+                match value {
+                    ParamValue::Literal(value) => {
+                        writeln!(f, "    {name} = {};", literal_text(value))?
+                    }
+                    ParamValue::Graph(param) => writeln!(f, "    {name} = {param};")?,
+                }
+            }
+            if let Some(domain) = &node.domain {
+                writeln!(f, "    domain = {domain};")?;
+            }
+            if node.is_async {
+                writeln!(f, "    async = true;")?;
+            }
+            writeln!(f, "}}")?;
+        }
+        writeln!(f)?;
+        for (name, source) in &self.0.outputs {
+            writeln!(f, "output {name} <- {source};")?;
+        }
+        Ok(())
+    }
+}
+
+/// Renders a value in the literal grammar shared with `.orla`.
+pub fn literal_text(value: &Value) -> String {
+    // A number a scene wrote is exact and has no width until a Kernel's
+    // param gives it one, so it reads back as written, without `d`.
+    match value {
+        Value::Double(v) => format!("{v:?}"),
+        Value::Long(v) => v.to_string(),
+        Value::Record(members) => format!(
+            "[{}]",
+            members
+                .iter()
+                .map(literal_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        other => other.to_string(),
     }
 }
