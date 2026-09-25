@@ -420,6 +420,201 @@ struct Level {
     writes: Vec<Write>,
 }
 
+/// Whether a placed graph and what places it agree: every input wired,
+/// no input or param given that the graph does not declare.
+fn check_placement(
+    placement: &Placement,
+    externals: &[String],
+    params: &[GraphParam],
+    path: &Path,
+) -> Result<(), DocumentError> {
+    for input in placement.inputs.keys() {
+        if !externals.contains(input) {
+            return Err(error(
+                Span::default(),
+                format!("sub-graph `{}` has no input `{input}`", path.display()),
+            ));
+        }
+    }
+    for external in externals {
+        if !placement.inputs.contains_key(external) {
+            return Err(error(
+                Span::default(),
+                format!(
+                    "sub-graph `{}` input `{external}` must be wired where it is placed",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    for param in placement.params.keys() {
+        if !params.iter().any(|p| &p.name == param) {
+            return Err(error(
+                Span::default(),
+                format!("sub-graph `{}` has no param `{param}`", path.display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What a document's inputs come to: every one's name, and those the
+/// caller supplies from a file, as text, or as frames.
+struct Inputs {
+    externals: Vec<String>,
+    assets: Vec<Asset>,
+    texts: Vec<(String, String)>,
+    sequences: Vec<(String, PathBuf, String, u32)>,
+}
+
+/// Where a document is lowered: its place in the flattened graph (the
+/// prefix on every node it names, and the bindings and values its placing
+/// graph gives it) and the params it declares. How a name written in the
+/// document becomes one of the flattened graph is decided here, once, for
+/// its values, domains, and the sources its nodes read.
+struct Place<'a> {
+    /// What every node the document names is prefixed with: its place.
+    prefix: &'a str,
+    /// What the placing graph gives, or none at the root.
+    placement: Option<&'a Placement>,
+    /// The params the document declares.
+    params: &'a [GraphParam],
+    /// The structs a literal may build.
+    known: Vec<(String, Vec<String>)>,
+}
+
+impl Place<'_> {
+    /// A value written in the document: a literal, or a graph param of
+    /// the document, which in a placed sub-graph becomes what the parent
+    /// passed (or the default).
+    fn value(&self, expr: &Expr) -> Result<ParamValue, DocumentError> {
+        if let ExprKind::Name(param) = &expr.kind {
+            let declared = self.params.iter().find(|p| &p.name == param).ok_or_else(|| {
+                error(
+                    expr.span,
+                    format!("`{param}` is not a param of this graph; values are literals or graph params"),
+                )
+            })?;
+            return Ok(match self.placement.and_then(|p| p.params.get(param)) {
+                Some(from_parent) => from_parent.clone(),
+                None if self.placement.is_some() => ParamValue::Literal(declared.default.clone()),
+                None => ParamValue::Graph(param.clone()),
+            });
+        }
+        let value = literal(expr, &self.known)?;
+        Ok(ParamValue::Literal(value))
+    }
+
+    /// What a value is before anything overrides it.
+    fn default_of(&self, value: &ParamValue) -> Value {
+        match value {
+            ParamValue::Literal(v) => v.clone(),
+            ParamValue::Graph(name) => self
+                .params
+                .iter()
+                .find(|p| &p.name == name)
+                .map(|p| p.default.clone())
+                .unwrap_or(Value::Float(0.0)),
+        }
+    }
+
+    /// A domain written in a placed graph may name that graph's params,
+    /// which do not exist once it is flattened: each becomes what the
+    /// parent passed, a number or the root's param, as a value does. A
+    /// name the node sets itself stays the node's.
+    fn domain(
+        &self,
+        domain: Option<DomainSpec>,
+        node_params: &BTreeMap<String, ParamValue>,
+    ) -> Result<Option<DomainSpec>, DocumentError> {
+        let (Some(placement), Some(DomainSpec::Expr(expr))) = (self.placement, &domain) else {
+            return Ok(domain);
+        };
+        let given = |name: &str| -> Option<DomainExpr> {
+            if node_params.contains_key(name) {
+                return None;
+            }
+            let declared = self.params.iter().find(|p| p.name == name)?;
+            match placement.params.get(name) {
+                Some(ParamValue::Graph(root)) => Some(DomainExpr::Name(root.clone())),
+                Some(ParamValue::Literal(value)) => number(value),
+                None => number(&declared.default),
+            }
+        };
+        spec_of(expr.with_names(&given), Span::default()).map(Some)
+    }
+
+    /// A source written in the document, in the flattened graph: a node's
+    /// name prefixed, and one of the document's inputs replaced with what
+    /// the parent binds to it (as a source when it is `Now`).
+    fn now(&self, reference: &SourceRef) -> Result<Binding, DocumentError> {
+        let prefix = self.prefix;
+        match &reference.node {
+            Some(node) => Ok(Binding::Now(Source::Node {
+                node: NodeId(format!("{prefix}{node}")),
+                port: reference.name.clone(),
+            })),
+            None => match self.placement {
+                Some(placement) => {
+                    placement
+                        .inputs
+                        .get(&reference.name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            error(
+                                reference.span,
+                                format!("`{}` is not an input of this graph", reference.name),
+                            )
+                        })
+                }
+                None => Ok(Binding::Now(Source::External(reference.name.clone()))),
+            },
+        }
+    }
+
+    /// A `<~` binding written in the document, in the flattened graph.
+    fn previous(
+        &self,
+        source: &SourceRef,
+        initial: &SourceRef,
+        migration: Option<&Spanned<String>>,
+    ) -> Result<Binding, DocumentError> {
+        let prefix = self.prefix;
+        let migration = match migration {
+            Some(named) => Some(
+                named
+                    .value
+                    .parse::<KernelId>()
+                    .map_err(|e| error(named.span, format!("`migrate` names a kernel id: {e}")))?,
+            ),
+            None => None,
+        };
+        let Some(node) = &source.node else {
+            return Err(error(
+                source.span,
+                "`<~` reads a node output; graph inputs carry no state",
+            ));
+        };
+        let initial = match self.now(initial)? {
+            Binding::Now(source) => source,
+            Binding::Previous { .. } => {
+                return Err(error(
+                    initial.span,
+                    "the `from` source of a `<~` binding must be a current value",
+                ));
+            }
+        };
+        Ok(Binding::Previous {
+            source: Source::Node {
+                node: NodeId(format!("{prefix}{node}")),
+                port: source.name.clone(),
+            },
+            initial,
+            migration,
+        })
+    }
+}
+
 impl Lowering<'_, '_> {
     /// The structs a literal of this document may name, and their fields
     /// in order: the document's own and those it uses.
@@ -698,23 +893,16 @@ impl Lowering<'_, '_> {
         Ok((nodes, outputs))
     }
 
-    /// Lowers one document whose source is `text`. `placement` is `None`
-    /// for the root.
-    fn level(
-        &mut self,
+    /// The inputs the document declares: every one's name, and those the
+    /// caller supplies from a file, as text, or as frames. A placed
+    /// graph's inputs are wired by the graph placing it, never from a
+    /// file.
+    fn inputs(
+        &self,
         document: &Document,
-        text: &str,
-        name: &str,
         base: &Path,
-        path: &Path,
         placement: Option<&Placement>,
-    ) -> Result<Level, DocumentError> {
-        let prefix = placement.map(|p| p.prefix.as_str()).unwrap_or("");
-        for item in &document.uses {
-            self.out
-                .uses
-                .push((base.join(&item.path.value), item.path.value.ends_with('/')));
-        }
+    ) -> Result<Inputs, DocumentError> {
         let mut externals = Vec::new();
         let mut assets = Vec::new();
         let mut texts = Vec::new();
@@ -789,6 +977,16 @@ impl Lowering<'_, '_> {
             }
             externals.push(input.name.value.clone());
         }
+        Ok(Inputs {
+            externals,
+            assets,
+            texts,
+            sequences,
+        })
+    }
+
+    /// The params the document declares, each read in its own type.
+    fn params(&self, document: &Document) -> Result<Vec<GraphParam>, DocumentError> {
         let mut params = Vec::new();
         for decl in &document.params {
             // Read in the type the param declares: exact, and shaped by
@@ -814,6 +1012,120 @@ impl Lowering<'_, '_> {
                 default,
             });
         }
+        Ok(params)
+    }
+
+    /// Lowers the document a `graph` node places, as the node `id` names
+    /// it, with the inputs and params the node gives it, and answers the
+    /// outputs it declares, by which the placing graph reads it. The
+    /// declarations in scope are the placed document's while it is lowered,
+    /// and the placing one's again after.
+    fn place(
+        &mut self,
+        sub_path: &Spanned<String>,
+        base: &Path,
+        id: &NodeId,
+        inputs: BTreeMap<String, Binding>,
+        node_params: BTreeMap<String, ParamValue>,
+    ) -> Result<Vec<(String, Source)>, DocumentError> {
+        let resolved = base.join(&sub_path.value);
+        if self.stack.contains(&resolved) {
+            return Err(error(
+                sub_path.span,
+                format!("sub-graph `{}` places itself", sub_path.value),
+            ));
+        }
+        let text = (self.loader)(&resolved).map_err(|message| {
+            error(
+                sub_path.span,
+                format!("cannot load `{}`: {message}", sub_path.value),
+            )
+        })?;
+        let mut sub_document = orla_language::parse_document(&text)
+            .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
+        let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
+        let (structs, types, functions) = (self.declare)(sub_base, &sub_document.uses)
+            .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
+        sub_document.inherit(&structs, &types, &functions);
+        let outer = (
+            std::mem::replace(
+                &mut self.aliases,
+                types
+                    .iter()
+                    .chain(&sub_document.types)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+            std::mem::replace(
+                &mut self.structs,
+                structs
+                    .iter()
+                    .chain(&sub_document.structs)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+            std::mem::replace(
+                &mut self.functions,
+                functions
+                    .iter()
+                    .chain(&sub_document.functions)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        let sub_name = resolved
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("graph")
+            .to_owned();
+        let sub_base = resolved.parent().unwrap_or(base).to_path_buf();
+        self.out.documents.push(resolved.clone());
+        self.stack.push(resolved.clone());
+        let placed = Placement {
+            prefix: format!("{}.", id.0),
+            inputs,
+            params: node_params,
+        };
+        let level = self
+            .level(
+                &sub_document,
+                &text,
+                &sub_name,
+                &sub_base,
+                &resolved,
+                Some(&placed),
+            )
+            .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)));
+        self.stack.pop();
+        (self.aliases, self.structs, self.functions) = outer;
+        let level = level?;
+        Ok(level.outputs)
+    }
+
+    /// Lowers one document whose source is `text`. `placement` is `None`
+    /// for the root.
+    fn level(
+        &mut self,
+        document: &Document,
+        text: &str,
+        name: &str,
+        base: &Path,
+        path: &Path,
+        placement: Option<&Placement>,
+    ) -> Result<Level, DocumentError> {
+        let prefix = placement.map(|p| p.prefix.as_str()).unwrap_or("");
+        for item in &document.uses {
+            self.out
+                .uses
+                .push((base.join(&item.path.value), item.path.value.ends_with('/')));
+        }
+        let Inputs {
+            externals,
+            assets,
+            texts,
+            sequences,
+        } = self.inputs(document, base, placement)?;
+        let params = self.params(document)?;
         // The root's params, before anything placed under it is walked. A
         // sub-graph's `times` names one of them through its placement and
         // is structural, so it is resolved here rather than at run time;
@@ -824,147 +1136,13 @@ impl Lowering<'_, '_> {
             self.out.graph.params = params.clone();
         }
         if let Some(placement) = placement {
-            for input in placement.inputs.keys() {
-                if !externals.contains(input) {
-                    return Err(error(
-                        Span::default(),
-                        format!("sub-graph `{}` has no input `{input}`", path.display()),
-                    ));
-                }
-            }
-            for external in &externals {
-                if !placement.inputs.contains_key(external) {
-                    return Err(error(
-                        Span::default(),
-                        format!(
-                            "sub-graph `{}` input `{external}` must be wired where it is placed",
-                            path.display()
-                        ),
-                    ));
-                }
-            }
-            for param in placement.params.keys() {
-                if !params.iter().any(|p| &p.name == param) {
-                    return Err(error(
-                        Span::default(),
-                        format!("sub-graph `{}` has no param `{param}`", path.display()),
-                    ));
-                }
-            }
+            check_placement(placement, &externals, &params, path)?;
         }
-        // Resolves a value written in this document: a literal, or a graph
-        // param of this document, which in a placed sub-graph becomes what
-        // the parent passed (or the default).
-        let known = self.known_structs();
-        let resolve_value = |expr: &Expr| -> Result<ParamValue, DocumentError> {
-            if let ExprKind::Name(param) = &expr.kind {
-                let declared = params.iter().find(|p| &p.name == param).ok_or_else(|| {
-                    error(
-                        expr.span,
-                        format!("`{param}` is not a param of this graph; values are literals or graph params"),
-                    )
-                })?;
-                return Ok(match placement.and_then(|p| p.params.get(param)) {
-                    Some(from_parent) => from_parent.clone(),
-                    None if placement.is_some() => ParamValue::Literal(declared.default.clone()),
-                    None => ParamValue::Graph(param.clone()),
-                });
-            }
-            let value = literal(expr, &known)?;
-            Ok(ParamValue::Literal(value))
-        };
-        let default_of = |value: &ParamValue| -> Value {
-            match value {
-                ParamValue::Literal(v) => v.clone(),
-                ParamValue::Graph(name) => params
-                    .iter()
-                    .find(|p| &p.name == name)
-                    .map(|p| p.default.clone())
-                    .unwrap_or(Value::Float(0.0)),
-            }
-        };
-        // A domain written in a placed graph may name that graph's params,
-        // which do not exist once it is flattened: each becomes what the
-        // parent passed, a number or the root's param, as a value does. A
-        // name the node sets itself stays the node's.
-        let placed_domain = |domain: Option<DomainSpec>,
-                             node_params: &BTreeMap<String, ParamValue>|
-         -> Result<Option<DomainSpec>, DocumentError> {
-            let (Some(placement), Some(DomainSpec::Expr(expr))) = (placement, &domain) else {
-                return Ok(domain);
-            };
-            let given = |name: &str| -> Option<DomainExpr> {
-                if node_params.contains_key(name) {
-                    return None;
-                }
-                let declared = params.iter().find(|p| p.name == name)?;
-                match placement.params.get(name) {
-                    Some(ParamValue::Graph(root)) => Some(DomainExpr::Name(root.clone())),
-                    Some(ParamValue::Literal(value)) => number(value),
-                    None => number(&declared.default),
-                }
-            };
-            spec_of(expr.with_names(&given), Span::default()).map(Some)
-        };
-        // Rewrites a source written in this document into the flattened
-        // space: prefixes node names, replaces this document's inputs with
-        // the parent's bindings (as a source when they are `Now`).
-        let rewrite_now =
-            |reference: &SourceRef| -> Result<Binding, DocumentError> {
-                match &reference.node {
-                    Some(node) => Ok(Binding::Now(Source::Node {
-                        node: NodeId(format!("{prefix}{node}")),
-                        port: reference.name.clone(),
-                    })),
-                    None => match placement {
-                        Some(placement) => placement
-                            .inputs
-                            .get(&reference.name)
-                            .cloned()
-                            .ok_or_else(|| {
-                                error(
-                                    reference.span,
-                                    format!("`{}` is not an input of this graph", reference.name),
-                                )
-                            }),
-                        None => Ok(Binding::Now(Source::External(reference.name.clone()))),
-                    },
-                }
-            };
-        let rewrite_previous = |source: &SourceRef,
-                                initial: &SourceRef,
-                                migration: Option<&Spanned<String>>|
-         -> Result<Binding, DocumentError> {
-            let migration =
-                match migration {
-                    Some(named) => Some(named.value.parse::<KernelId>().map_err(|e| {
-                        error(named.span, format!("`migrate` names a kernel id: {e}"))
-                    })?),
-                    None => None,
-                };
-            let Some(node) = &source.node else {
-                return Err(error(
-                    source.span,
-                    "`<~` reads a node output; graph inputs carry no state",
-                ));
-            };
-            let initial = match rewrite_now(initial)? {
-                Binding::Now(source) => source,
-                Binding::Previous { .. } => {
-                    return Err(error(
-                        initial.span,
-                        "the `from` source of a `<~` binding must be a current value",
-                    ));
-                }
-            };
-            Ok(Binding::Previous {
-                source: Source::Node {
-                    node: NodeId(format!("{prefix}{node}")),
-                    port: source.name.clone(),
-                },
-                initial,
-                migration,
-            })
+        let place = Place {
+            prefix,
+            placement,
+            params: &params,
+            known: self.known_structs(),
         };
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
@@ -1007,7 +1185,7 @@ impl Lowering<'_, '_> {
                     }
                     NodeMember::Set(name, expr) => {
                         if node_params
-                            .insert(name.value.clone(), resolve_value(expr)?)
+                            .insert(name.value.clone(), place.value(expr)?)
                             .is_some()
                         {
                             return Err(error(
@@ -1016,13 +1194,13 @@ impl Lowering<'_, '_> {
                             ));
                         }
                     }
-                    NodeMember::Bind(port, reference) => bind(port, rewrite_now(reference)?)?,
+                    NodeMember::Bind(port, reference) => bind(port, place.now(reference)?)?,
                     NodeMember::Previous {
                         port,
                         source,
                         initial,
                         migration,
-                    } => bind(port, rewrite_previous(source, initial, migration.as_ref())?)?,
+                    } => bind(port, place.previous(source, initial, migration.as_ref())?)?,
                     NodeMember::Carry(port, _) => {
                         return Err(error(port.span, "`carry` needs `times = N;` on the node"));
                     }
@@ -1034,7 +1212,7 @@ impl Lowering<'_, '_> {
                         .value
                         .parse::<KernelId>()
                         .map_err(|e| error(kernel.span, e.to_string()))?;
-                    let domain = placed_domain(domain, &node_params)?;
+                    let domain = place.domain(domain, &node_params)?;
                     self.out.graph.nodes.push(Node {
                         at: Some(written_at(path, decl.name.span)),
                         id,
@@ -1056,7 +1234,7 @@ impl Lowering<'_, '_> {
                     for input in &kernel.inputs {
                         match &input.binding {
                             Some(BindingDecl::Now(reference)) => {
-                                bind(&input.name, rewrite_now(reference)?)?;
+                                bind(&input.name, place.now(reference)?)?;
                             }
                             Some(BindingDecl::Previous {
                                 source,
@@ -1065,7 +1243,7 @@ impl Lowering<'_, '_> {
                             }) => {
                                 bind(
                                     &input.name,
-                                    rewrite_previous(source, initial, migration.as_ref())?,
+                                    place.previous(source, initial, migration.as_ref())?,
                                 )?;
                             }
                             None => {
@@ -1088,8 +1266,8 @@ impl Lowering<'_, '_> {
                     let mut edits = Vec::new();
                     for param in &mut compiled.params {
                         if let ExprKind::Name(_) = &param.default.kind {
-                            let value = resolve_value(&param.default)?;
-                            let literal = default_of(&value);
+                            let value = place.value(&param.default)?;
+                            let literal = place.default_of(&value);
                             edits.push((param.default_range.clone(), literal.to_string()));
                             param.default = literal_expr(literal, param.default.span);
                             node_params.insert(param.name.value.clone(), value);
@@ -1103,7 +1281,7 @@ impl Lowering<'_, '_> {
                         text,
                         document: path.to_path_buf(),
                     });
-                    let domain = placed_domain(domain, &node_params)?;
+                    let domain = place.domain(domain, &node_params)?;
                     self.out.graph.nodes.push(Node {
                         at: Some(written_at(path, decl.name.span)),
                         id,
@@ -1140,7 +1318,7 @@ impl Lowering<'_, '_> {
                     // fills a `Grid<Float>` as a Float.
                     let value = match node_params.get("value") {
                         Some(given) => {
-                            let given = default_of(given);
+                            let given = place.default_of(given);
                             given.shaped_like(&zero).ok_or_else(|| {
                                 error(
                                     ty.span,
@@ -1177,7 +1355,7 @@ impl Lowering<'_, '_> {
                         text,
                         document: path.to_path_buf(),
                     });
-                    let domain = placed_domain(domain, &node_params)?;
+                    let domain = place.domain(domain, &node_params)?;
                     self.out.graph.nodes.push(Node {
                         at: Some(written_at(path, decl.name.span)),
                         id,
@@ -1201,78 +1379,8 @@ impl Lowering<'_, '_> {
                             "a sub-graph takes no `async`; its nodes say which of them run off the frame",
                         ));
                     }
-                    let resolved = base.join(&sub_path.value);
-                    if self.stack.contains(&resolved) {
-                        return Err(error(
-                            sub_path.span,
-                            format!("sub-graph `{}` places itself", sub_path.value),
-                        ));
-                    }
-                    let text = (self.loader)(&resolved).map_err(|message| {
-                        error(
-                            sub_path.span,
-                            format!("cannot load `{}`: {message}", sub_path.value),
-                        )
-                    })?;
-                    let mut sub_document = orla_language::parse_document(&text)
-                        .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)))?;
-                    let sub_base = resolved.parent().unwrap_or_else(|| Path::new("."));
-                    let (structs, types, functions) = (self.declare)(sub_base, &sub_document.uses)
-                        .map_err(|m| error(sub_path.span, format!("{}: {m}", sub_path.value)))?;
-                    sub_document.inherit(&structs, &types, &functions);
-                    let outer = (
-                        std::mem::replace(
-                            &mut self.aliases,
-                            types
-                                .iter()
-                                .chain(&sub_document.types)
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                        ),
-                        std::mem::replace(
-                            &mut self.structs,
-                            structs
-                                .iter()
-                                .chain(&sub_document.structs)
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                        ),
-                        std::mem::replace(
-                            &mut self.functions,
-                            functions
-                                .iter()
-                                .chain(&sub_document.functions)
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                        ),
-                    );
-                    let sub_name = resolved
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .unwrap_or("graph")
-                        .to_owned();
-                    let sub_base = resolved.parent().unwrap_or(base).to_path_buf();
-                    self.out.documents.push(resolved.clone());
-                    self.stack.push(resolved.clone());
-                    let placed = Placement {
-                        prefix: format!("{}.", id.0),
-                        inputs,
-                        params: node_params,
-                    };
-                    let level = self
-                        .level(
-                            &sub_document,
-                            &text,
-                            &sub_name,
-                            &sub_base,
-                            &resolved,
-                            Some(&placed),
-                        )
-                        .map_err(|e| error(sub_path.span, format!("{}:{e}", sub_path.value)));
-                    self.stack.pop();
-                    (self.aliases, self.structs, self.functions) = outer;
-                    let level = level?;
-                    aliases.insert(id.0.clone(), level.outputs);
+                    let outputs = self.place(sub_path, base, &id, inputs, node_params)?;
+                    aliases.insert(id.0.clone(), outputs);
                 }
             }
         }
@@ -1309,7 +1417,7 @@ impl Lowering<'_, '_> {
         }
         let mut outputs: Vec<(String, Source)> = Vec::new();
         for (output, reference) in &declared_outputs {
-            let mut source = match rewrite_now(reference)? {
+            let mut source = match place.now(reference)? {
                 Binding::Now(source) => source,
                 Binding::Previous { .. } => {
                     return Err(error(reference.span, "an output must be a current value"));
@@ -1330,7 +1438,7 @@ impl Lowering<'_, '_> {
             .iter()
             .filter_map(|input| input.otherwise.as_ref().map(|_| &input.name.value));
         for (input, reference) in otherwise.zip(&fallback_refs) {
-            let mut source = match rewrite_now(reference)? {
+            let mut source = match place.now(reference)? {
                 Binding::Now(source) => source,
                 Binding::Previous { .. } => {
                     return Err(error(reference.span, "a fallback must be a current value"));
