@@ -180,6 +180,10 @@ fn check_rasterize_with(
             return Err(contract("`mask` must be a grid".into()));
         }
     }
+    // The surface is charged before any backend draws it anywhere: a
+    // domain however large is refused for what it would cost, not by
+    // running out of memory drawing it.
+    scope.can_hold(&[(&surface_schema(), invocation.domain)])?;
     Ok((vertices, triangles, mask))
 }
 
@@ -522,6 +526,35 @@ fn draw_band(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A surface larger than the Host may hold is refused before a word
+    /// of it is allocated or a pixel drawn: 65535 by 65535 would be over
+    /// a hundred gigabytes.
+    #[test]
+    fn a_surface_past_the_budget_is_refused_before_it_is_drawn() {
+        use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope};
+        let mut host = Host::new(1 << 20);
+        let vertices = host.create(vertex_schema(), Domain::Rows(3)).unwrap();
+        let triangles = host.create(triangle_schema(), Domain::Rows(1)).unwrap();
+        let invocation = Invocation {
+            inputs: vec![vertices, triangles],
+            params: vec![],
+            domain: Domain::Grid(65535, 65535),
+            context: Context::default(),
+        };
+        let all: Capabilities = Capability::ALL.into_iter().collect();
+        let mut scope = Scope::new(&mut host, all);
+        let refused = rasterize(&invocation, &mut scope).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                ExecutionError::Abi(orla_abi::AbiError::Host(
+                    orla_abi::HostError::BudgetExceeded { .. }
+                ))
+            ),
+            "{refused:?}"
+        );
+    }
 
     /// One vertex after the perspective divide, in pixel space.
     struct Screen {
