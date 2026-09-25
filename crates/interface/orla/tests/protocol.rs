@@ -668,6 +668,8 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
             json!({ "id": 3, "op": "trace", "node": "view", "at": [4, 4], "window": [128, 64] }),
             json!({ "id": 4, "op": "trace", "node": "nowhere", "element": 0 }),
             json!({ "id": 5, "op": "trace", "node": "machine" }),
+            // Element 2^32 is past the end, not element 0 again.
+            json!({ "id": 6, "op": "trace", "node": "machine", "element": 4_294_967_296u64, "window": [128, 64] }),
         ],
     );
     let timings = responses[0]["ok"]["timings"].as_array().unwrap();
@@ -716,6 +718,7 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
             .unwrap()
             .contains("element")
     );
+    assert!(responses[5]["error"].is_object(), "{}", responses[5]);
 }
 
 #[test]
@@ -1062,7 +1065,9 @@ fn an_agent_can_measure_the_scene_it_is_holding() {
             json!({ "id": 1, "op": "bench", "frames": 4, "repeat": 2, "nodes": true }),
             json!({ "id": 2, "op": "bench", "frames": 0 }),
             json!({ "id": 3, "op": "bench", "frames": 100000, "repeat": 4 }),
-            json!({ "id": 4, "op": "quit" }),
+            // A product that passes the end of 64 bits is still too many.
+            json!({ "id": 4, "op": "bench", "frames": 1001u64, "repeat": 17_285_760_180_958_600_815u64 }),
+            json!({ "id": 5, "op": "quit" }),
         ],
     );
     let measured = &responses[0]["ok"];
@@ -1091,6 +1096,14 @@ fn an_agent_can_measure_the_scene_it_is_holding() {
             .contains("at most"),
         "{}",
         responses[2]
+    );
+    assert!(
+        responses[3]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at most"),
+        "{}",
+        responses[3]
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

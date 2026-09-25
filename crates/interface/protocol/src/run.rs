@@ -63,7 +63,10 @@ pub(crate) fn bench(session: &mut Session, request: &Request) -> Result<Json, Js
     };
     let frames = whole("frames", 30)?;
     let repeat = whole("repeat", 3)?;
-    if frames * repeat > MAX_ADVANCE {
+    if frames
+        .checked_mul(repeat)
+        .is_none_or(|runs| runs > MAX_ADVANCE)
+    {
         return Err(failure(format!(
             "`frames` times `repeat` is at most {MAX_ADVANCE}; measure fewer frames or fewer runs"
         )));

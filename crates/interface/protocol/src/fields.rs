@@ -39,10 +39,16 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
         request.get("element").and_then(Json::as_u64),
     ) {
         (Some(list), _) => {
-            let axis = |i: usize| list.get(i).and_then(Json::as_u64).unwrap_or(0) as u32;
+            // A coordinate past 32 bits stays past the end, rather than wrapping
+            // onto an element that is there.
+            let axis = |i: usize| {
+                list.get(i)
+                    .and_then(Json::as_u64)
+                    .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
+            };
             [axis(0), axis(1), axis(2)]
         }
-        (None, Some(element)) => [element as u32, 0, 0],
+        (None, Some(element)) => [u32::try_from(element).unwrap_or(u32::MAX), 0, 0],
         (None, None) => {
             return Err(failure(
                 "`trace` names the element as `at`: [x, y, z] or `element`: n",
