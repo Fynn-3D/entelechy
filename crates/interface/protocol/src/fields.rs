@@ -424,19 +424,17 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
         let schema: orla_runtime::Schema = text("layout")?
             .parse()
             .map_err(|e: String| bad(&format!("a state's layout: {e}")))?;
-        let extent: Vec<u32> = state
-            .get("extent")
-            .and_then(Json::as_array)
-            .map(|sides| {
-                sides
-                    .iter()
-                    .filter_map(|s| s.as_u64())
-                    .map(|s| s as u32)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let [w, h, d] = extent[..] else {
-            return Err(bad("a state's extent is three sides"));
+        // Three whole sides, each one a Field may have: nothing dropped,
+        // nothing truncated.
+        let extent: Option<Vec<u32>> = state.get("extent").and_then(Json::as_array).map(|sides| {
+            sides
+                .iter()
+                .map(|side| side.as_u64().and_then(|side| u32::try_from(side).ok()))
+                .collect::<Option<Vec<u32>>>()
+                .unwrap_or_default()
+        });
+        let Some([w, h, d]) = extent.as_deref().and_then(|e| <[u32; 3]>::try_from(e).ok()) else {
+            return Err(bad("a state's extent is three whole sides"));
         };
         let domain = match text("shape")? {
             "Rows" => orla_runtime::Domain::Rows(w),
@@ -445,6 +443,9 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
             other => return Err(bad(&format!("`{other}` is no shape"))),
         };
         let bytes = unbase64(text("data")?).map_err(|e| bad(&format!("a state's data: {e}")))?;
+        if bytes.len() % 4 != 0 {
+            return Err(bad("a state's data is whole words"));
+        }
         let words = bytes
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))

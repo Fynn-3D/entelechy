@@ -2065,3 +2065,196 @@ fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
         .unwrap_err();
     assert!(error.to_string().contains("kept as unorm8"), "{error}");
 }
+
+const INC: &str = "kernel t.inc@1 { requires { field.read; field.write; } input previous: Rows<Int>; param by: Int = 1; output result: Rows<Int>; compute { return at(previous, 0) + by; } }";
+const INT_ZERO: &str =
+    "kernel t.zero@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }";
+const FAILS_AT: &str = "kernel t.fails@1 { requires { field.read; field.write; } input x: Rows<Int>; param at: Int = 5; output result: Rows<Int>; compute { return 100 / (at(x, 0) - at); } }";
+const COPY: &str = "kernel t.copy@1 { requires { field.read; field.write; } input x: Rows<Int>; output result: Rows<Int>; compute { return at(x, 0); } }";
+
+fn int_at(runtime: &Runtime, handle: orla_runtime::Handle) -> i32 {
+    runtime.host().element(handle, 0).unwrap()[0] as i32
+}
+
+/// What the restore work found (review of the time subsystem): each is
+/// held here against the evaluator directly.
+#[test]
+fn a_failed_restore_leaves_no_run_going_and_commits_are_whole() {
+    let mut runtime = cpu(1 << 12);
+    for source in [INC, INT_ZERO, FAILS_AT, COPY] {
+        load(&mut runtime, source);
+    }
+    let (none, params) = (BTreeMap::new(), BTreeMap::new());
+    let ctx = Context::default();
+    // An async reader of the count, and a check that fails at 5.
+    let graph = orla_scene::parse(
+        "node seed: t.zero@1 { domain = 1; }
+node count: t.inc@1 { previous <~ count.result from seed.result; domain = 1; }
+node slow: t.copy@1 { x <- count.result; async = true; domain = 1; }
+node check: t.fails@1 { x <- count.result; domain = 1; }
+output result <- check.result;
+output slow <- slow.result;
+",
+    )
+    .unwrap();
+    let mut evaluator = Evaluator::new();
+    for _ in 0..3 {
+        evaluator
+            .evaluate(&graph, &mut runtime, &none, &ctx, &params)
+            .unwrap();
+        evaluator.settle(&mut runtime).unwrap();
+    }
+    let four = runtime
+        .host_mut()
+        .adopt(
+            orla_runtime::FieldData::from_values(
+                orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
+                orla_runtime::Domain::Rows(1),
+                &[4],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let live = runtime.host().live();
+    // Restored to 4, the trial counts 5 and the check divides by zero.
+    let refused = evaluator.restore(
+        &graph,
+        &mut runtime,
+        &none,
+        &ctx,
+        &params,
+        vec![(NodeId("count".into()), "result".into(), four)],
+    );
+    assert!(refused.is_err());
+    assert!(
+        !evaluator.has_running(),
+        "no run of the refused world goes on"
+    );
+    assert!(
+        runtime.host().live() <= live,
+        "what the restore brought is let go"
+    );
+    let report = evaluator
+        .evaluate(&graph, &mut runtime, &none, &ctx, &params)
+        .unwrap();
+    let count = evaluator.cached(&NodeId("count".into()), "result").unwrap();
+    assert_eq!(int_at(&runtime, count), 4, "on from the world that stood");
+    let _ = report;
+
+    // Duplicate ports in one restore are refused, every handle released.
+    let make = |runtime: &mut Runtime, v: u32| {
+        runtime
+            .host_mut()
+            .adopt(
+                orla_runtime::FieldData::from_values(
+                    orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
+                    orla_runtime::Domain::Rows(1),
+                    &[v],
+                )
+                .unwrap(),
+            )
+            .unwrap()
+    };
+    let before = runtime.host().live();
+    let (a, b) = (make(&mut runtime, 1), make(&mut runtime, 2));
+    let twice = evaluator.restore(
+        &graph,
+        &mut runtime,
+        &none,
+        &ctx,
+        &params,
+        vec![
+            (NodeId("count".into()), "result".into(), a),
+            (NodeId("count".into()), "result".into(), b),
+        ],
+    );
+    assert!(twice.is_err());
+    assert_eq!(runtime.host().live(), before, "no handle leaks");
+}
+
+/// A commit is whole: a state port with no output fails the evaluation
+/// before any other port advances.
+#[test]
+fn a_commit_advances_every_port_or_none() {
+    let mut runtime = cpu(1 << 12);
+    for source in [INC, INT_ZERO] {
+        load(&mut runtime, source);
+    }
+    let graph = orla_scene::parse(
+        "node seed: t.zero@1 { domain = 1; }
+node a: t.inc@1 { previous <~ a.result from seed.result; domain = 1; }
+node b: t.inc@1 { previous <~ a.bogus from seed.result; domain = 1; }
+output result <- b.result;
+",
+    )
+    .unwrap();
+    let (none, params) = (BTreeMap::new(), BTreeMap::new());
+    let mut evaluator = Evaluator::new();
+    for _ in 0..3 {
+        assert!(
+            evaluator
+                .evaluate(&graph, &mut runtime, &none, &Context::default(), &params)
+                .is_err()
+        );
+    }
+    assert!(evaluator.committed_states().is_empty(), "nothing advanced");
+}
+
+/// Two ports' states swapped by a restore whose trial fails: each is put
+/// back, neither released while the other still needed it.
+#[test]
+fn a_restore_that_swaps_two_ports_and_fails_puts_both_back() {
+    let mut runtime = cpu(1 << 12);
+    for source in [INC, INT_ZERO, FAILS_AT] {
+        load(&mut runtime, source);
+    }
+    let graph = orla_scene::parse(
+        "node seed: t.zero@1 { domain = 1; }
+node a: t.inc@1 { previous <~ a.result from seed.result; domain = 1; }
+node b: t.inc@1 { previous <~ b.result from seed.result; by = 10; domain = 1; }
+node check: t.fails@1 { x <- a.result; at = 21; domain = 1; }
+output result <- check.result;
+",
+    )
+    .unwrap();
+    let (none, params) = (BTreeMap::new(), BTreeMap::new());
+    let ctx = Context::default();
+    let mut evaluator = Evaluator::new();
+    for _ in 0..2 {
+        evaluator
+            .evaluate(&graph, &mut runtime, &none, &ctx, &params)
+            .unwrap();
+    }
+    let committed: BTreeMap<String, orla_runtime::Handle> = evaluator
+        .committed_states()
+        .into_iter()
+        .map(|(node, _, handle)| (node.0, handle))
+        .collect();
+    let (ha, hb) = (committed["a"], committed["b"]);
+    assert_eq!((int_at(&runtime, ha), int_at(&runtime, hb)), (2, 20));
+    // a takes b's 20, and the trial's 21 fails the check.
+    let refused = evaluator.restore(
+        &graph,
+        &mut runtime,
+        &none,
+        &ctx,
+        &params,
+        vec![
+            (NodeId("a".into()), "result".into(), hb),
+            (NodeId("b".into()), "result".into(), ha),
+        ],
+    );
+    assert!(refused.is_err());
+    let after: BTreeMap<String, orla_runtime::Handle> = evaluator
+        .committed_states()
+        .into_iter()
+        .map(|(node, _, handle)| (node.0, handle))
+        .collect();
+    assert_eq!(
+        (int_at(&runtime, after["a"]), int_at(&runtime, after["b"])),
+        (2, 20)
+    );
+    evaluator
+        .evaluate(&graph, &mut runtime, &none, &ctx, &params)
+        .unwrap();
+}

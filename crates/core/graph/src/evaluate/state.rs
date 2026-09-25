@@ -117,8 +117,10 @@ impl Evaluator {
     /// Puts back the state [`Evaluator::reconcile_state`] replaced, last
     /// first, releasing what a migration carried in its place.
     pub(super) fn restore_replaced(&mut self, runtime: &mut Runtime) {
-        let replaced = std::mem::take(&mut self.replaced);
-        for Replaced { key, previous } in replaced.into_iter().rev() {
+        // One at a time, last first, so what is still to be put back is
+        // still held while the rest is: a handle two ports swapped is
+        // never released between them.
+        while let Some(Replaced { key, previous }) = self.replaced.pop() {
             let carried = match previous {
                 Some(previous) => self.commit_put(key, previous),
                 None => self.commit_take(&key),
@@ -136,8 +138,7 @@ impl Evaluator {
     /// Lets go of the state [`Evaluator::reconcile_state`] replaced, once
     /// the evaluation has committed and nothing will put it back.
     pub(super) fn release_replaced(&mut self, runtime: &mut Runtime) {
-        let replaced = std::mem::take(&mut self.replaced);
-        for Replaced { previous, .. } in replaced {
+        while let Some(Replaced { previous, .. }) = self.replaced.pop() {
             if let Some(previous) = previous
                 && !self.is_cached(previous)
                 && !self.is_kept(previous)
@@ -194,6 +195,18 @@ impl Evaluator {
             }
             return Err(refused);
         }
+        self.recover(runtime);
+        let mut named = BTreeSet::new();
+        if let Some((node, port, _)) = states
+            .iter()
+            .find(|(node, port, _)| !named.insert((node.clone(), port.clone())))
+        {
+            let refused = EvaluateError::Graph(GraphError::DuplicateName(format!("{node}.{port}")));
+            for (_, _, handle) in states {
+                release(runtime, handle);
+            }
+            return Err(refused);
+        }
         for (_, running) in std::mem::take(&mut self.running) {
             runtime.discard_run(running.run);
         }
@@ -224,6 +237,17 @@ impl Evaluator {
         proved
     }
 
+    /// Undoes what an evaluation interrupted by a panic left half done,
+    /// before the next: a trial's flag, and state it replaced and never
+    /// put back or let go. A caller that catches a panic (the FFI) then
+    /// finds the world as it was before the evaluation that panicked.
+    pub(super) fn recover(&mut self, runtime: &mut Runtime) {
+        self.trial = false;
+        if !self.replaced.is_empty() {
+            self.restore_replaced(runtime);
+        }
+    }
+
     /// Makes every `<~` source's current output the committed state.
     pub(super) fn commit(
         &mut self,
@@ -237,6 +261,9 @@ impl Evaluator {
         // list stays for the answer, which is in the order the bindings
         // came.
         let mut already: BTreeSet<(NodeId, String)> = BTreeSet::new();
+        // Every port's new state found first, and only then committed: a
+        // port that has none fails the commit before any other advances.
+        let mut staged = Vec::new();
         for node in &graph.nodes {
             for binding in node.inputs.values() {
                 let Binding::Previous {
@@ -259,16 +286,19 @@ impl Evaluator {
                             port: port.clone(),
                             near: None,
                         })?;
-                let previous = self.commit_put(key.clone(), current);
-                if previous != Some(current) {
-                    already.insert(key.clone());
-                    advanced.push(key);
-                    if let Some(previous) = previous
-                        && !self.is_cached(previous)
-                        && !self.is_kept(previous)
-                    {
-                        release(runtime, previous);
-                    }
+                already.insert(key.clone());
+                staged.push((key, current));
+            }
+        }
+        for (key, current) in staged {
+            let previous = self.commit_put(key.clone(), current);
+            if previous != Some(current) {
+                advanced.push(key);
+                if let Some(previous) = previous
+                    && !self.is_cached(previous)
+                    && !self.is_kept(previous)
+                {
+                    release(runtime, previous);
                 }
             }
         }

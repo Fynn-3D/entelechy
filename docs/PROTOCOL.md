@@ -87,7 +87,8 @@ or reset), the frame counts the evaluations committed since. `history`
 (`since` a revision) says what made each revision after it, and where
 it came from: a document on disk, or the protocol and its channel
 (`stdin`, `socket 3`, `websocket 4`), a fact about how it arrived, not
-who sent it; and the attempts refused since, with why, which move
+who sent it (an edit found on disk while a request is answered is its
+document's; the scene a `compose` or a `param` loads is the request's); and the attempts refused since, with why, which move
 nothing. `kernel` with a `generation` reads the source a Kernel had then,
 while the session remembers the change that published it, and
 `document` with a `version` the scene document a `scene` change loaded:
@@ -113,8 +114,8 @@ together, where their sources differ. A state port the snapshot does not
 name starts again from its initial source. The world is then proved by
 one frame, under the context given as `evaluate` takes it, which commits
 nothing: when it runs, the world is the snapshot's, and the next
-`evaluate` is the frame after it; when it fails, the state and the laws
-are what they were, and the attempt is in `history`. Runs off the frame
+`evaluate` is the frame after it; when it fails, the state, the laws (their generations too) and the
+revision are what they were, and the attempt is in `history`. Runs off the frame
 are let go either way. `structure` (`"current"` when absent) brings the
 snapshot's scene document back too, with `"snapshot"`: checked as
 `compose` checks it and written first, its own Kernels in place before

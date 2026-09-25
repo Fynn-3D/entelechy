@@ -148,7 +148,7 @@ pub(crate) fn document(session: &Session, request: &Request) -> Result<Json, Jso
     if let Some(version) = request.get("version").and_then(Json::as_str) {
         let text = u64::from_str_radix(version, 16)
             .ok()
-            .and_then(|digest| session.source_by_digest(digest))
+            .and_then(|digest| session.scene_at(digest))
             .ok_or_else(|| {
                 failure(format!(
                     "version {version} is not one the session remembers"

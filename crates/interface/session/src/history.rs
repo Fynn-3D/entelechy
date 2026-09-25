@@ -132,7 +132,7 @@ pub struct Attempt {
 }
 
 /// The session's memory of change.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct History {
     revision: u64,
     frame: u64,
@@ -245,6 +245,17 @@ impl History {
     /// A source still remembered, by digest.
     pub(crate) fn source(&self, hash: u64) -> Option<&str> {
         self.sources.get(&hash).map(|(text, _)| text.as_str())
+    }
+
+    /// A scene document a remembered change loaded, by its digest: only
+    /// what was loaded as the scene, never a Kernel's source that shares
+    /// the store.
+    pub(crate) fn scene_text(&self, digest: u64) -> Option<&str> {
+        self.changes
+            .iter()
+            .any(|record| matches!(record.change, Change::Scene { document } if document == digest))
+            .then(|| self.source(digest))
+            .flatten()
     }
 
     /// The source a Kernel had at `generation`, when a remembered change

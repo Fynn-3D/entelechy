@@ -1963,3 +1963,169 @@ fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
     assert_eq!(counted(&responses[4]["ok"]), 10, "the state that stood");
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
+
+/// A refused restore moves nothing: not the revision, not a Kernel's
+/// generation, not the scene on disk, and not an edit a person made there
+/// that the session had not read yet. Only the attempt is recorded.
+#[test]
+fn a_refused_restore_moves_nothing() {
+    let scene = tally_world("refused-whole", 1_000_000);
+    let taken = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "snapshot" }),
+        ],
+    )[1]["ok"]
+        .clone();
+    let with = |edit: &dyn Fn(&mut Json)| {
+        let mut snapshot = taken.clone();
+        edit(&mut snapshot);
+        snapshot
+    };
+    // Its laws differ and its states name a port that is no state: the
+    // laws would be published, then the state refused.
+    let not_state = with(&|s| {
+        s["laws"][0]["source"] = json!(
+            s["laws"][0]["source"]
+                .as_str()
+                .unwrap()
+                .replace("+ 1;", "+ 2;")
+        );
+        s["states"][0]["node"] = json!("zero");
+    });
+    // Its scene defines the tally the library already publishes: the
+    // scene reads, and its Kernel is refused.
+    let clash = with(&|s| {
+        let text = s["scene"]["text"].as_str().unwrap().to_owned()
+            + "kernel t.tally@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return at(previous, 0) + 5; } }\n";
+        s["scene"]["text"] = json!(text);
+    });
+    let on_disk = std::fs::read_to_string(&scene).unwrap();
+    let edited = format!("{on_disk}// a person's edit, not read yet\n");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "status" }),
+            json!({ "id": 3, "op": "kernel", "kernel": "t.tally@1" }),
+            json!({ "id": 4, "op": "restore", "snapshot": not_state, "laws": "snapshot" }),
+            json!({ "id": 5, "op": "status" }),
+            json!({ "id": 6, "op": "kernel", "kernel": "t.tally@1" }),
+        ],
+    );
+    assert!(responses[3].get("error").is_some(), "{}", responses[3]);
+    let (before, after) = (&responses[1]["ok"], &responses[4]["ok"]);
+    assert_eq!(after["revision"], before["revision"], "no revision");
+    assert_eq!(
+        responses[5]["ok"]["generation"], responses[2]["ok"]["generation"],
+        "no generation"
+    );
+    assert!(
+        responses[5]["ok"]["source"]
+            .as_str()
+            .unwrap()
+            .contains("+ 1;")
+    );
+    // The person's edit waits on disk while a structure restore is refused.
+    std::fs::write(&scene, &edited).unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "restore", "snapshot": clash, "laws": "current", "structure": "snapshot" }),
+            json!({ "id": 2, "op": "kernel", "kernel": "t.tally@1" }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 4, "op": "history" }),
+        ],
+    );
+    assert!(responses[0].get("error").is_some(), "{}", responses[0]);
+    assert_eq!(
+        std::fs::read_to_string(&scene).unwrap(),
+        edited,
+        "the edit stands"
+    );
+    assert!(
+        responses[1]["ok"]["source"]
+            .as_str()
+            .unwrap()
+            .contains("+ 1;"),
+        "{}",
+        responses[1]
+    );
+    assert!(responses[2].get("error").is_none(), "{}", responses[2]);
+    let attempts = responses[3]["ok"]["attempts"].as_array().unwrap();
+    assert!(
+        attempts
+            .iter()
+            .any(|a| a["subject"].as_str().unwrap().contains("snapshot"))
+    );
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}
+
+/// Where a change came from is where it came from: a scene edited on disk
+/// and found by a request's sync is its document's, the scene a compose
+/// wrote is the request's; and `document` by version reads scenes only.
+#[test]
+fn a_change_found_on_disk_is_its_documents_and_versions_name_scenes() {
+    let scene = tally_world("provenance", 1_000_000);
+    let first = std::fs::read_to_string(&scene).unwrap();
+    let mut child = talk(
+        &scene,
+        &[json!({ "id": 1, "op": "kernel", "kernel": "t.tally@1" })],
+    );
+    let tally_digest = format!(
+        "{:016x}",
+        orla_session::history::digest(child.remove(0)["ok"]["source"].as_str().unwrap())
+    );
+    std::fs::write(&scene, format!("{first}// edited on disk\n")).unwrap();
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "status" }),
+            json!({ "id": 2, "op": "document", "version": tally_digest }),
+            json!({ "id": 3, "op": "compose", "text": first }),
+            json!({ "id": 4, "op": "history" }),
+        ],
+    );
+    assert!(
+        responses[1].get("error").is_some(),
+        "a Kernel's source is no scene: {}",
+        responses[1]
+    );
+    let scenes: Vec<&Json> = responses[3]["ok"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "scene")
+        .collect();
+    assert!(
+        scenes[0]["origin"]["document"].as_str().is_some(),
+        "{:?}",
+        scenes
+    );
+    assert_eq!(
+        scenes.last().unwrap()["origin"],
+        json!({ "protocol": "stdin" })
+    );
+    // Edited on disk while the session runs, and found by a sync a
+    // protocol request made: still its document's.
+    let runtime = orla_session::Session::runtime_for("cpu", Default::default()).unwrap();
+    let mut session = orla_session::Session::open_with(&scene, None, runtime);
+    session.sync();
+    session.act_for(orla_session::Origin::Protocol("socket 1".into()));
+    std::fs::write(&scene, format!("{first}// edited again\n")).unwrap();
+    let file = std::fs::File::options().write(true).open(&scene).unwrap();
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+        .unwrap();
+    session.sync();
+    let found = session
+        .changes_since(0)
+        .into_iter()
+        .rev()
+        .find(|r| matches!(r.change, orla_session::Change::Scene { .. }));
+    assert_eq!(
+        found.unwrap().origin,
+        orla_session::Origin::Document(scene.clone())
+    );
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}

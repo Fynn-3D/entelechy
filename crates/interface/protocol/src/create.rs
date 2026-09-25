@@ -51,6 +51,8 @@ pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, 
             let _ = std::fs::remove_file(&beside);
             failure(format!("{}: {e}", root.display()))
         })?;
+    // The scene this reads is this request's change.
+    session.claim_scene();
     Ok(json!({
         "events": events_json(&session.sync()),
         "version": document_version(&text),
@@ -124,7 +126,9 @@ pub(crate) fn param(session: &mut Session, request: &Request) -> Result<Json, Js
     let given = value_from_json(request.field("value")?)?;
     session.set_param(&name, given).map_err(failure)?;
     let value = session.params().get(&name).cloned().expect("just set");
-    // A param that sizes the graph lowers the document again now.
+    // A param that sizes the graph lowers the document again now, as
+    // this request's change.
+    session.claim_scene();
     let events = session.sync();
     Ok(json!({ "name": name, "value": value_json(&value), "events": events_json(&events) }))
 }

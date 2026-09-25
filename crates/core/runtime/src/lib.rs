@@ -826,6 +826,24 @@ impl Runtime {
             .collect())
     }
 
+    /// Puts back exactly these versions, with the generations they had,
+    /// or no version where an id had none: the undo of a
+    /// [`Runtime::publish_all`] whose change was refused before anything
+    /// but its own trial ran under it. What was running is running again,
+    /// as it was, and an agent's expectation of it still holds.
+    pub fn reinstate(&mut self, versions: Vec<(KernelId, Option<Arc<KernelVersion>>)>) {
+        for (id, version) in versions {
+            match version {
+                Some(version) => {
+                    self.kernels.insert(id, version);
+                }
+                None => {
+                    self.kernels.remove(&id);
+                }
+            }
+        }
+    }
+
     /// Whether `expect` holds for `id` now, and it is not a native
     /// operation's.
     fn expected(&self, id: &KernelId, expect: Expect) -> Result<(), StaleCandidate> {

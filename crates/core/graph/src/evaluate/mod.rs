@@ -365,6 +365,7 @@ impl Evaluator {
         context: &Context,
         params: &BTreeMap<String, Value>,
     ) -> Result<Report, EvaluateError> {
+        self.recover(runtime);
         self.evaluate_with(graph, runtime, externals, context, params, None)
     }
 
@@ -383,6 +384,7 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
         demand: &BTreeSet<NodeId>,
     ) -> Result<Report, EvaluateError> {
+        self.recover(runtime);
         self.evaluate_with(graph, runtime, externals, context, params, Some(demand))
     }
 
@@ -534,7 +536,10 @@ impl Evaluator {
                     .iter()
                     .map(|port| port.name.clone())
                     .collect();
-                if node.is_async && self.cache.contains_key(&node.id) {
+                // A restore's trial runs every node on the frame: what it
+                // proves is the world restored, whole, and it leaves no run
+                // going that would land a world it may refuse.
+                if node.is_async && !self.trial && self.cache.contains_key(&node.id) {
                     // One run at a time; while it goes, the frame carries the
                     // last output and the state this node feeds stays.
                     if !self.running.contains_key(&node.id) {
