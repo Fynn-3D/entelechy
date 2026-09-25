@@ -560,3 +560,40 @@ it.
 **What would change it.** WebAssembly threads in the page, which would
 let the JIT split a run across workers as it does across threads.
 
+## In a page, waiting for the device is giving the page a turn
+
+The browser's WebGPU answers a readback, a pipeline's validation, even
+the device itself, only once the page's script has had a turn, and
+Orla's evaluation waits for such answers in the middle of a frame: a
+scan handed to the JIT reads what the GPU made, as does a `value(port)`,
+an async node's inputs, a `read`. In a page, then, the GPU backend waits
+by giving the page turns: Orla calls `orla.wait`, which the page gives
+as a suspending import (JavaScript Promise Integration), and Orla is
+suspended until the browser has done what it had to. The GPU backend is
+the same everywhere; only how it waits differs (`orla_gpu::Wait`: block,
+or give turns), and `orla-ffi`, which takes `unsafe`, supplies the turn.
+The browser is reached through wgpu's own WebGPU backend, whose glue
+`wasm-bindgen` writes; its import of `orla` is the page's
+`orla-host.mjs`, through an import map.
+
+**Why.** A frame that ends only at its commit would have had to become
+many frames, one for every place it waits, which is every place a
+backend reads what another made: the evaluator suspended at any node,
+the protocol answering "not yet", the Backend contract grown a way to
+ask without waiting. Suspending the machine is the host's to offer, and
+a page offers it; nothing above the GPU backend learns that it was
+suspended. One GPU backend, not a second one written against the
+browser, keeps its evidence one: the WGSL, the binding, the residency.
+
+**Where.** [`wait.rs`](../crates/backends/gpu/src/wait.rs) in the GPU
+backend, `Session::runtime_waiting`, `waiting` in the
+[C ABI](../crates/interface/ffi/src/lib.rs), `host` and `OrlaInPage` in
+the web bridge's [`orla.js`](../bridges/web/orla.js). Held by the web
+bridge's test, which runs the text example's checks on the page's
+WebGPU and the voxel example on it in a headless Chrome.
+
+**What would change it.** A browser that must run Orla's GPU and has no
+such suspension (Safari and Firefox, today, run it on the JIT): then
+the evaluation would learn to stop and go on, and this would be one way
+of waiting among two.
+

@@ -463,6 +463,10 @@ Represented in the IR, and so on every backend:
   native JIT's. Held by the JIT's own tests and the core's, the front
   end's and the interpreter's, run as 32-bit WebAssembly in node
   ([wasm test](crates/interface/orla/tests/wasm.rs)).
+- In a page the GPU backend is the browser's WebGPU through wgpu, and it
+  waits for the device by giving the page turns
+  ([wait](crates/backends/gpu/src/wait.rs)), which the page offers by
+  suspending Orla. Held by the web bridge's test in a headless Chrome.
 - A session reads and writes its documents through a
   [`Store`](crates/interface/session/src/store.rs): the disk, or the
   files its caller handed in (`Memory`), which is how Orla runs in a

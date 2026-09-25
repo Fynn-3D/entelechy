@@ -100,7 +100,19 @@ impl Session {
     /// Builds a runtime over a named backend: `cpu`, or `gpu` when a device
     /// is available.
     pub fn runtime_for(backend: &str, limits: Limits) -> Result<Runtime, String> {
-        Self::runtime_and_display(backend, limits).map(|(runtime, _)| runtime)
+        Self::runtime_waiting(backend, limits, orla_gpu::Wait::blocking())
+    }
+
+    /// The same, where the device is waited for as `wait` says: a page,
+    /// which cannot block, gives its host turns until the device answers.
+    pub fn runtime_waiting(
+        backend: &str,
+        limits: Limits,
+        wait: orla_gpu::Wait,
+    ) -> Result<Runtime, String> {
+        let (mut runtime, _) = Self::backend_runtime(backend, limits.words, wait)?;
+        runtime.host_mut().set_work(limits.work);
+        Ok(runtime)
     }
 
     /// The same, with the display a window presents what the backend
@@ -111,7 +123,8 @@ impl Session {
         backend: &str,
         limits: Limits,
     ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
-        let (mut runtime, display) = Self::backend_runtime(backend, limits.words)?;
+        let (mut runtime, display) =
+            Self::backend_runtime(backend, limits.words, orla_gpu::Wait::blocking())?;
         runtime.host_mut().set_work(limits.work);
         Ok((runtime, display))
     }
@@ -119,6 +132,7 @@ impl Session {
     fn backend_runtime(
         backend: &str,
         budget_words: usize,
+        wait: orla_gpu::Wait,
     ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
         match backend {
             "cpu" => Ok((
@@ -128,7 +142,8 @@ impl Session {
             "gpu" => {
                 // A GPU walks a scan on one thread; the JIT takes the
                 // scans, the GPU everything else.
-                let gpu = orla_gpu::GpuBackend::new().map_err(|error| error.to_string())?;
+                let gpu =
+                    orla_gpu::GpuBackend::with_wait(wait).map_err(|error| error.to_string())?;
                 let display = gpu.display();
                 let backend: Box<dyn Backend> = Box::new(gpu);
                 let ordered = Self::jit().ok();

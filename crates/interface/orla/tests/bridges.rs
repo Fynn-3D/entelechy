@@ -35,17 +35,24 @@ fn tool(paths: &[&str]) -> Option<PathBuf> {
 
 /// Orla built for a page (`wasm32-unknown-unknown`), from the source as
 /// it stands, into a target directory of its own so the build does not
-/// wait on the one running this test; `None` when this machine's Rust
-/// has no such target.
-fn page_module() -> Option<PathBuf> {
+/// wait on the one running this test, and the glue `wasm-bindgen` writes
+/// for it: the glue's path. `Err` says why there is none: this machine's
+/// Rust has no such target, or there is no `wasm-bindgen`.
+fn page_module() -> Result<PathBuf, String> {
     let sysroot = Command::new("rustc")
         .args(["--print", "sysroot"])
         .output()
-        .ok()?;
+        .map_err(|e| e.to_string())?;
     let sysroot = PathBuf::from(String::from_utf8_lossy(&sysroot.stdout).trim());
     if !sysroot.join("lib/rustlib/wasm32-unknown-unknown").exists() {
-        return None;
+        return Err("no wasm32-unknown-unknown target".into());
     }
+    let Some(bindgen) = tool(&["wasm-bindgen"]) else {
+        return Err(
+            "no wasm-bindgen (cargo install wasm-bindgen-cli at the version Cargo.lock holds)"
+                .into(),
+        );
+    };
     let target = root().join("target/web");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let built = Command::new(cargo)
@@ -60,7 +67,20 @@ fn page_module() -> Option<PathBuf> {
         "orla-ffi does not build for a page:\n{}",
         String::from_utf8_lossy(&built.stderr)
     );
-    Some(target.join("wasm32-unknown-unknown/release/orla_ffi.wasm"))
+    let page = target.join("page");
+    let glued = Command::new(bindgen)
+        .args(["--target", "web", "--keep-lld-exports", "--no-typescript"])
+        .arg("--out-dir")
+        .arg(&page)
+        .arg(target.join("wasm32-unknown-unknown/release/orla_ffi.wasm"))
+        .output()
+        .expect("wasm-bindgen runs");
+    assert!(
+        glued.status.success(),
+        "wasm-bindgen:\n{}",
+        String::from_utf8_lossy(&glued.stderr)
+    );
+    Ok(page.join("orla_ffi.js"))
 }
 
 /// Runs a bridge's own runner and says what it said. The runners print
@@ -110,16 +130,18 @@ fn the_web_bridge_passes_its_own_test() {
         .arg("--chrome")
         .arg(chrome);
     match page_module() {
-        Some(module) => {
-            command.arg("--wasm").arg(module);
+        Ok(glue) => {
+            command.arg("--glue").arg(glue);
             passed(
                 command,
                 "the web bridge",
-                "text in the page: a file handed in again is read",
+                "voxel in the page: a frame on the GPU",
             );
         }
-        None => {
-            eprintln!("in the page: skipped, no wasm32-unknown-unknown target");
+        Err(why) => {
+            eprintln!("in the page: skipped, {why}");
+            // Nothing stale stands in for what was not built.
+            command.arg("--glue").arg("nothing-built");
             passed(command, "the web bridge", "voxel: a click places a voxel");
         }
     }

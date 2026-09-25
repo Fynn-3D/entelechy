@@ -299,19 +299,27 @@ cargo build --release -p orla --target wasm32-wasip1
 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay examples/ant/tests/ant.replay --backend cpu
 ```
 
-In a page, Orla is the C ABI built for `wasm32-unknown-unknown`: a
-module that imports nothing, whose documents are the files the page
-hands in (`orla_files`, `orla_files_put`, `orla_open_files`) and which
-answers the protocol in place (`orla_request`). Its JIT writes
-WebAssembly, which the page loads (`orla.load`): Kernels run at the
-page's own compiled speed, tens of times the interpreter's. The web
-bridge's page runs it: add the `examples` and `packages` folders, pick
-a scene, and Open here. It runs on the page's one thread, and a page
-has no clock of its own, so nothing is timed and history is not dated.
+In a page, Orla is the C ABI built for `wasm32-unknown-unknown`, with
+the glue `wasm-bindgen` writes for the browser's WebGPU. Its documents
+are the files the page hands in (`orla_files`, `orla_files_put`,
+`orla_open_files`), and it answers the protocol in place
+(`orla_request`). It runs a scene on its JIT, which writes WebAssembly
+the page loads (`orla.load`), at tens of times the interpreter's
+speed; or on the GPU, the browser's WebGPU through the same GPU backend
+as everywhere, which waits for the device by suspending Orla while the
+page takes a turn (`orla.wait`, JavaScript Promise Integration: Chrome
+and Edge 137 and later). The web bridge's page runs it, served: add the
+`examples` and `packages` folders, pick a scene and what runs it, and
+Open here. It runs on the page's one thread, and a page has no clock of
+its own, so nothing is timed and history is not dated.
 
 ```sh
 rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version <the wasm-bindgen Cargo.lock holds>
 cargo build --release -p orla-ffi --target wasm32-unknown-unknown
+wasm-bindgen --target web --keep-lld-exports --no-typescript --out-dir target/page \
+  target/wasm32-unknown-unknown/release/orla_ffi.wasm
+node bridges/web/serve.mjs     # then http://127.0.0.1:7789/bridges/web/index.html
 ```
 
 ## Hot reload

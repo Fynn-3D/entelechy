@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <title>Orla bridge</title>
+<!-- Orla in the page imports its host's functions as `orla`. -->
+<script type="importmap">{ "imports": { "orla": "./orla-host.mjs" } }</script>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #15161a; color: #d8dae0; display: grid; grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr; height: 100vh; }
@@ -34,8 +36,8 @@
   <button id="connect">Connect</button>
   <span class="sep"></span>
   <label class="pick" title="Orla in this page: add the folders a scene reads, as the repository has them (examples, packages)">Add folder<input id="folders" type="file" webkitdirectory multiple></label>
-  <label class="pick" title="orla_ffi.wasm, from cargo build --release -p orla-ffi --target wasm32-unknown-unknown; found by itself when the page is served beside the repository">Module<input id="module" type="file" accept=".wasm"></label>
   <select id="scenes" disabled></select>
+  <select id="on" title="What runs the Kernels in the page: Orla's JIT, whose code the page loads; the browser's WebGPU; or the interpreter"><option>jit</option><option>gpu</option><option>cpu</option></select>
   <button id="here" disabled>Open here</button>
   <span class="sep"></span>
   <button id="run" disabled>Run</button>
@@ -194,28 +196,18 @@ $("folders").onchange = (event) => {
   status(`${picked.size} files to hand in`);
 };
 
-// The module: the one picked, else beside the page, else where the
-// repository builds it.
-const moduleBytes = async () => {
-  const chosen = $("module").files[0];
-  if (chosen) return chosen.arrayBuffer();
-  for (const url of ["orla_ffi.wasm", "../../target/wasm32-unknown-unknown/release/orla_ffi.wasm"]) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return response.arrayBuffer();
-    } catch (error) {
-      // A page opened from a file fetches nothing; the module is picked.
-    }
-  }
-  throw new Error("no orla_ffi.wasm: pick it with Module");
-};
+// Where the repository puts Orla built for a page: the glue
+// `wasm-bindgen` wrote, beside the module. The page is served, as a
+// page that loads modules must be.
+const glue = new URLSearchParams(location.search).get("glue") || "../../target/page/orla_ffi.js";
 
-/// Opens `scene` in the page over `files`, [path, bytes] pairs; what
-/// Open here does with the folders added, and what a test calls.
-const openInPage = async (bytes, files, scene) => {
-  const orla = await OrlaInPage.load(bytes);
+/// Opens `scene` in the page over `files`, [path, bytes] pairs, on
+/// `backend`; what Open here does with the folders added, and what a
+/// test calls.
+const openInPage = async (files, scene, backend = "jit") => {
+  const orla = await OrlaInPage.load(glue);
   for (const [path, data] of files) orla.put(path, data);
-  orla.open(scene);
+  await orla.open(scene, backend);
   await attach(orla);
   return orla;
 };
@@ -227,7 +219,7 @@ $("here").onclick = async () => {
     const files = await Promise.all(
       [...picked].map(async ([path, file]) => [path, new Uint8Array(await file.arrayBuffer())]),
     );
-    await openInPage(await moduleBytes(), files, $("scenes").value);
+    await openInPage(files, $("scenes").value, $("on").value);
   } catch (error) {
     status(error.message);
   }

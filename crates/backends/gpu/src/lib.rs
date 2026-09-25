@@ -13,7 +13,10 @@
 
 pub mod present;
 mod raster;
+mod wait;
 pub mod wgsl;
+
+pub use wait::Wait;
 
 use std::any::Any;
 use std::fmt;
@@ -207,6 +210,8 @@ impl std::error::Error for GpuError {}
 
 /// A wgpu device with a compute-only contract.
 pub struct GpuBackend {
+    /// How to wait for the device: block, or give the page turns.
+    wait: Wait,
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
@@ -428,12 +433,24 @@ impl GpuBackend {
         None
     }
 
-    /// Opens the default adapter.
+    /// Opens the default adapter, blocking where the device is waited
+    /// for; a page, which cannot block, opens it with [`GpuBackend::with_wait`].
     pub fn new() -> Result<Self, GpuError> {
+        if cfg!(target_arch = "wasm32") {
+            return Err(GpuError(
+                "a page's device is waited for by giving the page turns; open it with a Wait"
+                    .into(),
+            ));
+        }
+        Self::with_wait(Wait::blocking())
+    }
+
+    /// Opens the default adapter, waiting for the device as `wait` says.
+    pub fn with_wait(wait: Wait) -> Result<Self, GpuError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .map_err(|error| GpuError(error.to_string()))?;
+        let adapter = wait
+            .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .map_err(|error| GpuError(error.to_string()))?;
         let adapter_limits = adapter.limits();
         // What the device will bind at once is what a Kernel's ports
         // come to: one buffer for the output and one for each input, so
@@ -477,15 +494,17 @@ impl GpuBackend {
         if int64_atomics {
             features |= wgpu::Features::SHADER_INT64_ATOMIC_MIN_MAX;
         }
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("orla"),
-            required_features: features,
-            required_limits,
-            ..Default::default()
-        }))
-        .map_err(|error| GpuError(error.to_string()))?;
+        let (device, queue) = wait
+            .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("orla"),
+                required_features: features,
+                required_limits,
+                ..Default::default()
+            }))
+            .map_err(|error| GpuError(error.to_string()))?;
         let adapter_name = adapter.get_info().name;
         Ok(Self {
+            wait,
             instance,
             adapter,
             device,
@@ -572,25 +591,14 @@ impl GpuBackend {
     /// when the run is not being measured: a submission a later node
     /// reads needs no wait, since one queue runs in order.
     fn settle_measured(&self, submission: wgpu::SubmissionIndex, timing: Option<wgpu::Buffer>) {
+        let _ = submission;
         if !self.measured() {
             let _ = self.device.poll(wgpu::PollType::Poll);
             return;
         }
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: None,
-        });
+        let _ = self.wait.drain(&self.device, &self.queue);
         let Some(read) = timing else { return };
-        let (sender, receiver) = std::sync::mpsc::channel();
-        read.slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result);
-            });
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        if receiver.recv().is_ok_and(|result| result.is_ok())
+        if self.wait.map_read(&self.device, read.slice(..)).is_ok()
             && let Ok(bytes) = read.slice(..).get_mapped_range()
         {
             let ticks =
@@ -630,11 +638,8 @@ impl GpuBackend {
                     label: Some("orla floor"),
                 });
             let started = std::time::Instant::now();
-            let submission = self.queue.submit(Some(encoder.finish()));
-            let _ = self.device.poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            });
+            self.queue.submit(Some(encoder.finish()));
+            let _ = self.wait.drain(&self.device, &self.queue);
             least = least.min(started.elapsed());
         }
         least
@@ -705,7 +710,7 @@ impl GpuBackend {
                 compilation_options: Default::default(),
                 cache: None,
             });
-        if let Some(error) = pollster::block_on(scope_guard.pop()) {
+        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
             return Err(format!(
                 "{}\n--- emitted WGSL ---\n{source}",
                 device_error(&error)
@@ -916,10 +921,7 @@ impl Backend for GpuBackend {
     /// measurement wants this, a Player gets it from presenting, and an
     /// ordinary evaluation needs neither.
     fn settle_device(&self) {
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
+        let _ = self.wait.drain(&self.device, &self.queue);
     }
 
     fn has_device(&self) -> bool {
@@ -1037,7 +1039,7 @@ impl Backend for GpuBackend {
                 compilation_options: Default::default(),
                 cache: None,
             });
-        if let Some(error) = pollster::block_on(scope_guard.pop()) {
+        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
             return Err(format!(
                 "{}\n--- emitted WGSL ---\n{source}",
                 device_error(&error)
@@ -1097,7 +1099,7 @@ impl Backend for GpuBackend {
                     compilation_options: Default::default(),
                     cache: None,
                 });
-            if let Some(error) = pollster::block_on(scope_guard.pop()) {
+            if let Some(error) = self.wait.block_on(scope_guard.pop()) {
                 return Err(format!(
                     "{}\n--- emitted WGSL ---\n{reduce_source}",
                     device_error(&error)
@@ -1364,7 +1366,7 @@ impl Backend for GpuBackend {
         // this output needs no wait here; only observation does. Under
         // `set_measured`, this call waits, so what times it is the work.
         self.settle_measured(submission, timing);
-        if let Some(error) = pollster::block_on(scope_guard.pop()) {
+        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(device_error(&error)));
         }
         let outputs = adopt_outputs(
@@ -1378,6 +1380,7 @@ impl Backend for GpuBackend {
         )?;
         let check = failure.map(|pair| {
             Box::new(FailureCheck {
+                wait: self.wait,
                 device: self.device.clone(),
                 pair: Some(pair),
                 pile: Arc::clone(&self.failures),
@@ -1479,23 +1482,8 @@ impl Backend for GpuBackend {
                 label: Some("orla download"),
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
-        let submission = self.queue.submit(Some(encoder.finish()));
-        let (sender, receiver) = std::sync::mpsc::channel();
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result);
-            });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            })
-            .map_err(|error| error.to_string())?;
-        receiver
-            .recv()
-            .map_err(|_| "readback was dropped".to_string())?
-            .map_err(|error| error.to_string())?;
+        self.queue.submit(Some(encoder.finish()));
+        self.wait.map_read(&self.device, staging.slice(..))?;
         let bytes: Vec<u8> = {
             let view = staging
                 .slice(..)
@@ -1775,7 +1763,7 @@ impl GpuBackend {
         }
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::Poll);
-        if let Some(error) = pollster::block_on(scope_guard.pop()) {
+        if let Some(error) = self.wait.block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(device_error(&error)));
         }
         // What the last time wrote is what the run gives.
@@ -2553,6 +2541,8 @@ impl GpuBackend {
 /// A device run's failure word, to be read once the device is waited
 /// for: the first failing element, in row-major order, and why.
 struct FailureCheck {
+    /// How the device is waited for.
+    wait: Wait,
     device: wgpu::Device,
     /// The failure word and the buffer it was copied to, which go back
     /// to the pile once read.
@@ -2571,10 +2561,9 @@ impl Check for FailureCheck {
     fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
         let (word_buffer, back) = self.pair.take().expect("a check is waited on once");
         let slice = back.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|error| ExecutionError::Device(error.to_string()))?;
+        self.wait
+            .map_read(&self.device, slice)
+            .map_err(ExecutionError::Device)?;
         let (word, blocks, left) = {
             let bytes = slice
                 .get_mapped_range()

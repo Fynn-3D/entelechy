@@ -47,6 +47,8 @@ use orla_runtime::{Generation, KernelId};
 
 pub use history::{Attempt, Change, Origin, Record};
 pub use options::SessionOptions;
+/// How a device is waited for: blocking, or giving a page turns.
+pub use orla_gpu::Wait;
 pub use store::{Disk, Memory, Store};
 
 /// The world at one moment, taken for its caller to keep

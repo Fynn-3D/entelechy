@@ -187,6 +187,30 @@ pub unsafe extern "C" fn orla_open(
     unsafe { open(None, scene, backend, library) }
 }
 
+// In a page, Orla waits for the device by giving the page a turn: the
+// page's `orla.wait` suspends Orla (JavaScript Promise Integration) until
+// the browser has had one.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[link(wasm_import_module = "orla")]
+unsafe extern "C" {
+    fn wait();
+}
+
+/// How this process waits for a device.
+fn waiting() -> orla_session::Wait {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        fn turn() {
+            unsafe { wait() }
+        }
+        orla_session::Wait::turns(turn)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        orla_session::Wait::blocking()
+    }
+}
+
 /// Opens a scene over `store`, the disk when `None`.
 ///
 /// # Safety
@@ -207,7 +231,8 @@ unsafe fn open(
         };
         let backend = unsafe { text(backend) }.unwrap_or("jit");
         let library = unsafe { text(library) }.map(Path::new);
-        let runtime = Session::runtime_for(backend, orla_session::Limits::default())?;
+        let runtime =
+            Session::runtime_waiting(backend, orla_session::Limits::default(), waiting())?;
         let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk));
         let mut session = Session::open_in(store, Path::new(scene), library, runtime);
         let events = session.sync();

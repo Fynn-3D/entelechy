@@ -3,13 +3,16 @@
 <head>
 <meta charset="utf-8">
 <title>Orla web bridge test</title>
+<script type="importmap">{ "imports": { "orla": "./orla-host.mjs" } }</script>
 </head>
 <body>
 <!--
 Exercises the bridge, against two serving sessions:
   orla serve examples/text/scene.osn --listen 127.0.0.1:0    (note the port)
   orla serve examples/voxel/scene.osn --listen 127.0.0.1:0   (note the port)
-and, with `wasm=<path>`, against Orla in the page: the page is served
+and, with `glue=<path>` (what `wasm-bindgen` wrote for Orla built for a
+page), against Orla in the page, on its JIT and on the browser's WebGPU:
+the page is served
 from the repository's root by `node bridges/web/test.mjs`, which does all
 of it headless, and which answers `/list?roots=a,b` with the files under
 them. The page's log ends with `RESULT: ok` when every check passed, or
@@ -78,16 +81,16 @@ async function textScene(client, where) {
 }
 
 /// Orla in the page, over the text example's files and the packages.
-async function inPage(wasm) {
+async function inPage(glue) {
   const fetched = async (path) => {
     const response = await fetch(`/${path}`);
     assert(response.ok, `${path}: ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   };
   const list = await (await fetch("/list?roots=examples/text,packages")).json();
-  const orla = await OrlaInPage.load(await fetched(wasm));
+  const orla = await OrlaInPage.load(`/${glue}`);
   for (const path of list) orla.put(path, await fetched(path));
-  orla.open("examples/text/scene.osn");
+  await orla.open("examples/text/scene.osn");
   // The JIT, its code WebAssembly this page loaded: a Kernel it could not
   // load would be refused, and the picture would say so.
   const about = await orla.call("status");
@@ -111,18 +114,30 @@ async function inPage(wasm) {
   await hollow([0.1, 0.1, 0.3], "the background handed in");
   say("text in the page: a file handed in again is read");
   orla.close();
+  // The same checks on the browser's WebGPU, the GPU backend's own code
+  // waiting for the device by giving the page turns.
+  const gpu = await OrlaInPage.load(`/${glue}`);
+  for (const path of list) gpu.put(path, await fetched(path));
+  await gpu.open("examples/text/scene.osn", "gpu");
+  const on = await gpu.call("status");
+  assert(on.backend === "gpu", `on the page's GPU, on ${on.backend}`);
+  await textScene(gpu, "on the page's GPU");
+  gpu.close();
   // The voxel editor's Kernels are large: each is loaded as this page's
   // code, or the scene does not run.
-  const voxel = await OrlaInPage.load(await fetched(wasm));
-  for (const path of await (await fetch("/list?roots=examples/voxel,packages")).json()) {
-    voxel.put(path, await fetched(path));
+  const voxelFiles = await (await fetch("/list?roots=examples/voxel,packages")).json();
+  for (const backend of ["jit", "gpu"]) {
+    const voxel = await OrlaInPage.load(`/${glue}`);
+    for (const path of voxelFiles) voxel.put(path, await fetched(path));
+    await voxel.open("examples/voxel/scene.osn", backend);
+    const report = await voxel.call("evaluate", { time: 0, window: [240, 135] });
+    const shown = report.outputs.find((output) => output.width > 0);
+    assert(shown && shown.width === 240 && shown.height === 135, `voxel in the page on ${backend}: ${JSON.stringify(report.outputs)}`);
+    const read = await voxel.call("read", { output: shown.name, format: "ppm" });
+    assert(decodePpm(read.data).width === 240, `voxel in the page on ${backend}: the picture reads back`);
+    say(`voxel in the page: a frame on the ${backend === "jit" ? "JIT" : "GPU"}`);
+    voxel.close();
   }
-  voxel.open("examples/voxel/scene.osn");
-  const report = await voxel.call("evaluate", { time: 0, window: [240, 135] });
-  const shown = report.outputs.find((output) => output.width > 0);
-  assert(shown && shown.width === 240 && shown.height === 135, `voxel in the page: ${JSON.stringify(report.outputs)}`);
-  say("voxel in the page: a frame on the JIT");
-  voxel.close();
 }
 
 async function voxelScene(port) {
@@ -171,7 +186,7 @@ async function voxelScene(port) {
     const text = await OrlaClient.open(`ws://127.0.0.1:${query.get("text")}`);
     await textScene(text, "over a socket");
     text.close();
-    if (query.get("wasm")) await inPage(query.get("wasm"));
+    if (query.get("glue")) await inPage(query.get("glue"));
     await voxelScene(query.get("voxel"));
     say("RESULT: ok");
   } catch (error) {

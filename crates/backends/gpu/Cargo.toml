@@ -14,10 +14,20 @@ doctest = false
 orla-rules = { path = "../../core/rules" }
 orla-abi = { path = "../../core/abi" }
 orla-ir = { path = "../../core/ir" }
+pollster = "0.4"
+
 # `std` keeps wgpu error scopes thread-local, so the preparation worker and
 # the executing thread never share one scope stack.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal", "vulkan", "dx12"] }
-pollster = "0.4"
+
+# In a page the device is the browser's WebGPU, reached from one thread.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "webgpu", "fragile-send-sync-non-atomic-wasm"] }
+
+# Under WASI there is no device to reach.
+[target.'cfg(all(target_arch = "wasm32", not(target_os = "unknown")))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "fragile-send-sync-non-atomic-wasm"] }
 
 [dev-dependencies]
 orla-runtime = { path = "../../core/runtime" }

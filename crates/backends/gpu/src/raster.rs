@@ -165,7 +165,7 @@ pub(crate) struct RasterPipelines {
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-fn build(device: &wgpu::Device) -> Result<RasterPipelines, String> {
+fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, String> {
     let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let raster = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("orla rasterize"),
@@ -283,7 +283,7 @@ fn build(device: &wgpu::Device) -> Result<RasterPipelines, String> {
         compilation_options: Default::default(),
         cache: None,
     });
-    if let Some(error) = pollster::block_on(guard.pop()) {
+    if let Some(error) = wait.block_on(guard.pop()) {
         return Err(format!(
             "rasterize pipeline: {}",
             crate::device_error(&error)
@@ -333,7 +333,7 @@ pub(crate) fn rasterize(
         let (vertices, triangles) = check_rasterize(invocation, scope)?;
         (vertices, triangles, None, 0.0)
     };
-    let pipelines = match pipelines.get_or_init(|| build(&gpu.device)) {
+    let pipelines = match pipelines.get_or_init(|| build(&gpu.device, gpu.wait)) {
         Ok(pipelines) => pipelines,
         Err(error) => return Err(ExecutionError::Device(error.clone())),
     };
@@ -519,7 +519,7 @@ pub(crate) fn rasterize(
     let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 4);
     let submission = gpu.queue.submit(Some(encoder.finish()));
     gpu.settle_measured(submission, timing);
-    if let Some(error) = pollster::block_on(guard.pop()) {
+    if let Some(error) = gpu.wait.block_on(guard.pop()) {
         return Err(ExecutionError::Device(format!(
             "rasterize: {}",
             crate::device_error(&error)

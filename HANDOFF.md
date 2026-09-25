@@ -19,7 +19,7 @@ Verified surface, as of `main`:
 | --- | --- |
 | macOS, Apple M4, Metal | every round |
 | WebAssembly under WASI (`wasmtime`), the interpreter | the example replays, `serve` on standard input |
-| A page: Orla as WebAssembly in headless Chrome, its JIT writing WebAssembly, files handed in | the web bridge's test, from `cargo test --workspace` |
+| A page: Orla as WebAssembly in headless Chrome, on its JIT (WebAssembly) and on WebGPU, files handed in | the web bridge's test, from `cargo test --workspace` (needs `wasm-bindgen` at Cargo.lock's version) |
 | 32-bit WebAssembly under node: the core's, the front end's, the interpreter's and the JIT's tests, the JIT's code WebAssembly | `crates/interface/orla/tests/wasm.rs`, from `cargo test --workspace` |
 | Interpreter, JIT, GPU | `examples/*/tests/*.replay` on all three |
 | 36 language features × 7 execution forms (the modes, and a map of several outputs), and 8 narrow encodings read and written | `crates/backends/conformance`, JIT and GPU against the interpreter |
@@ -52,10 +52,7 @@ done
 ## Next
 
 Open: the user has not chosen the next round. Orla runs in a page on
-its JIT, which writes WebAssembly. The GPU in a page is the next step
-recommended: WebGPU answers asynchronously, and the GPU backend blocks
-on its device (pollster) wherever it reads back, so its readbacks and
-`materialize` must stop blocking; that touches the `Backend` boundary
-and wants a design agreed first. Else a second native platform (Vulkan
-or DX12, Linux or Windows; needs the CI workflow run by hand). Ask
-before starting any.
+its JIT and on WebGPU. Candidates: presenting the GPU's picture on the
+page's canvas without reading it back (wgpu's surface on a canvas); a
+second native platform (Vulkan or DX12, Linux or Windows; needs the CI
+workflow run by hand). Ask before starting any.

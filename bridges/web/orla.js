@@ -75,11 +75,23 @@ class OrlaClient {
   }
 }
 
+/// A turn for the page: resolves once everything the browser had to do
+/// in the meantime (a device's answer among it) has been done.
+function turn() {
+  return new Promise((done) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => done();
+    channel.port2.postMessage(0);
+  });
+}
+
 /// What Orla built as WebAssembly imports from its host: `orla.load`,
 /// which compiles a Kernel's code (WebAssembly the JIT wrote) over Orla's
-/// memory and function table and puts its functions into the table, and
-/// `orla.unload`, which gives their slots back. `instance()` answers the
-/// Orla instance, once there is one.
+/// memory and function table and puts its functions into the table;
+/// `orla.unload`, which gives their slots back; and `orla.wait`, which
+/// suspends Orla until the page has had a turn (JavaScript Promise
+/// Integration), which is how Orla waits for a device. `instance()`
+/// answers the Orla instance, once there is one.
 function host(instance) {
   const free = [];
   const table = () => instance().exports.__indirect_function_table;
@@ -111,17 +123,35 @@ function host(instance) {
         free.push(at);
       }
     },
+    wait:
+      typeof WebAssembly.Suspending === "function"
+        ? new WebAssembly.Suspending(turn)
+        : () => {
+            throw new Error("this browser cannot suspend WebAssembly (JavaScript Promise Integration)");
+          },
   };
 }
+
+/// The one Orla a page loads, by the URL of the glue `wasm-bindgen`
+/// wrote for it (`orla_ffi.js`, beside `orla_ffi_bg.wasm`). Its imports
+/// from `orla` are `orla-host.mjs`, which an import map names.
+const loaded = new Map();
 
 /// Orla itself in the page: the session as WebAssembly (the C ABI,
 /// `orla_ffi.wasm` built for `wasm32-unknown-unknown`), its documents the
 /// files handed in, no disk and no server. It answers the same protocol
 /// lines a socket carries, through `orla_request`, so a Driver runs it as
-/// it runs a connection. The module imports nothing.
+/// it runs a connection. A call that waits for the device suspends Orla
+/// and answers when the device has; each session is its own, over the
+/// one instance the page loaded.
 class OrlaInPage {
   constructor(exports) {
     this.x = exports;
+    // What may wait for a device answers a promise.
+    const promising = (name) =>
+      typeof WebAssembly.promising === "function" ? WebAssembly.promising(exports[name]) : exports[name];
+    this.open_files = promising("orla_open_files");
+    this.request = promising("orla_request");
     this.files = exports.orla_files();
     this.session = 0;
     this.onclose = null;
@@ -129,29 +159,45 @@ class OrlaInPage {
     this.decoder = new TextDecoder();
   }
 
-  /// Instantiates the module from its bytes, as the host of the code its
-  /// JIT writes.
-  static async load(bytes) {
-    let orla = null;
-    const { instance } = await WebAssembly.instantiate(bytes, { orla: host(() => orla) });
-    orla = instance;
-    return new OrlaInPage(instance.exports);
+  /// Loads Orla from its glue's URL, once a page, and makes a new set of
+  /// files for a session of its own.
+  static async load(glue) {
+    const url = new URL(glue, location.href).href;
+    if (!loaded.has(url)) {
+      loaded.set(
+        url,
+        (async () => {
+          const [module, hosted] = await Promise.all([import(url), import("orla")]);
+          const exports = await module.default();
+          hosted.bind({ exports });
+          return exports;
+        })(),
+      );
+    }
+    return new OrlaInPage(await loaded.get(url));
   }
 
   memory() {
     return new Uint8Array(this.x.memory.buffer);
   }
 
-  /// `bytes` copied into Orla's memory for one call.
+  /// `bytes` copied into Orla's memory for one call, which may answer a
+  /// promise: the room is given back when it settles.
   withBytes(bytes, use) {
     const pointer = this.x.orla_alloc(bytes.length);
     if (!pointer) throw new Error("Orla has no room for the call");
     this.memory().set(bytes, pointer);
+    const give = () => this.x.orla_free(pointer, bytes.length);
+    let result;
     try {
-      return use(pointer, bytes.length);
-    } finally {
-      this.x.orla_free(pointer, bytes.length);
+      result = use(pointer, bytes.length);
+    } catch (error) {
+      give();
+      throw error;
     }
+    if (result instanceof Promise) return result.finally(give);
+    give();
+    return result;
   }
 
   withText(text, use) {
@@ -175,11 +221,11 @@ class OrlaInPage {
   }
 
   /// Opens `scene`, a path among the files put: on the JIT, whose code
-  /// this page loads, unless `backend` says `cpu`.
-  open(scene, backend = "jit") {
+  /// this page loads, or on `gpu`, the browser's WebGPU, or `cpu`.
+  async open(scene, backend = "jit") {
     if (this.session) this.x.orla_close(this.session);
-    this.session = this.withText(scene, (name) =>
-      this.withText(backend, (on) => this.x.orla_open_files(this.files, name, on)),
+    this.session = await this.withText(scene, (name) =>
+      this.withText(backend, (on) => this.open_files(this.files, name, on)),
     );
     if (!this.session) throw new Error(this.text(this.x.orla_open_error()));
   }
@@ -187,26 +233,27 @@ class OrlaInPage {
   /// One request, answered in place; the same promise a connection's
   /// `call` gives. A panic inside the module ends it, as a closed
   /// connection ends a session.
-  call(op, fields = {}) {
-    if (!this.session) return Promise.reject(new Error("no scene is open"));
+  async call(op, fields = {}) {
+    if (!this.session) throw new Error("no scene is open");
     let response;
     try {
       const line = JSON.stringify({ op, ...fields });
-      response = JSON.parse(this.withText(line, (request) => this.text(this.x.orla_request(this.session, request))));
+      const answer = await this.withText(line, (request) => this.request(this.session, request));
+      response = JSON.parse(this.text(answer));
     } catch (error) {
       if (error instanceof WebAssembly.RuntimeError) {
         this.session = 0;
         if (this.onclose) this.onclose();
       }
-      return Promise.reject(error);
+      throw error;
     }
     if ("error" in response) {
       const error = new Error(response.error.message);
       error.line = response.error.line;
       error.column = response.error.column;
-      return Promise.reject(error);
+      throw error;
     }
-    return Promise.resolve(response.ok);
+    return response.ok;
   }
 
   close() {
