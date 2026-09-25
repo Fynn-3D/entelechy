@@ -62,10 +62,11 @@ pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, 
         .store()
         .write(&root, text.as_bytes())
         .map_err(|e| failure(format!("{}: {e}", root.display())))?;
-    // The scene this reads is this request's change.
+    // The scene this reads is this request's change, answered whole: its
+    // Kernels published and the scene replaced, or refused.
     session.claim_scene();
     Ok(json!({
-        "events": events_json(&session.sync()),
+        "events": events_json(&session.sync_settled()),
         "version": document_version(&text),
     }))
 }

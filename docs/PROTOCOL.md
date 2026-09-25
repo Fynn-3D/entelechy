@@ -327,6 +327,11 @@ and `graph` name each parameter's type.
 A saved edit to a Kernel that is already running is prepared on a worker
 thread: `sync` reports `preparing` at once and `published` (or `rejected`)
 on a later `sync`, and every `evaluate` in between runs the previous
-version. `sync` reports `routed`, `{node, backend, why}`, when a node's
+version. A scene whose own Kernels are being prepared so waits for them:
+its `scene_loaded` comes on the `sync` that publishes them, every
+`evaluate` until then runs the scene before it on the Kernels it ran on,
+and a Kernel of it refused there refuses the scene (`scene_rejected`)
+with none of its Kernels published. `compose` waits for its own scene
+so, and answers with where it landed. `sync` reports `routed`, `{node, backend, why}`, when a node's
 placement off the main backend begins or changes, once. A Kernel nothing runs yet, and `publish` itself, prepare inline so
 the reply is final.

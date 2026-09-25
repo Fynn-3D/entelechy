@@ -303,6 +303,21 @@ impl Session {
             .map_err(|error| format!("the restored world does not run: {error}"))
     }
 
+    /// Syncs, and waits for what the sync set preparing to be published
+    /// or refused: the scene's own Kernels, prepared off the thread where
+    /// one ran before, and the scene waiting for them. What a caller
+    /// that changed the document answers from, whole.
+    pub fn sync_settled(&mut self) -> Vec<Event> {
+        let mut events = self.sync();
+        let mut landed = Vec::new();
+        self.kernels.wait_pending(&mut self.runtime, &mut landed);
+        self.scene
+            .wait_staged(&mut self.kernels, &mut self.runtime, &mut landed);
+        self.remember(&landed);
+        events.extend(landed);
+        events
+    }
+
     /// Replaces the scene document whole and reads it again, the Kernels
     /// it writes in place before it answers; refused, it says why.
     pub(super) fn replace_scene(&mut self, text: &str) -> Result<(), String> {
@@ -310,13 +325,7 @@ impl Session {
         self.store()
             .write(&root, text.as_bytes())
             .map_err(|e| format!("{}: {e}", root.display()))?;
-        let mut events = self.sync();
-        // The scene's own Kernels, prepared off the thread where one ran
-        // before, must stand before the world that runs in it does.
-        let mut landed = Vec::new();
-        self.kernels.wait_pending(&mut self.runtime, &mut landed);
-        self.remember(&landed);
-        events.extend(landed);
+        let events = self.sync_settled();
         // What the scene document itself was refused: its lowering, or a
         // Kernel it writes. An input's file is another matter.
         let refused = events.iter().find(|event| match event {
@@ -336,11 +345,19 @@ impl Session {
     /// the scene twice (a library changed with it) is one change.
     pub(super) fn remember(&mut self, events: &[Event]) {
         let claimed = std::mem::take(&mut self.claimed);
+        // A claimed scene waiting for its Kernels is still the request's
+        // when it lands, on a later sync.
+        let waiting = self.claim_waiting.take();
         let scene_origin = if claimed {
-            self.origin.clone()
+            Some(self.origin.clone())
         } else {
-            crate::Origin::Document(self.scene.root().to_path_buf())
+            waiting
         };
+        if self.scene.waiting() {
+            self.claim_waiting.clone_from(&scene_origin);
+        }
+        let scene_origin = scene_origin
+            .unwrap_or_else(|| crate::Origin::Document(self.scene.root().to_path_buf()));
         let document = |path: &Path| crate::Origin::Document(path.to_path_buf());
         let mut scene_loaded = false;
         for event in events {

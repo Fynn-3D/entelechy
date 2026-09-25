@@ -11,7 +11,7 @@ use std::sync::Arc;
 use orla_graph::Graph;
 use orla_runtime::{Runtime, Value};
 
-use crate::kernels::{Defined, Kernels};
+use crate::kernels::{Batch, Defined, Kernels};
 use crate::sources::{
     declarations_for, declarations_key, declarations_within, expand_use, is_library, named_id,
     read_document,
@@ -46,7 +46,33 @@ pub(crate) struct Scene {
     text: Option<String>,
     /// Caller overrides of graph parameters.
     params: BTreeMap<String, Value>,
+    /// A change read and lowered whose Kernels are still being prepared:
+    /// it replaces the scene running when they publish, and is dropped
+    /// when one is refused.
+    staged: Option<Staged>,
 }
+
+/// A scene lowered and waiting for its own Kernels, and what it replaces
+/// when they stand.
+struct Staged {
+    graph: Graph,
+    text: String,
+    files: orla_scene::Files,
+    uses: Vec<(PathBuf, bool)>,
+    sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
+    /// Graph documents the running scene places and this one does not,
+    /// whose Kernels are retired once it runs.
+    gone: Vec<PathBuf>,
+    /// The declarations the running scene shares, put back when this
+    /// change is refused.
+    declared: Declared,
+}
+
+type Declared = (
+    Vec<orla_language::StructDecl>,
+    Vec<orla_language::TypeAlias>,
+    Vec<orla_language::FnDecl>,
+);
 
 impl Scene {
     pub(crate) fn new(store: Arc<dyn Store>, root: &Path, library: Option<&Path>) -> Self {
@@ -64,6 +90,7 @@ impl Scene {
             files: orla_scene::Files::default(),
             text: None,
             params: BTreeMap::new(),
+            staged: None,
         }
     }
 
@@ -164,6 +191,7 @@ impl Scene {
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
+        self.settle(kernels, runtime, events);
         self.sync_root(kernels, runtime, events, readable);
         if self.sync_libraries(kernels, runtime, events) {
             self.stamp = None;
@@ -283,14 +311,26 @@ impl Scene {
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
         let current = self.store.stamp(&self.root);
-        let sub_graph_changed = self
-            .sub_graphs
+        // The newest the scene has read: the change still being prepared,
+        // or the scene running.
+        let read = self
+            .staged
+            .as_ref()
+            .map_or(&self.sub_graphs, |staged| &staged.sub_graphs);
+        let sub_graph_changed = read
             .iter()
             .any(|(path, loaded)| self.store.stamp(path) != *loaded);
-        if current == self.stamp && self.graph.is_some() && !sub_graph_changed {
+        let loaded = self.graph.is_some() || self.staged.is_some();
+        if current == self.stamp && loaded && !sub_graph_changed {
             return;
         }
         self.stamp = current;
+        // A newer change supersedes one still being prepared, which then
+        // replaces nothing.
+        if let Some(staged) = self.staged.take() {
+            (self.structs, self.types, self.functions) = staged.declared;
+            kernels.abandon_scene(Vec::new(), runtime, events);
+        }
         let text = match self.store.read_text(&self.root) {
             Ok(text) => text,
             Err(error) => {
@@ -380,6 +420,7 @@ impl Scene {
             .filter(|path| !sub_graphs.contains_key(*path))
             .cloned()
             .collect();
+        let mut batches: Vec<(PathBuf, Batch)> = Vec::new();
         for (path, defined) in by_document {
             let current = if path == root {
                 current
@@ -403,7 +444,7 @@ impl Scene {
                     .map(|(s, t, f)| declarations_key(&s, &t, &f))
                     .unwrap_or_default()
             };
-            kernels.publish_document(
+            let staged = kernels.stage_document(
                 self.store.as_ref(),
                 &path,
                 current,
@@ -413,6 +454,7 @@ impl Scene {
                 runtime,
                 events,
             );
+            batches.extend(staged.map(|batch| (path, batch)));
         }
         // The scene's own documents, the root and the graphs it places,
         // publish whole or not at all; one refused leaves every Kernel of
@@ -424,28 +466,102 @@ impl Scene {
         });
         if refused {
             (self.structs, self.types, self.functions) = declared;
+            kernels.abandon_scene(batches, runtime, events);
             events.push(Event::SceneRejected(Diagnostic::new(
-                "the scene's own Kernels were refused, so it does not replace the scene running",
+                "the scene's own Kernels were refused, so none of them is published and it does not replace the scene running",
             )));
             return;
         }
-        // Only now do the documents it no longer places let go of their
-        // Kernels: until it replaces the scene running, that scene may
-        // still run them.
-        for path in gone {
-            kernels.retire_document(&path, runtime, events);
+        // The graph waits for its Kernels: it replaces the scene running
+        // when every one of them is ready and published with the others.
+        kernels.stage_scene(batches);
+        self.staged = Some(Staged {
+            graph: lowered.graph,
+            text,
+            files: lowered.files,
+            uses: lowered.uses,
+            sub_graphs,
+            gone,
+            declared,
+        });
+        self.settle(kernels, runtime, events);
+    }
+
+    /// Puts the scene waiting for its Kernels in place of the one running
+    /// once they are published, or drops it when one was refused; while
+    /// they are prepared the scene running goes on.
+    pub(crate) fn settle(
+        &mut self,
+        kernels: &mut Kernels,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+    ) {
+        if self.staged.is_none() {
+            return;
         }
-        self.sub_graphs = sub_graphs;
-        self.uses = lowered.uses;
-        // A value held for a param the document no longer declares
-        // reaches nothing now, and is let go with the declaration.
-        let graph = lowered.graph;
-        self.params
-            .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
-        self.graph = Some(graph);
-        self.text = Some(text);
-        self.files = lowered.files;
-        events.push(Event::SceneLoaded);
+        match kernels.collect_scene(runtime, events) {
+            None => {}
+            Some(false) => {
+                let staged = self.staged.take().expect("a scene is staged");
+                (self.structs, self.types, self.functions) = staged.declared;
+                events.push(Event::SceneRejected(Diagnostic::new(
+                    "a Kernel of the scene was refused where it was prepared, so none of them is published and it does not replace the scene running",
+                )));
+            }
+            Some(true) => {
+                let staged = self.staged.take().expect("a scene is staged");
+                // Only now do the documents it no longer places let go of
+                // their Kernels: until it replaced the scene running, that
+                // scene could still run them.
+                for path in staged.gone {
+                    kernels.retire_document(&path, runtime, events);
+                }
+                self.sub_graphs = staged.sub_graphs;
+                self.uses = staged.uses;
+                // A value held for a param the document no longer declares
+                // reaches nothing now, and is let go with the declaration.
+                let graph = staged.graph;
+                self.params
+                    .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
+                self.graph = Some(graph);
+                self.text = Some(staged.text);
+                self.files = staged.files;
+                events.push(Event::SceneLoaded);
+            }
+        }
+    }
+
+    /// Whether a scene read is waiting for its Kernels to replace the one
+    /// running.
+    pub(crate) fn waiting(&self) -> bool {
+        self.staged.is_some()
+    }
+
+    /// Whether `path` is a graph document the scene places, running or
+    /// waiting for its Kernels: the scene's own, not a library.
+    fn places(&self, path: &Path) -> bool {
+        self.sub_graphs.contains_key(path)
+            || self
+                .staged
+                .as_ref()
+                .is_some_and(|staged| staged.sub_graphs.contains_key(path))
+    }
+
+    /// Waits until the scene waiting for its Kernels replaces the one
+    /// running or is refused: what must stand before a caller that
+    /// replaced the document answers.
+    pub(crate) fn wait_staged(
+        &mut self,
+        kernels: &mut Kernels,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+    ) {
+        while self.staged.is_some() {
+            self.settle(kernels, runtime, events);
+            if self.staged.is_some() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
     }
 
     /// Loads the libraries the root uses; returns whether any changed.
@@ -464,15 +580,13 @@ impl Scene {
         for path in &self.extra_uses {
             wanted.extend(expand_use(self.store.as_ref(), path, false).unwrap_or_default());
         }
-        wanted.retain(|path| *path != self.root && !self.sub_graphs.contains_key(path));
+        wanted.retain(|path| *path != self.root && !self.places(path));
         wanted.sort();
         wanted.dedup();
         let stale: Vec<PathBuf> = kernels
             .documents()
             .into_iter()
-            .filter(|path| {
-                *path != self.root && !wanted.contains(path) && !self.sub_graphs.contains_key(path)
-            })
+            .filter(|path| *path != self.root && !wanted.contains(path) && !self.places(path))
             .collect();
         for path in stale {
             kernels.retire_document(&path, runtime, events);

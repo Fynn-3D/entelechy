@@ -14,7 +14,7 @@ contract is enforced, and the constraints that are not visible from the code.
 | --- | --- |
 | `.orla` compiles | [compiler tests](crates/frontend/compiler/tests/compile.rs) |
 | Kernel calls Host only through ABI | [scope tests](crates/core/abi/src/lib.rs), [denied execution](crates/backends/cpu/tests/execute.rs), [validator capability checks](crates/core/ir/src/validate.rs) |
-| Kernel hot-swaps without restart | [hot swap tests](crates/interface/session/tests/hot_swap.rs), [session tests](crates/interface/orla/tests/session.rs) |
+| Kernel hot-swaps without restart | [hot swap tests](crates/interface/session/tests/hot_swap.rs), [a scene's change swapped whole](crates/interface/session/tests/scene_change.rs), [session tests](crates/interface/orla/tests/session.rs) |
 | Graph references KernelID | [composition tests](crates/interface/session/tests/composition.rs), [example scene](examples/grayscale/scene.osn) |
 
 ## Layers

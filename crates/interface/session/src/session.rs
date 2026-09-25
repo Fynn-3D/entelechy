@@ -36,6 +36,9 @@ pub struct Session {
     /// request being answered made ([`Session::claim_scene`]), rather
     /// than one found on disk.
     claimed: bool,
+    /// The origin of a claimed scene still waiting for its Kernels, which
+    /// it carries when it lands.
+    claim_waiting: Option<crate::Origin>,
 }
 
 /// The error an evaluation returns when no scene has loaded.
@@ -83,6 +86,7 @@ impl Session {
             history: crate::history::History::default(),
             origin: crate::Origin::Local,
             claimed: false,
+            claim_waiting: None,
         }
     }
 
