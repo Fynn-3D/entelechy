@@ -330,7 +330,7 @@ devices. Served, `play.html` plays what its address names:
 
 ```text
 http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.osn
-http://127.0.0.1:7789/bridges/web/play.html?replay=examples/voxel/tests/monolith.replay&on=gpu
+http://127.0.0.1:7789/bridges/web/play.html?replay=examples/voxel/tests/voxel.replay&on=gpu
 ```
 
 ## Hot reload
@@ -494,7 +494,7 @@ what it observed is printed and the window is the person's to go on
 with. The replay names its scene and its window, so it is all it needs:
 
 ```sh
-cargo run --release -p orla-player -- --replay examples/voxel/tests/monolith.replay
+cargo run --release -p orla-player -- --replay examples/voxel/tests/voxel.replay
 ```
 
 The file format is documented at the top of
