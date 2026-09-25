@@ -40,14 +40,14 @@ backend is held to.
 | Orla IR | [ir](crates/core/ir/src/lib.rs), [validation](crates/core/ir/src/validate.rs), [display](crates/core/ir/src/display.rs), [fusion](crates/core/ir/src/fuse.rs), [optimizer](crates/core/ir/src/optimize.rs) | typing, SSA order, capability coverage; [fusion bit-identity](crates/backends/cpu/tests/fusion.rs) |
 | Kernel language | [language](crates/frontend/language/src/lib.rs), [parser](crates/frontend/language/src/parser.rs), [lexer](crates/frontend/language/src/lexer.rs) | syntax, precedence, positioned errors, near misses |
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [the language surface at its version](crates/frontend/compiler/tests/surface.rs) |
-| File writes | [writes](crates/interface/session/src/writes.rs): an output written `to` a file after the commit, into an allowed directory, whole; an input's `else` fallback substituted by the [evaluator](crates/core/graph/src/evaluate.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/save/tests/tally.replay) |
+| File writes | [writes](crates/interface/session/src/writes.rs): an output written `to` a file after the commit, into an allowed directory, whole; an input's `else` fallback substituted by the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/save/tests/tally.replay) |
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [the `Backend` contract](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer contract and fast path](crates/core/rules/src/raster.rs) | every backend's parity test runs by them |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution tests](crates/backends/cpu/tests/execute.rs), [optimizer tests](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), every replay on `jit` |
 | GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL emission](crates/backends/gpu/src/wgsl.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs); both skip without an adapter; [the names a shader declares](crates/backends/gpu/tests/names.rs), without one |
 | Kernel Runtime | [runtime](crates/core/runtime/src/lib.rs), [off-frame runs](crates/core/runtime/src/later.rs); takes validated IR and the backend it is given | [hot swap](crates/interface/session/tests/hot_swap.rs), [async](crates/interface/session/tests/later.rs), [mixed clocks](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain expressions](crates/frontend/scene/src/domain.rs) | [lowering tests](crates/frontend/scene/src/lib.rs), [every form lowered as recorded](crates/frontend/scene/tests/surface.rs) |
-| Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs), written as documents |
+| Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs), written as documents |
 | Session | [session](crates/interface/session/src/session.rs): [scene](crates/interface/session/src/scene.rs), [kernel ledger](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs.rs), [source resolution](crates/interface/session/src/sources.rs), [observation](crates/interface/session/src/observe.rs); [bench](crates/interface/session/src/bench.rs), [file formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/orla/tests/session.rs) |
 | Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire forms](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs), [contract](docs/PROTOCOL.md) | [client test](crates/interface/orla/tests/protocol.rs); [live agents](crates/interface/orla/tests/agent.rs) repair, publish and compose from the answers alone, and change what a running state carries without losing it; the op table held to the server ([contract test](crates/interface/protocol/src/lib.rs)); [an agent's record](examples/scanline/agent.jsonl) replayed |
 | Command line | [orla](crates/interface/orla/src/main.rs), [replay](crates/interface/session/src/replay.rs), [render](crates/interface/orla/src/render.rs), [packages](crates/interface/orla/src/package.rs), [scaffold](crates/interface/orla/src/scaffold.rs) | every example replay on three backends |
@@ -74,11 +74,11 @@ What these packages do needed no engine feature; keep it that way.
 
 ### Resource and residency
 
-- One resource, following [the Typed Field decision](TYPED-FIELD-ARCHITECTURE.md):
+- One resource, following [the Typed Field decision](docs/TYPED-FIELD-ARCHITECTURE.md):
   a Field of `Rows`, `Grid` or `Volume`, one 32-bit word per scalar
   ([host](crates/core/host/src/lib.rs)). Port types are structural; `Image` is
   the compiler's alias for `Grid<Vec4>`. Bindings are checked by shape and
-  layout, never by spelling ([evaluator](crates/core/graph/src/evaluate.rs)).
+  layout, never by spelling ([evaluator](crates/core/graph/src/evaluate/bind.rs)).
   Every backend carries elements as words, so integers and booleans are
   exact everywhere.
 - A `Double` or a `Long` is two words, the low one first, everywhere a
@@ -114,7 +114,7 @@ What these packages do needed no engine feature; keep it that way.
   C ABI handing a narrow Field over widened in the session's memory.
   Only a map or a scan writes a narrow output, and a narrow link is
   never fused ([validator](crates/core/ir/src/validate.rs),
-  [planner](crates/core/graph/src/evaluate.rs),
+  [planner](crates/core/graph/src/evaluate/plan.rs),
   [composition test](crates/interface/session/tests/composition.rs), the
   [packed example](examples/packed/README.md) and its
   [session test](crates/interface/orla/tests/session.rs)).
@@ -185,7 +185,7 @@ and nothing emitted for a `Long` may use `select`
   stands for. A producer of several outputs fuses whole, each linked
   input taking the value of its output, when every reader of every
   output is the one consumer; otherwise it runs and writes them all
-  ([`fuse_outputs`](crates/core/ir/src/fuse.rs), [planner](crates/core/graph/src/evaluate.rs),
+  ([`fuse_outputs`](crates/core/ir/src/fuse.rs), [planner](crates/core/graph/src/evaluate/plan.rs),
   [composition tests](crates/interface/session/tests/composition.rs)).
 - A backend answers with one Field per declared output or not at all:
   the runtime releases what a backend gave and fails the execution when
@@ -193,7 +193,7 @@ and nothing emitted for a `Long` may use `select`
   [test](crates/interface/session/tests/hot_swap.rs)).
 - Repetition is fusion without inlining: the same Kernel placed over its
   own output, same generation, params, bindings and domain, nothing else
-  reading between, is one group ([planner](crates/core/graph/src/evaluate.rs));
+  reading between, is one group ([planner](crates/core/graph/src/evaluate/plan.rs));
   the GPU records the passes into one encoder with two buffers taking
   turns ([`Backend::execute_repeated`](crates/core/rules/src/backend.rs)).
 - Native operations are device access published as versions at
@@ -219,7 +219,7 @@ and nothing emitted for a `Long` may use `select`
 - State lives in the Graph: `<~` reads what the previous successful
   evaluation committed; every node of one evaluation reads the same
   state; an evaluation commits atomically at its end or not at all; a
-  republished Kernel inherits the state ([evaluator](crates/core/graph/src/evaluate.rs),
+  republished Kernel inherits the state ([evaluator](crates/core/graph/src/evaluate/state.rs),
   [feedback tests](crates/interface/session/tests/composition.rs)).
 - Migration: before nodes run, each committed state's shape and layout is
   compared with its port's (the comparison every evaluation already
@@ -254,7 +254,7 @@ and nothing emitted for a `Long` may use `select`
   a Kernel's default ([compiler](crates/frontend/compiler/src/lower/declare.rs)
   `literal_in`), a scene's literal, a graph parameter set by a replay
   or the protocol ([scene](crates/interface/session/src/scene.rs) `set_param`),
-  and the binding of a node ([evaluator](crates/core/graph/src/evaluate.rs)).
+  and the binding of a node ([evaluator](crates/core/graph/src/evaluate/bind.rs)).
   The interpreter and the JIT read a parameter's words where the params
   are laid end to end; the GPU keeps them as `vec4<u32>` slots, each
   parameter from a slot of its own, and builds the value from its words
@@ -274,7 +274,7 @@ and nothing emitted for a `Long` may use `select`
   a producer that has already run. Reading it is a wait on a device, so
   the port is held to a row of scalars and `VALUE_MAX_ELEMENTS`, and
   several readers of one Field wait once
-  ([`domain_values`](crates/core/graph/src/evaluate.rs)). Such a node's
+  ([`domain_values`](crates/core/graph/src/evaluate/bind.rs)). Such a node's
   expression moves onto the fused node under fusion's port names
   (`renamed`). No backend knows about it.
 - The window's size and scale are context and part of a node's cache
@@ -491,7 +491,7 @@ Represented in the IR, and so on every backend:
   ([`Spare::take`](crates/backends/gpu/src/lib.rs)).
 - Handle liveness and node lookup are counts and indexes kept by the
   methods that touch them, with a `debug_assert` against the walk
-  ([`cached_handles`](crates/core/graph/src/evaluate.rs), [`Graph::index`](crates/core/graph/src/lib.rs)).
+  ([`cached_handles`](crates/core/graph/src/evaluate/ledger.rs), [`Graph::index`](crates/core/graph/src/lib.rs)).
 
 ## Device facts
 

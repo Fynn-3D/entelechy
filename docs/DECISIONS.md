@@ -317,7 +317,7 @@ session; `to` and `else` in the document
 ([parser](../crates/frontend/language/src/parser.rs),
 [lowering](../crates/frontend/scene/src/lib.rs)); a fallback in use
 substitutes for its input when the evaluation starts
-([evaluator](../crates/core/graph/src/evaluate.rs)). Held by
+([evaluator](../crates/core/graph/src/evaluate/mod.rs)). Held by
 [the session's write tests](../crates/interface/session/tests/writes.rs),
 [the lowering's](../crates/frontend/scene/src/lib.rs) and
 [`examples/save`](../examples/save/README.md).
