@@ -81,30 +81,55 @@ document intentional compatibility changes. A commit is not a release.
 
 ## Verification
 
-A change to the code is verified by all of this before it is committed:
+A change to the code is verified by all of this before it is committed. Run
+it in the background: each step is timed into `target/verify.log`, which
+`tail -f` shows as it goes, and the first step that fails stops the run with
+its output there.
 
 ```sh
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p orla-jit -p orla-ffi --features orla-jit/wasm-host --target wasm32-unknown-unknown -- -D warnings
-cargo clippy -p orla-gpu -p orla-session --target wasm32-unknown-unknown -- -D warnings
-cargo test --workspace
-cargo build --release
-# Replays are independent: several at once, each backend in turn. A
-# failure prints why and makes xargs exit non-zero.
-for b in gpu cpu jit; do
-  printf '%s\n' examples/*/tests/*.replay | xargs -P 4 -n 1 ./target/release/orla replay --backend "$b"
-done
-cargo build --release -p orla --target wasm32-wasip1
-# WASI has no threads, so each replay is one core: eight at once.
-printf '%s\n' examples/*/tests/*.replay |
-  xargs -P 8 -n 1 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay --backend cpu
+log=target/verify.log; : > "$log"
+step() {
+  name=$1; shift; start=$SECONDS
+  if "$@" > target/verify.out 2>&1; then
+    printf '%-14s %4d s\n' "$name" $((SECONDS - start)) >> "$log"
+  else
+    printf '%-14s %4d s  FAILED\n' "$name" $((SECONDS - start)) >> "$log"
+    tail -40 target/verify.out >> "$log"; return 1
+  fi
+}
+# Replays are independent: several at once, each backend in turn; WASI has
+# no threads, so each replay there is one core, and eight run at once.
+replays() {
+  for b in gpu cpu jit; do
+    printf '%s\n' examples/*/tests/*.replay |
+      xargs -P 4 -n 1 ./target/release/orla replay --backend "$b" || return 1
+  done
+}
+wasi_replays() {
+  printf '%s\n' examples/*/tests/*.replay |
+    xargs -P 8 -n 1 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay --backend cpu
+}
+step fmt cargo fmt --all &&
+step clippy cargo clippy --workspace --all-targets -- -D warnings &&
+step clippy-wasm cargo clippy -p orla-jit -p orla-ffi --features orla-jit/wasm-host --target wasm32-unknown-unknown -- -D warnings &&
+step clippy-page cargo clippy -p orla-gpu -p orla-session --target wasm32-unknown-unknown -- -D warnings &&
+step test cargo test --workspace &&
+step release cargo build --release &&
+step replays replays &&
+step wasi-build cargo build --release -p orla --target wasm32-wasip1 &&
+step wasi-replays wasi_replays &&
+echo passed >> "$log"
 ```
 
-Run it in the background with each step timed, so its progress can be
-watched; a step far slower than it was before is a fault to find, not a
-wait. A replay under `examples/*/tests/` is a test of what its example
-promises; a piece made with the example is not one, and is not kept there.
+A step far slower than it was before is a fault to find, not a wait: stop
+the run and look at that step alone. A debug build that slows down every
+unit alike has most often been `target/debug/deps` filling with files; count
+them (`ls -f target/debug/deps | wc -l`) and compare with a build in a fresh
+`CARGO_TARGET_DIR` before blaming a setting. Debug info is packed into a
+`.dSYM` (`split-debuginfo` in `Cargo.toml`) so that directory stays small.
+
+A replay under `examples/*/tests/` is a test of what its example promises; a
+piece made with the example is not one, and is not kept there.
 
 ## Handoff
 
