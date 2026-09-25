@@ -222,7 +222,10 @@ impl Schema {
     /// Words of memory `count` elements take: their bytes, rounded up to
     /// a whole word.
     pub fn storage_words(&self, count: usize) -> usize {
-        count.saturating_mul(self.bytes).div_ceil(4)
+        // The bytes counted in 64 bits: where `usize` is 32, a count's
+        // bytes pass it before its words do.
+        let words = (count as u64).saturating_mul(self.bytes as u64).div_ceil(4);
+        usize::try_from(words).unwrap_or(usize::MAX)
     }
 
     /// The Kernel's word for scalar `scalar` of element `element`, read
@@ -509,7 +512,12 @@ fn words_for(schema: &Schema, domain: Domain) -> Result<usize, HostError> {
     if domain.is_empty() || schema.value_words() == 0 {
         return Err(HostError::ZeroSize);
     }
-    if domain.count() > MAX_ELEMENTS {
+    // Counted in 64 bits: where `usize` is 32 (WebAssembly), the count
+    // it saturates at is the most there may be, and would pass.
+    let exact = u64::from(domain.width())
+        .saturating_mul(u64::from(domain.height()))
+        .saturating_mul(u64::from(domain.depth()));
+    if exact > MAX_ELEMENTS as u64 {
         return Err(HostError::TooManyElements(domain));
     }
     Ok(schema.storage_words(domain.count()))

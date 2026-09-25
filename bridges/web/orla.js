@@ -75,6 +75,45 @@ class OrlaClient {
   }
 }
 
+/// What Orla built as WebAssembly imports from its host: `orla.load`,
+/// which compiles a Kernel's code (WebAssembly the JIT wrote) over Orla's
+/// memory and function table and puts its functions into the table, and
+/// `orla.unload`, which gives their slots back. `instance()` answers the
+/// Orla instance, once there is one.
+function host(instance) {
+  const free = [];
+  const table = () => instance().exports.__indirect_function_table;
+  return {
+    load(bytes, length, slots, most) {
+      const exports = instance().exports;
+      try {
+        const code = new Uint8Array(exports.memory.buffer, bytes, length).slice();
+        const loaded = new WebAssembly.Instance(new WebAssembly.Module(code), {
+          env: { memory: exports.memory, table: table() },
+        });
+        const out = new Uint32Array(exports.memory.buffer, slots, most);
+        let count = 0;
+        for (; count < most && loaded.exports[String(count)]; count++) {
+          const at = free.length ? free.pop() : table().grow(1);
+          table().set(at, loaded.exports[String(count)]);
+          out[count] = at;
+        }
+        return count;
+      } catch (error) {
+        if (globalThis.console) console.error(`orla.load: ${error.message}`);
+        return -1;
+      }
+    },
+    unload(slots, count) {
+      const exports = instance().exports;
+      for (const at of new Uint32Array(exports.memory.buffer, slots, count)) {
+        table().set(at, null);
+        free.push(at);
+      }
+    },
+  };
+}
+
 /// Orla itself in the page: the session as WebAssembly (the C ABI,
 /// `orla_ffi.wasm` built for `wasm32-unknown-unknown`), its documents the
 /// files handed in, no disk and no server. It answers the same protocol
@@ -90,9 +129,12 @@ class OrlaInPage {
     this.decoder = new TextDecoder();
   }
 
-  /// Instantiates the module from its bytes.
+  /// Instantiates the module from its bytes, as the host of the code its
+  /// JIT writes.
   static async load(bytes) {
-    const { instance } = await WebAssembly.instantiate(bytes, {});
+    let orla = null;
+    const { instance } = await WebAssembly.instantiate(bytes, { orla: host(() => orla) });
+    orla = instance;
     return new OrlaInPage(instance.exports);
   }
 
@@ -132,8 +174,9 @@ class OrlaInPage {
     );
   }
 
-  /// Opens `scene`, a path among the files put, on the interpreter.
-  open(scene, backend = "cpu") {
+  /// Opens `scene`, a path among the files put: on the JIT, whose code
+  /// this page loads, unless `backend` says `cpu`.
+  open(scene, backend = "jit") {
     if (this.session) this.x.orla_close(this.session);
     this.session = this.withText(scene, (name) =>
       this.withText(backend, (on) => this.x.orla_open_files(this.files, name, on)),
@@ -401,5 +444,5 @@ class Driver {
   }
 }
 
-globalThis.Orla = { OrlaClient, OrlaInPage, Driver, decodePpm, decodeWords, placement, bytesOf };
+globalThis.Orla = { OrlaClient, OrlaInPage, host, Driver, decodePpm, decodeWords, placement, bytesOf };
 })();

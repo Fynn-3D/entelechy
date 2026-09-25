@@ -452,11 +452,17 @@ Represented in the IR, and so on every backend:
   `start_run` returns ([later](crates/core/runtime/src/later.rs)), the
   preparation worker is not started, and `serve` reads each request in
   turn; where links cannot be resolved, a file's one name is its path
-  folded ([store](crates/interface/session/src/store.rs)); where native
-  code cannot run, the session has no JIT; where there is no clock (a
-  page), nothing is timed ([clock](crates/core/runtime/src/clock.rs)).
-  The replays run under `wasmtime` on the interpreter (HANDOFF's
-  verification).
+  folded ([store](crates/interface/session/src/store.rs)); where
+  nothing loads the code a JIT writes, the session has no JIT; where
+  there is no clock (a page), nothing is timed
+  ([clock](crates/core/runtime/src/clock.rs)). The replays run under
+  `wasmtime` on the interpreter (HANDOFF's verification).
+- Where Orla is WebAssembly, the JIT writes WebAssembly
+  ([wasm](crates/backends/jit/src/wasm)) that the host loads into Orla's
+  function table, and everything around the code generator is the
+  native JIT's. Held by the JIT's own tests and the core's, the front
+  end's and the interpreter's, run as 32-bit WebAssembly in node
+  ([wasm test](crates/interface/orla/tests/wasm.rs)).
 - A session reads and writes its documents through a
   [`Store`](crates/interface/session/src/store.rs): the disk, or the
   files its caller handed in (`Memory`), which is how Orla runs in a

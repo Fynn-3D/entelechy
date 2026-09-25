@@ -1757,6 +1757,7 @@ version = "0.1.0"
 dependencies = [
  "orla-abi",
  "orla-graph",
+ "orla-jit",
  "orla-protocol",
  "orla-session",
 ]

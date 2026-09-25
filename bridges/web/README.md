@@ -46,9 +46,12 @@ wasm32-unknown-unknown`), its documents the files the page hands in.
 so adding `examples` and then `packages` keeps the repository's
 `../../packages/...`; **Module** picks `orla_ffi.wasm`, which a page
 served beside the repository finds by itself; **Open here** opens the
-scene picked on the interpreter, and everything above works on it, the
+scene picked on Orla's JIT, which writes each Kernel as WebAssembly the
+page loads (`host` in `orla.js`), and everything above works on it, the
 same protocol answered in the page. It runs on the page's one thread,
-so a heavy scene holds the page while a frame is made.
+so a heavy scene holds the page while a frame is made. `wasi.mjs` runs
+Orla built for WASI in node the same way, as the runner of its
+WebAssembly tests.
 
 `orla.js` is the client on its own: `OrlaClient` (a request, its answer;
 the session answers in order, so answers are matched first in, first
@@ -66,7 +69,8 @@ republishes its background, over the socket and in the page alike; in
 the page it composes the scene and hands a changed one in; then it
 drives the voxel editor with a window and a pointer, places a voxel,
 and resizes the window; then it opens `index.html`, connects it, loads a
-Kernel into its editor, and opens the text example in it in the page.
+Kernel into its editor, and opens the text example in it in the page;
+in the page, the voxel example runs a frame on the JIT.
 Node 22 or later and a Chrome, nothing installed:
 
 ```sh

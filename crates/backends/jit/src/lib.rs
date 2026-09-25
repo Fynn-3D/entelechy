@@ -10,13 +10,26 @@
 //! same libm. Only the map mode is compiled; a reduction, a scan, a
 //! scatter and the native operations run on the CPU backend, which this
 //! one wraps.
+//!
+//! Where Orla is itself WebAssembly, the code is WebAssembly
+//! ([`wasm`]), which the host loads into Orla's function table (the
+//! `wasm-host` feature): a pointer to a function there is what a native
+//! function pointer is here, so everything but the code generator is
+//! the same.
 
+#[cfg(not(target_arch = "wasm32"))]
 mod codegen;
+#[cfg(target_arch = "wasm32")]
+mod wasm;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::any::Any;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
 use cranelift_codegen::isa::TargetIsa;
+#[cfg(not(target_arch = "wasm32"))]
 use cranelift_codegen::settings::{self, Configurable};
 use orla_abi::{Domain, Handle, Invocation, Scope};
 use orla_ir::{Combine, Mode, Validated};
@@ -110,15 +123,34 @@ type Merge = unsafe extern "C" fn(*mut Ctx, *const u32, *const u32, *mut u32);
 
 /// The JIT backend: a target ISA to compile for.
 pub struct JitBackend {
+    #[cfg(not(target_arch = "wasm32"))]
     isa: Arc<dyn TargetIsa>,
 }
 
 impl std::fmt::Debug for JitBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "JitBackend({})", self.isa.triple())
+        write!(f, "JitBackend({})", self.target())
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl JitBackend {
+    /// Opens the backend where the host loads WebAssembly.
+    pub fn new() -> Result<Self, String> {
+        if cfg!(feature = "wasm-host") {
+            Ok(Self {})
+        } else {
+            Err("the JIT makes code the host loads, and this build has no such host".into())
+        }
+    }
+
+    /// The target the code is compiled for, for diagnostics.
+    pub fn target(&self) -> String {
+        "wasm32".into()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl JitBackend {
     /// Opens the backend for this machine.
     pub fn new() -> Result<Self, String> {
@@ -141,6 +173,7 @@ impl JitBackend {
 
 /// A module's compiled code. The function pointer stays valid as long as
 /// the JIT module lives, and it lives as long as the Kernel version.
+#[cfg(not(target_arch = "wasm32"))]
 struct Compiled {
     module: Option<cranelift_jit::JITModule>,
     entry: usize,
@@ -152,9 +185,12 @@ struct Compiled {
 
 // The module is only read after finalization, and the code it holds is
 // called from any thread; nothing in it is mutated after `prepare`.
+#[cfg(not(target_arch = "wasm32"))]
 unsafe impl Send for Compiled {}
+#[cfg(not(target_arch = "wasm32"))]
 unsafe impl Sync for Compiled {}
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Compiled {
     fn drop(&mut self) {
         if let Some(module) = self.module.take() {
@@ -165,6 +201,7 @@ impl Drop for Compiled {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Prepared for Compiled {
     fn as_any(&self) -> &dyn Any {
         self
@@ -176,6 +213,7 @@ impl Backend for JitBackend {
         "jit"
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         let code = codegen::compile(module, self.isa.clone())?;
         Ok(Box::new(Compiled {
@@ -186,6 +224,11 @@ impl Backend for JitBackend {
         }))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        Ok(Box::new(wasm::compile(module)?))
+    }
+
     fn execute(
         &self,
         prepared: &dyn Prepared,
@@ -193,6 +236,8 @@ impl Backend for JitBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
+        #[cfg(target_arch = "wasm32")]
+        use wasm::Compiled;
         let Some(compiled) = prepared.as_any().downcast_ref::<Compiled>() else {
             return Err(ExecutionError::Device(
                 "kernel was prepared by a different backend".into(),
@@ -1404,6 +1449,18 @@ extern "C" fn orla_jit_fmodf(a: f32, b: f32) -> f32 {
     a % b
 }
 
+/// `fma` on floats and on doubles: one rounding, as the interpreter's
+/// `mul_add`. Cranelift has the instruction; WebAssembly has none.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+extern "C" fn orla_jit_fmaf(a: f32, b: f32, c: f32) -> f32 {
+    a.mul_add(b, c)
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+extern "C" fn orla_jit_fma(a: f64, b: f64, c: f64) -> f64 {
+    a.mul_add(b, c)
+}
+
 /// A half float's bits widened to a float's: the Host's own rule, so the
 /// compiled code reads a half as the interpreter does.
 extern "C" fn orla_jit_half(h: u32) -> u32 {
@@ -1456,6 +1513,8 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ("orla_jit_pow", orla_jit_pow as *const u8),
         ("orla_jit_atan2", orla_jit_atan2 as *const u8),
         ("orla_jit_fmod", orla_jit_fmod as *const u8),
+        ("orla_jit_fmaf", orla_jit_fmaf as *const u8),
+        ("orla_jit_fma", orla_jit_fma as *const u8),
     ]
 }
 

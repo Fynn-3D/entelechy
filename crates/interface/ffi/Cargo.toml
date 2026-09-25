@@ -18,6 +18,11 @@ orla-protocol = { path = "../../interface/protocol" }
 orla-abi = { path = "../../core/abi" }
 orla-graph = { path = "../../core/graph" }
 
+# Where Orla is WebAssembly, the program that loads it (a page) is the
+# host of the code the JIT writes.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+orla-jit = { path = "../../backends/jit", features = ["wasm-host"] }
+
 # The one crate besides the JIT that takes `unsafe`: it reads the
 # pointers and strings a C caller hands it, and nothing else.
 [lints.rust]

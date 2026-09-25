@@ -142,16 +142,10 @@ impl Session {
         }
     }
 
-    /// The JIT, where the machine runs the native code it makes.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The JIT, where there is somewhere to run the code it makes: the
+    /// machine itself, or where Orla is WebAssembly, a host that loads it.
     fn jit() -> Result<Box<dyn Backend>, String> {
         orla_jit::JitBackend::new().map(|jit| Box::new(jit) as Box<dyn Backend>)
-    }
-
-    /// A WebAssembly machine runs no code made after it was loaded.
-    #[cfg(target_arch = "wasm32")]
-    fn jit() -> Result<Box<dyn Backend>, String> {
-        Err("the JIT makes native code, which WebAssembly does not run".into())
     }
 
     /// Mutable runtime access for interfaces that need to observe images.

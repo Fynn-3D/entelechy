@@ -88,6 +88,10 @@ async function inPage(wasm) {
   const orla = await OrlaInPage.load(await fetched(wasm));
   for (const path of list) orla.put(path, await fetched(path));
   orla.open("examples/text/scene.osn");
+  // The JIT, its code WebAssembly this page loaded: a Kernel it could not
+  // load would be refused, and the picture would say so.
+  const about = await orla.call("status");
+  assert(about.backend === "jit", `in the page on ${about.backend}`);
   await textScene(orla, "in the page");
   const hollow = async (rgb, what) => {
     await orla.call("evaluate", { time: 0.2 });
@@ -107,6 +111,18 @@ async function inPage(wasm) {
   await hollow([0.1, 0.1, 0.3], "the background handed in");
   say("text in the page: a file handed in again is read");
   orla.close();
+  // The voxel editor's Kernels are large: each is loaded as this page's
+  // code, or the scene does not run.
+  const voxel = await OrlaInPage.load(await fetched(wasm));
+  for (const path of await (await fetch("/list?roots=examples/voxel,packages")).json()) {
+    voxel.put(path, await fetched(path));
+  }
+  voxel.open("examples/voxel/scene.osn");
+  const report = await voxel.call("evaluate", { time: 0, window: [240, 135] });
+  const shown = report.outputs.find((output) => output.width > 0);
+  assert(shown && shown.width === 240 && shown.height === 135, `voxel in the page: ${JSON.stringify(report.outputs)}`);
+  say("voxel in the page: a frame on the JIT");
+  voxel.close();
 }
 
 async function voxelScene(port) {

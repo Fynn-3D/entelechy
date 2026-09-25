@@ -302,11 +302,12 @@ wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay examples/ant/
 In a page, Orla is the C ABI built for `wasm32-unknown-unknown`: a
 module that imports nothing, whose documents are the files the page
 hands in (`orla_files`, `orla_files_put`, `orla_open_files`) and which
-answers the protocol in place (`orla_request`). The web bridge's page
-runs it: add the `examples` and `packages` folders, pick a scene, and
-Open here. It runs on the interpreter, on the page's one thread, and a
-page has no clock of its own, so nothing is timed and history is not
-dated.
+answers the protocol in place (`orla_request`). Its JIT writes
+WebAssembly, which the page loads (`orla.load`): Kernels run at the
+page's own compiled speed, tens of times the interpreter's. The web
+bridge's page runs it: add the `examples` and `packages` folders, pick
+a scene, and Open here. It runs on the page's one thread, and a page
+has no clock of its own, so nothing is timed and history is not dated.
 
 ```sh
 rustup target add wasm32-unknown-unknown

@@ -468,9 +468,10 @@ run lands before its start returns, Kernels are prepared inline, and
 `serve` answers each request before it reads the next. Where links
 cannot be resolved, a file's one name is its path made whole with `.`
 and `..` folded, and the sandbox, which lets no link lead out of the
-directories it was given, keeps that name honest. Where native code
-cannot run, there is no JIT, as there is no GPU where there is no
-device, and asking for it says why.
+directories it was given, keeps that name honest. Where nothing loads
+the code a JIT writes (WASI under a plain runtime), there is no JIT,
+as there is no GPU where there is no device, and asking for it says
+why; where the host loads it (a page), the JIT writes WebAssembly.
 
 **Why.** A platform is the Host's world, and the Host's primitives are
 what vary; what a scene computes must not. Every fallback here is one a
@@ -520,4 +521,42 @@ the text example in a headless Chrome in the page.
 **What would change it.** A page that must see files change without
 being told (a folder the person edits live): the page would watch and
 hand them in again, and the store would not change.
+
+## Where Orla is WebAssembly, its JIT writes WebAssembly
+
+The JIT is the interpreter's words at a machine's speed. Where Orla is
+itself WebAssembly, the machine runs WebAssembly, so that is what the
+JIT writes: a Kernel's IR as a module, instruction for instruction what
+the Cranelift translation does, which imports Orla's memory and function
+table. The host (a page's script; node, for the tests) compiles it and
+puts its functions into Orla's table, and the index it gives back is a
+function pointer there, so everything around the code generator (the
+five modes' drivers, the context, the helpers, integer failures, the
+work budget) is the JIT's own, unchanged. What would be on a stack is
+in slots the prepared Kernel owns: WebAssembly runs on one thread and a
+Kernel's functions do not recurse.
+
+**Why.** In a page, the interpreter made Orla run and nothing more: a
+voxel editor took seven seconds a frame. The Kernels are not known
+when Orla is built (they arrive, change and are published while it
+runs), so only compiling them where they arrive makes them fast, as the
+JIT does natively. A separate backend would have repeated the drivers
+and the helpers; a function pointer that is a table index makes the
+native JIT's host side the WebAssembly one's. No dependency is taken:
+the module is written by hand, and the host is the one import.
+
+**Where.** [`wasm/`](../crates/backends/jit/src/wasm) in the JIT, its
+`wasm-host` feature, which `orla-ffi` turns on for a page; `host` in
+the web bridge's [`orla.js`](../bridges/web/orla.js), which
+[`wasi.mjs`](../bridges/web/wasi.mjs) uses to run Orla's WebAssembly
+tests in node. Held by the JIT's own tests (the parity cases, the
+feature matrix, random programs, word for word with the interpreter)
+run as WebAssembly, alongside the core's, the front end's and the
+interpreter's, which found two places a 32-bit `usize` saturated
+first (`crates/interface/orla/tests/wasm.rs`); and by the web bridge's
+test, which runs the text and voxel examples in a headless Chrome on
+it.
+
+**What would change it.** WebAssembly threads in the page, which would
+let the JIT split a run across workers as it does across threads.
 
