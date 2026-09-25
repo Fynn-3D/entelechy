@@ -67,7 +67,7 @@ use orla_session::Session;
 use crate::request::Request;
 use crate::wire::failure;
 
-pub use transport::{Incoming, Reply, listen, serve, stdin_into};
+pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     context_of, report_json, trace_json, type_name, value_from_json, value_json, words_json,
     words_text,

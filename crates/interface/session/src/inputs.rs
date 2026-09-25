@@ -81,8 +81,7 @@ impl Inputs {
 
     /// Allows files in `dir` and under it to be read into inputs.
     pub(crate) fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
-        let resolved = dir
-            .canonicalize()
+        let resolved = crate::paths::canonical(dir)
             .map_err(|e| format!("cannot allow reads from {}: {e}", dir.display()))?;
         if !resolved.is_dir() {
             return Err(format!(
@@ -155,7 +154,7 @@ impl Inputs {
     ) {
         self.beside = read_from
             .iter()
-            .filter_map(|dir| dir.canonicalize().ok())
+            .filter_map(|dir| crate::paths::canonical(dir).ok())
             .collect();
         self.sync_assets(graph, files, host, events);
         self.sync_sequences(files, host, events);

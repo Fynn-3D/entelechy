@@ -812,7 +812,16 @@ fn serve(args: &[String]) -> Result<(), String> {
             orla_protocol::listen(address, sink.clone(), origins).map_err(|e| e.to_string())?;
         eprintln!("listening on {bound}");
     }
-    orla_protocol::stdin_into(sink);
+    if orla_protocol::stdin_into(sink).is_err() {
+        // No thread to read with: each request is read and answered in
+        // turn, here.
+        for incoming in orla_protocol::stdin_lines() {
+            if orla_protocol::answer(&mut session, incoming) {
+                break;
+            }
+        }
+        return Ok(());
+    }
     for incoming in requests {
         if orla_protocol::answer(&mut session, incoming) {
             break;

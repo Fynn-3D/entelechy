@@ -285,6 +285,20 @@ the GPU when a device is available.
 cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm
 ```
 
+## WebAssembly
+
+Orla builds for WebAssembly under WASI, where it runs a scene on the
+interpreter: the same replays pass, and `serve` answers the protocol on
+standard input and output. The JIT is absent there (WebAssembly runs no
+code made after it loaded); where no thread can be started, an `async`
+node lands on the frame that started it.
+
+```sh
+rustup target add wasm32-wasip1
+cargo build --release -p orla --target wasm32-wasip1
+wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay examples/ant/tests/ant.replay --backend cpu
+```
+
 ## Hot reload
 
 Keep the scene running and republish Kernels as their files change:

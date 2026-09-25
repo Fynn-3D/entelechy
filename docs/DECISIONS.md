@@ -459,3 +459,34 @@ with its laws taken back; one restored with its laws runs as it ran)
 and by the session's random life, which restores among everything else
 and was checked against a trial that commits.
 
+## A platform that lacks a primitive does the same work another way
+
+Orla runs on WebAssembly under WASI, a machine with no threads, no
+resolved links and no code made at run time. Where no thread can be
+started, the work a thread would have done is done in turn: an `async`
+run lands before its start returns, Kernels are prepared inline, and
+`serve` answers each request before it reads the next. Where links
+cannot be resolved, a file's one name is its path made whole with `.`
+and `..` folded, and the sandbox, which lets no link lead out of the
+directories it was given, keeps that name honest. Where native code
+cannot run, there is no JIT, as there is no GPU where there is no
+device, and asking for it says why.
+
+**Why.** A platform is the Host's world, and the Host's primitives are
+what vary; what a scene computes must not. Every fallback here is one a
+native run already allows (an async run that finishes at once, a
+worker that is off, a file reached by one spelling), so no document,
+replay or agent sees a different world, only a slower one. A
+WebAssembly backend (IR compiled to WebAssembly, the JIT's place in a
+browser) is a separate step, with its own evidence.
+
+**Where.** [`later.rs`](../crates/core/runtime/src/later.rs) and
+`set_background` in the runtime,
+[`paths.rs`](../crates/interface/session/src/paths.rs) in the session,
+`stdin_into` in the protocol's transport. Held by the example replays,
+run under `wasmtime` on the interpreter.
+
+**What would change it.** WebAssembly threads (`wasm32-wasip1-threads`),
+which would bring back the thread where it can be had, with nothing
+else to change.
+

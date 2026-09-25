@@ -18,6 +18,7 @@ Verified surface, as of `main`:
 | Where | How |
 | --- | --- |
 | macOS, Apple M4, Metal | every round |
+| WebAssembly under WASI (`wasmtime`), the interpreter | the example replays, `serve` on standard input |
 | Interpreter, JIT, GPU | `examples/*/tests/*.replay` on all three |
 | 36 language features × 7 execution forms (the modes, and a map of several outputs), and 8 narrow encodings read and written | `crates/backends/conformance`, JIT and GPU against the interpreter |
 | 8 features of `Double` and `Long` × 6 modes; 5 of `Long` alone in maps and reductions | the same: the JIT against the interpreter, the GPU for `Long` |
@@ -39,11 +40,18 @@ cargo build --release
 for f in examples/*/tests/*.replay; do
   for b in gpu cpu jit; do ./target/release/orla replay "$f" --backend "$b"; done
 done
+cargo build --release -p orla --target wasm32-wasip1
+for f in examples/*/tests/*.replay; do
+  wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay "$f" --backend cpu
+done
 ```
 
 ## Next
 
-Open: the user has not chosen the next round. Pending their word:
-portability (a second platform: Vulkan or DX12, Linux or Windows; only
-macOS with Metal is verified) and a WASM backend. Ask before starting
-either.
+Open: the user has not chosen the next round. WebAssembly's first step
+is done (WASI, the interpreter). Pending their word: a browser
+(`wasm32-unknown-unknown`: sources handed in rather than read from
+disk, WebGPU, whose device answers asynchronously), a WebAssembly
+backend (IR compiled to WebAssembly, the JIT's place in a browser), or
+a second native platform (Vulkan or DX12, Linux or Windows; needs the
+CI workflow run by hand). Ask before starting any.

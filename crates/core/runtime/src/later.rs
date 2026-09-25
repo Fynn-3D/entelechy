@@ -118,20 +118,41 @@ impl Runtime {
         let backend = self.shared_backend_for(module);
         let granted = self.scope_grants(version);
         let version = Arc::clone(version);
+        let work = move || {
+            run_on(
+                backend.as_ref(),
+                &version,
+                &invocation,
+                granted,
+                &mut scratch,
+            )
+        };
+        // The work is shared with the thread so that, where no thread can
+        // be started (WebAssembly), it is taken back and done here: the
+        // run lands before this returns, as one that finished at once.
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(Some(work)));
+        let theirs = std::sync::Arc::clone(&shared);
         let landed = self.runs.landed.clone();
-        std::thread::Builder::new()
+        let started = std::thread::Builder::new()
             .name(format!("orla run {run}"))
             .spawn(move || {
-                let outcome = run_on(
-                    backend.as_ref(),
-                    &version,
-                    &invocation,
-                    granted,
-                    &mut scratch,
-                );
-                let _ = landed.send(Landed { run, outcome });
-            })
-            .map_err(|error| ExecutionError::Device(format!("cannot start a thread: {error}")))?;
+                let work = theirs.lock().ok().and_then(|mut work| work.take());
+                if let Some(work) = work {
+                    let _ = landed.send(Landed {
+                        run,
+                        outcome: work(),
+                    });
+                }
+            });
+        if started.is_err() {
+            let work = shared.lock().ok().and_then(|mut work| work.take());
+            let outcome = work.map_or_else(
+                || Err(ExecutionError::Device("the run was lost".into())),
+                |work| work(),
+            );
+            self.runs.ready.insert(run, outcome);
+            return Ok(run);
+        }
         self.runs.in_flight.insert(run);
         Ok(run)
     }

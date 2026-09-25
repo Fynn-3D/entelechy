@@ -111,21 +111,27 @@ impl Session {
                 let gpu = orla_gpu::GpuBackend::new().map_err(|error| error.to_string())?;
                 let display = gpu.display();
                 let backend: Box<dyn Backend> = Box::new(gpu);
-                let ordered: Option<Box<dyn Backend>> = orla_jit::JitBackend::new()
-                    .ok()
-                    .map(|jit| Box::new(jit) as Box<dyn Backend>);
+                let ordered = Self::jit().ok();
                 Ok((
                     Runtime::with_backends(budget_words, backend, ordered),
                     Some(display),
                 ))
             }
-            "jit" => {
-                let jit = orla_jit::JitBackend::new()?;
-                let backend: Box<dyn Backend> = Box::new(jit);
-                Ok((Runtime::with_backend(budget_words, backend), None))
-            }
+            "jit" => Ok((Runtime::with_backend(budget_words, Self::jit()?), None)),
             other => Err(format!("unknown backend `{other}`; use cpu, gpu, or jit")),
         }
+    }
+
+    /// The JIT, where the machine runs the native code it makes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn jit() -> Result<Box<dyn Backend>, String> {
+        orla_jit::JitBackend::new().map(|jit| Box::new(jit) as Box<dyn Backend>)
+    }
+
+    /// A WebAssembly machine runs no code made after it was loaded.
+    #[cfg(target_arch = "wasm32")]
+    fn jit() -> Result<Box<dyn Backend>, String> {
+        Err("the JIT makes native code, which WebAssembly does not run".into())
     }
 
     /// Mutable runtime access for interfaces that need to observe images.

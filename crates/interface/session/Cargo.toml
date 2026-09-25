@@ -19,8 +19,11 @@ orla-scene = { path = "../../frontend/scene" }
 orla-runtime = { path = "../../core/runtime" }
 orla-cpu = { path = "../../backends/cpu" }
 orla-gpu = { path = "../../backends/gpu" }
-orla-jit = { path = "../../backends/jit" }
 orla-formats = { path = "../../interface/formats" }
+
+# The JIT makes native code, which a WebAssembly machine does not run.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+orla-jit = { path = "../../backends/jit" }
 
 [dev-dependencies]
 orla-abi = { path = "../../core/abi" }

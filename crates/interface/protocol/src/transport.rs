@@ -76,26 +76,35 @@ impl Reply {
     }
 }
 
-/// Feeds standard input's lines to `sink`; the answers are written on
-/// standard output where they are made.
-pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) {
-    std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines().map_while(Result::ok) {
-            if line.trim().is_empty() {
-                continue;
+/// Feeds standard input's lines to `sink`, from a thread of its own; the
+/// answers are written on standard output where they are made. Where no
+/// thread can be started (WebAssembly) it says so, and its caller reads
+/// [`stdin_lines`] itself, answering each before it reads the next.
+pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("orla stdin".into())
+        .spawn(move || {
+            for incoming in stdin_lines() {
+                if sink.send(incoming).is_err() {
+                    break;
+                }
             }
-            let incoming = Incoming {
-                line,
-                reply: Reply::Stdout,
-                local: true,
-                from: "stdin".into(),
-            };
-            if sink.send(incoming).is_err() {
-                break;
-            }
-        }
-    });
+        })
+        .map(drop)
+}
+
+/// Standard input's request lines, as they arrive.
+pub fn stdin_lines() -> impl Iterator<Item = Incoming> {
+    std::io::stdin()
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| Incoming {
+            line,
+            reply: Reply::Stdout,
+            local: true,
+            from: "stdin".into(),
+        })
 }
 
 /// Listens on `address` (`127.0.0.1:7788`, or port 0 for any) and feeds

@@ -447,6 +447,15 @@ Represented in the IR, and so on every backend:
   Nothing that can fail moves or folds: a failure belongs to the element
   that has it.
 
+- A platform without a primitive does the same work another way: where
+  no thread can be started (WebAssembly), an async run is done before
+  `start_run` returns ([later](crates/core/runtime/src/later.rs)), the
+  preparation worker is not started, and `serve` reads each request in
+  turn; where links cannot be resolved, a file's one name is its path
+  folded ([paths](crates/interface/session/src/paths.rs)); where native
+  code cannot run, the session has no JIT. The replays run under
+  `wasmtime` on the interpreter (HANDOFF's verification).
+
 ### Measuring
 
 - A profile's numbers are each node's own and say which kind they are:

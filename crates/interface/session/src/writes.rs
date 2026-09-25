@@ -30,8 +30,7 @@ impl Writes {
     /// Allows writes into `dir` and anything under it. The directory
     /// must exist: an allowance names a place, it does not make one.
     pub(crate) fn allow(&mut self, dir: &Path) -> Result<(), String> {
-        let resolved = dir
-            .canonicalize()
+        let resolved = crate::paths::canonical(dir)
             .map_err(|e| format!("cannot allow writes into {}: {e}", dir.display()))?;
         if !resolved.is_dir() {
             return Err(format!(
@@ -209,9 +208,8 @@ pub(crate) fn resolve(path: &Path) -> Result<PathBuf, String> {
         rest.push(existing.file_name().map(PathBuf::from).unwrap_or_default());
         existing = parent;
     }
-    let mut resolved = existing
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", existing.display()))?;
+    let mut resolved =
+        crate::paths::canonical(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
     for part in rest.iter().rev() {
         resolved.push(part);
     }

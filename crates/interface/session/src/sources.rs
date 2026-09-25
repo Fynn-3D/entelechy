@@ -21,7 +21,7 @@ pub(crate) fn expand_use(path: &Path, trailing_slash: bool) -> Result<Vec<PathBu
     // One file, one path: a Kernel reached by two spellings (a scene's
     // `use` of a package and its preset's `use "../kernels/"`, say) is
     // owned by one document, not published twice.
-    let canonical = |file: PathBuf| file.canonicalize().unwrap_or(file);
+    let canonical = |file: PathBuf| crate::paths::canonical(&file).unwrap_or(file);
     let path = resolve_package(path);
     // A `use` written inside a package, reached by the package's name:
     // the way through it is the same, wherever the package itself is.
@@ -129,7 +129,8 @@ fn package_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     for item in &document.uses {
         let path = dir.join(&item.path.value);
-        if path.join("package.osn").is_file() && path.canonicalize().ok() == dir.canonicalize().ok()
+        if path.join("package.osn").is_file()
+            && crate::paths::canonical(&path).ok() == crate::paths::canonical(dir).ok()
         {
             return Err(format!(
                 "{}: a package cannot use itself",
@@ -193,7 +194,7 @@ pub fn used_documents(base: &Path, uses: &[orla_language::Use]) -> Result<Vec<Pa
         for item in uses {
             let path = base.join(&item.path.value);
             for file in expand_use(&path, item.path.value.ends_with('/'))? {
-                let key = file.canonicalize().unwrap_or_else(|_| file.clone());
+                let key = crate::paths::canonical(&file).unwrap_or_else(|_| file.clone());
                 if !visited.insert(key) {
                     continue;
                 }
@@ -245,7 +246,7 @@ pub fn declarations_within(
         for item in uses {
             let path = base.join(&item.path.value);
             for file in expand_use(&path, item.path.value.ends_with('/'))? {
-                let key = file.canonicalize().unwrap_or_else(|_| file.clone());
+                let key = crate::paths::canonical(&file).unwrap_or_else(|_| file.clone());
                 if let Some(at) = stack.iter().position(|open| *open == key) {
                     let names: Vec<String> = stack[at..]
                         .iter()
@@ -350,7 +351,7 @@ pub fn declarations_within(
     }
     let mut visited = std::collections::BTreeSet::new();
     let mut stack: Vec<PathBuf> = origin
-        .map(|path| vec![path.canonicalize().unwrap_or_else(|_| path.to_path_buf())])
+        .map(|path| vec![crate::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf())])
         .unwrap_or_default();
     let (mut structs, mut types, mut functions) = (Vec::new(), Vec::new(), Vec::new());
     gather(
@@ -413,8 +414,8 @@ fn declared_in(name: &str, search: &[PathBuf]) -> Option<(PathBuf, &'static str)
 /// `path` as a `use` would spell it from `from`, when they share a root.
 fn relative_to(path: &Path, from: &Path) -> String {
     let (path, from) = (
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
-        from.canonicalize().unwrap_or_else(|_| from.to_path_buf()),
+        crate::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf()),
+        crate::paths::canonical(from).unwrap_or_else(|_| from.to_path_buf()),
     );
     if let Ok(rest) = path.strip_prefix(&from) {
         return rest.display().to_string();

@@ -409,7 +409,8 @@ impl Runtime {
 
     /// Starts or stops the preparation worker. With a worker,
     /// [`Runtime::prepare_later`] returns before the backend has built
-    /// anything; without one it prepares inline. Stopping waits for the
+    /// anything; without one (or where no thread can be started) it
+    /// prepares inline. Stopping waits for the
     /// jobs in flight and keeps their results for [`Runtime::poll`].
     pub fn set_background(&mut self, enabled: bool) {
         if enabled == self.worker.is_some() {
@@ -423,7 +424,9 @@ impl Runtime {
         let (outbox, done) = channel::<Done>();
         let backend = Arc::clone(&self.backend);
         let ordered = self.ordered.clone();
-        let handle = std::thread::Builder::new()
+        // Where no thread can be started (WebAssembly), there is no
+        // worker, and every preparation is done inline.
+        let Ok(handle) = std::thread::Builder::new()
             .name("orla-prepare".into())
             // A backend walks a module's nested blocks by recursion; the
             // language bounds how deep they nest, and this is room for
@@ -448,7 +451,9 @@ impl Runtime {
                     }
                 }
             })
-            .expect("the preparation thread can be spawned");
+        else {
+            return;
+        };
         self.worker = Some(Worker { jobs, done, handle });
     }
 

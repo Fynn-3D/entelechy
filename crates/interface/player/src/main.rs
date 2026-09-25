@@ -918,7 +918,10 @@ fn main() -> ExitCode {
                 }
             }
         }
-        orla_protocol::stdin_into(sender);
+        if let Err(error) = orla_protocol::stdin_into(sender) {
+            eprintln!("error: cannot read standard input: {error}");
+            return ExitCode::FAILURE;
+        }
         player.requests = Some(receiver);
         eprintln!("serving the creation protocol on stdin/stdout");
     }
