@@ -21,11 +21,9 @@
 //! meantime. Without a worker the same calls prepare inline, so tools that
 //! want determinism get it by never enabling one.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread::JoinHandle;
 
 pub use orla_abi::pad;
 pub use orla_abi::{
@@ -38,6 +36,7 @@ pub use orla_rules::{Backend, Check, ExecutionError, NativeOp, Prepared};
 
 pub mod clock;
 mod later;
+mod prepare;
 pub use later::Run;
 
 /// Monotonic counter identifying one published version. Generations are
@@ -275,24 +274,6 @@ impl fmt::Display for Ticket {
     }
 }
 
-struct Job {
-    ticket: Ticket,
-    module: Validated,
-    source: String,
-}
-
-struct Done {
-    ticket: Ticket,
-    result: Result<Candidate, PrepareError>,
-}
-
-/// The thread that prepares modules while frames keep going.
-struct Worker {
-    jobs: Sender<Job>,
-    done: Receiver<Done>,
-    handle: JoinHandle<()>,
-}
-
 fn prepare_on(
     backend: &dyn Backend,
     module: Validated,
@@ -323,9 +304,31 @@ fn prepare_on(
     })
 }
 
-impl Drop for Runtime {
-    fn drop(&mut self) {
-        self.stop_worker();
+/// What executions answered besides their outputs, kept until taken:
+/// the bytes carried between Host memory and a device, what the device
+/// took over the last execution, and the checks of runs on a device that
+/// is not waited for.
+#[derive(Default)]
+struct Telemetry {
+    /// What the device took over the last execution, when the backend
+    /// measured it; see [`Runtime::last_measured`].
+    last_measured: Option<std::time::Duration>,
+    /// Bytes carried since last taken; see [`Runtime::take_moved`].
+    moved: Moved,
+    /// Whether a run on a device not waited for failed after all; see
+    /// [`Runtime::take_checks`].
+    checks: Vec<Box<dyn Check>>,
+}
+
+impl Telemetry {
+    /// Counts what `backend` uploaded since it said `before`.
+    fn carried(&mut self, backend: &dyn Backend, before: u64) {
+        self.moved.uploaded += backend.uploaded().saturating_sub(before);
+    }
+
+    /// Keeps what `backend` measured of the execution just done.
+    fn measured(&mut self, backend: &dyn Backend) {
+        self.last_measured = backend.last_device_time();
     }
 }
 
@@ -340,20 +343,10 @@ pub struct Runtime {
     ordered: Option<Arc<dyn Backend>>,
     kernels: BTreeMap<KernelId, Arc<KernelVersion>>,
     next_generation: u64,
-    worker: Option<Worker>,
-    next_ticket: u64,
-    /// What the device took over the last execution, when the backend
-    /// measured it; see [`Runtime::last_measured`].
-    last_measured: Option<std::time::Duration>,
-    /// Bytes carried between Host memory and a device by executions
-    /// since it was last taken; see [`Runtime::take_moved`].
-    moved: Moved,
-    /// What executions since they were last taken answered with besides
-    /// their outputs: whether a run on a device that is not waited for
-    /// failed after all; see [`Runtime::take_checks`].
-    checks: Vec<Box<dyn Check>>,
-    ready: BTreeMap<Ticket, Result<Candidate, PrepareError>>,
-    discarded: BTreeSet<Ticket>,
+    /// Kernels being prepared, on a worker or inline.
+    preparer: prepare::Preparer,
+    /// What executions answered besides their outputs.
+    telemetry: Telemetry,
     runs: later::Runs,
     /// The capabilities a Kernel may be given: what it requires must be
     /// among them to be prepared, and what it runs with is what it
@@ -381,13 +374,8 @@ impl Runtime {
             ordered: ordered.map(Arc::from),
             kernels: BTreeMap::new(),
             next_generation: 1,
-            worker: None,
-            next_ticket: 1,
-            last_measured: None,
-            moved: Moved::default(),
-            checks: Vec::new(),
-            ready: BTreeMap::new(),
-            discarded: BTreeSet::new(),
+            preparer: prepare::Preparer::default(),
+            telemetry: Telemetry::default(),
             runs: later::Runs::new(),
             grants: Capability::ALL.into_iter().collect(),
         };
@@ -414,106 +402,33 @@ impl Runtime {
     /// prepares inline. Stopping waits for the
     /// jobs in flight and keeps their results for [`Runtime::poll`].
     pub fn set_background(&mut self, enabled: bool) {
-        if enabled == self.worker.is_some() {
+        if enabled == self.preparer.running() {
             return;
         }
-        if !enabled {
-            self.stop_worker();
-            return;
+        if enabled {
+            self.preparer
+                .start(Arc::clone(&self.backend), self.ordered.clone());
+        } else {
+            self.preparer.stop();
         }
-        let (jobs, inbox) = channel::<Job>();
-        let (outbox, done) = channel::<Done>();
-        let backend = Arc::clone(&self.backend);
-        let ordered = self.ordered.clone();
-        // Where no thread can be started (WebAssembly), there is no
-        // worker, and every preparation is done inline.
-        let Ok(handle) = std::thread::Builder::new()
-            .name("orla-prepare".into())
-            // A backend walks a module's nested blocks by recursion; the
-            // language bounds how deep they nest, and this is room for
-            // that bound (orla_language::DEEP_STACK, which the runtime
-            // does not depend on).
-            .stack_size(256 << 20)
-            .spawn(move || {
-                for job in inbox {
-                    let chosen = match &ordered {
-                        Some(ordered) if goes_ordered(backend.as_ref(), &job.module) => ordered,
-                        _ => &backend,
-                    };
-                    let result = prepare_on(chosen.as_ref(), job.module, job.source);
-                    if outbox
-                        .send(Done {
-                            ticket: job.ticket,
-                            result,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-        else {
-            return;
-        };
-        self.worker = Some(Worker { jobs, done, handle });
     }
 
     /// Whether a preparation worker is running.
     pub fn background(&self) -> bool {
-        self.worker.is_some()
-    }
-
-    fn stop_worker(&mut self) {
-        if let Some(Worker { jobs, done, handle }) = self.worker.take() {
-            drop(jobs);
-            let _ = handle.join();
-            for finished in done.try_iter() {
-                self.file(finished);
-            }
-        }
-    }
-
-    fn file(&mut self, finished: Done) {
-        if !self.discarded.remove(&finished.ticket) {
-            self.ready.insert(finished.ticket, finished.result);
-        }
-    }
-
-    fn collect(&mut self) {
-        let finished: Vec<Done> = match &self.worker {
-            Some(worker) => worker.done.try_iter().collect(),
-            None => Vec::new(),
-        };
-        for done in finished {
-            self.file(done);
-        }
+        self.preparer.running()
     }
 
     /// Hands a validated module to the worker, or prepares it now when
     /// there is none. `source` is kept for inspection.
     pub fn prepare_later(&mut self, module: Validated, source: String) -> Ticket {
-        let ticket = Ticket(self.next_ticket);
-        self.next_ticket += 1;
+        let ticket = self.preparer.ticket();
         if let Err(refused) = self.granted(&module) {
-            self.ready.insert(ticket, Err(refused));
+            self.preparer.finish(ticket, Err(refused));
             return ticket;
         }
-        match &self.worker {
-            Some(worker) => {
-                if let Err(unsent) = worker.jobs.send(Job {
-                    ticket,
-                    module,
-                    source,
-                }) {
-                    let Job { module, source, .. } = unsent.0;
-                    let result = prepare_on(self.backend_for(&module), module, source);
-                    self.ready.insert(ticket, result);
-                }
-            }
-            None => {
-                let result = prepare_on(self.backend_for(&module), module, source);
-                self.ready.insert(ticket, result);
-            }
+        if let Some((module, source)) = self.preparer.send(ticket, module, source) {
+            let result = prepare_on(self.backend_for(&module), module, source);
+            self.preparer.finish(ticket, result);
         }
         ticket
     }
@@ -521,8 +436,7 @@ impl Runtime {
     /// Takes a finished preparation, or `None` while it is still running.
     /// A ticket is redeemed once.
     pub fn poll(&mut self, ticket: Ticket) -> Option<Result<Candidate, PrepareError>> {
-        self.collect();
-        self.ready.remove(&ticket)
+        self.preparer.poll(ticket)
     }
 
     /// Preparations the worker has finished or been told to forget that
@@ -531,15 +445,12 @@ impl Runtime {
     /// asked for, which would hold a module and a backend's prepared
     /// state with it.
     pub fn uncollected(&self) -> usize {
-        self.ready.len() + self.discarded.len()
+        self.preparer.uncollected()
     }
 
     /// Forgets a preparation whose result is no longer wanted.
     pub fn discard(&mut self, ticket: Ticket) {
-        self.collect();
-        if self.ready.remove(&ticket).is_none() {
-            self.discarded.insert(ticket);
-        }
+        self.preparer.discard(ticket);
     }
 
     /// Turns a candidate into a version that is never registered, under
@@ -718,7 +629,7 @@ impl Runtime {
     /// when the backend measured it (a GPU under a profile); `None`
     /// otherwise, and the caller's own timing is the answer.
     pub fn last_measured(&self) -> Option<std::time::Duration> {
-        self.last_measured
+        self.telemetry.last_measured
     }
 
     /// What measuring one node costs before the node does anything; see
@@ -765,14 +676,14 @@ impl Runtime {
     /// nothing before waiting on every check it took is held to the
     /// reference's failures exactly.
     pub fn take_checks(&mut self) -> Vec<Box<dyn Check>> {
-        std::mem::take(&mut self.checks)
+        std::mem::take(&mut self.telemetry.checks)
     }
 
     /// The bytes executions carried between Host memory and a device
     /// since the last call, and none after it: what one node's run cost
     /// in traffic, when the caller takes it around the run.
     pub fn take_moved(&mut self) -> Moved {
-        std::mem::take(&mut self.moved)
+        std::mem::take(&mut self.telemetry.moved)
     }
 
     /// The name of the backend ordered work runs on, when it is not the
@@ -955,9 +866,9 @@ impl Runtime {
                     chain,
                 )
             };
-            self.moved.uploaded += backend.uploaded().saturating_sub(before);
+            self.telemetry.carried(backend.as_ref(), before);
             if let Some(outputs) = answered {
-                self.last_measured = backend.last_device_time();
+                self.telemetry.measured(backend.as_ref());
                 return held_to(version.manifest(), &mut self.host, outputs);
             }
         }
@@ -998,7 +909,7 @@ impl Runtime {
         // execution must answer `None` here, not the previous node's
         // number. A native operation used to leave it standing, and its
         // neighbour's time was printed as its own.
-        self.last_measured = None;
+        self.telemetry.last_measured = None;
         match &version.body {
             Body::Kernel {
                 module,
@@ -1011,7 +922,8 @@ impl Runtime {
                     // whatever the main one left resident comes back
                     // first.
                     for handle in &invocation.inputs {
-                        self.moved.downloaded += self.bring_home(*handle)?;
+                        let brought = self.bring_home(*handle)?;
+                        self.telemetry.moved.downloaded += brought;
                     }
                 }
                 let backend = if ordered {
@@ -1024,10 +936,10 @@ impl Runtime {
                     let mut scope = Scope::new(&mut self.host, granted);
                     backend.execute_checked(prepared.as_ref(), run, invocation, &mut scope)
                 };
-                self.moved.uploaded += backend.uploaded().saturating_sub(before);
-                self.last_measured = backend.last_device_time();
+                self.telemetry.carried(backend.as_ref(), before);
+                self.telemetry.measured(backend.as_ref());
                 let outputs = outputs.map(|(outputs, check)| {
-                    self.checks.extend(check);
+                    self.telemetry.checks.extend(check);
                     outputs
                 });
                 held_to(version.manifest(), &mut self.host, outputs)
@@ -1039,8 +951,8 @@ impl Runtime {
                     let mut scope = Scope::new(&mut self.host, granted);
                     backend.execute_native(*op, invocation, &mut scope)
                 };
-                self.moved.uploaded += backend.uploaded().saturating_sub(before);
-                self.last_measured = backend.last_device_time();
+                self.telemetry.carried(backend.as_ref(), before);
+                self.telemetry.measured(backend.as_ref());
                 held_to(version.manifest(), &mut self.host, outputs)
             }
         }
