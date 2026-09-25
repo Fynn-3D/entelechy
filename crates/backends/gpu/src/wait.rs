@@ -73,6 +73,7 @@ impl Wait {
     pub fn map_read(
         self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         slice: wgpu::BufferSlice<'_>,
     ) -> Result<(), String> {
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -81,6 +82,14 @@ impl Wait {
             let _ = sender.send(result);
             wake();
         });
+        // A browser may answer a mapping only when it next looks at the
+        // device: Firefox does on a submission, and otherwise a tenth of
+        // a second later, which Orla, parked for the answer and
+        // submitting nothing meanwhile, would wait out at every read. An
+        // empty submission has it look now.
+        if self.parks_with_host() {
+            queue.submit(std::iter::empty());
+        }
         self.until(device, || receiver.try_recv().ok())?
             .map_err(|error| error.to_string())
     }

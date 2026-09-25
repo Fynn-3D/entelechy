@@ -598,7 +598,10 @@ impl GpuBackend {
         }
         let _ = self.wait.drain(&self.device, &self.queue);
         let Some(read) = timing else { return };
-        if self.wait.map_read(&self.device, read.slice(..)).is_ok()
+        if self
+            .wait
+            .map_read(&self.device, &self.queue, read.slice(..))
+            .is_ok()
             && let Ok(bytes) = read.slice(..).get_mapped_range()
         {
             let ticks =
@@ -1382,6 +1385,7 @@ impl Backend for GpuBackend {
             Box::new(FailureCheck {
                 wait: self.wait,
                 device: self.device.clone(),
+                queue: self.queue.clone(),
                 pair: Some(pair),
                 pile: Arc::clone(&self.failures),
                 width: domain.width(),
@@ -1483,7 +1487,8 @@ impl Backend for GpuBackend {
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
         self.queue.submit(Some(encoder.finish()));
-        self.wait.map_read(&self.device, staging.slice(..))?;
+        self.wait
+            .map_read(&self.device, &self.queue, staging.slice(..))?;
         let bytes: Vec<u8> = {
             let view = staging
                 .slice(..)
@@ -2544,6 +2549,7 @@ struct FailureCheck {
     /// How the device is waited for.
     wait: Wait,
     device: wgpu::Device,
+    queue: wgpu::Queue,
     /// The failure word and the buffer it was copied to, which go back
     /// to the pile once read.
     pair: Option<(wgpu::Buffer, wgpu::Buffer)>,
@@ -2562,7 +2568,7 @@ impl Check for FailureCheck {
         let (word_buffer, back) = self.pair.take().expect("a check is waited on once");
         let slice = back.slice(..);
         self.wait
-            .map_read(&self.device, slice)
+            .map_read(&self.device, &self.queue, slice)
             .map_err(ExecutionError::Device)?;
         let (word, blocks, left) = {
             let bytes = slice

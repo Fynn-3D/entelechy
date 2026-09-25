@@ -632,6 +632,11 @@ page hands it nothing, and what the person does waits for the frame to
 end. The GPU backend is
 the same everywhere; only how it waits differs (`orla_gpu::Wait`: block,
 or park), and `orla-ffi`, which takes `unsafe`, supplies the turn.
+Parked for a mapping, Orla submits nothing, and a browser may look at the
+device only when something is submitted: Firefox answers a mapping then,
+or otherwise a tenth of a second later. So a parking wait submits an
+empty batch after it asks for a mapping, and the answer comes as soon
+as the device has it; a blocking wait polls the device and needs none.
 The browser is reached through wgpu's own WebGPU backend, whose glue
 `wasm-bindgen` writes; its import of `orla` is the page's
 `orla-host.mjs`, through an import map.
@@ -650,12 +655,17 @@ backend, `Session::runtime_waiting`, `waiting` in the
 [C ABI](../crates/interface/ffi/src/lib.rs), `host` and `OrlaInPage` in
 the web bridge's [`orla.js`](../bridges/web/orla.js). Held by the web
 bridge's test, which runs the text example's checks on the page's
-WebGPU and the voxel example on it in a headless Chrome.
+WebGPU and the voxel example on it in a headless Chrome. Firefox has the
+suspension from 153 and Safari from 27: every example replay played in
+`play.html` on Firefox 156's WebGPU, by hand, in a window (a headless
+Firefox offers no adapter); the four that read back every frame
+(collapse, rubik, skirmish, stride) took thirty seconds and more before
+the empty submission and as long as in Chrome after it. Safari waits
+for 27 on a machine to try it.
 
 **What would change it.** A browser that must run Orla's GPU and has no
-such suspension (Safari and Firefox, today, run it on the JIT): then
-the evaluation would learn to stop and go on, and this would be one way
-of waiting among two.
+such suspension: then the evaluation would learn to stop and go on, and
+this would be one way of waiting among two.
 
 ## What playing a scene means is decided once
 
