@@ -103,8 +103,10 @@ impl Runtime {
             self.runs.ready.insert(run, outcome);
             return Ok(run);
         };
-        let mut scratch = Host::new(self.host.budget_words());
-        scratch.set_work(self.host.work());
+        // The run's Host is its own, but its Fields count against the
+        // one budget with this Host's: runs off the frame hold no more
+        // together than the person allowed.
+        let mut scratch = self.host.sharing();
         let mut inputs = Vec::with_capacity(invocation.inputs.len());
         for handle in &invocation.inputs {
             self.materialize(*handle)?;

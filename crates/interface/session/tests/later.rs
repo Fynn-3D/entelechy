@@ -68,6 +68,24 @@ fn a_discarded_run_keeps_nothing_and_a_failed_run_says_why() {
     assert_eq!(runtime.host().live(), live);
 }
 
+/// A run off the frame spends the one budget the Host spends: its copy
+/// of the inputs and its outputs count with what the Host already holds,
+/// so runs on threads of their own do not each get the whole budget.
+#[test]
+fn a_run_off_the_frame_holds_what_it_holds_against_the_one_budget() {
+    let mut runtime = cpu(64);
+    let version = load(&mut runtime, COLOR);
+    let input = runtime.host_mut().create_image(1, 1).unwrap();
+    // 4 + 56 of 64 words: room for the run's copy of its input, not for
+    // its output as well.
+    let _held = runtime.host_mut().create_image(14, 1).unwrap();
+    let run = runtime.execute_later(&version, &invocation(input)).unwrap();
+    let error = runtime.wait_run(run).unwrap_err().to_string();
+    assert!(error.contains("budget"), "{error}");
+    // What the run held went back: the Host takes the last 4 words.
+    assert!(runtime.host_mut().create_image(1, 1).is_ok());
+}
+
 /// A runtime on the reference backend, as a session opens one.
 fn cpu(budget_words: usize) -> orla_runtime::Runtime {
     orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
