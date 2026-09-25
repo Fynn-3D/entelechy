@@ -52,7 +52,8 @@ done
 ## Next
 
 Open: the user has not chosen the next round. Orla runs in a page on
-its JIT and on WebGPU. Candidates: presenting the GPU's picture on the
-page's canvas without reading it back (wgpu's surface on a canvas); a
-second native platform (Vulkan or DX12, Linux or Windows; needs the CI
-workflow run by hand). Ask before starting any.
+its JIT and on WebGPU, presenting on a canvas. Candidates: a second
+native platform (Vulkan or DX12, Linux or Windows; needs the CI workflow
+run by hand); the page's GPU in Firefox and Safari, which have no
+JavaScript Promise Integration yet (DECISIONS: *In a page, waiting for
+the device is giving the page a turn*). Ask before starting any.

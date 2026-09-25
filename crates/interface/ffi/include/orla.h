@@ -123,6 +123,13 @@ const char *orla_report(const OrlaSession *session);
  * output. Fills `field` and returns 0, or -1 with orla_error() set. */
 int orla_output(OrlaSession *session, const char *name, OrlaField *field);
 
+/* In a page, draws a graph output (`output` NULL for the first) on the
+ * page's canvas whose element id is `canvas`, from where the GPU holds
+ * it: nothing is read back. Returns 0 when it was drawn; 1 when it was
+ * not (a session not on the GPU, an output that is not a grid of float
+ * pixels on the device), and the caller reads it with orla_output; -1
+ * with orla_error() set, as everywhere outside a page. */
+int orla_present(OrlaSession *session, const char *canvas, const char *output);
 /* A node's port after an evaluation (`port` NULL for "result"). A node
  * that fusion would inline or that no output needs must be pinned first
  * ({"op":"pin","node":"..."} through orla_request) and evaluated again.

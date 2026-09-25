@@ -152,6 +152,7 @@ class OrlaInPage {
       typeof WebAssembly.promising === "function" ? WebAssembly.promising(exports[name]) : exports[name];
     this.open_files = promising("orla_open_files");
     this.request = promising("orla_request");
+    this.presenting = promising("orla_present");
     this.files = exports.orla_files();
     this.session = 0;
     this.onclose = null;
@@ -256,6 +257,21 @@ class OrlaInPage {
     return response.ok;
   }
 
+  /// Draws output `name` (the first, when none) on the canvas whose
+  /// element id is `canvas`, from where the GPU holds it: whether it was
+  /// drawn. Not drawn (a session not on the GPU, an output that is not a
+  /// picture), it is to be read instead.
+  async present(canvas, name) {
+    if (!this.session) throw new Error("no scene is open");
+    const done = await this.withText(canvas, (id) =>
+      name === undefined
+        ? this.presenting(this.session, id, 0)
+        : this.withText(name, (output) => this.presenting(this.session, id, output)),
+    );
+    if (done < 0) throw new Error(this.text(this.x.orla_error(this.session)));
+    return done === 0;
+  }
+
   close() {
     if (this.session) this.x.orla_close(this.session);
     this.session = 0;
@@ -326,11 +342,16 @@ function placement(width, height, targetWidth, targetHeight) {
 /// Drives a session from a canvas: the canvas is the window (its size in
 /// device pixels and the device's scale go with every `evaluate`), the
 /// pointer, buttons, wheel and keys over it are the input, and each frame
-/// is an `evaluate` followed by a `read` drawn onto the canvas.
+/// is an `evaluate` followed by a `read` drawn onto the canvas. Given
+/// `shown`, a second canvas over the first that takes no pointer, a
+/// session that can present (Orla in the page, on its GPU) draws each
+/// frame there from the device instead, and nothing is read back.
 class Driver {
-  constructor(client, canvas) {
+  constructor(client, canvas, shown = null) {
     this.client = client;
     this.canvas = canvas;
+    this.shown = shown;
+    this.presented = false;
     this.context = canvas.getContext("2d");
     this.pointer = [0, 0];
     this.buttons = new Set();
@@ -440,7 +461,8 @@ class Driver {
       scale: window.devicePixelRatio || 1,
     });
     const picture = report.outputs.find((output) => output.width > 0);
-    if (picture) {
+    this.presented = picture ? await this.present(picture) : false;
+    if (picture && !this.presented) {
       const read = await this.client.call("read", { output: picture.name, format: "ppm" });
       const decoded = decodePpm(read.data);
       this.draw(decoded);
@@ -448,6 +470,22 @@ class Driver {
     this.lastMillis = performance.now() - started;
     if (this.onframe) this.onframe(report, this.lastMillis);
     return report;
+  }
+
+  /// Draws `picture` on the second canvas from the device, where the
+  /// session can: whether it did.
+  async present(picture) {
+    const shown = this.shown;
+    if (!shown || typeof this.client.present !== "function") return false;
+    shown.width = this.canvas.width;
+    shown.height = this.canvas.height;
+    const drawn = await this.client.present(shown.id, picture.name);
+    shown.style.display = drawn ? "block" : "none";
+    if (drawn) {
+      this.frame = { width: picture.width, height: picture.height };
+      this.placed = placement(picture.width, picture.height, shown.width, shown.height);
+    }
+    return drawn;
   }
 
   draw(decoded) {

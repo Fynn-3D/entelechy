@@ -351,3 +351,23 @@ fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
     assert!(!room.is_null());
     unsafe { orla_ffi::orla_free(room, 64) };
 }
+
+/// A picture is presented on a page's canvas; a program reads it in
+/// place instead, and asking to present says so.
+#[test]
+fn presenting_is_for_a_page() {
+    let scene = example("text/scene.osn");
+    let session =
+        unsafe { orla_ffi::orla_open(scene.as_ptr(), c("cpu").as_ptr(), std::ptr::null()) };
+    assert!(!session.is_null());
+    assert_eq!(
+        unsafe { orla_ffi::orla_evaluate(session, std::ptr::null()) },
+        0
+    );
+    let presented =
+        unsafe { orla_ffi::orla_present(session, c("view").as_ptr(), std::ptr::null()) };
+    assert_eq!(presented, -1);
+    let why = unsafe { str_of(orla_ffi::orla_error(session)) };
+    assert!(why.contains("orla_output"), "{why}");
+    unsafe { orla_ffi::orla_close(session) };
+}

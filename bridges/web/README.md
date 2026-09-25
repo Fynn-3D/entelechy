@@ -50,7 +50,10 @@ repository's `../../packages/...`; the list beside it says what runs
 the Kernels, `jit` (Orla's JIT, which writes each Kernel as WebAssembly
 the page loads), `gpu` (the browser's WebGPU) or `cpu`; **Open here**
 opens the scene picked, and everything above works on it, the same
-protocol answered in the page. What Orla imports from the page is
+protocol answered in the page. On the GPU, each frame is drawn from the
+device on a second canvas over the first (`present` in `Driver`,
+`orla_present` in Orla), and nothing is read back; the first canvas
+still takes the pointer and the keys. What Orla imports from the page is
 `orla-host.mjs` (`host` in `orla.js`), which the page's import map
 names `orla`: loading a Kernel's code, and waiting for the device, which
 suspends Orla while the page takes a turn (JavaScript Promise
@@ -70,8 +73,9 @@ examples, serves the repository's files to the page, opens the page in a
 headless Chrome over the DevTools protocol, and prints the page's log,
 which ends with `RESULT: ok`. It reads the text example's picture and
 republishes its background, over the socket and in the page alike; in
-the page it composes the scene and hands a changed one in, and runs the
-same checks on the page's WebGPU; then it
+the page it composes the scene and hands a changed one in, runs the
+same checks on the page's WebGPU, and checks what the GPU presents on a
+canvas; then it
 drives the voxel editor with a window and a pointer, places a voxel,
 and resizes the window; then it opens `index.html`, connects it, loads a
 Kernel into its editor, and opens the text example in it in the page;

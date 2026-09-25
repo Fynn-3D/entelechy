@@ -76,6 +76,16 @@ pub struct OrlaSession {
     /// A narrow Field's words widened, which a caller reads instead of
     /// the packed memory: the header promises 32-bit words.
     widened: Vec<u32>,
+    /// The GPU's device as a canvas reaches it, when the backend is one.
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", target_os = "unknown")),
+        allow(dead_code)
+    )]
+    display: Option<orla_gpu::present::Display>,
+    /// The canvas a picture was last presented on, by its id, and its
+    /// surface.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    presenter: Option<(String, orla_gpu::present::Presenter)>,
 }
 
 thread_local! {
@@ -102,6 +112,81 @@ unsafe fn text<'a>(pointer: *const c_char) -> Option<&'a str> {
 }
 
 impl OrlaSession {
+    /// A graph output's Field, `name` `None` for the first.
+    fn output(&self, name: Option<&str>) -> Result<Handle, String> {
+        let graph = self.session.graph().ok_or("no scene is loaded")?;
+        let found = match name {
+            Some(name) => graph.outputs.iter().find(|(output, _)| output == name),
+            None => graph.outputs.first(),
+        };
+        let Some((name, source)) = found else {
+            return Err(match name {
+                Some(name) => format!("no output named `{name}`"),
+                None => "the graph has no output".to_owned(),
+            });
+        };
+        let handle = match source {
+            orla_graph::Source::Node { node, port } => self.session.cached(node, port),
+            orla_graph::Source::External(_) => {
+                return Err(format!("output `{name}` is an external image"));
+            }
+        };
+        handle.ok_or_else(|| "evaluate before reading an output".to_owned())
+    }
+
+    /// Presents an output on the canvas `canvas`: whether it was drawn.
+    /// A picture drawn is one the GPU holds as a grid of float pixels;
+    /// anything else is not, and its caller reads it instead.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    fn present(&mut self, canvas: &str, name: Option<&str>) -> Result<bool, String> {
+        use wasm_bindgen::JsCast;
+        let handle = self.output(name)?;
+        let Some(display) = &self.display else {
+            return Ok(false);
+        };
+        let host = self.session.runtime().host();
+        let pixels = host
+            .schema(handle)
+            .is_ok_and(|schema| schema.is_pixel() && schema.is_wide())
+            && host.domain(handle).is_ok_and(|domain| domain.depth() == 1);
+        let (Some(device), Ok((width, height)), true) = (
+            host.resident(handle).ok().flatten(),
+            host.image_size(handle),
+            pixels,
+        ) else {
+            return Ok(false);
+        };
+        let element: web_sys::HtmlCanvasElement = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(canvas))
+            .ok_or_else(|| format!("no element `{canvas}` on the page"))?
+            .dyn_into()
+            .map_err(|_| format!("`{canvas}` is not a canvas"))?;
+        let (window_width, window_height) = (element.width(), element.height());
+        if self.presenter.as_ref().is_none_or(|(id, _)| id != canvas) {
+            let target = wgpu::SurfaceTarget::Canvas(element);
+            let presenter = display.presenter(target, window_width, window_height)?;
+            self.presenter = Some((canvas.to_owned(), presenter));
+        }
+        let (_, presenter) = self.presenter.as_mut().expect("just made");
+        let placed = display.present(
+            presenter,
+            device,
+            width,
+            height,
+            window_width,
+            window_height,
+            None,
+        )?;
+        Ok(placed.is_some())
+    }
+
+    /// Only a page has a canvas.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn present(&mut self, _canvas: &str, _name: Option<&str>) -> Result<bool, String> {
+        Err("a picture is presented on a page's canvas; a program reads it with orla_output".into())
+    }
+
     fn fail(&mut self, message: impl Into<String>) -> c_int {
         self.error = c_string(&message.into());
         -1
@@ -231,8 +316,11 @@ unsafe fn open(
         };
         let backend = unsafe { text(backend) }.unwrap_or("jit");
         let library = unsafe { text(library) }.map(Path::new);
-        let runtime =
-            Session::runtime_waiting(backend, orla_session::Limits::default(), waiting())?;
+        let (runtime, display) = Session::runtime_and_display_waiting(
+            backend,
+            orla_session::Limits::default(),
+            waiting(),
+        )?;
         let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk));
         let mut session = Session::open_in(store, Path::new(scene), library, runtime);
         let events = session.sync();
@@ -247,16 +335,19 @@ unsafe fn open(
                 .unwrap_or_else(|| format!("{scene} did not load"));
             return Err(reason);
         }
-        Ok(session)
+        Ok((session, display))
     }));
     match opened {
-        Ok(Ok(session)) => Box::into_raw(Box::new(OrlaSession {
+        Ok(Ok((session, display))) => Box::into_raw(Box::new(OrlaSession {
             session,
             error: CString::default(),
             report: CString::default(),
             response: CString::default(),
             schema: CString::default(),
             widened: Vec::new(),
+            display,
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            presenter: None,
         })),
         Ok(Err(message)) => set_error(message),
         Err(_) => set_error("a panic inside Orla while opening".to_owned()),
@@ -469,30 +560,39 @@ pub unsafe extern "C" fn orla_output(
     let name = unsafe { text(name) }.map(str::to_owned);
     guarded(session, |s| {
         s.clear();
-        let Some(graph) = s.session.graph() else {
-            return s.fail("no scene is loaded");
-        };
-        let found = match &name {
-            Some(name) => graph.outputs.iter().find(|(output, _)| output == name),
-            None => graph.outputs.first(),
-        };
-        let Some((name, source)) = found else {
-            return s.fail(match &name {
-                Some(name) => format!("no output named `{name}`"),
-                None => "the graph has no output".to_owned(),
-            });
-        };
-        let handle = match source {
-            orla_graph::Source::Node { node, port } => s.session.cached(node, port),
-            orla_graph::Source::External(_) => {
-                return s.fail(format!("output `{name}` is an external image"));
-            }
-        };
-        let Some(handle) = handle else {
-            return s.fail("evaluate before reading an output");
+        let handle = match s.output(name.as_deref()) {
+            Ok(handle) => handle,
+            Err(message) => return s.fail(message),
         };
         match s.field(handle, field) {
             Ok(()) => 0,
+            Err(message) => s.fail(message),
+        }
+    })
+}
+
+/// Draws a graph output, `output` NULL for the first, on the page's
+/// canvas whose element id is `canvas`, from where the GPU holds it:
+/// nothing is read back.
+///
+/// # Safety
+/// `session` is a live session; `canvas` is a string, `output` NULL or one.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn orla_present(
+    session: *mut OrlaSession,
+    canvas: *const c_char,
+    output: *const c_char,
+) -> c_int {
+    let Some(session) = (unsafe { session.as_mut() }) else {
+        return -1;
+    };
+    let canvas = unsafe { text(canvas) }.unwrap_or("").to_owned();
+    let output = unsafe { text(output) }.map(str::to_owned);
+    guarded(session, |s| {
+        s.clear();
+        match s.present(&canvas, output.as_deref()) {
+            Ok(true) => 0,
+            Ok(false) => 1,
             Err(message) => s.fail(message),
         }
     })

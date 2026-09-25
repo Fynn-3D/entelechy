@@ -110,9 +110,19 @@ impl Session {
         limits: Limits,
         wait: orla_gpu::Wait,
     ) -> Result<Runtime, String> {
-        let (mut runtime, _) = Self::backend_runtime(backend, limits.words, wait)?;
+        Self::runtime_and_display_waiting(backend, limits, wait).map(|(runtime, _)| runtime)
+    }
+
+    /// The runtime and the display, where the device is waited for as
+    /// `wait` says: what a page presents on its canvas through.
+    pub fn runtime_and_display_waiting(
+        backend: &str,
+        limits: Limits,
+        wait: orla_gpu::Wait,
+    ) -> Result<(Runtime, Option<orla_gpu::present::Display>), String> {
+        let (mut runtime, display) = Self::backend_runtime(backend, limits.words, wait)?;
         runtime.host_mut().set_work(limits.work);
-        Ok(runtime)
+        Ok((runtime, display))
     }
 
     /// The same, with the display a window presents what the backend

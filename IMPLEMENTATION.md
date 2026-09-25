@@ -466,7 +466,9 @@ Represented in the IR, and so on every backend:
 - In a page the GPU backend is the browser's WebGPU through wgpu, and it
   waits for the device by giving the page turns
   ([wait](crates/backends/gpu/src/wait.rs)), which the page offers by
-  suspending Orla. Held by the web bridge's test in a headless Chrome.
+  suspending Orla. A picture it holds is drawn on a page's canvas with
+  the Player's own presenter (`orla_present`), nothing read back. Held
+  by the web bridge's test in a headless Chrome.
 - A session reads and writes its documents through a
   [`Store`](crates/interface/session/src/store.rs): the disk, or the
   files its caller handed in (`Memory`), which is how Orla runs in a

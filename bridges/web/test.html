@@ -119,9 +119,30 @@ async function inPage(glue) {
   const gpu = await OrlaInPage.load(`/${glue}`);
   for (const path of list) gpu.put(path, await fetched(path));
   await gpu.open("examples/text/scene.osn", "gpu");
-  const on = await gpu.call("status");
-  assert(on.backend === "gpu", `on the page's GPU, on ${on.backend}`);
+  const about_gpu = await gpu.call("status");
+  assert(about_gpu.backend === "gpu", `on the page's GPU, on ${about_gpu.backend}`);
   await textScene(gpu, "on the page's GPU");
+  // Presented from the device on a canvas of its own, nothing read back:
+  // what the canvas shows is the picture, the republished background in
+  // the O's hollow and the title around it.
+  const view = window.document.createElement("canvas");
+  view.width = 192;
+  view.height = 88;
+  const shown = window.document.createElement("canvas");
+  shown.id = "shown";
+  window.document.body.append(view, shown);
+  const driver = new Driver(gpu, view, shown);
+  await driver.step();
+  assert(driver.presented, "the GPU's picture is presented, not read back");
+  const copy = window.document.createElement("canvas");
+  copy.width = shown.width;
+  copy.height = shown.height;
+  const copied = copy.getContext("2d");
+  copied.drawImage(shown, 0, 0);
+  const presented = { width: copy.width, height: copy.height, data: copied.getImageData(0, 0, copy.width, copy.height).data };
+  colour(presented, 12, 12, [0.3, 0.1, 0.1], 0.02, "the presented hollow");
+  colour(presented, 10, 6, [1.0, 0.85, 0.45], 0.02, "the presented title");
+  say("text on the page's GPU: presented on a canvas, nothing read back");
   gpu.close();
   // The voxel editor's Kernels are large: each is loaded as this page's
   // code, or the scene does not run.

@@ -308,7 +308,9 @@ the page loads (`orla.load`), at tens of times the interpreter's
 speed; or on the GPU, the browser's WebGPU through the same GPU backend
 as everywhere, which waits for the device by suspending Orla while the
 page takes a turn (`orla.wait`, JavaScript Promise Integration: Chrome
-and Edge 137 and later). The web bridge's page runs it, served: add the
+and Edge 137 and later). On the GPU, a picture is drawn on a canvas of
+the page from where the device holds it (`orla_present`), nothing read
+back, as the Player's window is. The web bridge's page runs it, served: add the
 `examples` and `packages` folders, pick a scene and what runs it, and
 Open here. It runs on the page's one thread, and a page has no clock of
 its own, so nothing is timed and history is not dated.

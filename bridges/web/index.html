@@ -16,6 +16,7 @@
   #status { color: #9a9ea8; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   main { position: relative; min-width: 0; min-height: 0; }
   canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
+  #shown { position: absolute; inset: 0; pointer-events: none; display: none; }
   aside { border-left: 1px solid #2a2c33; padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
   aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #9a9ea8; margin: 6px 0 2px; }
   textarea { width: 100%; height: 320px; box-sizing: border-box; font: 12px/1.35 ui-monospace, monospace; background: #0f1013; color: #e6e8ee; border: 1px solid #2a2c33; padding: 6px; resize: vertical; tab-size: 4; }
@@ -44,7 +45,7 @@
   <button id="reset" disabled title="Forget committed state (F5 in the Player)">Reset state</button>
   <span id="status">not connected</span>
 </header>
-<main><canvas id="view" width="960" height="540"></canvas></main>
+<main><canvas id="view" width="960" height="540"></canvas><canvas id="shown" title="What the GPU presents, drawn from the device"></canvas></main>
 <aside>
   <h2>Kernel</h2>
   <div class="row">
@@ -150,7 +151,7 @@ const attach = async (opened) => {
   client.onclose = () => { status("session closed"); enable(false); if (driver) driver.stop(); };
   const about = await client.call("status");
   status(`${about.backend}: ${about.scene}`);
-  driver = new Driver(client, canvas);
+  driver = new Driver(client, canvas, $("shown"));
   driver.onframe = (report, millis) => {
     const ran = report.executed.length ? report.executed.join(" ") : "nothing ran";
     status(`${millis.toFixed(0)} ms  ${driver.frame.width}x${driver.frame.height}  ${ran}`);

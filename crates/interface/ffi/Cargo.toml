@@ -17,11 +17,18 @@ orla-session = { path = "../../interface/session" }
 orla-protocol = { path = "../../interface/protocol" }
 orla-abi = { path = "../../core/abi" }
 orla-graph = { path = "../../core/graph" }
+orla-gpu = { path = "../../backends/gpu" }
 
 # Where Orla is WebAssembly, the program that loads it (a page) is the
 # host of the code the JIT writes.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 orla-jit = { path = "../../backends/jit", features = ["wasm-host"] }
+
+# In a page, the canvas a picture is presented on is found by its id.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wasm-bindgen = "0.2"
+wgpu = { version = "30", default-features = false }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
 
 # The one crate besides the JIT that takes `unsafe`: it reads the
 # pointers and strings a C caller hands it, and nothing else.

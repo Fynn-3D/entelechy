@@ -1758,10 +1758,14 @@ name = "orla-ffi"
 version = "0.1.0"
 dependencies = [
  "orla-abi",
+ "orla-gpu",
  "orla-graph",
  "orla-jit",
  "orla-protocol",
  "orla-session",
+ "wasm-bindgen",
+ "web-sys",
+ "wgpu",
 ]
 
 [[package]]
