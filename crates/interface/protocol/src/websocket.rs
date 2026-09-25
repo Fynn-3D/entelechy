@@ -6,6 +6,41 @@
 
 use std::io::{self, BufRead, Read, Write};
 
+/// The longest request a socket takes, in bytes: a line, or a
+/// WebSocket message whole. What a peer says it will send is weighed
+/// against this before anything is held for it, so no peer can make the
+/// server take more than this for one request.
+pub const MAX_MESSAGE: usize = 256 << 20;
+
+/// The longest line of a handshake's header.
+const MAX_HEADER_LINE: usize = 8 << 10;
+
+/// Reads one line into `line`, the newline included, of at most `limit`
+/// bytes; the bytes read, 0 at the end of the stream. A longer line is
+/// refused before more than `limit` bytes of it are held.
+pub(crate) fn read_line_within(
+    reader: &mut impl BufRead,
+    limit: usize,
+    line: &mut Vec<u8>,
+) -> io::Result<usize> {
+    line.clear();
+    let read = (&mut *reader)
+        .take(limit as u64 + 1)
+        .read_until(b'\n', line)?;
+    if line.len() > limit {
+        return Err(too_long());
+    }
+    Ok(read)
+}
+
+/// The refusal of a request past [`MAX_MESSAGE`].
+pub(crate) fn too_long() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("a request is at most {MAX_MESSAGE} bytes"),
+    )
+}
+
 /// A message read from the socket.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Message {
@@ -82,11 +117,12 @@ pub fn handshake(
     let mut key = None;
     let mut upgrade = false;
     let mut origin = None;
+    let mut bytes = Vec::new();
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        if read_line_within(reader, MAX_HEADER_LINE, &mut bytes)? == 0 {
             return Ok(false);
         }
+        let line = String::from_utf8_lossy(&bytes);
         let line = line.trim_end();
         if line.is_empty() {
             break;
@@ -172,8 +208,16 @@ pub fn read_message(reader: &mut impl Read) -> io::Result<Option<Message>> {
         if masked {
             reader.read_exact(&mut mask)?;
         }
-        let mut payload = vec![0u8; length as usize];
-        reader.read_exact(&mut payload)?;
+        // The length is the peer's word: weighed first, and what is held
+        // grows with the bytes that do arrive.
+        if length > (MAX_MESSAGE - text.len()) as u64 {
+            return Err(too_long());
+        }
+        let mut payload = Vec::new();
+        reader.by_ref().take(length).read_to_end(&mut payload)?;
+        if payload.len() as u64 != length {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
         if masked {
             for (index, byte) in payload.iter_mut().enumerate() {
                 *byte ^= mask[index % 4];
@@ -306,6 +350,39 @@ mod tests {
             )),
             "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
         );
+    }
+
+    /// A peer's word for a length is weighed before anything is held:
+    /// a frame that says it carries 2^63 bytes is refused, not allocated.
+    #[test]
+    fn a_frame_longer_than_a_request_may_be_is_refused_before_it_is_held() {
+        let mut frame = vec![0x81u8, 0x80 | 127];
+        frame.extend_from_slice(&(u64::MAX >> 1).to_be_bytes());
+        frame.extend_from_slice(&[1, 2, 3, 4]);
+        let error = read_message(&mut io::Cursor::new(frame)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("at most"), "{error}");
+        // Fragments count together.
+        let mut first = vec![0x01u8, 126];
+        first.extend_from_slice(&60000u16.to_be_bytes());
+        first.extend(std::iter::repeat_n(b'x', 60000));
+        let mut stream = Vec::new();
+        for _ in 0..(MAX_MESSAGE / 60000 + 1) {
+            stream.extend_from_slice(&first);
+        }
+        let error = read_message(&mut io::Cursor::new(stream)).unwrap_err();
+        assert!(error.to_string().contains("at most"), "{error}");
+    }
+
+    #[test]
+    fn a_line_longer_than_its_limit_is_refused() {
+        let mut line = Vec::new();
+        let mut reader = io::Cursor::new(b"abc\nabcdefgh\n".to_vec());
+        assert_eq!(read_line_within(&mut reader, 4, &mut line).unwrap(), 4);
+        assert_eq!(line, b"abc\n");
+        let error = read_line_within(&mut reader, 4, &mut line).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(line.len() <= 5, "no more than the limit is held");
     }
 
     #[test]

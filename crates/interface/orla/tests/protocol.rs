@@ -593,6 +593,72 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A peer that says it will send more than a request may hold is told so
+/// and let go; the server, and every other connection, lives on.
+#[test]
+fn a_peer_claiming_an_endless_request_is_refused_and_the_server_lives() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpStream;
+    let dir = scratch_in("-endless");
+    let mut child = Server(
+        Command::new(env!("CARGO_BIN_EXE_orla"))
+            .arg("serve")
+            .arg(dir.join("scene.osn"))
+            .args(["--listen", "127.0.0.1:0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = BufReader::new(child.0.stderr.take().unwrap());
+    let port = stderr
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| {
+            line.strip_prefix("listening on 127.0.0.1:")
+                .map(str::to_owned)
+        })
+        .expect("the server names its port");
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    write!(
+        stream,
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    )
+    .unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" || line.is_empty() {
+            break;
+        }
+    }
+    // A text frame that says it carries 2^63 bytes.
+    let mut frame = vec![0x81u8, 0x80 | 127];
+    frame.extend_from_slice(&(u64::MAX >> 1).to_be_bytes());
+    frame.extend_from_slice(&[1, 2, 3, 4]);
+    stream.write_all(&frame).unwrap();
+    let mut answer = Vec::new();
+    reader.read_to_end(&mut answer).unwrap();
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.contains("at most"), "{answer}");
+    // Another client is served, by the same process.
+    let stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    let mut writer = stream.try_clone().unwrap();
+    let mut reader = BufReader::new(stream);
+    writeln!(writer, "{}", json!({ "id": 1, "op": "status" })).unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let status: Json = serde_json::from_str(&line).unwrap();
+    assert_eq!(status["ok"]["nodes"], 3, "{status}");
+    let mut stdin = child.0.stdin.take().unwrap();
+    writeln!(stdin, "{}", json!({ "id": 2, "op": "quit" })).unwrap();
+    drop(stdin);
+    assert!(child.0.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_headless_session_takes_a_window_for_window_shaped_scenes() {
     let dir = scratch_in("-window");

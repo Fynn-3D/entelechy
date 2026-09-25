@@ -103,6 +103,9 @@ page served from this machine (`localhost`, `127.0.0.1`, `[::1]`), one
 opened from a file (`null`), and a client that is no browser connect;
 another origin only where the server was started with
 `--allow-origin <origin>`, `https://host:port` as a browser writes it.
+A request on a socket, a line or a WebSocket message, is at most
+256 MiB; a longer one is answered with an error and its connection
+closed, and the session serves the rest as before.
 
 `status` answers with the session's backend, scene, watched files,
 counts, and `versions`, the ABI, language, IR and package format

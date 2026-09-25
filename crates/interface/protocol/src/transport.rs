@@ -172,6 +172,16 @@ fn refuse_http(mut stream: std::net::TcpStream) {
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
+/// Tells a connection why what it sent is refused, then closes it.
+fn refuse(reply: &std::sync::mpsc::Sender<String>, error: &std::io::Error) {
+    let refusal = crate::envelope(
+        &serde_json::Value::Null,
+        Err(crate::wire::failure(error.to_string())),
+    );
+    let _ = reply.send(refusal);
+    let _ = reply.send(String::new());
+}
+
 /// One connection of JSON lines.
 fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incoming>, from: String) {
     let Ok(mut writer) = stream.try_clone() else {
@@ -192,8 +202,24 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
         }
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
-    let reader = std::io::BufReader::new(stream);
-    for line in reader.lines().map_while(Result::ok) {
+    let mut reader = std::io::BufReader::new(stream);
+    let mut bytes = Vec::new();
+    loop {
+        let line = match crate::websocket::read_line_within(
+            &mut reader,
+            crate::websocket::MAX_MESSAGE,
+            &mut bytes,
+        ) {
+            Ok(0) => break,
+            Ok(_) => match std::str::from_utf8(&bytes) {
+                Ok(line) => line.trim_end_matches(['\n', '\r']).to_owned(),
+                Err(_) => break,
+            },
+            Err(error) => {
+                refuse(&reply, &error);
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -278,6 +304,10 @@ fn serve_websocket(
                 if websocket::write_pong(&mut *guard, &payload).is_err() {
                     break;
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                refuse(&reply, &error);
+                break;
             }
             Ok(Some(Message::Close)) | Ok(None) | Err(_) => {
                 let _ = reply.send(String::new());
