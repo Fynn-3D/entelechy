@@ -40,13 +40,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p orla-jit -p orla-ffi --features orla-jit/wasm-host --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
 cargo build --release
-for f in examples/*/tests/*.replay; do
-  for b in gpu cpu jit; do ./target/release/orla replay "$f" --backend "$b"; done
+# Replays are independent: several at once, each backend in turn. A
+# failure prints why and makes xargs exit non-zero.
+for b in gpu cpu jit; do
+  printf '%s\n' examples/*/tests/*.replay | xargs -P 4 -n 1 ./target/release/orla replay --backend "$b"
 done
 cargo build --release -p orla --target wasm32-wasip1
-for f in examples/*/tests/*.replay; do
-  wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay "$f" --backend cpu
-done
+# WASI has no threads, so each replay is one core: eight at once.
+printf '%s\n' examples/*/tests/*.replay |
+  xargs -P 8 -n 1 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay --backend cpu
 ```
 
 ## Next
