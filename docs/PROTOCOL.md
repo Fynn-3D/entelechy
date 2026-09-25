@@ -86,7 +86,8 @@ published or retired, the scene read again, a param set, state written
 or reset), the frame counts the evaluations committed since. `history`
 (`since` a revision) says what made each revision after it, and where
 it came from: a document on disk, or the protocol and its channel
-(`stdin`, `socket 3`, `websocket 4`), a fact about how it arrived, not
+(`stdin`, `socket 3`, `websocket 4`, `orla_request` for a program or a
+page that holds the session in its own process), a fact about how it arrived, not
 who sent it (an edit found on disk while a request is answered is its
 document's; the scene a `compose` or a `param` loads is the request's); and the attempts refused since, with why, which move
 nothing. `kernel` with a `generation` reads the source a Kernel had then,

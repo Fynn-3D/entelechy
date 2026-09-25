@@ -752,7 +752,14 @@ pub unsafe extern "C" fn orla_request(
     let line = unsafe { text(line) }.unwrap_or("").to_owned();
     guarded(session, |s| {
         s.clear();
+        // What it changes is recorded as the protocol's, arrived through
+        // this function: a fact about how it came, as `stdin` or
+        // `socket 3` are for a served session.
+        let before = s
+            .session
+            .act_for(orla_session::Origin::Protocol("orla_request".into()));
         let (response, _quit) = orla_protocol::respond_line(&mut s.session, &line);
+        s.session.act_for(before);
         s.response = c_string(&response);
         0
     });

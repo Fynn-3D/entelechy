@@ -440,3 +440,24 @@ fn a_host_plays_a_replay_through_the_play() {
     );
     unsafe { orla_ffi::orla_close(session) };
 }
+
+/// What a request through `orla_request` changes is recorded as the
+/// protocol's, as a served session records its channel's.
+#[test]
+fn a_request_through_the_abi_is_recorded_as_the_protocols() {
+    let scene = example("text/scene.osn");
+    let session =
+        unsafe { orla_ffi::orla_open(scene.as_ptr(), c("cpu").as_ptr(), std::ptr::null()) };
+    assert!(!session.is_null());
+    let request = |line: &str| unsafe { str_of(orla_ffi::orla_request(session, c(line).as_ptr())) };
+    let published = request(
+        r#"{"op":"publish","source":"kernel t.said@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }"}"#,
+    );
+    assert!(published.contains("\"ok\""), "{published}");
+    let history = request(r#"{"op":"history","since":0}"#);
+    assert!(
+        history.contains(r#"{"protocol":"orla_request"}"#),
+        "{history}"
+    );
+    unsafe { orla_ffi::orla_close(session) };
+}

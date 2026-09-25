@@ -192,7 +192,9 @@ int orla_node(OrlaSession *session, const char *node, const char *port, OrlaFiel
 /* One request of the creation protocol as a JSON line (see
  * docs/PROTOCOL.md: status, kernels, kernel, graph, prepare, publish,
  * param, compose, pin, read, write, reset, window, sync, ...) and its
- * response line, {"id":...,"ok":{...}} or {"id":...,"error":{...}}. */
+ * response line, {"id":...,"ok":{...}} or {"id":...,"error":{...}}.
+ * What it changes is recorded in the session's history as coming from
+ * the protocol, through "orla_request". */
 const char *orla_request(OrlaSession *session, const char *line);
 
 #ifdef __cplusplus
