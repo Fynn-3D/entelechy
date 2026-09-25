@@ -52,7 +52,7 @@ backend is held to.
 | Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire forms](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs), [contract](docs/PROTOCOL.md) | [client test](crates/interface/orla/tests/protocol.rs); [live agents](crates/interface/orla/tests/agent.rs) repair, publish and compose from the answers alone, and change what a running state carries without losing it; the op table held to the server ([contract test](crates/interface/protocol/src/lib.rs)); [an agent's record](examples/scanline/agent.jsonl) replayed |
 | Command line | [orla](crates/interface/orla/src/main.rs), [replay](crates/interface/session/src/replay.rs), [render](crates/interface/orla/src/render.rs), [packages](crates/interface/orla/src/package.rs), [scaffold](crates/interface/orla/src/scaffold.rs) | every example replay on three backends |
 | C ABI | [ffi](crates/interface/ffi/src/lib.rs), [header](crates/interface/ffi/include/orla.h) | [ABI tests](crates/interface/ffi/tests/abi.rs), [header held to the exports](crates/interface/ffi/tests/header.rs), [C example](bridges/c/hello.c) |
-| Player | [window loop](crates/interface/player/src/main.rs), [audio](crates/interface/player/src/audio.rs), [gamepad](crates/interface/player/src/gamepad.rs) | presentation and blit tests |
+| Player | [the play](crates/interface/session/src/play/mod.rs) every interface shares (frame, keys, preview, pads, F10 line, replay); the window's [loop](crates/interface/player/src/main.rs), [audio](crates/interface/player/src/audio.rs), [gamepad](crates/interface/player/src/gamepad.rs) | [play tests](crates/interface/session/tests/play.rs), presentation and blit tests |
 | Import and export | [import](crates/interface/import/src/), [export](crates/interface/export/src/) | [MIDI tests](crates/interface/formats/tests/midi.rs), [round trip](crates/interface/export/tests/round_trip.rs) |
 | Bridges | [bridges](bridges/), each in its program's own language | [bridge tests](crates/interface/orla/tests/bridges.rs), run when the program is present |
 | Conformance matrix | [conformance matrix](crates/backends/conformance/src/lib.rs) | [on the JIT](crates/backends/jit/tests/matrix.rs) bit for bit, [on the GPU](crates/backends/gpu/tests/matrix.rs) ints exact and floats to rounding; the 64-bit rows on the JIT, the `Long` rows on both; the element shapes a scatter's target may hold (one word to twenty-one, `Long`s, rows and a volume, every rule, emitting where it may) from one narrow input, on both |
@@ -357,11 +357,12 @@ Represented in the IR, and so on every backend:
 - Input, pad, window and sound rate are context
   ([ABI](crates/core/abi/src/lib.rs), [`orla_abi::pad`](crates/core/abi/src/lib.rs)).
   A pad is sticks and buttons in the context, not a device a scene opens;
-  the Player also presses keys from it, so older scenes play on one
-  ([gamepad](crates/interface/player/src/gamepad.rs)). Replay and the protocol
+  the play also presses keys from it, so older scenes play on one
+  ([pad](crates/interface/session/src/play/pad.rs)); each device names its
+  pads' buttons and axes to it. Replay and the protocol
   drive every one of them.
 - The sound card is a Player adapter ([audio](crates/interface/player/src/audio.rs)):
-  it claims the first output of one- or two-float rows, and its real-time
+  the play names the first output of one- or two-float rows, and its real-time
   callback only drains a lock-free ring — it never waits on the Graph or
   the GPU and never allocates. While a device plays, it paces evaluation.
 

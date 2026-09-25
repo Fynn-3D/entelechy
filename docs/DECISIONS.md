@@ -597,3 +597,30 @@ such suspension (Safari and Firefox, today, run it on the JIT): then
 the evaluation would learn to stop and go on, and this would be one way
 of waiting among two.
 
+## What playing a scene means is decided once
+
+Every interface that plays a scene shares one play
+(`orla_session::play`): the frame (what changed is read, a replay's
+frame taken at its time, the scene evaluated, the picture and the sound
+named), what F5, Tab, F10 and Escape mean, how a pad is a keyboard, how
+the pointer is found in the picture, what the line of frame data says,
+and what is said on the way. A window, a page, anything that shows a
+scene, is its devices only: it hands the play its person's hands and
+its clock, shows the picture on its own device and plays the sound on
+its own, and tells the play where the picture landed.
+
+**Why.** ARCHITECTURE-PLAN §34: interfaces are many, and "all of them
+operate on the same underlying Runtime". A second Player written for a
+page would have been the first one again, and the two would have
+drifted apart. A display, keys and a sound card are the Host's IO
+(§6); a page is another Host, not another product. The session is
+already what "every interface drives"; playing a scene is part of it.
+
+**Where.** [`play`](../crates/interface/session/src/play/mod.rs), with
+its [pad](../crates/interface/session/src/play/pad.rs) and
+[line of frame data](../crates/interface/session/src/play/hud.rs); the
+window, sound card and pads of [the Player](../crates/interface/player/src/main.rs).
+Held by [the play's tests](../crates/interface/session/tests/play.rs),
+headless: the keys, the preview, the pointer, the sound output, a
+failure said once, a replay played to its end.
+

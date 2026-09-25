@@ -1,9 +1,10 @@
 //! One line of frame data over the picture, toggled by F10: rendered on
 //! the CPU with a five-by-seven font into `0x00RRGGBB` pixels, which the
 //! GPU presenter samples as an overlay and the CPU path stamps into its
-//! frame. Nothing here knows about windows.
+//! frame. Nothing here knows about windows, or keeps its own time: the
+//! seconds are the host's clock's.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// A glyph: seven rows of five bits, the high bit leftmost.
 type Glyph = [u8; 7];
@@ -122,7 +123,7 @@ pub fn stamp(panel: &Panel, frame: &mut [u32], frame_width: u32, frame_height: u
 /// What a frame took, smoothed, and what the last one did.
 #[derive(Debug)]
 pub struct Stats {
-    last_start: Option<Instant>,
+    last_start: Option<f64>,
     /// Smoothed milliseconds: between frames, evaluating, waiting for
     /// the device to finish what evaluating gave it, and presenting
     /// (which includes waiting for the display's refresh). The device's
@@ -157,20 +158,26 @@ fn smooth(average: &mut f64, sample: Duration) {
 
 impl Stats {
     /// Marks a frame's start; the time since the last one is its interval.
-    pub fn begin(&mut self) {
-        let now = Instant::now();
+    pub fn begin(&mut self, now: f64) {
         if let Some(last) = self.last_start.replace(now) {
-            smooth(&mut self.interval, now - last);
+            smooth(
+                &mut self.interval,
+                Duration::from_secs_f64((now - last).max(0.0)),
+            );
         }
     }
 
     /// Records how long evaluating, waiting for the device and
     /// presenting took this frame.
-    pub fn record(&mut self, evaluate: Duration, device: Option<Duration>, present: Duration) {
+    pub fn record(&mut self, evaluate: Duration, device: Option<Duration>) {
         smooth(&mut self.evaluate, evaluate);
         if let Some(device) = device {
             smooth(self.device.get_or_insert(0.0), device);
         }
+    }
+
+    /// What presenting the frame took, once the device has presented it.
+    pub fn presented(&mut self, present: Duration) {
         smooth(&mut self.present, present);
     }
 
@@ -218,8 +225,9 @@ mod tests {
         assert_eq!(frame[3 * 4 + 1], PAPER);
         assert_eq!(frame[3 * 4 + 3], INK, "the stem, clipped to the frame");
         let mut stats = Stats::default();
-        stats.begin();
-        stats.record(Duration::from_millis(2), None, Duration::from_micros(500));
+        stats.begin(0.0);
+        stats.record(Duration::from_millis(2), None);
+        stats.presented(Duration::from_micros(500));
         assert!(
             stats
                 .line("x")
@@ -231,12 +239,9 @@ mod tests {
         // then not part of presenting, and is not called `gpu`: the
         // backend's own name is already that.
         let mut stats = Stats::default();
-        stats.begin();
-        stats.record(
-            Duration::from_millis(2),
-            Some(Duration::from_micros(1450)),
-            Duration::from_micros(500),
-        );
+        stats.begin(0.0);
+        stats.record(Duration::from_millis(2), Some(Duration::from_micros(1450)));
+        stats.presented(Duration::from_micros(500));
         assert!(
             stats.line("x").starts_with(
                 "frame 0.0 ms (0 fps) | eval 2.00 ms | device 1.45 ms | present 0.50 ms | x"

@@ -1,24 +1,26 @@
-//! The `orla-player` command: a window over a live session.
+//! The `orla-player` command: a window over a live session. The frame
+//! itself, what the keys mean and what the line of frame data says are
+//! the session's play (`orla_session::play`), which every interface that
+//! plays a scene shares; this is the window, the sound card and the pads
+//! it hands its person's hands from, and shows the picture on.
 
 use std::num::NonZeroU32;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use orla_gpu::present::{Display, Overlay, Presenter};
 use orla_player::audio::Audio;
 use orla_player::gamepad::Gamepad;
-use orla_player::hud::{self, Panel, Stats};
-use orla_player::{Placement, key_code, to_output};
-use orla_runtime::{Context, InputState};
 use orla_session::Session;
+use orla_session::play::{self, Asked, Frame, Placement, Play, View, hud};
 use serde_json::Value as Json;
-use std::sync::mpsc::{Receiver, channel};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::Key;
 use winit::window::{Window, WindowId};
 
 const USAGE: &str = "\
@@ -56,16 +58,6 @@ usage:
       its evaluate observes that person's input. A browser's page connects
       from this machine or from a file; a page elsewhere only from an
       origin --allow-origin <origin> names.";
-
-/// What a replay says for the frame about to be drawn.
-enum Replayed {
-    /// Its next frame's time has not come.
-    Wait,
-    /// Its next frame, under this context.
-    Frame(Context),
-    /// No replay is playing.
-    Not,
-}
 
 /// The window `window()` reads before one opens, when none was asked for.
 const DEFAULT_WINDOW: (u32, u32) = (960, 540);
@@ -158,13 +150,19 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
+/// The window's clock: seconds since the Player started.
+fn clock() -> f64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
+
 struct Player {
     session: Session,
+    play: Play,
     scale: u32,
     /// The logical size the window opens at, when asked for; also what
     /// `window()` reads before the window exists.
     requested: Option<(u32, u32)>,
-    clock: Instant,
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     /// The device the backend computes on, when it has one to show: a
@@ -173,42 +171,24 @@ struct Player {
     /// The GPU presenter, when the backend is the GPU and the surface could
     /// be configured; then frames are shown without any readback.
     presenter: Option<Presenter>,
-    downloads: u64,
     last_frame: Vec<[f32; 4]>,
     last_size: (u32, u32),
-    placement: Placement,
-    input: InputState,
-    cursor: (f32, f32),
-    status: String,
-    /// What a run of failures has already said, so a hand on the
-    /// window's corner does not fill the terminal.
-    reported: orla_player::Reporting,
-    /// How the last frame reached the window, for the F10 line.
-    path: &'static str,
     /// Protocol requests arriving from stdin or a socket, when serving.
     requests: Option<Receiver<orla_protocol::Incoming>>,
-    /// The node whose image is shown instead of the graph output.
-    preview: Option<orla_graph::NodeId>,
     /// The sound card, opened when a scene has a sound-shaped output.
     audio: Option<Audio>,
     /// The gamepads, when the system offers them.
     gamepad: Option<Gamepad>,
     audio_allowed: bool,
     audio_failed: bool,
-    /// The F10 line: on or off, what it measures, and its pixels for this
-    /// frame when on.
-    hud: bool,
-    stats: Stats,
-    panel: Option<Panel>,
-    /// A replay being played, and when its first frame was shown.
-    replaying: Option<(orla_session::replay::Replayer, Option<Instant>)>,
 }
 
 impl Player {
-    fn context(&self) -> Context {
-        // The window's physical size and scale factor; before it opens, the
-        // requested size at scale one, or a plain default, so a scene sized
-        // by the window has something to fill on its first evaluation.
+    /// What the window says about itself: its physical size and scale
+    /// factor; before it opens, the requested size at scale one, or a
+    /// plain default, so a scene sized by the window has something to
+    /// fill on its first evaluation. And the sound card's rate.
+    fn view(&self) -> View {
         let (window, scale) = match &self.window {
             Some(window) => {
                 let size = window.inner_size();
@@ -222,12 +202,10 @@ impl Player {
                 ([w as f32, h as f32], 1.0)
             }
         };
-        Context {
-            time: self.clock.elapsed().as_secs_f32(),
-            rate: self.audio.as_ref().map_or(0.0, |audio| audio.rate() as f32),
-            input: self.input,
+        View {
             window,
             scale,
+            rate: self.audio.as_ref().map_or(0.0, |audio| audio.rate() as f32),
         }
     }
 
@@ -237,125 +215,39 @@ impl Player {
         self.audio.as_ref().is_some_and(|audio| !audio.has_room())
     }
 
-    fn frame(&mut self) -> Option<orla_graph::Report> {
-        if let Some(gamepad) = &mut self.gamepad {
-            gamepad.poll(&mut self.input);
-        }
-        let events = self.session.sync();
-        for event in &events {
-            eprintln!("{event}");
-        }
-        // A replay, while it plays, is the input: its frame, at its time,
-        // under its pointer, keys and window; the person's hands wait.
-        let replayed = match self.replay_frame() {
-            Replayed::Wait => return None,
-            Replayed::Frame(context) => Some(context),
-            Replayed::Not => None,
-        };
-        self.stats.begin();
-        let started = Instant::now();
-        let context = replayed.unwrap_or_else(|| self.context());
-        self.input.wheel = [0.0, 0.0];
-        match self.session.evaluate(&context) {
-            Ok(report) => {
-                if replayed.is_some()
-                    && let Some((replayer, _)) = &mut self.replaying
-                {
-                    replayer.evaluated(report.clone());
-                }
-                let elapsed = started.elapsed();
-                // The window claims the first output that is a grid of
-                // pixels; the sound card the first that is rows of one or
-                // two floats. Both go by structure, never by name.
-                let displayed = self.displayed_output(&report);
-                let target = self
-                    .preview
-                    .as_ref()
-                    .and_then(|node| self.session.cached(node, "result"))
-                    .unwrap_or(displayed);
-                self.panel = self.hud.then(|| self.panel_for(&report, target, &context));
-                // With the line on, the frame waits here for the
-                // device to finish what evaluating gave it, so what it
-                // took is a number of its own rather than a share of
-                // `present`, where it would look like the display's
-                // refresh. Asking costs the overlap between this
-                // frame's device work and the next frame's own; only
-                // the line asks.
-                let device = (self.hud && self.session.runtime().has_device()).then(|| {
-                    let waiting = Instant::now();
-                    self.session.runtime().settle_device();
-                    waiting.elapsed()
-                });
-                let presenting = Instant::now();
-                self.path = self.show(target);
-                self.stats.record(elapsed, device, presenting.elapsed());
-                self.play(&report);
-                if self.reported.worked() {
-                    eprintln!("evaluating again");
-                }
-                self.status = "running".into();
-                Some(report)
-            }
-            Err(error) => {
-                let message = format!("evaluation failed: {error}");
-                // One failure a frame, each naming the size the window
-                // was that frame, is one failure: a hand on the corner
-                // should not fill the terminal. What is printed again is
-                // a failure of another shape, or this one after a frame
-                // that worked.
-                if self.reported.failed(&message) {
-                    eprintln!("{message}; last frame is kept");
-                }
-                self.status = message;
-                self.blit();
-                None
-            }
+    /// Prints what the play has to say.
+    fn say(&mut self) {
+        for line in self.play.said() {
+            eprintln!("{line}");
         }
     }
 
-    /// The replay's next frame, once its time has come; `Wait` before,
-    /// and `Not` when no replay is playing. Past its last frame the
-    /// replay's remaining checks run, what it observed is said, and the
-    /// person has the window.
-    fn replay_frame(&mut self) -> Replayed {
-        let Some((replayer, since)) = &mut self.replaying else {
-            return Replayed::Not;
-        };
-        let clock = since
-            .get_or_insert_with(Instant::now)
-            .elapsed()
-            .as_secs_f32();
-        if replayer.next_time().is_some_and(|time| time > clock) {
-            return Replayed::Wait;
+    fn frame(&mut self) -> Option<orla_graph::Report> {
+        if let Some(gamepad) = &mut self.gamepad {
+            gamepad.poll(&mut self.play);
         }
-        match replayer.next_frame(&mut self.session) {
-            Ok(Some(frame)) => {
-                self.status = format!("replaying, {:.2} s", frame.context.time);
-                Replayed::Frame(frame.context)
+        let view = self.view();
+        let frame = self.play.frame(&mut self.session, view);
+        self.say();
+        match frame {
+            Frame::Wait => None,
+            Frame::Failed => {
+                let placement = self.blit();
+                self.play.landed(placement, self.last_size);
+                None
             }
-            Ok(None) => {
-                let outcome = &replayer.outcome;
-                let said = if outcome.failures.is_empty() {
-                    format!(
-                        "replay: ok ({} frames, {} checks)",
-                        outcome.frames, outcome.checks
-                    )
-                } else {
-                    format!(
-                        "replay: {} of {} checks failed\n  {}",
-                        outcome.failures.len(),
-                        outcome.checks,
-                        outcome.failures.join("\n  ")
-                    )
-                };
-                eprintln!("{said}; the window is yours");
-                self.replaying = None;
-                Replayed::Not
-            }
-            Err(error) => {
-                eprintln!("replay stopped: {error}; the window is yours");
-                self.replaying = None;
-                Replayed::Not
+            Frame::Shown(shown) => {
+                let presenting = clock();
+                let (placement, path, downloaded) = self.show(shown.picture);
+                self.play.placed(
+                    placement,
+                    self.last_size,
+                    path,
+                    downloaded,
+                    clock() - presenting,
+                );
+                self.sound(shown.sound);
+                Some(shown.report)
             }
         }
     }
@@ -376,7 +268,7 @@ impl Player {
                 {
                     let result = match self.frame() {
                         Some(report) => Ok(orla_protocol::report_json(&self.session, &report)),
-                        None => Err(serde_json::json!({ "message": self.status })),
+                        None => Err(serde_json::json!({ "message": self.play.status() })),
                     };
                     (orla_protocol::envelope(&id, result), false)
                 }
@@ -394,103 +286,10 @@ impl Player {
         }
     }
 
-    /// Moves the preview to the next node, or back to the graph output
-    /// after the last one. Previewed nodes are pinned so fusion keeps them
-    /// materialized.
-    fn cycle_preview(&mut self) {
-        let nodes: Vec<orla_graph::NodeId> = self
-            .session
-            .graph()
-            .map(|graph| graph.nodes.iter().map(|node| node.id.clone()).collect())
-            .unwrap_or_default();
-        if let Some(current) = self.preview.take() {
-            self.session.unpin(&current);
-            let position = nodes.iter().position(|node| *node == current);
-            if let Some(next) = position.and_then(|p| nodes.get(p + 1)) {
-                self.preview = Some(next.clone());
-            }
-        } else {
-            self.preview = nodes.first().cloned();
-        }
-        if let Some(node) = &self.preview {
-            self.session.pin(node.clone());
-        }
-        let view = self
-            .preview
-            .as_ref()
-            .map_or("output".to_string(), ToString::to_string);
-        eprintln!("previewing {view}");
-    }
-
-    /// The F10 line for this frame: the smoothed times, then the backend,
-    /// the window, the shown image, what ran, and what waits off the frame.
-    fn panel_for(
-        &self,
-        report: &orla_graph::Report,
-        shown: orla_runtime::Handle,
-        context: &Context,
-    ) -> Panel {
-        let host = self.session.runtime().host();
-        let (width, height) = host.image_size(shown).unwrap_or((0, 0));
-        let fused: usize = report
-            .fused
-            .iter()
-            .map(|(_, absorbed)| absorbed.len())
-            .sum();
-        let view = match &self.preview {
-            Some(node) => format!("view {node}"),
-            None => "output".to_string(),
-        };
-        let sound = match &self.audio {
-            Some(audio) => format!(" | sound {}", audio.describe()),
-            None => String::new(),
-        };
-        // The nodes that left the main backend this frame, and what the
-        // trip carried: what a device session pays that a profile would
-        // otherwise have to be asked for.
-        let routed: Vec<&orla_graph::Placed> = report
-            .placements
-            .iter()
-            .filter(|placed| placed.routed.is_some())
-            .collect();
-        let off = if routed.is_empty() {
-            String::new()
-        } else {
-            let carried: u64 = routed.iter().map(|p| p.uploaded + p.downloaded).sum();
-            let carried = carried
-                + report
-                    .placements
-                    .iter()
-                    .filter(|placed| placed.routed.is_none())
-                    .map(|p| p.uploaded)
-                    .sum::<u64>();
-            format!(
-                " | off {} {} ({})",
-                routed[0].backend,
-                routed.len(),
-                orla_session::bench::bytes_text(carried)
-            )
-        };
-        let rest = format!(
-            "{}{off} | window {}x{} x{:.0} | {view} {width}x{height} | ran {} reused {} fused {fused} | async {} | {} | downloads {}{sound} | t {:.1} s",
-            self.session.runtime().backend_name(),
-            context.window[0],
-            context.window[1],
-            context.scale,
-            report.executed.len(),
-            report.reused.len(),
-            report.pending.len(),
-            self.path,
-            self.downloads,
-            context.time,
-        );
-        hud::panel(&self.stats.line(&rest), context.scale.round() as u32)
-    }
-
-    /// Shows an output image: directly from the device when it is resident
+    /// Shows a picture: directly from the device when it is resident
     /// and a presenter exists, otherwise by downloading it and blitting.
-    /// Returns a short description of the path taken.
-    fn show(&mut self, output: orla_runtime::Handle) -> &'static str {
+    /// Answers where it landed, how, and whether that took a download.
+    fn show(&mut self, output: orla_runtime::Handle) -> (Option<Placement>, &'static str, bool) {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
             let host = self.session.runtime().host();
             let resident = host.resident(output).ok().flatten();
@@ -506,7 +305,7 @@ impl Player {
             {
                 let size = window.inner_size();
                 if let Some(display) = &self.display {
-                    let overlay = self.panel.as_ref().map(|panel| Overlay {
+                    let overlay = self.play.panel().map(|panel| Overlay {
                         pixels: &panel.pixels,
                         width: panel.width,
                         height: panel.height,
@@ -522,66 +321,35 @@ impl Player {
                     ) {
                         Ok(Some(placement)) => {
                             self.last_size = (width, height);
-                            self.placement = placement;
-                            return "presented on the device";
+                            return (Some(placement), "presented on the device", false);
                         }
                         Ok(None) => {
                             self.last_size = (width, height);
-                            return "window not ready";
+                            return (None, "window not ready", false);
                         }
                         Err(error) => eprintln!("present failed: {error}; downloading instead"),
                     }
                 }
             }
         }
-        if let Ok(image) = self.session.runtime_mut().image(output) {
-            self.downloads += 1;
-            self.last_size = (image.width(), image.height());
-            self.last_frame.clear();
-            self.last_frame.extend_from_slice(image.pixels());
-        }
-        self.blit();
-        "downloaded and blitted"
+        let downloaded = match self.session.runtime_mut().image(output) {
+            Ok(image) => {
+                self.last_size = (image.width(), image.height());
+                self.last_frame.clear();
+                self.last_frame.extend_from_slice(image.pixels());
+                true
+            }
+            Err(_) => false,
+        };
+        (self.blit(), "downloaded and blitted", downloaded)
     }
 
-    /// The output the window shows: the first grid of pixels, or the
-    /// graph's first output when there is none.
-    fn displayed_output(&self, report: &orla_graph::Report) -> orla_runtime::Handle {
-        let host = self.session.runtime().host();
-        report
-            .outputs
-            .iter()
-            .map(|(_, handle)| *handle)
-            .find(|handle| {
-                host.schema(*handle).is_ok_and(|s| s.is_pixel())
-                    && host.domain(*handle).is_ok_and(|d| d.depth() == 1)
-            })
-            .unwrap_or(report.output)
-    }
-
-    /// Hands the first sound-shaped output to the sound card: rows of one
-    /// float (mono) or two (stereo). Opens the device on first need.
-    fn play(&mut self, report: &orla_graph::Report) {
+    /// Hands the frame's sound output to the sound card, opening it on
+    /// first need.
+    fn sound(&mut self, sound: Option<orla_runtime::Handle>) {
         if !self.audio_allowed || self.audio_failed {
             return;
         }
-        let sound = {
-            let host = self.session.runtime().host();
-            report
-                .outputs
-                .iter()
-                .map(|(_, handle)| *handle)
-                .find(|handle| {
-                    host.domain(*handle)
-                        .is_ok_and(|d| d.shape() == orla_runtime::Shape::Rows)
-                        && host.schema(*handle).is_ok_and(|s| {
-                            (1..=2).contains(&s.value_words())
-                                && s.scalars()
-                                    .iter()
-                                    .all(|c| *c == orla_runtime::Scalar::Float)
-                        })
-                })
-        };
         let Some(handle) = sound else {
             return;
         };
@@ -596,6 +364,7 @@ impl Player {
             match Audio::open(frames) {
                 Ok(audio) => {
                     eprintln!("audio: {}", audio.describe());
+                    self.play.sound_opened(audio.describe());
                     self.audio = Some(audio);
                 }
                 Err(error) => {
@@ -631,26 +400,28 @@ impl Player {
         }
     }
 
-    fn blit(&mut self) {
+    /// Draws the last downloaded picture, and the line of frame data
+    /// over it, into the window: where it landed, when it was drawn.
+    fn blit(&mut self) -> Option<Placement> {
         if self.presenter.is_some() && self.last_frame.is_empty() {
-            return;
+            return None;
         }
         let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
-            return;
+            return None;
         };
         let size = window.inner_size();
         let (Some(width), Some(height)) =
             (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
         else {
-            return;
+            return None;
         };
         if surface.resize(width, height).is_err() {
-            return;
+            return None;
         }
         let Ok(mut buffer) = surface.buffer_mut() else {
-            return;
+            return None;
         };
-        self.placement = orla_player::present(
+        let placement = play::present(
             &self.last_frame,
             self.last_size.0,
             self.last_size.1,
@@ -658,20 +429,11 @@ impl Player {
             size.height,
             &mut buffer,
         );
-        if let Some(panel) = &self.panel {
+        if let Some(panel) = self.play.panel() {
             hud::stamp(panel, &mut buffer, size.width, size.height);
         }
         let _ = buffer.present();
-    }
-
-    fn update_pointer(&mut self) {
-        self.input.pointer = to_output(
-            &self.placement,
-            self.cursor.0,
-            self.cursor.1,
-            self.last_size.0,
-            self.last_size.1,
-        );
+        Some(placement)
     }
 }
 
@@ -730,18 +492,16 @@ impl ApplicationHandler for Player {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = (position.x as f32, position.y as f32);
-                self.update_pointer();
+                self.play.pointer(position.x as f32, position.y as f32);
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let held = state == ElementState::Pressed;
                 match button {
-                    MouseButton::Left => self.input.pointer_down = held,
-                    MouseButton::Right => self.input.pointer_right = held,
-                    MouseButton::Middle => self.input.pointer_middle = held,
+                    MouseButton::Left => self.play.button(0, held),
+                    MouseButton::Right => self.play.button(1, held),
+                    MouseButton::Middle => self.play.button(2, held),
                     _ => {}
                 }
-                self.update_pointer();
             }
             // The wheel accumulates until the next evaluation reads it.
             WindowEvent::MouseWheel { delta, .. } => {
@@ -749,8 +509,7 @@ impl ApplicationHandler for Player {
                     MouseScrollDelta::LineDelta(x, y) => (x, y),
                     MouseScrollDelta::PixelDelta(p) => (p.x as f32 / 40.0, p.y as f32 / 40.0),
                 };
-                self.input.wheel[0] += x;
-                self.input.wheel[1] += y;
+                self.play.wheel(x, y);
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -763,36 +522,15 @@ impl ApplicationHandler for Player {
                 ..
             } => {
                 let down = state == ElementState::Pressed;
-                match logical_key {
-                    Key::Named(NamedKey::Escape) => event_loop.exit(),
-                    Key::Named(NamedKey::F5) => {
-                        if down {
-                            self.session.reset_state();
-                            eprintln!("state reset");
-                        }
-                    }
-                    Key::Named(NamedKey::Tab) => {
-                        if down {
-                            self.cycle_preview();
-                        }
-                    }
-                    Key::Named(NamedKey::F10) => {
-                        if down {
-                            self.hud = !self.hud;
-                            self.panel = None;
-                        }
-                    }
-                    Key::Named(named) => {
-                        if let Some(code) = key_code(&format!("{named:?}")) {
-                            self.input.set_key(code, down);
-                        }
-                    }
-                    Key::Character(text) => {
-                        if let Some(code) = key_code(&text) {
-                            self.input.set_key(code, down);
-                        }
-                    }
-                    _ => {}
+                let name = match logical_key {
+                    Key::Named(named) => format!("{named:?}"),
+                    Key::Character(text) => text.to_string(),
+                    _ => return,
+                };
+                let asked = self.play.key(&mut self.session, &name, down);
+                self.say();
+                if asked == Some(Asked::Stop) {
+                    event_loop.exit();
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -874,37 +612,24 @@ fn main() -> ExitCode {
     session.set_background(true);
     let mut player = Player {
         session,
+        play: Play::new(clock),
         scale: options.scale,
         requested: options.window,
-        clock: Instant::now(),
         window: None,
         surface: None,
         display,
         presenter: None,
-        downloads: 0,
         last_frame: Vec::new(),
         last_size: (0, 0),
-        placement: Placement::default(),
-        input: InputState::default(),
-        cursor: (0.0, 0.0),
-        status: "starting".into(),
-        reported: orla_player::Reporting::default(),
-        path: "",
         requests: None,
-        preview: None,
         audio: None,
         gamepad,
         audio_allowed: !options.no_audio,
         audio_failed: false,
-        hud: false,
-        stats: Stats::default(),
-        panel: None,
-        replaying: None,
     };
     if let Some(replay) = &options.replay {
-        let replayer = orla_session::replay::Replayer::start(replay, &mut player.session);
-        player.replaying = Some((replayer, None));
-        eprintln!("playing the replay: its inputs drive the window until it ends");
+        player.play.replay(replay, &mut player.session);
+        player.say();
     }
     if options.serve {
         let (sender, receiver) = channel();
@@ -925,17 +650,21 @@ fn main() -> ExitCode {
         player.requests = Some(receiver);
         eprintln!("serving the creation protocol on stdin/stdout");
     }
-    // Evaluate once before opening the window so it can take the output size.
-    let context = player.context();
-    match player.session.evaluate(&context) {
-        Ok(report) => {
+    // Evaluate once before opening the window so it can take the output
+    // size. Not under a replay: its window is the replay's, and a frame
+    // the replay did not ask for would move the world it starts from.
+    let context = player.play.context(player.view());
+    let probed = (!player.play.replaying()).then(|| player.session.evaluate(&context));
+    match probed {
+        Some(Ok(report)) => {
             if let Ok((width, height)) = player.session.runtime().host().image_size(report.output) {
                 player.last_size = (width, height);
             }
         }
-        Err(error) => {
+        Some(Err(error)) => {
             eprintln!("evaluation failed: {error}; the window opens when it succeeds");
         }
+        None => {}
     }
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,

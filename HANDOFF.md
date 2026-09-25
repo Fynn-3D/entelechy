@@ -51,9 +51,10 @@ done
 
 ## Next
 
-Open: the user has not chosen the next round. Orla runs in a page on
-its JIT and on WebGPU, presenting on a canvas. Candidates: a second
-native platform (Vulkan or DX12, Linux or Windows; needs the CI workflow
-run by hand); the page's GPU in Firefox and Safari, which have no
-JavaScript Promise Integration yet (DECISIONS: *In a page, waiting for
-the device is giving the page a turn*). Ask before starting any.
+The page's Player, as a device adapter over the shared play
+(DECISIONS: *What playing a scene means is decided once*): the play
+reached through the C ABI (keys, pointer, wheel, pads, the frame, where
+the picture landed, what it says, a replay), and a page that is only the
+canvas, its events, WebAudio, the Gamepad API and the served files
+watched and handed in. Agreed with the user; nothing of the play is
+written again in JavaScript.
