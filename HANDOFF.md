@@ -6,12 +6,8 @@
 
 | Fact | What follows from it |
 | --- | --- |
-| Conversation is Chinese; source, comments, documents and commits are English. | Write artifacts in English whatever the request was written in. |
-| `main` is the line; a round of work is one branch, fast-forwarded back on the user's word. | Branch first, ask once at the end, never merge unasked. |
-| `origin` is the private GitHub repository `Fynn-3D/orla`. | Push only on the user's word; the CI workflow runs when started by hand, until a release spans platforms. |
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
 | `../bak/orla` is the previous implementation, read-only. | Consult it; take nothing from it unchecked. |
-| Commit as the repository's configured identity. | `git config user.name` is already what the user wants. |
 
 Verified surface, as of `main`:
 
@@ -31,25 +27,6 @@ Verified surface, as of `main`:
 | A session's random life: a success advances by one, a failure changes nothing, the Host does not grow | `crates/interface/session/tests/properties.rs` |
 | Blender 5.2, headless Chrome, Godot 4.6, C ABI | `cargo test --workspace`, each skipped when its tool is absent |
 | A live Blender | its MCP add-on, `127.0.0.1:9876`, `{"type":"execute","code":…,"strict_json":false}` + `\0` |
-
-## Verification before a commit
-
-```sh
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p orla-jit -p orla-ffi --features orla-jit/wasm-host --target wasm32-unknown-unknown -- -D warnings
-cargo test --workspace
-cargo build --release
-# Replays are independent: several at once, each backend in turn. A
-# failure prints why and makes xargs exit non-zero.
-for b in gpu cpu jit; do
-  printf '%s\n' examples/*/tests/*.replay | xargs -P 4 -n 1 ./target/release/orla replay --backend "$b"
-done
-cargo build --release -p orla --target wasm32-wasip1
-# WASI has no threads, so each replay is one core: eight at once.
-printf '%s\n' examples/*/tests/*.replay |
-  xargs -P 8 -n 1 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay --backend cpu
-```
 
 ## Next
 
