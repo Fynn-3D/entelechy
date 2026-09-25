@@ -30,14 +30,15 @@ use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
 use orla_abi::{Encoding, Scalar, Type, encoding};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
 
+use crate::failure;
+use crate::layout::{self, Lane, byte_offsets, byte_size, field_offset, holds_wide};
 use crate::offsets;
 
-/// Error codes stored in the context, as the CPU backend reports them.
-const DIVISION_BY_ZERO: i64 = 1;
-const OVERFLOW: i64 = 2;
-const EXHAUSTED: i64 = 3;
-/// The failure code of an element whose run passed its total.
-const OVERRUN: i64 = 4;
+/// The failure codes ([`crate::failure`]) as this code stores them.
+const DIVISION_BY_ZERO: i64 = failure::DIVISION_BY_ZERO as i64;
+const OVERFLOW: i64 = failure::OVERFLOW as i64;
+const EXHAUSTED: i64 = failure::EXHAUSTED as i64;
+const OVERRUN: i64 = failure::OVERRUN as i64;
 
 /// The imported helpers, by function id.
 struct Imports {
@@ -313,90 +314,24 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         merge,
     })
 }
-
 /// The Cranelift type of each scalar of a value of `ty`, in layout
-/// order: a 32-bit scalar is one word, and a `Double` or a `Long` one
-/// 64-bit value that memory keeps as two words, the low one first
-/// (little-endian, as every target the JIT builds for is).
+/// order ([`layout::lanes`]).
 fn word_types(module: &Module, ty: Type) -> Vec<types::Type> {
-    match ty {
-        Type::Struct(index) => module.structs[index as usize]
-            .fields
-            .iter()
-            .flat_map(|field| word_types(module, field.ty))
-            .collect(),
-        other => {
-            let (scalar, n) = other.shape().unwrap_or((Type::Float, 1));
-            let lane = match scalar {
-                Type::Float => types::F32,
-                Type::Double => types::F64,
-                Type::Long => types::I64,
-                _ => types::I32,
-            };
-            vec![lane; usize::from(n)]
-        }
-    }
-}
-
-/// Where each scalar of `tys` begins in memory, in bytes.
-fn byte_offsets(tys: &[types::Type]) -> Vec<i32> {
-    let mut at = 0;
-    tys.iter()
-        .map(|t| {
-            let here = at;
-            at += t.bytes() as i32;
-            here
+    layout::lanes(module, ty)
+        .into_iter()
+        .map(|lane| match lane {
+            Lane::F32 => types::F32,
+            Lane::F64 => types::F64,
+            Lane::I32 => types::I32,
+            Lane::I64 => types::I64,
         })
         .collect()
 }
 
-/// Bytes the scalars of `tys` take in memory.
-fn byte_size(tys: &[types::Type]) -> usize {
-    tys.iter().map(|t| t.bytes() as usize).sum()
-}
-
-/// Whether a type holds a 64-bit scalar anywhere.
-fn holds_wide(module: &Module, ty: Type) -> bool {
-    word_types(module, ty).iter().any(|t| t.bits() == 64)
-}
-
-/// Word offset of a struct's field.
-fn field_offset(module: &Module, index: u32, field: usize) -> usize {
-    module.structs[index as usize].fields[..field]
-        .iter()
-        .map(|f| word_types(module, f.ty).len())
-        .sum()
-}
-
-fn result_type(function: &Function) -> Type {
-    fn find(instructions: &[Instruction], id: orla_ir::ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                Op::Match {
-                    arms, otherwise, ..
-                } => arms
-                    .iter()
-                    .find_map(|(_, block)| find(&block.body, id))
-                    .or_else(|| find(&otherwise.body, id)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
+impl layout::Width for types::Type {
+    fn width(self) -> u32 {
+        self.bytes()
     }
-    find(&function.body, function.results[0]).unwrap_or(Type::Float)
 }
 
 /// An input's view as the run sees it: the parts that do not change
@@ -764,7 +699,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 // has them; the carried words are loaded once.
                 let zero = self.i32c(0);
                 self.coords = Some((params[1], zero, zero, params[3]));
-                let carried_types = word_types(self.module, result_type(function));
+                let carried_types = word_types(self.module, function.result_type());
                 let carried = self.loads(&carried_types, self.flags, params[2], 0);
                 self.scan = Some((carried, params[1]));
                 params[3]
@@ -1149,7 +1084,7 @@ impl<'a, 'b> Fx<'a, 'b> {
     ) -> Vec<Value> {
         tys.iter()
             .zip(byte_offsets(tys))
-            .map(|(t, at)| self.b.ins().load(*t, flags, base, offset + at))
+            .map(|(t, at)| self.b.ins().load(*t, flags, base, offset + at as i32))
             .collect()
     }
 
@@ -1523,7 +1458,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             Op::Param(index) => {
                 let offset: usize = self.module.manifest.params[..*index as usize]
                     .iter()
-                    .map(|p| byte_size(&word_types(self.module, p.ty)))
+                    .map(|p| byte_size(&word_types(self.module, p.ty)) as usize)
                     .sum();
                 let base = self
                     .b
@@ -1631,7 +1566,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                         3,
                     ));
                     for (word, at) in words.iter().zip(byte_offsets(&array_types)) {
-                        self.b.ins().stack_store(*word, slot, at);
+                        self.b.ins().stack_store(*word, slot, at as i32);
                     }
                     let address = self.b.ins().stack_addr(self.ptr, slot, 0);
                     if let Some(block) = self.b.current_block() {
@@ -2088,7 +2023,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 // run already carries where it is in every input, so
                 // the part is the loads at its offset and nothing else.
                 let Some(at) = at else {
-                    let within = self.part_offset(*input, path, byte_size(&tys) / 4, unit);
+                    let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, unit);
                     if let Some(base) = self.settled_view(*input).and_then(|view| view.at) {
                         let offset = self.b.ins().uextend(self.ptr, within);
                         let base = self.b.ins().iadd(base, offset);
@@ -2100,7 +2035,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 };
                 let address = self.words(at);
                 if matches!(self.ty(at), Type::Int) {
-                    let within = self.part_offset(*input, path, byte_size(&tys) / 4, unit);
+                    let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, unit);
                     let index = self.rows_index(*input, address[0]);
                     return self.part_words(*input, index, within, ty, &tys);
                 }
@@ -2124,7 +2059,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                         );
                     }
                 }
-                let within = self.part_offset(*input, path, byte_size(&tys) / 4, 4);
+                let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, 4);
                 let bytes = self.b.ins().uextend(self.ptr, within);
                 let base = self.b.ins().iadd(out, bytes);
                 self.loads(&tys, self.flags, base, 0)

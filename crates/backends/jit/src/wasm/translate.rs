@@ -20,12 +20,15 @@ use orla_abi::{Encoding, Scalar, Type, encoding};
 use orla_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp};
 
 use super::encode::{Body, Signature, Val, signed, unsigned};
+use crate::failure;
+use crate::layout::{self, Lane, byte_offsets, byte_size, field_offset, holds_wide};
 use crate::offsets;
 
-const DIVISION_BY_ZERO: i32 = 1;
-const OVERFLOW: i32 = 2;
-const EXHAUSTED: i32 = 3;
-const OVERRUN: i32 = 4;
+/// The failure codes ([`crate::failure`]) as this code stores them.
+const DIVISION_BY_ZERO: i32 = failure::DIVISION_BY_ZERO as i32;
+const OVERFLOW: i32 = failure::OVERFLOW as i32;
+const EXHAUSTED: i32 = failure::EXHAUSTED as i32;
+const OVERRUN: i32 = failure::OVERRUN as i32;
 
 /// A word: the local that holds it, and its type.
 pub type W = (u32, Val);
@@ -74,86 +77,24 @@ pub enum Kind {
     /// output slot.
     Merge,
 }
-
 /// The WebAssembly type of each scalar of a value of `ty`, in layout
-/// order.
+/// order ([`layout::lanes`]).
 pub fn word_types(module: &Module, ty: Type) -> Vec<Val> {
-    match ty {
-        Type::Struct(index) => module.structs[index as usize]
-            .fields
-            .iter()
-            .flat_map(|field| word_types(module, field.ty))
-            .collect(),
-        other => {
-            let (scalar, n) = other.shape().unwrap_or((Type::Float, 1));
-            let lane = match scalar {
-                Type::Float => Val::F32,
-                Type::Double => Val::F64,
-                Type::Long => Val::I64,
-                _ => Val::I32,
-            };
-            vec![lane; usize::from(n)]
-        }
-    }
-}
-
-fn byte_offsets(tys: &[Val]) -> Vec<u32> {
-    let mut at = 0;
-    tys.iter()
-        .map(|t| {
-            let here = at;
-            at += t.bytes();
-            here
+    layout::lanes(module, ty)
+        .into_iter()
+        .map(|lane| match lane {
+            Lane::F32 => Val::F32,
+            Lane::F64 => Val::F64,
+            Lane::I32 => Val::I32,
+            Lane::I64 => Val::I64,
         })
         .collect()
 }
 
-fn byte_size(tys: &[Val]) -> u32 {
-    tys.iter().map(|t| t.bytes()).sum()
-}
-
-fn holds_wide(module: &Module, ty: Type) -> bool {
-    word_types(module, ty)
-        .iter()
-        .any(|t| matches!(t, Val::I64 | Val::F64))
-}
-
-fn field_offset(module: &Module, index: u32, field: usize) -> usize {
-    module.structs[index as usize].fields[..field]
-        .iter()
-        .map(|f| word_types(module, f.ty).len())
-        .sum()
-}
-
-fn result_type(function: &Function) -> Type {
-    fn find(instructions: &[Instruction], id: orla_ir::ValueId) -> Option<Type> {
-        for instruction in instructions {
-            if instruction.id == id {
-                return Some(instruction.ty);
-            }
-            let nested = match &instruction.op {
-                Op::If {
-                    then, otherwise, ..
-                } => find(&then.body, id).or_else(|| find(&otherwise.body, id)),
-                Op::Match {
-                    arms, otherwise, ..
-                } => arms
-                    .iter()
-                    .find_map(|(_, block)| find(&block.body, id))
-                    .or_else(|| find(&otherwise.body, id)),
-                Op::Loop { until, body, .. } => until
-                    .as_ref()
-                    .and_then(|block| find(&block.body, id))
-                    .or_else(|| find(&body.body, id)),
-                _ => None,
-            };
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        None
+impl layout::Width for Val {
+    fn width(self) -> u32 {
+        self.bytes()
     }
-    find(&function.body, function.results[0]).unwrap_or(Type::Float)
 }
 
 /// The signature every function of `kind` has.
@@ -664,7 +605,7 @@ impl<'a> Fx<'a> {
             Kind::Scan => {
                 let zero = self.i32c(0);
                 self.coords = Some((params[1], zero, zero, params[3]));
-                let carried_types = word_types(self.module, result_type(function));
+                let carried_types = word_types(self.module, function.result_type());
                 let carried = self.loads(&carried_types, params[2], 0);
                 self.scan = Some((carried, params[1]));
                 params[3]

@@ -19,6 +19,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod codegen;
+mod failure;
+mod layout;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
@@ -524,7 +526,12 @@ fn compute_into(
                 )
             };
             if ctx.error != 0 {
-                return Err(failure(ctx.error, ctx.error_at, z * height + y, shared));
+                return Err(failure::failure(
+                    ctx.error,
+                    ctx.error_at,
+                    z * height + y,
+                    shared,
+                ));
             }
             hand_left(&mut ctx, shared, LEFT_HANDED)?;
             done += run;
@@ -672,7 +679,7 @@ fn run_reduce(
                 ctx.work = 0;
                 unsafe { merge(&mut ctx, a, b, out.as_mut_ptr()) };
                 if ctx.error != 0 {
-                    return Err((pair, failure(ctx.error, 0, 0, &shared)));
+                    return Err((pair, failure::failure(ctx.error, 0, 0, &shared)));
                 }
                 keep_left(&mut ctx, &shared).map_err(|error| (pair, error))?;
             }
@@ -1037,29 +1044,6 @@ fn keep_left(ctx: &mut Ctx, shared: &Shared) -> Result<(), ExecutionError> {
     hand_left(ctx, shared, LEFT_HANDED)
 }
 
-/// The failure a context's error code names.
-/// What the code a run left in the context says, at the element named:
-/// 1 a division by zero, 2 an overflow, 3 more loop iterations than the
-/// budget, 4 the run past its total.
-fn failure(code: u32, x: u32, y: u32, shared: &Shared) -> ExecutionError {
-    let budget = shared.budget;
-    match code {
-        4 => shared.run.overrun(),
-        5 => shared.held.over(),
-        1 => ExecutionError::Arithmetic {
-            x,
-            y,
-            error: ArithmeticError::DivisionByZero,
-        },
-        3 => ExecutionError::Exhausted { x, y, budget },
-        _ => ExecutionError::Arithmetic {
-            x,
-            y,
-            error: ArithmeticError::Overflow,
-        },
-    }
-}
-
 /// Runs a scan: `init` for the first carried words, then the entry once
 /// per element of the first input, in order, each step reading the
 /// previous step's result and writing its own; then the output and the
@@ -1085,7 +1069,7 @@ fn run_scan(
         if ctx.error == 0 {
             return Ok(());
         }
-        Err(failure(ctx.error, index, 0, &shared))
+        Err(failure::failure(ctx.error, index, 0, &shared))
     };
     // `init` writes exactly `stride` words; each step reads `stride` words
     // of the carried value and writes `stride` words of the next.
@@ -1313,7 +1297,7 @@ unsafe extern "C" fn orla_jit_emit(ctx: *mut Ctx, element: u32, pair: *const u32
     // Held with the word naming its element; past the room, the element
     // stops as a failure does.
     if !ctx.held.is_null() && !unsafe { &*ctx.held }.take(n as usize + 1) {
-        ctx.error = 5;
+        ctx.error = failure::HELD_OVER;
         return;
     }
     let emitted = unsafe { &mut *ctx.emitted };
