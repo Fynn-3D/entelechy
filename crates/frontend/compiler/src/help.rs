@@ -151,7 +151,7 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("emit", "scatter", &["emit(pair: P) -> P"],
             "Gives a scatter one more pair, a struct of an address into its target and a value of its element, as it returns one: an element's pairs are the ones it emits, in order, then the one it returns, and an address outside the target is dropped. Scatter only, from its body, under `min`, `max`, or a `sum` of integers, whose answer is the same in any order.", Some("field.write"), true),
         fixed("element", "context", &["element() -> Int"], "This element's index over rows; a scan's step.", None, true),
-        fixed("coord", "context", &["coord() -> Vec2", "coord() -> Vec3"], "This element's coordinates over a grid or a volume; rows have element().", None, true),
+        fixed("coord", "context", &["coord() -> Vec2", "coord() -> Vec3"], "This element's column and row (and layer) over a grid or a volume, whole numbers from 0 with row 0 at the top; the element's centre is coord() + 0.5. Rows have element().", None, true),
         fixed("icoord", "context", &["icoord() -> IVec2", "icoord() -> IVec3"], "This element's coordinates as integers, for arithmetic on cells.", None, true),
         fixed("domain", "context", &["domain() -> Int", "domain() -> Vec2", "domain() -> Vec3"], "The output's extent in its shape.", None, true),
         fixed("idomain", "context", &["idomain() -> Int", "idomain() -> IVec2", "idomain() -> IVec3"], "The output's extent as integers.", None, true),

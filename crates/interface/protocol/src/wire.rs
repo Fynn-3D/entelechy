@@ -377,12 +377,27 @@ pub(crate) fn events_json(events: &[Event]) -> Vec<Json> {
         .collect()
 }
 
+/// A Float as the shortest decimal that reads back as it: `0.3`, not the
+/// double nearest the float (`0.30000001192092896`).
+fn float_json(v: f32) -> Json {
+    v.to_string()
+        .parse::<f64>()
+        .ok()
+        .and_then(serde_json::Number::from_f64)
+        .map_or(Json::Null, Json::Number)
+}
+
+fn floats_json(v: &[f32]) -> Json {
+    Json::Array(v.iter().map(|x| float_json(*x)).collect())
+}
+
 /// A value as JSON: numbers and booleans, a vector as its components, a
-/// matrix as its columns, a struct or array as its members. A double is
-/// the number that reads back exactly; a long is a number up to 2^53 in
-/// magnitude and a string of digits beyond.
+/// matrix as its columns, a struct or array as its members. A float is
+/// the shortest decimal that reads back as it, a double the number that
+/// reads back exactly, a long a number up to 2^53 in magnitude and a
+/// string of digits beyond.
 pub fn value_json(value: &Value) -> Json {
-    let columns = |v: &[f32], n: usize| json!(v.chunks(n).collect::<Vec<_>>());
+    let columns = |v: &[f32], n: usize| Json::Array(v.chunks(n).map(floats_json).collect());
     let dcolumns = |v: &[f64], n: usize| json!(v.chunks(n).collect::<Vec<_>>());
     let long = |v: i64| {
         if v.unsigned_abs() <= 1 << 53 {
@@ -402,12 +417,12 @@ pub fn value_json(value: &Value) -> Json {
         Value::DMat2(v) => dcolumns(v, 2),
         Value::DMat3(v) => dcolumns(v, 3),
         Value::DMat4(v) => dcolumns(v, 4),
-        Value::Float(v) => json!(v),
+        Value::Float(v) => float_json(*v),
         Value::Int(v) => json!(v),
         Value::Bool(v) => json!(v),
-        Value::Vec2(v) => json!(v),
-        Value::Vec3(v) => json!(v),
-        Value::Vec4(v) => json!(v),
+        Value::Vec2(v) => floats_json(v),
+        Value::Vec3(v) => floats_json(v),
+        Value::Vec4(v) => floats_json(v),
         Value::IVec2(v) => json!(v),
         Value::IVec3(v) => json!(v),
         Value::Mat2(v) => columns(v, 2),

@@ -218,6 +218,16 @@ mod tests {
         assert_eq!(error["similar"][0], "clamp", "{error}");
     }
 
+    /// A float answers as the decimal written for it.
+    #[test]
+    fn a_float_is_its_shortest_decimal() {
+        assert_eq!(value_json(&Value::Float(0.3)).to_string(), "0.3");
+        assert_eq!(
+            value_json(&Value::Vec2([0.1, 2.5])).to_string(),
+            "[0.1,2.5]"
+        );
+    }
+
     #[test]
     fn values_round_trip_through_json() {
         for value in [

@@ -404,8 +404,13 @@ fn new_scene(args: &[String]) -> Result<(), String> {
         .find(|path| path.ends_with(".replay"))
         .map(|path| dir.join(path))
         .unwrap_or_else(|| dir.join("tests"));
+    // Written as `orla` was run, so each line runs as it is.
+    let orla = std::env::args()
+        .next()
+        .filter(|me| me.contains('/'))
+        .unwrap_or_else(|| "orla".to_owned());
     eprintln!(
-        "play it:  orla player {}\nrun it:   orla run {} --window 640x400 --out frame.ppm\ntest it:  orla replay {}",
+        "play it:  {orla} player {}\nrun it:   {orla} run {} --window 640x400 --out frame.png\ntest it:  {orla} replay {}",
         scene.display(),
         scene.display(),
         replay.display()

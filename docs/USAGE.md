@@ -369,6 +369,15 @@ window a person is watching. The operations are in
 
 ## In your own process
 
+From a release, whose library is `lib/` and header `include/`:
+
+```sh
+cc bridges/c/hello.c -Iinclude -Llib -lorla_ffi -Wl,-rpath,lib -o hello
+./hello examples/text/scene.osn jit
+```
+
+From the source:
+
 ```sh
 cargo build --release -p orla-ffi
 cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lorla_ffi -o hello
@@ -392,12 +401,24 @@ their program's language that speak the protocol over `--listen`:
 
 ```sh
 orla player --serve --listen 127.0.0.1:7788 examples/mesh/scene.osn
-cargo test -p orla --test bridges   # web through node and Chrome, Godot through godot -s
 ```
 
-The bridge test skips, and says so, what has no tool installed.
+Each bridge's README says how to open it. From the source, `cargo test
+-p orla --test bridges` runs web through node and Chrome and Godot
+through `godot -s`, and skips, saying so, what has no tool installed.
 
 ## WebAssembly
+
+A release carries both: `orla-<version>-wasm32-wasip1.wasm`, the `orla`
+command for any WASI runtime, and `orla-<version>-web.tar.gz`, Orla in a
+page with the web bridge, the examples and the packages:
+
+```sh
+wasmtime run --dir . orla-<version>-wasm32-wasip1.wasm replay examples/ant/tests/ant.replay --backend cpu
+cd orla-<version>-web && node bridges/web/serve.mjs   # then http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.osn
+```
+
+From the source:
 
 ```sh
 rustup target add wasm32-wasip1
