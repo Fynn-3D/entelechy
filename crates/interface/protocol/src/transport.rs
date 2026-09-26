@@ -54,6 +54,18 @@ pub enum Reply {
     /// answer is made, so a `quit`'s answer is out before the process
     /// ends.
     Stdout,
+    /// Standard output as an MCP server's tool result, under the call's
+    /// JSON-RPC id ([`crate::mcp::result`]).
+    Mcp(serde_json::Value),
+}
+
+/// How requests arrive on standard input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Framing {
+    /// The protocol's own lines.
+    Lines,
+    /// MCP: JSON-RPC 2.0, each operation a tool ([`crate::mcp`]).
+    Mcp,
 }
 
 impl Reply {
@@ -63,24 +75,36 @@ impl Reply {
             Self::Connection(sender) => {
                 let _ = sender.send(line);
             }
-            Self::Stdout => {
-                let stdout = std::io::stdout();
-                let mut out = stdout.lock();
-                let _ = writeln!(out, "{line}");
-                let _ = out.flush();
+            Self::Stdout => write_stdout(&line),
+            Self::Mcp(id) => {
+                // The empty line that closes a connection has no result.
+                if !line.is_empty() {
+                    write_stdout(&crate::mcp::result(id, &line));
+                }
             }
         }
     }
 }
 
-/// Feeds standard input's lines to `sink` from its own thread. Where no
+/// One line to standard output, flushed.
+fn write_stdout(line: &str) {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
+}
+
+/// Feeds standard input's requests to `sink` from its own thread. Where no
 /// thread starts (WebAssembly) it returns the error, and the caller reads
 /// [`stdin_lines`] itself, answering each before the next.
-pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) -> std::io::Result<()> {
+pub fn stdin_into(
+    sink: std::sync::mpsc::Sender<Incoming>,
+    framing: Framing,
+) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("orla stdin".into())
         .spawn(move || {
-            for incoming in stdin_lines() {
+            for incoming in stdin_lines(framing) {
                 if sink.send(incoming).is_err() {
                     break;
                 }
@@ -89,17 +113,34 @@ pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) -> std::io::Result<()
         .map(drop)
 }
 
-/// Standard input's request lines, as they arrive.
-pub fn stdin_lines() -> impl Iterator<Item = Incoming> {
+/// Standard input's requests, as they arrive. Under MCP, what needs no
+/// session (`initialize`, `tools/list`, `ping`) is answered here, and a
+/// tool call arrives as its operation's request.
+pub fn stdin_lines(framing: Framing) -> impl Iterator<Item = Incoming> {
     std::io::stdin()
         .lines()
         .map_while(Result::ok)
         .filter(|line| !line.trim().is_empty())
-        .map(|line| Incoming {
-            line,
-            reply: Reply::Stdout,
-            local: true,
-            from: "stdin".into(),
+        .filter_map(move |line| match framing {
+            Framing::Lines => Some(Incoming {
+                line,
+                reply: Reply::Stdout,
+                local: true,
+                from: "stdin".into(),
+            }),
+            Framing::Mcp => match crate::mcp::step(&line) {
+                crate::mcp::Step::Answer(answer) => {
+                    write_stdout(&answer);
+                    None
+                }
+                crate::mcp::Step::Quiet => None,
+                crate::mcp::Step::Call { id, request } => Some(Incoming {
+                    line: request.to_string(),
+                    reply: Reply::Mcp(id),
+                    local: true,
+                    from: "mcp".into(),
+                }),
+            },
         })
 }
 

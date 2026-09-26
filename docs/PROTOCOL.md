@@ -83,6 +83,14 @@ Schema in `schema`.
   --serve <scene.osn>`: requests arrive while the window runs, `evaluate`
   answers with the next window frame under the person's pointer and
   keys, and `read` returns the frame the window shows.
+- **MCP.** `orla serve <scene.osn> --mcp` speaks MCP on standard input
+  and output: JSON-RPC 2.0, a message a line. `initialize` says what Orla
+  is and to ask `help` first; `tools/list` names every operation but
+  `quit` as a tool whose input schema is its request's; `tools/call` is
+  the operation's request, answered as any other, its answer the tool's
+  result (as text, and as `structuredContent` when it is an object), a
+  refusal an error result that says why. An MCP client runs it as its
+  server command.
 - **Socket.** `--listen <host:port>` (`127.0.0.1:7788`; port 0 for any
   free port, named on stderr as `listening on ...`) accepts connections
   carrying the same lines, one response per request in order. Every

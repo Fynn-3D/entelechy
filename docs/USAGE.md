@@ -356,6 +356,13 @@ back bit for bit.
 
 ```sh
 orla serve examples/life/scene.osn
+orla serve examples/life/scene.osn --mcp     # the same session as an MCP server
+```
+
+An MCP client runs Orla as a server command:
+
+```json
+{ "mcpServers": { "orla": { "command": "/path/to/bin/orla", "args": ["serve", "/path/to/scene.osn", "--mcp"] } } }
 ```
 
 Agents drive a session with JSON lines on stdin and stdout;

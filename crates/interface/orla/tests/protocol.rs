@@ -904,6 +904,85 @@ fn search_finds_the_packages_beside_the_ones_a_scene_uses() {
     assert_eq!(typed["capabilities"].as_array().unwrap().len(), 2);
 }
 
+/// An MCP client meets Orla, lists its tools, and drives the session
+/// through them: each operation a tool with its request's schema, a call
+/// answered as the operation answers, a refusal an error result, and a
+/// publish still being prepared answered before the input's end.
+#[test]
+fn an_mcp_client_drives_the_session_through_tools() {
+    let dir = scratch_in("-mcp");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .arg("serve")
+        .arg(dir.join("scene.osn"))
+        .arg("--mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let call = |id: u64, name: &str, arguments: Json| json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+    for message in [
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        call(3, "status", json!({})),
+        call(
+            4,
+            "publish",
+            json!({ "source": BRIGHT_SHOW, "expect": "any" }),
+        ),
+        call(5, "evaluate", json!({ "time": "soon" })),
+        call(6, "quit", json!({})),
+        json!({ "jsonrpc": "2.0", "id": 7, "method": "resources/list" }),
+    ] {
+        writeln!(stdin, "{message}").unwrap();
+    }
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let answers: Vec<Json> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let by = |id: u64| {
+        answers
+            .iter()
+            .find(|answer| answer["id"] == id)
+            .unwrap_or_else(|| panic!("no answer {id}: {answers:?}"))
+    };
+    assert_eq!(
+        answers.len(),
+        7,
+        "every request, and no notification, answered: {answers:?}"
+    );
+    let hello = &by(1)["result"];
+    assert_eq!(hello["serverInfo"]["name"], "orla");
+    assert_eq!(hello["protocolVersion"], "2025-06-18");
+    assert!(hello["instructions"].as_str().unwrap().contains("`help`"));
+    let tools = by(2)["result"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "search"));
+    assert!(tools.iter().all(|tool| tool["name"] != "quit"));
+    let publish = tools.iter().find(|tool| tool["name"] == "publish").unwrap();
+    assert_eq!(publish["inputSchema"]["required"], json!(["source"]));
+    assert_eq!(by(3)["result"]["isError"], false);
+    assert_eq!(by(3)["result"]["structuredContent"]["kernels"], 3);
+    let published = &by(4)["result"];
+    assert_eq!(published["isError"], false, "{published}");
+    assert_eq!(published["structuredContent"]["id"], "life.show@1");
+    let refused = &by(5)["result"];
+    assert_eq!(refused["isError"], true);
+    assert_eq!(refused["structuredContent"]["field"], "time");
+    assert!(
+        by(6)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no tool `quit`")
+    );
+    assert_eq!(by(7)["error"]["code"], -32601);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Replays the scanline example's `agent.jsonl`, each step held to the
 /// example's README.
 #[test]

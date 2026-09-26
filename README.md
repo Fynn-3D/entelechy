@@ -112,7 +112,9 @@ What an agent can rely on:
 - **The world is observable.** Any port can be read, any element traced through its Kernel, any node
   timed; a run is a replay, and a replay is a test.
 
-The operations, fields and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same
+An MCP client uses the same session as tools: `bin/orla serve <scene.osn> --mcp` is its server
+command, each operation a tool with its request's schema. The operations, fields and answers are in
+[the protocol](docs/PROTOCOL.md). Bridges speak the same
 protocol from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md),
 [a web page](bridges/web/README.md) and [C](bridges/c/README.md).
 

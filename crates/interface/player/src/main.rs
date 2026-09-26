@@ -630,7 +630,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        if let Err(error) = orla_protocol::stdin_into(sender) {
+        if let Err(error) = orla_protocol::stdin_into(sender, orla_protocol::Framing::Lines) {
             eprintln!("error: cannot read standard input: {error}");
             return ExitCode::FAILURE;
         }

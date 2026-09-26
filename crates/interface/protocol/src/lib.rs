@@ -20,6 +20,7 @@ mod create;
 mod fields;
 pub mod help;
 mod inspect;
+pub mod mcp;
 pub mod ops;
 mod request;
 mod run;
@@ -35,7 +36,7 @@ use crate::request::Request;
 use crate::wire::failure;
 
 pub use answers::{Answers, Served};
-pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
+pub use transport::{Framing, Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     capability_json, context_of, report_json, trace_json, type_name, value_from_json, value_json,
     words_json, words_text,
