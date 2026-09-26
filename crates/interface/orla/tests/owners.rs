@@ -83,7 +83,7 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     for entry in entries {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            if !path.file_name().is_some_and(|name| name == "tests") {
+            if path.file_name().is_none_or(|name| name != "tests") {
                 sources(&path, found);
             }
         } else if path.extension().is_some_and(|ext| ext == "rs") {
