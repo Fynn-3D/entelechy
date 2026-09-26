@@ -31,8 +31,8 @@ fn ink(glyphs: Text, font: Atlas, px: Vec2) -> Float {
     return end.cover;
 }
 
-// Codes laid out from `origin`, `advance` texels apart at `scale`; with
-// `wrap` above zero, that many per line, lines 8 texels apart.
+/// Codes laid out from `origin`, `advance` texels apart at `scale`; with
+/// `wrap` above zero, that many per line, lines 8 texels apart.
 kernel text.layout@1 {
     requires { field.read; field.write; }
     input codes: Codes;
@@ -50,8 +50,8 @@ kernel text.layout@1 {
     }
 }
 
-// The first value's magnitude, rounded, as `places` digit codes, most
-// significant first, leading zeros blank; a node sets `domain = places;`.
+/// The first value's magnitude, rounded, as `places` digit codes, most
+/// significant first, leading zeros blank; a node sets `domain = places;`.
 kernel text.digits@1 {
     requires { field.read; field.write; }
     input values: Rows<Float>;
@@ -68,7 +68,7 @@ kernel text.digits@1 {
     }
 }
 
-// The glyphs painted over `under` in `colour`.
+/// The glyphs painted over `under` in `colour`.
 kernel text.draw@1 {
     requires { field.read; field.write; }
     input under: Image;
@@ -83,11 +83,11 @@ kernel text.draw@1 {
     }
 }
 
-// A caption and a number as one row of codes for `text.layout`: the
-// caption's codes, a space, and value `index` of `values` with `places`
-// digits before the point and `decimals` after (none, and no point, at
-// zero), leading zeros blank; a node sets `domain = size(caption) +
-// places + decimals + 2;` (one less with no decimals).
+/// A caption and a number as one row of codes for `text.layout`: the
+/// caption's codes, a space, and value `index` of `values` with `places`
+/// digits before the point and `decimals` after (none, and no point, at
+/// zero), leading zeros blank; a node sets `domain = size(caption) +
+/// places + decimals + 2;` (one less with no decimals).
 kernel text.label@1 {
     requires { field.read; field.write; }
     input caption: Codes;

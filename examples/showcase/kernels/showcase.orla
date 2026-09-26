@@ -16,8 +16,8 @@ type State = Rows<Show>;
 struct Mat { albedo: Vec3; rough: Float; metal: Float; glow: Vec3; }
 struct Hit { t: Float; id: Float; }
 
-// The toolbar: four items of 64 pixels with 12 between, centred at the
-// bottom of a 1280-wide frame.
+/// The toolbar: four items of 64 pixels with 12 between, centred at the
+/// bottom of a 1280-wide frame.
 kernel show.begin@1 {
     requires { field.write; }
     output result: State;

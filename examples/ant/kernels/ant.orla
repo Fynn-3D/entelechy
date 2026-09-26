@@ -4,7 +4,7 @@
 struct Ant { at: IVec2; dir: Int; }
 type Cells = Grid<Int>;
 
-// The ant's memory: x, y, and the way it faces (0 up, 1 right, 2 down, 3 left).
+/// The ant's memory: x, y, and the way it faces (0 up, 1 right, 2 down, 3 left).
 kernel ant.start@1 {
     requires { field.write; }
     param x: Int = 48;
@@ -16,8 +16,8 @@ kernel ant.start@1 {
     }
 }
 
-// The rule: on a white cell turn right, on a black cell turn left; flip
-// the cell, step forward. The grid wraps.
+/// The rule: on a white cell turn right, on a black cell turn left; flip
+/// the cell, step forward. The grid wraps.
 kernel ant.walk@1 {
     requires { field.read; field.write; }
     input ticks: Rows<Int>;
@@ -38,7 +38,7 @@ kernel ant.walk@1 {
     }
 }
 
-// Pixels: black cells on parchment, the ant in red, `zoom` pixels a cell.
+/// Pixels: black cells on parchment, the ant in red, `zoom` pixels a cell.
 kernel ant.view@1 {
     requires { field.read; field.write; }
     input cells: Cells;

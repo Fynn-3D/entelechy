@@ -48,8 +48,8 @@ fn mip_at(strip: Grid<Vec4>, uv: Vec2, wanted: Float, side: Int, levels: Int) ->
                wanted - float(k));
 }
 
-// The strip before any halving: the texture in the top square and
-// nothing under it.
+/// The strip before any halving: the texture in the top square and
+/// nothing under it.
 kernel mip.first@1 {
     requires { field.read; field.write; }
     input source: Image;
@@ -65,7 +65,7 @@ kernel mip.first@1 {
     }
 }
 
-// The level being written, which starts at one.
+/// The level being written, which starts at one.
 kernel mip.one@1 {
     requires { field.write; }
     output result: Rows<Int>;
@@ -79,8 +79,8 @@ kernel mip.next@1 {
     compute { return at(previous, 0) + 1; }
 }
 
-// One halving: four texels of the level above averaged into one of the
-// level named, everything else carried over.
+/// One halving: four texels of the level above averaged into one of the
+/// level named, everything else carried over.
 kernel mip.halve@1 {
     requires { field.read; field.write; }
     input strip: Image;

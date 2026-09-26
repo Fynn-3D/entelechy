@@ -73,13 +73,13 @@ fn straddles(field: Field, c: IVec3) -> Bool {
     return lo < 0 && hi >= 0;
 }
 
-// The field itself, one value a corner.
+/// The field itself, one value a corner.
 kernel surface.field@1 {
     requires { field.write; time.read; }
-    // A ball's radius and the surface's threshold are both proportions,
-    // in hundredths — of the volume's side and of the radius squared —
-    // so the same blob is meshed at any `size`, which is what lets the
-    // replay run a small volume and the scene a couple of million cells.
+    /// A ball's radius and the surface's threshold are both proportions,
+    /// in hundredths — of the volume's side and of the radius squared —
+    /// so the same blob is meshed at any `size`, which is what lets the
+    /// replay run a small volume and the scene a couple of million cells.
     param radius: Int = 20;
     param iso: Int = 45;
     param rate: Float = 20.0;
@@ -91,12 +91,12 @@ kernel surface.field@1 {
     }
 }
 
-// One flag a cell: does the surface pass through it?
-//
-// `--param compaction=false` flags every cell instead, so the graph
-// places a cube for all two million of them and the ones the surface
-// misses collapse to a point. The picture is the same; the geometry is
-// a hundred times as much.
+/// One flag a cell: does the surface pass through it?
+///
+/// `--param compaction=false` flags every cell instead, so the graph
+/// places a cube for all two million of them and the ones the surface
+/// misses collapse to a point. The picture is the same; the geometry is
+/// a hundred times as much.
 kernel surface.flags@1 {
     requires { field.read; field.write; }
     input field: Field;
@@ -108,16 +108,16 @@ kernel surface.flags@1 {
     }
 }
 
-// Eight corners a kept cell, at the cell's own place in the world, with
-// the field's gradient for a normal so the blob reads as a surface and
-// not as a heap of boxes. A cell the surface misses — which only
-// happens with the compaction turned off — puts all eight on one point,
-// and a triangle of no area is not drawn.
+/// Eight corners a kept cell, at the cell's own place in the world, with
+/// the field's gradient for a normal so the blob reads as a surface and
+/// not as a heap of boxes. A cell the surface misses — which only
+/// happens with the compaction turned off — puts all eight on one point,
+/// and a triangle of no area is not drawn.
 kernel surface.corners@1 {
     requires { field.read; field.write; }
     input kept: Rows<Int>;
-    // How many cells were kept. The Kernel does not read it: the node's
-    // `domain` does, with `value(count)`.
+    /// How many cells were kept. The Kernel does not read it: the node's
+    /// `domain` does, with `value(count)`.
     input count: Rows<Int>;
     input field: Field;
     output result: Rows<Point>;
@@ -143,12 +143,12 @@ kernel surface.corners@1 {
     }
 }
 
-// Twelve triangles a kept cell, indexing that cell's own eight corners.
+/// Twelve triangles a kept cell, indexing that cell's own eight corners.
 kernel surface.faces@1 {
     requires { field.read; field.write; }
-    // As in `surface.corners`: the node's `domain` reads this, not the
-    // Kernel. Which cells they are does not matter here, since a
-    // triangle indexes its own cell's block of corners.
+    /// As in `surface.corners`: the node's `domain` reads this, not the
+    /// Kernel. Which cells they are does not matter here, since a
+    /// triangle indexes its own cell's block of corners.
     input count: Rows<Int>;
     output result: Rows<Tri>;
     compute {
@@ -169,9 +169,9 @@ kernel surface.start@1 {
     compute { return Camera { angle: 0.0, height: 0.30, distance: 1.0 }; }
 }
 
-// The eye goes round the blob on its own, and a hand takes it over: the
-// left stick, or the arrow keys, which is what the Player presses the
-// stick as.
+/// The eye goes round the blob on its own, and a hand takes it over: the
+/// left stick, or the arrow keys, which is what the Player presses the
+/// stick as.
 kernel surface.orbit@1 {
     requires { field.read; field.write; time.read; input.read; }
     input previous: Rows<Camera>;

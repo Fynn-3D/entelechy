@@ -17,7 +17,7 @@ struct Cell { kind: Int; ttl: Int; }    // kind: 0 empty, 1 snake, 2 food
 type State = Rows<Game>;
 type Board = Grid<Cell>;
 
-// Where a game begins: a four-long snake heading right, food ahead.
+/// Where a game begins: a four-long snake heading right, food ahead.
 kernel snake.start@1 {
     requires { field.write; }
     output result: State;
@@ -29,7 +29,7 @@ kernel snake.start@1 {
     }
 }
 
-// The matching board: the body behind the head, oldest at the tail.
+/// The matching board: the body behind the head, oldest at the tail.
 kernel snake.empty@1 {
     requires { field.write; }
     output result: Board;
@@ -41,7 +41,7 @@ kernel snake.empty@1 {
     }
 }
 
-// One evaluation of the rules: steer, advance on a tick, collide, eat.
+/// One evaluation of the rules: steer, advance on a tick, collide, eat.
 kernel snake.step@1 {
     requires { field.read; field.write; time.read; input.read; }
     input previous: State;
@@ -106,8 +106,8 @@ kernel snake.step@1 {
     }
 }
 
-// The board after the rules: the head is written, the body ages unless
-// the snake ate, and the food sits where the rules put it.
+/// The board after the rules: the head is written, the body ages unless
+/// the snake ate, and the food sits where the rules put it.
 kernel snake.board@1 {
     requires { field.read; field.write; }
     input previous: Board;
@@ -130,8 +130,8 @@ kernel snake.board@1 {
     }
 }
 
-// Pixels: cells with faint grid lines, the head brighter than the body,
-// the food red, everything dimmed and reddened once the snake is dead.
+/// Pixels: cells with faint grid lines, the head brighter than the body,
+/// the food red, everything dimmed and reddened once the snake is dead.
 kernel snake.draw@1 {
     requires { field.read; field.write; }
     input board: Board;

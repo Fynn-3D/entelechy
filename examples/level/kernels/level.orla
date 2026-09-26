@@ -90,8 +90,8 @@ kernel level.draw@1 {
     }
 }
 
-// What the file says about itself, as numbers a label prints: the
-// version, the width, the height and how many entities it lists.
+/// What the file says about itself, as numbers a label prints: the
+/// version, the width, the height and how many entities it lists.
 kernel level.about@1 {
     requires { field.read; field.write; }
     input data: Bytes;

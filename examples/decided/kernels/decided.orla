@@ -9,8 +9,8 @@ struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Tri { a: Int; b: Int; c: Int; }
 struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
 
-// Where the camera is, carried from frame to frame: it climbs and dives
-// on a slow cycle and drifts forward.
+/// Where the camera is, carried from frame to frame: it climbs and dives
+/// on a slow cycle and drifts forward.
 kernel decided.fly@1 {
     requires { field.read; field.write; time.read; }
     input previous: Rows<Flight>;
@@ -31,8 +31,8 @@ kernel decided.start@1 {
     compute { return Flight { height: 1.0, along: 0.0 }; }
 }
 
-// The one number the whole frame is sized by: near the ground the sheet
-// is fine, far above it is coarse. A side, so the mesh is its square.
+/// The one number the whole frame is sized by: near the ground the sheet
+/// is fine, far above it is coarse. A side, so the mesh is its square.
 kernel decided.detail@1 {
     requires { field.read; field.write; }
     input camera: Rows<Flight>;
@@ -47,7 +47,7 @@ kernel decided.detail@1 {
     }
 }
 
-// The sheet, `side` by `side`, where `side` is what `detail` decided.
+/// The sheet, `side` by `side`, where `side` is what `detail` decided.
 kernel decided.ground@1 {
     requires { field.read; field.write; }
     input detail: Rows<Int>;
@@ -71,7 +71,7 @@ kernel decided.ground@1 {
     }
 }
 
-// Two triangles per cell of the same lattice.
+/// Two triangles per cell of the same lattice.
 kernel decided.faces@1 {
     requires { field.read; field.write; }
     input detail: Rows<Int>;
@@ -113,8 +113,8 @@ kernel decided.project@1 {
     }
 }
 
-// The surface lit, with the lattice drawn on it so the resolution the
-// frame chose is visible rather than merely claimed.
+/// The surface lit, with the lattice drawn on it so the resolution the
+/// frame chose is visible rather than merely claimed.
 kernel decided.shade@1 {
     requires { field.read; field.write; }
     input surface: Grid<Surface>;

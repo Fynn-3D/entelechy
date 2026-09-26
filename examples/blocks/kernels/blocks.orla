@@ -87,8 +87,8 @@ kernel blocks.start@1 {
     }
 }
 
-// An empty board, or one with its bottom row all but one cell filled,
-// for a test of the clearing.
+/// An empty board, or one with its bottom row all but one cell filled,
+/// for a test of the clearing.
 kernel blocks.empty@1 {
     requires { field.write; }
     param prefill: Int = 0;
@@ -100,8 +100,8 @@ kernel blocks.empty@1 {
     }
 }
 
-// The rules, once per frame: steer on a key's press, fall on a tick or
-// while down is held, drop on space, land, count the lines, spawn.
+/// The rules, once per frame: steer on a key's press, fall on a tick or
+/// while down is held, drop on space, land, count the lines, spawn.
 kernel blocks.step@1 {
     requires { field.read; field.write; time.read; input.read; }
     input previous: State;
@@ -162,9 +162,9 @@ kernel blocks.step@1 {
     }
 }
 
-// The settled cells: when a piece lands it is merged in, its colour the
-// piece's number plus one, and every full row vanishes, the rows above
-// falling by as many rows as were full beneath them.
+/// The settled cells: when a piece lands it is merged in, its colour the
+/// piece's number plus one, and every full row vanishes, the rows above
+/// falling by as many rows as were full beneath them.
 kernel blocks.board@1 {
     requires { field.read; field.write; }
     input previous: Board;
@@ -193,9 +193,9 @@ kernel blocks.board@1 {
     }
 }
 
-// Pixels: the board at `cell` pixels a cell with the falling piece over
-// it, the next piece in a panel to the right, grid lines, and a dimmed
-// board once the game is over.
+/// Pixels: the board at `cell` pixels a cell with the falling piece over
+/// it, the next piece in a panel to the right, grid lines, and a dimmed
+/// board once the game is over.
 kernel blocks.draw@1 {
     requires { field.read; field.write; }
     input board: Board;

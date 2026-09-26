@@ -13,7 +13,7 @@ type Vertices = Rows<Vertex>;
 type Triangles = Rows<Tri>;
 type GBuffer = Grid<Surface>;
 
-// Rotations as matrices, by columns: where each axis lands.
+/// Rotations as matrices, by columns: where each axis lands.
 kernel model.project@1 {
     requires { field.read; field.write; time.read; }
     input mesh: Model;
@@ -42,7 +42,7 @@ kernel model.project@1 {
     }
 }
 
-// The texture at the pixel's uv, lit by a key light and the sky.
+/// The texture at the pixel's uv, lit by a key light and the sky.
 kernel model.shade@1 {
     requires { field.read; field.write; }
     input surface: GBuffer;

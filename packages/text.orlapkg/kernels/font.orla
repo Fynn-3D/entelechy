@@ -1,12 +1,12 @@
-// The font: a 5x7 bitmap face for the printable ASCII codes, 32 to 126,
-// written as its rows and baked into an atlas the text library reads.
-// The atlas is a Grid<Float> of 96 by 48 texels: sixteen cells of 6 by 8
-// per row, six rows, the glyph in the top-left 5 by 7 of its cell and a
-// blank column and row beside it, so cell (code - 32) % 16, (code - 32)
-// / 16 holds a code. Bake it with
-//   orla run examples/text/bake.osn --save font=examples/shared/font.png
-// Each glyph is its seven rows, top first, each row five bits with the
-// leftmost pixel highest: `rows(14, 17, 17, 31, 17, 17, 17)` is an A.
+/// The font: a 5x7 bitmap face for the printable ASCII codes, 32 to 126,
+/// written as its rows and baked into an atlas the text library reads.
+/// The atlas is a Grid<Float> of 96 by 48 texels: sixteen cells of 6 by 8
+/// per row, six rows, the glyph in the top-left 5 by 7 of its cell and a
+/// blank column and row beside it, so cell (code - 32) % 16, (code - 32)
+/// / 16 holds a code. Bake it with
+///   orla run examples/text/bake.osn --save font=examples/shared/font.png
+/// Each glyph is its seven rows, top first, each row five bits with the
+/// leftmost pixel highest: `rows(14, 17, 17, 31, 17, 17, 17)` is an A.
 kernel text.font@1 {
     requires { field.write; }
     output result: Grid<Float>;

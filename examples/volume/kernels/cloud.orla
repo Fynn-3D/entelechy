@@ -1,7 +1,7 @@
 // A Volume<Float> of density, filled by one Kernel and ray-marched into an
 // image by another. The volume never leaves the device on the GPU.
 
-// Layered noise over the unit cube, drifting with time.
+/// Layered noise over the unit cube, drifting with time.
 kernel cloud.density@1 {
     requires { field.write; time.read; }
     param scale: Float = 3.0;
@@ -38,8 +38,8 @@ kernel cloud.density@1 {
     }
 }
 
-// March a ray per pixel through the unit cube, accumulating light through
-// the density with a fixed step count.
+/// March a ray per pixel through the unit cube, accumulating light through
+/// the density with a fixed step count.
 kernel cloud.render@1 {
     requires { field.read; field.write; }
     input density: Volume<Float>;

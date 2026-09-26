@@ -33,10 +33,10 @@ kernel world.start@1 {
     compute { return Camera { x: 0.0, z: 0.0, heading: 0.0, height: 0.0 }; }
 }
 
-// The camera walks forward and turns, wrapping in the world's square.
-// A hand on it steers: the left stick, or the arrow keys, which is what
-// the Player presses the stick as. With no hand it sweeps on its own,
-// so the scene runs and replays without one.
+/// The camera walks forward and turns, wrapping in the world's square.
+/// A hand on it steers: the left stick, or the arrow keys, which is what
+/// the Player presses the stick as. With no hand it sweeps on its own,
+/// so the scene runs and replays without one.
 kernel world.fly@1 {
     requires { field.read; field.write; time.read; input.read; }
     input previous: Rows<Camera>;
@@ -75,21 +75,21 @@ kernel world.fly@1 {
     }
 }
 
-// One flag per chunk: is any of it in front of the eye and inside the
-// two side planes? A sphere around the chunk, which is what a cull test
-// is before anyone makes it clever.
+/// One flag per chunk: is any of it in front of the eye and inside the
+/// two side planes? A sphere around the chunk, which is what a cull test
+/// is before anyone makes it clever.
 kernel world.visible@1 {
     requires { field.read; field.write; }
     input camera: Rows<Camera>;
     param cols: Int = 64;
     param cell: Float = 0.03125;
     param reach: Float = 0.9;
-    // The tangent of the half angle the eye sees sideways, which must
-    // cover the projection's or the cull cuts inside the picture:
-    // `aspect / f`, and a little over.
+    /// The tangent of the half angle the eye sees sideways, which must
+    /// cover the projection's or the cull cuts inside the picture:
+    /// `aspect / f`, and a little over.
     param spread: Float = 1.55;
-    // `false` keeps every chunk: the same scene with the culling turned
-    // off, so the two pictures can be compared and must be the same.
+    /// `false` keeps every chunk: the same scene with the culling turned
+    /// off, so the two pictures can be compared and must be the same.
     param culling: Bool = true;
     output result: Rows<Int>;
 
@@ -111,14 +111,14 @@ kernel world.visible@1 {
     }
 }
 
-// The vertices of the kept chunks, one element per vertex of one of
-// them: `domain = max(value(count), 1) * side * side;`.
+/// The vertices of the kept chunks, one element per vertex of one of
+/// them: `domain = max(value(count), 1) * side * side;`.
 kernel world.ground@1 {
     requires { field.read; field.write; }
     input kept: Rows<Int>;
-    // How many chunks were kept. The Kernel does not read it: the
-    // node's `domain` does, with `value(count)`, and a domain reads a
-    // port the Kernel declares.
+    /// How many chunks were kept. The Kernel does not read it: the
+    /// node's `domain` does, with `value(count)`, and a domain reads a
+    /// port the Kernel declares.
     input count: Rows<Int>;
     param cols: Int = 64;
     param cell: Float = 0.03125;
@@ -144,16 +144,16 @@ kernel world.ground@1 {
     }
 }
 
-// Two triangles per cell of every kept chunk, indexing that chunk's own
-// block of vertices. The seams do not crack: neighbouring chunks share
-// the edge's coordinates, so they compute the same height.
+/// Two triangles per cell of every kept chunk, indexing that chunk's own
+/// block of vertices. The seams do not crack: neighbouring chunks share
+/// the edge's coordinates, so they compute the same height.
 kernel world.faces@1 {
     requires { field.read; field.write; }
-    // How many chunks were kept. The Kernel does not read it: the
-    // node's `domain` does, with `value(count)`, and a domain reads a
-    // port the Kernel declares. Which chunks they are does not matter
-    // here — a triangle indexes its own chunk's block of vertices, and
-    // the block is the same wherever the chunk was.
+    /// How many chunks were kept. The Kernel does not read it: the
+    /// node's `domain` does, with `value(count)`, and a domain reads a
+    /// port the Kernel declares. Which chunks they are does not matter
+    /// here — a triangle indexes its own chunk's block of vertices, and
+    /// the block is the same wherever the chunk was.
     input count: Rows<Int>;
     param side: Int = 36;
     output result: Rows<Tri>;
@@ -198,11 +198,11 @@ kernel world.project@1 {
     }
 }
 
-// The surface lit, and faded out at the reach the cull test used, so
-// the edge of what was placed is where the world ends rather than a
-// line of nothing. The distance is the real one: a rasterized surface
-// carries the world position in its `uv`, and a depth buffer's number
-// is not a distance.
+/// The surface lit, and faded out at the reach the cull test used, so
+/// the edge of what was placed is where the world ends rather than a
+/// line of nothing. The distance is the real one: a rasterized surface
+/// carries the world position in its `uv`, and a depth buffer's number
+/// is not a distance.
 kernel world.shade@1 {
     requires { field.read; field.write; }
     input surface: Grid<Surface>;

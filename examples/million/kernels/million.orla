@@ -37,7 +37,7 @@ fn placed(i: Int, pull: Float) -> Body {
     };
 }
 
-// Where they start.
+/// Where they start.
 kernel million.spawn@1 {
     requires { field.write; }
     param pull: Float = 0.06;
@@ -45,10 +45,10 @@ kernel million.spawn@1 {
     compute { return placed(element(), pull); }
 }
 
-// One step: pulled towards the middle by an inverse square, which the
-// inside answers faster than the outside, so what starts as a disc
-// winds into arms. A map, one body an element, and no body reads
-// another: a million of them is a million independent sums.
+/// One step: pulled towards the middle by an inverse square, which the
+/// inside answers faster than the outside, so what starts as a disc
+/// winds into arms. A map, one body an element, and no body reads
+/// another: a million of them is a million independent sums.
 kernel million.step@1 {
     requires { field.read; field.write; }
     input previous: Bodies;
@@ -69,9 +69,9 @@ kernel million.step@1 {
     }
 }
 
-// Every body into the cell it lands on, counted: what the picture
-// shows is how many are there, which is the only thing a million of
-// anything can show.
+/// Every body into the cell it lands on, counted: what the picture
+/// shows is how many are there, which is the only thing a million of
+/// anything can show.
 kernel million.splat@1 {
     requires { field.read; field.write; }
     input bodies: Bodies;
@@ -95,7 +95,7 @@ kernel million.splat@1 {
     }
 }
 
-// What the canvas holds, as a picture.
+/// What the canvas holds, as a picture.
 kernel million.draw@1 {
     requires { field.read; field.write; }
     input heat: Grid<Int>;

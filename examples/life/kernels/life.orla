@@ -4,7 +4,7 @@
 struct Cell { alive: Bool; age: Int; }
 type Cells = Grid<Cell>;
 
-// Initial cells: a blinker at a fixed spot plus deterministic noise.
+/// Initial cells: a blinker at a fixed spot plus deterministic noise.
 kernel life.seed@1 {
     requires { field.write; }
     param noise: Float = 0.3;
@@ -27,9 +27,9 @@ kernel life.seed@1 {
     }
 }
 
-// One generation. `previous` is this node's own output from the last frame,
-// so the Kernel stays pure while the Graph carries the state.
-// Hold the pointer to paint live cells; hold C to clear.
+/// One generation. `previous` is this node's own output from the last frame,
+/// so the Kernel stays pure while the Graph carries the state.
+/// Hold the pointer to paint live cells; hold C to clear.
 kernel life.step@1 {
     requires { field.read; field.write; input.read; }
     input previous: Cells;
@@ -55,7 +55,7 @@ kernel life.step@1 {
     }
 }
 
-// Colors cells by age: fresh cells glow, old cells settle.
+/// Colors cells by age: fresh cells glow, old cells settle.
 kernel life.show@1 {
     requires { field.read; field.write; }
     input cells: Cells;

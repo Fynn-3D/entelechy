@@ -8,8 +8,8 @@ type State = Rows<Play>;
 type Clip = Rows<Float>;
 type Stereo = Rows<Vec2>;
 
-// The sound itself, baked to assets/kick.wav by bake.osn: a sine whose
-// pitch falls and whose loudness decays, half a second at 48 kHz.
+/// The sound itself, baked to assets/kick.wav by bake.osn: a sine whose
+/// pitch falls and whose loudness decays, half a second at 48 kHz.
 kernel sampler.kick@1 {
     requires { field.write; }
     output result: Clip;
@@ -27,9 +27,9 @@ kernel sampler.begin@1 {
     compute { return Play { head: 0.0, beat: -1, space: false }; }
 }
 
-// The playhead, in the clip's frames: it advances by a block of the
-// device's frames scaled by the rates, and returns to zero on a beat
-// or a press of Space.
+/// The playhead, in the clip's frames: it advances by a block of the
+/// device's frames scaled by the rates, and returns to zero on a beat
+/// or a press of Space.
 kernel sampler.state@1 {
     requires { field.read; field.write; time.read; input.read; }
     input previous: State;
@@ -49,7 +49,7 @@ kernel sampler.state@1 {
     }
 }
 
-// One block of stereo frames from the clip at the playhead.
+/// One block of stereo frames from the clip at the playhead.
 kernel sampler.block@1 {
     requires { field.read; field.write; time.read; }
     input state: State;

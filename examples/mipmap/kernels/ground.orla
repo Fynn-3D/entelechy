@@ -7,8 +7,8 @@ struct Vertex { clip: Vec4; normal: Vec3; uv: Vec2; }
 struct Tri { a: Int; b: Int; c: Int; }
 struct Surface { depth: Float; normal: Vec3; uv: Vec2; id: Int; }
 
-// The texture: a fine checker under a grid of red lines, which is the
-// pattern that crawls worst.
+/// The texture: a fine checker under a grid of red lines, which is the
+/// pattern that crawls worst.
 kernel ground.texture@1 {
     requires { field.write; }
     param side: Int = 256;
@@ -24,7 +24,7 @@ kernel ground.texture@1 {
     }
 }
 
-// The ground: two triangles from under the eye to the horizon.
+/// The ground: two triangles from under the eye to the horizon.
 kernel ground.quad@1 {
     requires { field.write; }
     param reach: Float = 900.0;
@@ -56,10 +56,10 @@ kernel ground.faces@1 {
     }
 }
 
-// The picture. A surface a rasterizer left carries its uv at every
-// pixel, so the pixel next door says how fast the texture is moving:
-// that difference is the derivative a level is chosen by, and the
-// triangle's own id says whether the neighbour is on the same surface.
+/// The picture. A surface a rasterizer left carries its uv at every
+/// pixel, so the pixel next door says how fast the texture is moving:
+/// that difference is the derivative a level is chosen by, and the
+/// triangle's own id says whether the neighbour is on the same surface.
 kernel ground.shade@1 {
     requires { field.read; field.write; }
     input surface: Grid<Surface>;

@@ -22,9 +22,9 @@ fn view_of(p: Vec3, aspect: Float) -> Vec4 {
                 v.z * far / (near - far) + near * far / (near - far), 0.0 - v.z);
 }
 
-// The point the shoulder turns to, in the rig's own space: a slow loop
-// in front of it, or, with the pointer down, where the pointer is on a
-// plane at the loop's depth.
+/// The point the shoulder turns to, in the rig's own space: a slow loop
+/// in front of it, or, with the pointer down, where the pointer is on a
+/// plane at the loop's depth.
 kernel reach.target@1 {
     requires { field.write; time.read; input.read; }
     param aspect: Float = 1.7778;
@@ -41,8 +41,8 @@ kernel reach.target@1 {
     }
 }
 
-// How much of the reach is laid over the clip: all of it, unless a
-// scene wants the clip to show through.
+/// How much of the reach is laid over the clip: all of it, unless a
+/// scene wants the clip to show through.
 kernel reach.weight@1 {
     requires { field.write; }
     param weight: Float = 1.0;
@@ -61,8 +61,8 @@ kernel reach.project@1 {
     }
 }
 
-// The arm lit, and the point it reaches for drawn where the camera sees
-// it, so what the joint is doing can be checked by eye.
+/// The arm lit, and the point it reaches for drawn where the camera sees
+/// it, so what the joint is doing can be checked by eye.
 kernel reach.shade@1 {
     requires { field.read; field.write; }
     input surface: GBuffer;

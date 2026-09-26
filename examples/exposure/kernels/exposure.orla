@@ -4,8 +4,8 @@
 struct Light { sum: Float; max: Float; count: Int; }
 type Measure = Rows<Light>;
 
-// A bright scene: a sun disc over a sky gradient, drifting with time,
-// with values well above one.
+/// A bright scene: a sun disc over a sky gradient, drifting with time,
+/// with values well above one.
 kernel exposure.scene@1 {
     requires { field.write; time.read; }
     param brightness: Float = 6.0;
@@ -22,8 +22,8 @@ kernel exposure.scene@1 {
     }
 }
 
-// The reduction: `compute` runs once per pixel of `source` and `merge`
-// folds the results pairwise, so it must be associative and commutative.
+/// The reduction: `compute` runs once per pixel of `source` and `merge`
+/// folds the results pairwise, so it must be associative and commutative.
 kernel exposure.measure@1 {
     requires { field.read; field.write; }
     input source: Image;
@@ -43,8 +43,8 @@ kernel exposure.measure@1 {
     }
 }
 
-// Scales the frame so its mean luma lands on `target`, then rolls off
-// the highlights.
+/// Scales the frame so its mean luma lands on `target`, then rolls off
+/// the highlights.
 kernel exposure.apply@1 {
     requires { field.read; field.write; }
     input source: Image;

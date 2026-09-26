@@ -4,8 +4,8 @@
 // mirror addressing takes.
 type Picture = Grid<Vec4>;
 
-// A source with features against every edge, so the edges matter: a
-// disc cut by the top, a bar along the left, stripes into the corner.
+/// A source with features against every edge, so the edges matter: a
+/// disc cut by the top, a bar along the left, stripes into the corner.
 kernel blur.source@1 {
     requires { field.write; }
     output result: Picture;
@@ -32,7 +32,7 @@ fn mirror(c: IVec2, n: IVec2) -> IVec2 {
     return ivec2(fold(c.x, n.x), fold(c.y, n.y));
 }
 
-// One pass of a five-tap Gaussian along an axis.
+/// One pass of a five-tap Gaussian along an axis.
 kernel blur.pass@1 {
     requires { field.read; field.write; }
     input source: Picture;
@@ -49,8 +49,8 @@ kernel blur.pass@1 {
     }
 }
 
-// An emboss: the 3 by 3 kernel is a matrix, read column by column with
-// the same offsets that fetch the neighbours.
+/// An emboss: the 3 by 3 kernel is a matrix, read column by column with
+/// the same offsets that fetch the neighbours.
 kernel blur.emboss@1 {
     requires { field.read; field.write; }
     input source: Picture;
@@ -68,7 +68,7 @@ kernel blur.emboss@1 {
     }
 }
 
-// Side by side: the blur on the left, the emboss of it on the right.
+/// Side by side: the blur on the left, the emboss of it on the right.
 kernel blur.show@1 {
     requires { field.read; field.write; }
     input blurred: Picture;

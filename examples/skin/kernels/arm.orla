@@ -9,10 +9,10 @@ type Vertices = Rows<Vertex>;
 type Triangles = Rows<Tri>;
 type GBuffer = Grid<Surface>;
 
-// The clock the clips are read at, and how much of the second one to
-// take: the pointer's height, so a hand blends the two live. With no
-// hand on it the blend sweeps on its own, which is what the replay
-// pins.
+/// The clock the clips are read at, and how much of the second one to
+/// take: the pointer's height, so a hand blends the two live. With no
+/// hand on it the blend sweeps on its own, which is what the replay
+/// pins.
 kernel arm.hand@1 {
     requires { field.write; time.read; input.read; }
     param speed: Float = 1.0;
@@ -46,8 +46,8 @@ kernel arm.project@1 {
     param distance: Float = 4.0;
     param tilt: Float = 0.25;
     param spin: Float = 0.35;
-    // Where the orbit starts: side on, so the chain bends across the
-    // window rather than towards it.
+    /// Where the orbit starts: side on, so the chain bends across the
+    /// window rather than towards it.
     param turn: Float = 1.5708;
     output result: Vertices;
     compute {

@@ -3,14 +3,14 @@
 // long it is held.
 struct Tally { count: Int; held: Bool; }
 
-// Where a tally starts when nothing was saved.
+/// Where a tally starts when nothing was saved.
 kernel save.fresh@1 {
     requires { field.write; }
     output result: Rows<Tally>;
     compute { return Tally { count: 0, held: false }; }
 }
 
-// One more on each press of space.
+/// One more on each press of space.
 kernel save.tally@1 {
     requires { field.read; field.write; input.read; }
     input last: Rows<Tally>;
@@ -23,7 +23,7 @@ kernel save.tally@1 {
     }
 }
 
-// The count as lit cells of 16 pixels, ten to a row.
+/// The count as lit cells of 16 pixels, ten to a row.
 kernel save.show@1 {
     requires { field.read; field.write; }
     input tally: Rows<Tally>;

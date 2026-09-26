@@ -29,8 +29,8 @@ type Units = Rows<Unit>;
 type State = Rows<Game>;
 type Range = Grid<Int>;
 
-// Terrain: a river down the middle with two fords, forests and peaks
-// scattered by a hash, forts at both camps.
+/// Terrain: a river down the middle with two fords, forests and peaks
+/// scattered by a hash, forts at both camps.
 kernel slg.map@1 {
     requires { field.write; }
     output result: Map;
@@ -55,7 +55,7 @@ kernel slg.map@1 {
     }
 }
 
-// Two armies of four: the player on the left, the enemy on the right.
+/// Two armies of four: the player on the left, the enemy on the right.
 kernel slg.spawn@1 {
     requires { field.write; }
     param enemy_x: Int = 13;
@@ -78,7 +78,7 @@ kernel slg.spawn@1 {
     }
 }
 
-// Where a game begins: the cursor on the first unit, turn one.
+/// Where a game begins: the cursor on the first unit, turn one.
 kernel slg.begin@1 {
     requires { field.write; }
     output result: State;
@@ -87,9 +87,9 @@ kernel slg.begin@1 {
     }
 }
 
-// A range's first pass: zero at one unit, unreachable elsewhere. `who`
-// picks the unit: 0 the acting unit, 1 the enemy's prey, so the same
-// passes measure both how far a unit can go and how far the prey is.
+/// A range's first pass: zero at one unit, unreachable elsewhere. `who`
+/// picks the unit: 0 the acting unit, 1 the enemy's prey, so the same
+/// passes measure both how far a unit can go and how far the prey is.
 kernel slg.seed@1 {
     requires { field.read; field.write; }
     input game: State;
@@ -108,8 +108,8 @@ kernel slg.seed@1 {
     }
 }
 
-// One relaxation pass: the cheapest way in from a neighbour. Water and
-// units of the other team block; friends may be passed through.
+/// One relaxation pass: the cheapest way in from a neighbour. Water and
+/// units of the other team block; friends may be passed through.
 kernel slg.relax@1 {
     requires { field.read; field.write; }
     input previous: Range;
@@ -144,15 +144,15 @@ kernel slg.relax@1 {
     }
 }
 
-// Nothing reachable: what the rules read before any range exists.
+/// Nothing reachable: what the rules read before any range exists.
 kernel slg.blank@1 {
     requires { field.write; }
     output result: Range;
     compute { return 999; }
 }
 
-// The turn machine. It reads last frame's units and range, the keys and
-// the clock, and writes an order for the unit row to apply this frame.
+/// The turn machine. It reads last frame's units and range, the keys and
+/// the clock, and writes an order for the unit row to apply this frame.
 kernel slg.game@1 {
     requires { field.read; field.write; input.read; }
     input previous: State;
@@ -308,8 +308,8 @@ kernel slg.game@1 {
     }
 }
 
-// The unit row applies this frame's order. Damage is attack less
-// defense, never below one; a unit that acted is spent until the turn ends.
+/// The unit row applies this frame's order. Damage is attack less
+/// defense, never below one; a unit that acted is spent until the turn ends.
 kernel slg.units@1 {
     requires { field.read; field.write; }
     input previous: Units;
@@ -335,8 +335,8 @@ kernel slg.units@1 {
     }
 }
 
-// Sixteen-pixel tiles, sprites drawn from arithmetic, a cursor that
-// blinks with the clock, a bar at the bottom for the turn and the phase.
+/// Sixteen-pixel tiles, sprites drawn from arithmetic, a cursor that
+/// blinks with the clock, a bar at the bottom for the turn and the phase.
 kernel slg.draw@1 {
     requires { field.read; field.write; time.read; }
     input map: Map;

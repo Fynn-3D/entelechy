@@ -66,15 +66,15 @@ kernel particles.step@1 {
     }
 }
 
-// An empty canvas, the size of the picture.
+/// An empty canvas, the size of the picture.
 kernel particles.clear@1 {
     requires { field.write; }
     output result: Canvas;
     compute { return vec3(0.0, 0.0, 0.0); }
 }
 
-// Last frame's canvas dimmed, so the particles leave trails; `fade` at
-// zero forgets the past entirely.
+/// Last frame's canvas dimmed, so the particles leave trails; `fade` at
+/// zero forgets the past entirely.
 kernel particles.fade@1 {
     requires { field.read; field.write; }
     input previous: Canvas;
@@ -83,11 +83,11 @@ kernel particles.fade@1 {
     compute { return sample(previous) * fade; }
 }
 
-// Every particle adds its tint to the cell under it. A scatter maps over
-// the particles and combines each value into the canvas at its address,
-// in element order, so the cost is one write per particle however many
-// pixels there are; a particle on the far edge falls outside and is
-// dropped rather than clamped.
+/// Every particle adds its tint to the cell under it. A scatter maps over
+/// the particles and combines each value into the canvas at its address,
+/// in element order, so the cost is one write per particle however many
+/// pixels there are; a particle on the far edge falls outside and is
+/// dropped rather than clamped.
 kernel particles.splat@1 {
     requires { field.read; field.write; }
     input particles: Rows<Particle>;
@@ -101,8 +101,8 @@ kernel particles.splat@1 {
     }
 }
 
-// The picture: each pixel gathers the heat of the cells within `radius`,
-// a fixed window whatever the number of particles.
+/// The picture: each pixel gathers the heat of the cells within `radius`,
+/// a fixed window whatever the number of particles.
 kernel particles.draw@1 {
     requires { field.read; field.write; }
     input canvas: Canvas;

@@ -75,8 +75,8 @@ fn sky(direction: Vec3) -> Vec3 {
     return mix(vec3(0.22, 0.25, 0.32), vec3(0.45, 0.58, 0.85), t) * 0.8;
 }
 
-// Where the camera is: dragged by the pointer, and it says when it moved
-// so the sum can start over.
+/// Where the camera is: dragged by the pointer, and it says when it moved
+/// so the sum can start over.
 kernel path.eye@1 {
     requires { field.read; field.write; input.read; }
     input previous: Eyes;
@@ -103,8 +103,8 @@ kernel path.begin@1 {
     compute { return Eye { yaw: 0.35, pitch: -0.18, drag: vec2(0.0, 0.0), held: false, moved: false }; }
 }
 
-// One path per pixel, added to what the frames before it traced. The
-// count rides in the alpha channel, which is also the seed's frame.
+/// One path per pixel, added to what the frames before it traced. The
+/// count rides in the alpha channel, which is also the seed's frame.
 kernel path.sample@1 {
     requires { field.read; field.write; }
     input history: Image;
@@ -156,7 +156,7 @@ kernel path.sample@1 {
     }
 }
 
-// The mean of every sample so far, tone mapped.
+/// The mean of every sample so far, tone mapped.
 kernel path.view@1 {
     requires { field.read; field.write; }
     input sum: Image;

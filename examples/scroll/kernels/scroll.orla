@@ -6,8 +6,8 @@ use "../../../packages/picture.orlapkg/kernels/wrap.orla";
 
 type Tile = Grid<Vec4>;
 
-// The tile: a checker of eight-texel squares under a tint that comes
-// round exactly at the edge, and a ring in the middle.
+/// The tile: a checker of eight-texel squares under a tint that comes
+/// round exactly at the edge, and a ring in the middle.
 kernel scroll.tile@1 {
     requires { field.write; }
     output result: Tile;

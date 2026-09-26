@@ -1,4 +1,4 @@
-// ACES-style tone mapping and gamma; edit `exposure` while the Player runs.
+/// ACES-style tone mapping and gamma; edit `exposure` while the Player runs.
 kernel image.tonemap@1 {
     requires { field.read; field.write; }
     input source: Image;

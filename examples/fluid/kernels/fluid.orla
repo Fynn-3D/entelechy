@@ -9,15 +9,15 @@ type Hand = Rows<Touch>;
 type Flow = Grid<Vec2>;
 type Amount = Grid<Float>;
 
-// The pointer at rest, before the first frame.
+/// The pointer at rest, before the first frame.
 kernel fluid.rest@1 {
     requires { field.write; }
     output result: Hand;
     compute { return Touch { x: 0.0, y: 0.0, down: false, vx: 0.0, vy: 0.0 }; }
 }
 
-// The pointer as a row: where it is, whether it is down, and how far it
-// moved since last frame while down, which is the stirring velocity.
+/// The pointer as a row: where it is, whether it is down, and how far it
+/// moved since last frame while down, which is the stirring velocity.
 kernel fluid.hand@1 {
     requires { field.read; field.write; input.read; }
     input previous: Hand;
@@ -44,9 +44,9 @@ fn flow_at(velocity: Flow, p: Vec2) -> Vec2 {
     return vec2(at_linear(velocity, p + vec2(0.5, 0.0)).x, at_linear(velocity, p + vec2(0.0, 0.5)).y);
 }
 
-// Advection of the velocity by itself, semi-Lagrangian with a midpoint
-// step, then the forces: vorticity confinement, the hand, the plume, and
-// the lift of warm smoke; the border cells are walls.
+/// Advection of the velocity by itself, semi-Lagrangian with a midpoint
+/// step, then the forces: vorticity confinement, the hand, the plume, and
+/// the lift of warm smoke; the border cells are walls.
 kernel fluid.advect@1 {
     requires { field.read; field.write; time.read; }
     input velocity: Flow;
@@ -107,7 +107,7 @@ kernel fluid.advect@1 {
     }
 }
 
-// The net flow out of each cell through its four faces.
+/// The net flow out of each cell through its four faces.
 kernel fluid.divergence@1 {
     requires { field.read; field.write; }
     input velocity: Flow;
@@ -123,10 +123,10 @@ kernel fluid.divergence@1 {
     }
 }
 
-// One Jacobi step of the Poisson equation for pressure: the average of
-// the neighbours less the divergence. A neighbour in the wall counts as
-// this cell's own pressure, so no pressure difference drives flow into
-// the wall.
+/// One Jacobi step of the Poisson equation for pressure: the average of
+/// the neighbours less the divergence. A neighbour in the wall counts as
+/// this cell's own pressure, so no pressure difference drives flow into
+/// the wall.
 kernel fluid.relax@1 {
     requires { field.read; field.write; }
     input pressure: Amount;
@@ -148,8 +148,8 @@ kernel fluid.relax@1 {
     }
 }
 
-// Subtracting the pressure difference across each face leaves the
-// velocity divergence-free.
+/// Subtracting the pressure difference across each face leaves the
+/// velocity divergence-free.
 kernel fluid.project@1 {
     requires { field.read; field.write; }
     input velocity: Flow;
@@ -167,8 +167,8 @@ kernel fluid.project@1 {
     }
 }
 
-// The smoke, carried by the projected velocity, fed by the plume and by
-// the hand while it is down, fading slowly.
+/// The smoke, carried by the projected velocity, fed by the plume and by
+/// the hand while it is down, fading slowly.
 kernel fluid.smoke@1 {
     requires { field.read; field.write; }
     input previous: Amount;
@@ -194,7 +194,7 @@ kernel fluid.smoke@1 {
     }
 }
 
-// Smoke as light on a dark ground, tinted by how fast it moves.
+/// Smoke as light on a dark ground, tinted by how fast it moves.
 kernel fluid.draw@1 {
     requires { field.read; field.write; }
     input smoke: Amount;
@@ -212,8 +212,8 @@ kernel fluid.draw@1 {
     }
 }
 
-// The sum of a grid's magnitudes as one element: a measure of how much
-// divergence is left, for a test to read, or for anyone to watch.
+/// The sum of a grid's magnitudes as one element: a measure of how much
+/// divergence is left, for a test to read, or for anyone to watch.
 kernel fluid.total@1 {
     requires { field.read; field.write; }
     input field: Amount;

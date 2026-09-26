@@ -57,8 +57,8 @@ kernel deferred.surface@1 {
     }
 }
 
-// Lambert and a little ambient from what the G-buffer holds; the sky's
-// alpha of zero says there is nothing to light.
+/// Lambert and a little ambient from what the G-buffer holds; the sky's
+/// alpha of zero says there is nothing to light.
 kernel deferred.light@1 {
     requires { field.read; field.write; }
     input albedo: Image;
@@ -73,11 +73,11 @@ kernel deferred.light@1 {
     }
 }
 
-// An edge where the surface breaks: this reads the depth at the
-// neighbours, by address, which is why the G-buffer is written rather
-// than fused away. The inverse of depth runs straight across a plane on
-// the screen, so its second difference is zero on every surface here and
-// large only where one surface ends in front of another.
+/// An edge where the surface breaks: this reads the depth at the
+/// neighbours, by address, which is why the G-buffer is written rather
+/// than fused away. The inverse of depth runs straight across a plane on
+/// the screen, so its second difference is zero on every surface here and
+/// large only where one surface ends in front of another.
 kernel deferred.outline@1 {
     requires { field.read; field.write; }
     input depth: Grid<Float>;

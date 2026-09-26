@@ -7,9 +7,9 @@
 type Bytes = Rows<Int>;
 type Screen = Grid<Int>;
 
-// The program: a box that the keypad's 4, 6, 2 and 8 (Q, E, 2, S) move,
-// one pixel a frame, paced by the delay timer so the picture never
-// flickers: set DT to one, spin until it is zero, erase, move, draw.
+/// The program: a box that the keypad's 4, 6, 2 and 8 (Q, E, 2, S) move,
+/// one pixel a frame, paced by the delay timer so the picture never
+/// flickers: set DT to one, spin until it is zero, erase, move, draw.
 kernel chip8.rom@1 {
     requires { field.write; }
     output result: Bytes;
@@ -46,7 +46,7 @@ kernel chip8.rom@1 {
     }
 }
 
-// RAM at power-on: the font at 0x50, the program at 0x200, zeros elsewhere.
+/// RAM at power-on: the font at 0x50, the program at 0x200, zeros elsewhere.
 kernel chip8.boot@1 {
     requires { field.read; field.write; }
     input rom: Bytes;
@@ -83,8 +83,8 @@ kernel chip8.boot@1 {
     }
 }
 
-// The registers: V0..VF at 0..15, I at 16, PC at 17, SP at 18, DT at 19,
-// ST at 20, the random state at 21, the stack at 32..47.
+/// The registers: V0..VF at 0..15, I at 16, PC at 17, SP at 18, DT at 19,
+/// ST at 20, the random state at 21, the stack at 32..47.
 kernel chip8.start@1 {
     requires { field.write; }
     output result: Bytes;
@@ -94,8 +94,8 @@ kernel chip8.start@1 {
     }
 }
 
-// One step of the machine per element of `ticks`; the opcode it ran is
-// the output, for the record.
+/// One step of the machine per element of `ticks`; the opcode it ran is
+/// the output, for the record.
 kernel chip8.step@1 {
     requires { field.read; field.write; input.read; }
     input ticks: Rows<Int>;
@@ -226,8 +226,8 @@ kernel chip8.step@1 {
     }
 }
 
-// The screen, each of its 64 by 32 cells a block of the picture with a
-// faint grid, lit green.
+/// The screen, each of its 64 by 32 cells a block of the picture with a
+/// faint grid, lit green.
 kernel chip8.view@1 {
     requires { field.read; field.write; }
     input screen: Screen;

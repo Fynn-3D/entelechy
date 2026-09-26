@@ -4,7 +4,7 @@
 // by interpolating the level between two corners.
 type Field = Grid<Float>;
 
-// Three blobs orbiting: the sum of their inverse square distances.
+/// Three blobs orbiting: the sum of their inverse square distances.
 kernel marching.field@1 {
     requires { field.write; time.read; }
     output result: Field;

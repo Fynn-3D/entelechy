@@ -37,17 +37,17 @@ fn noise(n: Int) -> Float {
     return float(mix32(n) >>> 8) / 8388608.0 - 1.0;
 }
 
-// The lines start quiet and the heads at nothing.
+/// The lines start quiet and the heads at nothing.
 kernel strings.ready@1 {
     requires { field.write; }
     output result: State;
     compute { return 0; }
 }
 
-// A block of samples, and the strings as they are left. The scan walks
-// the block sample by sample; every sample moves each string's head on
-// one place, and the first sample of a block is where a key that has
-// just gone down fills its string with noise.
+/// A block of samples, and the strings as they are left. The scan walks
+/// the block sample by sample; every sample moves each string's head on
+/// one place, and the first sample of a block is where a key that has
+/// just gone down fills its string with noise.
 kernel strings.play@1 {
     requires { field.read; field.write; input.read; time.read; }
     input block: Rows<Int>;           // one element a sample: what the scan walks
@@ -99,8 +99,8 @@ kernel strings.play@1 {
     }
 }
 
-// The strings as they stand: six bands, each a line drawn from its own
-// delay line, brighter where it is loud.
+/// The strings as they stand: six bands, each a line drawn from its own
+/// delay line, brighter where it is loud.
 kernel strings.draw@1 {
     requires { field.read; field.write; time.read; }
     input line: Line;

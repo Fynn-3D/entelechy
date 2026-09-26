@@ -10,10 +10,10 @@ type Vertices = Rows<Vertex>;
 type Triangles = Rows<Tri>;
 type GBuffer = Grid<Surface>;
 
-// An inchworm's stride for the arm's two joints: the forearm curls and
-// straightens while the whole arm rocks and moves on along -z by
-// `stride` a loop. Its last frame is its first moved on by that stride,
-// which is what makes a clip travel: frame `k` of `frames`, joint `j`.
+/// An inchworm's stride for the arm's two joints: the forearm curls and
+/// straightens while the whole arm rocks and moves on along -z by
+/// `stride` a loop. Its last frame is its first moved on by that stride,
+/// which is what makes a clip travel: frame `k` of `frames`, joint `j`.
 kernel stride.clip@1 {
     requires { field.read; field.write; }
     input skeleton: Skeleton;
@@ -39,15 +39,15 @@ kernel stride.clip@1 {
     }
 }
 
-// Where the body starts: at the origin, facing as the rig does.
+/// Where the body starts: at the origin, facing as the rig does.
 kernel stride.origin@1 {
     requires { field.write; }
     output result: Rows<Pose>;
     compute { return Pose { at: vec3(0.0, 0.0, 0.0), turn: vec4(0.0, 0.0, 0.0, 1.0), grow: vec3(1.0, 1.0, 1.0) }; }
 }
 
-// Where the body stands now: where it stood, moved on by what the clip
-// travelled since. The scene's own state, fed back.
+/// Where the body stands now: where it stood, moved on by what the clip
+/// travelled since. The scene's own state, fed back.
 kernel stride.stand@1 {
     requires { field.read; field.write; }
     input previous: Rows<Pose>;
@@ -89,9 +89,9 @@ kernel stride.project@1 {
     }
 }
 
-// The arm lit, and below the horizon a floor striped across the way it
-// travels, every 0.4 of a unit, so the crawl shows while the camera
-// keeps up with it.
+/// The arm lit, and below the horizon a floor striped across the way it
+/// travels, every 0.4 of a unit, so the crawl shows while the camera
+/// keeps up with it.
 kernel stride.shade@1 {
     requires { field.read; field.write; }
     input surface: GBuffer;

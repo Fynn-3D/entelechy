@@ -67,7 +67,7 @@ fn slab(ro: Vec3, rd: Vec3, lo: Vec3, hi: Vec3) -> Hit {
     return Hit { t: t, n: n, p: ro + rd * t };
 }
 
-// The solved cube: each face its own colour.
+/// The solved cube: each face its own colour.
 kernel cube.solved@1 {
     requires { field.write; }
     output result: Stickers;
@@ -83,9 +83,9 @@ kernel cube.begin@1 {
     }
 }
 
-// The rules, once a frame: drag the pointer to orbit; U R F D L B turn
-// a face (with shift, the other way); space scrambles ten turns; enter
-// resets. A turn takes a quarter second, and lands as a permutation.
+/// The rules, once a frame: drag the pointer to orbit; U R F D L B turn
+/// a face (with shift, the other way); space scrambles ten turns; enter
+/// resets. A turn takes a quarter second, and lands as a permutation.
 kernel cube.game@1 {
     requires { field.read; field.write; time.read; input.read; }
     input previous: Games;
@@ -123,8 +123,8 @@ kernel cube.game@1 {
     }
 }
 
-// The stickers after this frame's rules: reset to solved, permuted by
-// the turn that landed, or as they were.
+/// The stickers after this frame's rules: reset to solved, permuted by
+/// the turn that landed, or as they were.
 kernel cube.stickers@1 {
     requires { field.read; field.write; }
     input previous: Stickers;
@@ -137,8 +137,8 @@ kernel cube.stickers@1 {
     }
 }
 
-// The picture: the cube less the turning layer, and the layer in its
-// turned frame, each a box; the nearer hit paints its sticker.
+/// The picture: the cube less the turning layer, and the layer in its
+/// turned frame, each a box; the nearer hit paints its sticker.
 kernel cube.draw@1 {
     requires { field.read; field.write; }
     input game: Games;
@@ -199,8 +199,8 @@ kernel cube.draw@1 {
     }
 }
 
-// The line under the cube: what the network thinks the cube is from
-// solved, in turns; how many turns were made; the training loss.
+/// The line under the cube: what the network thinks the cube is from
+/// solved, in turns; how many turns were made; the training loss.
 kernel cube.readout@1 {
     requires { field.read; field.write; input.read; }
     input game: Games;

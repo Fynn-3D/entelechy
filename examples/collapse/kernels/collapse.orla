@@ -34,17 +34,17 @@ fn mix32(n: Int) -> Int {
     return c ^ (c >>> 16);
 }
 
-// Every tile possible, everywhere, but the blank one: every cell leads
-// somewhere, which is what makes the picture plumbing rather than dust.
+/// Every tile possible, everywhere, but the blank one: every cell leads
+/// somewhere, which is what makes the picture plumbing rather than dust.
 kernel collapse.start@1 {
     requires { field.write; }
     output result: Grid<Int>;
     compute { return 0xFFFE; }
 }
 
-// The cell to collapse next: the fewest tiles left, ties broken by a
-// hash of the cell so the picture does not comb one way. A cell that is
-// already one tile ranks last and is never picked.
+/// The cell to collapse next: the fewest tiles left, ties broken by a
+/// hash of the cell so the picture does not comb one way. A cell that is
+/// already one tile ranks last and is never picked.
 kernel collapse.pick@1 {
     requires { field.read; field.write; }
     input cells: Grid<Int>;
@@ -61,9 +61,9 @@ kernel collapse.pick@1 {
     }
 }
 
-// One step: the picked cell becomes one of the tiles it had left, and
-// wherever the pointer is held the cells around it forget again, so a
-// drag melts the picture and it grows back.
+/// One step: the picked cell becomes one of the tiles it had left, and
+/// wherever the pointer is held the cells around it forget again, so a
+/// drag melts the picture and it grows back.
 kernel collapse.step@1 {
     requires { field.read; field.write; time.read; input.read; }
     input cells: Grid<Int>;
@@ -105,10 +105,10 @@ kernel collapse.step@1 {
     }
 }
 
-// What the neighbours rule out, one cell at a time: placed several
-// times, the news travels that many cells. The grid's edge is a closed
-// side, so no pipe runs off it, and a cell left with nothing melts
-// rather than sticking, which is this collapse's whole backtracking.
+/// What the neighbours rule out, one cell at a time: placed several
+/// times, the news travels that many cells. The grid's edge is a closed
+/// side, so no pipe runs off it, and a cell left with nothing melts
+/// rather than sticking, which is this collapse's whole backtracking.
 kernel collapse.spread@1 {
     requires { field.read; field.write; }
     input cells: Grid<Int>;
@@ -126,7 +126,7 @@ kernel collapse.spread@1 {
     }
 }
 
-// How much of the grid has settled, for the readout.
+/// How much of the grid has settled, for the readout.
 kernel collapse.tally@1 {
     requires { field.read; field.write; }
     input cells: Grid<Int>;
@@ -135,8 +135,8 @@ kernel collapse.tally@1 {
     merge(a, b) { return a + b; }
 }
 
-// The picture: a settled cell is its pipe, an unsettled one a shade of
-// how much it has still to decide, so the frontier shows as it moves.
+/// The picture: a settled cell is its pipe, an unsettled one a shade of
+/// how much it has still to decide, so the frontier shows as it moves.
 kernel collapse.view@1 {
     requires { field.read; field.write; }
     input cells: Grid<Int>;

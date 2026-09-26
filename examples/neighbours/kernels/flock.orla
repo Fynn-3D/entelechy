@@ -46,7 +46,7 @@ fn cell_of(p: Vec2, cols: Int) -> Int {
     return c.y * cols + c.x;
 }
 
-// The bodies before the first frame: scattered, drifting.
+/// The bodies before the first frame: scattered, drifting.
 kernel flock.start@1 {
     requires { field.write; }
     output result: Bodies;
@@ -60,7 +60,7 @@ kernel flock.start@1 {
     }
 }
 
-// One cell number per body: the key the sort orders by.
+/// One cell number per body: the key the sort orders by.
 kernel flock.cell@1 {
     requires { field.read; field.write; }
     input bodies: Bodies;
@@ -69,7 +69,7 @@ kernel flock.cell@1 {
     compute { return cell_of(sample(bodies).at, cols); }
 }
 
-// How many bodies are in each cell.
+/// How many bodies are in each cell.
 kernel flock.counts@1 {
     requires { field.read; field.write; }
     input cells: Rows<Int>;
@@ -79,9 +79,9 @@ kernel flock.counts@1 {
     scatter into blank with sum { return One { cell: sample(cells), one: 1 }; }
 }
 
-// Where each cell's run ends in the sorted order: an inclusive sum of
-// the counts, which is what a prefix fold is. A cell's run begins where
-// the cell before it ended.
+/// Where each cell's run ends in the sorted order: an inclusive sum of
+/// the counts, which is what a prefix fold is. A cell's run begins where
+/// the cell before it ended.
 kernel flock.ends@1 {
     requires { field.read; field.write; }
     input counts: Rows<Int>;
@@ -89,8 +89,8 @@ kernel flock.ends@1 {
     prefix with sum { return sample(counts); }
 }
 
-// The step: every neighbour within `radius` pushes, the push is
-// damped, and the body moves and wraps.
+/// The step: every neighbour within `radius` pushes, the push is
+/// damped, and the body moves and wraps.
 kernel flock.step@1 {
     requires { field.read; field.write; time.read; }
     input bodies: Bodies;
@@ -98,23 +98,23 @@ kernel flock.step@1 {
     input ends: Rows<Int>;
     param cols: Int = 64;
     param radius: Float = 0.015625;
-    // Close in, bodies push apart; further out, they draw together.
-    // `near` is where one becomes the other, in parts of the radius.
+    /// Close in, bodies push apart; further out, they draw together.
+    /// `near` is where one becomes the other, in parts of the radius.
     param near: Float = 0.38;
     param repel: Float = 0.00035;
     param cohere: Float = 0.012;
     param align: Float = 0.05;
     param drag: Float = 0.90;
     param speed: Float = 0.0035;
-    // A kick a frame, so the drops keep wandering into each other
-    // instead of settling into a lattice and stopping.
+    /// A kick a frame, so the drops keep wandering into each other
+    /// instead of settling into a lattice and stopping.
     param jitter: Float = 0.00022;
     param dt: Float = 1.0;
-    // How many of a cell's bodies a body will look at. A cell holding
-    // more than this is reported by `flock.crowded@1`.
+    /// How many of a cell's bodies a body will look at. A cell holding
+    /// more than this is reported by `flock.crowded@1`.
     param cap: Int = 64;
-    // `false` asks every pair, which is the same forces in another
-    // order and no grid at all.
+    /// `false` asks every pair, which is the same forces in another
+    /// order and no grid at all.
     param grid: Bool = true;
     output result: Bodies;
 
@@ -188,8 +188,8 @@ kernel flock.step@1 {
     }
 }
 
-// A cell holding more bodies than `cap`, which is the one thing that
-// would make the grid answer differently from every pair.
+/// A cell holding more bodies than `cap`, which is the one thing that
+/// would make the grid answer differently from every pair.
 kernel flock.crowded@1 {
     requires { field.read; field.write; }
     input counts: Rows<Int>;
@@ -199,8 +199,8 @@ kernel flock.crowded@1 {
     merge(a, b) { return a + b; }
 }
 
-// Every pair of neighbours in the sorted order that is out of order, or
-// equal and swapped: a stable sort leaves none of either.
+/// Every pair of neighbours in the sorted order that is out of order, or
+/// equal and swapped: a stable sort leaves none of either.
 kernel flock.unsorted@1 {
     requires { field.read; field.write; }
     input cells: Rows<Int>;
@@ -218,7 +218,7 @@ kernel flock.unsorted@1 {
     merge(a, b) { return a + b; }
 }
 
-// The picture: one count per cell of the canvas, tone-mapped.
+/// The picture: one count per cell of the canvas, tone-mapped.
 kernel flock.splat@1 {
     requires { field.read; field.write; }
     input bodies: Bodies;
@@ -230,8 +230,8 @@ kernel flock.splat@1 {
     }
 }
 
-// A scatter counts in integers, since integers add the same way in
-// every order; reading the counts as a field wants floats.
+/// A scatter counts in integers, since integers add the same way in
+/// every order; reading the counts as a field wants floats.
 kernel flock.soften@1 {
     requires { field.read; field.write; }
     input heat: Grid<Int>;
@@ -239,12 +239,12 @@ kernel flock.soften@1 {
     compute { return float(sample(heat)); }
 }
 
-// The counts read as a field rather than as the cells they are stored
-// in, so a crowd is a shape and not a dusting of pixels.
+/// The counts read as a field rather than as the cells they are stored
+/// in, so a crowd is a shape and not a dusting of pixels.
 kernel flock.view@1 {
     requires { field.read; field.write; }
     input heat: Grid<Float>;
-    // How bright one body is, so a picture of any crowd can be read.
+    /// How bright one body is, so a picture of any crowd can be read.
     param bright: Float = 0.30;
     output result: Image;
     compute {

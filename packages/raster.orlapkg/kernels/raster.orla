@@ -141,11 +141,11 @@ fn large(b: Box, tile: Int) -> Bool {
     return tile > 0 && (b.w > tile || b.h > tile);
 }
 
-// Every pixel's nearest fragment as one key: each triangle walks its box
-// and emits a key a pixel it covers. With a `tile`, only the triangles
-// whose box is one tile or less; the larger ones are left to
-// `raster.cover_tiles@1`, which takes these keys as its own start, so the
-// least of both is kept.
+/// Every pixel's nearest fragment as one key: each triangle walks its box
+/// and emits a key a pixel it covers. With a `tile`, only the triangles
+/// whose box is one tile or less; the larger ones are left to
+/// `raster.cover_tiles@1`, which takes these keys as its own start, so the
+/// least of both is kept.
 kernel raster.cover@2 {
     requires { field.read; field.write; }
     input triangles: Rows<Face>;
@@ -174,8 +174,8 @@ kernel raster.cover@2 {
     }
 }
 
-// How many tiles each triangle's box is cut into: none for one of a
-// tile or less, which `raster.cover@2` covers whole.
+/// How many tiles each triangle's box is cut into: none for one of a
+/// tile or less, which `raster.cover@2` covers whole.
 kernel raster.tiles@1 {
     requires { field.read; field.write; }
     input triangles: Rows<Face>;
@@ -190,8 +190,8 @@ kernel raster.tiles@1 {
     }
 }
 
-// Where each triangle's tiles begin: an inclusive prefix of the counts,
-// so triangle `t`'s tiles end before `offsets[t]`.
+/// Where each triangle's tiles begin: an inclusive prefix of the counts,
+/// so triangle `t`'s tiles end before `offsets[t]`.
 kernel raster.offsets@1 {
     requires { field.read; field.write; }
     input counts: Rows<Int>;
@@ -199,7 +199,7 @@ kernel raster.offsets@1 {
     prefix with sum { return sample(counts); }
 }
 
-// How many tiles there are, which sizes the next node: the last offset.
+/// How many tiles there are, which sizes the next node: the last offset.
 kernel raster.total@1 {
     requires { field.read; field.write; }
     input offsets: Rows<Int>;
@@ -230,13 +230,13 @@ fn place(e: Int, counts: Rows<Int>, offsets: Rows<Int>, triangles: Rows<Face>, v
     };
 }
 
-// Every pixel's nearest fragment as one key, of the large triangles, a
-// tile of one's box at a time, so a triangle that fills the canvas is
-// covered by as many invocations as it has tiles rather than by one. The
-// node's domain is a pool of invocations sized by the canvas, each taking
-// every `n`th tile, so how many tiles there are this frame is read on the
-// device and never waited for. It starts from the keys `raster.cover@2`
-// left, and keeps the least.
+/// Every pixel's nearest fragment as one key, of the large triangles, a
+/// tile of one's box at a time, so a triangle that fills the canvas is
+/// covered by as many invocations as it has tiles rather than by one. The
+/// node's domain is a pool of invocations sized by the canvas, each taking
+/// every `n`th tile, so how many tiles there are this frame is read on the
+/// device and never waited for. It starts from the keys `raster.cover@2`
+/// left, and keeps the least.
 kernel raster.cover_tiles@1 {
     requires { field.read; field.write; }
     input triangles: Rows<Face>;
@@ -276,10 +276,10 @@ kernel raster.cover_tiles@1 {
     }
 }
 
-// The same pair with a cutout: a fragment whose alpha in `mask`, read at
-// its own uv as `at_linear(mask, uv * size(mask))` reads it, is below
-// `cutout` is not drawn — it emits no key, so it settles no depth and
-// what is behind a leaf's edge is seen through it.
+/// The same pair with a cutout: a fragment whose alpha in `mask`, read at
+/// its own uv as `at_linear(mask, uv * size(mask))` reads it, is below
+/// `cutout` is not drawn — it emits no key, so it settles no depth and
+/// what is behind a leaf's edge is seen through it.
 kernel raster.cover_cutout@2 {
     requires { field.read; field.write; }
     input triangles: Rows<Face>;
@@ -361,9 +361,9 @@ kernel raster.cover_cutout_tiles@1 {
     }
 }
 
-// The surface: at each covered pixel, the depth its key holds and the
-// winner's attributes interpolated at the pixel's centre,
-// perspective-correct.
+/// The surface: at each covered pixel, the depth its key holds and the
+/// winner's attributes interpolated at the pixel's centre,
+/// perspective-correct.
 kernel raster.resolve@2 {
     requires { field.read; field.write; }
     input keys: Grid<Long>;

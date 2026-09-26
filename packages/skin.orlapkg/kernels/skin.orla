@@ -50,8 +50,8 @@ fn mixing(a: Pose, b: Pose, t: Float) -> Pose {
     };
 }
 
-// The clock a clip is read at, as a row of one second: the simple case,
-// where a clip plays at its own speed from the start of the session.
+/// The clock a clip is read at, as a row of one second: the simple case,
+/// where a clip plays at its own speed from the start of the session.
 kernel skin.clock@1 {
     requires { field.write; time.read; }
     param speed: Float = 1.0;
@@ -59,24 +59,24 @@ kernel skin.clock@1 {
     compute { return time() * speed; }
 }
 
-// Every joint's local transform at the moment the clock says, blended
-// between the two frames it falls between. A clip ends where its rows
-// end: `repeat` wraps round to the start, and otherwise the last frame
-// holds.
-//
-// A node sized `instances * count(skeleton)` poses a crowd instead of
-// one: element `e` is joint `e % joints` of instance `e / joints`, and
-// each instance reads its own row of `at`, so a hundred of them walk
-// the same clip out of step. Sized for one — which is what a node with
-// no `domain` of its own is — it is the same Kernel doing the same
-// thing.
+/// Every joint's local transform at the moment the clock says, blended
+/// between the two frames it falls between. A clip ends where its rows
+/// end: `repeat` wraps round to the start, and otherwise the last frame
+/// holds.
+///
+/// A node sized `instances * count(skeleton)` poses a crowd instead of
+/// one: element `e` is joint `e % joints` of instance `e / joints`, and
+/// each instance reads its own row of `at`, so a hundred of them walk
+/// the same clip out of step. Sized for one — which is what a node with
+/// no `domain` of its own is — it is the same Kernel doing the same
+/// thing.
 kernel skin.sample@1 {
     requires { field.read; field.write; }
     input skeleton: Skeleton;
     input clip: Clip;
     input at: Rows<Float>;
-    // Frames a second the clip was written at, which `orla import`
-    // prints and the bridge writes.
+    /// Frames a second the clip was written at, which `orla import`
+    /// prints and the bridge writes.
     param rate: Float = 30.0;
     param repeat: Bool = true;
     output result: Rows<Pose>;
@@ -99,13 +99,13 @@ kernel skin.sample@1 {
     }
 }
 
-// Two poses of one skeleton, blended: a walk into a run, a turn laid
-// over either. A Kernel or the graph decides `mix`, so it can move every
-// frame.
-//
-// `mix` of one row is the whole skeleton. A row a joint is a mask: an
-// upper body running while the legs walk is the same blend with ones
-// down the arms and zeros down the legs.
+/// Two poses of one skeleton, blended: a walk into a run, a turn laid
+/// over either. A Kernel or the graph decides `mix`, so it can move every
+/// frame.
+///
+/// `mix` of one row is the whole skeleton. A row a joint is a mask: an
+/// upper body running while the legs walk is the same blend with ones
+/// down the arms and zeros down the legs.
 kernel skin.blend@1 {
     requires { field.read; field.write; }
     input first: Rows<Pose>;
@@ -120,13 +120,13 @@ kernel skin.blend@1 {
     }
 }
 
-// A pose laid over another: what `add` does differently from `rest` is
-// done to `base`, by `weight`. A clip authored as a difference — a
-// flinch, a lean, a breath — plays over whatever the body is already
-// doing, which is what a game blends on top of a walk.
-//
-// `rest` is the frame the difference is measured from, which is the
-// additive clip's own first frame: sample it at zero.
+/// A pose laid over another: what `add` does differently from `rest` is
+/// done to `base`, by `weight`. A clip authored as a difference — a
+/// flinch, a lean, a breath — plays over whatever the body is already
+/// doing, which is what a game blends on top of a walk.
+///
+/// `rest` is the frame the difference is measured from, which is the
+/// additive clip's own first frame: sample it at zero.
 kernel skin.add@1 {
     requires { field.read; field.write; }
     input base: Rows<Pose>;
@@ -167,21 +167,21 @@ fn travelled(clip: Clip, joints: Int, joint: Int, moment: Float, ground: Vec3) -
     return (stride * loops + here - start) * ground;
 }
 
-// A travelling clip played in place: every joint as `skin.sample@1`
-// would pose it, looping every `frames - 1` frames as the clip closes on
-// itself, and the root with its travel along the `ground` axes taken
-// out. What stays in the root is what is not travel — a walk's bob, its
-// sway on an axis `ground` leaves out — and the travel is what
-// `skin.travel@1` gives the scene to carry.
+/// A travelling clip played in place: every joint as `skin.sample@1`
+/// would pose it, looping every `frames - 1` frames as the clip closes on
+/// itself, and the root with its travel along the `ground` axes taken
+/// out. What stays in the root is what is not travel — a walk's bob, its
+/// sway on an axis `ground` leaves out — and the travel is what
+/// `skin.travel@1` gives the scene to carry.
 kernel skin.stride@1 {
     requires { field.read; field.write; }
     input skeleton: Skeleton;
     input clip: Clip;
     input at: Rows<Float>;
     param rate: Float = 30.0;
-    // The joint whose travel is the body's: the root.
+    /// The joint whose travel is the body's: the root.
     param joint: Int = 0;
-    // Which axes of its translation are travel: the ground, y up.
+    /// Which axes of its translation are travel: the ground, y up.
     param ground: Vec3 = vec3(1.0, 0.0, 1.0);
     output result: Rows<Pose>;
 
@@ -201,12 +201,12 @@ kernel skin.stride@1 {
     }
 }
 
-// How far a travelling clip's root moved between two moments, `was` and
-// `at`, one row an instance: the travel `skin.stride@1` took out of the
-// pose, for the scene to add to where the body stands. It is the
-// difference of where the root had got to at each, so a scene that adds
-// it every evaluation stands where the clip says whatever its frames
-// are, loops and all.
+/// How far a travelling clip's root moved between two moments, `was` and
+/// `at`, one row an instance: the travel `skin.stride@1` took out of the
+/// pose, for the scene to add to where the body stands. It is the
+/// difference of where the root had got to at each, so a scene that adds
+/// it every evaluation stands where the clip says whatever its frames
+/// are, loops and all.
 kernel skin.travel@1 {
     requires { field.read; field.write; }
     input skeleton: Skeleton;
@@ -244,17 +244,17 @@ fn standing(poses: Rows<Pose>, skeleton: Skeleton, block: Int, joint: Int, depth
     return walked.matrix;
 }
 
-// One joint turned to face a point, over whatever the poses already say:
-// a head that follows what it looks at, an arm that reaches, a gun that
-// tracks. The joint's `axis`, in its own space (a bone from Blender runs
-// along its y), is turned the shortest way onto the target, and that
-// turn is laid over the pose the joint already had, so the twist the
-// clip gives it stays; `weight` blends between the two. Every other
-// joint passes through, so this sits between sampling and the palette
-// and the chain below the joint follows it.
-//
-// `target` is in the skin's space, one row an instance: a crowd sized
-// `instances * count(skeleton)` has each instance look at its own.
+/// One joint turned to face a point, over whatever the poses already say:
+/// a head that follows what it looks at, an arm that reaches, a gun that
+/// tracks. The joint's `axis`, in its own space (a bone from Blender runs
+/// along its y), is turned the shortest way onto the target, and that
+/// turn is laid over the pose the joint already had, so the twist the
+/// clip gives it stays; `weight` blends between the two. Every other
+/// joint passes through, so this sits between sampling and the palette
+/// and the chain below the joint follows it.
+///
+/// `target` is in the skin's space, one row an instance: a crowd sized
+/// `instances * count(skeleton)` has each instance look at its own.
 kernel skin.aim@1 {
     requires { field.read; field.write; }
     input poses: Rows<Pose>;
@@ -263,7 +263,7 @@ kernel skin.aim@1 {
     input weight: Rows<Float>;
     param joint: Int = 0;
     param axis: Vec3 = vec3(0.0, 1.0, 0.0);
-    // How deep a skeleton may be, as the palette takes it.
+    /// How deep a skeleton may be, as the palette takes it.
     param depth: Int = 64;
     output result: Rows<Pose>;
 
@@ -287,15 +287,15 @@ kernel skin.aim@1 {
     }
 }
 
-// The palette: each joint's local transform composed up the parent
-// chain and taken through its inverse bind, which is the matrix a
-// vertex bound to that joint is moved by.
+/// The palette: each joint's local transform composed up the parent
+/// chain and taken through its inverse bind, which is the matrix a
+/// vertex bound to that joint is moved by.
 kernel skin.palette@1 {
     requires { field.read; field.write; }
     input poses: Rows<Pose>;
     input skeleton: Skeleton;
-    // How deep a skeleton may be. A joint's walk stops at the root long
-    // before this unless someone built a chain of them.
+    /// How deep a skeleton may be. A joint's walk stops at the root long
+    /// before this unless someone built a chain of them.
     param depth: Int = 64;
     output result: Palette;
 
@@ -316,19 +316,19 @@ kernel skin.palette@1 {
     }
 }
 
-// The mesh in the pose the palette says: four joints a vertex,
-// weighted. A node sized `instances * count(mesh)` poses a crowd out of
-// one mesh, each instance reading its own block of the palette.
-//
-// A vertex bound to nothing — all four weights zero, which is what a
-// model that mixes skinned and unskinned meshes writes — is left where
-// it is.
+/// The mesh in the pose the palette says: four joints a vertex,
+/// weighted. A node sized `instances * count(mesh)` poses a crowd out of
+/// one mesh, each instance reading its own block of the palette.
+///
+/// A vertex bound to nothing — all four weights zero, which is what a
+/// model that mixes skinned and unskinned meshes writes — is left where
+/// it is.
 kernel skin.apply@1 {
     requires { field.read; field.write; }
     input mesh: Rows<Point>;
     input weights: Rows<Bound>;
     input palette: Palette;
-    // Bound for its count: how many joints an instance's palette holds.
+    /// Bound for its count: how many joints an instance's palette holds.
     input skeleton: Skeleton;
     output result: Rows<Point>;
 
@@ -352,13 +352,13 @@ kernel skin.apply@1 {
     }
 }
 
-// Where each instance stands: one `Pose` a instance, applied to the
-// mesh it posed. A crowd is this over `skin.apply@1`'s output.
+/// Where each instance stands: one `Pose` a instance, applied to the
+/// mesh it posed. A crowd is this over `skin.apply@1`'s output.
 kernel skin.place@1 {
     requires { field.read; field.write; }
     input mesh: Rows<Point>;
     input places: Rows<Pose>;
-    // Bound for its count: how many vertices one instance has.
+    /// Bound for its count: how many vertices one instance has.
     input one: Rows<Point>;
     output result: Rows<Point>;
     compute {

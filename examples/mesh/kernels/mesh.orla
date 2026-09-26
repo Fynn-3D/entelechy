@@ -9,8 +9,8 @@ type Vertices = Rows<Vertex>;
 type Triangles = Rows<Tri>;
 type GBuffer = Grid<Surface>;
 
-// One vertex per element over a segments x rings lattice, in object
-// space (`clip.w` is 1 until projection).
+/// One vertex per element over a segments x rings lattice, in object
+/// space (`clip.w` is 1 until projection).
 kernel mesh.torus@1 {
     requires { field.write; }
     param major: Float = 1.0;
@@ -34,7 +34,7 @@ kernel mesh.torus@1 {
     }
 }
 
-// Two triangles per lattice cell, wrapping in both directions.
+/// Two triangles per lattice cell, wrapping in both directions.
 kernel mesh.torus_faces@1 {
     requires { field.write; }
     param segments: Int = 48;
@@ -59,10 +59,10 @@ kernel mesh.torus_faces@1 {
     }
 }
 
-// Midpoint subdivision, the topology-changing step: every triangle
-// becomes four. The new vertex rows hold the originals followed by three
-// edge midpoints per triangle, so the graph sizes them from the inputs:
-// `domain = count(mesh) + 3 * count(faces);` and `domain = 4 * count(faces);`.
+/// Midpoint subdivision, the topology-changing step: every triangle
+/// becomes four. The new vertex rows hold the originals followed by three
+/// edge midpoints per triangle, so the graph sizes them from the inputs:
+/// `domain = count(mesh) + 3 * count(faces);` and `domain = 4 * count(faces);`.
 kernel mesh.split_vertices@1 {
     requires { field.read; field.write; }
     input mesh: Vertices;
@@ -114,8 +114,8 @@ kernel mesh.split_faces@1 {
     }
 }
 
-// Rotate with time, look from `distance` down the z axis, and project
-// with a perspective whose depth spans [0, 1] from `near` to `far`.
+/// Rotate with time, look from `distance` down the z axis, and project
+/// with a perspective whose depth spans [0, 1] from `near` to `far`.
 kernel mesh.project@1 {
     requires { field.read; field.write; time.read; }
     input mesh: Vertices;
@@ -152,8 +152,8 @@ kernel mesh.project@1 {
     }
 }
 
-// Lambert plus a highlight over a checker from the uv; the background
-// where no triangle landed.
+/// Lambert plus a highlight over a checker from the uv; the background
+/// where no triangle landed.
 kernel mesh.shade@1 {
     requires { field.read; field.write; }
     input surface: GBuffer;

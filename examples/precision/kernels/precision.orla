@@ -11,9 +11,9 @@ struct Corner { at: DVec2; nm: LVec2; }
 // An edge measured three ways.
 struct Edge { wide: Double; narrow: Float; nm: Long; }
 
-// A ring half a millimetre across around `origin`, ten micrometres a
-// pixel: the right half asks each pixel in doubles, the left half the
-// same question in floats, from the same world coordinates.
+/// A ring half a millimetre across around `origin`, ten micrometres a
+/// pixel: the right half asks each pixel in doubles, the left half the
+/// same question in floats, from the same world coordinates.
 kernel precision.ring@1 {
     requires { field.write; }
     param origin: DVec2 = dvec2(500000.123456789, 4000000.987654321);
@@ -41,8 +41,8 @@ kernel precision.ring@1 {
     }
 }
 
-// The corners of a part two and a half millimetres by one point two,
-// placed at `origin` in nanometres; the metres are derived from them.
+/// The corners of a part two and a half millimetres by one point two,
+/// placed at `origin` in nanometres; the metres are derived from them.
 kernel precision.corners@1 {
     requires { field.write; }
     param origin: LVec2 = lvec2(500000123456789, 4000000987654321);
@@ -56,8 +56,8 @@ kernel precision.corners@1 {
     }
 }
 
-// Each edge of the part, from a corner to the next: its length in
-// doubles, in floats from the same coordinates, and in nanometres.
+/// Each edge of the part, from a corner to the next: its length in
+/// doubles, in floats from the same coordinates, and in nanometres.
 kernel precision.edges@1 {
     requires { field.read; field.write; }
     input corners: Rows<Corner>;

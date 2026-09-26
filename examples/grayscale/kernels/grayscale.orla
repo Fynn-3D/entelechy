@@ -1,4 +1,4 @@
-// Edit the weights or `amount` while `orla run --watch` is running.
+/// Edit the weights or `amount` while `orla run --watch` is running.
 kernel image.grayscale@1 {
     requires { field.read; field.write; }
     input source: Image;

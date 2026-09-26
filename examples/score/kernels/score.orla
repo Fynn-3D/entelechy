@@ -21,9 +21,9 @@ fn envelope(age: Float, duration: Float) -> Float {
     return if age < 0.0 { 0.0 } else { rise * fall * body };
 }
 
-// The block of samples for this frame: every note that sounds at this
-// sample, added. The loop counts the score's own rows, so a scene may
-// hand it a song of any length.
+/// The block of samples for this frame: every note that sounds at this
+/// sample, added. The loop counts the score's own rows, so a scene may
+/// hand it a song of any length.
 kernel score.voice@1 {
     requires { field.read; field.write; time.read; }
     input song: Notes;
@@ -51,8 +51,8 @@ kernel score.voice@1 {
     }
 }
 
-// The piano roll: time across, key up, one bar per note, and the line
-// that says where the sound is.
+/// The piano roll: time across, key up, one bar per note, and the line
+/// that says where the sound is.
 kernel score.roll@1 {
     requires { field.read; field.write; time.read; }
     input song: Notes;

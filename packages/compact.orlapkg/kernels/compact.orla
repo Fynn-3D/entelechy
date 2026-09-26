@@ -7,7 +7,7 @@
 // the nodes that do the work are sized by the count and read the
 // indices to know what they are working on.
 
-// What a slot holds when nothing was gathered into it.
+/// What a slot holds when nothing was gathered into it.
 kernel compact.blank@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
@@ -15,15 +15,15 @@ kernel compact.blank@1 {
     compute { return -1; }
 }
 
-// The rank of each kept element: an inclusive prefix sum, so a kept
-// element at `i` belongs at `offsets[i] - 1`.
-//
-// `prefix with sum` and not `scan`: a scan is ordered work — each step
-// reads what the step before it left, so one thread walks the row — and
-// a sum of integers does not need that order. Saying the rule instead of
-// writing the carry lets a backend fold the row in whatever grouping it
-// likes, which is how a device does this in three passes over blocks
-// rather than in one invocation walking every element.
+/// The rank of each kept element: an inclusive prefix sum, so a kept
+/// element at `i` belongs at `offsets[i] - 1`.
+///
+/// `prefix with sum` and not `scan`: a scan is ordered work — each step
+/// reads what the step before it left, so one thread walks the row — and
+/// a sum of integers does not need that order. Saying the rule instead of
+/// writing the carry lets a backend fold the row in whatever grouping it
+/// likes, which is how a device does this in three passes over blocks
+/// rather than in one invocation walking every element.
 kernel compact.offsets@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
@@ -33,8 +33,8 @@ kernel compact.offsets@1 {
     }
 }
 
-// How many were kept, as a row of one, which is what a `domain` reads:
-// `domain = value(count) * per_thing;`.
+/// How many were kept, as a row of one, which is what a `domain` reads:
+/// `domain = value(count) * per_thing;`.
 kernel compact.total@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;
@@ -43,20 +43,20 @@ kernel compact.total@1 {
     merge(a, b) { return a + b; }
 }
 
-// Every kept element's index, written where its rank says. An address
-// outside the target is dropped, so a flag of zero sends its index to
-// -1 and nothing lands.
-//
-// The rule is `max` and not `last` because a rank is unique: no two
-// kept elements have the same one, so no slot is written twice and
-// every rule agrees. It is worth choosing: `last` means the greatest
-// source wins, which no invocation can know until every other one is
-// done, so a backend writes the winners with atomics in one pass and
-// gathers their values in another. `max` over integers is one pass of
-// atomics and nothing else — a million sources go 1.30 ms to 0.96,
-// four thousand 0.41 to 0.35. `blank` fills the slots with -1 and an
-// index is never negative, so the maximum of a slot is what landed in
-// it or the -1 that says nothing did.
+/// Every kept element's index, written where its rank says. An address
+/// outside the target is dropped, so a flag of zero sends its index to
+/// -1 and nothing lands.
+///
+/// The rule is `max` and not `last` because a rank is unique: no two
+/// kept elements have the same one, so no slot is written twice and
+/// every rule agrees. It is worth choosing: `last` means the greatest
+/// source wins, which no invocation can know until every other one is
+/// done, so a backend writes the winners with atomics in one pass and
+/// gathers their values in another. `max` over integers is one pass of
+/// atomics and nothing else — a million sources go 1.30 ms to 0.96,
+/// four thousand 0.41 to 0.35. `blank` fills the slots with -1 and an
+/// index is never negative, so the maximum of a slot is what landed in
+/// it or the -1 that says nothing did.
 kernel compact.gather@1 {
     requires { field.read; field.write; }
     input flags: Rows<Int>;

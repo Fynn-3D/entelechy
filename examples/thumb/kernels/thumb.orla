@@ -6,11 +6,11 @@
 // in RAM and counts its frames; the picture is the framebuffer.
 type Words = Rows<Int>;
 
-// The program, halfword by halfword (bytes by arithmetic, as the CHIP-8
-// does). Registers: r7 the framebuffer, r6 the frame count t, r5 y, r4 x.
-// Each cell of the picture is (x ^ y) + t; `tick` then counts the frame
-// into RAM at 0x0FF0, going through the stack, a high register and a
-// halfword store on the way, so most of the instruction formats run.
+/// The program, halfword by halfword (bytes by arithmetic, as the CHIP-8
+/// does). Registers: r7 the framebuffer, r6 the frame count t, r5 y, r4 x.
+/// Each cell of the picture is (x ^ y) + t; `tick` then counts the frame
+/// into RAM at 0x0FF0, going through the stack, a high register and a
+/// halfword store on the way, so most of the instruction formats run.
 kernel thumb.rom@1 {
     requires { field.write; }
     output result: Words;
@@ -59,8 +59,8 @@ kernel thumb.rom@1 {
     }
 }
 
-// RAM at power-on: the program's halfwords packed little-endian into
-// words from address 0, zeros elsewhere (8 KiB: 2048 words).
+/// RAM at power-on: the program's halfwords packed little-endian into
+/// words from address 0, zeros elsewhere (8 KiB: 2048 words).
 kernel thumb.boot@1 {
     requires { field.read; field.write; }
     input rom: Words;
@@ -73,9 +73,9 @@ kernel thumb.boot@1 {
     }
 }
 
-// The registers: r0..r15 at 0..15 (r13 the stack pointer, r14 the link,
-// r15 the address of the instruction to run), the flags at 16 as
-// N Z C V in bits 3..0. The stack starts at 0x0FE0, the program at 0.
+/// The registers: r0..r15 at 0..15 (r13 the stack pointer, r14 the link,
+/// r15 the address of the instruction to run), the flags at 16 as
+/// N Z C V in bits 3..0. The stack starts at 0x0FE0, the program at 0.
 kernel thumb.start@1 {
     requires { field.write; }
     output result: Words;
@@ -85,8 +85,8 @@ kernel thumb.start@1 {
     }
 }
 
-// One instruction per element of `ticks`; the halfword it ran is the
-// output, for the record.
+/// One instruction per element of `ticks`; the halfword it ran is the
+/// output, for the record.
 kernel thumb.step@1 {
     requires { field.read; field.write; }
     input ticks: Rows<Int>;
@@ -401,7 +401,7 @@ kernel thumb.step@1 {
     }
 }
 
-// The framebuffer at 0x1000, 32 by 32 bytes, each a colour by its value.
+/// The framebuffer at 0x1000, 32 by 32 bytes, each a colour by its value.
 kernel thumb.view@1 {
     requires { field.read; field.write; }
     input ram: Words;

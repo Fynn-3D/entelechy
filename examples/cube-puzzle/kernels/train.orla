@@ -22,16 +22,16 @@ fn unit(w: Rows<Float>, x: Rows<Float>, first: Int, j: Int) -> Float {
     return tanh(loop 54 with acc = at(w, j * 55 + 54) { acc + at(w, j * 55 + index()) * at(x, first + index()) });
 }
 
-// Small random weights to start from.
+/// Small random weights to start from.
 kernel train.init@1 {
     requires { field.write; }
     output result: Batch;
     compute { return (noise(float(element()) + 0.37) - 0.5) * 0.3; }
 }
 
-// This frame's scrambles: element e is sticker e % 54 of cube e / 54,
-// which is solved, then turned k random times; the colour is the one
-// that ends up there, found by following the permutations back.
+/// This frame's scrambles: element e is sticker e % 54 of cube e / 54,
+/// which is solved, then turned k random times; the colour is the one
+/// that ends up there, found by following the permutations back.
 kernel train.samples@1 {
     requires { field.read; field.write; time.read; }
     output result: Batch;
@@ -51,7 +51,7 @@ kernel train.samples@1 {
     }
 }
 
-// The label of each cube of the frame: how many turns it was given.
+/// The label of each cube of the frame: how many turns it was given.
 kernel train.labels@1 {
     requires { field.write; time.read; }
     output result: Batch;
@@ -62,8 +62,8 @@ kernel train.labels@1 {
     }
 }
 
-// The hidden units of every cube of the batch: element e is unit e % 32
-// of cube e / 32.
+/// The hidden units of every cube of the batch: element e is unit e % 32
+/// of cube e / 32.
 kernel train.act@1 {
     requires { field.read; field.write; }
     input samples: Batch;
@@ -75,8 +75,8 @@ kernel train.act@1 {
     }
 }
 
-// The output of every cube less its label: the gradient of half the
-// squared error at the output.
+/// The output of every cube less its label: the gradient of half the
+/// squared error at the output.
 kernel train.delta@1 {
     requires { field.read; field.write; }
     input act: Batch;
@@ -90,10 +90,10 @@ kernel train.delta@1 {
     }
 }
 
-// The gradient, summed over the batch, weight by weight: element e is
-// weight e % 1793 of cube e / 1793 (the node's domain is the product),
-// one term of the chain rule from the hidden units and the deltas
-// already computed.
+/// The gradient, summed over the batch, weight by weight: element e is
+/// weight e % 1793 of cube e / 1793 (the node's domain is the product),
+/// one term of the chain rule from the hidden units and the deltas
+/// already computed.
 kernel train.grads@1 {
     requires { field.read; field.write; }
     input samples: Batch;
@@ -121,7 +121,7 @@ kernel train.grads@1 {
     }
 }
 
-// One step down the mean gradient.
+/// One step down the mean gradient.
 kernel train.step@1 {
     requires { field.read; field.write; }
     input weights: Batch;
@@ -132,7 +132,7 @@ kernel train.step@1 {
     compute { return sample(weights) - rate * at(grads, element()) / count; }
 }
 
-// The mean squared error over the batch, halved.
+/// The mean squared error over the batch, halved.
 kernel train.loss@1 {
     requires { field.read; field.write; }
     input delta: Batch;
@@ -144,7 +144,7 @@ kernel train.loss@1 {
     merge(a, b) { return Loss { sum: a.sum + b.sum, count: a.count + b.count }; }
 }
 
-// The network's guess for the cube on screen.
+/// The network's guess for the cube on screen.
 kernel train.guess@1 {
     requires { field.read; field.write; }
     input stickers: Rows<Int>;

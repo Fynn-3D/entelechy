@@ -9,9 +9,9 @@ type Bins = Rows<Float>;
 struct Peak { bin: Int; power: Float; }
 type Peaks = Rows<Peak>;
 
-// The voice: two partials and a slow wobble, at a pitch the scene sets.
-// The phase comes from the sample's own place in time, so a block joins
-// the one before it without a click.
+/// The voice: two partials and a slow wobble, at a pitch the scene sets.
+/// The phase comes from the sample's own place in time, so a block joins
+/// the one before it without a click.
 kernel spectrum.voice@1 {
     requires { field.write; time.read; }
     param pitch: Float = 220.0;
@@ -30,9 +30,9 @@ kernel spectrum.voice@1 {
     }
 }
 
-// One bin per element: how much of the block turns at this bin's
-// frequency. The loop's count is the block's length, so the Kernel does
-// not know it when it is written.
+/// One bin per element: how much of the block turns at this bin's
+/// frequency. The loop's count is the block's length, so the Kernel does
+/// not know it when it is written.
 kernel spectrum.bins@1 {
     requires { field.read; field.write; time.read; }
     input block: Block;
@@ -55,7 +55,7 @@ kernel spectrum.bins@1 {
     }
 }
 
-// The loudest bin, which the readout names.
+/// The loudest bin, which the readout names.
 kernel spectrum.peak@1 {
     requires { field.read; field.write; }
     input bins: Bins;
@@ -64,8 +64,8 @@ kernel spectrum.peak@1 {
     merge(a, b) { return if b.power > a.power { b } else { a }; }
 }
 
-// The bars: one per bin, tallest in the middle of the picture, with the
-// loudest one lit.
+/// The bars: one per bin, tallest in the middle of the picture, with the
+/// loudest one lit.
 kernel spectrum.draw@1 {
     requires { field.read; field.write; }
     input bins: Bins;
@@ -95,7 +95,7 @@ kernel spectrum.draw@1 {
     }
 }
 
-// The loudest bin's frequency, as a number the label prints.
+/// The loudest bin's frequency, as a number the label prints.
 kernel spectrum.hertz@1 {
     requires { field.read; field.write; }
     input peak: Peaks;

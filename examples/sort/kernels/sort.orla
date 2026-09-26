@@ -4,7 +4,7 @@
 // backends, and enough for rows in the thousands. Larger sorts wait for
 // a scatter primitive, which the map mode does not have.
 
-// Values to sort: a deterministic hash of the index, shuffled by time.
+/// Values to sort: a deterministic hash of the index, shuffled by time.
 kernel sort.values@1 {
     requires { field.write; time.read; }
     output result: Rows<Float>;
@@ -20,8 +20,8 @@ kernel sort.values@1 {
     }
 }
 
-// The rank of each value: how many are smaller, ties broken by index so
-// every rank is used exactly once.
+/// The rank of each value: how many are smaller, ties broken by index so
+/// every rank is used exactly once.
 kernel sort.rank@1 {
     requires { field.read; field.write; }
     input values: Rows<Float>;
@@ -37,7 +37,7 @@ kernel sort.rank@1 {
     }
 }
 
-// The value at this rank: the one element whose rank is this index.
+/// The value at this rank: the one element whose rank is this index.
 kernel sort.gather@1 {
     requires { field.read; field.write; }
     input values: Rows<Float>;
@@ -52,7 +52,7 @@ kernel sort.gather@1 {
     }
 }
 
-// Bars: one column per value, height by value, before and after sorting.
+/// Bars: one column per value, height by value, before and after sorting.
 kernel sort.bars@1 {
     requires { field.read; field.write; }
     input before: Rows<Float>;

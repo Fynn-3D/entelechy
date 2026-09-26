@@ -1,5 +1,5 @@
-// The picture an agent works on: a warm gradient with a cool disc, every
-// pixel different from its neighbours so an effect on it can be measured.
+/// The picture an agent works on: a warm gradient with a cool disc, every
+/// pixel different from its neighbours so an effect on it can be measured.
 kernel picture.draw@1 {
     requires { field.write; }
     output result: Image;

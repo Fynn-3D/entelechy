@@ -4,8 +4,8 @@
 struct Tile { kind: Int; height: Float; passable: Bool; }
 type Map = Grid<Tile>;
 
-// Kinds: 0 grass, 1 sand, 2 rock, 3 water. Rock lies on a fixed lattice so
-// the map is deterministic; the spring is at `source`.
+/// Kinds: 0 grass, 1 sand, 2 rock, 3 water. Rock lies on a fixed lattice so
+/// the map is deterministic; the spring is at `source`.
 kernel tiles.generate@1 {
     requires { field.write; }
     param source: Vec2 = vec2(0.0, 0.0);
@@ -29,7 +29,7 @@ kernel tiles.generate@1 {
     }
 }
 
-// Water spreads to the four passable neighbours every frame.
+/// Water spreads to the four passable neighbours every frame.
 kernel tiles.flood@1 {
     requires { field.read; field.write; }
     input previous: Map;
@@ -48,8 +48,8 @@ kernel tiles.flood@1 {
     }
 }
 
-// The atlas: one 16x16 sprite per kind, side by side. Flat in the middle,
-// darker at the edge, so the map reads as tiles.
+/// The atlas: one 16x16 sprite per kind, side by side. Flat in the middle,
+/// darker at the edge, so the map reads as tiles.
 kernel tiles.atlas@1 {
     requires { field.write; }
     output result: Image;
@@ -68,7 +68,7 @@ kernel tiles.atlas@1 {
     }
 }
 
-// Every pixel finds its tile, then its sprite pixel in the atlas.
+/// Every pixel finds its tile, then its sprite pixel in the atlas.
 kernel tiles.render@1 {
     requires { field.read; field.write; }
     input map: Map;

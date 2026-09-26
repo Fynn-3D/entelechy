@@ -12,8 +12,8 @@ kernel audio.silence@1 {
     compute { return Voice { sample: 0.0, phase: 0.0 }; }
 }
 
-// Continues the phase from the last frame of the previous block, at the
-// sound device's rate. Holding the pointer bends the pitch with x.
+/// Continues the phase from the last frame of the previous block, at the
+/// sound device's rate. Holding the pointer bends the pitch with x.
 kernel audio.voice@1 {
     requires { field.read; field.write; input.read; time.read; }
     input previous: Block;
@@ -33,10 +33,10 @@ kernel audio.voice@1 {
     }
 }
 
-// A one-pole low-pass: ordered work, each sample from the one before.
-// `scan` walks the block in order; the carried value starts from the last
-// output of the previous block, so the filter's memory crosses blocks as
-// the oscillator's phase does.
+/// A one-pole low-pass: ordered work, each sample from the one before.
+/// `scan` walks the block in order; the carried value starts from the last
+/// output of the previous block, so the filter's memory crosses blocks as
+/// the oscillator's phase does.
 kernel audio.filter@1 {
     requires { field.read; field.write; }
     input voice: Block;
@@ -50,7 +50,7 @@ kernel audio.filter@1 {
     }
 }
 
-// Pans the voice into two channels; the pointer's y pans while held.
+/// Pans the voice into two channels; the pointer's y pans while held.
 kernel audio.mix@1 {
     requires { field.read; field.write; input.read; }
     input voice: Block;
@@ -64,7 +64,7 @@ kernel audio.mix@1 {
     }
 }
 
-// The block as a trace: each column shows one frame of the block.
+/// The block as a trace: each column shows one frame of the block.
 kernel audio.scope@1 {
     requires { field.read; field.write; }
     input block: Stereo;

@@ -71,7 +71,7 @@ kernel bgm.play@1 {
     }
 }
 
-// The stereo frames the sound card takes.
+/// The stereo frames the sound card takes.
 kernel bgm.stereo@1 {
     requires { field.read; field.write; }
     input music: Music;

@@ -1,6 +1,6 @@
-// Signed-distance ray marching: a bounded loop walks each ray until it is
-// close to a surface or leaves the scene. The loop carries a struct, so the
-// distance, the material, and the last step travel together.
+/// Signed-distance ray marching: a bounded loop walks each ray until it is
+/// close to a surface or leaves the scene. The loop carries a struct, so the
+/// distance, the material, and the last step travel together.
 kernel scene.march@1 {
     requires { field.write; time.read; }
     param orbit_speed: Float = 0.35;

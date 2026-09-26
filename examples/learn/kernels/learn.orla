@@ -26,8 +26,8 @@ fn hash(n: Float) -> Float {
     return fract((r + r) * q);
 }
 
-// The training set: points on the plane, labelled by a circle they are
-// in or out of, which no line separates.
+/// The training set: points on the plane, labelled by a circle they are
+/// in or out of, which no line separates.
 kernel learn.points@1 {
     requires { field.write; }
     output result: Rows<Point>;
@@ -39,17 +39,17 @@ kernel learn.points@1 {
     }
 }
 
-// Small random weights to start from.
+/// Small random weights to start from.
 kernel learn.init@1 {
     requires { field.write; }
     output result: Rows<Float>;
     compute { return hash(float(element()) + 3.75) - 0.5; }
 }
 
-// The gradient of the loss over every point, summed weight by weight:
-// element e is weight e % 65 of point e / 65 (the node's domain is the
-// product), so the sum needs no array and every element is one forward
-// pass and one term of the chain rule.
+/// The gradient of the loss over every point, summed weight by weight:
+/// element e is weight e % 65 of point e / 65 (the node's domain is the
+/// product), so the sum needs no array and every element is one forward
+/// pass and one term of the chain rule.
 kernel learn.grads@1 {
     requires { field.read; field.write; }
     input points: Rows<Point>;
@@ -78,7 +78,7 @@ kernel learn.grads@1 {
     }
 }
 
-// One step down the mean gradient.
+/// One step down the mean gradient.
 kernel learn.step@1 {
     requires { field.read; field.write; }
     input weights: Rows<Float>;
@@ -89,7 +89,7 @@ kernel learn.step@1 {
     compute { return sample(weights) - rate * at(grads, element()) / count; }
 }
 
-// The mean log loss over the points.
+/// The mean log loss over the points.
 kernel learn.loss@1 {
     requires { field.read; field.write; }
     input points: Rows<Point>;
@@ -104,8 +104,8 @@ kernel learn.loss@1 {
     merge(a, b) { return Loss { sum: a.sum + b.sum, count: a.count + b.count }; }
 }
 
-// The plane as the network sees it: warm where it answers one, cool
-// where it answers zero, and the circle it is learning drawn faintly.
+/// The plane as the network sees it: warm where it answers one, cool
+/// where it answers zero, and the circle it is learning drawn faintly.
 kernel learn.view@1 {
     requires { field.read; field.write; }
     input weights: Rows<Float>;
@@ -121,7 +121,7 @@ kernel learn.view@1 {
     }
 }
 
-// The points, a dot each in its label's colour, over the picture.
+/// The points, a dot each in its label's colour, over the picture.
 kernel learn.dots@1 {
     requires { field.read; field.write; }
     input points: Rows<Point>;

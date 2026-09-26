@@ -19,7 +19,7 @@ fn unit(x: Int) -> Float {
     return float(mix32(x) & 0xFFFFFF) / 16777216.0;
 }
 
-// One clock an instance: the same clip, everybody out of step.
+/// One clock an instance: the same clip, everybody out of step.
 kernel crowd.times@1 {
     requires { field.write; time.read; }
     param speed: Float = 1.0;
@@ -27,8 +27,8 @@ kernel crowd.times@1 {
     compute { return time() * speed + unit(element() * 3 + 11) * 4.0; }
 }
 
-// Where each one stands and which way it faces: a grid, turned a little
-// by its own hash.
+/// Where each one stands and which way it faces: a grid, turned a little
+/// by its own hash.
 kernel crowd.places@1 {
     requires { field.write; }
     param across: Int = 8;
@@ -47,7 +47,7 @@ kernel crowd.places@1 {
     }
 }
 
-// How much of the additive layer to take, as a row of one.
+/// How much of the additive layer to take, as a row of one.
 kernel crowd.weight@1 {
     requires { field.write; }
     param lean: Float = 0.0;
@@ -55,8 +55,8 @@ kernel crowd.weight@1 {
     compute { return lean; }
 }
 
-// A weight a joint, which is what makes a blend a mask: the bone at the
-// root keeps the first clip, the one above it takes the second.
+/// A weight a joint, which is what makes a blend a mask: the bone at the
+/// root keeps the first clip, the one above it takes the second.
 kernel crowd.mask@1 {
     requires { field.read; field.write; }
     input skeleton: Skeleton;
@@ -65,8 +65,8 @@ kernel crowd.mask@1 {
     compute { return if sample(skeleton).parent < 0 { 0.0 } else { upper }; }
 }
 
-// One instance's triangles after another, each indexing its own block
-// of vertices.
+/// One instance's triangles after another, each indexing its own block
+/// of vertices.
 kernel crowd.faces@1 {
     requires { field.read; field.write; }
     input faces: Triangles;
@@ -108,9 +108,9 @@ kernel crowd.project@1 {
     }
 }
 
-// A triangle knows which instance it belongs to — its row over the
-// triangles of one — so the crowd is a crowd of somebodies rather than
-// one body drawn many times.
+/// A triangle knows which instance it belongs to — its row over the
+/// triangles of one — so the crowd is a crowd of somebodies rather than
+/// one body drawn many times.
 kernel crowd.shade@1 {
     requires { field.read; field.write; }
     input surface: GBuffer;

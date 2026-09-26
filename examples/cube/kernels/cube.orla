@@ -40,10 +40,10 @@ kernel cube.draw@1 {
     requires { field.write; time.read; }
     param spin: Float = 0.6;
     param tilt: Float = 0.5;
-    // The camera: a perspective with focal length 2.2, x and y scaled,
-    // w = -z for the divide. The scene hands it over whole.
+    /// The camera: a perspective with focal length 2.2, x and y scaled,
+    /// w = -z for the divide. The scene hands it over whole.
     param lens: Mat4 = mat4(vec4(2.2, 0.0, 0.0, 0.0), vec4(0.0, 2.2, 0.0, 0.0), vec4(0.0, 0.0, 1.0, -1.0), vec4(0.0, 0.0, 0.0, 0.0));
-    // Which corners each of the twelve edges joins.
+    /// Which corners each of the twelve edges joins.
     param edges: [IVec2; 12] = [
         ivec2(0, 1), ivec2(1, 2), ivec2(2, 3), ivec2(3, 0),
         ivec2(4, 5), ivec2(5, 6), ivec2(6, 7), ivec2(7, 4),

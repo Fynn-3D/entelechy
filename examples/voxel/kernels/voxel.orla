@@ -99,7 +99,7 @@ fn solid(voxels: Voxels, c: Vec3, n: Float) -> Bool {
 }
 
 
-// The starting model: a ground plate, a tree, a few blocks.
+/// The starting model: a ground plate, a tree, a few blocks.
 kernel voxel.seed@1 {
     requires { field.write; }
     output result: Voxels;
@@ -130,10 +130,10 @@ kernel voxel.begin@1 {
     }
 }
 
-// The bar: six items of 64 pixels with 12 between, centred at the bottom,
-// laid out in logical pixels (the window's scale factor is the unit), so
-// it keeps its size on screen however large the window is.
-// Place, erase, paint, the colour (a click cycles it), undo, reset.
+/// The bar: six items of 64 pixels with 12 between, centred at the bottom,
+/// laid out in logical pixels (the window's scale factor is the unit), so
+/// it keeps its size on screen however large the window is.
+/// Place, erase, paint, the colour (a click cycles it), undo, reset.
 kernel voxel.state@1 {
     requires { field.read; field.write; input.read; }
     input previous: Studio;
@@ -221,8 +221,8 @@ kernel voxel.state@1 {
     }
 }
 
-// The volume after this frame's edit: one voxel placed, erased, or
-// painted; or the backup restored; or the model reset.
+/// The volume after this frame's edit: one voxel placed, erased, or
+/// painted; or the backup restored; or the model reset.
 kernel voxel.edit@1 {
     requires { field.read; field.write; }
     input previous: Voxels;
@@ -242,8 +242,8 @@ kernel voxel.edit@1 {
     }
 }
 
-// The backup takes the volume as it stood before each stroke, so undo
-// restores it, and a second undo restores the stroke.
+/// The backup takes the volume as it stood before each stroke, so undo
+/// restores it, and a second undo restores the stroke.
 kernel voxel.keep@1 {
     requires { field.read; field.write; }
     input previous: Voxels;
@@ -256,12 +256,12 @@ kernel voxel.keep@1 {
     }
 }
 
-// The label: the item under the pointer, else the tool in hand, by name
-// from the scene's text of names (six characters each), then the voxel
-// under the pointer as three two-digit numbers, dashes when there is
-// none or the pointer is on the bar; fifteen glyphs at the top left,
-// laid out in logical pixels with
-// the glyph at a whole multiple of the scale so the font stays crisp.
+/// The label: the item under the pointer, else the tool in hand, by name
+/// from the scene's text of names (six characters each), then the voxel
+/// under the pointer as three two-digit numbers, dashes when there is
+/// none or the pointer is on the bar; fifteen glyphs at the top left,
+/// laid out in logical pixels with
+/// the glyph at a whole multiple of the scale so the font stays crisp.
 kernel voxel.label@1 {
     requires { field.read; field.write; input.read; }
     input state: Studio;
@@ -288,10 +288,10 @@ kernel voxel.label@1 {
     }
 }
 
-// The picture: the same camera and the same cast as the state, per
-// pixel; faces lit by their direction, darkened where neighbours crowd
-// the face; the voxel under the pointer outlined; a floor whose grid
-// fades with distance; a compass of the axes; the bar; the label.
+/// The picture: the same camera and the same cast as the state, per
+/// pixel; faces lit by their direction, darkened where neighbours crowd
+/// the face; the voxel under the pointer outlined; a floor whose grid
+/// fades with distance; a compass of the axes; the bar; the label.
 kernel voxel.draw@1 {
     requires { field.read; field.write; input.read; }
     input voxels: Voxels;
