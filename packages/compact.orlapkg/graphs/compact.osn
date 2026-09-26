@@ -1,4 +1,6 @@
-//! A row of flags in, the kept indices and their count out. Place it with
+//! Filters a row: flags in (non-zero keeps an element), the kept
+//! elements' indices gathered to the front and their count out. Place it
+//! with
 //!   node kept: graph "../../packages/compact.orlapkg/graphs/compact.osn" {
 //!       flags <- visible.result;
 //!   }

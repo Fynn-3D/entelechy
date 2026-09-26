@@ -164,6 +164,20 @@ fn a_session_finds_what_it_publishes_and_what_its_packages_hold() {
         })
         .is_empty()
     );
+    // Any word counts, a word of the name most; a word matches one it
+    // begins or that begins it: `counting` finds `count`.
+    let found = names(Query {
+        text: Some("counting clock".into()),
+        ..Query::default()
+    });
+    assert_eq!(
+        found[0], "extra.clock@1",
+        "the name holds `clock`: {found:?}"
+    );
+    assert!(
+        found.contains(&"tally.twice@1".to_owned()),
+        "a doc holds `count`: {found:?}"
+    );
 
     // A capability the session does not grant is found, and says so.
     let mut grants = orla_kernel::Capabilities::none();

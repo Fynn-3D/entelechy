@@ -362,10 +362,12 @@ Each answer says what the capability is for (its `///` and `//!` docs),
 what it takes and gives with types as written, what it requires and
 whether this session grants that, and `reach`: the line a scene writes
 to use it (`use "..";` for a Kernel, `node name: graph ".." { ... }` for
-a preset). `text` matches a name, package, doc or port name; `takes`,
-`gives` and `requires` hold to a type or a capability. A name that is
-the words comes first, then a name holding them, then a doc; ties go by
-name. The same session and query answer the same list.
+a preset). `text` is words, each matching a word of a name, a package or
+its doc, a capability's doc or a port's name or doc, where one begins
+the other and the shorter has four letters or more (`compaction` finds
+`compact`); `takes`, `gives` and `requires` hold to a type or a
+capability. Each word matched counts, a word of the name most; ties go
+by name. The same session and query answer the same list.
 
 ## Timing of changes
 

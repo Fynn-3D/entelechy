@@ -57,6 +57,8 @@ pub struct Capability {
     pub doc: Option<String>,
     /// The package it is in, `name@version`.
     pub package: Option<String>,
+    /// What that package is for, its manifest's `//!` doc.
+    pub package_doc: Option<String>,
     /// What a scene writes to reach it; `None` for a Kernel the session
     /// has published.
     pub reach: Option<String>,
@@ -94,8 +96,8 @@ fn same_type(a: &str, b: &str) -> bool {
 
 impl Query {
     /// How well `capability` matches: `None` when it does not; higher is
-    /// nearer (its name is the text, holds it, or only its doc does).
-    pub fn rank(&self, capability: &Capability) -> Option<u8> {
+    /// nearer: each word it matches counts, a word of its name most.
+    pub fn rank(&self, capability: &Capability) -> Option<u32> {
         if let Some(takes) = &self.takes
             && !capability
                 .inputs
@@ -120,16 +122,25 @@ impl Query {
         let Some(text) = &self.text else {
             return Some(1);
         };
-        let text = text.to_lowercase();
-        let name = capability.name.to_lowercase();
-        let words = text.split_whitespace().collect::<Vec<_>>();
-        if name == text || name.split(['.', '@', '/']).any(|part| part == text) {
-            return Some(3);
-        }
-        let mut haystack = name.clone();
+        // Each word counts where it matches a word of the name, most, then
+        // anywhere else it is described; a word matches a word it begins,
+        // or that begins it, of four letters or more.
+        let tokens = |text: &str| -> Vec<String> {
+            text.to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|word| !word.is_empty())
+                .map(str::to_owned)
+                .collect()
+        };
+        let near = |a: &str, b: &str| {
+            a == b || (a.len().min(b.len()) >= 4 && (a.starts_with(b) || b.starts_with(a)))
+        };
+        let name = tokens(&capability.name);
+        let mut described = Vec::new();
         for part in capability
             .package
             .iter()
+            .chain(capability.package_doc.iter())
             .chain(capability.doc.iter())
             .chain(
                 capability
@@ -139,17 +150,26 @@ impl Query {
                     .chain(&capability.outputs)
                     .map(|p| &p.name),
             )
+            .chain(
+                capability
+                    .inputs
+                    .iter()
+                    .chain(&capability.params)
+                    .chain(&capability.outputs)
+                    .filter_map(|p| p.doc.as_ref()),
+            )
         {
-            haystack.push(' ');
-            haystack.push_str(&part.to_lowercase());
+            described.extend(tokens(part));
         }
-        if words.iter().all(|word| name.contains(word)) {
-            Some(2)
-        } else if words.iter().all(|word| haystack.contains(word)) {
-            Some(1)
-        } else {
-            None
+        let mut score: u32 = 0;
+        for word in tokens(text) {
+            if name.iter().any(|n| near(n, &word)) {
+                score += 10;
+            } else if described.iter().any(|d| near(d, &word)) {
+                score += 1;
+            }
         }
+        (score > 0).then_some(score)
     }
 }
 
@@ -194,6 +214,10 @@ fn in_package(
         return Vec::new();
     };
     let package = declared.id.value.clone();
+    let package_doc = store
+        .read_text(&dir.join("package.osn"))
+        .ok()
+        .and_then(|text| doc::doc_of_document(&text));
     let reach_package = format!("use \"{}\";", relative(dir, base));
     let mut out = Vec::new();
     // Every Kernel a package's manifest uses, by id, with its ports as
@@ -222,6 +246,7 @@ fn in_package(
                 name: id.value.clone(),
                 doc: doc::doc_above(&text, line),
                 package: Some(package.clone()),
+                package_doc: package_doc.clone(),
                 reach: Some(reach_package.clone()),
                 inputs: ports(&kernel.inputs),
                 params: kernel
@@ -265,6 +290,7 @@ fn in_package(
             name: path_text.clone(),
             doc: doc::doc_of_document(&text),
             package: Some(package.clone()),
+            package_doc: package_doc.clone(),
             reach: Some(format!("node name: graph \"{path_text}\" {{ ... }}")),
             inputs: document
                 .inputs
@@ -322,7 +348,7 @@ pub fn in_packages(
 /// The capabilities in `capabilities` matching `query`, nearest first, then
 /// by name.
 pub fn matching(capabilities: Vec<Capability>, query: &Query) -> Vec<Capability> {
-    let mut ranked: Vec<(u8, Capability)> = capabilities
+    let mut ranked: Vec<(u32, Capability)> = capabilities
         .into_iter()
         .filter_map(|c| query.rank(&c).map(|rank| (rank, c)))
         .collect();
@@ -360,6 +386,7 @@ impl Session {
                 name: version.id().to_string(),
                 doc: docs.doc.clone(),
                 package: None,
+                package_doc: None,
                 reach: None,
                 inputs: manifest.inputs.iter().map(port).collect(),
                 params: manifest

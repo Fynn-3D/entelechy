@@ -1,5 +1,7 @@
-//! The compact package: how a row of decisions becomes a row of the
-//! things decided, gathered to the front, and the count of them.
+//! The compact package: filtering a row. A flag per element selects the
+//! ones to keep (by a threshold, a test, a culling decision); what comes
+//! out is the kept elements' indices gathered to the front, and how many
+//! were kept: stream compaction.
 //!
 //! A Kernel can say how many there are — a `domain` reads that number
 //! with `value(port)` — but it takes a rank to say which ones. A
