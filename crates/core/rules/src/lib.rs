@@ -323,6 +323,21 @@ pub fn check_scatter(
     Ok(scope.size(invocation.inputs[base])?)
 }
 
+/// The domain a module's outputs have, by its mode, from the invocation's
+/// domain and its inputs' extents (`inputs`): a map's and a scan's are
+/// the invocation's, a reduction's one row, a prefix's its first input's,
+/// a scatter's the input it scatters into. What is known of a run before
+/// it runs, so what it will hold can be set aside for it.
+pub fn output_domain(mode: Mode, domain: Domain, inputs: &[Domain]) -> Domain {
+    let input = |at: usize| inputs.get(at).copied().unwrap_or(domain);
+    match mode {
+        Mode::Map | Mode::Scan => domain,
+        Mode::Reduce => Domain::Rows(1),
+        Mode::Prefix { .. } => input(0),
+        Mode::Scatter { base, .. } => input(base as usize),
+    }
+}
+
 /// Words an address into a domain takes in a scatter's pair.
 pub fn address_words(domain: Domain) -> usize {
     domain.shape().dims() as usize

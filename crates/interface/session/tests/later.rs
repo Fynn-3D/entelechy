@@ -68,22 +68,52 @@ fn a_discarded_run_keeps_nothing_and_a_failed_run_says_why() {
     assert_eq!(runtime.host().live(), live);
 }
 
-/// A run off the frame spends the one budget the Host spends: its copy
-/// of the inputs and its outputs count with what the Host already holds,
-/// so runs on threads of their own do not each get the whole budget.
+/// What a run off the frame may hold is set aside when it starts, in the
+/// caller's order: its copy of the input and its output twice over. It
+/// counts against the budget until the run is redeemed, so the Host and
+/// the run together hold no more than the budget, and whether either
+/// fits is decided by that, never by which thread allocates first.
 #[test]
-fn a_run_off_the_frame_holds_what_it_holds_against_the_one_budget() {
+fn a_run_off_the_frame_is_given_its_room_when_it_starts() {
     let mut runtime = cpu(64);
     let version = load(&mut runtime, COLOR);
     let input = runtime.host_mut().create_image(1, 1).unwrap();
-    // 4 + 56 of 64 words: room for the run's copy of its input, not for
-    // its output as well.
-    let _held = runtime.host_mut().create_image(14, 1).unwrap();
+    // 4 + 48 of 64 words: 12 left, the room a 1 by 1 run takes (4 for the
+    // copy, 8 for its output twice).
+    let held = runtime.host_mut().create_image(12, 1).unwrap();
     let run = runtime.execute_later(&version, &invocation(input)).unwrap();
-    let error = runtime.wait_run(run).unwrap_err().to_string();
+    // The room is the run's until it is redeemed: the Host has none left,
+    // however far the run has got.
+    assert!(runtime.host_mut().create_image(1, 1).is_err());
+    let outputs = runtime.wait_run(run).unwrap();
+    assert_eq!(outputs.len(), 1);
+    // Redeemed, the room went back and the output is held as a Field.
+    assert!(runtime.host_mut().create_image(1, 2).is_ok());
+
+    // A run that does not fit is refused when it is started.
+    runtime.host_mut().release(held).unwrap();
+    // 4 + 4 + 8 + 40: 8 words left, fewer than the run takes.
+    let _full = runtime.host_mut().create_image(10, 1).unwrap();
+    let error = runtime
+        .execute_later(&version, &invocation(input))
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("budget"), "{error}");
-    // What the run held went back: the Host takes the last 4 words.
+    // Nothing of it is kept aside.
     assert!(runtime.host_mut().create_image(1, 1).is_ok());
+}
+
+/// A discarded run gives its room back at once.
+#[test]
+fn a_discarded_run_gives_its_room_back() {
+    let mut runtime = cpu(64);
+    let version = load(&mut runtime, COLOR);
+    let input = runtime.host_mut().create_image(1, 1).unwrap();
+    let _held = runtime.host_mut().create_image(12, 1).unwrap();
+    let run = runtime.execute_later(&version, &invocation(input)).unwrap();
+    assert!(runtime.host_mut().create_image(1, 1).is_err());
+    runtime.discard_run(run);
+    assert!(runtime.host_mut().create_image(3, 1).is_ok());
 }
 
 /// A runtime on the reference backend, as a session opens one.

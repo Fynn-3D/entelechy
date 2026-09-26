@@ -20,8 +20,6 @@ pub use encoding::Encoding;
 
 use std::any::Any;
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Opaque handle to a resource owned by the Host: any Field, an image
 /// included. The architecture documents list handle kinds (image, buffer,
@@ -889,11 +887,10 @@ pub struct Host {
     slots: Vec<Slot>,
     free: Vec<u32>,
     budget_words: usize,
-    /// Words this Host holds.
     used_words: usize,
-    /// Words held against the budget by this Host and every Host that
-    /// shares it ([`Host::sharing`]): one budget, however many stores.
-    charged: Arc<AtomicUsize>,
+    /// Words of the budget set aside for work that holds them in a Host
+    /// of its own ([`Host::reserve`]).
+    reserved_words: usize,
     /// The loop iterations one run of a Kernel may take.
     work: u64,
     /// Word buffers a released Field gave back, largest last. A scene
@@ -913,24 +910,8 @@ impl Host {
             spare: Vec::new(),
             budget_words,
             used_words: 0,
-            charged: Arc::new(AtomicUsize::new(0)),
+            reserved_words: 0,
             work: DEFAULT_WORK,
-        }
-    }
-
-    /// An empty Host of its own, charged against this one's budget: for
-    /// work on another thread, whose Fields count against the budget
-    /// with this Host's for as long as it holds them. However many share
-    /// it, together they hold no more than the budget.
-    pub fn sharing(&self) -> Self {
-        Self {
-            slots: Vec::new(),
-            free: Vec::new(),
-            spare: Vec::new(),
-            budget_words: self.budget_words,
-            used_words: 0,
-            charged: Arc::clone(&self.charged),
-            work: self.work,
         }
     }
 
@@ -959,8 +940,7 @@ impl Host {
             .count()
     }
 
-    /// Words this Host currently holds; those a Host sharing its budget
-    /// holds are not among them.
+    /// Words currently allocated.
     pub fn used_words(&self) -> usize {
         self.used_words
     }
@@ -1066,11 +1046,33 @@ impl Host {
         self.within_budget(requested)
     }
 
+    /// Sets aside room for Fields of these schemas over these domains,
+    /// held somewhere else (a Host of a run's own, on another thread),
+    /// and answers the words set aside: from here until they are given
+    /// back ([`Host::unreserve`]) the budget counts them with this Host's
+    /// Fields, so the two together hold no more than it. What is set
+    /// aside is decided here, once, not by when the other side allocates.
+    pub fn reserve(&mut self, fields: &[(&Schema, Domain)]) -> Result<usize, HostError> {
+        let mut requested = 0usize;
+        for (schema, domain) in fields {
+            requested = requested.saturating_add(words_for(schema, *domain)?);
+        }
+        self.within_budget(requested)?;
+        self.reserved_words += requested;
+        Ok(requested)
+    }
+
+    /// Gives back words [`Host::reserve`] set aside.
+    pub fn unreserve(&mut self, words: usize) {
+        self.reserved_words = self.reserved_words.saturating_sub(words);
+    }
+
     /// Whether `requested` more words fit under the budget.
     fn within_budget(&self, requested: usize) -> Result<(), HostError> {
         let available = self
             .budget_words
-            .saturating_sub(self.charged.load(Ordering::Acquire));
+            .saturating_sub(self.used_words)
+            .saturating_sub(self.reserved_words);
         if requested > available {
             return Err(HostError::BudgetExceeded {
                 requested,
@@ -1080,26 +1082,9 @@ impl Host {
         Ok(())
     }
 
-    /// Charges `requested` words to the budget, or refuses them, in one
-    /// step: two Hosts sharing it cannot both take the last of it.
-    fn charge(&mut self, requested: usize) -> Result<(), HostError> {
-        let budget = self.budget_words;
-        self.charged
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |charged| {
-                charged
-                    .checked_add(requested)
-                    .filter(|total| *total <= budget)
-            })
-            .map_err(|charged| HostError::BudgetExceeded {
-                requested,
-                available: budget.saturating_sub(charged),
-            })?;
-        self.used_words += requested;
-        Ok(())
-    }
-
     fn place(&mut self, requested: usize, storage: Storage) -> Result<Handle, HostError> {
-        self.charge(requested)?;
+        self.within_budget(requested)?;
+        self.used_words += requested;
         let index = match self.free.pop() {
             Some(index) => {
                 let slot = &mut self.slots[index as usize];
@@ -1287,7 +1272,6 @@ impl Host {
         let storage = std::mem::replace(&mut slot.storage, Storage::Free);
         let charge = std::mem::take(&mut slot.charge);
         self.used_words -= charge;
-        self.charged.fetch_sub(charge, Ordering::AcqRel);
         self.free.push(handle.index);
         // The words go into the spare pile for the next Field of that
         // size, which is almost always the same node a frame later.
@@ -1409,13 +1393,6 @@ impl Host {
     }
 }
 
-impl Drop for Host {
-    /// What a Host held goes back to the budget it shares.
-    fn drop(&mut self) {
-        self.charged.fetch_sub(self.used_words, Ordering::AcqRel);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1488,37 +1465,26 @@ mod tests {
         assert!(host.create_image(2, 4).is_ok());
     }
 
-    /// A Host sharing another's budget holds its own Fields, and the two
-    /// together hold no more than the budget; what the sharer held goes
-    /// back when it is dropped.
+    /// Room set aside counts against the budget with the Host's Fields
+    /// until it is given back, and more than there is is refused whole.
     #[test]
-    fn hosts_sharing_a_budget_hold_no_more_than_it_together() {
+    fn reserved_room_counts_against_the_budget_until_given_back() {
         let mut host = Host::new(32);
         let first = host.create_image(2, 2).unwrap();
-        let mut run = host.sharing();
+        let pixel = Schema::pixel();
         assert_eq!(
-            run.create_image(3, 3),
+            host.reserve(&[(&pixel, Domain::Grid(3, 1)), (&pixel, Domain::Grid(3, 1))]),
             Err(HostError::BudgetExceeded {
-                requested: 36,
+                requested: 24,
                 available: 16
             })
         );
-        let theirs = run.create_image(2, 2).unwrap();
-        assert_eq!((host.used_words(), run.used_words()), (16, 16));
-        assert!(host.create_image(1, 1).is_err(), "the budget is spent");
-        assert!(
-            host.can_hold(&[(&Schema::pixel(), Domain::Grid(1, 1))])
-                .is_err()
-        );
-        run.release(theirs).unwrap();
-        let again = run.create_image(1, 1).unwrap();
+        let reserved = host.reserve(&[(&pixel, Domain::Grid(3, 1))]).unwrap();
+        assert_eq!(reserved, 12);
+        assert!(host.create_image(1, 2).is_err(), "4 words are left");
+        assert!(host.create_image(1, 1).is_ok());
+        host.unreserve(reserved);
         assert!(host.create_image(1, 2).is_ok());
-        let _ = again;
-        drop(run);
-        assert!(
-            host.create_image(1, 1).is_ok(),
-            "a dropped sharer gives back"
-        );
         host.release(first).unwrap();
     }
 

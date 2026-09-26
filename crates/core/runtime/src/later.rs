@@ -9,6 +9,14 @@
 //! backend that keeps Fields resident a download before and an upload
 //! after, the same price the ordered-scan path pays, so a run off the
 //! frame is for work that takes longer than its inputs take to copy.
+//!
+//! What a run may hold is set aside when it is started, on the caller's
+//! thread and in the caller's order: its copies of the inputs, and its
+//! outputs twice over (a backend may hold two buffers of one, taking
+//! turns). The Host counts that room against its budget until the run is
+//! redeemed or discarded, and the run's own Host holds no more than it:
+//! whether a run fits is decided by what it was given, never by when
+//! either side allocates.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -48,6 +56,9 @@ pub(crate) struct Runs {
     in_flight: BTreeSet<Run>,
     ready: BTreeMap<Run, Outcome>,
     discarded: BTreeSet<Run>,
+    /// The room each run not yet redeemed or discarded was given, in
+    /// words of the Host's budget.
+    reserved: BTreeMap<Run, usize>,
 }
 
 impl Runs {
@@ -60,6 +71,7 @@ impl Runs {
             in_flight: BTreeSet::new(),
             ready: BTreeMap::new(),
             discarded: BTreeSet::new(),
+            reserved: BTreeMap::new(),
         }
     }
 
@@ -103,15 +115,23 @@ impl Runtime {
             self.runs.ready.insert(run, outcome);
             return Ok(run);
         };
-        // The run's Host is its own, but its Fields count against the
-        // one budget with this Host's: runs off the frame hold no more
-        // together than the person allowed.
-        let mut scratch = self.host.sharing();
+        let room = self.reserve_for(module, invocation)?;
+        self.runs.reserved.insert(run, room);
+        let mut scratch = Host::new(room);
+        scratch.set_work(self.host.work());
         let mut inputs = Vec::with_capacity(invocation.inputs.len());
         for handle in &invocation.inputs {
-            self.materialize(*handle)?;
-            let data = self.host.data(*handle).map_err(abi)?.clone();
-            inputs.push(scratch.adopt(data).map_err(abi)?);
+            let copied = self.materialize(*handle).and_then(|()| {
+                let data = self.host.data(*handle).map_err(abi)?.clone();
+                scratch.adopt(data).map_err(abi)
+            });
+            match copied {
+                Ok(input) => inputs.push(input),
+                Err(error) => {
+                    self.give_back(run);
+                    return Err(error);
+                }
+            }
         }
         let invocation = Invocation {
             inputs,
@@ -164,6 +184,7 @@ impl Runtime {
     pub fn poll_run(&mut self, run: Run) -> Option<Result<Vec<Handle>, ExecutionError>> {
         self.runs.collect();
         let outcome = self.runs.ready.remove(&run)?;
+        self.give_back(run);
         Some(outcome.and_then(|fields| self.adopt_all(fields)))
     }
 
@@ -173,6 +194,7 @@ impl Runtime {
         loop {
             self.runs.collect();
             if let Some(outcome) = self.runs.ready.remove(&run) {
+                self.give_back(run);
                 return outcome.and_then(|fields| self.adopt_all(fields));
             }
             if !self.runs.in_flight.contains(&run) {
@@ -192,6 +214,7 @@ impl Runtime {
     /// Forgets a run whose outputs are no longer wanted; what it lands is
     /// dropped.
     pub fn discard_run(&mut self, run: Run) {
+        self.give_back(run);
         self.runs.collect();
         if self.runs.ready.remove(&run).is_none() && self.runs.in_flight.contains(&run) {
             self.runs.discarded.insert(run);
@@ -202,6 +225,39 @@ impl Runtime {
     pub fn runs_in_flight(&mut self) -> usize {
         self.runs.collect();
         self.runs.in_flight.len()
+    }
+
+    /// Sets aside in the Host what a run of `module` over `invocation` may
+    /// hold: its copies of the inputs and its outputs twice over.
+    fn reserve_for(
+        &mut self,
+        module: &Validated,
+        invocation: &Invocation,
+    ) -> Result<usize, ExecutionError> {
+        let mut fields = Vec::new();
+        let mut sizes = Vec::with_capacity(invocation.inputs.len());
+        for handle in &invocation.inputs {
+            let domain = self.host.domain(*handle).map_err(abi)?;
+            fields.push((self.host.schema(*handle).map_err(abi)?.clone(), domain));
+            sizes.push(domain);
+        }
+        let domain = orla_rules::output_domain(module.manifest.mode, invocation.domain, &sizes);
+        for port in &module.manifest.outputs {
+            fields.push((port.ty.schema.clone(), domain));
+            fields.push((port.ty.schema.clone(), domain));
+        }
+        let fields: Vec<_> = fields
+            .iter()
+            .map(|(schema, domain)| (schema, *domain))
+            .collect();
+        self.host.reserve(&fields).map_err(abi)
+    }
+
+    /// Gives back the room a run was set aside, once.
+    fn give_back(&mut self, run: Run) {
+        if let Some(room) = self.runs.reserved.remove(&run) {
+            self.host.unreserve(room);
+        }
     }
 
     /// The backend a module executes on, shared with a thread.
