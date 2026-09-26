@@ -5,7 +5,8 @@
 //! authority rules.
 //!
 //! The envelope, and every operation with its fields and answer, are in
-//! `docs/PROTOCOL.md`, *Operations*, which [`OPERATIONS`] is held to.
+//! `docs/PROTOCOL.md`, *Operations*, rendered from [`ops`], which the
+//! server checks every request against.
 //!
 //! Each operation lives in the module for what it may do: [`inspect`]
 //! reads the session, [`create`] changes the scene and its Kernels, [`run`]
@@ -18,6 +19,7 @@ mod answers;
 mod create;
 mod fields;
 mod inspect;
+pub mod ops;
 mod request;
 mod run;
 mod transport;
@@ -86,16 +88,9 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
     }
 }
 
-/// Every operation the protocol answers, in the table's order. A request
-/// naming another is refused with this list.
-pub const OPERATIONS: [&str; 26] = [
-    "status", "kernels", "kernel", "graph", "document", "history", "compose", "sync", "prepare",
-    "publish", "retire", "param", "evaluate", "advance", "bench", "window", "read", "write",
-    "snapshot", "restore", "reset", "help", "trace", "pin", "unpin", "quit",
-];
-
 /// Handles one request by the function for the operation it names.
 pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
+    ops::check(request)?;
     let request = Request::new(request)?;
     match request.op() {
         "status" => inspect::status(session),
@@ -125,8 +120,12 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "unpin" => fields::unpin(session, &request),
         "quit" => Ok(json!({ "bye": true })),
         other => Err(json!({
-            "message": format!("unknown op `{other}`; the operations are {}", OPERATIONS.join(", ")),
-            "operations": OPERATIONS,
+            "message": format!(
+                "unknown op `{other}`; the operations are {}{}",
+                ops::names().join(", "),
+                orla_language::did_you_mean(other, ops::names())
+            ),
+            "operations": ops::names(),
         })),
     }
 }
@@ -137,27 +136,35 @@ mod tests {
     use crate::wire::diagnostic_json;
     use orla_kernel::Value;
 
-    /// The protocol document's table names exactly the operations the server answers,
-    /// and an unknown name is told the list.
+    /// `docs/PROTOCOL.md`'s table is the operations' rendering, and every
+    /// operation is answered; `ORLA_BLESS=1` writes the table again.
     #[test]
-    fn the_table_is_every_operation_and_every_operation_is_answered() {
-        let protocol = include_str!("../../../../docs/PROTOCOL.md");
-        let operations = protocol.split("## Operations").nth(1).unwrap();
-        let operations = operations.split("\n## ").next().unwrap();
-        let documented: Vec<&str> = operations
-            .lines()
-            .filter_map(|line| line.strip_prefix("| `"))
-            .flat_map(|row| {
-                let cell = row.split(" |").next().unwrap_or_default();
-                cell.split(" / ").map(|op| op.trim_matches('`'))
-            })
-            .collect();
-        assert_eq!(documented, OPERATIONS, "the table and `OPERATIONS` differ");
+    fn the_document_shows_every_operation_and_every_operation_is_answered() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/PROTOCOL.md");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let start = text
+            .find("\n| op |")
+            .expect("PROTOCOL.md has the operations table")
+            + 1;
+        let end = start + text[start..].find("\n\n").expect("the table ends") + 1;
+        let table = ops::table();
+        if text[start..end] != table {
+            if std::env::var_os("ORLA_BLESS").is_some() {
+                std::fs::write(&path, format!("{}{table}{}", &text[..start], &text[end..]))
+                    .unwrap();
+            } else {
+                panic!(
+                    "docs/PROTOCOL.md's table is not the operations'; write it again with \
+                     ORLA_BLESS=1 cargo test -p orla-protocol\nexpected:\n{table}"
+                );
+            }
+        }
         let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../examples/grayscale/scene.osn");
         let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
         session.sync();
-        for op in OPERATIONS {
+        for op in ops::names() {
             // A bare request may lack a field; its name is still known.
             if let Err(error) = handle(&mut session, &json!({ "op": op })) {
                 assert!(
@@ -167,7 +174,37 @@ mod tests {
             }
         }
         let error = handle(&mut session, &json!({ "op": "compile" })).unwrap_err();
-        assert_eq!(error["operations"], json!(OPERATIONS));
+        assert_eq!(error["operations"], json!(ops::names()));
+    }
+
+    /// A field an operation does not take, or a missing one it needs, is
+    /// refused with the fields it takes; the near miss is named.
+    #[test]
+    fn a_request_is_held_to_its_operations_fields() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/grayscale/scene.osn");
+        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        session.sync();
+        let error = handle(&mut session, &json!({ "op": "publish", "sorce": "x" })).unwrap_err();
+        assert_eq!(error["fields"], json!(["source", "expect"]), "{error}");
+        assert_eq!(error["similar"], json!(["source"]), "{error}");
+        let error = handle(&mut session, &json!({ "op": "publish" })).unwrap_err();
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("`publish` needs `source`"),
+            "{error}"
+        );
+        let error = handle(&mut session, &json!({ "op": "status", "verbose": true })).unwrap_err();
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("takes no fields"),
+            "{error}"
+        );
+        assert!(handle(&mut session, &json!({ "op": "status", "id": 7 })).is_ok());
     }
 
     #[test]

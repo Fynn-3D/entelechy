@@ -72,6 +72,11 @@ impl Answers {
     /// Answers `incoming` now, or after the answer it queues behind; true
     /// when the process should end (a `quit` on standard input).
     pub fn answer(&mut self, served: &mut dyn Served, incoming: Incoming) -> bool {
+        if let Ok((id, request)) = parse_request(&incoming.line)
+            && let Err(error) = crate::ops::check(&request)
+        {
+            return send(&incoming, envelope(&id, Err(error)), false);
+        }
         let changes = matches!(op_of(&incoming).as_deref(), Some("compose" | "publish"));
         if let Some(waiting) = &self.waiting
             && (changes || waiting.incoming.from == incoming.from)

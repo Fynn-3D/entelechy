@@ -42,33 +42,34 @@ name the `similar` ones, a failed evaluation its `node` (a state
 migration's also `port` and `migration`) and a run's `frame`. A field
 marked `?` may be left out.
 
-| op | request fields | ok |
+| op | fields | answer |
 | --- | --- | --- |
-| `status` | | backend, scene, watched, kernels (native operations included), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
-| `kernels` | | list of manifests with generations |
-| `kernel` | `kernel` (the Kernel's id), `generation`? (one the session remembers) | manifest, generation, source, as `publish` takes it |
-| `graph` | | inputs, params, nodes, outputs |
-| `document` | `version`? (one the session remembers) | path, text and version of the scene |
-| `history` | `since`? (a revision) | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
-| `compose` | `text` or `edits` (each names a statement, or a node's `member`, with its `text` or null), `expect`? (a version) | checks, then writes the scene and syncs; events, version |
-| `sync` | | events |
-| `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
-| `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
-| `retire` | `kernel` (the Kernel's id) | retired |
-| `param` | `name` (a param the scene declares), `value` | name, value, events; a node's own value is refused, and changes by `compose` |
-| `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `window`? (`[w, h]` in pixels), `scale`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
-| `advance` | `frames`, `fps`?, `time`?, the context `evaluate` takes, `until`? (`{target, below / above / equals}`), `save`? | frames, stopped, target, value, saved, millis, report |
-| `bench` | `frames`?, `fps`?, `repeat`?, `nodes`? | backend, frames, repeat, best_ms, median_ms, nodes, ran |
-| `window` | `size` (`[w, h]` in pixels, or null for none), `scale`? | the window a headless session reports to evaluations that name none |
-| `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
-| `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
-| `snapshot` | `to`? (a file, where `--allow file.write` allows) | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
-| `restore` | `snapshot` (as `snapshot` gave it) or `from` (its file), `laws` = `"current"` / `"snapshot"`, `structure`? = `"current"` / `"snapshot"`, the context `evaluate` takes | the world restored after a trial frame that commits nothing; revision, report |
-| `reset` | `node`?, `port`? (`result` when not named) | forgets the committed state, or that one port's alone; `<~` readers restart from their initial sources |
-| `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
-| `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
-| `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
-| `quit` | | bye |
+| `status` |  | backend, scene, watched, kernels (native operations included), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
+| `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
+| `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
+| `graph` |  | inputs, params, nodes, outputs |
+| `document` | `version`?: string | path, text, and version, which `compose`'s `expect` names |
+| `history` | `since`?: integer | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
+| `compose` | `text`?: string, `edits`?: [{statement \| member, text}], `expect`?: string | events, version |
+| `sync` |  | events |
+| `prepare` | `source`: string | id, manifest; or an error at a line and column |
+| `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation |
+| `retire` | `kernel`?: string | retired |
+| `param` | `name`: string, `value`: value | name, value, events; a node's own value is refused, and changes by `compose` |
+| `evaluate` | `nodes`?: [string], `settle`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs |
+| `advance` | `frames`: integer, `fps`?: number, `until`?: {target, below \| above \| equals}, `save`?: {node.port: path}, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | frames, stopped, target, value, saved, millis, report |
+| `bench` | `frames`?: integer, `fps`?: number, `repeat`?: integer, `nodes`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | backend, frames, repeat, best_ms, median_ms, nodes, ran |
+| `window` | `size`?: [w, h] \| null, `scale`?: number | the window |
+| `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "rgba32f" \| "ppm" \| "field" | width, height, format, data (base64); words for a Field that is not pixels |
+| `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
+| `snapshot` | `to`?: string | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
+| `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
+| `reset` | `node`?: string, `port`?: string | what was reset |
+| `help` | `section`?: string, `name`?: string | the index; a section's items; or one item in full. An unknown name is an error with `similar` |
+| `trace` | `node`: string, `at`?: [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
+| `pin` | `node`: string | pinned |
+| `unpin` | `node`: string | unpinned |
+| `quit` |  | bye |
 
 ## Transports
 
