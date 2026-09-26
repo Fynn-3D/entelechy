@@ -48,6 +48,7 @@
 //! }
 //! ```
 
+pub mod doc;
 mod lexer;
 mod parser;
 

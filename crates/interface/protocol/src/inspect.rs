@@ -33,7 +33,27 @@ fn version_json(version: &orla_kernel::KernelVersion) -> Json {
         (None, Some(structs)) => &structs[..],
         (None, None) => &[][..],
     };
-    manifest_json(version.manifest(), version.generation(), structs)
+    let mut json = manifest_json(version.manifest(), version.generation(), structs);
+    with_docs(&mut json, version.source());
+    json
+}
+
+/// Adds what the Kernel's source says of it and of its ports and params,
+/// its `///` lines, as `doc`.
+fn with_docs(json: &mut Json, source: &str) {
+    let docs = orla_language::doc::kernel_docs(source);
+    if let Some(doc) = docs.doc {
+        json["doc"] = Json::String(doc);
+    }
+    for list in ["inputs", "params", "outputs"] {
+        if let Some(entries) = json[list].as_array_mut() {
+            for entry in entries {
+                if let Some((_, doc)) = docs.ports.iter().find(|(name, _)| entry["name"] == *name) {
+                    entry["doc"] = Json::String(doc.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Every published Kernel and native operation, by its manifest.

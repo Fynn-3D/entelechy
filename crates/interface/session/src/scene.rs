@@ -385,7 +385,8 @@ impl Scene {
             match named_id(kernel) {
                 Ok(id) => by_document.entry(root.clone()).or_default().push(Defined {
                     id,
-                    text: text[kernel.range.clone()].to_owned(),
+                    text: text[orla_language::doc::with_doc(&text, kernel.range.clone())]
+                        .to_owned(),
                     kernel: kernel.clone(),
                 }),
                 Err(message) => events.push(Event::Rejected {
@@ -689,7 +690,8 @@ impl Scene {
                 match named_id(kernel) {
                     Ok(id) => defined.push(Defined {
                         id,
-                        text: text[kernel.range.clone()].to_owned(),
+                        text: text[orla_language::doc::with_doc(&text, kernel.range.clone())]
+                            .to_owned(),
                         kernel: kernel.clone(),
                     }),
                     Err(message) => events.push(Event::Rejected {
