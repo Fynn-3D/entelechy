@@ -2,6 +2,7 @@
 //! The command line's own commands over an `orla-session` session:
 //! packages, rendering frames to files, replays, and scaffolding.
 
+pub mod commands;
 pub mod package;
 pub mod render;
 /// Replays, owned by the session.

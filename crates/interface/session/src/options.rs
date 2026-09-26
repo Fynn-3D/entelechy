@@ -59,7 +59,7 @@ impl SessionOptions {
     ) -> Result<bool, String> {
         let mut value = |flag: &str| next().ok_or_else(|| format!("{flag} needs a value"));
         match arg {
-            "--library" | "--kernels" => self.library = Some(PathBuf::from(value(arg)?)),
+            "--library" => self.library = Some(PathBuf::from(value(arg)?)),
             "--backend" => self.backend = Some(value(arg)?),
             "--no-fusion" => self.fusion = false,
             "--allow" => self.allow.push(parse_allow(&value(arg)?)?),

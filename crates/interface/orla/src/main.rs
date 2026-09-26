@@ -7,124 +7,6 @@ use std::time::{Duration, Instant};
 use orla_kernel::Context;
 use orla_session::{Event, Session};
 
-const USAGE: &str = "\
-usage:
-  orla check [--ir] <file.orla|file.osn>...
-      Parse documents, compile their Kernels, and print manifests or diagnostics.
-      --ir prints each Kernel's IR as a backend runs it: where its work is
-      counted (`work spend`) and looked at (`work look`) included.
-  orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
-                       [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
-                       [--out <file.png|.ppm|.field>] [--watch] [--backend cpu|gpu|jit]
-                       [--param <name>=<literal>]... [--no-fusion]
-                       [--window <w>x<h>[@<scale>]] [--profile] [--memory <MB>] [--work <M>]
-                       [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
-      Evaluate a scene; write its picture to --out and each --save, in the
-      format each file's extension names, and nothing else. With --watch, keep running and
-      republish Kernels as their files change; a rejected change keeps the
-      running version. --window is the window a scene sized by `window()`
-      would fill, in pixels, with its scale factor.
-      --memory says how many mebibytes of Fields the Host may hold at once
-      (2048 by default); a scene of millions of triangles wants more, and
-      `run`, `render`, `replay`, `serve`, `graph`, `trace` and `bench` all
-      take it. --work says how many million loop iterations one run of a
-      Kernel may take, all its elements together (4000 by default), and
-      the same commands take it.
-      --profile prints how long each executed node took; it waits for the
-      device after each one, so a GPU's numbers are the work, not the
-      submission, and the frame is slower than it would be. What
-      measuring a node costs before it does anything is taken off every
-      line; a node runs alone under a profile, so the lines add up to
-      more than a frame, and the sum says by how much.
-      --allow file.write=<dir> lets the scene's outputs written `to` a file
-      land in that directory and under it, once an evaluation that changed
-      them commits; nothing is written without it. `render`, `serve` and
-      the Player take it too. --allow file.read=<dir> lets a served
-      scene's inputs read files there: under `serve`, where an agent
-      composes the scene, a scene reads only beside its documents
-      without it.
-      --grant field.read,field.write,... names the capabilities a Kernel
-      may be given, and no others (every one without it): a Kernel that
-      requires another is refused when it is prepared, and what ran
-      before goes on running. `render`, `serve`, `bench` and the Player
-      take it too.
-  orla render <scene.osn> --frames <n> [--rate <fps>] [--sound-rate <hz>]
-                          [--out <dir>] [--library <dir|file>] [--input <name>=<file.ppm>]...
-                          [--param <name>=<literal>]... [--window <w>x<h>[@<scale>]]
-                          [--backend cpu|gpu|jit] [--no-fusion]
-                          [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
-                          [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
-      Step the scene for n frames at the rate (60 by default) and write each
-      frame's picture as <dir>/0000.png, 0001.png, ... and the sound output,
-      block after block, as <dir>/sound.wav at the sound rate (48000 by
-      default, what Kernels read as rate()). The clock is the frame count
-      over the rate, so a render is the same every time; async nodes are
-      waited for after every frame. ffmpeg makes a video of the directory.
-      --save writes a node's output after the last frame, as run's does:
-      how a state trained or settled over many frames is kept.
-  orla trace <scene.osn> --node <name> (--element <i> | --at <x> <y> [<z>])
-                         [--time <seconds>] [--param <name>=<literal>]...
-                         [--window <w>x<h>[@<scale>]] [--library <dir|file>]
-                         [--backend cpu|gpu|jit]
-      Evaluate the scene, then run one element of a node's Kernel (or one
-      step of a scan) on the interpreter and print every `let` of it with
-      its value, and the result. Nothing is committed by the trace.
-  orla player <scene.osn> [...]
-  orla import <file> --out <dir> [...]
-  orla export <file.field>... --out <file> [...]
-      The Player, the importer and the exporter: `orla-player`,
-      `orla-import` and `orla-export` beside `orla`, run with the same
-      arguments.
-  orla help [<name>]
-      List every builtin a Kernel may call with one line each, or show one
-      builtin's signatures, what it does, and the capability it needs.
-  orla version
-      Print Orla's release and the versions of the ABI, the language, the IR
-      and the package format, each its own.
-  orla package <dir.orlapkg>
-      Check a package directory's manifest and say what it holds.
-  orla pack <dir.orlapkg> [<file.orlapkg>]
-      Write a package directory as one archive file, its manifest checked.
-  orla unpack <file.orlapkg> <new dir>
-      Read an archive back into a directory, its manifest checked.
-  orla replay <file.replay>... [--backend cpu|gpu|jit]
-      Drive scenes through scripted frames and inputs and check pixels.
-  orla new <dir> [--kind picture|sound|game]
-      Write a scene that runs: a Kernel, the scene that places it, a replay
-      that checks what it draws, and a README saying what to change first.
-      `picture` is one Kernel over the window, `sound` a voice with a
-      drawing of it, `game` a grid of state the arrow keys move.
-  orla bench <scene.osn> [--frames <n>] [--repeat <n>] [--rate <fps>]
-                         [--backend cpu|gpu|jit|all]... [--nodes]
-                         [--window <w>x<h>[@<scale>]] [--library <dir|file>]
-                         [--param <name>=<literal>]... [--input <name>=<file>]...
-                         [--no-fusion] [--json <file>] [--compare <file>]
-      Step the scene for --frames frames --repeat times on each backend and
-      print the least of the runs, a millisecond a frame. The first frame
-      of all is thrown away: it compiles and allocates. --nodes measures
-      every node as well, waiting for the device after each one, native
-      operations included; what measuring a node costs before it does
-      anything is taken off every line, and the sum says how the parts
-      come to more than the whole, since a node runs alone there and a
-      frame overlaps them. --json
-      writes the measurement, and --compare reads one back and prints what
-      changed since, which is how a change is shown to cost nothing.
-  orla graph <scene.osn> [--library <dir|file>] [--no-fusion]
-      Print the flattened graph and what would execute, fused groups marked.
-  orla serve <scene.osn> [--library <dir|file>] [--backend cpu|gpu|jit]
-                         [--input <name>=<file.ppm>]... [--param <name>=<literal>]...
-                         [--no-fusion] [--memory <MB>] [--work <M>]
-                         [--listen <host:port>] [--window <w>x<h>[@<scale>]]
-                         [--allow file.read|file.write=<dir>]... [--allow-origin <origin>]...
-                         [--grant <capability,...>]
-      Serve the creation protocol: JSON requests on stdin, one response per
-      line on stdout, and on every connection to --listen, where a client's
-      quit ends only its connection. A browser's page connects from this
-      machine or from a file; a page elsewhere only from an origin
-      --allow-origin names (`https://host:port`). --window is what evaluations that name
-      no window see (the protocol's `window` op changes it). See
-      docs/PROTOCOL.md.";
-
 /// Runs `orla-<tool>` with `args`: the one beside this `orla`, else the
 /// one on `PATH`. Its exit status is `orla`'s.
 fn beside(tool: &str, args: &[String]) -> ExitCode {
@@ -144,13 +26,21 @@ fn beside(tool: &str, args: &[String]) -> ExitCode {
 }
 
 fn usage_error(message: &str) -> Result<(), String> {
-    Err(format!("{message}\n{USAGE}"))
+    Err(format!("{message}\n{}", orla::commands::usage()))
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(command) = args.first().and_then(|name| orla::commands::command(name)) {
+        if command.passes {
+            return beside(command.name, &args[1..]);
+        }
+        if let Err(message) = command.check(&args[1..]) {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+    }
     let result = match args.first().map(String::as_str) {
-        Some(tool @ ("player" | "import" | "export")) => return beside(tool, &args[1..]),
         Some("check") => check(&args[1..]),
         Some("run") => run(&args[1..]),
         Some("render") => render(&args[1..]),
@@ -202,7 +92,7 @@ fn main() -> ExitCode {
             _ => usage_error("package needs a package directory"),
         },
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", orla::commands::usage());
             return ExitCode::from(2);
         }
     };
