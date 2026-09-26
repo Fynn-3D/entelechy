@@ -525,9 +525,8 @@ impl Sums {
     /// four a total: what a backend holds against its run's room
     /// ([`Held`]) before it makes them.
     pub fn held_words(scalars: &[Scalar], elements: usize) -> usize {
-        let integers = scalars
-            .iter()
-            .filter(|scalar| matches!(scalar, Scalar::Int | Scalar::Long))
+        let integers = starts(scalars)
+            .filter(|(_, scalar)| matches!(scalar, Scalar::Int | Scalar::Long))
             .count();
         elements.saturating_mul(integers).saturating_mul(4)
     }
@@ -535,17 +534,14 @@ impl Sums {
     /// The sums of a scatter into `words`, the target's elements of
     /// `scalars` in order: its totals start at what each element holds.
     pub fn new(scalars: &[Scalar], words: &[u32]) -> Self {
-        let mut integers = Vec::new();
-        let mut at = 0;
-        for scalar in scalars {
-            match scalar {
-                Scalar::Int => integers.push((at, false)),
-                Scalar::Long => integers.push((at, true)),
-                _ => {}
-            }
-            at += scalar.words();
-        }
-        let stride = at.max(1);
+        let integers: Vec<(usize, bool)> = starts(scalars)
+            .filter_map(|(at, scalar)| match scalar {
+                Scalar::Int => Some((at, false)),
+                Scalar::Long => Some((at, true)),
+                _ => None,
+            })
+            .collect();
+        let stride = scalars.len().max(1);
         let count = words.len() / stride * integers.len();
         let mut totals = Vec::with_capacity(count);
         for element in words.chunks_exact(stride) {
@@ -565,8 +561,7 @@ impl Sums {
     /// floats to the words in `words`, in the order they are added.
     pub fn add(&mut self, words: &mut [u32], element: usize, value: &[u32]) {
         let slot = &mut words[element * self.stride..(element + 1) * self.stride];
-        let mut at = 0;
-        for scalar in &self.scalars {
+        for (at, scalar) in starts(&self.scalars) {
             match scalar {
                 Scalar::Float => {
                     slot[at] = (f32::from_bits(slot[at]) + f32::from_bits(value[at])).to_bits();
@@ -579,7 +574,6 @@ impl Sums {
                 }
                 _ => {}
             }
-            at += scalar.words();
         }
         let n = self.integers.len();
         for (k, &(at, long)) in self.integers.iter().enumerate() {
@@ -612,6 +606,19 @@ impl Sums {
         }
         Ok(())
     }
+}
+
+/// Each scalar of a layout where it starts: a layout names a scalar once
+/// a word, so a `Double` or a `Long` is named twice, and starts at the
+/// first.
+fn starts(scalars: &[Scalar]) -> impl Iterator<Item = (usize, Scalar)> + '_ {
+    let mut at = 0;
+    std::iter::from_fn(move || {
+        let scalar = *scalars.get(at)?;
+        let start = at;
+        at += scalar.words();
+        Some((start, scalar))
+    })
 }
 
 /// The integer at word `at` of `words`, a `Long` over two.
@@ -737,5 +744,51 @@ pub mod prefix {
     pub fn block(count: usize) -> usize {
         let root = (count as f64).sqrt().ceil() as usize;
         root.max(LEAST).min(count.max(1))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A layout names a 64-bit scalar once a word: a `Double` and a
+    /// `Long` are each summed once, from where they start, beside an
+    /// `Int` and a `Float`; and a total that does not fit is the first
+    /// element's whose does not. (Walked a word a scalar, a `Double` was
+    /// added twice and a `Long` read from the middle.)
+    #[test]
+    fn sums_take_each_scalar_once_where_it_starts() {
+        use Scalar::{Double, Float, Int, Long};
+        let scalars = [Double, Double, Long, Long, Int, Float];
+        let element = |d: f64, l: i64, i: i32, f: f32| {
+            let (d, l) = (d.to_bits(), l as u64);
+            vec![
+                d as u32,
+                (d >> 32) as u32,
+                l as u32,
+                (l >> 32) as u32,
+                i as u32,
+                f.to_bits(),
+            ]
+        };
+        let mut words = [element(1.5, 5_000_000_000, 7, 0.5), element(0.0, 0, 0, 0.0)].concat();
+        assert_eq!(Sums::held_words(&scalars, 2), 2 * 2 * 4);
+        let mut sums = Sums::new(&scalars, &words);
+        sums.add(
+            &mut words,
+            0,
+            &element(0.25, i64::MAX - 5_000_000_000, i32::MAX, 1.0),
+        );
+        sums.add(&mut words, 0, &element(0.25, -1, -8, 1.0));
+        sums.finish(&mut words).unwrap();
+        assert_eq!(
+            &words[..6],
+            &element(2.0, i64::MAX - 1, i32::MAX - 1, 2.5)[..]
+        );
+        // Past the end of a `Long`, at the second element.
+        let mut words = [element(0.0, 0, 0, 0.0), element(0.0, i64::MAX, 0, 0.0)].concat();
+        let mut sums = Sums::new(&scalars, &words);
+        sums.add(&mut words, 1, &element(0.0, 1, 0, 0.0));
+        assert_eq!(sums.finish(&mut words), Err((1, ArithmeticError::Overflow)));
     }
 }

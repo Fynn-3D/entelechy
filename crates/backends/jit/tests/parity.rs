@@ -421,7 +421,8 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
             error: ArithmeticError::Overflow
         }
     );
-    // An integer sum into one slot overflows at the third source.
+    // An integer sum into one slot whose whole total does not fit: the
+    // slot is named, whatever source took it past the end.
     let source = "kernel test.pile@1 { requires { field.read; field.write; } input rows: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair { at: Int; value: Int; } scatter into slots with sum { return Pair { at: 0, value: sample(rows) }; } }";
     let module = compile(source).unwrap();
     let mut host = Host::new(1 << 16);
@@ -450,7 +451,7 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
     assert_eq!(
         outcome.unwrap_err(),
         ExecutionError::Arithmetic {
-            x: 2,
+            x: 0,
             y: 0,
             error: ArithmeticError::Overflow
         }
