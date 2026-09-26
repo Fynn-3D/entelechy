@@ -84,7 +84,7 @@ document intentional compatibility changes. A commit is not a release.
 A commit on a branch is verified by the tests of the crates it touches,
 formatted and linted, and by its own regression test, seen to fail
 without the change. A branch is verified by all of this once, before it
-merges; a failure is fixed on the branch and the whole run repeated. Run
+merges, and compared [against main](#against-main); a failure is fixed on the branch and the whole run repeated. Run
 it in the background: each step is timed into `target/verify.log`, which
 `tail -f` shows as it goes, and the first step that fails stops the run with
 its output there.
@@ -133,6 +133,33 @@ them (`ls -f target/debug/deps | wc -l`) and compare with a build in a fresh
 
 A replay under `examples/*/tests/` is a test of what its example promises; a
 piece made with the example is not one, and is not kept there.
+
+### Against main
+
+Tests hold what a change meant to do, not what it did beside it. Before a
+branch merges, every example is also run by `main`'s build and by the
+branch's, and what each says is compared: its `check`, its `graph` (the
+plan), and its picture. Every difference is one the branch means, and its
+commit says so; any other is a fault to find before the merge.
+
+```sh
+out=target/against-main; rm -rf "$out"; mkdir -p "$out/main" "$out/branch"
+git worktree add -f "$out/tree" main &&
+CARGO_TARGET_DIR="$out/target" cargo build --release -p orla --manifest-path "$out/tree/Cargo.toml" &&
+for scene in examples/*/scene.osn; do
+  name=$(basename "$(dirname "$scene")")
+  for side in main branch; do
+    orla=./target/release/orla; [ "$side" = main ] && orla="$out/target/release/orla"
+    at="$out/$side/$name"
+    "$orla" check "$scene" > "$at.check" 2>&1
+    "$orla" graph "$scene" > "$at.graph" 2>&1
+    "$orla" run "$scene" --backend cpu --window 64x48 --out "$at.ppm" > "$at.run" 2>&1
+    [ -f "$at.ppm" ] && md5 -q "$at.ppm" > "$at.picture" && rm "$at.ppm"
+  done
+done
+git worktree remove --force "$out/tree"
+diff -r -I 'evaluated in' "$out/main" "$out/branch"
+```
 
 ## Handoff
 
