@@ -43,6 +43,14 @@ const RULES: &[Rule] = &[
         ],
     },
     Rule {
+        rule: "a scene output is read by its name, or the first declared, in one place",
+        owner: "`Session::output`, over `Graph::primary_output`",
+        since: "4c4ddc7",
+        within: &["crates/interface"],
+        owners: &["crates/interface/session/src/session.rs"],
+        acts: &["outputs.first()"],
+    },
+    Rule {
         // The store is the session's own (`Session::store` is the crate's),
         // so a write through it outside the session does not compile; what
         // is held here is a write that goes around it.
