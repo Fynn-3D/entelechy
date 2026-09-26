@@ -314,9 +314,8 @@ impl Session {
     pub fn sync_settled(&mut self) -> Vec<Event> {
         let mut events = self.sync();
         let mut landed = Vec::new();
-        self.kernels.wait_pending(&mut self.runtime, &mut landed);
         self.scene
-            .wait_staged(&mut self.kernels, &mut self.runtime, &mut landed);
+            .wait(&mut self.kernels, &mut self.runtime, &mut landed);
         self.remember(&landed);
         events.extend(landed);
         events

@@ -291,7 +291,6 @@ impl Session {
     /// documents are read, then the inputs, and last where each node runs.
     pub fn sync(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
-        self.kernels.collect_pending(&mut self.runtime, &mut events);
         let store = Arc::clone(self.scene.store());
         let inputs = &self.inputs;
         let readable = |path: &Path| inputs.readable(store.as_ref(), path);

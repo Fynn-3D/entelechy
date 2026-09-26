@@ -11,7 +11,7 @@ use std::sync::Arc;
 use orla_graph::Graph;
 use orla_runtime::{Runtime, Value};
 
-use crate::kernels::{Batch, Defined, Kernels};
+use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
     declarations_for, declarations_key, declarations_within, expand_use, is_library, named_id,
     read_document,
@@ -205,7 +205,10 @@ impl Scene {
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
-        self.settle(kernels, runtime, events);
+        // What the worker finished publishes first, the scene's change
+        // with its graph.
+        let outcome = kernels.collect(runtime, events);
+        self.land(outcome, kernels, runtime, events);
         self.sync_root(kernels, runtime, events, readable);
         if self.sync_libraries(kernels, runtime, events) {
             self.stamp = None;
@@ -343,7 +346,7 @@ impl Scene {
         // replaces nothing.
         if let Some(staged) = self.staged.take() {
             (self.structs, self.types, self.functions) = staged.declared;
-            kernels.abandon_scene(Vec::new(), runtime, events);
+            kernels.supersede_scene(runtime, events);
         }
         let text = match self.store.read_text(&self.root) {
             Ok(text) => text,
@@ -480,7 +483,11 @@ impl Scene {
         });
         if refused {
             (self.structs, self.types, self.functions) = declared;
-            kernels.abandon_scene(batches, runtime, events);
+            let change = Change {
+                documents: batches,
+                scene: true,
+            };
+            kernels.refuse(change, runtime, events);
             events.push(Event::SceneRejected(Diagnostic::new(
                 "the scene's own Kernels were refused, so none of them is published and it does not replace the scene running",
             )));
@@ -488,7 +495,6 @@ impl Scene {
         }
         // The graph waits for its Kernels: it replaces the scene running
         // when every one of them is ready and published with the others.
-        kernels.stage_scene(batches);
         self.staged = Some(Staged {
             graph: lowered.graph,
             text,
@@ -498,14 +504,21 @@ impl Scene {
             gone,
             declared,
         });
-        self.settle(kernels, runtime, events);
+        let change = Change {
+            documents: batches,
+            scene: true,
+        };
+        let outcome = kernels.make(change, runtime, events);
+        self.land(outcome, kernels, runtime, events);
     }
 
     /// Puts the scene waiting for its Kernels in place of the one running
-    /// once they are published, or drops it when one was refused; while
-    /// they are prepared the scene running goes on.
-    pub(crate) fn settle(
+    /// once its change published, or drops it when the change was
+    /// refused; while it is prepared the scene running goes on. `outcome`
+    /// is what the ledger said of the scene's change, if anything.
+    fn land(
         &mut self,
+        outcome: Option<bool>,
         kernels: &mut Kernels,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
@@ -513,7 +526,7 @@ impl Scene {
         if self.staged.is_none() {
             return;
         }
-        match kernels.collect_scene(runtime, events) {
+        match outcome {
             None => {}
             Some(false) => {
                 let staged = self.staged.take().expect("a scene is staged");
@@ -595,21 +608,17 @@ impl Scene {
                 .is_some_and(|staged| staged.sub_graphs.contains_key(path))
     }
 
-    /// Waits until the scene waiting for its Kernels replaces the one
-    /// running or is refused: what must stand before a caller that
-    /// replaced the document answers.
-    pub(crate) fn wait_staged(
+    /// Waits until every change being prepared has published or been
+    /// refused, the scene's with its graph: what must stand before a
+    /// caller that replaced the document answers.
+    pub(crate) fn wait(
         &mut self,
         kernels: &mut Kernels,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) {
-        while self.staged.is_some() {
-            self.settle(kernels, runtime, events);
-            if self.staged.is_some() {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-        }
+        let outcome = kernels.wait(runtime, events);
+        self.land(outcome, kernels, runtime, events);
     }
 
     /// Loads the libraries the root uses; returns whether any changed.
@@ -714,7 +723,7 @@ impl Scene {
                 }
             }
             let root = self.root.clone();
-            kernels.publish_document(
+            let outcome = kernels.publish_document(
                 self.store.as_ref(),
                 &path,
                 current,
@@ -724,6 +733,7 @@ impl Scene {
                 runtime,
                 events,
             );
+            self.land(outcome, kernels, runtime, events);
         }
         changed
     }

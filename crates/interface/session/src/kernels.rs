@@ -1,11 +1,14 @@
 //! Which document published which Kernel. The ledger owns that and
 //! nothing else: the Kernels themselves are the runtime's, which the
-//! session hands in, and what a document says is read by the scene. A
-//! document's Kernels publish when their text or what they inherit
-//! changed, all of a document's changes as one: prepared (a running
-//! Kernel's replacement off the caller's thread), then swapped in
-//! together, or, when any of them fails, none, and every Kernel the
-//! document had goes on running as it was.
+//! session hands in, and what a document says is read by the scene.
+//!
+//! What changes, changes as one [`Change`]: the Kernels of the documents
+//! it reads, prepared (a running Kernel's replacement off the caller's
+//! thread), then swapped in together, or, when any of them fails, none,
+//! and every Kernel they had goes on running as it was. A library
+//! document is a change of its own; the scene's documents, the root and
+//! the graphs it places, are one change with the graph they make, which
+//! the scene puts in place when the change publishes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -76,6 +79,14 @@ impl Batch {
     }
 }
 
+/// One change: its documents' Kernels, published together once every
+/// one is ready, or none of them; with `scene`, it is the scene's own,
+/// and the graph the scene lowered waits on it.
+pub(crate) struct Change {
+    pub(crate) documents: Vec<(PathBuf, Batch)>,
+    pub(crate) scene: bool,
+}
+
 /// The ledger of published Kernels by the document that owns each.
 #[derive(Default)]
 pub(crate) struct Kernels {
@@ -83,12 +94,8 @@ pub(crate) struct Kernels {
     /// root document is one of them.
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
-    /// Each document's change still being prepared.
-    pending: BTreeMap<PathBuf, Batch>,
-    /// The scene's own change still being prepared: the changes of its
-    /// documents, the root and the graphs it places, which publish
-    /// together once all are ready, or none of them.
-    scene: Option<Vec<(PathBuf, Batch)>>,
+    /// The changes still being prepared, in the order they were made.
+    pending: Vec<Change>,
 }
 
 /// Which document published which Kernel, kept to be put back whole
@@ -111,11 +118,10 @@ impl Kernels {
     /// Puts back the ledger [`Kernels::keep`] kept, letting go of every
     /// change still being prepared.
     pub(crate) fn put_back(&mut self, kept: Kept, runtime: &mut Runtime) {
-        for (_, batch) in std::mem::take(&mut self.pending) {
-            batch.discard(runtime);
-        }
-        for (_, batch) in self.scene.take().into_iter().flatten() {
-            batch.discard(runtime);
+        for change in std::mem::take(&mut self.pending) {
+            for (_, batch) in change.documents {
+                batch.discard(runtime);
+            }
         }
         self.documents = kept.documents;
         self.owners = kept.owners;
@@ -151,136 +157,213 @@ impl Kernels {
         located(store, error, document, root, &self.documents())
     }
 
-    /// Publishes every document's change whose Kernels the worker has
-    /// all finished, each as one; a change of which one failed publishes
-    /// nothing.
-    pub(crate) fn collect_pending(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) {
-        let paths: Vec<PathBuf> = self.pending.keys().cloned().collect();
-        for path in paths {
-            let Some(mut batch) = self.pending.remove(&path) else {
-                continue;
-            };
+    /// Makes `change`, and publishes what of it and of every change before
+    /// it is ready: the outcome of the scene's change, when it had one
+    /// and it came to one ([`Kernels::collect`]).
+    pub(crate) fn make(
+        &mut self,
+        change: Change,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+    ) -> Option<bool> {
+        self.pending.push(change);
+        self.collect(runtime, events)
+    }
+
+    /// Publishes every change whose Kernels the worker has all finished,
+    /// each as one; a change of which one failed publishes nothing. The
+    /// outcome of the scene's change, when it came to one: `true` when it
+    /// published, `false` when it was refused.
+    pub(crate) fn collect(
+        &mut self,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+    ) -> Option<bool> {
+        let mut scene = None;
+        for mut change in std::mem::take(&mut self.pending) {
             let mut failed = Vec::new();
             let mut waiting = false;
-            for item in &mut batch.items {
-                let Prep::Waiting(ticket) = item.prep else {
-                    continue;
-                };
-                match runtime.poll(ticket) {
-                    None => waiting = true,
-                    Some(Ok(candidate)) => item.prep = Prep::Ready(Box::new(candidate)),
-                    Some(Err(error)) => failed.push((item.id.clone(), error.to_string())),
-                }
+            for (path, batch) in &mut change.documents {
+                // What the worker refused is gone from the batch; what is
+                // left is what the refusal holds back.
+                batch.items.retain_mut(|item| {
+                    let Prep::Waiting(ticket) = item.prep else {
+                        return true;
+                    };
+                    match runtime.poll(ticket) {
+                        None => {
+                            waiting = true;
+                            true
+                        }
+                        Some(Ok(candidate)) => {
+                            item.prep = Prep::Ready(Box::new(candidate));
+                            true
+                        }
+                        Some(Err(error)) => {
+                            failed.push(Event::Rejected {
+                                path: path.clone(),
+                                error: Diagnostic::new(format!("{}: {error}", item.id)),
+                            });
+                            false
+                        }
+                    }
+                });
             }
-            if !failed.is_empty() {
-                let held = batch.items.len() > failed.len() || !batch.leaving.is_empty();
-                for (id, error) in failed {
-                    events.push(Event::Rejected {
-                        path: path.clone(),
-                        error: Diagnostic::new(format!("{id}: {error}")),
-                    });
-                }
-                self.hold_back(&path, batch, held, runtime, events);
+            let outcome = if !failed.is_empty() {
+                events.extend(failed);
+                self.abandon(change, false, runtime, events)
+            } else if waiting {
+                self.pending.push(change);
                 continue;
-            }
-            if waiting {
-                self.pending.insert(path, batch);
-                continue;
-            }
-            self.publish_batch(&path, batch, runtime, events);
+            } else {
+                self.publish(change, runtime, events)
+            };
+            scene = scene.or(outcome);
         }
+        scene
     }
 
     /// Waits until every change being prepared has been published or
     /// refused: what must stand before a world that depends on it runs.
-    pub(crate) fn wait_pending(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) {
+    /// The outcome of the scene's change, as [`Kernels::collect`] says.
+    pub(crate) fn wait(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) -> Option<bool> {
+        let mut scene = None;
         while !self.pending.is_empty() {
-            self.collect_pending(runtime, events);
+            scene = scene.or(self.collect(runtime, events));
             if !self.pending.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
+        scene
     }
 
-    /// Swaps a ready batch in, all at once, and retires what left.
-    fn publish_batch(
+    /// Refuses a change before it is made: nothing of it is published,
+    /// and each of its documents is held as it was.
+    pub(crate) fn refuse(
         &mut self,
-        path: &Path,
-        batch: Batch,
+        change: Change,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) {
-        let Batch {
-            items,
-            leaving,
-            before,
-        } = batch;
-        let ready: Vec<(Candidate, Expect)> = items
+        self.abandon(change, false, runtime, events);
+    }
+
+    /// Lets go of the scene's change still being prepared, superseded by
+    /// a newer one: nothing of it is published.
+    pub(crate) fn supersede_scene(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) {
+        let (scene, rest): (Vec<Change>, Vec<Change>) = std::mem::take(&mut self.pending)
             .into_iter()
-            .filter_map(|item| match item.prep {
-                Prep::Ready(candidate) => Some((*candidate, item.expect)),
-                Prep::Waiting(ticket) => {
-                    runtime.discard(ticket);
-                    None
+            .partition(|change| change.scene);
+        self.pending = rest;
+        for change in scene {
+            self.abandon(change, false, runtime, events);
+        }
+    }
+
+    /// Swaps a ready change in, all at once, and retires what its
+    /// documents no longer define; refused by the registry, nothing of
+    /// it is. The scene's outcome, when it was the scene's change.
+    fn publish(
+        &mut self,
+        change: Change,
+        runtime: &mut Runtime,
+        events: &mut Vec<Event>,
+    ) -> Option<bool> {
+        let Change { documents, scene } = change;
+        let mut ready = Vec::new();
+        let mut from = Vec::new();
+        let mut held = Vec::new();
+        for (path, batch) in documents {
+            let Batch {
+                items,
+                leaving,
+                before,
+            } = batch;
+            for item in items {
+                match item.prep {
+                    Prep::Ready(candidate) => {
+                        ready.push((*candidate, item.expect));
+                        from.push(path.clone());
+                    }
+                    Prep::Waiting(ticket) => runtime.discard(ticket),
                 }
-            })
-            .collect();
+            }
+            held.push((path, leaving, before));
+        }
         match runtime.publish_all(ready) {
             Ok(versions) => {
-                for version in versions {
+                for (version, path) in versions.into_iter().zip(from) {
                     events.push(Event::Published {
-                        path: path.to_path_buf(),
+                        path: path.clone(),
                         id: version.id().clone(),
                         generation: version.generation(),
                     });
-                    self.owners.insert(version.id().clone(), path.to_path_buf());
+                    self.owners.insert(version.id().clone(), path);
                 }
-                for id in &leaving {
-                    self.retire(path, id, runtime, events);
+                for (path, leaving, _) in held {
+                    for id in &leaving {
+                        self.retire(&path, id, runtime, events);
+                    }
                 }
+                scene.then_some(true)
             }
             Err(error) => {
                 events.push(Event::Rejected {
-                    path: path.to_path_buf(),
+                    path: held
+                        .first()
+                        .map(|(path, _, _)| path.clone())
+                        .unwrap_or_default(),
                     error: Diagnostic::new(error.to_string()),
                 });
-                let batch = Batch {
-                    items: Vec::new(),
-                    leaving,
-                    before,
-                };
-                self.hold_back(path, batch, true, runtime, events);
+                let documents = held
+                    .into_iter()
+                    .map(|(path, leaving, before)| {
+                        let batch = Batch {
+                            items: Vec::new(),
+                            leaving,
+                            before,
+                        };
+                        (path, batch)
+                    })
+                    .collect();
+                self.abandon(Change { documents, scene }, true, runtime, events)
             }
         }
     }
 
     /// A change that failed: nothing of it is published, what it still
-    /// prepares is let go, and the ledger holds what it held before, read
-    /// at the document's new stamp so it is read again when it changes.
-    /// `held` says the failure held back something else the change had,
-    /// which is then said too.
-    fn hold_back(
+    /// prepares is let go, and each of its documents is held as it was,
+    /// read at its new stamp so it is read again when it changes. A
+    /// library document's change that held back more than what failed
+    /// (or, `held`, a change the registry refused whole) says so; the
+    /// scene's says it with its refusal. The scene's outcome, when it was
+    /// the scene's change.
+    fn abandon(
         &mut self,
-        path: &Path,
-        batch: Batch,
+        change: Change,
         held: bool,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
-    ) {
-        let mut before = batch.before.clone();
-        if let Some(state) = self.documents.get(path) {
-            before.stamp = state.stamp;
+    ) -> Option<bool> {
+        let Change { documents, scene } = change;
+        for (path, batch) in documents {
+            let held = !scene && (held || !batch.items.is_empty() || !batch.leaving.is_empty());
+            let mut before = batch.before.clone();
+            if let Some(state) = self.documents.get(&path) {
+                before.stamp = state.stamp;
+            }
+            batch.discard(runtime);
+            self.documents.insert(path.clone(), before);
+            if held {
+                events.push(Event::Rejected {
+                    path,
+                    error: Diagnostic::new(
+                        "nothing in it was published: a document's Kernels change together, and the ones it had go on running",
+                    ),
+                });
+            }
         }
-        batch.discard(runtime);
-        self.documents.insert(path.to_path_buf(), before);
-        if held {
-            events.push(Event::Rejected {
-                path: path.to_path_buf(),
-                error: Diagnostic::new(
-                    "nothing in it was published: a document's Kernels change together, and the ones it had go on running",
-                ),
-            });
-        }
+        scene.then_some(false)
     }
 
     /// Publishes the Kernels a document now defines, as one change:
@@ -288,7 +371,9 @@ impl Kernels {
     /// changed, and reports each. When any of them does not compile or
     /// prepare, none is published and none retired. `declarations` keys
     /// what the Kernels inherit; a change there republishes them all.
-    /// `root` is the scene, for diagnostics.
+    /// `root` is the scene, for diagnostics. What was made publishes with
+    /// what else is ready, the scene's change among it, whose outcome it
+    /// answers ([`Kernels::collect`]).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn publish_document(
         &mut self,
@@ -300,7 +385,7 @@ impl Kernels {
         root: &Path,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
-    ) {
+    ) -> Option<bool> {
         let staged = self.stage_document(
             store,
             path,
@@ -312,14 +397,18 @@ impl Kernels {
             events,
         );
         if let Some(batch) = staged {
-            self.pending.insert(path.to_path_buf(), batch);
-            self.collect_pending(runtime, events);
+            let change = Change {
+                documents: vec![(path.to_path_buf(), batch)],
+                scene: false,
+            };
+            return self.make(change, runtime, events);
         }
+        None
     }
 
     /// A document's change compiled and handed to be prepared, nothing of
     /// it published: what [`Kernels::publish_document`] publishes alone,
-    /// and a scene's documents together ([`Kernels::stage_scene`]).
+    /// and a scene's documents together, as one [`Change`].
     /// `None` when any of its Kernels was refused, the document held
     /// back as it was.
     #[allow(clippy::too_many_arguments)]
@@ -334,11 +423,18 @@ impl Kernels {
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) -> Option<Batch> {
-        // A newer change supersedes one still being prepared.
-        if let Some(superseded) = self.pending.remove(path) {
-            let before = superseded.before.clone();
-            superseded.discard(runtime);
-            self.documents.insert(path.to_path_buf(), before);
+        // A newer change of a library document supersedes one still being
+        // prepared (the scene's own are superseded whole, by the scene).
+        if let Some(at) = self
+            .pending
+            .iter()
+            .position(|change| !change.scene && change.documents.iter().any(|(p, _)| p == path))
+        {
+            for (other, batch) in self.pending.remove(at).documents {
+                let before = batch.before.clone();
+                batch.discard(runtime);
+                self.documents.insert(other, before);
+            }
         }
         let before = self.documents.remove(path).unwrap_or_default();
         let previous = if before.declarations == declarations {
@@ -435,126 +531,14 @@ impl Kernels {
             },
         );
         if failed {
-            let held = !batch.items.is_empty() || !batch.leaving.is_empty();
-            self.hold_back(path, batch, held, runtime, events);
+            let change = Change {
+                documents: vec![(path.to_path_buf(), batch)],
+                scene: false,
+            };
+            self.abandon(change, false, runtime, events);
             return None;
         }
         Some(batch)
-    }
-
-    /// Takes the scene's own change, its documents' batches, to publish
-    /// together once every Kernel of it is ready
-    /// ([`Kernels::collect_scene`]).
-    pub(crate) fn stage_scene(&mut self, batches: Vec<(PathBuf, Batch)>) {
-        self.scene = Some(batches);
-    }
-
-    /// Lets go of the scene's change still being prepared, and of these
-    /// batches of it: nothing of them is published, and each document is
-    /// held as it was.
-    pub(crate) fn abandon_scene(
-        &mut self,
-        batches: Vec<(PathBuf, Batch)>,
-        runtime: &mut Runtime,
-        events: &mut Vec<Event>,
-    ) {
-        let staged = self.scene.take().unwrap_or_default();
-        for (path, batch) in staged.into_iter().chain(batches) {
-            self.hold_back(&path, batch, false, runtime, events);
-        }
-    }
-
-    /// Publishes the scene's own change once every Kernel of it is
-    /// ready, all of its documents' Kernels as one: `Some(true)` when it
-    /// did, `Some(false)` when any was refused and none published,
-    /// `None` while one is still being prepared or there is none.
-    pub(crate) fn collect_scene(
-        &mut self,
-        runtime: &mut Runtime,
-        events: &mut Vec<Event>,
-    ) -> Option<bool> {
-        let mut batches = self.scene.take()?;
-        let mut failed = Vec::new();
-        let mut waiting = false;
-        for (path, batch) in &mut batches {
-            for item in &mut batch.items {
-                let Prep::Waiting(ticket) = item.prep else {
-                    continue;
-                };
-                match runtime.poll(ticket) {
-                    None => waiting = true,
-                    Some(Ok(candidate)) => item.prep = Prep::Ready(Box::new(candidate)),
-                    Some(Err(error)) => failed.push(Event::Rejected {
-                        path: path.clone(),
-                        error: Diagnostic::new(format!("{}: {error}", item.id)),
-                    }),
-                }
-            }
-        }
-        if !failed.is_empty() {
-            events.extend(failed);
-            self.abandon_scene(batches, runtime, events);
-            return Some(false);
-        }
-        if waiting {
-            self.scene = Some(batches);
-            return None;
-        }
-        let mut ready = Vec::new();
-        let mut from = Vec::new();
-        let mut held = Vec::new();
-        for (path, batch) in batches {
-            let Batch {
-                items,
-                leaving,
-                before,
-            } = batch;
-            for item in items {
-                if let Prep::Ready(candidate) = item.prep {
-                    ready.push((*candidate, item.expect));
-                    from.push(path.clone());
-                }
-            }
-            held.push((path, leaving, before));
-        }
-        match runtime.publish_all(ready) {
-            Ok(versions) => {
-                for (version, path) in versions.into_iter().zip(from) {
-                    events.push(Event::Published {
-                        path: path.clone(),
-                        id: version.id().clone(),
-                        generation: version.generation(),
-                    });
-                    self.owners.insert(version.id().clone(), path);
-                }
-                for (path, leaving, _) in held {
-                    for id in &leaving {
-                        self.retire(&path, id, runtime, events);
-                    }
-                }
-                Some(true)
-            }
-            Err(error) => {
-                let path = held.first().map(|(path, _, _)| path.clone());
-                events.push(Event::Rejected {
-                    path: path.unwrap_or_default(),
-                    error: Diagnostic::new(error.to_string()),
-                });
-                let batches = held
-                    .into_iter()
-                    .map(|(path, leaving, before)| {
-                        let batch = Batch {
-                            items: Vec::new(),
-                            leaving,
-                            before,
-                        };
-                        (path, batch)
-                    })
-                    .collect();
-                self.abandon_scene(batches, runtime, events);
-                Some(false)
-            }
-        }
     }
 
     /// Retires every Kernel a document published, and forgets it.
@@ -564,9 +548,17 @@ impl Kernels {
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) {
-        if let Some(batch) = self.pending.remove(path) {
-            batch.discard(runtime);
+        for change in &mut self.pending {
+            let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut change.documents)
+                .into_iter()
+                .partition(|(p, _)| p == path);
+            change.documents = kept;
+            for (_, batch) in gone {
+                batch.discard(runtime);
+            }
         }
+        self.pending
+            .retain(|change| !change.documents.is_empty() || change.scene);
         if let Some(state) = self.documents.remove(path) {
             for id in state.kernels.keys() {
                 self.retire(path, id, runtime, events);
@@ -606,8 +598,11 @@ impl Kernels {
 
     /// Takes `id` out of whatever change is still preparing it.
     fn forget_pending(&mut self, id: &KernelId, runtime: &mut Runtime) {
-        let scene = self.scene.iter_mut().flatten().map(|(_, batch)| batch);
-        for batch in self.pending.values_mut().chain(scene) {
+        let batches = self
+            .pending
+            .iter_mut()
+            .flat_map(|change| &mut change.documents);
+        for (_, batch) in batches {
             batch.items.retain(|item| {
                 if &item.id != id {
                     return true;
