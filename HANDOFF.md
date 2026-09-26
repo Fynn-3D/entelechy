@@ -31,10 +31,20 @@ Verified surface, as of `main`:
 
 ## Next
 
-Open: the user has not chosen the next round. The code was converged on
-the architecture (the soul held; interfaces now ask the session what
-each used to decide, the IR owns what backends derived again, the god
-files and objects are split, their invariants held by types). Candidates:
-Safari 27's WebGPU, once this machine has it; a second native platform
-(Vulkan or DX12, Linux or Windows; needs the CI workflow run by hand).
-Ask before starting any.
+The v0.0.2-alpha.1 batch is on `feat/self-description` (over
+`fix/serve-drain`), verified and matching main on every example, not
+merged: it is published only on the user's word. A release is tagged and
+published once a whole batch is done and accepted, never per fix.
+
+The next batch, v0.0.2-alpha.2, agreed with the user:
+
+1. The protocol's operation table types each field structurally (a
+   string, an integer, a number, a bool, a fixed array, one of some
+   values, an object), and the server checks every request's types
+   against it before an operation reads it; the document renders it.
+2. Each operation's request as JSON Schema, from that table.
+3. An MCP door onto the same protocol: each operation a tool, its schema
+   the table's, so any MCP agent drives Orla.
+
+Accepted by a fresh agent that reaches Orla only over MCP. The replay
+and command-line tables stay as they are.
