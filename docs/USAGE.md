@@ -3,7 +3,9 @@
 **Answers:** which command does what, with a line you can run.
 
 `orla` prints every command and flag with no arguments; this page is the
-commands with a line to run and what their flags mean. Build and verify:
+commands with a line to run and what their flags mean. `orla player`,
+`orla import` and `orla export` run `orla-player`, `orla-import` and
+`orla-export` beside `orla` with the same arguments. Build and verify:
 
 ```sh
 cargo build --workspace

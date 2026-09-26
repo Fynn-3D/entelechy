@@ -69,6 +69,12 @@ usage:
       Evaluate the scene, then run one element of a node's Kernel (or one
       step of a scan) on the interpreter and print every `let` of it with
       its value, and the result. Nothing is committed by the trace.
+  orla player <scene.osn> [...]
+  orla import <file> --out <dir> [...]
+  orla export <file.field>... --out <file> [...]
+      The Player, the importer and the exporter: `orla-player`,
+      `orla-import` and `orla-export` beside `orla`, run with the same
+      arguments.
   orla help [<name>]
       List every builtin a Kernel may call with one line each, or show one
       builtin's signatures, what it does, and the capability it needs.
@@ -119,6 +125,24 @@ usage:
       no window see (the protocol's `window` op changes it). See
       docs/PROTOCOL.md.";
 
+/// Runs `orla-<tool>` with `args`: the one beside this `orla`, else the
+/// one on `PATH`. Its exit status is `orla`'s.
+fn beside(tool: &str, args: &[String]) -> ExitCode {
+    let name = format!("orla-{tool}{}", std::env::consts::EXE_SUFFIX);
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join(&name)))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(&name));
+    match std::process::Command::new(&path).args(args).status() {
+        Ok(status) => ExitCode::from(status.code().map_or(1, |code| code as u8)),
+        Err(error) => {
+            eprintln!("error: `orla {tool}` runs `{name}`, beside `orla` or on PATH: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn usage_error(message: &str) -> Result<(), String> {
     Err(format!("{message}\n{USAGE}"))
 }
@@ -126,6 +150,7 @@ fn usage_error(message: &str) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
+        Some(tool @ ("player" | "import" | "export")) => return beside(tool, &args[1..]),
         Some("check") => check(&args[1..]),
         Some("run") => run(&args[1..]),
         Some("render") => render(&args[1..]),

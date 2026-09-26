@@ -346,6 +346,46 @@ fn the_binary_checks_and_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `orla player|import|export` runs `orla-<tool>` beside `orla` with the
+/// same arguments, and exits as it does; with none beside it or on `PATH`,
+/// it says what it looked for.
+#[test]
+fn a_tool_beside_orla_runs_as_an_orla_command() {
+    let dir = std::env::temp_dir().join(format!("orla-beside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let orla = dir.join("orla");
+    std::fs::copy(env!("CARGO_BIN_EXE_orla"), &orla).unwrap();
+    // A stand-in for `orla-export`: `orla` itself, which answers `version`.
+    std::fs::copy(env!("CARGO_BIN_EXE_orla"), dir.join("orla-export")).unwrap();
+    let output = Command::new(&orla)
+        .args(["export", "version"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("orla = "), "{stdout}");
+    let output = Command::new(&orla)
+        .args(["export", "check"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "its exit status is orla's");
+    let output = Command::new(&orla)
+        .arg("player")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("runs `orla-player`, beside `orla` or on PATH"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `run` writes only the files named, each in the format its extension
 /// names.
 #[test]
