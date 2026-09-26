@@ -48,7 +48,17 @@ pub fn answer(asked: Option<&str>) -> Result<Json, Json> {
             "items": all.iter().map(|c| json!({ "name": c.name, "line": c.summary })).collect::<Vec<_>>(),
         })),
         Some(name) => {
-            if let Ok(section) = orla_protocol::help::section(name) {
+            // A section's name may also name items (`replay`, the command
+            // and the section): the answer is both.
+            if let Ok(mut section) = orla_protocol::help::section(name) {
+                let found: Vec<Json> = all
+                    .iter()
+                    .filter(|c| c.name == name)
+                    .map(command_json)
+                    .collect();
+                if !found.is_empty() {
+                    section["found"] = json!(found);
+                }
                 return Ok(section);
             }
             let mut found: Vec<Json> = match orla_protocol::help::named(name) {
@@ -97,7 +107,29 @@ pub fn text(answer: &Json) -> String {
         }
         out.push_str(answer["ask"].as_str().unwrap_or_default());
         out.push('\n');
-    } else if let Some(items) = answer["items"].as_array() {
+    } else if answer["items"].is_array() {
+        out.push_str(&items_text(answer));
+        if let Some(found) = answer["found"].as_array() {
+            for item in found {
+                out.push('\n');
+                out.push_str(&item_text(item));
+            }
+        }
+    } else if let Some(found) = answer["found"].as_array() {
+        for (index, item) in found.iter().enumerate() {
+            if index > 0 {
+                out.push('\n');
+            }
+            out.push_str(&item_text(item));
+        }
+    }
+    out
+}
+
+/// A section's items, one line each.
+fn items_text(answer: &Json) -> String {
+    let mut out = String::new();
+    if let Some(items) = answer["items"].as_array() {
         let width = items
             .iter()
             .filter_map(|item| item["name"].as_str())
@@ -110,13 +142,6 @@ pub fn text(answer: &Json) -> String {
                 item["name"].as_str().unwrap_or_default(),
                 item["line"].as_str().unwrap_or_default()
             ));
-        }
-    } else if let Some(found) = answer["found"].as_array() {
-        for (index, item) in found.iter().enumerate() {
-            if index > 0 {
-                out.push('\n');
-            }
-            out.push_str(&item_text(item));
         }
     }
     out

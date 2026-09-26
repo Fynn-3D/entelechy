@@ -1107,7 +1107,12 @@ fn help_lists_the_sections_their_items_and_shows_one() {
     for name in ["match", "loop", "each", "scatter", "fill"] {
         assert!(forms.contains(&format!("  {name} ")), "{name} in {forms}");
     }
-    assert!(listed("replay").contains("  expect "));
+    // `replay` names a section and a command: the answer is both.
+    let replay = listed("replay");
+    assert!(
+        replay.contains("  expect ") && replay.contains("orla replay <file.replay>"),
+        "{replay}"
+    );
     assert!(listed("protocol").contains("  publish "));
     assert!(listed("commands").contains("  serve "));
     let output = Command::new(orla).args(["help", "each"]).output().unwrap();
