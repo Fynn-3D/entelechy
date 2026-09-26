@@ -27,8 +27,7 @@ impl Session {
     /// graph), so it is recorded as the request's; a scene found changed
     /// on disk is its document's.
     pub fn claim_scene(&mut self) {
-        self.claimed = true;
-        self.claim_landed = None;
+        self.claim = super::Claim::Asked;
     }
 
     /// The world's position: its revision, which moves when the world
@@ -348,32 +347,31 @@ impl Session {
     /// ([`Session::claim_scene`]) is the request's. One sync that reads
     /// the scene twice (a library changed with it) is one change.
     pub(super) fn remember(&mut self, events: &[Event]) {
-        let claimed = std::mem::take(&mut self.claimed);
-        // A claimed scene waiting for its Kernels is still the request's
-        // when it lands, on a later sync.
+        use super::Claim;
+        let landing = events
+            .iter()
+            .any(|e| matches!(e, Event::SceneLoaded | Event::SceneRejected(_)));
         // A claim is on the scene it made: one read in its place since, a
         // document changed on disk, is that document's.
         let superseded = self.scene.take_superseded();
-        let waiting = self.claim_waiting.take().filter(|_| !superseded);
-        // Landing on a sync after the request's own, what that sync said
-        // is the request's to answer with.
-        if waiting.is_some()
-            && events
-                .iter()
-                .any(|e| matches!(e, Event::SceneLoaded | Event::SceneRejected(_)))
-        {
-            self.claim_landed = Some(events.to_vec());
-        }
-        let scene_origin = if claimed {
-            Some(self.origin.clone())
-        } else {
-            waiting
+        let (claimant, landed) = match std::mem::take(&mut self.claim) {
+            Claim::Asked => (Some(self.origin.clone()), None),
+            Claim::Waiting(origin) if !superseded => {
+                // Landing on a sync after the request's own, what that
+                // sync said is the request's to answer with.
+                let landed = landing.then(|| events.to_vec());
+                (Some(origin), landed)
+            }
+            Claim::Landed(events) => (None, Some(events)),
+            Claim::Waiting(_) | Claim::None => (None, None),
         };
-        if self.scene.waiting() {
-            self.claim_waiting.clone_from(&scene_origin);
-        }
-        let scene_origin = scene_origin
-            .unwrap_or_else(|| crate::Origin::Document(self.scene.root().to_path_buf()));
+        self.claim = match (&claimant, landed) {
+            (Some(origin), _) if self.scene.waiting() => Claim::Waiting(origin.clone()),
+            (_, Some(events)) => Claim::Landed(events),
+            _ => Claim::None,
+        };
+        let scene_origin =
+            claimant.unwrap_or_else(|| crate::Origin::Document(self.scene.root().to_path_buf()));
         let document = |path: &Path| crate::Origin::Document(path.to_path_buf());
         let mut scene_loaded = false;
         for event in events {

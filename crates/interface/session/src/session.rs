@@ -34,17 +34,29 @@ pub struct Session {
     history: crate::history::History,
     /// Where what the session is asked to do comes from now.
     origin: crate::Origin,
-    /// Whether the next scene the session loads is the change the
-    /// request being answered made ([`Session::claim_scene`]), rather
-    /// than one found on disk.
-    claimed: bool,
-    /// The origin of a claimed scene still waiting for its Kernels, which
-    /// it carries when it lands.
-    claim_waiting: Option<crate::Origin>,
-    /// What the sync on which a claimed scene landed, a sync after the
-    /// request's own, said: for the request to answer with
-    /// ([`Session::take_landing`]).
-    claim_landed: Option<Vec<Event>>,
+    /// Which request, if any, the scene being read is the change of
+    /// ([`Session::claim_scene`]), rather than one found on disk.
+    claim: Claim,
+}
+
+/// A request's claim on the scene it made, through what the scene comes
+/// to: asked for by the request being answered, waiting for its Kernels
+/// while the request waits for it, landed and what the sync it landed on
+/// said, for the request to answer with. A scene read in its place, a
+/// document changed on disk, ends it.
+#[derive(Default)]
+pub(crate) enum Claim {
+    /// No request's.
+    #[default]
+    None,
+    /// The next scene read is the change of the request being answered.
+    Asked,
+    /// The scene a request made waits for its Kernels; it is that
+    /// request's when it lands.
+    Waiting(crate::Origin),
+    /// The scene a request made landed on a sync after the request's own:
+    /// what that sync said ([`Session::take_landing`]).
+    Landed(Vec<Event>),
 }
 
 /// The error an evaluation returns when no scene has loaded.
@@ -91,9 +103,7 @@ impl Session {
             window: None,
             history: crate::history::History::default(),
             origin: crate::Origin::Local,
-            claimed: false,
-            claim_waiting: None,
-            claim_landed: None,
+            claim: Claim::None,
         }
     }
 
@@ -453,7 +463,13 @@ impl Session {
     /// sync after the request's own: the request answers with it once. A
     /// scene that landed on the request's own sync leaves nothing here.
     pub fn take_landing(&mut self) -> Option<Vec<Event>> {
-        self.claim_landed.take()
+        match std::mem::take(&mut self.claim) {
+            Claim::Landed(events) => Some(events),
+            other => {
+                self.claim = other;
+                None
+            }
+        }
     }
 
     /// Starts publishing Kernel source that did not come from a document,
