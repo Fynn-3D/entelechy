@@ -1453,6 +1453,25 @@ fn a_served_scene_reads_beside_its_documents_or_where_allowed() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Whether a session's reads are held is decided when it is opened: once
+/// its scene has been read, holding them is refused, so what may be read
+/// never depends on when it was asked, or on who spoke first.
+#[test]
+fn reads_are_held_from_the_start_or_not_at_all() {
+    let dir = scratch_in("-held-late");
+    let mut session = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    session.sync();
+    let refused = session.restrict_reads().unwrap_err();
+    assert!(
+        refused.contains("from before the scene is first read"),
+        "{refused}"
+    );
+    let mut held = orla_session::Session::open(&dir.join("scene.osn"), None, 1 << 20);
+    held.restrict_reads().unwrap();
+    held.sync();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Any web page the person visits can reach a server on this machine. A
 /// page elsewhere is refused its WebSocket unless `--allow-origin` names
 /// it, and an HTTP request that is no upgrade, a form's or a fetch's, is

@@ -272,7 +272,7 @@ fn a_live_session_survives_mutated_scenes_and_requests() {
         )
         .unwrap();
         let mut session = Session::open_with(&scene, None, runtime);
-        session.restrict_reads();
+        session.restrict_reads().unwrap();
         session.sync();
         sessions.push((dir, session));
     }

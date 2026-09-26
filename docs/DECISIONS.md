@@ -336,10 +336,12 @@ frame commits, which this model refuses on purpose.
 
 A session an agent drives, `orla serve`, the Player's `--serve`, or a
 program's `orla_request`, holds the scene to what the person who started
-it allowed, and nothing that arrives over the wire widens it. The
-session decides this itself, the first time it acts for the protocol,
-whichever interface the request came through; a program embedding Orla
-allows more with `orla_allow`, as a command line does with `--allow`. An agent's `save` and a scene's `to`
+it allowed, and nothing that arrives over the wire widens it. Whether
+reads are held is decided when the session is opened, before its scene
+is first read, and never after: what may be read is the directories of
+the scene as it first loads, whoever edits it later and whenever. A
+program embedding Orla allows more with `orla_allow`, as a command line
+does with `--allow`. An agent's `save` and a scene's `to`
 land only where `--allow file.write` says. An input reads a file only
 beside the documents the scene reads (the root, the graphs it places,
 what it uses), inside a package, or where `--allow file.read` says. A

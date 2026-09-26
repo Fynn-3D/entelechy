@@ -75,7 +75,9 @@ const char *orla_version(void);
  * when the backend cannot be opened or the scene does not load, with
  * the reason in orla_open_error(). A scene whose Kernels are partly
  * rejected still opens; ask {"op":"sync"} through orla_request for the
- * events. */
+ * events. Its scene reads what it names as it first loads; from then on,
+ * since orla_request is an agent's door, its reads are held to the
+ * directories of that scene and the ones orla_allow allows. */
 OrlaSession *orla_open(const char *scene, const char *backend, const char *library);
 
 /* Files handed in: a store in memory a session reads instead of a disk,

@@ -590,6 +590,15 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // An agent composes a served scene and reads back what it holds:
+    // what it reads is held to its documents' directories and what the
+    // person allowed, decided before the scene is first read.
+    if options.serve
+        && let Err(error) = session.restrict_reads()
+    {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
     for event in session.sync() {
         eprintln!("{event}");
     }

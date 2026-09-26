@@ -260,12 +260,15 @@ impl Session {
 
     /// Holds what the scene's inputs read to the directories the scene
     /// names, its own, the graphs' it places and the libraries and
-    /// packages it uses, and the ones [`Session::allow_reads`] allowed. A
-    /// session does this itself once it acts for the protocol
-    /// ([`Session::act_for`]), which an agent composes through: a scene a
-    /// person runs reads what it names.
-    pub fn restrict_reads(&mut self) {
-        self.inputs.restrict_reads();
+    /// packages it uses, and the ones [`Session::allow_reads`] allowed:
+    /// for a session an agent composes and reads back from (`serve`, the
+    /// Player's `--serve`, a program's `orla_request`), where a scene a
+    /// person runs reads what it names. Decided when the session is
+    /// opened, before its first sync, or refused: the directories are
+    /// those of the scene as it first loads, and nothing after changes
+    /// them.
+    pub fn restrict_reads(&mut self) -> Result<(), String> {
+        self.inputs.restrict_reads()
     }
 
     /// Allows the scene's inputs to be read from files in `dir` and under

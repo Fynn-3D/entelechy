@@ -414,6 +414,10 @@ fn opened(
         let built = Session::build(backend, orla_session::Limits::default(), waiting())?;
         let (runtime, display, passed_over) = (built.runtime, built.display, built.passed_over);
         let mut session = Session::open_in(store, &scene, library.as_deref(), runtime);
+        // Any session opened here answers `orla_request`, an agent's door:
+        // what its scene reads is held from the start to the directories
+        // of the scene as it first loads, and what `orla_allow` allows.
+        session.restrict_reads()?;
         let events = session.sync();
         if session.graph().is_none() {
             let reason = events

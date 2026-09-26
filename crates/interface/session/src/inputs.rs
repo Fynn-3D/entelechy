@@ -77,22 +77,23 @@ pub(crate) struct Inputs {
     /// Whether `beside` holds what the opened scene read from, so it no
     /// longer follows the documents.
     settled: bool,
-    /// Whether a sync has set `beside` from a scene that loaded.
+    /// Whether a sync has read the scene: from then on whether reads are
+    /// held is settled.
     synced: bool,
 }
 
 impl Inputs {
     /// Holds reads to the documents' own directories and the ones
     /// [`Inputs::allow_reads`] allowed.
-    ///
-    /// Held once a scene has loaded, what it reads from is what the
-    /// scene running named: the change the agent is about to make is
-    /// held to it, not the measure of it.
-    pub(crate) fn restrict_reads(&mut self) {
-        if !self.restricted {
-            self.restricted = true;
-            self.settled = self.synced;
+    /// Decided before the scene is first read, or not at all: what may
+    /// be read is then the directories of the scene as it first loads,
+    /// whatever happens after, and never depends on when it was asked.
+    pub(crate) fn restrict_reads(&mut self) -> Result<(), String> {
+        if self.synced && !self.restricted {
+            return Err("reads are held from before the scene is first read, or not at all".into());
         }
+        self.restricted = true;
+        Ok(())
     }
 
     /// Allows files in `dir` and under it to be read into inputs.

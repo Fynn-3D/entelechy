@@ -20,9 +20,7 @@ pub fn serve(
         if line.trim().is_empty() {
             continue;
         }
-        let before = session.act_for(orla_session::Origin::Protocol("stdin".into()));
         let (response, quit) = respond_line(session, &line);
-        session.act_for(before);
         writeln!(output, "{response}")?;
         output.flush()?;
         if quit {
