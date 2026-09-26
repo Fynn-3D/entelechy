@@ -796,3 +796,42 @@ headless, the ABI's through `orla_play_*`, and the web bridge's in
 **What would change it.** A piece that is its making, a recorded
 performance kept for its own sake, which would be data a scene reads,
 not a replay among the tests.
+
+## A rule that had two owners is held to one
+
+A rule found with a second owner (a syntax parsed in two places, a
+second way to the disk, an interface asking the question the session
+asks) is fixed by leaving it one, and then held there: by the compiler
+where visibility can say it, by a source scan where it cannot. The
+compiler comes first: the session's store is the session's own, so what
+a caller reads or writes on another's behalf goes through
+`Session::read_file`, `write_file` and `write_scene`, each asking what
+may be before it acts, and a caller that tries the store itself does not
+compile. A scan holds what visibility cannot: the act a copy would have
+to do (cut `node.port` at a dot, write a file past the store), each
+written as a row naming its owner and the commit that gave it one.
+
+A rule is held only after it has had a second owner, and only by an act
+that would have found that owner in the source before the fix. A rule
+no copy has broken is not scanned for, and neither is a name a copy
+could avoid.
+
+**Why.** A project grows second paths for convenience, each small and
+each working, and a rule with two owners drifts until the two disagree:
+`reset node.port` cut at the first dot while the Graph cut at the last,
+and an export wrote where the protocol would have refused. Tests hold
+behaviour, not ownership, and a second owner that agrees today passes
+them. A guard over every rule would be a pile of fragile patterns that
+fail on legitimate code and teach their readers to silence them; a
+guard over the rules that have broken is few, precise, and each one
+proven by the bug it would have caught.
+
+**Where.** [`owners.rs`](../crates/interface/orla/tests/owners.rs): the
+rows, each shown to fail on the source its commit replaced. The
+session's store, `pub(crate)` in [the session](../crates/interface/session/src/session.rs).
+The layers are held beside it, in [`layers.rs`](../crates/interface/orla/tests/layers.rs).
+
+**What would change it.** A rule whose owner is better held by a type,
+which then leaves the scan for the compiler; or a row that fails on
+legitimate code, which means its act was not the rule's and is written
+again, never widened with exceptions.

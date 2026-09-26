@@ -16,8 +16,11 @@ Host → ABI → IR → Kernel Runtime → Graph Runtime
 One module, one responsibility. Avoid god objects, hidden globals, cross-layer
 helpers, implicit ownership.
 
-Every state has an owner. Prefer immutable values, explicit mutation, explicit
-lifetime, explicit dependencies.
+Every state has an owner, and every rule one. A rule found with a second owner
+is left with one, and held there by the compiler or by a row in
+`crates/interface/orla/tests/owners.rs`; see `docs/DECISIONS.md`, *A rule that
+had two owners is held to one*. Prefer immutable values, explicit mutation,
+explicit lifetime, explicit dependencies.
 
 Do not silently recover from invalid runtime state. Return meaningful errors.
 A failed hot reload keeps the previous valid Kernel alive.

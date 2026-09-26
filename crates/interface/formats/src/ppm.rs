@@ -8,7 +8,7 @@ use orla_host::{Domain, FieldData, HostError, Image, Scalar, Schema};
 /// Why a PPM file could not be read.
 #[derive(Debug)]
 pub enum PpmError {
-    /// The file could not be read or written.
+    /// The file could not be read.
     Io(std::io::Error),
     /// The file is not a binary PPM with 8-bit samples.
     Format(String),
@@ -160,11 +160,6 @@ pub fn encode(image: &Image) -> Vec<u8> {
         }
     }
     bytes
-}
-
-/// Writes an image as a P6 file.
-pub fn write(path: &Path, image: &Image) -> Result<(), PpmError> {
-    Ok(std::fs::write(path, encode(image))?)
 }
 
 #[cfg(test)]
