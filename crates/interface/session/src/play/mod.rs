@@ -12,7 +12,7 @@ pub mod hud;
 pub mod pad;
 
 use orla_graph::{NodeId, Report};
-use orla_runtime::{Context, Handle, InputState};
+use orla_kernel::{Context, Handle, InputState};
 
 pub use orla_rules::placement::{Placement, placement};
 pub use pad::{Pad, PadAxis, PadButton};

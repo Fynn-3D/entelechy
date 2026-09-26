@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use orla_graph::{Context, EvaluateError, Evaluator, Graph, GraphError, NodeId};
-use orla_runtime::{ExecutionError, Runtime};
+use orla_kernel::{ExecutionError, Runtime};
 
 fn at(time: f32) -> Context {
     Context {
@@ -412,7 +412,7 @@ node count: test.increment@1 { previous <~ count.result from seed.result; }
 output result <- count.result;
 ";
 
-fn red(runtime: &Runtime, handle: orla_runtime::Handle) -> f32 {
+fn red(runtime: &Runtime, handle: orla_kernel::Handle) -> f32 {
     runtime.host().read_pixel(handle, 1, 1).unwrap()[0]
 }
 
@@ -695,7 +695,7 @@ fn graph_params_feed_nodes_and_can_be_overridden() {
     );
 }
 
-fn pixels(runtime: &Runtime, handle: orla_runtime::Handle) -> Vec<[f32; 4]> {
+fn pixels(runtime: &Runtime, handle: orla_kernel::Handle) -> Vec<[f32; 4]> {
     runtime.host().image(handle).unwrap().pixels().to_vec()
 }
 
@@ -968,7 +968,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
     let total = evaluator.cached(&NodeId("total".into()), "result").unwrap();
     assert_eq!(
         runtime.host().domain(total).unwrap(),
-        orla_runtime::Domain::Rows(1)
+        orla_kernel::Domain::Rows(1)
     );
     let expected: [f32; 4] = pixels(
         &runtime,
@@ -1038,7 +1038,7 @@ fn scans_follow_their_input_and_stay_out_of_fusion() {
     );
     assert_eq!(
         runtime.host().domain(report.output).unwrap(),
-        orla_runtime::Domain::Rows(5)
+        orla_kernel::Domain::Rows(5)
     );
     let totals: Vec<i32> = (0..5)
         .map(|i| runtime.host().element(report.output, i).unwrap()[0] as i32)
@@ -1210,7 +1210,7 @@ fn a_side_from_a_size_divides_as_one_from_the_window() {
         window: [101.0, 101.0],
         ..Context::default()
     };
-    let side = |runtime: &mut orla_runtime::Runtime, domain: &str| {
+    let side = |runtime: &mut orla_kernel::Runtime, domain: &str| {
         let graph = orla_scene::parse(&format!(
             "node source: image.gradient@1 {{ domain = window(); }}\nnode half: image.grayscale@1 {{ source <- source.result; amount = 1.0; domain = {domain}; }}\noutput r <- half.result;"
         ))
@@ -1333,7 +1333,7 @@ output r <- machine.result;",
             &BTreeMap::new(),
         )
         .unwrap();
-    let read = |runtime: &Runtime, handle: orla_runtime::Handle, i: u32| {
+    let read = |runtime: &Runtime, handle: orla_kernel::Handle, i: u32| {
         runtime.host().element(handle, i).unwrap()[0]
     };
     // Three steps count to three within the frame...
@@ -1377,7 +1377,7 @@ node count: tally.step@1 { previous <~ count.result from seed.result migrate tal
 output result <- count.result;
 ";
 
-fn tally(runtime: &Runtime, handle: orla_runtime::Handle) -> Vec<i32> {
+fn tally(runtime: &Runtime, handle: orla_kernel::Handle) -> Vec<i32> {
     runtime
         .host()
         .element(handle, 0)
@@ -1908,16 +1908,16 @@ output result <- twice.result;
 }
 
 /// A runtime on the reference backend, as a session opens one.
-fn cpu(budget_words: usize) -> orla_runtime::Runtime {
-    orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+fn cpu(budget_words: usize) -> orla_kernel::Runtime {
+    orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
 }
 
 /// Compiles and publishes a Kernel as a session does: the runtime takes
 /// validated IR, and compiling is the caller's step.
 fn load(
-    runtime: &mut orla_runtime::Runtime,
+    runtime: &mut orla_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_runtime::KernelVersion> {
+) -> std::sync::Arc<orla_kernel::KernelVersion> {
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
@@ -2084,7 +2084,7 @@ fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
         "the gradient fuses into pack; pack does not fuse into show"
     );
     // Pixel (3, 1) of a 6 by 4 gradient: u = 3/5, v = 1/3, as bytes.
-    let byte = |x: f32| (x * 255.0).round_ties_even() * orla_runtime::encoding::UNORM8 * 2.0;
+    let byte = |x: f32| (x * 255.0).round_ties_even() * orla_kernel::encoding::UNORM8 * 2.0;
     let pixel = runtime.host().read_pixel(report.output, 3, 1).unwrap();
     assert_eq!(pixel, [byte(0.6), byte(1.0 / 3.0), 0.0, 2.0]);
     let packed = evaluator.cached(&NodeId("pack".into()), "result").unwrap();
@@ -2119,7 +2119,7 @@ const INT_ZERO: &str =
 const FAILS_AT: &str = "kernel t.fails@1 { requires { field.read; field.write; } input x: Rows<Int>; param at: Int = 5; output result: Rows<Int>; compute { return 100 / (at(x, 0) - at); } }";
 const COPY: &str = "kernel t.copy@1 { requires { field.read; field.write; } input x: Rows<Int>; output result: Rows<Int>; compute { return at(x, 0); } }";
 
-fn int_at(runtime: &Runtime, handle: orla_runtime::Handle) -> i32 {
+fn int_at(runtime: &Runtime, handle: orla_kernel::Handle) -> i32 {
     runtime.host().element(handle, 0).unwrap()[0] as i32
 }
 
@@ -2154,9 +2154,9 @@ output slow <- slow.result;
     let four = runtime
         .host_mut()
         .adopt(
-            orla_runtime::FieldData::from_values(
-                orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
-                orla_runtime::Domain::Rows(1),
+            orla_kernel::FieldData::from_values(
+                orla_kernel::Schema::new(vec![orla_kernel::Scalar::Int]),
+                orla_kernel::Domain::Rows(1),
                 &[4],
             )
             .unwrap(),
@@ -2193,9 +2193,9 @@ output slow <- slow.result;
         runtime
             .host_mut()
             .adopt(
-                orla_runtime::FieldData::from_values(
-                    orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
-                    orla_runtime::Domain::Rows(1),
+                orla_kernel::FieldData::from_values(
+                    orla_kernel::Schema::new(vec![orla_kernel::Scalar::Int]),
+                    orla_kernel::Domain::Rows(1),
                     &[v],
                 )
                 .unwrap(),
@@ -2272,7 +2272,7 @@ output result <- check.result;
             .evaluate(&graph, &mut runtime, &none, &ctx, &params)
             .unwrap();
     }
-    let committed: BTreeMap<String, orla_runtime::Handle> = evaluator
+    let committed: BTreeMap<String, orla_kernel::Handle> = evaluator
         .committed_states()
         .into_iter()
         .map(|(node, _, handle)| (node.0, handle))
@@ -2292,7 +2292,7 @@ output result <- check.result;
         ],
     );
     assert!(refused.is_err());
-    let after: BTreeMap<String, orla_runtime::Handle> = evaluator
+    let after: BTreeMap<String, orla_kernel::Handle> = evaluator
         .committed_states()
         .into_iter()
         .map(|(node, _, handle)| (node.0, handle))

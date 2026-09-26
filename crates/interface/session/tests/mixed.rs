@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use orla_abi::{Capabilities, Capability, Domain, Handle, Invocation, Scope};
-use orla_runtime::{Backend, Expect, Runtime};
+use orla_kernel::{Backend, Expect, Runtime};
 
 /// A backend that records what it is asked to do, and does it on the CPU.
 struct Recorder {
@@ -33,7 +33,7 @@ impl Backend for Recorder {
     fn prepare(
         &self,
         module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
         self.log
             .lock()
             .unwrap()
@@ -42,11 +42,11 @@ impl Backend for Recorder {
     }
     fn execute(
         &self,
-        prepared: &dyn orla_runtime::Prepared,
+        prepared: &dyn orla_kernel::Prepared,
         module: &orla_ir::Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_runtime::ExecutionError> {
+    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
         self.log
             .lock()
             .unwrap()
@@ -127,7 +127,7 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
         Some("not on main: a scan runs its steps in order, on one thread")
     );
     // Backends that compute in Host memory carry nothing anywhere.
-    assert_eq!(runtime.take_moved(), orla_runtime::Moved::default());
+    assert_eq!(runtime.take_moved(), orla_kernel::Moved::default());
     // Without a second backend, everything is the main one's.
     let plain = cpu(1 << 16);
     assert_eq!(plain.ordered_backend_name(), None);
@@ -193,25 +193,25 @@ impl Backend for Clocked {
     fn prepare(
         &self,
         module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
         self.cpu.prepare(module)
     }
     fn execute(
         &self,
-        prepared: &dyn orla_runtime::Prepared,
+        prepared: &dyn orla_kernel::Prepared,
         module: &orla_ir::Validated,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_runtime::ExecutionError> {
+    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
         self.timed.store(true, std::sync::atomic::Ordering::Relaxed);
         Backend::execute(&self.cpu, prepared, module, invocation, scope)
     }
     fn execute_native(
         &self,
-        op: orla_runtime::NativeOp,
+        op: orla_kernel::NativeOp,
         invocation: &Invocation,
         scope: &mut Scope<'_>,
-    ) -> Result<Vec<Handle>, orla_runtime::ExecutionError> {
+    ) -> Result<Vec<Handle>, orla_kernel::ExecutionError> {
         Backend::execute_native(&self.cpu, op, invocation, scope)
     }
     fn last_device_time(&self) -> Option<std::time::Duration> {
@@ -239,7 +239,7 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
     let points = runtime.publish(points, Expect::Absent).unwrap();
     let faces = runtime.publish(faces, Expect::Absent).unwrap();
 
-    let run = |runtime: &mut Runtime, version: &Arc<orla_runtime::KernelVersion>, count: u32| {
+    let run = |runtime: &mut Runtime, version: &Arc<orla_kernel::KernelVersion>, count: u32| {
         runtime
             .execute(
                 version,
@@ -265,7 +265,7 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
     );
 
     let raster = runtime
-        .kernel(&orla_runtime::NativeOp::Rasterize.id())
+        .kernel(&orla_kernel::NativeOp::Rasterize.id())
         .unwrap();
     runtime
         .execute(
@@ -290,15 +290,15 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
 }
 
 /// A runtime on the reference backend, as a session opens one.
-fn cpu(budget_words: usize) -> orla_runtime::Runtime {
-    orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+fn cpu(budget_words: usize) -> orla_kernel::Runtime {
+    orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
 }
 
 /// Compiles and prepares a Kernel without publishing it.
 fn prepare(
-    runtime: &orla_runtime::Runtime,
+    runtime: &orla_kernel::Runtime,
     source: &str,
-) -> Result<orla_runtime::Candidate, orla_runtime::PrepareError> {
+) -> Result<orla_kernel::Candidate, orla_kernel::PrepareError> {
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.prepare_module(module, source)
 }

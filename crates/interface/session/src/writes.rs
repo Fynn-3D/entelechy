@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use orla_graph::Report;
-use orla_runtime::{Handle, Runtime};
+use orla_kernel::{Handle, Runtime};
 
 use crate::Event;
 use crate::store::Store;

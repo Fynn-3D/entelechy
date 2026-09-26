@@ -275,7 +275,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
     // The device is taken before the backend goes to the runtime, which
     // knows only a `Backend` from then on.
     let device = gpu.device().clone();
-    let mut runtime = orla_runtime::Runtime::with_backend(1 << 22, Box::new(gpu));
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 22, Box::new(gpu));
     runtime.set_background(true);
     let source = |value: &str| {
         format!(
@@ -343,7 +343,7 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
 fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     use orla_rules::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
     let Some(gpu) = gpu() else { return };
-    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, Box::new(gpu));
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, Box::new(gpu));
     // Two triangles: a large one at depth 0.6 and a nearer one at 0.3
     // covering the lower-left, with distinct normals and uvs, at w = 2 so
     // perspective correction is exercised.
@@ -1405,7 +1405,7 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
         Cutout, SURFACE_WORDS, mask_schema, rasterize_masked, triangle_schema, vertex_schema,
     };
     let Some(gpu) = gpu() else { return };
-    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, Box::new(gpu));
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, Box::new(gpu));
     let vertex = |clip: [f32; 4], normal: [f32; 3], uv: [f32; 2]| -> Vec<u32> {
         clip.iter()
             .chain(normal.iter())
@@ -1537,9 +1537,9 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
 /// Compiles and publishes a Kernel as a session does: the runtime takes
 /// validated IR, and compiling is the caller's step.
 fn load(
-    runtime: &mut orla_runtime::Runtime,
+    runtime: &mut orla_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_runtime::KernelVersion> {
+) -> std::sync::Arc<orla_kernel::KernelVersion> {
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
@@ -1550,12 +1550,12 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
         return;
     };
     let mut runtime =
-        orla_runtime::Runtime::with_backends(1 << 20, Box::new(gpu), Some(Box::new(CpuBackend)));
+        orla_kernel::Runtime::with_backends(1 << 20, Box::new(gpu), Some(Box::new(CpuBackend)));
     let mut publish = |source: &str| {
         let module = compile(source).unwrap();
         let candidate = runtime.prepare_module(module, source).unwrap();
         runtime
-            .publish(candidate, orla_runtime::Expect::Absent)
+            .publish(candidate, orla_kernel::Expect::Absent)
             .unwrap()
     };
     let map = publish(
@@ -1567,7 +1567,7 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
     let back = publish(
         "kernel t.back@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return sample(rows) + 1; } }",
     );
-    let run = |runtime: &mut orla_runtime::Runtime, version, inputs| {
+    let run = |runtime: &mut orla_kernel::Runtime, version, inputs| {
         let outputs = runtime
             .execute(
                 version,
@@ -1582,7 +1582,7 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
         (outputs[0], runtime.take_moved())
     };
     let (rows, moved) = run(&mut runtime, &map, vec![]);
-    assert_eq!(moved, orla_runtime::Moved::default());
+    assert_eq!(moved, orla_kernel::Moved::default());
     // The scan reads in Host memory: the map's rows come home.
     assert!(runtime.placement(&scan).routed.is_some());
     let (sums, moved) = run(&mut runtime, &scan, vec![rows]);
@@ -2245,14 +2245,14 @@ fn branches_nested_past_what_a_shader_holds_run_off_the_device() {
         let module = compile(&source).unwrap_or_else(|error| panic!("{error}"));
         let why = gpu.declines(&module).expect("past the brace limit");
         assert!(why.contains("nest"), "{why}");
-        let mut runtime = orla_runtime::Runtime::with_backends(
+        let mut runtime = orla_kernel::Runtime::with_backends(
             1 << 20,
             Box::new(GpuBackend::new().unwrap()),
             Some(Box::new(CpuBackend)),
         );
         let candidate = runtime.prepare_module(module.clone(), &source).unwrap();
         let version = runtime
-            .publish(candidate, orla_runtime::Expect::Absent)
+            .publish(candidate, orla_kernel::Expect::Absent)
             .unwrap();
         assert!(runtime.placement(&version).routed.is_some(), "{shape}");
         let outputs = runtime

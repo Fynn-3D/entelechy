@@ -330,7 +330,7 @@ output stirred <- stir.result;
             json!({ "id": 2, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&file) }),
             json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
             json!({ "id": 4, "op": "read", "node": "count" }),
-            json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&orla_formats::file::encode(&"f".parse().unwrap(), orla_runtime::Domain::Rows(3), &[0, 0, 0])) }),
+            json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&orla_formats::file::encode(&"f".parse().unwrap(), orla_kernel::Domain::Rows(3), &[0, 0, 0])) }),
             json!({ "id": 6, "op": "quit" }),
         ],
     );
@@ -2074,7 +2074,7 @@ fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
 /// history saying nothing had moved.)
 #[test]
 fn a_refused_restore_puts_back_the_scene_that_ran_whatever_is_on_disk() {
-    use orla_runtime::Context;
+    use orla_kernel::Context;
     use orla_session::{Laws, Session, Structure};
     let scene = tally_world("put-back", 3);
     let strict = std::fs::read_to_string(&scene).unwrap();
@@ -2653,27 +2653,27 @@ fn a_native_operation_is_neither_retired_nor_replaced() {
 /// has been read.
 struct Slow;
 
-impl orla_runtime::Backend for Slow {
+impl orla_kernel::Backend for Slow {
     fn name(&self) -> &'static str {
         "slow"
     }
 
     fn prepare(
         &self,
-        module: &orla_runtime::Validated,
-    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+        module: &orla_kernel::Validated,
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
         std::thread::sleep(std::time::Duration::from_millis(40));
-        orla_runtime::Backend::prepare(&orla_cpu::CpuBackend, module)
+        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
     }
 
     fn execute(
         &self,
-        prepared: &dyn orla_runtime::Prepared,
-        module: &orla_runtime::Validated,
-        invocation: &orla_runtime::Invocation,
-        scope: &mut orla_runtime::Scope<'_>,
-    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
-        orla_runtime::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        prepared: &dyn orla_kernel::Prepared,
+        module: &orla_kernel::Validated,
+        invocation: &orla_kernel::Invocation,
+        scope: &mut orla_kernel::Scope<'_>,
+    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
+        orla_kernel::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
     }
 }
 
@@ -2695,7 +2695,7 @@ fn a_change_is_answered_once_it_stands_and_nothing_waits_for_it() {
         )
     };
     std::fs::write(&scene, text("0.1")).unwrap();
-    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Slow));
+    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Slow));
     let mut session = orla_session::Session::open_with(&scene, None, runtime);
     session.sync();
     session.set_background(true);

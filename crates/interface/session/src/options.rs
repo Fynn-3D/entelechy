@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_runtime::{Runtime, Value};
+use orla_kernel::{Runtime, Value};
 
 use crate::{Allowance, Limits, Session, parse_allow};
 
@@ -32,7 +32,7 @@ pub struct SessionOptions {
     pub allow: Vec<Allowance>,
     /// The capabilities a Kernel may be given, when the command line
     /// names them (`--grant`); every capability otherwise.
-    pub grants: Option<orla_runtime::Capabilities>,
+    pub grants: Option<orla_kernel::Capabilities>,
 }
 
 impl Default for SessionOptions {
@@ -71,11 +71,11 @@ impl SessionOptions {
             "--grant" => {
                 let grants = self.grants.get_or_insert_with(Default::default);
                 for name in value(arg)?.split(',').filter(|name| !name.is_empty()) {
-                    let capability: orla_runtime::Capability =
+                    let capability: orla_kernel::Capability =
                         name.trim().parse().map_err(|_| {
                             format!(
                                 "--grant takes capabilities ({}), not `{name}`",
-                                orla_runtime::Capability::ALL.map(|c| c.name()).join(", ")
+                                orla_kernel::Capability::ALL.map(|c| c.name()).join(", ")
                             )
                         })?;
                     grants.insert(capability);

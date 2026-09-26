@@ -3,7 +3,7 @@
 //! the generation the agent expects, and a rejected change leaves the
 //! running version alive.
 
-use orla_runtime::{Expect, Generation};
+use orla_kernel::{Expect, Generation};
 use serde_json::{Value as Json, json};
 
 use orla_session::Session;
@@ -230,7 +230,7 @@ pub(crate) fn publish_begin(
 
 /// What a finished `publish` answers.
 pub(crate) fn published_json(
-    published: Result<std::sync::Arc<orla_runtime::KernelVersion>, orla_session::Diagnostic>,
+    published: Result<std::sync::Arc<orla_kernel::KernelVersion>, orla_session::Diagnostic>,
 ) -> Result<Json, Json> {
     let version = published.map_err(|e| diagnostic_json(&e))?;
     Ok(json!({ "id": version.id().to_string(), "generation": version.generation().0 }))

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use orla_runtime::Context;
+use orla_kernel::Context;
 use orla_session::{Event, Session};
 
 const USAGE: &str = "\
@@ -138,7 +138,7 @@ fn main() -> ExitCode {
         Some("version") => {
             println!(
                 "orla.api = {}\norla.language = {}\norla.ir = {}\norla.package = {}",
-                orla_runtime::ABI_VERSION,
+                orla_kernel::ABI_VERSION,
                 orla_language::LANGUAGE_VERSION,
                 orla_ir::IR_VERSION,
                 orla_session::PACKAGE_VERSION
@@ -1026,7 +1026,7 @@ fn evaluate_and_export(
                 // that is already running.
                 // What measuring a node costs before the node does
                 // anything comes off every line; see
-                // `orla_runtime::Backend::measurement_floor`.
+                // `orla_kernel::Backend::measurement_floor`.
                 let floor = session.measurement_floor().as_secs_f64() * 1000.0;
                 // Where each ran, why when it left the main backend, and
                 // what that carried between Host memory and a device.

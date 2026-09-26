@@ -1,7 +1,7 @@
 //! A request as its operation reads it: the fields it names, and one way
 //! of saying that one is missing or of the wrong kind.
 
-use orla_runtime::KernelId;
+use orla_kernel::KernelId;
 use serde_json::Value as Json;
 
 use crate::wire::failure;

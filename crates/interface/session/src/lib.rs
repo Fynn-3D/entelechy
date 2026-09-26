@@ -45,7 +45,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use orla_formats::ppm;
-use orla_runtime::{Generation, KernelId};
+use orla_kernel::{Generation, KernelId};
 
 pub use history::{Attempt, Change, Origin, Record};
 pub use options::SessionOptions;
@@ -99,9 +99,9 @@ pub struct StateCopy {
     /// Its port.
     pub port: String,
     /// The element layout.
-    pub schema: orla_runtime::Schema,
+    pub schema: orla_kernel::Schema,
     /// The extent.
-    pub domain: orla_runtime::Domain,
+    pub domain: orla_kernel::Domain,
     /// The Kernel's words, one per scalar.
     pub words: Vec<u32>,
 }
@@ -135,7 +135,7 @@ pub use check::{Checked, check_document};
 /// `best` passed over for it, each with why.
 pub struct Built {
     /// The runtime.
-    pub runtime: orla_runtime::Runtime,
+    pub runtime: orla_kernel::Runtime,
     /// The device's display, when the backend has one.
     pub display: Option<orla_gpu::present::Display>,
     /// The backends tried first and passed over, as `name: why`.
@@ -145,8 +145,8 @@ pub struct Built {
 /// A `publish` being prepared ([`Session::publish_later`]), finished by
 /// [`Session::publishing`].
 pub struct Publishing {
-    ticket: orla_runtime::Ticket,
-    expect: orla_runtime::Expect,
+    ticket: orla_kernel::Ticket,
+    expect: orla_kernel::Expect,
     source: String,
 }
 
@@ -234,7 +234,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             words: DEFAULT_BUDGET_WORDS,
-            work: orla_runtime::DEFAULT_WORK,
+            work: orla_kernel::DEFAULT_WORK,
         }
     }
 }
@@ -257,7 +257,7 @@ impl Limits {
             "--memory" => self.words = budget_of_megabytes(whole("mebibytes")? as usize),
             "--work" => {
                 let millions = whole("millions of iterations")?;
-                let most = orla_runtime::MAX_WORK / 1_000_000;
+                let most = orla_kernel::MAX_WORK / 1_000_000;
                 if millions > most {
                     return Err(format!(
                         "--work is at most {most} million iterations, found {millions}"
@@ -488,7 +488,7 @@ pub enum SessionError {
     /// No scene has been loaded successfully.
     NoScene,
     /// The Host rejected an import.
-    Host(orla_runtime::HostError),
+    Host(orla_kernel::HostError),
     /// A resident image could not be brought back for observation.
     Observe(String),
 }

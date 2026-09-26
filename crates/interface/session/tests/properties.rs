@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use orla_conformance::random::Rng;
-use orla_runtime::Context;
+use orla_kernel::Context;
 use orla_session::Session;
 
 fn steps() -> usize {

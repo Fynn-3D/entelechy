@@ -47,7 +47,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use orla_graph::Report;
-use orla_runtime::{Context, Handle, InputState, Runtime};
+use orla_kernel::{Context, Handle, InputState, Runtime};
 
 use crate::Session;
 
@@ -111,7 +111,7 @@ pub enum Step {
         /// Parameter name.
         name: String,
         /// The value.
-        value: orla_runtime::Value,
+        value: orla_kernel::Value,
     },
     /// Check a field of an element of a node's output after the last frame.
     ExpectElement {
@@ -242,16 +242,16 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     "left" => 0,
                     "right" => 1,
                     "middle" => 2,
-                    "south" => orla_runtime::pad::SOUTH,
-                    "east" => orla_runtime::pad::EAST,
-                    "west" => orla_runtime::pad::WEST,
-                    "north" => orla_runtime::pad::NORTH,
-                    "l1" => orla_runtime::pad::LEFT_SHOULDER,
-                    "r1" => orla_runtime::pad::RIGHT_SHOULDER,
-                    "l3" => orla_runtime::pad::LEFT_THUMB,
-                    "r3" => orla_runtime::pad::RIGHT_THUMB,
-                    "start" => orla_runtime::pad::START,
-                    "select" => orla_runtime::pad::SELECT,
+                    "south" => orla_kernel::pad::SOUTH,
+                    "east" => orla_kernel::pad::EAST,
+                    "west" => orla_kernel::pad::WEST,
+                    "north" => orla_kernel::pad::NORTH,
+                    "l1" => orla_kernel::pad::LEFT_SHOULDER,
+                    "r1" => orla_kernel::pad::RIGHT_SHOULDER,
+                    "l3" => orla_kernel::pad::LEFT_THUMB,
+                    "r3" => orla_kernel::pad::RIGHT_THUMB,
+                    "start" => orla_kernel::pad::START,
+                    "select" => orla_kernel::pad::SELECT,
                     _ => {
                         return Err(error(
                             "button is `left`, `right`, `middle`, or a pad's `south`, `east`, \

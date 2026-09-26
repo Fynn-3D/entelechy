@@ -198,7 +198,7 @@ impl Evaluator {
     /// never for a hidden download of a scene's geometry.
     pub(super) fn domain_values(
         node: &Node,
-        manifest: &orla_runtime::Manifest,
+        manifest: &orla_kernel::Manifest,
         expr: &DomainExpr,
         runtime: &mut Runtime,
         inputs: &[Handle],

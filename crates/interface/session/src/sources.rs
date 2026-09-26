@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use orla_kernel::KernelId;
 use orla_language::{Document, Kernel};
-use orla_runtime::KernelId;
 
 use crate::store::Store;
 

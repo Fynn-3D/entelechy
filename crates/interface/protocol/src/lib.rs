@@ -175,7 +175,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
 mod tests {
     use super::*;
     use crate::wire::diagnostic_json;
-    use orla_runtime::Value;
+    use orla_kernel::Value;
 
     /// The table at the top of this module is the protocol's contract.
     /// It names every operation the server answers, the server answers

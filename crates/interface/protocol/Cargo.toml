@@ -18,7 +18,7 @@ orla-graph = { path = "../../core/graph" }
 orla-ir = { path = "../../core/ir" }
 orla-language = { path = "../../frontend/language" }
 orla-scene = { path = "../../frontend/scene" }
-orla-runtime = { path = "../../core/runtime" }
+orla-kernel = { path = "../../core/kernel" }
 serde_json = "1"
 
 [lints]

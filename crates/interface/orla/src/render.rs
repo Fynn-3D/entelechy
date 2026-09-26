@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_runtime::{Context, Handle};
+use orla_kernel::{Context, Handle};
 
 use orla_formats::{png, wav};
 use orla_session::Session;

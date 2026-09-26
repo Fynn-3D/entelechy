@@ -30,7 +30,7 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "w
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "fragile-send-sync-non-atomic-wasm"] }
 
 [dev-dependencies]
-orla-runtime = { path = "../../core/runtime" }
+orla-kernel = { path = "../../core/kernel" }
 orla-cpu = { path = "../../backends/cpu" }
 orla-compiler = { path = "../../frontend/compiler" }
 orla-conformance = { path = "../../backends/conformance" }

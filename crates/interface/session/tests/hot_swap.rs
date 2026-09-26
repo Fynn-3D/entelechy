@@ -1,4 +1,4 @@
-use orla_runtime::{Context, Domain, Expect, Generation, Invocation, KernelId, Runtime, Value};
+use orla_kernel::{Context, Domain, Expect, Generation, Invocation, KernelId, Runtime, Value};
 
 fn source(red: &str) -> String {
     format!(
@@ -12,8 +12,8 @@ fn id() -> KernelId {
 
 fn run(
     runtime: &mut Runtime,
-    version: &orla_runtime::KernelVersion,
-    input: orla_runtime::Handle,
+    version: &orla_kernel::KernelVersion,
+    input: orla_kernel::Handle,
 ) -> [f32; 4] {
     let invocation = Invocation {
         inputs: vec![input],
@@ -174,7 +174,7 @@ fn background_preparation_resolves_through_tickets() {
 
 #[test]
 fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
-    use orla_runtime::NativeOp;
+    use orla_kernel::NativeOp;
     let mut runtime = cpu(1 << 16);
     let raster = runtime.kernel(&NativeOp::Rasterize.id()).unwrap();
     assert_eq!(raster.generation(), Generation(0));
@@ -207,7 +207,7 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
     let host = runtime.host_mut();
     let vertices = host
         .adopt(
-            orla_runtime::FieldData::from_storage(
+            orla_kernel::FieldData::from_storage(
                 orla_rules::raster::vertex_schema(),
                 Domain::Rows(3),
                 words,
@@ -217,7 +217,7 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
         .unwrap();
     let triangles = host
         .adopt(
-            orla_runtime::FieldData::from_storage(
+            orla_kernel::FieldData::from_storage(
                 orla_rules::raster::triangle_schema(),
                 Domain::Rows(1),
                 vec![0, 1, 2],
@@ -254,25 +254,25 @@ fn native_operations_are_published_by_the_runtime_and_cannot_be_replaced() {
 }
 
 /// A runtime on the reference backend, as a session opens one.
-fn cpu(budget_words: usize) -> orla_runtime::Runtime {
-    orla_runtime::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
+fn cpu(budget_words: usize) -> orla_kernel::Runtime {
+    orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
 }
 
 /// Compiles and publishes a Kernel as a session does: the runtime takes
 /// validated IR, and compiling is the caller's step.
 fn load(
-    runtime: &mut orla_runtime::Runtime,
+    runtime: &mut orla_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_runtime::KernelVersion> {
+) -> std::sync::Arc<orla_kernel::KernelVersion> {
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
 
 /// Compiles and prepares a Kernel without publishing it.
 fn prepare(
-    runtime: &orla_runtime::Runtime,
+    runtime: &orla_kernel::Runtime,
     source: &str,
-) -> Result<orla_runtime::Candidate, orla_runtime::PrepareError> {
+) -> Result<orla_kernel::Candidate, orla_kernel::PrepareError> {
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.prepare_module(module, source)
 }
@@ -281,26 +281,26 @@ fn prepare(
 /// runtime must refuse to pass on.
 struct Lossy;
 
-impl orla_runtime::Backend for Lossy {
+impl orla_kernel::Backend for Lossy {
     fn name(&self) -> &'static str {
         "lossy"
     }
 
     fn prepare(
         &self,
-        module: &orla_runtime::Validated,
-    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
-        orla_runtime::Backend::prepare(&orla_cpu::CpuBackend, module)
+        module: &orla_kernel::Validated,
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
+        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
     }
 
     fn execute(
         &self,
-        prepared: &dyn orla_runtime::Prepared,
-        module: &orla_runtime::Validated,
+        prepared: &dyn orla_kernel::Prepared,
+        module: &orla_kernel::Validated,
         invocation: &Invocation,
-        scope: &mut orla_runtime::Scope<'_>,
-    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
-        let mut outputs = orla_runtime::Backend::execute(
+        scope: &mut orla_kernel::Scope<'_>,
+    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
+        let mut outputs = orla_kernel::Backend::execute(
             &orla_cpu::CpuBackend,
             prepared,
             module,
@@ -316,7 +316,7 @@ impl orla_runtime::Backend for Lossy {
 
 #[test]
 fn a_backend_that_answers_with_the_wrong_count_of_fields_is_refused() {
-    let mut runtime = orla_runtime::Runtime::with_backend(1 << 12, Box::new(Lossy));
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 12, Box::new(Lossy));
     let version = load(
         &mut runtime,
         "kernel test.two@1 { requires { field.write; } output a: Image; output b: Grid<Float>; compute { return { a: vec4(1.0, 0.0, 0.0, 1.0), b: 2.0 }; } }",
@@ -348,29 +348,29 @@ fn a_backend_that_answers_with_the_wrong_count_of_fields_is_refused() {
 /// a live session must survive.
 struct Brittle;
 
-impl orla_runtime::Backend for Brittle {
+impl orla_kernel::Backend for Brittle {
     fn name(&self) -> &'static str {
         "brittle"
     }
 
     fn prepare(
         &self,
-        module: &orla_runtime::Validated,
-    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+        module: &orla_kernel::Validated,
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
         if module.manifest.id.to_string().contains("panics") {
             panic!("the backend could not handle this module");
         }
-        orla_runtime::Backend::prepare(&orla_cpu::CpuBackend, module)
+        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
     }
 
     fn execute(
         &self,
-        prepared: &dyn orla_runtime::Prepared,
-        module: &orla_runtime::Validated,
+        prepared: &dyn orla_kernel::Prepared,
+        module: &orla_kernel::Validated,
         invocation: &Invocation,
-        scope: &mut orla_runtime::Scope<'_>,
-    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
-        orla_runtime::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        scope: &mut orla_kernel::Scope<'_>,
+    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
+        orla_kernel::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
     }
 }
 
@@ -419,7 +419,7 @@ fn a_backend_that_panics_preparing_rejects_the_kernel_and_the_worker_lives() {
     assert_eq!(runtime.kernel(&id()).unwrap().generation(), Generation(2));
 }
 
-fn compile_ok(source: &str) -> orla_runtime::Validated {
+fn compile_ok(source: &str) -> orla_kernel::Validated {
     orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"))
 }
 
@@ -477,8 +477,8 @@ fn a_kernel_requiring_what_is_not_granted_is_refused_and_the_running_one_stays()
     let first = load(&mut runtime, &source("c.r"));
     runtime.set_grants(
         [
-            orla_runtime::Capability::FieldRead,
-            orla_runtime::Capability::FieldWrite,
+            orla_kernel::Capability::FieldRead,
+            orla_kernel::Capability::FieldWrite,
         ]
         .into_iter()
         .collect(),
@@ -505,7 +505,7 @@ fn a_kernel_requiring_what_is_not_granted_is_refused_and_the_running_one_stays()
     };
     assert!(matches!(
         refused,
-        Err(orla_runtime::PrepareError::NotGranted { .. })
+        Err(orla_kernel::PrepareError::NotGranted { .. })
     ));
     assert_eq!(
         runtime.kernel(&id()).unwrap().generation(),

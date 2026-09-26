@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orla_graph::Graph;
-use orla_runtime::{FieldData, Handle, Host};
+use orla_kernel::{FieldData, Handle, Host};
 
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
@@ -431,8 +431,8 @@ impl Inputs {
             let words: Vec<u32> = text.chars().map(|c| c as u32).collect();
             let chars = words.len();
             let data = FieldData::from_storage(
-                orla_runtime::Schema::new(vec![orla_runtime::Scalar::Int]),
-                orla_runtime::Domain::Rows(chars as u32),
+                orla_kernel::Schema::new(vec![orla_kernel::Scalar::Int]),
+                orla_kernel::Domain::Rows(chars as u32),
                 words,
             );
             match data.and_then(|data| host.adopt(data)) {
@@ -459,7 +459,7 @@ fn kept_as(data: FieldData, ty: &str) -> Result<FieldData, String> {
     else {
         return Ok(data);
     };
-    let encoding = orla_runtime::Encoding::parse(name.trim())
+    let encoding = orla_kernel::Encoding::parse(name.trim())
         .ok_or_else(|| format!("`{name}` is not an encoding"))?;
     let schema = data
         .schema()

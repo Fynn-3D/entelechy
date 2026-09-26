@@ -2,7 +2,7 @@
 //! count or a value says to stop, a measurement, and the state and window
 //! runs see.
 
-use orla_runtime::Context;
+use orla_kernel::Context;
 use serde_json::{Value as Json, json};
 
 use orla_session::Session;
@@ -199,7 +199,7 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
         pinned.push(node.clone());
     }
     let demand: std::collections::BTreeSet<orla_graph::NodeId> = watched.iter().cloned().collect();
-    let started = orla_runtime::clock::now();
+    let started = orla_kernel::clock::now();
     let outcome = (|| -> Result<Json, Json> {
         let mut ran = 0u64;
         let mut stopped = "frames";
@@ -255,7 +255,7 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
             "target": until.as_ref().map(|(target, ..)| target.clone()),
             "value": value,
             "saved": saved,
-            "millis": orla_runtime::clock::since(started).as_secs_f64() * 1000.0,
+            "millis": orla_kernel::clock::since(started).as_secs_f64() * 1000.0,
             "report": report,
         }))
     })();

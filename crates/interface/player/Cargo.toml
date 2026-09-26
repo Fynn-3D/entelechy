@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 orla-session = { path = "../../interface/session" }
 orla-protocol = { path = "../../interface/protocol" }
-orla-runtime = { path = "../../core/runtime" }
+orla-kernel = { path = "../../core/kernel" }
 orla-gpu = { path = "../../backends/gpu" }
 orla-graph = { path = "../../core/graph" }
 winit = "0.30.13"

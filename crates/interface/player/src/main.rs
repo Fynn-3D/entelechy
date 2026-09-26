@@ -299,7 +299,7 @@ impl Player {
     /// Shows a picture: directly from the device when it is resident
     /// and a presenter exists, otherwise by downloading it and blitting.
     /// Answers where it landed, how, and whether that took a download.
-    fn show(&mut self, output: orla_runtime::Handle) -> (Option<Placement>, &'static str, bool) {
+    fn show(&mut self, output: orla_kernel::Handle) -> (Option<Placement>, &'static str, bool) {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
             let host = self.session.runtime().host();
             let resident = host.resident(output).ok().flatten();
@@ -356,7 +356,7 @@ impl Player {
 
     /// Hands the frame's sound output to the sound card, opening it on
     /// first need.
-    fn sound(&mut self, sound: Option<orla_runtime::Handle>) {
+    fn sound(&mut self, sound: Option<orla_kernel::Handle>) {
         if !self.audio_allowed || self.audio_failed {
             return;
         }

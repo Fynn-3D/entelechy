@@ -18,7 +18,7 @@
 //! on each machine (gilrs's names, a browser's standard mapping) is the
 //! device's to say; what it means is here.
 
-use orla_runtime::{InputState, pad};
+use orla_kernel::{InputState, pad};
 
 /// A pad's button, by where it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

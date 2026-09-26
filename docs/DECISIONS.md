@@ -573,7 +573,7 @@ replay or agent sees a different world, only a slower one. A
 WebAssembly backend (IR compiled to WebAssembly, the JIT's place in a
 browser) is a separate step, with its own evidence.
 
-**Where.** [`later.rs`](../crates/core/runtime/src/later.rs) and
+**Where.** [`later.rs`](../crates/core/kernel/src/later.rs) and
 `set_background` in the runtime,
 [`store.rs`](../crates/interface/session/src/store.rs) in the session,
 `stdin_into` in the protocol's transport. Held by the example replays,
@@ -611,7 +611,7 @@ hot reload is the same act in a page.
 **Where.** [`store.rs`](../crates/interface/session/src/store.rs) in
 the session; `orla_files`, `orla_files_put` and `orla_open_files` in
 the [C ABI](../crates/interface/ffi/include/orla.h);
-[`clock.rs`](../crates/core/runtime/src/clock.rs) in the runtime;
+[`clock.rs`](../crates/core/kernel/src/clock.rs) in the runtime;
 `OrlaInPage` in the web bridge. Held by the ABI's test (a scene from
 paths no disk has, a Kernel put again) and the web bridge's, which runs
 the text example in a headless Chrome in the page.

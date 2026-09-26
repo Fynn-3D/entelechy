@@ -3,7 +3,7 @@
 //! for reading.
 
 use orla_graph::Source;
-use orla_runtime::Shape;
+use orla_kernel::Shape;
 use serde_json::{Value as Json, json};
 
 use orla_formats::base64::{base64, unbase64};
@@ -403,7 +403,7 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
             .get("source")
             .and_then(Json::as_str)
             .ok_or_else(|| bad("a law's source"))?;
-        laws.push((id, orla_runtime::Generation(generation), source.to_owned()));
+        laws.push((id, orla_kernel::Generation(generation), source.to_owned()));
     }
     let mut states = Vec::new();
     for state in json
@@ -417,7 +417,7 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
                 .and_then(Json::as_str)
                 .ok_or_else(|| bad(&format!("a state's {key}")))
         };
-        let schema: orla_runtime::Schema = text("layout")?
+        let schema: orla_kernel::Schema = text("layout")?
             .parse()
             .map_err(|e: String| bad(&format!("a state's layout: {e}")))?;
         // Three whole sides, each one a Field may have: nothing dropped,
@@ -433,9 +433,9 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
             return Err(bad("a state's extent is three whole sides"));
         };
         let domain = match text("shape")? {
-            "Rows" => orla_runtime::Domain::Rows(w),
-            "Grid" => orla_runtime::Domain::Grid(w, h),
-            "Volume" => orla_runtime::Domain::Volume(w, h, d),
+            "Rows" => orla_kernel::Domain::Rows(w),
+            "Grid" => orla_kernel::Domain::Grid(w, h),
+            "Volume" => orla_kernel::Domain::Volume(w, h, d),
             other => return Err(bad(&format!("`{other}` is no shape"))),
         };
         let bytes = unbase64(text("data")?).map_err(|e| bad(&format!("a state's data: {e}")))?;

@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orla_graph::Report;
-use orla_runtime::{Context, Expect, FieldData, KernelId, KernelVersion};
+use orla_kernel::{Context, Expect, FieldData, KernelId, KernelVersion};
 
 use super::Session;
 use crate::Event;
@@ -50,7 +50,7 @@ impl Session {
     /// A Kernel's source at `generation`: the registry's when that is
     /// the one running, else the remembered one, when a change the
     /// session remembers published it.
-    pub fn source_at(&self, id: &KernelId, generation: orla_runtime::Generation) -> Option<String> {
+    pub fn source_at(&self, id: &KernelId, generation: orla_kernel::Generation) -> Option<String> {
         match self.runtime.kernel(id) {
             Some(version) if version.generation() == generation => {
                 Some(version.source().to_owned())

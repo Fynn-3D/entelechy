@@ -1,5 +1,5 @@
 [package]
-name = "orla-runtime"
+name = "orla-kernel"
 description = "Orla Kernel Runtime: prepare, publish, execute, and atomically replace Kernel versions"
 version.workspace = true
 edition.workspace = true

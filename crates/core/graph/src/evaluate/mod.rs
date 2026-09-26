@@ -20,7 +20,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use orla_abi::{Capability, Context, Domain, FieldData, Handle, Invocation, Type, Value};
-use orla_runtime::{
+use orla_kernel::{
     ExecutionError, Generation, HostError, KernelId, KernelVersion, PrepareError, Run, Runtime,
     Ticket,
 };
@@ -494,7 +494,7 @@ impl Evaluator {
             // Every node run on the frame, in order, with what its runs
             // answered besides their outputs: whether a device's run failed,
             // known once the device is waited for, before anything commits.
-            let mut checks: Vec<(NodeId, Vec<Box<dyn orla_runtime::Check>>)> = Vec::new();
+            let mut checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)> = Vec::new();
             runtime.take_checks();
             let mut pending = Vec::new();
             for group in &groups {
@@ -564,7 +564,7 @@ impl Evaluator {
                 }
                 let placement = runtime.placement(&group.version);
                 runtime.take_moved();
-                let started = orla_runtime::clock::now();
+                let started = orla_kernel::clock::now();
                 let outputs = match group.chain {
                     Some(chain) => {
                         runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
@@ -579,7 +579,7 @@ impl Evaluator {
                 // own time otherwise.
                 let took = runtime
                     .last_measured()
-                    .unwrap_or_else(|| orla_runtime::clock::since(started));
+                    .unwrap_or_else(|| orla_kernel::clock::since(started));
                 timings.push((node.id.clone(), took));
                 checks.push((node.id.clone(), runtime.take_checks()));
                 let moved = runtime.take_moved();

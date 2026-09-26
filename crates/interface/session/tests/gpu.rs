@@ -132,9 +132,9 @@ fn mismatch(cpu: &[[f32; 4]], gpu: &[[f32; 4]], tolerance: f32) -> f32 {
 /// Compiles and publishes a Kernel as a session does: the runtime takes
 /// validated IR, and compiling is the caller's step.
 fn load(
-    runtime: &mut orla_runtime::Runtime,
+    runtime: &mut orla_kernel::Runtime,
     source: &str,
-) -> std::sync::Arc<orla_runtime::KernelVersion> {
+) -> std::sync::Arc<orla_kernel::KernelVersion> {
     let module = orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"));
     runtime.load(module, source).unwrap()
 }
@@ -181,7 +181,7 @@ fn the_examples_match_within_tolerance() {
 fn chains_and_state_stay_resident_until_observed() {
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
     load(
         &mut runtime,
         "kernel test.zero@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
@@ -243,7 +243,7 @@ fn chains_and_state_stay_resident_until_observed() {
 fn fields_flow_through_the_gpu_exactly() {
     let Some(gpu) = gpu() else { return };
     let backend: Box<dyn Backend> = Box::new(gpu);
-    let mut runtime = orla_runtime::Runtime::with_backend(1 << 24, backend);
+    let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, backend);
     load(
         &mut runtime,
         "kernel test.seed@1 { requires { field.write; } output result: Rows<Particle>; struct Particle { position: Vec2; life: Int; alive: Bool; } compute { let i = element(); return Particle { position: vec2(float(i), float(i) * 0.5), life: i * 3, alive: i / 2 * 2 == i }; } }",

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use orla_runtime::Context;
+use orla_kernel::Context;
 
 use crate::Session;
 

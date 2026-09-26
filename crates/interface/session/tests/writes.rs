@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orla_runtime::{Context, Value};
+use orla_kernel::{Context, Value};
 use orla_session::{Event, Session};
 
 const KERNELS: &str = "

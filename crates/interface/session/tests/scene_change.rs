@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_runtime::{Context, KernelId};
+use orla_kernel::{Context, KernelId};
 use orla_session::{Event, Memory, Session};
 
 /// The root: `k.src` makes a picture under the output `port`, and a
@@ -29,7 +29,7 @@ fn sub(body: &str) -> String {
     )
 }
 
-fn open(files: &Arc<Memory>, runtime: orla_runtime::Runtime) -> Session {
+fn open(files: &Arc<Memory>, runtime: orla_kernel::Runtime) -> Session {
     let store: Arc<dyn orla_session::Store> = Arc::clone(files) as _;
     Session::open_in(store, Path::new("/s/scene.osn"), None, runtime)
 }
@@ -97,7 +97,7 @@ fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
     let files = Arc::new(Memory::default());
     put(&files, "scene.osn", &root("result"));
     put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
@@ -126,15 +126,15 @@ fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
 /// replacement that validates and fails to prepare.
 struct Deliberate;
 
-impl orla_runtime::Backend for Deliberate {
+impl orla_kernel::Backend for Deliberate {
     fn name(&self) -> &'static str {
         "deliberate"
     }
 
     fn prepare(
         &self,
-        module: &orla_runtime::Validated,
-    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+        module: &orla_kernel::Validated,
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
         std::thread::sleep(std::time::Duration::from_millis(20));
         if module
             .manifest
@@ -144,17 +144,17 @@ impl orla_runtime::Backend for Deliberate {
         {
             return Err("this device refuses it".into());
         }
-        orla_runtime::Backend::prepare(&orla_cpu::CpuBackend, module)
+        orla_kernel::Backend::prepare(&orla_cpu::CpuBackend, module)
     }
 
     fn execute(
         &self,
-        prepared: &dyn orla_runtime::Prepared,
-        module: &orla_runtime::Validated,
-        invocation: &orla_runtime::Invocation,
-        scope: &mut orla_runtime::Scope<'_>,
-    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
-        orla_runtime::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+        prepared: &dyn orla_kernel::Prepared,
+        module: &orla_kernel::Validated,
+        invocation: &orla_kernel::Invocation,
+        scope: &mut orla_kernel::Scope<'_>,
+    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
+        orla_kernel::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
     }
 }
 
@@ -166,7 +166,7 @@ fn a_scene_whose_kernel_fails_off_the_frame_is_refused_and_the_old_one_runs() {
     let files = Arc::new(Memory::default());
     put(&files, "scene.osn", &root("result"));
     put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
@@ -202,7 +202,7 @@ fn a_claimed_scene_landing_later_is_the_requests() {
     let files = Arc::new(Memory::default());
     put(&files, "scene.osn", &root("result"));
     put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
@@ -253,7 +253,7 @@ fn a_param_is_judged_by_the_newest_scene_read() {
     };
     let files = Arc::new(Memory::default());
     put(&files, "scene.osn", &scene("speed", "0.25"));
-    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);
@@ -265,11 +265,11 @@ fn a_param_is_judged_by_the_newest_scene_read() {
     session.sync();
     assert!(
         session
-            .set_param("speed", orla_runtime::Value::Float(2.0))
+            .set_param("speed", orla_kernel::Value::Float(2.0))
             .is_err()
     );
     session
-        .set_param("zoom", orla_runtime::Value::Float(5.0))
+        .set_param("zoom", orla_kernel::Value::Float(5.0))
         .expect("the newest scene declares it");
     for _ in 0..5_000 {
         if session
@@ -283,7 +283,7 @@ fn a_param_is_judged_by_the_newest_scene_read() {
     }
     assert_eq!(
         session.params().get("zoom"),
-        Some(&orla_runtime::Value::Float(5.0)),
+        Some(&orla_kernel::Value::Float(5.0)),
         "the value set is the scene's once it runs"
     );
     assert!(session.params().get("speed").is_none());
@@ -336,7 +336,7 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
     let files = Arc::new(Memory::default());
     put(&files, "scene.osn", &root("result"));
     put(&files, "sub.osn", &sub("return sample(source);"));
-    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    let runtime = orla_kernel::Runtime::with_backend(1 << 20, Box::new(Deliberate));
     let mut session = open(&files, runtime);
     session.sync();
     session.set_background(true);

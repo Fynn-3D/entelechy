@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use orla_formats::ppm;
 use orla_graph::{EvaluateError, Evaluator, Graph, Report};
-use orla_runtime::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
+use orla_kernel::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
 
 use crate::store::Store;
 use crate::{
@@ -404,7 +404,7 @@ impl Session {
     /// Where every node of the scene runs: the backend, and why it is not
     /// the main one when it is not. A node whose Kernel is not published
     /// is left out.
-    pub fn placements(&self) -> Vec<(String, orla_runtime::Placement)> {
+    pub fn placements(&self) -> Vec<(String, orla_kernel::Placement)> {
         let Some(graph) = self.scene.graph() else {
             return Vec::new();
         };
@@ -501,7 +501,7 @@ impl Session {
     pub fn publishing(
         &mut self,
         publishing: &Publishing,
-    ) -> Option<Result<std::sync::Arc<orla_runtime::KernelVersion>, crate::Diagnostic>> {
+    ) -> Option<Result<std::sync::Arc<orla_kernel::KernelVersion>, crate::Diagnostic>> {
         let prepared = self.runtime.poll(publishing.ticket)?;
         let published = prepared
             .map_err(|e| crate::Diagnostic::new(e.to_string()))
@@ -545,7 +545,7 @@ impl Session {
         &mut self,
         source: &str,
         expect: Expect,
-    ) -> Result<std::sync::Arc<orla_runtime::KernelVersion>, crate::Diagnostic> {
+    ) -> Result<std::sync::Arc<orla_kernel::KernelVersion>, crate::Diagnostic> {
         let publishing = self.publish_later(source, expect)?;
         loop {
             if let Some(published) = self.publishing(&publishing) {
@@ -562,7 +562,7 @@ impl Session {
     pub fn prepare_source(
         &self,
         source: &str,
-    ) -> Result<orla_runtime::Candidate, crate::Diagnostic> {
+    ) -> Result<orla_kernel::Candidate, crate::Diagnostic> {
         self.scene
             .prepare_source(source, &self.kernels, &self.runtime)
     }
@@ -722,7 +722,7 @@ impl Session {
 
     /// What measuring one node costs before the node does anything, so
     /// a profile can take it off what it prints; see
-    /// [`orla_runtime::Backend::measurement_floor`]. Ask after a
+    /// [`orla_kernel::Backend::measurement_floor`]. Ask after a
     /// measured run: a backend only knows once it has tried.
     pub fn measurement_floor(&self) -> std::time::Duration {
         self.runtime().measurement_floor()
@@ -873,7 +873,7 @@ impl Session {
     /// A Field's data as the Host holds it, brought back from the device
     /// first when one holds it: what a front reads to answer or show,
     /// asking the session rather than reaching into its runtime.
-    pub fn field(&mut self, handle: Handle) -> Result<&orla_runtime::FieldData, SessionError> {
+    pub fn field(&mut self, handle: Handle) -> Result<&orla_kernel::FieldData, SessionError> {
         self.runtime
             .materialize(handle)
             .map_err(|e| SessionError::Observe(e.to_string()))?;
@@ -893,7 +893,7 @@ impl Session {
                 host.schema(*handle).is_ok_and(|s| s.is_pixel())
                     && host
                         .domain(*handle)
-                        .is_ok_and(|d| d.shape() == orla_runtime::Shape::Grid && d.depth() == 1)
+                        .is_ok_and(|d| d.shape() == orla_kernel::Shape::Grid && d.depth() == 1)
             })
     }
 
@@ -905,12 +905,12 @@ impl Session {
         report.outputs.iter().find_map(|(_, handle)| {
             let rows = host
                 .domain(*handle)
-                .is_ok_and(|d| d.shape() == orla_runtime::Shape::Rows);
+                .is_ok_and(|d| d.shape() == orla_kernel::Shape::Rows);
             let schema = host.schema(*handle).ok()?;
             let floats = schema
                 .scalars()
                 .iter()
-                .all(|c| *c == orla_runtime::Scalar::Float);
+                .all(|c| *c == orla_kernel::Scalar::Float);
             let channels = schema.value_words();
             (rows && floats && (1..=2).contains(&channels)).then_some((*handle, channels))
         })
@@ -918,7 +918,7 @@ impl Session {
 
     /// A Field of pixels as an image, brought back from the device first
     /// when one holds it.
-    pub fn picture(&mut self, handle: Handle) -> Result<orla_runtime::Image, SessionError> {
+    pub fn picture(&mut self, handle: Handle) -> Result<orla_kernel::Image, SessionError> {
         self.runtime
             .image(handle)
             .map_err(|e| SessionError::Observe(e.to_string()))
@@ -930,7 +930,7 @@ impl Session {
         image: Handle,
         x: u32,
         y: u32,
-    ) -> Result<orla_runtime::Pixel, SessionError> {
+    ) -> Result<orla_kernel::Pixel, SessionError> {
         observe::read_pixel(&mut self.runtime, image, x, y)
     }
 }

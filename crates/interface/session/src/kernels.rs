@@ -13,8 +13,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use orla_kernel::{Candidate, Expect, KernelId, Runtime, Ticket};
 use orla_language::Kernel;
-use orla_runtime::{Candidate, Expect, KernelId, Runtime, Ticket};
 
 use crate::sources::located;
 use crate::store::{Stamp, Store};
@@ -618,7 +618,7 @@ impl Kernels {
     /// The Kernel as its document wrote it, compiled without the
     /// optimizer; `None` for one no document owns, or one whose source
     /// no longer compiles on its own.
-    pub(crate) fn unoptimized(&self, id: &KernelId) -> Option<orla_runtime::Validated> {
+    pub(crate) fn unoptimized(&self, id: &KernelId) -> Option<orla_kernel::Validated> {
         let kernel = self
             .documents
             .values()

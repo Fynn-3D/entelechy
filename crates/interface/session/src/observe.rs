@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use orla_formats::ppm;
 use orla_graph::{Evaluator, Graph, Node, NodeId};
-use orla_runtime::{Context, Handle, KernelVersion, Runtime, Validated, Value};
+use orla_kernel::{Context, Handle, KernelVersion, Runtime, Validated, Value};
 
 use crate::SessionError;
 
@@ -239,13 +239,13 @@ pub(crate) fn trace_element(
     // It runs with its work accounted, as a backend runs it.
     let module = orla_ir::account(module).map_err(|error| error.to_string())?;
     // What it requires, of what the session grants, as an execution.
-    let granted: orla_runtime::Capabilities = module
+    let granted: orla_kernel::Capabilities = module
         .manifest
         .requires
         .iter()
         .filter(|capability| runtime.grants().contains(*capability))
         .collect();
-    let mut scope = orla_runtime::Scope::new(runtime.host_mut(), granted);
+    let mut scope = orla_kernel::Scope::new(runtime.host_mut(), granted);
     orla_cpu::trace(&module, &invocation, &mut scope, at).map_err(|error| error.to_string())
 }
 
@@ -343,7 +343,7 @@ pub(crate) fn read_pixel(
     image: Handle,
     x: u32,
     y: u32,
-) -> Result<orla_runtime::Pixel, SessionError> {
+) -> Result<orla_kernel::Pixel, SessionError> {
     // Four words out of the Field, not a copy of the picture: a replay
     // checks a handful of pixels a frame, and the picture it checks them
     // in is thirty-three megabytes at 1920x1080. The Field comes to the
@@ -360,7 +360,7 @@ pub(crate) fn read_pixel(
     }
     let (width, height) = (domain.width(), domain.height() * domain.depth());
     if x >= width || y >= height {
-        return Err(SessionError::Host(orla_runtime::HostError::OutOfBounds {
+        return Err(SessionError::Host(orla_kernel::HostError::OutOfBounds {
             x,
             y,
             width,

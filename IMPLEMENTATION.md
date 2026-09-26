@@ -45,7 +45,7 @@ backend is held to.
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution tests](crates/backends/cpu/tests/execute.rs), [optimizer tests](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), every replay on `jit` |
 | GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL emission](crates/backends/gpu/src/wgsl/mod.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs); both skip without an adapter; [the names a shader declares](crates/backends/gpu/tests/names.rs), without one |
-| Kernel Runtime | [runtime](crates/core/runtime/src/lib.rs), [off-frame runs](crates/core/runtime/src/later.rs); takes validated IR and the backend it is given | [hot swap](crates/interface/session/tests/hot_swap.rs), [async](crates/interface/session/tests/later.rs), [mixed clocks](crates/interface/session/tests/mixed.rs) |
+| Kernel Runtime | [runtime](crates/core/kernel/src/lib.rs), [off-frame runs](crates/core/kernel/src/later.rs); takes validated IR and the backend it is given | [hot swap](crates/interface/session/tests/hot_swap.rs), [async](crates/interface/session/tests/later.rs), [mixed clocks](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain expressions](crates/frontend/scene/src/domain.rs) | [lowering tests](crates/frontend/scene/src/lib.rs), [every form lowered as recorded](crates/frontend/scene/tests/surface.rs) |
 | Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/interface/session/tests/composition.rs), written as documents |
 | Session | [session](crates/interface/session/src/session.rs): [scene](crates/interface/session/src/scene.rs), [kernel ledger](crates/interface/session/src/kernels.rs), [inputs](crates/interface/session/src/inputs.rs), [source resolution](crates/interface/session/src/sources.rs), [observation](crates/interface/session/src/observe.rs); [bench](crates/interface/session/src/bench.rs), [file formats](crates/interface/formats/src/lib.rs) | [session tests](crates/interface/orla/tests/session.rs), [layers](crates/interface/orla/tests/layers.rs) |
@@ -122,7 +122,7 @@ What these packages do needed no engine feature; keep it that way.
   object only the backend understands. The GPU binds resident inputs,
   uploads Host inputs once, and leaves outputs resident, so committed state
   ping-pongs on the device. Words return only at observation boundaries
-  through [`Runtime::image`](crates/core/runtime/src/lib.rs) — export, protocol
+  through [`Runtime::image`](crates/core/kernel/src/lib.rs) — export, protocol
   `read`, replay `expect`, present — which is where device work is waited
   for ([residency test](crates/backends/gpu/tests/parity.rs)).
 - Presentation of a resident output is a blit on the device; without a
@@ -164,7 +164,7 @@ or a `Long` outside a map, a reduction, or a scatter of `Long`s under
 one), or on a device without 64-bit integers. Their inputs come to the Host and their outputs upload when
 read ([test](crates/interface/session/tests/mixed.rs)). A report says where every
 node ran, why when it left the main backend, and the bytes the trip
-carried ([`Runtime::placement`](crates/core/runtime/src/lib.rs),
+carried ([`Runtime::placement`](crates/core/kernel/src/lib.rs),
 [traffic test](crates/backends/gpu/tests/parity.rs)); a session says it when the
 scene loads, once per change ([routed test](crates/interface/orla/tests/session.rs)),
 and a replay can pin it (`expect placed`). On the device a `Long` is
@@ -189,7 +189,7 @@ and nothing emitted for a `Long` may use `select`
   [composition tests](crates/interface/session/tests/composition.rs)).
 - A backend answers with one Field per declared output or not at all:
   the runtime releases what a backend gave and fails the execution when
-  the count differs ([`held_to`](crates/core/runtime/src/lib.rs),
+  the count differs ([`held_to`](crates/core/kernel/src/lib.rs),
   [test](crates/interface/session/tests/hot_swap.rs)).
 - Repetition is fusion without inlining: the same Kernel placed over its
   own output, same generation, params, bindings and domain, nothing else
@@ -310,7 +310,7 @@ Represented in the IR, and so on every backend:
   pass the budget. Where work is counted is IR:
   [`account`](crates/core/ir/src/account.rs) places `Op::Spend` after every
   loop and `Op::Look` where an element looks, and the runtime accounts a
-  module as it prepares it ([`prepare_on`](crates/core/runtime/src/lib.rs)),
+  module as it prepares it ([`prepare_on`](crates/core/kernel/src/lib.rs)),
   so a backend implements two operations and never the rule. It fails
   with `ExecutionError::Exhausted` at the same element, or `Overrun` for
   the run, whose sum is exact
@@ -434,7 +434,7 @@ Represented in the IR, and so on every backend:
   reference.
 - Async nodes run on a Host of their own thread and are adopted when they
   land, keyed like a cache entry; the frame carries the last output
-  meanwhile ([later](crates/core/runtime/src/later.rs)).
+  meanwhile ([later](crates/core/kernel/src/later.rs)).
 - A Kernel can be traced: `let` bindings are a side table
   (`Function.bindings`, renumbered through fusion) and `orla_cpu::trace`
   runs one element of the unoptimized Kernel and reads them back
@@ -450,13 +450,13 @@ Represented in the IR, and so on every backend:
 
 - A platform without a primitive does the same work another way: where
   no thread can be started (WebAssembly), an async run is done before
-  `start_run` returns ([later](crates/core/runtime/src/later.rs)), the
+  `start_run` returns ([later](crates/core/kernel/src/later.rs)), the
   preparation worker is not started, and `serve` reads each request in
   turn; where links cannot be resolved, a file's one name is its path
   folded ([store](crates/interface/session/src/store.rs)); where
   nothing loads the code a JIT writes, the session has no JIT; where
   there is no clock (a page), nothing is timed
-  ([clock](crates/core/runtime/src/clock.rs)). The replays run under
+  ([clock](crates/core/kernel/src/clock.rs)). The replays run under
   `wasmtime` on the interpreter (HANDOFF's verification).
 - Where Orla is WebAssembly, the JIT writes WebAssembly
   ([wasm](crates/backends/jit/src/wasm)) that the host loads into Orla's
@@ -485,7 +485,7 @@ Represented in the IR, and so on every backend:
   round trip where it resolves zeros (Metal through wgpu does), with
   `Backend::measurement_floor` subtracted from every line; a frame's cost
   is `bench`'s question, not the profile's
-  ([runtime](crates/core/runtime/src/lib.rs), [bench](crates/interface/session/src/bench.rs)).
+  ([runtime](crates/core/kernel/src/lib.rs), [bench](crates/interface/session/src/bench.rs)).
 - The GPU buffer pile serves the smallest buffer big enough, never more
   than twice the size; no emitted shader asks a buffer its length
   ([`Spare::take`](crates/backends/gpu/src/lib.rs)).

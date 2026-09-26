@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use orla_graph::EvaluateError;
-use orla_runtime::Context;
+use orla_kernel::Context;
 use orla_session::{Event, Session};
 
 fn example() -> PathBuf {
@@ -701,7 +701,7 @@ output result <- copy.result;
     assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("loaded photo from"), "{stderr}");
     let (field, _) = orla_formats::read(&dir.join("copy.field"), None).unwrap();
-    assert_eq!(field.domain(), orla_runtime::Domain::Grid(2, 1));
+    assert_eq!(field.domain(), orla_kernel::Domain::Grid(2, 1));
     assert_eq!(f32::from_bits(field.storage()[0]), 1.0);
     assert_eq!(
         std::fs::read(dir.join("copy.ppm")).unwrap(),
@@ -735,7 +735,7 @@ output result <- copy.result;
     )
     .unwrap();
     let (rows, detail) = orla_formats::read(&dir.join("hit.wav"), Some("Rows<Vec2>")).unwrap();
-    assert_eq!(rows.domain(), orla_runtime::Domain::Rows(2));
+    assert_eq!(rows.domain(), orla_kernel::Domain::Rows(2));
     assert!(detail.ends_with("at 22050 Hz"), "{detail}");
     let output = Command::new(orla)
         .arg("run")
@@ -776,7 +776,7 @@ output result <- blocks.result;
     assert_eq!(session.graph().unwrap().nodes.len(), 3);
     assert!(session.evaluate(&Context::default()).is_ok());
     session
-        .set_param("level", orla_runtime::Value::Int(3))
+        .set_param("level", orla_kernel::Value::Int(3))
         .unwrap();
     let events = session.sync();
     assert!(
@@ -801,7 +801,7 @@ output result <- blocks.result;
     );
     // A param that does not size the graph does not lower it again.
     session
-        .set_param("other", orla_runtime::Value::Int(1))
+        .set_param("other", orla_kernel::Value::Int(1))
         .unwrap();
     assert!(
         !session
@@ -1335,17 +1335,17 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
     assert_eq!(read(&mut session, zeros), vec![0.0; 4]);
     // Both the fill and the loop's count follow their graph params.
     session
-        .set_param("level", orla_runtime::Value::Float(1.0))
+        .set_param("level", orla_kernel::Value::Float(1.0))
         .unwrap();
     session
-        .set_param("depth", orla_runtime::Value::Int(10))
+        .set_param("depth", orla_kernel::Value::Int(10))
         .unwrap();
     session.sync();
     let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(read(&mut session, report.output), vec![11.0; 4]);
     // A count of zero yields what the loop carries.
     session
-        .set_param("depth", orla_runtime::Value::Int(0))
+        .set_param("depth", orla_kernel::Value::Int(0))
         .unwrap();
     session.sync();
     let report = session.evaluate(&Context::default()).unwrap();
@@ -1638,7 +1638,7 @@ fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
             0.2126 + f64::from(step) * 0.000_001
         );
         session
-            .publish_source(&source, orla_runtime::Expect::Any)
+            .publish_source(&source, orla_kernel::Expect::Any)
             .unwrap_or_else(|error| panic!("{error}"));
         if step % 4 == 0 {
             session.evaluate(&context).unwrap();
@@ -1869,7 +1869,7 @@ fn a_parameter_of_any_value_type_is_set_by_its_layout() {
     let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/cube/scene.osn");
     let mut session = Session::open(&scene, None, 1 << 22);
     assert!(session.sync().contains(&Event::SceneLoaded));
-    use orla_runtime::Value;
+    use orla_kernel::Value;
     let columns = Value::Record(vec![
         Value::Record(vec![
             Value::Int(3),
@@ -1917,7 +1917,7 @@ fn a_parameter_of_any_value_type_is_set_by_its_layout() {
 /// device without doubles, for a session that has one to route around.
 struct NoDoubles(orla_cpu::CpuBackend);
 
-impl orla_runtime::Backend for NoDoubles {
+impl orla_kernel::Backend for NoDoubles {
     fn name(&self) -> &'static str {
         "device"
     }
@@ -1929,17 +1929,17 @@ impl orla_runtime::Backend for NoDoubles {
     fn prepare(
         &self,
         module: &orla_ir::Validated,
-    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+    ) -> Result<Box<dyn orla_kernel::Prepared>, String> {
         self.0.prepare(module)
     }
     fn execute(
         &self,
-        prepared: &dyn orla_runtime::Prepared,
+        prepared: &dyn orla_kernel::Prepared,
         module: &orla_ir::Validated,
-        invocation: &orla_runtime::Invocation,
-        scope: &mut orla_runtime::Scope<'_>,
-    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
-        orla_runtime::Backend::execute(&self.0, prepared, module, invocation, scope)
+        invocation: &orla_kernel::Invocation,
+        scope: &mut orla_kernel::Scope<'_>,
+    ) -> Result<Vec<orla_kernel::Handle>, orla_kernel::ExecutionError> {
+        orla_kernel::Backend::execute(&self.0, prepared, module, invocation, scope)
     }
 }
 
@@ -1956,7 +1956,7 @@ output result <- plain.result;
 ",
     )
     .unwrap();
-    let runtime = orla_runtime::Runtime::with_backends(
+    let runtime = orla_kernel::Runtime::with_backends(
         1 << 20,
         Box::new(NoDoubles(orla_cpu::CpuBackend)),
         Some(Box::new(orla_cpu::CpuBackend)),
@@ -2034,14 +2034,12 @@ output result <- m.result;
                 .map_err(|error| error.to_string())
         };
         answers.push(evaluate(session));
-        session.set_param("k", orla_runtime::Value::Int(1)).unwrap();
+        session.set_param("k", orla_kernel::Value::Int(1)).unwrap();
         // Element 2 overflows, and again the next time: nothing computed
         // from the failed run is kept.
         answers.push(evaluate(session));
         answers.push(evaluate(session));
-        session
-            .set_param("k", orla_runtime::Value::Int(10))
-            .unwrap();
+        session.set_param("k", orla_kernel::Value::Int(10)).unwrap();
         answers.push(evaluate(session));
     }
     assert_eq!(answers[1], answers[0]);
@@ -2512,11 +2510,11 @@ output result <- gray.result;
     let mut session = Session::open(&scene, None, 1 << 20);
     session.sync();
     session
-        .set_param("level", orla_runtime::Value::Float(1.0))
+        .set_param("level", orla_kernel::Value::Float(1.0))
         .unwrap();
     assert_eq!(
         session.params().get("level"),
-        Some(&orla_runtime::Value::Float(1.0))
+        Some(&orla_kernel::Value::Float(1.0))
     );
     // The document stops declaring it: the value held goes with it.
     std::fs::write(
@@ -2528,7 +2526,7 @@ output result <- gray.result;
     assert!(session.sync().contains(&Event::SceneLoaded));
     assert!(session.params().is_empty(), "{:?}", session.params());
     let refused = session
-        .set_param("level", orla_runtime::Value::Float(1.0))
+        .set_param("level", orla_kernel::Value::Float(1.0))
         .unwrap_err();
     assert!(
         refused.contains("`level` is not a param the scene declares"),
@@ -2587,8 +2585,8 @@ fn a_refused_scene_edit_leaves_the_scene_running() {
     let mut runtime = Session::runtime_for("cpu", orla_session::Limits::default()).unwrap();
     runtime.set_grants(
         [
-            orla_runtime::Capability::FieldRead,
-            orla_runtime::Capability::FieldWrite,
+            orla_kernel::Capability::FieldRead,
+            orla_kernel::Capability::FieldWrite,
         ]
         .into_iter()
         .collect(),

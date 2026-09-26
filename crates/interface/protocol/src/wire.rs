@@ -4,7 +4,7 @@
 
 use orla_graph::{Binding, ParamValue, Source};
 use orla_ir::{Type, Validated};
-use orla_runtime::{Context, Generation, InputState, KernelId, Manifest, Value};
+use orla_kernel::{Context, Generation, InputState, KernelId, Manifest, Value};
 use serde_json::{Value as Json, json};
 
 use orla_session::{Event, Session};
@@ -308,7 +308,7 @@ pub(crate) fn manifest_json(
 pub(crate) fn graph_json(
     graph: &orla_graph::Graph,
     overrides: &std::collections::BTreeMap<String, Value>,
-    placements: &[(String, orla_runtime::Placement)],
+    placements: &[(String, orla_kernel::Placement)],
 ) -> Json {
     let source = |source: &Source| source.to_string();
     let placed = |node: &str| placements.iter().find(|(id, _)| id == node).map(|(_, p)| p);
@@ -335,9 +335,9 @@ pub(crate) fn graph_json(
                 ParamValue::Graph(p) => json!({ "param": p }),
             })).collect::<serde_json::Map<_, _>>(),
             "domain": node.domain.as_ref().map(|d| match d {
-                orla_graph::DomainSpec::Literal(orla_runtime::Domain::Rows(n)) => json!([n]),
-                orla_graph::DomainSpec::Literal(orla_runtime::Domain::Grid(w, h)) => json!([w, h]),
-                orla_graph::DomainSpec::Literal(orla_runtime::Domain::Volume(w, h, d)) => json!([w, h, d]),
+                orla_graph::DomainSpec::Literal(orla_kernel::Domain::Rows(n)) => json!([n]),
+                orla_graph::DomainSpec::Literal(orla_kernel::Domain::Grid(w, h)) => json!([w, h]),
+                orla_graph::DomainSpec::Literal(orla_kernel::Domain::Volume(w, h, d)) => json!([w, h, d]),
                 orla_graph::DomainSpec::Expr(expr) => json!(expr.to_string()),
             }),
             "async": node.is_async,

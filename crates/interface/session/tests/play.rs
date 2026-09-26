@@ -69,7 +69,7 @@ fn shown(play: &mut Play, session: &mut Session) -> Box<orla_session::play::Show
 }
 
 /// The red of the picture's first pixel: the count over a hundred.
-fn red(session: &mut Session, picture: orla_runtime::Handle) -> f32 {
+fn red(session: &mut Session, picture: orla_kernel::Handle) -> f32 {
     session.field(picture).unwrap();
     f32::from_bits(session.runtime().host().element(picture, 0).unwrap()[0])
 }

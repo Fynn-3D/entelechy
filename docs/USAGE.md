@@ -580,4 +580,4 @@ is watching.
 - IR operations and validation rules: [the IR](../crates/core/ir/src/lib.rs) and
   [its validator](../crates/core/ir/src/validate.rs).
 - Document format: [the contract](DOCUMENTS.md), [the frontend](../crates/frontend/language/src/lib.rs), and [scene lowering](../crates/frontend/scene/src/lib.rs).
-- Publication semantics: [the runtime](../crates/core/runtime/src/lib.rs).
+- Publication semantics: [the runtime](../crates/core/kernel/src/lib.rs).

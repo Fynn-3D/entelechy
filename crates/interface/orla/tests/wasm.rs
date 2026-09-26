@@ -42,7 +42,7 @@ const PACKAGES: &[&str] = &[
     "orla-host",
     "orla-ir",
     "orla-rules",
-    "orla-runtime",
+    "orla-kernel",
     "orla-graph",
     "orla-language",
     "orla-compiler",

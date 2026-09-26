@@ -12,7 +12,7 @@ use crate::wire::{failure, graph_json, manifest_json};
 /// The session at a glance, and the versions it speaks.
 pub(crate) fn status(session: &Session) -> Result<Json, Json> {
     Ok(json!({
-        "versions": { "api": orla_runtime::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": orla_session::PACKAGE_VERSION },
+        "versions": { "api": orla_kernel::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": orla_session::PACKAGE_VERSION },
         "backend": session.runtime().backend_name(),
         "scene": session.root().display().to_string(),
         "watched": session.watched().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
@@ -27,7 +27,7 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
 
 /// A published version's manifest, its structs named: a Kernel's from
 /// its module, a native operation's from its own table.
-fn version_json(version: &orla_runtime::KernelVersion) -> Json {
+fn version_json(version: &orla_kernel::KernelVersion) -> Json {
     let native = version.native().map(|op| op.structs());
     let structs = match (version.module(), &native) {
         (Some(module), _) => &module.structs[..],
@@ -55,7 +55,7 @@ pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json>
     // remembers of the change that published it.
     if let Some(generation) = request.get("generation").and_then(Json::as_u64) {
         let source = session
-            .source_at(&id, orla_runtime::Generation(generation))
+            .source_at(&id, orla_kernel::Generation(generation))
             .ok_or_else(|| {
                 failure(format!(
                     "{id} generation {generation} is not one the session remembers"
@@ -83,7 +83,7 @@ pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json
         orla_session::Origin::Protocol(channel) => json!({ "protocol": channel }),
         orla_session::Origin::Local => json!("local"),
     };
-    let generation = |g: &Option<orla_runtime::Generation>| g.map(|g| g.0);
+    let generation = |g: &Option<orla_kernel::Generation>| g.map(|g| g.0);
     let changes: Vec<Json> = session
         .changes_since(since)
         .iter()

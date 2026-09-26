@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orla_graph::Graph;
-use orla_runtime::{Runtime, Value};
+use orla_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
@@ -756,7 +756,7 @@ impl Scene {
         source: &str,
         kernels: &Kernels,
         runtime: &Runtime,
-    ) -> Result<orla_runtime::Candidate, Diagnostic> {
+    ) -> Result<orla_kernel::Candidate, Diagnostic> {
         let module = self.compile_source(source, kernels)?;
         runtime
             .prepare_module(module, source)
@@ -769,7 +769,7 @@ impl Scene {
         &self,
         source: &str,
         kernels: &Kernels,
-    ) -> Result<orla_runtime::Validated, Diagnostic> {
+    ) -> Result<orla_kernel::Validated, Diagnostic> {
         let mut document =
             orla_language::parse_document(source).map_err(|e| Diagnostic::from(&e))?;
         if document.kernels.len() != 1 {
