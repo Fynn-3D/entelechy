@@ -160,7 +160,7 @@ in the browser on WebAssembly and WebGPU.
 
 ## License
 
-MIT or Apache-2.0, at your option.
+MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option.
 
 > **Keep the world stable.**
 > **Keep the laws replaceable.**
