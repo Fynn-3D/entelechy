@@ -735,11 +735,11 @@ form merge
 form node
   node name: kernel.id@1 { port <- source.result; param = 2; domain = vec2(w, h); }
 form output
-  output result <- node.port;   output kept <- node.port to "saves/n.field";
+  output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to "saves/n.field";
 form package
   package name@1 { language = 1; ir = 1; }
 form param
-  param speed: Float = 1.0;   node n: k@1 { gain = speed; }
+  param gain: Float = 1.0;
 form prefix
   prefix with sum { return value; }
 form previous

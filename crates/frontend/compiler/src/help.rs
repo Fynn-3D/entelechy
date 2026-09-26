@@ -327,38 +327,26 @@ pub fn forms() -> Vec<Form> {
         form(
             "input",
             "kernel",
-            "input source: Image;   input counts: Rows<Int>;",
-            "A Field the Kernel reads, bound by the node that runs it (`source <- other.result;`).",
+            "input x: Image;   = \"atlas.png\";   = text \"ORLA\";   = frames \"clip/\" at 30;",
+            "In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, or frame by frame from a directory.",
         ),
         form(
             "param",
             "kernel",
             "param gain: Float = 1.0;",
-            "A value the node that runs the Kernel may set (`gain = 0.5;`), with its default.",
+            "In a Kernel, a value the node that runs it may set (`gain = 0.5;`), with its default; in a scene, a value the caller sets (`--param`, the protocol's `param`) and its nodes read by name.",
         ),
         form(
             "output",
             "kernel",
-            "output result: Grid<Vec4>;",
-            "A Field the Kernel writes, one element per element of its domain; a map may write several.",
+            "output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to \"saves/n.field\";",
+            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, and one written `to` a file is saved after each evaluation that changed it, where allowed.",
         ),
         form(
             "type",
             "kernel",
             "type Cells = Grid<Int>;   struct Cell { alive: Int, age: Float }",
             "A name for a port type, or a struct of named fields, shared by the Kernels of a document.",
-        ),
-        form(
-            "output",
-            "graph",
-            "output result <- node.port;   output kept <- node.port to \"saves/n.field\";",
-            "A scene's named result; the first picture is what it shows, and one written `to` a file is saved after each evaluation that changed it, where allowed.",
-        ),
-        form(
-            "param",
-            "graph",
-            "param speed: Float = 1.0;   node n: k@1 { gain = speed; }",
-            "A scene's parameter, set by the caller (`--param`, the protocol's `param`) and read by its nodes.",
         ),
         form(
             "let",
@@ -517,12 +505,6 @@ pub fn forms() -> Vec<Form> {
             "The documents whose Kernels and declarations this one brings in: a file, a directory, or a package.",
         ),
         form(
-            "input",
-            "document",
-            "input x: Image;   = \"atlas.png\";   = text \"ORLA\";   = frames \"clip/\" at 30;",
-            "A Field the caller supplies, or one the Host reads from a file, from text, or frame by frame from a directory.",
-        ),
-        form(
             "package",
             "document",
             "package name@1 { language = 1; ir = 1; }",
@@ -577,7 +559,7 @@ mod tests {
             assert!(!form.shape.is_empty(), "{} has no shape", form.name);
             assert!(form.doc.ends_with('.'), "{} reads oddly", form.name);
             assert!(
-                ["expression", "kernel", "graph", "document"].contains(&form.kind),
+                ["type", "expression", "kernel", "graph", "document"].contains(&form.kind),
                 "{} is written where?",
                 form.name
             );
