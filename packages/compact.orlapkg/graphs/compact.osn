@@ -1,10 +1,10 @@
-// A row of flags in, the kept indices and their count out. Place it with
-//   node kept: graph "../../packages/compact.orlapkg/graphs/compact.osn" {
-//       flags <- visible.result;
-//   }
-// and size what does the work with
-//   domain = value(count) * per_thing;
-// reading `kept.indices` to know which thing each element belongs to.
+//! A row of flags in, the kept indices and their count out. Place it with
+//!   node kept: graph "../../packages/compact.orlapkg/graphs/compact.osn" {
+//!       flags <- visible.result;
+//!   }
+//! and size what does the work with
+//!   domain = value(count) * per_thing;
+//! reading `kept.indices` to know which thing each element belongs to.
 use "../kernels/compact.orla";
 
 input flags: Rows<Int>;

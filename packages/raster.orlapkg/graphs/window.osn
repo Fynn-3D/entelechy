@@ -1,11 +1,11 @@
-// The raster preset at the window's size: the surface is the window's
-// extent in pixels, and follows it when it is resized, as a node of
-// `domain = window();` does. Place it with
-//   node raster: graph "../../packages/raster.orlapkg/graphs/window.osn" {
-//       vertices <- project.result;
-//       triangles <- faces.result;
-//   }
-// and read `raster.surface`.
+//! The raster preset at the window's size: the surface is the window's
+//! extent in pixels, and follows it when it is resized, as a node of
+//! `domain = window();` does. Place it with
+//!   node raster: graph "../../packages/raster.orlapkg/graphs/window.osn" {
+//!       vertices <- project.result;
+//!       triangles <- faces.result;
+//!   }
+//! and read `raster.surface`.
 use "../kernels/raster.orla";
 
 input vertices: Rows<Corner>;

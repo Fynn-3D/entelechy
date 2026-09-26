@@ -1,9 +1,9 @@
-// The tiled form of `raster.osn`: a triangle whose box is larger than
-// a `tile` is covered a tile to an invocation, by a pool of `pool`
-// invocations, so a mesh of few large triangles (a model close to the
-// camera, a quad filling the screen) draws in parallel on a device. It
-// costs a pass over every triangle, a prefix and a pass more, so a mesh
-// of small triangles draws faster with `raster.osn`.
+//! The tiled form of `raster.osn`: a triangle whose box is larger than
+//! a `tile` is covered a tile to an invocation, by a pool of `pool`
+//! invocations, so a mesh of few large triangles (a model close to the
+//! camera, a quad filling the screen) draws in parallel on a device. It
+//! costs a pass over every triangle, a prefix and a pass more, so a mesh
+//! of small triangles draws faster with `raster.osn`.
 use "../kernels/raster.orla";
 
 input vertices: Rows<Corner>;

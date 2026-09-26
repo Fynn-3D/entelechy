@@ -1,11 +1,11 @@
-// One clip playing on one skeleton, as one node. Place it with
-//   node posed: graph "../../packages/skin.orlapkg/graphs/pose.osn" {
-//       mesh <- mesh; weights <- weights; skeleton <- skeleton;
-//       clip <- walk; at <- clock.result; rate = 30.0;
-//   }
-// and hand `posed.result` to whatever projects it. Blending two clips
-// wants the Kernels themselves: sample each, `skin.blend@1`, then
-// `skin.palette@1`.
+//! One clip playing on one skeleton, as one node. Place it with
+//!   node posed: graph "../../packages/skin.orlapkg/graphs/pose.osn" {
+//!       mesh <- mesh; weights <- weights; skeleton <- skeleton;
+//!       clip <- walk; at <- clock.result; rate = 30.0;
+//!   }
+//! and hand `posed.result` to whatever projects it. Blending two clips
+//! wants the Kernels themselves: sample each, `skin.blend@1`, then
+//! `skin.palette@1`.
 use "../kernels/skin.orla";
 
 input mesh: Rows<Point>;

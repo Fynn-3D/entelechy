@@ -1,12 +1,12 @@
-// The compact package: how a row of decisions becomes a row of the
-// things decided, gathered to the front, and the count of them.
-//
-// A Kernel can say how many there are — a `domain` reads that number
-// with `value(port)` — but it takes a rank to say which ones. A
-// prefix sum over the flags is that rank, and a scatter puts each kept
-// element where its rank says. The row keeps its length; what is past
-// the count is `NONE`, and nothing reads it because the count sizes
-// whatever runs next.
+//! The compact package: how a row of decisions becomes a row of the
+//! things decided, gathered to the front, and the count of them.
+//!
+//! A Kernel can say how many there are — a `domain` reads that number
+//! with `value(port)` — but it takes a rank to say which ones. A
+//! prefix sum over the flags is that rank, and a scatter puts each kept
+//! element where its rank says. The row keeps its length; what is past
+//! the count is `NONE`, and nothing reads it because the count sizes
+//! whatever runs next.
 package compact@1 { language = 1; ir = 1; }
 
 use "kernels/";

@@ -1,6 +1,6 @@
-// One halving of a mip strip: the level the counter names is written
-// from the level above it, every other texel carried over unchanged.
-// `mip.osn` places this `levels` times.
+//! One halving of a mip strip: the level the counter names is written
+//! from the level above it, every other texel carried over unchanged.
+//! `mip.osn` places this `levels` times.
 use "../kernels/mip.orla";
 
 input strip: Image;

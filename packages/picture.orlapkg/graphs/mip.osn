@@ -1,12 +1,12 @@
-// The mip strip of a square texture, as a sub-graph. Place it with
-//   node strip: graph "../../packages/picture.orlapkg/graphs/mip.osn" {
-//       source <- texture.result; side = 256; levels = 7;
-//   }
-// and read it with the functions in `mip.orla`.
-//
-// A placement does not know which repetition it is, so the level being
-// written rides beside the strip as a row of one Int and is carried on
-// with it.
+//! The mip strip of a square texture, as a sub-graph. Place it with
+//!   node strip: graph "../../packages/picture.orlapkg/graphs/mip.osn" {
+//!       source <- texture.result; side = 256; levels = 7;
+//!   }
+//! and read it with the functions in `mip.orla`.
+//!
+//! A placement does not know which repetition it is, so the level being
+//! written rides beside the strip as a row of one Int and is carried on
+//! with it.
 use "../kernels/mip.orla";
 
 input source: Image;

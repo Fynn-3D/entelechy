@@ -1,13 +1,13 @@
-// Vertex and triangle rows in, the surface out: for every pixel, the
-// nearest triangle's depth, normal and uv, perspective-correct, and its
-// row as `id`. Place it with
-//   node raster: graph "../../packages/raster.orlapkg/graphs/raster.osn" {
-//       vertices <- project.result;
-//       triangles <- faces.result;
-//       width = 320;
-//       height = 240;
-//   }
-// and read `raster.surface` where `native.rasterize@1` gave `surface`.
+//! Vertex and triangle rows in, the surface out: for every pixel, the
+//! nearest triangle's depth, normal and uv, perspective-correct, and its
+//! row as `id`. Place it with
+//!   node raster: graph "../../packages/raster.orlapkg/graphs/raster.osn" {
+//!       vertices <- project.result;
+//!       triangles <- faces.result;
+//!       width = 320;
+//!       height = 240;
+//!   }
+//! and read `raster.surface` where `native.rasterize@1` gave `surface`.
 use "../kernels/raster.orla";
 
 input vertices: Rows<Corner>;

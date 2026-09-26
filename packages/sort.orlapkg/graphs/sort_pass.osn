@@ -1,6 +1,6 @@
-// One bit of the sort: the rank of the zeros, then every element to
-// its place. `sort.osn` places this once a bit, carrying both the
-// permutation and the bit it is on.
+//! One bit of the sort: the rank of the zeros, then every element to
+//! its place. `sort.osn` places this once a bit, carrying both the
+//! permutation and the bit it is on.
 use "../kernels/sort.orla";
 
 input order: Rows<Int>;

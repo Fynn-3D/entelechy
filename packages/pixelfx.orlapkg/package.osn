@@ -1,6 +1,6 @@
-// The pixelfx package: a coarse pixel grid and a four-colour palette, and
-// the NES look made of both as a graph preset. A scene uses the package
-// for its Kernels and places the preset by path.
+//! The pixelfx package: a coarse pixel grid and a four-colour palette, and
+//! the NES look made of both as a graph preset. A scene uses the package
+//! for its Kernels and places the preset by path.
 package pixelfx@1 { language = 1; ir = 1; }
 
 use "kernels/";

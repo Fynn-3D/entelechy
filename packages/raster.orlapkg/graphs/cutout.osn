@@ -1,13 +1,13 @@
-// The raster preset with a cutout: as `raster.osn`, except that a
-// fragment whose alpha in `mask` at its own uv is below `cutout` is not
-// drawn, so what is behind it shows — leaves, fences, hair. Place it with
-//   node raster: graph "../../packages/raster.orlapkg/graphs/cutout.osn" {
-//       vertices <- project.result;
-//       triangles <- faces.result;
-//       mask <- leaves;
-//       cutout = 0.5;
-//   }
-// and read `raster.surface` where `native.rasterize@2` gave `surface`.
+//! The raster preset with a cutout: as `raster.osn`, except that a
+//! fragment whose alpha in `mask` at its own uv is below `cutout` is not
+//! drawn, so what is behind it shows — leaves, fences, hair. Place it with
+//!   node raster: graph "../../packages/raster.orlapkg/graphs/cutout.osn" {
+//!       vertices <- project.result;
+//!       triangles <- faces.result;
+//!       mask <- leaves;
+//!       cutout = 0.5;
+//!   }
+//! and read `raster.surface` where `native.rasterize@2` gave `surface`.
 use "../kernels/raster.orla";
 
 input vertices: Rows<Corner>;

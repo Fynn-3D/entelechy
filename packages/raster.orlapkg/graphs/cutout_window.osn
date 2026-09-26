@@ -1,5 +1,5 @@
-// The cutout preset at the window's size, as `window.osn` is the plain
-// one's: the surface follows the window when it is resized.
+//! The cutout preset at the window's size, as `window.osn` is the plain
+//! one's: the surface follows the window when it is resized.
 use "../kernels/raster.orla";
 
 input vertices: Rows<Corner>;

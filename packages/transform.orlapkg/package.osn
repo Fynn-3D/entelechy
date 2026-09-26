@@ -1,8 +1,8 @@
-// The transform package: rotations as quaternions and rigid transforms
-// as matrices, as functions any Kernel calls. A rig poses joints with
-// them, a camera orbits with them, a particle turns with them; each
-// would otherwise write them again. There are no Kernels here, only the
-// arithmetic they share.
+//! The transform package: rotations as quaternions and rigid transforms
+//! as matrices, as functions any Kernel calls. A rig poses joints with
+//! them, a camera orbits with them, a particle turns with them; each
+//! would otherwise write them again. There are no Kernels here, only the
+//! arithmetic they share.
 package transform@1 { language = 1; ir = 1; }
 
 use "kernels/";

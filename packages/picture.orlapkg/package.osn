@@ -1,9 +1,9 @@
-// The picture package: the reads and the writes a scene does to
-// pictures that are not its own subject. Wrapped addressing, where
-// `at_linear`'s clamp is the wrong edge; tone mapping, and the display
-// graph that is usually the last node of a scene; mip levels, the
-// strip and the reads that pick one, for a surface running away from
-// the eye.
+//! The picture package: the reads and the writes a scene does to
+//! pictures that are not its own subject. Wrapped addressing, where
+//! `at_linear`'s clamp is the wrong edge; tone mapping, and the display
+//! graph that is usually the last node of a scene; mip levels, the
+//! strip and the reads that pick one, for a surface running away from
+//! the eye.
 package picture@1 { language = 1; ir = 1; }
 
 use "kernels/";

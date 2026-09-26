@@ -1,12 +1,12 @@
-// The permutation that orders `keys`, least significant bit first.
-// Place it with
-//   node order: graph "../../packages/sort.orlapkg/graphs/sort.osn" {
-//       keys <- cell.result; bits = 12;
-//   }
-// and read a row through it: `at(bodies, at(order, slot))`.
-//
-// `bits` is how many bits of the key matter; the keys must be
-// non-negative and below `2^bits`.
+//! The permutation that orders `keys`, least significant bit first.
+//! Place it with
+//!   node order: graph "../../packages/sort.orlapkg/graphs/sort.osn" {
+//!       keys <- cell.result; bits = 12;
+//!   }
+//! and read a row through it: `at(bodies, at(order, slot))`.
+//!
+//! `bits` is how many bits of the key matter; the keys must be
+//! non-negative and below `2^bits`.
 use "../kernels/sort.orla";
 
 input keys: Rows<Int>;
