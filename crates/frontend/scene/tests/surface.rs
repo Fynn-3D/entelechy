@@ -1,18 +1,13 @@
-//! What a scene document may say is a contract with every scene already
-//! written. `tests/surface/` holds documents that between them write
-//! every form a scene has — wiring, values, state, inline Kernels,
-//! extents, Field nodes, native operations, placed graphs, repetition,
-//! inputs the Host reads — and beside each, the Graph it lowers to at
-//! `LANGUAGE_VERSION`.
+//! A scene document's surface is a contract with every written scene.
+//! `tests/surface/` holds documents covering every scene form (wiring,
+//! values, state, inline Kernels, extents, Field nodes, native operations,
+//! placed graphs, repetition, Host inputs), each beside the Graph it
+//! lowers to at `LANGUAGE_VERSION`.
 //!
-//! A document that stops lowering, or lowers to something else, breaks
-//! scenes already written, and waits for a new `LANGUAGE_VERSION`. Every
-//! Kernel a document writes in place, a filled Field's included, must
-//! compile: a lowering that does not was never a scene. A new
-//! document is the surface growing. `ORLA_BLESS=1` records what is new
-//! and refuses to record a change to what was recorded until the version
-//! is raised. `parts/` holds documents the others place, which are not
-//! lowered alone.
+//! A changed lowering waits for a new `LANGUAGE_VERSION`. Every Kernel a
+//! document writes in place compiles. `ORLA_BLESS=1` records new
+//! documents and refuses to change recorded ones until the version is
+//! raised. `parts/` holds documents others place, not lowered alone.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -31,10 +26,8 @@ fn relative(path: &Path, base: &Path) -> String {
         .to_string()
 }
 
-/// The document lowered and written out: the Graph as it prints, then
-/// what printing leaves out — the files the Host reads, the frames it
-/// steps, the parameters that size the graph, the Kernels written in
-/// place, and what the document uses.
+/// The document lowered and written out: the printed Graph, then its Host
+/// files, stepped frames, sizing params, inline Kernels and uses.
 fn lowered(path: &Path) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let document = orla_language::parse_document(&text).map_err(|e| e.to_string())?;
@@ -52,8 +45,7 @@ fn lowered(path: &Path) -> Result<String, String> {
         &BTreeMap::new(),
     )
     .map_err(|e| e.to_string())?;
-    // A lowering is only a scene if what it wrote compiles: every Kernel
-    // written in place, a filled Field's among them.
+    // Every Kernel written in place compiles, filled Fields' included.
     for inline in &lowered.inline {
         orla_compiler::compile_kernel(&inline.kernel, Some(&inline.id))
             .map_err(|e| format!("the Kernel `{}` it writes does not compile: {e}", inline.id))?;

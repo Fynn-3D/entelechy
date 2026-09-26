@@ -1,6 +1,5 @@
-//! A node's invocation: its inputs from the cache, the committed state
-//! and the externals, its params and its domain, checked against the
-//! ports its Kernel declares.
+//! A node's invocation (inputs, params, domain), checked against its
+//! Kernel's declared ports.
 
 use super::*;
 
@@ -68,8 +67,8 @@ impl Evaluator {
                     }));
                 }
             };
-            // The bound resource must have the shape and layout the port
-            // declares; the spelling of either side does not matter.
+            // The bound resource must have the port's shape and layout,
+            // however either is spelled.
             let bound_shape = runtime.host().domain(handle)?.shape();
             let bound_schema = runtime.host().schema(handle)?;
             let message = if input.ty.shape != bound_shape {
@@ -114,8 +113,8 @@ impl Evaluator {
                     })?)
                 }
             };
-            // What was given, in the parameter's type: its layout, an
-            // integer standing in for a float, whatever it was spelled as.
+            // The given value in the parameter's type (an integer may
+            // stand for a float).
             let structs = version.module().map_or(&[][..], |module| &module.structs);
             let value = match given {
                 None => param.default.clone(),
@@ -189,13 +188,9 @@ impl Evaluator {
         ))
     }
 
-    /// Reads every number a node's `domain` asks a Field for.
-    ///
-    /// This is the one domain term that is data rather than shape, so it
-    /// is the one that brings a Field to the Host — a wait, where the
-    /// Field is a device's. The port is held to a row of scalars and to
-    /// [`VALUE_MAX_ELEMENTS`] of them so that the wait is for a count and
-    /// never for a hidden download of a scene's geometry.
+    /// Reads every number a node's `domain` asks a Field for, bringing
+    /// the Field to the Host. The port holds a row of at most
+    /// [`VALUE_MAX_ELEMENTS`] scalars.
     pub(super) fn domain_values(
         node: &Node,
         manifest: &orla_kernel::Manifest,
@@ -275,8 +270,8 @@ impl Evaluator {
                 node: producer,
                 port,
             } => {
-                // The producer precedes this node in topological order, so a
-                // missing entry means it never produced this port.
+                // The producer runs first, so a missing entry means it
+                // never produced this port.
                 let cached =
                     self.ledger
                         .entry(producer)

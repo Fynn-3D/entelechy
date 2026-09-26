@@ -1,11 +1,9 @@
-//! What a caller observes of a session without changing what it
-//! computes: an output saved as a file, a pixel, an element's field, an
-//! element traced through its Kernel, a picture exported.
+//! Observations that leave computation unchanged: a saved output, a
+//! pixel, an element's field, an element trace, an exported picture.
 //!
-//! Nothing here sees a session. Each observation is given the parts it
-//! reads — the Graph, the evaluator's cache, the runtime — and nothing
-//! else, so an observation cannot reach the ledger, the inputs or the
-//! scene's documents by accident.
+//! Each observation receives only the parts it reads (the Graph, the
+//! evaluator's cache, the runtime), never the session, so it cannot
+//! reach the ledger, the inputs or the scene's documents.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -16,8 +14,7 @@ use orla_kernel::{Context, Handle, KernelVersion, Runtime, Validated, Value};
 
 use crate::SessionError;
 
-/// A vector's component by name, as a Kernel spells it (`x` or `r` and
-/// the rest): which word it is, and what type it holds.
+/// A vector component by letter (`xyzw` or `rgba`): its word and type.
 fn component_of(ty: orla_ir::Type, name: &str) -> Option<(usize, orla_ir::Type)> {
     use orla_ir::Type;
     let (lanes, element) = match ty {
@@ -34,9 +31,8 @@ fn component_of(ty: orla_ir::Type, name: &str) -> Option<(usize, orla_ir::Type)>
     (name.len() == 1 && at < lanes).then_some((at, element))
 }
 
-/// `node.port[index].field.field` as a replay writes it and the
-/// protocol takes it: the node, the port, the element, and the path
-/// through the struct to a value.
+/// Parses `node.port[index].field.field` (replays and the protocol)
+/// into node, port, element index and field path.
 pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), String> {
     let (head, rest) = text
         .split_once('[')
@@ -57,8 +53,8 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
     Ok((node.0, port, index, path))
 }
 
-/// What a scene output of this name is wired to, when the name is an
-/// output rather than a node.
+/// The source a scene output named `node` is wired to, when `node` is
+/// an output and not a node.
 fn output_source(graph: Option<&Graph>, node: &NodeId, port: &str) -> Option<(NodeId, String)> {
     let graph = graph?;
     if graph.nodes.iter().any(|n| n.id == *node) {
@@ -74,9 +70,8 @@ fn output_source(graph: Option<&Graph>, node: &NodeId, port: &str) -> Option<(No
     }
 }
 
-/// Why a node's output is not there to be saved: the name may be a
-/// placed graph, which is its nodes by the time the graph runs, or a
-/// node of one written without its repetition, or no node at all.
+/// Why a node's output has no value to save: the name is a placed
+/// graph or repeated node, no node, or unevaluated.
 fn why_not_saved(graph: Option<&Graph>, node: &NodeId, port: &str) -> String {
     let Some(graph) = graph else {
         return format!("`{node}.{port}` has no value; no scene is loaded");
@@ -113,8 +108,7 @@ pub(crate) fn save(
     port: &str,
     path: &Path,
 ) -> Result<(), String> {
-    // A scene's own output name stands for what it is wired to, so
-    // `--save settled=...` works with the names the scene reads by.
+    // A scene output name stands for its wired source.
     let (node, port) = match output_source(graph, node, port) {
         Some((node, port)) => (node, port),
         None => (node.clone(), port.to_owned()),
@@ -131,7 +125,7 @@ pub(crate) fn save(
 
 /// Why a Field was not written to a file.
 pub(crate) enum Written {
-    /// The Field could not be brought back from the device.
+    /// Reading the Field back from the device failed.
     Observe(String),
     /// The file's extension names no format.
     Unknown(orla_formats::EncodeError),
@@ -152,9 +146,9 @@ impl std::fmt::Display for Written {
     }
 }
 
-/// Writes a Field to `path` as its extension says, through `store`,
-/// brought back from the device first: the one way a session turns a
-/// Field into a file, for `save` and `export` alike.
+/// Materializes a Field and writes it to `path` in the format its
+/// extension names, through `store`: the session's one Field-to-file
+/// path, for `save` and `export`.
 pub(crate) fn write(
     store: &dyn crate::Store,
     runtime: &mut Runtime,
@@ -197,9 +191,8 @@ pub(crate) fn element_count(
         .map_err(|e| e.to_string())
 }
 
-/// The node a trace runs and the version it runs: refused for a node
-/// the scene does not have, a Kernel not published, or a native
-/// operation, which has no source to walk.
+/// The node and Kernel version a trace runs; a trace requires a scene
+/// node whose published Kernel has a module (not a native operation).
 pub(crate) fn trace_target(
     graph: Option<&Graph>,
     runtime: &Runtime,
@@ -224,8 +217,7 @@ pub(crate) fn trace_target(
     Ok((target, version))
 }
 
-/// The nodes whose Fields a trace of `target` reads, which must be
-/// kept for it.
+/// The nodes whose Fields a trace of `target` reads and so keeps.
 pub(crate) fn trace_sources(target: &Node) -> Vec<NodeId> {
     let mut sources = Vec::new();
     for binding in target.inputs.values() {
@@ -246,10 +238,9 @@ pub(crate) fn trace_sources(target: &Node) -> Vec<NodeId> {
     sources
 }
 
-/// Runs element `at` of `target` on the interpreter over the invocation
-/// an evaluation would give it now. `written` is the Kernel as its
-/// document wrote it, compiled without the optimizer, when a document
-/// owns it; the running module answers otherwise.
+/// Runs element `at` of `target` on the interpreter with the current
+/// invocation. `written` is the owning document's unoptimized module;
+/// without it the running module is traced.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn trace_element(
     graph: &Graph,
@@ -270,15 +261,13 @@ pub(crate) fn trace_element(
             .materialize(*handle)
             .map_err(|error| error.to_string())?;
     }
-    // A trace walks the Kernel as written: the same source without the
-    // optimizer, so its functions are still called and its `let`s are
-    // all there.
+    // Unoptimized, so the trace keeps the source's calls and `let`s.
     let module = written
         .as_ref()
         .unwrap_or_else(|| version.module().expect("a traced Kernel has a module"));
-    // It runs with its work accounted, as a backend runs it.
+    // Work-accounted, as a backend runs it.
     let module = orla_ir::account(module).map_err(|error| error.to_string())?;
-    // What it requires, of what the session grants, as an execution.
+    // Only the required capabilities the session grants.
     let granted: orla_kernel::Capabilities = module
         .manifest
         .requires
@@ -313,21 +302,17 @@ pub(crate) fn element_field(
         .iter()
         .find(|o| o.name == port)
         .ok_or_else(|| format!("`{kernel}` has no output `{port}`"))?;
-    // A Kernel names its structs in its module; a native operation, in
-    // its own table.
+    // Struct table: the module's, or a native operation's own.
     let structs: Vec<orla_ir::StructDef> = match (version.module(), version.native()) {
         (Some(module), _) => module.structs.clone(),
         (None, Some(op)) => op.structs(),
         (None, None) => Vec::new(),
     };
-    // Follow the field path through the struct table to a word offset
-    // and a type.
+    // Follow the path to a word offset and type.
     let mut ty = output.element();
     let mut offset = 0usize;
     let words_of = |ty: Type| orla_ir::schema_of(ty, &structs).map_or(1, |s| s.value_words());
     for field in path {
-        // A struct's field by name, or a vector's component by the
-        // letter the language spells it with.
         if let Some((component, element)) = component_of(ty, field) {
             offset += component;
             ty = element;
@@ -369,10 +354,8 @@ pub(crate) fn read_pixel(
     x: u32,
     y: u32,
 ) -> Result<orla_kernel::Pixel, SessionError> {
-    // Four words out of the Field, not a copy of the picture: a replay
-    // checks a handful of pixels a frame, and the picture it checks them
-    // in is thirty-three megabytes at 1920x1080. The Field comes to the
-    // Host once; every pixel after that is an index.
+    // Reads four words of the materialized Field; the picture is not
+    // copied.
     runtime
         .materialize(image)
         .map_err(|e| SessionError::Observe(e.to_string()))?;

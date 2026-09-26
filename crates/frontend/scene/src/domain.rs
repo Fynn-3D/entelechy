@@ -1,6 +1,5 @@
-//! A node's `domain` as written, accepted into the Graph's own
-//! [`DomainExpr`]: the subset of the expression language a domain may
-//! use, checked where it was written.
+//! A node's written `domain`, accepted into the Graph's [`DomainExpr`]:
+//! the subset of the expression language a domain may use.
 
 use orla_graph::{DomainExpr, DomainOp};
 use orla_language::{BinaryOp, Expr, ExprKind};
@@ -169,9 +168,8 @@ mod tests {
             let printed = expr.to_string();
             assert_eq!(parse(&printed), expr, "{text} printed as {printed}");
         }
-        // A window is whatever size a hand drags it to, so a side that
-        // divides is a fraction half the time; the message says what to
-        // write instead.
+        // An odd window side divides to a fraction; the message names
+        // the fix.
         let odd = |name: &str| match name {
             "window" => Some(Value::Vec2([953.0, 541.0])),
             _ => None,
@@ -188,8 +186,7 @@ mod tests {
                 .unwrap(),
             Domain::Grid(476, 270),
         );
-        // And the smallest window there is leaves a side of nothing,
-        // which the other half of that spelling covers.
+        // A 1x1 window floors to zero; `max(..., 1)` covers it.
         let tiny = |name: &str| match name {
             "window" => Some(Value::Vec2([1.0, 1.0])),
             _ => None,
@@ -214,9 +211,8 @@ mod tests {
             [("counts".to_owned(), 2)]
         );
         assert_eq!(parse("count(faces)").values_read(), []);
-        // Fused onto its consumer, the expression follows its ports and
-        // its own params under the names fusion gives them; `tile` is
-        // not a param of this Kernel, so it is the graph's and stays.
+        // Renamed for fusion: ports and own params take the fused names;
+        // `tile` is the graph's and stays.
         assert_eq!(
             parse("value(live) * count(faces) * levels * tile")
                 .renamed("mesh", &["levels".to_owned()])
@@ -233,8 +229,7 @@ mod tests {
             .resolve(&port, &param, &context, &element)
             .unwrap_err();
         assert!(error.to_string().contains("not a bound input"), "{error}");
-        // A division that leaves a remainder is a fraction, as a
-        // window's is: `floor` and `ceil` decide it, bare it sizes nothing.
+        // A division with a remainder needs `floor` or `ceil`.
         assert_eq!(
             parse("floor(count(faces) / 7)")
                 .resolve(&port, &param, &context, &element)
@@ -267,9 +262,7 @@ mod tests {
             .resolve(&port, &param, &context, &element)
             .unwrap_err();
         assert!(error.to_string().contains("neither a parameter"), "{error}");
-        // Counts are exact and whole numbers never wrap: a count past
-        // what anything can hold fails where it is worked out, and the
-        // only thing that comes out is an extent.
+        // Counts are exact: an overflow fails where it is worked out.
         let error = parse("count(faces) * 4611686018427387904")
             .resolve(&port, &param, &context, &element)
             .unwrap_err();
@@ -289,7 +282,7 @@ mod tests {
             .resolve(&port, &param, &context, &element)
             .unwrap_err();
         assert!(error.to_string().contains("divides by zero"), "{error}");
-        // What is not a number or a size sizes nothing.
+        // Only numbers and sizes size a domain.
         let shaped = |name: &str| match name {
             "on" => Some(Value::Bool(true)),
             "tint" => Some(Value::Vec4([1.0; 4])),

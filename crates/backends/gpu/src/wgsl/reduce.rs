@@ -1,5 +1,4 @@
-//! A reduction's entry points: each workgroup folds its span, and the
-//! partial results fold again until one is left.
+//! A reduction's fold pass, run level by level until one element is left.
 
 use super::*;
 
@@ -8,19 +7,16 @@ pub const REDUCE_WORKGROUP: u32 = 64;
 /// Threads a row of reduce workgroups covers; see [`folded`].
 pub const REDUCE_SPAN: u32 = MAX_GROUPS * REDUCE_WORKGROUP;
 
-/// Emits the reduce step of a reduce module: element `i` of the output
-/// level is the run of at most [`orla_rules::reduce::FOLD`] elements
-/// starting at `i * FOLD`, folded by the pairwise tree every backend
-/// folds in — which is [`orla_rules::reduce::LEVELS_AT_ONCE`] of that
-/// tree's levels in one pass, and the same values as walking them one
-/// at a time. Run with the level's element count in the uniform until
-/// one element is left.
+/// Emits a reduce module's fold pass: output element `i` is the run of
+/// at most [`orla_rules::reduce::FOLD`] elements from `i * FOLD`, folded
+/// by the shared pairwise tree ([`orla_rules::reduce::LEVELS_AT_ONCE`]
+/// levels per pass). Run with the level's count in the uniform until one
+/// element is left.
 pub fn emit_reduce(module: &Module) -> String {
     emit_reduce_packed(module, &[])
 }
 
-/// The fold pass with the inputs `packed` names read from one buffer, as
-/// the map pass reads them.
+/// The fold pass with the `packed` inputs read from one buffer.
 pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
     debug_assert_eq!(module.manifest.mode, Mode::Reduce);
     let Some(merge) = &module.merge else {
@@ -30,8 +26,7 @@ pub fn emit_reduce_packed(module: &Module, packed: &[usize]) -> String {
     let stride = module.manifest.outputs[0].ty.schema.value_words();
     let (count_binding, in_binding, out_binding) = reduce_bindings(module);
     let mut out = String::new();
-    // The same context, params and inputs as the map shader: `merge` is a
-    // plain function and may read any of them, or call one that does.
+    // The map shader's context, params and inputs, which `merge` may read.
     emit_preamble(&mut out, module, false, packed);
     let _ = writeln!(
         out,
@@ -125,8 +120,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     out
 }
 
-/// The fold pass's own bindings, after the inputs': the level count, the
-/// level read and the level written.
+/// The fold pass's bindings after the inputs: level count, level read,
+/// level written.
 pub fn reduce_bindings(module: &Module) -> (u32, u32, u32) {
     let base = INPUT_BINDING + module.manifest.inputs.len() as u32;
     (base, base + 1, base + 2)

@@ -1,8 +1,6 @@
-//! A Field as a file: how a Field leaves the Host and comes back. The
-//! format is the Host's own view of a Field and nothing more: a text
-//! header naming the shape, the extent, and the layout, then the elements
-//! as kept: a whole word per scalar, or fewer bytes where the layout keeps
-//! a scalar narrow (`f:unorm8`), little-endian, one element after another.
+//! A Field as a file: a text header naming shape, extent and layout,
+//! then the elements as kept, little-endian: a word per scalar, fewer
+//! bytes where the layout keeps a scalar narrow (`f:unorm8`).
 //!
 //! ```text
 //! ORLAFIELD 1
@@ -19,7 +17,7 @@ use orla_host::{Domain, FieldData, HostError, Schema, Shape};
 pub enum FileError {
     /// The header is missing or malformed.
     Header(String),
-    /// The bytes after the header are not the count the header promises.
+    /// The body length differs from the header's count.
     Length {
         /// Bytes the header promises.
         expected: usize,
@@ -168,8 +166,7 @@ mod tests {
 
     #[test]
     fn a_narrow_field_keeps_its_bytes_in_its_file() {
-        // Three elements of two unorm8 floats: six bytes, and the Field's
-        // two words of storage hold them with two bytes to spare.
+        // Three elements of two unorm8 floats: six bytes in two words.
         let schema = Schema::new(vec![Scalar::Float; 2])
             .with_encoding(orla_host::Encoding::Unorm8)
             .unwrap();

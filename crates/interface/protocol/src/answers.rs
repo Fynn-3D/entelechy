@@ -1,11 +1,9 @@
-//! Answers that wait for what they changed to stand, while everything
-//! else goes on. A `compose` whose scene waits for its Kernels, and a
-//! `publish` whose Kernel is prepared off the frame, are answered once it
-//! lands, with what it came to, as a request answered in place would be;
-//! meanwhile the frames run and other connections are answered. A
-//! connection's requests are answered in the order it sent them, and one
-//! change is made at a time: what comes behind a waiting answer on its
-//! connection, and any other `compose` or `publish`, waits its turn.
+//! Answers that wait for their change to land. A `compose` whose scene
+//! waits for its Kernels, or a `publish` prepared off the frame, is
+//! answered once it lands; frames and other connections go on meanwhile.
+//! A connection's requests are answered in order, and one change runs at a
+//! time: later requests on the waiting connection, and any other `compose`
+//! or `publish`, queue behind it.
 
 use std::collections::VecDeque;
 
@@ -20,13 +18,12 @@ use crate::wire::events_json;
 use crate::{envelope, parse_request, respond_from};
 
 /// What serves a session to the protocol: the session, and the requests
-/// it answers itself before the protocol does, as a window answers
-/// `evaluate` with a frame of its own.
+/// it answers itself first (a window answers `evaluate` with its frame).
 pub trait Served {
     /// The session served.
     fn session(&mut self) -> &mut Session;
-    /// The answer to `incoming`, and whether it asked to quit, when this
-    /// answers it itself; `None` leaves it to the protocol.
+    /// Its own answer to `incoming` and the quit flag; `None` leaves it to
+    /// the protocol.
     fn own(&mut self, incoming: &Incoming) -> Option<(String, bool)> {
         let _ = incoming;
         None
@@ -39,8 +36,8 @@ impl Served for Session {
     }
 }
 
-/// The answers a served session owes: at most one waiting for what it
-/// changed, and the requests behind it.
+/// A served session's owed answers: at most one waiting on its change,
+/// and the requests queued behind it.
 #[derive(Default)]
 pub struct Answers {
     waiting: Option<Waiting>,
@@ -67,14 +64,13 @@ impl Answers {
         Self::default()
     }
 
-    /// Whether an answer waits for what it changed to stand.
+    /// Whether an answer waits for its change to land.
     pub fn waiting(&self) -> bool {
         self.waiting.is_some()
     }
 
-    /// Answers `incoming` now, or once the answer it waits behind is
-    /// given; returns whether the process should end (a `quit` on
-    /// standard input).
+    /// Answers `incoming` now, or after the answer it queues behind; true
+    /// when the process should end (a `quit` on standard input).
     pub fn answer(&mut self, served: &mut dyn Served, incoming: Incoming) -> bool {
         let changes = matches!(op_of(&incoming).as_deref(), Some("compose" | "publish"));
         if let Some(waiting) = &self.waiting
@@ -94,8 +90,8 @@ impl Answers {
         }
     }
 
-    /// Answers what waited once it stands, and then what came behind it,
-    /// in turn; returns whether the process should end.
+    /// Answers the waiting request once it lands, then the queue in turn;
+    /// true when the process should end.
     pub fn poll(&mut self, served: &mut dyn Served) -> bool {
         let Some(waiting) = &self.waiting else {
             return false;
@@ -105,8 +101,7 @@ impl Answers {
         let before = session.act_for(origin);
         let done = match &waiting.on {
             On::Scene(answer) => {
-                // A served session with no frames of its own is synced
-                // here, which is what lands the scene.
+                // A served session without frames lands the scene here.
                 session.sync();
                 let landed = session.take_landing();
                 (landed.is_some() || !session.scene_waiting()).then(|| {
@@ -132,8 +127,8 @@ impl Answers {
         quit
     }
 
-    /// Begins a `compose` or a `publish`: answered now when what it
-    /// changed stands at once, or kept to be answered when it lands.
+    /// Begins a `compose` or `publish`: answered now when it lands at once,
+    /// otherwise kept waiting.
     fn begin(&mut self, session: &mut Session, incoming: Incoming) -> bool {
         let (id, request) = match parse_request(&incoming.line) {
             Ok(parsed) => parsed,
@@ -179,8 +174,8 @@ fn op_of(incoming: &Incoming) -> Option<String> {
     request.get("op").and_then(Json::as_str).map(str::to_owned)
 }
 
-/// Sends an answer where its request came from; returns whether the
-/// process should end, as [`crate::answer`] does.
+/// Sends an answer to its request's channel; the return is as
+/// [`crate::answer`]'s.
 fn send(incoming: &Incoming, response: String, quit: bool) -> bool {
     incoming.reply.send(response);
     if quit && !incoming.local {

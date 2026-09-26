@@ -1,7 +1,6 @@
-//! What an interface asks of a scene's outputs, answered once by the
-//! session: the output a name reads, and whether the device can show a
-//! picture as it lies. The C ABI, the protocol and the Player each asked
-//! these themselves before.
+//! What an interface asks of a scene's outputs, answered by the session:
+//! the output a name reads, and whether the device can show a picture as
+//! it lies.
 
 use std::path::{Path, PathBuf};
 
@@ -91,10 +90,9 @@ fn only_a_wide_picture_the_device_holds_is_shown_as_it_lies() {
     }
 }
 
-/// A Field goes to a file one way, as the file's extension says, whether
-/// saved by its port or exported by its handle: a picture kept narrow is a
-/// PNG or a PPM as a wide one is, and what a format cannot take is refused
-/// with the file named and nothing written.
+/// A Field goes to a file by its extension, saved by port or exported by
+/// handle: a narrow picture is a PNG or PPM like a wide one, and a format
+/// that cannot take it is refused, the file named, nothing written.
 #[test]
 fn a_field_is_written_as_its_file_says() {
     let dir = scratch("export");

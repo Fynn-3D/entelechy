@@ -1,21 +1,15 @@
 #![warn(missing_docs)]
 //! JIT backend.
 //!
-//! Compiles a [`Validated`] module's functions to native code with
-//! Cranelift once, when the Kernel is prepared, and runs the entry once
-//! per output element from as many threads as the CPU backend uses. The
-//! contract is the CPU interpreter's, bit for bit: the same word layout,
-//! the same integer checks, the same reads through the scope's gate (the
-//! inputs are borrowed once and handed to the code as pointers), and the
-//! same libm. Only the map mode is compiled; a reduction, a scan, a
-//! scatter and the native operations run on the CPU backend, which this
-//! one wraps.
+//! Compiles a [`Validated`] module's functions with Cranelift when the
+//! Kernel is prepared and runs them on as many threads as pay off. The
+//! contract is the CPU interpreter's, bit for bit: word layout, integer
+//! checks, reads through the scope's gate, and libm. Native operations
+//! run on the wrapped CPU backend.
 //!
-//! Where Orla is itself WebAssembly, the code is WebAssembly
-//! ([`wasm`]), which the host loads into Orla's function table (the
-//! `wasm-host` feature): a pointer to a function there is what a native
-//! function pointer is here, so everything but the code generator is
-//! the same.
+//! When Orla is itself WebAssembly, the code is WebAssembly (`wasm`),
+//! loaded into Orla's function table; a table index stands for a
+//! function pointer.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod codegen;
@@ -60,9 +54,8 @@ pub struct View {
     schema: *const orla_abi::Schema,
 }
 
-/// Everything the compiled entry reads besides its own arguments: the
-/// inputs, the parameters as words, the context, the output domain, and
-/// a slot for the first integer error.
+/// What the compiled entry reads besides its arguments: inputs,
+/// parameters as words, context, output domain, and the failure slot.
 #[repr(C)]
 pub struct Ctx {
     views: *const View,
@@ -80,42 +73,37 @@ pub struct Ctx {
     width: u32,
     height: u32,
     depth: u32,
-    /// Zero, or the first failure: 1 division by zero, 2 overflow, 3
-    /// more loop iterations than the budget, 4 the run past its total,
-    /// 5 a scatter's pairs past the Host's room.
+    /// Zero, or the first failure code (see `failure`).
     error: u32,
     /// Loop iterations the running element has run, when the module
     /// counts them.
     work: u32,
-    /// The element's count when it last looked: the blocks up to it are
-    /// the run's already.
+    /// The element's count at its last look; blocks up to it are
+    /// already the run's.
     looked: u32,
     /// The run's count of blocks, which the element adds a block to at
     /// a time, and the most it may reach ([`orla_rules::Run`]).
     run_blocks: *const std::sync::atomic::AtomicU32,
     run_limit: u32,
-    /// What this thread's finished elements ran short of their blocks,
-    /// summed, not yet handed to the run's total.
+    /// The partial blocks of this thread's finished elements, summed and
+    /// held back from the run's total.
     left: u64,
-    /// The `x` the failure was seen at, which a map's entry writes as it
-    /// leaves its run; the caller knows the rest of the coordinates.
+    /// The failing element's `x`, written by a map's entry as it leaves
+    /// its run; the caller holds the other coordinates.
     error_at: u32,
-    /// Where a scatter's `emit` keeps its pairs, each after the element
-    /// it came from; null where nothing emits.
+    /// Where a scatter's `emit` keeps its pairs, each after its element;
+    /// null where nothing emits.
     emitted: *mut Vec<u32>,
-    /// What the run holds against the Host's room, which every emitted
-    /// pair is held in.
+    /// The run's hold against the Host's room, covering emitted pairs.
     held: *const orla_rules::Held,
 }
 
-/// A map entry's native signature: the context, where a run of elements
-/// starts (`x`, and the `y` and `z` they share), how many there are,
-/// and where their output words go, one element after another. The
-/// entry walks the run itself: a million elements is one call, so the
-/// reads it does not have to repeat are hoisted out of it.
+/// A map entry's native signature: the context, a run's first element
+/// (`x`, and the shared `y`, `z`), its length, and where its output
+/// words go, element after element. The entry walks the run itself.
 type Entry = unsafe extern "C" fn(*mut Ctx, u32, u32, u32, u32, *mut u32);
-/// A scan entry's: the context, the step's index, the carried words, and
-/// where the next carried words go.
+/// A scan entry's: the context, the step's index, the carried words,
+/// and where the next carried words go.
 type ScanEntry = unsafe extern "C" fn(*mut Ctx, u32, *const u32, *mut u32);
 /// A scan's `init`: the context and where the first carried words go.
 type Init = unsafe extern "C" fn(*mut Ctx, *mut u32);
@@ -173,8 +161,8 @@ impl JitBackend {
     }
 }
 
-/// A module's compiled code. The function pointer stays valid as long as
-/// the JIT module lives, and it lives as long as the Kernel version.
+/// A module's compiled code. Its function pointers are valid while the
+/// JIT module lives, which is as long as the Kernel version.
 #[cfg(not(target_arch = "wasm32"))]
 struct Compiled {
     module: Option<cranelift_jit::JITModule>,
@@ -185,8 +173,8 @@ struct Compiled {
     merge: Option<usize>,
 }
 
-// The module is only read after finalization, and the code it holds is
-// called from any thread; nothing in it is mutated after `prepare`.
+// The module is read-only after `prepare`; its code is called from any
+// thread.
 #[cfg(not(target_arch = "wasm32"))]
 unsafe impl Send for Compiled {}
 #[cfg(not(target_arch = "wasm32"))]
@@ -196,8 +184,8 @@ unsafe impl Sync for Compiled {}
 impl Drop for Compiled {
     fn drop(&mut self) {
         if let Some(module) = self.module.take() {
-            // No execution holds this version any more: the runtime drops
-            // the prepared code after the last executing thread lets go.
+            // The runtime drops prepared code after its last executing
+            // thread lets go.
             unsafe { module.free_memory() };
         }
     }
@@ -288,15 +276,14 @@ fn param_words(value: &orla_abi::Value) -> Vec<u32> {
     value.words()
 }
 
-/// Shared read-only data the threads' contexts point into, and the
-/// context they start from. The vectors are read through the pointers
-/// in the context, never by name; they live here so they outlive the run.
+/// Read-only data the threads' contexts point into, and the context
+/// they start from. The vectors live here to outlive the run and are
+/// read through the context's pointers.
 #[allow(dead_code)]
 struct Shared {
     views: Vec<View>,
     params: Vec<u32>,
-    /// The memories' working copies, by input index; the views point into
-    /// them.
+    /// The memories' working copies, by input index; views point here.
     memories: Vec<(usize, Vec<u32>)>,
     /// The layouts of the inputs kept narrow; the views point at them.
     /// Boxed so a view's pointer stays good while the vector grows.
@@ -307,20 +294,19 @@ struct Shared {
     budget: u32,
     /// The run's total; boxed so the contexts' pointer to it stays good.
     run: Box<orla_rules::Run>,
-    /// What the run holds beyond its Fields, against the Host's room;
-    /// boxed for the same reason.
+    /// The run's hold beyond its Fields against the Host's room; boxed
+    /// for the same reason.
     held: Box<orla_rules::Held>,
 }
 
 // The views point into the scope's Fields, borrowed for the run, and the
-// params are this run's; both are only read.
+// params are this run's; both are read-only.
 unsafe impl Sync for Shared {}
 unsafe impl Send for Shared {}
 
-/// The views of the inputs and the context they hang from, for a run
-/// over `domain`. The memories named get working copies of their own,
-/// which the views point at instead, so the steps' writes are seen by
-/// their reads and the inputs stay untouched.
+/// The inputs' views and their context for a run over `domain`. Named
+/// memories get working copies the views point at, so steps read their
+/// own writes and the inputs stay intact.
 fn shared(
     module: &Validated,
     invocation: &Invocation,
@@ -408,9 +394,8 @@ fn shared(
     })
 }
 
-/// Runs the compiled entry over every element of `domain`, on as many
-/// threads as pay off, and returns `stride` words per element, element
-/// after element (rows of every layer one after another).
+/// Runs the entry over every element of `domain` and returns `stride`
+/// words per element, in element order (rows of every layer in turn).
 fn compute(
     entry: Entry,
     shared: &Shared,
@@ -422,9 +407,8 @@ fn compute(
     Ok(results)
 }
 
-/// The same, with what a scatter's elements emitted: each run of elements
-/// gives its first element, the element after its last, and its pairs,
-/// each after the element it came from; the runs come in order.
+/// The same, with a scatter's emitted pairs as [`Emitted`] runs, in
+/// order.
 fn compute_emitting(
     entry: Entry,
     shared: &Shared,
@@ -436,9 +420,6 @@ fn compute_emitting(
     Ok((results, emitted))
 }
 
-/// The same, into words the caller owns: a Field it just created, so a
-/// map's output is written once instead of into a buffer that is then
-/// copied into the Field.
 /// How many threads `items` pieces of work are worth: every core, but
 /// no fewer than `PARALLEL_THRESHOLD` pieces a thread.
 fn workers(items: usize) -> usize {
@@ -453,6 +434,7 @@ fn workers(items: usize) -> usize {
 /// the pairs its elements emitted, each after the element it came from.
 type Emitted = (usize, usize, Vec<u32>);
 
+/// The same, into words the caller owns, such as a new Field's.
 fn compute_into(
     entry: Entry,
     shared: &Shared,
@@ -464,8 +446,7 @@ fn compute_into(
     let height = domain.height();
     let rows = height as usize * domain.depth() as usize;
     let element_count = width * rows;
-    // Split by elements and not by rows: a `Rows` domain is one row of
-    // a million, and splitting that by rows is one thread.
+    // Split by elements: a `Rows` domain is one long row.
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
@@ -498,8 +479,7 @@ fn compute_into(
         emitted: std::ptr::null_mut(),
         held: t.held,
     };
-    // One call a run of elements that share a row: a `Rows` domain is
-    // one run of a million, a grid one run a row.
+    // One call per run of elements sharing a row.
     let run_elements = |first: usize, chunk: &mut [u32]| -> Result<Emitted, ExecutionError> {
         let mut ctx = fresh(&shared.template);
         let mut emitted: Vec<u32> = Vec::new();
@@ -581,13 +561,9 @@ fn run(
         .collect();
     let stride: usize = strides.iter().sum();
     let count = domain.count();
-    // One output is the common case, and then the entry writes straight
-    // into the Field: no buffer of our own and no copy into it. The
-    // views were made before this Field was, and they hold pointers
-    // into the inputs' words: what keeps them good is that a Field's
-    // words are an allocation of their own, so making another Field
-    // moves nothing. A Host that ever put every Field's words in one
-    // place would have to give this its own reading of them.
+    // A single output is written straight into its Field. The views
+    // made earlier stay valid because each Field's words are their own
+    // allocation, which creating another Field leaves in place.
     if let [port] = &module.manifest.outputs[..]
         && port.ty.schema.is_wide()
     {
@@ -605,8 +581,8 @@ fn run(
             }
         };
     }
-    // The words are computed here before the Host holds them: asked
-    // first, so a domain past the budget costs nothing to refuse.
+    // The Fields are asked for first, so a domain past the budget is
+    // refused before any work.
     let fields: Vec<_> = module
         .manifest
         .outputs
@@ -641,9 +617,9 @@ fn run(
     Ok(outputs)
 }
 
-/// A reduction: the entry over the first input's domain, then a pairwise
-/// fold with `merge` in the fixed tree the CPU uses, so the result does
-/// not depend on how many threads ran the map. One `Rows` element.
+/// A reduction: the entry over the first input's domain, then a
+/// pairwise fold with `merge` in the CPU's fixed tree, so the result is
+/// thread-count independent. One `Rows` element.
 fn run_reduce(
     entry: usize,
     merge: usize,
@@ -659,10 +635,8 @@ fn run_reduce(
     let stride = port.ty.schema.value_words();
     let mut level = compute(entry, &shared, domain, stride)?;
     let mut count = domain.count();
-    // The tree is fixed, one level after another; the pairs of a level
-    // are merged by as many workers as they are worth, each on a run of
-    // them, and the failure the sequential walk meets first is the one
-    // of the earliest pair.
+    // The tree is fixed, level by level; a level's pairs are split among
+    // workers, and the reported failure is the earliest pair's.
     while count > 1 {
         let pairs = count / 2;
         let mut next = vec![0u32; count.div_ceil(2) * stride];
@@ -675,7 +649,6 @@ fn run_reduce(
                 let b = level[(2 * pair + 1) * stride..].as_ptr();
                 // `merge` reads `stride` words at `a` and `b` and writes
                 // `stride` words at `out`.
-                // A merge, a step and `init` each start their work anew.
                 ctx.work = 0;
                 unsafe { merge(&mut ctx, a, b, out.as_mut_ptr()) };
                 if ctx.error != 0 {
@@ -726,10 +699,9 @@ fn run_reduce(
     Ok(vec![output])
 }
 
-/// A prefix: the entry over every element of the first input, then each
-/// element folded with everything before it in element order, by the
-/// rule the CPU applies. The rule is order-free, so walking it is one
-/// grouping of many and gives the reference's words.
+/// A prefix: the entry over every element of the first input, then
+/// each element folded with all before it, by the CPU's rule. The rule
+/// is associative, so any grouping gives the reference's words.
 fn run_prefix(
     entry: usize,
     module: &Validated,
@@ -746,9 +718,8 @@ fn run_prefix(
     shared.run.outcome()?;
     drop(shared);
     let scalars = port.ty.schema.scalars();
-    // One `Int` an element, the common case, folds on the words
-    // directly; anything else by the rule the CPU applies. Both are the
-    // same arithmetic, overflow included.
+    // One `Int` an element folds on the words directly, anything else by
+    // the CPU's rule; both are the same arithmetic, overflow included.
     let int = |f: fn(i32, i32) -> Option<i32>| {
         move |running: &mut [u32], value: &[u32]| -> Result<(), ArithmeticError> {
             let folded = f(running[0] as i32, value[0] as i32).ok_or(ArithmeticError::Overflow)?;
@@ -783,14 +754,11 @@ fn run_prefix(
     Ok(vec![output])
 }
 
-/// Folds each element of `values` (`stride` words each) with everything
-/// before it, in place, as a walk in element order would, and fails
-/// where that walk first fails. Runs of elements are folded by as many
-/// workers as they are worth: each run's total, the totals folded in
-/// order into where each run starts, then each run walked from its
-/// start. The rule gives the same words in any grouping, so with no
-/// failure every word is the walk's; a failure in the totals may be one
-/// the walk never meets, and so hands the whole to the walk.
+/// Folds each element of `values` (`stride` words each) with all
+/// before it, in place, failing where an in-order walk first fails.
+/// In parallel: each run's total, the totals folded into each run's
+/// start, then each run walked from its start. A failure in the totals
+/// hands the whole to the sequential walk, which names the true one.
 fn fold_prefix<E: Send>(
     values: &mut [u32],
     stride: usize,
@@ -866,8 +834,8 @@ fn fold_prefix<E: Send>(
             .map(|handle| handle.join().expect("prefix worker panicked"))
             .collect()
     });
-    // With the starts the walk's own, every run folds the walk's words
-    // up to the first failure, which is the earliest.
+    // With the walk's starts, every run folds the walk's words up to its
+    // first failure; the earliest is the walk's.
     match outcomes
         .into_iter()
         .filter_map(Result::err)
@@ -878,9 +846,8 @@ fn fold_prefix<E: Send>(
     }
 }
 
-/// A scatter: the entry over the first input into pairs of address and
-/// value, then every pair applied to a copy of the target, one after
-/// another in element order, by the rule the CPU applies.
+/// A scatter: the entry over the first input into address-value pairs,
+/// applied to a copy of the target in element order by the CPU's rule.
 fn run_scatter(
     entry: usize,
     module: &Validated,
@@ -897,9 +864,9 @@ fn run_scatter(
     let stride = port.ty.schema.value_words();
     let shared = shared(module, invocation, scope, sources)?;
     let pair_words = address + stride;
-    // Held against the Host's room: the pairs returned, one an element,
-    // before the run; those emitted as they come; and the parts' copies
-    // of the pairs that land, before they are sorted.
+    // Held against the Host's room: the returned pairs (one an element)
+    // before the run, emitted pairs as they come, and the parts' copies
+    // of landing pairs before sorting.
     if !shared.held.take(sources.count() * pair_words) {
         return Err(shared.held.over());
     }
@@ -907,13 +874,11 @@ fn run_scatter(
     shared.run.outcome()?;
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let scalars = port.ty.schema.scalars();
-    // The target is cut into parts, one a worker. Each run of elements
-    // sorts its pairs, in element order, into the part each lands in:
-    // the pairs it emitted before the one it returned, as the
-    // interpreter applies them. Each part then takes its pairs run by
-    // run, so every element of the target sees its pairs in the
-    // sequential order, whatever the rule, and no two workers touch one
-    // element.
+    // The target is cut into one part a worker. Each run sorts its pairs
+    // in element order (emitted before returned, as the interpreter does)
+    // into the part each lands in. Each part takes its pairs run by run,
+    // so every target element sees the sequential order and has one
+    // writer.
     let count = target.count();
     let pair_count = pairs.len() / pair_words.max(1)
         + runs
@@ -974,8 +939,8 @@ fn run_scatter(
         })
     };
     let apply = |part: usize, slice: &mut [u32]| -> Result<(), (usize, ArithmeticError)> {
-        // A sum is each element's whole total, whatever the order; what
-        // fails is the first target element whose total does not fit.
+        // A sum is each element's whole total; the failure is the first
+        // target element whose total overflows.
         if summed {
             let mut sums = orla_rules::Sums::new(scalars, slice);
             for run in &sorted {
@@ -1019,9 +984,8 @@ fn run_scatter(
                 .collect()
         })
     };
-    // Of the parts that failed, the failure the sequential order meets
-    // first: the one from the earliest element, a source's, or under a
-    // sum the target's.
+    // The failure is the one the sequential order meets first: the
+    // earliest source element's, or under a sum the target's.
     if let Some((index, error)) = outcomes
         .into_iter()
         .filter_map(Result::err)
@@ -1046,12 +1010,12 @@ fn run_scatter(
     Ok(vec![output])
 }
 
-/// How much a thread keeps short of blocks before handing it to the run:
-/// enough that the shared total is touched rarely.
+/// Partial-block work a thread holds before handing it to the run, so
+/// the shared total is touched rarely.
 const LEFT_HANDED: u64 = 64 * orla_ir::WORK_BLOCK as u64;
 
-/// Hands the run what a context's elements ran short of their blocks,
-/// once it is `at_least`: the run's failure once it has passed.
+/// Hands a context's held partial-block work to the run once it is
+/// `at_least`; fails once the run is past its total.
 fn hand_left(ctx: &mut Ctx, shared: &Shared, at_least: u64) -> Result<(), ExecutionError> {
     if ctx.left < at_least.max(1) {
         return Ok(());
@@ -1062,9 +1026,8 @@ fn hand_left(ctx: &mut Ctx, shared: &Shared, at_least: u64) -> Result<(), Execut
     }
 }
 
-/// Keeps what a merge, a step or `init` ran short of a block, as the map's
-/// code does for its elements, once its last look has handed the run its
-/// blocks; then starts the next one's work anew.
+/// Holds the partial block of a merge, step or `init`, as the map's code
+/// does for its elements, and resets the work count.
 fn keep_left(ctx: &mut Ctx, shared: &Shared) -> Result<(), ExecutionError> {
     ctx.left += u64::from(ctx.work % orla_ir::WORK_BLOCK);
     ctx.work = 0;
@@ -1072,11 +1035,10 @@ fn keep_left(ctx: &mut Ctx, shared: &Shared) -> Result<(), ExecutionError> {
     hand_left(ctx, shared, LEFT_HANDED)
 }
 
-/// Runs a scan: `init` for the first carried words, then the entry once
-/// per element of the first input, in order, each step reading the
-/// previous step's result and writing its own; then the output and the
-/// memories as the steps left them, in the manifest's order. Ordered
-/// work runs on one thread.
+/// Runs a scan on one thread: `init` for the first carried words, then
+/// the entry once per element of the first input in order, each step
+/// reading the previous result. Returns the output and the memories, in
+/// the manifest's order.
 fn run_scan(
     entry: usize,
     init: usize,
@@ -1101,7 +1063,6 @@ fn run_scan(
     };
     // `init` writes exactly `stride` words; each step reads `stride` words
     // of the carried value and writes `stride` words of the next.
-    // A merge, a step and `init` each start their work anew.
     ctx.work = 0;
     unsafe { init(&mut ctx, carried.as_mut_ptr()) };
     failure(&ctx, 0)?;
@@ -1109,7 +1070,6 @@ fn run_scan(
     let mut words = vec![0u32; count * stride];
     for index in 0..count {
         let out = &mut words[index * stride..(index + 1) * stride];
-        // A merge, a step and `init` each start their work anew.
         ctx.work = 0;
         unsafe { entry(&mut ctx, index as u32, carried.as_ptr(), out.as_mut_ptr()) };
         failure(&ctx, index as u32)?;
@@ -1144,9 +1104,8 @@ fn run_scan(
     Ok(outputs)
 }
 
-// ---- Helpers the compiled code calls, by symbol. Each takes the context
-// and an input index, resolves the address as the CPU interpreter does,
-// and copies the element's words to `out`. ----
+// ---- Helpers the compiled code calls by symbol. Each resolves an
+// input's address as the CPU interpreter does. ----
 
 unsafe fn view<'a>(ctx: *const Ctx, input: u32) -> &'a View {
     unsafe { &*(*ctx).views.add(input as usize) }
@@ -1218,7 +1177,7 @@ unsafe extern "C" fn orla_jit_read_rows(ctx: *const Ctx, input: u32, i: i32, out
     unsafe { copy_out(view, index, out) };
 }
 
-/// `sample`: this element's own coordinates, clamped into the input.
+/// `sample`: this element's coordinates, clamped into the input.
 unsafe extern "C" fn orla_jit_sample(
     ctx: *const Ctx,
     input: u32,
@@ -1260,8 +1219,8 @@ unsafe extern "C" fn orla_jit_linear(
     let (z0, z1, fz) = axis(z, view.depth);
     let stride = view.stride as usize;
     let (width, height) = (view.width as usize, view.height as usize);
-    // An element of up to 64 words blends on the stack; a wider one,
-    // which the language allows, on the heap rather than past the end.
+    // An element of up to 64 words blends on the stack, a wider one on
+    // the heap.
     let (mut sums_here, mut sums_heap, mut element_here, mut element_heap);
     let (sums, element): (&mut [f32], &mut [u32]) = if stride <= 64 {
         sums_here = [0.0f32; 64];
@@ -1333,8 +1292,8 @@ unsafe extern "C" fn orla_jit_emit(ctx: *mut Ctx, element: u32, pair: *const u32
     emitted.extend_from_slice(unsafe { std::slice::from_raw_parts(pair, n as usize) });
 }
 
-/// `put` into a rows memory: the element's words replaced, an index
-/// outside the memory dropped.
+/// `put` into a rows memory: the element's words replaced; an index
+/// outside the memory is dropped.
 unsafe extern "C" fn orla_jit_put_rows(ctx: *const Ctx, input: u32, i: i32, value: *const u32) {
     let view = unsafe { view(ctx, input) };
     let count = view.width * view.height * view.depth;
@@ -1345,7 +1304,7 @@ unsafe extern "C" fn orla_jit_put_rows(ctx: *const Ctx, input: u32, i: i32, valu
 }
 
 /// `put` into a grid or volume memory: an address outside it (NaN
-/// included) dropped, never clamped, as the interpreter has it.
+/// included) is dropped unclamped, as in the interpreter.
 unsafe extern "C" fn orla_jit_put(
     ctx: *const Ctx,
     input: u32,
@@ -1461,8 +1420,8 @@ extern "C" fn orla_jit_fmodf(a: f32, b: f32) -> f32 {
     a % b
 }
 
-/// `fma` on floats and on doubles: one rounding, as the interpreter's
-/// `mul_add`. Cranelift has the instruction; WebAssembly has none.
+/// `fma` on floats and doubles: one rounding, as the interpreter's
+/// `mul_add`. WebAssembly code calls this.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 extern "C" fn orla_jit_fmaf(a: f32, b: f32, c: f32) -> f32 {
     a.mul_add(b, c)
@@ -1473,8 +1432,7 @@ extern "C" fn orla_jit_fma(a: f64, b: f64, c: f64) -> f64 {
     a.mul_add(b, c)
 }
 
-/// A half float's bits widened to a float's: the Host's own rule, so the
-/// compiled code reads a half as the interpreter does.
+/// A half float's bits widened to a float's by the Host's rule.
 extern "C" fn orla_jit_half(h: u32) -> u32 {
     orla_abi::encoding::f16_to_f32(h)
 }

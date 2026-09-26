@@ -1,11 +1,8 @@
 #![warn(missing_docs)]
-//! The rules of Kernel execution that every backend keeps, in one place
-//! so the interpreter, the JIT and the GPU are one law: what an
-//! invocation must look like, how a scan and a scatter are sized, where
-//! a scattered value lands and how it meets what is there, the tree a
-//! reduction folds in, the order floats take as keys, the rasterizer's
-//! contract and its reference, and the [`Backend`] trait each backend
-//! implements. Nothing here executes a Kernel; the backends do, by these.
+//! The rules of Kernel execution every backend keeps: invocation
+//! checks, scan and scatter sizing, scatter placement and combining,
+//! the reduction tree, float ordering, the rasterizer's contract, and
+//! the [`Backend`] trait. The backends execute; this crate rules.
 
 pub mod backend;
 pub mod placement;
@@ -19,7 +16,7 @@ use std::fmt;
 use orla_abi::{AbiError, Domain, Invocation, Scalar, Scope, Shape};
 use orla_ir::{Combine, Mode, Validated};
 
-/// Integer arithmetic that cannot produce a value.
+/// Integer arithmetic without a result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArithmeticError {
     /// Integer division or remainder by zero.
@@ -37,7 +34,7 @@ impl fmt::Display for ArithmeticError {
     }
 }
 
-/// Why an execution failed. The Kernel version stays valid; only this run
+/// Why an execution failed. The Kernel version stays valid; the run
 /// produced nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionError {
@@ -64,8 +61,7 @@ pub enum ExecutionError {
         /// The value supplied.
         actual: String,
     },
-    /// An input is bound to a Field whose shape or element layout is not
-    /// its port's.
+    /// An input's Field differs from its port in shape or element layout.
     InputType {
         /// Input name.
         name: String,
@@ -94,8 +90,8 @@ pub enum ExecutionError {
         /// What failed.
         error: ArithmeticError,
     },
-    /// The element at the given place ran more loop iterations than the
-    /// Kernel's budget, and stopped there.
+    /// The element at the given place passed the Kernel's loop budget and
+    /// stopped there.
     Exhausted {
         /// Element column.
         x: u32,
@@ -104,29 +100,24 @@ pub enum ExecutionError {
         /// The budget it had.
         budget: u32,
     },
-    /// The run's elements together ran more loop iterations than the Host
-    /// lets one run take.
+    /// The run's elements together passed the Host's loop bound for a run.
     Overrun {
         /// The iterations the run could take.
         work: u64,
     },
-    /// A scatter's pairs, held in Host memory while the run applies them,
-    /// needed more words than the Host had room for when the run began.
+    /// A scatter's pairs, held in Host memory while applied, passed the
+    /// room the Host had when the run began.
     OverRoom {
         /// The words the Host had room for.
         room: usize,
     },
 }
 
-/// A run's total of loop iterations, shared by every thread or
-/// invocation that runs its elements. An element hands it the blocks of
-/// [`orla_ir::WORK_BLOCK`] iterations it fills as its loops finish, so a
-/// run that passes the Host's bound is stopped while it runs; what is
-/// left of each element, short of a block, is summed where the element
-/// ran and handed on in blocks, and at the end as it is. The run fails
-/// when the whole, blocks and what is left, is more than the Host lets
-/// it take: an exact sum of every element's iterations, so it is decided
-/// alike however the elements are scheduled.
+/// A run's total of loop iterations, shared by every thread that runs
+/// its elements. Elements hand in full blocks of [`orla_ir::WORK_BLOCK`]
+/// iterations as they go, so a run past the Host's bound stops early;
+/// remainders are summed per thread and handed in at the end. The run
+/// fails when the exact total passes the bound, whatever the schedule.
 pub struct Run {
     blocks: std::sync::atomic::AtomicU32,
     left: std::sync::atomic::AtomicU64,
@@ -146,8 +137,8 @@ impl Run {
         }
     }
 
-    /// Hands the run `blocks` full blocks; `true` once the run has
-    /// certainly passed its bound, when the element should stop.
+    /// Hands the run `blocks` full blocks; `true` once the run has passed
+    /// its bound and the element should stop.
     pub fn spend(&self, blocks: u32) -> bool {
         self.blocks
             .fetch_add(blocks, std::sync::atomic::Ordering::Relaxed)
@@ -155,9 +146,8 @@ impl Run {
             > self.limit
     }
 
-    /// Hands the run what a thread's elements left short of their
-    /// blocks, summed: its full blocks as blocks, the rest as it is.
-    /// `true` once the run has certainly passed its bound.
+    /// Hands the run a thread's summed remainders. `true` once the run
+    /// has passed its bound.
     pub fn settle(&self, left: u64) -> bool {
         let block = u64::from(orla_ir::WORK_BLOCK);
         self.left
@@ -165,16 +155,16 @@ impl Run {
         self.spend((left / block).min(u64::from(u32::MAX / 2)) as u32)
     }
 
-    /// The run's answer once every element has handed in what it ran:
-    /// the failure when the whole is more than its bound.
+    /// The run's verdict once every element has handed in: the failure
+    /// when the total passes the bound.
     pub fn outcome(&self) -> Result<(), ExecutionError> {
         let blocks = u64::from(self.blocks.load(std::sync::atomic::Ordering::Relaxed));
         let left = self.left.load(std::sync::atomic::Ordering::Relaxed);
         Self::judge(self.work, blocks, left)
     }
 
-    /// The answer for a run whose blocks and remainder were counted
-    /// elsewhere, a device's record read back.
+    /// The verdict for blocks and remainder counted elsewhere (a
+    /// device's record read back).
     pub fn judge(work: u64, blocks: u64, left: u64) -> Result<(), ExecutionError> {
         match blocks * u64::from(orla_ir::WORK_BLOCK) + left > work {
             true => Err(ExecutionError::Overrun { work }),
@@ -192,9 +182,8 @@ impl Run {
         self.limit
     }
 
-    /// The count of blocks handed, for a backend that adds to it in the
-    /// code it generates: the run has passed once the count after an
-    /// addition is more than [`Run::limit`].
+    /// The count of blocks handed, for generated code that adds to it:
+    /// the run has passed once the count exceeds [`Run::limit`].
     pub fn blocks(&self) -> &std::sync::atomic::AtomicU32 {
         &self.blocks
     }
@@ -205,11 +194,9 @@ impl Run {
     }
 }
 
-/// The Host words a run holds beyond its Fields — a scatter's pairs,
-/// returned and emitted, while it applies them — against the room the
-/// Host had when the run began ([`orla_abi::Scope::room`]). Shared by
-/// every thread of the run; a backend whose pairs never reach Host
-/// memory (a device landing them where they are emitted) holds none.
+/// The Host words a run holds beyond its Fields (a scatter's pairs while
+/// applied), against the room the Host had when the run began
+/// ([`orla_abi::Scope::room`]). Shared by every thread of the run.
 pub struct Held {
     words: std::sync::atomic::AtomicUsize,
     room: usize,
@@ -224,8 +211,8 @@ impl Held {
         }
     }
 
-    /// Holds `words` more; `false`, and nothing held, when that would
-    /// pass the room.
+    /// Holds `words` more; `false`, holding nothing, when that would pass
+    /// the room.
     pub fn take(&self, words: usize) -> bool {
         let before = self
             .words
@@ -296,8 +283,7 @@ impl From<AbiError> for ExecutionError {
     }
 }
 
-/// Checks a scan's invocation: it runs over its first input's rows and
-/// writes as many; the domain says so. Every backend applies this.
+/// Checks a scan's invocation: its domain is its first input's rows.
 pub fn check_scan(invocation: &Invocation, scope: &Scope<'_>) -> Result<Domain, ExecutionError> {
     let domain = scope.size(invocation.inputs[0])?;
     if domain != invocation.domain {
@@ -309,10 +295,9 @@ pub fn check_scan(invocation: &Invocation, scope: &Scope<'_>) -> Result<Domain, 
     Ok(domain)
 }
 
-/// Checks a scatter's invocation: its body runs once per element of the
-/// domain (the first input's extent unless the node says otherwise), and
-/// it writes the extent of the input it scatters into, which is what this
-/// returns. Every backend applies this.
+/// Checks a scatter's invocation: its body runs once per domain element
+/// (the first input's extent by default). Returns the extent of the
+/// input it scatters into, which it writes.
 pub fn check_scatter(
     invocation: &Invocation,
     scope: &Scope<'_>,
@@ -324,11 +309,10 @@ pub fn check_scatter(
     Ok(scope.size(invocation.inputs[base])?)
 }
 
-/// The domain a module's outputs have, by its mode, from the invocation's
-/// domain and its inputs' extents (`inputs`): a map's and a scan's are
-/// the invocation's, a reduction's one row, a prefix's its first input's,
-/// a scatter's the input it scatters into. What is known of a run before
-/// it runs, so what it will hold can be set aside for it.
+/// The domain a module's outputs have, by mode: a map's and a scan's are
+/// the invocation's, a reduction's one row, a prefix's its first input's
+/// extent, a scatter's its target's. Known before the run, so its
+/// storage can be reserved.
 pub fn output_domain(mode: Mode, domain: Domain, inputs: &[Domain]) -> Domain {
     let input = |at: usize| inputs.get(at).copied().unwrap_or(domain);
     match mode {
@@ -366,10 +350,8 @@ pub fn scatter_index(domain: Domain, address: &[u32]) -> Option<usize> {
 }
 
 /// `max` of two floats as every backend computes it (IEEE 754-2019
-/// maximumNumber): a NaN gives way to the other operand, and of two
-/// equal values the one without a sign, so `max(-0.0, 0.0)` is `0.0`
-/// whichever comes first. Rust's own `f32::max` leaves the zero's sign
-/// to the machine, which is no rule for a reference.
+/// maximumNumber): a NaN gives way to the other operand, and
+/// `max(-0.0, 0.0)` is `0.0` in either order.
 pub fn max_f32(a: f32, b: f32) -> f32 {
     if a.is_nan() {
         b
@@ -422,18 +404,16 @@ pub fn min_f64(a: f64, b: f64) -> f64 {
     }
 }
 
-/// The total order `min` and `max` use over floats, as a key that orders
-/// like the float: every negative below every positive, negative zero
-/// below positive zero, NaN beyond the infinities by its bits. Both
-/// backends compare by it, so a parallel minimum on the GPU and a
-/// sequential one here pick the same word.
+/// The total order `min` and `max` use over floats, as a key: negatives
+/// below positives, negative zero below positive zero, NaN beyond the
+/// infinities by its bits. Every backend compares by it.
 pub fn float_order_key(word: u32) -> i32 {
     let bits = word as i32;
     if bits >= 0 { bits } else { bits ^ 0x7fff_ffff }
 }
 
 /// Combines a scattered value into the element already there, scalar by
-/// scalar; the one rule every backend follows.
+/// scalar.
 pub fn combine_words(
     combine: Combine,
     scalars: &[Scalar],
@@ -503,14 +483,11 @@ pub fn combine_words(
     Ok(())
 }
 
-/// A scatter's `sum`, kept exact. An integer summed into its element is
-/// the whole total of what the element held and every value scattered to
-/// it, and fails only when that total is not one the scalar holds: the
-/// order the values arrive in cannot change it, so a walk in element
-/// order and a device adding in parallel agree to the bit, and to the
-/// element that fails, the first whose total does not fit. A float is
-/// added in element order, as it always was. Every backend's scatter
-/// under `sum` is held to this.
+/// A scatter's `sum`, the rule every backend's scatter keeps. An integer
+/// element becomes the exact total of what it held and every value
+/// scattered to it, failing only when that total overflows its scalar;
+/// the first element that overflows is the one reported, in any arrival
+/// order. A float is added in element order.
 pub struct Sums {
     scalars: Vec<Scalar>,
     stride: usize,
@@ -523,8 +500,7 @@ pub struct Sums {
 
 impl Sums {
     /// The Host words the sums of `elements` elements of `scalars` hold,
-    /// four a total: what a backend holds against its run's room
-    /// ([`Held`]) before it makes them.
+    /// four per total, to be held ([`Held`]) before they are made.
     pub fn held_words(scalars: &[Scalar], elements: usize) -> usize {
         let integers = starts(scalars)
             .filter(|(_, scalar)| matches!(scalar, Scalar::Int | Scalar::Long))
@@ -583,8 +559,8 @@ impl Sums {
         }
     }
 
-    /// Writes every total into `words`, or fails at the first element,
-    /// by its number, whose total its scalar does not hold.
+    /// Writes every total into `words`, or fails at the first element
+    /// whose total overflows its scalar.
     pub fn finish(self, words: &mut [u32]) -> Result<(), (usize, ArithmeticError)> {
         let n = self.integers.len();
         if n == 0 {
@@ -609,9 +585,8 @@ impl Sums {
     }
 }
 
-/// Each scalar of a layout where it starts: a layout names a scalar once
-/// a word, so a `Double` or a `Long` is named twice, and starts at the
-/// first.
+/// Each scalar of a layout at its first word; a layout names a `Double`
+/// or a `Long` once per word.
 fn starts(scalars: &[Scalar]) -> impl Iterator<Item = (usize, Scalar)> + '_ {
     let mut at = 0;
     std::iter::from_fn(move || {
@@ -643,9 +618,8 @@ pub fn double_order_key(bits: u64) -> i64 {
 
 /// Checks that an invocation matches the manifest: input and parameter
 /// counts, each input's shape and element layout, parameter types, and a
-/// non-empty domain. Every backend applies the same rule, and a backend
-/// that reads an input's words by its port's layout (the JIT's code
-/// does) is safe whoever called it, not only when the Graph did.
+/// non-empty domain. Every backend applies it, so reading an input by its
+/// port's layout is safe for any caller.
 pub fn check_invocation(
     module: &Validated,
     invocation: &Invocation,
@@ -682,8 +656,7 @@ pub fn check_invocation(
             actual: invocation.params.len(),
         });
     }
-    // A value is its type's words, scalar for scalar: what a caller
-    // widened or reshaped (`orla_ir::value_as`) arrives exact.
+    // A value is its type's words, scalar for scalar.
     for (param, value) in manifest.params.iter().zip(&invocation.params) {
         let wanted = orla_ir::schema_of(param.ty, &module.structs).map(|s| s.scalars().to_vec());
         if wanted.as_deref() != Some(value.scalars().as_slice()) {
@@ -705,10 +678,8 @@ pub fn check_invocation(
         }
         return Ok(());
     }
-    // A scatter's output has the target's shape, whatever its domain; its
-    // domain has the shape its entry was compiled over, its first input's,
-    // or `element()`, `coord()` and `domain()` would read one shape as
-    // another.
+    // A scatter's output has the target's shape; its domain has its first
+    // input's shape, the one `element()`, `coord()` and `domain()` read.
     if let (Mode::Scatter { .. }, Some(first)) = (manifest.mode, manifest.inputs.first())
         && first.ty.shape != invocation.domain.shape()
     {
@@ -729,16 +700,11 @@ pub fn check_invocation(
     Ok(())
 }
 
-/// The grouping a prefix fold takes on a backend that blocks it.
-///
-/// The rule a prefix declares is order-free, so where the fold is
-/// grouped changes no word; what it changes is how long the two walks
-/// are. A block of about the square root of the count makes them the
-/// same length: as many blocks as there are elements in one, so the
-/// walk over the blocks' totals is no longer than a block's own.
+/// The grouping a prefix fold takes on a backend that blocks it. A
+/// prefix's rule is order-free, so grouping changes no word; a block of
+/// about the square root of the count balances the two walks.
 pub mod prefix {
-    /// The fewest elements a block holds, below which the blocks
-    /// outnumber what a walk over them should cost.
+    /// The fewest elements a block holds.
     pub const LEAST: usize = 64;
 
     /// How many elements a block holds, for `count` of them.
@@ -752,11 +718,9 @@ pub mod prefix {
 mod tests {
     use super::*;
 
-    /// A layout names a 64-bit scalar once a word: a `Double` and a
-    /// `Long` are each summed once, from where they start, beside an
-    /// `Int` and a `Float`; and a total that does not fit is the first
-    /// element's whose does not. (Walked a word a scalar, a `Double` was
-    /// added twice and a `Long` read from the middle.)
+    /// A `Double` and a `Long` are each summed once, from their first
+    /// word, beside an `Int` and a `Float`; an overflow names the first
+    /// element whose total overflows.
     #[test]
     fn sums_take_each_scalar_once_where_it_starts() {
         use Scalar::{Double, Float, Int, Long};

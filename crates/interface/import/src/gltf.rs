@@ -1,10 +1,8 @@
-//! glTF 2.0 as Fields: `orla import` reads a model and writes what a
-//! scene takes as inputs: vertices as rows of `{position, normal, uv}`,
-//! triangles as rows of three indices, the base colour texture as a PNG.
-//! Node transforms are baked into positions and normals, so the model
-//! stands as its author placed it; every mesh of the scene lands in one
-//! pair of rows. Skins, animations, sparse accessors and JPEG textures
-//! are reported and left where they are.
+//! glTF 2.0 as Fields: vertices as rows of `{position, normal, uv}`,
+//! triangles as rows of three indices, the base colour texture as a PNG,
+//! and a skin's weights, skeleton and clips. Node transforms are baked
+//! in; every mesh of the scene lands in one pair of rows. What is left
+//! out is named in the notes.
 
 use std::path::{Path, PathBuf};
 
@@ -29,8 +27,7 @@ pub struct Imported {
     pub bounds: ([f32; 3], [f32; 3]),
     /// Joints of the skin, when the model has one.
     pub joints: usize,
-    /// Each animation as a clip: its name and how many frames it was
-    /// sampled into.
+    /// Each animation's clip name and frame count.
     pub clips: Vec<(String, usize)>,
     /// Frames a second the clips were sampled at.
     pub rate: f32,
@@ -54,8 +51,8 @@ fn transform_point(m: &Matrix, p: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Normals transform by the inverse transpose of the upper 3×3, which
-/// is the adjugate over the determinant, transposed: the cofactors.
+/// Normals transform by the cofactors of the upper 3×3 (the inverse
+/// transpose up to scale).
 fn transform_normal(m: &Matrix, n: [f32; 3]) -> [f32; 3] {
     let (a, b, c) = (m[0], m[4], m[8]);
     let (d, e, f) = (m[1], m[5], m[9]);
@@ -342,18 +339,15 @@ struct Point {
     uv: [f32; 2],
 }
 
-/// What a vertex is bound to: four joints of the skin and how much of
-/// each. All four weights zero means the vertex is bound to nothing,
-/// which is how a model that mixes skinned and unskinned meshes says
-/// "leave this one where it is".
+/// A vertex's four joints and weights. All weights zero means bound to
+/// nothing: the vertex stays where it is.
 #[derive(Clone, Copy, Default)]
 struct Bound {
     joints: [u32; 4],
     weights: [f32; 4],
 }
 
-/// A skin as the rows a scene reads: a parent and an inverse bind
-/// matrix per joint, parents before children.
+/// A skin: a parent and an inverse bind matrix per joint.
 struct Skeleton {
     /// Which node each joint is, in the skin's own order.
     nodes: Vec<usize>,
@@ -370,8 +364,7 @@ enum Between {
     Cubic,
 }
 
-/// One channel of an animation: the times, the values, and how to read
-/// between them.
+/// One animation channel.
 struct Track {
     times: Vec<f32>,
     values: Vec<f32>,
@@ -418,8 +411,7 @@ impl Track {
                 .map(|(a, b)| a + (b - a) * u)
                 .collect(),
             Between::Cubic => {
-                // The spline glTF defines: each key is an in-tangent,
-                // the value, and an out-tangent.
+                // Each glTF cubic key is in-tangent, value, out-tangent.
                 let out = |k: usize| &self.values[k * stride * 3 + stride * 2..][..stride];
                 let into = |k: usize| &self.values[k * stride * 3..][..stride];
                 let (t2, t3) = (u * u, u * u * u);
@@ -508,9 +500,8 @@ fn rest_pose(node: &Json) -> [f32; 10] {
     ]
 }
 
-/// The skin's joints as rows: each one's parent in the same row and its
-/// inverse bind matrix. The order is the skin's own, which is what a
-/// vertex's `JOINTS_0` indexes.
+/// The skin's joints in the skin's order (what `JOINTS_0` indexes), each
+/// with its parent's index in that order and its inverse bind matrix.
 fn skeleton_of(model: &Model, skin: usize) -> Result<Skeleton, String> {
     let skin = model.json["skins"]
         .get(skin)
@@ -524,8 +515,7 @@ fn skeleton_of(model: &Model, skin: usize) -> Result<Skeleton, String> {
     if nodes.is_empty() {
         return Err("a skin has no joints".into());
     }
-    // Who holds whom, over every node there is: a joint's parent may be
-    // any node, and only the ones that are joints of this skin count.
+    // Parents over all nodes; only joints of this skin count.
     let mut parent_of: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
     for (index, node) in model.json["nodes"]
         .as_array()
@@ -575,8 +565,8 @@ fn skeleton_of(model: &Model, skin: usize) -> Result<Skeleton, String> {
     })
 }
 
-/// One animation as a clip: every joint's local transform at every
-/// frame, a frame's joints together, sampled at `rate`.
+/// One animation as a clip: every joint's local transform per frame,
+/// sampled at `rate`.
 fn clip_of(
     model: &Model,
     animation: &Json,
@@ -587,7 +577,6 @@ fn clip_of(
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    // A track per joint per path, and how long the whole thing runs.
     let mut tracks: std::collections::BTreeMap<(usize, String), Track> =
         std::collections::BTreeMap::new();
     let mut seconds: f32 = 0.0;
@@ -658,15 +647,13 @@ fn clip_of(
     Ok((out, frames))
 }
 
-/// Reads `path` and writes `<stem>.vertices.field`, `<stem>.triangles.field`
-/// and, when there is one in PNG, `<stem>.albedo.png` into `out_dir`.
+/// Reads `path` and writes into `out_dir`: `<stem>.vertices.field`,
+/// `<stem>.triangles.field`, and `<stem>.albedo.png` for a PNG texture.
 ///
-/// A model with a skin writes two more — `<stem>.weights.field`, the four
-/// joints and weights of every vertex, and `<stem>.skeleton.field`, each
-/// joint's parent and inverse bind matrix — and one `<stem>.<name>.clip.field`
-/// per animation, sampled at `rate` frames a second: rows of a local
-/// translation, rotation and scale, a frame's joints together. The
-/// `skin` package poses a mesh from those.
+/// A skinned model also writes `<stem>.weights.field`,
+/// `<stem>.skeleton.field`, and one `<stem>.<name>.clip.field` per
+/// animation sampled at `rate` frames a second, which the `skin` package
+/// reads.
 pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String> {
     let model = Model::open(path)?;
     let stem = path
@@ -694,9 +681,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     } else {
         None
     };
-    // What a model can carry that these rows do not, said rather than
-    // dropped: a reader that loses something in silence is worse than
-    // one that refuses.
+    // Everything left out is named in the notes.
     let morphs = model.json["meshes"]
         .as_array()
         .into_iter()
@@ -719,7 +704,6 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
             "the model has {textured} materials with a base colour texture; the first comes in and the rest are left out"
         ));
     }
-    // Walk the scene: nodes carry meshes and transforms.
     let scene_index = model.json["scene"].as_u64().unwrap_or(0) as usize;
     let roots: Vec<usize> = model.json["scenes"]
         .get(scene_index)
@@ -732,7 +716,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
                 .collect()
         })
         .unwrap_or_else(|| {
-            // No scenes: every node stands on its own.
+            // Without scenes, every node is a root.
             (0..model.json["nodes"].as_array().map_or(0, Vec::len)).collect()
         });
     let mut stack: Vec<(usize, Matrix)> = roots.iter().map(|&n| (n, IDENTITY)).collect();
@@ -787,9 +771,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
                 Some(i) => Some(model.floats(i as usize)?.0),
                 None => None,
             };
-            // A skinned mesh is placed by its joints, so glTF says to
-            // ignore the node's own transform; an unskinned one is
-            // placed where its author put it.
+            // glTF places a skinned mesh by its joints alone.
             let skinned = node.get("skin").is_some() && joints.is_some() && weights.is_some();
             let world = if skinned { IDENTITY } else { world };
             let base = points.len() as u32;
@@ -822,8 +804,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
                             ],
                             weights: [w[k * 4], w[k * 4 + 1], w[k * 4 + 2], w[k * 4 + 3]],
                         },
-                        // Bound to nothing, which the `skin` package
-                        // reads as "leave it where it is".
+                        // Bound to nothing.
                         _ => Bound::default(),
                     });
                 }
@@ -947,8 +928,6 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
             notes.push("the base colour texture is not PNG (JPEG, likely); convert it to PNG and it comes in".into());
         }
     }
-    // The skin: what every vertex is bound to, what the joints are, and
-    // every animation sampled into a clip.
     let mut clips = Vec::new();
     let joints = skeleton.as_ref().map(|s| s.nodes.len()).unwrap_or(0);
     if let Some(skeleton) = &skeleton {
@@ -1050,8 +1029,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
 mod tests {
     use super::*;
 
-    /// A quad of two triangles, positions and uvs, indices as u16, in a
-    /// data URI; one node scales it by two and lifts it by one.
+    /// A two-triangle quad in a data URI, scaled by two and lifted by one.
     fn quad_gltf() -> String {
         let mut bin = Vec::new();
         for p in [
@@ -1083,9 +1061,8 @@ mod tests {
         )
     }
 
-    /// Two vertices on a chain of two joints, the upper one turning a
-    /// quarter circle over a second: the skin, the skeleton and the clip
-    /// a scene reads.
+    /// Two vertices on a two-joint chain; the upper joint turns a quarter
+    /// circle over a second.
     fn rigged_gltf() -> String {
         let mut bin = Vec::new();
         // positions
@@ -1157,7 +1134,7 @@ mod tests {
         )
     }
 
-    /// What a model carries that these rows do not is said, not dropped.
+    /// What is left out is named in the notes.
     #[test]
     fn what_is_left_out_is_named() {
         let dir = std::env::temp_dir().join(format!("orla-gltf-notes-{}", std::process::id()));
@@ -1211,8 +1188,7 @@ mod tests {
             let data = file::decode(&bytes).unwrap();
             (data.values().to_vec(), data.domain())
         };
-        // A skinned mesh is placed by its joints, so the node's own
-        // translation of nine is not in the positions.
+        // A skinned mesh ignores its node's translation of nine.
         let (vertices, _) = read("arm.vertices.field");
         assert_eq!(f32::from_bits(vertices[1]), 0.0, "the first vertex");
         assert_eq!(f32::from_bits(vertices[9]), 2.0, "the second vertex");
@@ -1229,8 +1205,7 @@ mod tests {
         assert_eq!(skeleton[0] as i32, -1);
         assert_eq!(skeleton[17] as i32, 0);
 
-        // The clip: the joint at rest to start, a quarter turn about x
-        // by the last frame, and the halfway frame halfway round.
+        // At rest first, a quarter turn about x last, halfway between.
         let (clip, domain) = read("arm.bend.clip.field");
         assert_eq!(domain, Domain::Rows(31 * 2));
         let pose = |frame: usize, joint: usize| -> Vec<f32> {
@@ -1250,7 +1225,6 @@ mod tests {
         let quarter = std::f32::consts::FRAC_PI_4;
         assert!((end[3] - quarter.sin()).abs() < 1e-4, "{end:?}");
         assert!((end[6] - quarter.cos()).abs() < 1e-4, "{end:?}");
-        // Halfway is halfway round, which is what slerp is for.
         let middle = pose(15, 1);
         let eighth = std::f32::consts::FRAC_PI_8;
         assert!((middle[3] - eighth.sin()).abs() < 1e-3, "{middle:?}");

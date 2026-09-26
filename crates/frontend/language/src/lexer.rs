@@ -5,9 +5,9 @@ use crate::{ParseError, Span};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Token {
     Ident(String),
-    /// An integer as written; which width it is, the compiler decides.
+    /// An integer as written; the compiler picks its width.
     Int(i64),
-    /// A float as written, kept exact until a width is decided.
+    /// A float as written; the compiler picks its width.
     Float(f64),
     /// A float written with `d`: a `Double`.
     Double(f64),
@@ -119,8 +119,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             });
             continue;
         }
-        // A suffix after a number: `d` for a `Double`, `l` for a `Long`,
-        // when no other letter follows it.
+        // A number's suffix, `d` (`Double`) or `l` (`Long`), standing alone.
         let suffix = |at: usize, letters: &[char]| {
             chars.get(at).copied().filter(|c| {
                 letters.contains(c)
@@ -130,9 +129,8 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Lexeme>, ParseError> {
             })
         };
         if c == '0' && chars.get(index + 1) == Some(&'x') {
-            // A hexadecimal integer: its bits as written, so `0x80000000`
-            // is an `Int`'s sign bit; more than eight digits, or an `l`,
-            // make a `Long`.
+            // Hexadecimal is bits as written (`0x80000000` is an `Int`'s
+            // sign bit); over eight digits or an `l` make a `Long`.
             advance(2, &mut index, &mut byte);
             while index < chars.len() && chars[index].is_ascii_hexdigit() {
                 advance(1, &mut index, &mut byte);

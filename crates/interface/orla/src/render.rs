@@ -1,14 +1,11 @@
-//! Rendering frames over time to files: the Player is real time and `run`
-//! is one frame; `render` steps a scene at a fixed rate for a count of
-//! frames and writes the picture of each as a PNG in a directory, with the
-//! sound output, block after block, as one WAV beside them. ffmpeg makes
-//! a video of the directory; nothing here depends on a codec.
+//! `render`: steps a scene at a fixed rate for a count of frames, each
+//! picture a PNG in a directory and the sound, block after block, one
+//! WAV beside them.
 //!
-//! The clock is the frame count over the rate, so a render is the same
-//! every time; an `async` node's run is waited for after every frame, so
-//! no step is skipped. The picture is the first output that is a grid of
-//! pixels and the sound the first that is rows of one or two floats, as
-//! the Player chooses them.
+//! The clock is frame count over rate, so a render is deterministic;
+//! `async` nodes are waited for every frame. The picture is the first
+//! pixel-grid output and the sound the first output of rows of one or
+//! two floats, as in the Player.
 
 use std::path::{Path, PathBuf};
 
@@ -53,9 +50,8 @@ pub fn picture_name(index: u32) -> String {
 /// The sound's file name.
 pub const SOUND_NAME: &str = "sound.wav";
 
-/// Renders `options.frames` frames of the session's scene into
-/// `options.out`, calling `progress` with each frame's index once it is
-/// written.
+/// Renders `options.frames` frames into `options.out`, calling
+/// `progress` with each written frame's index.
 pub fn render(
     session: &mut Session,
     options: &Options,

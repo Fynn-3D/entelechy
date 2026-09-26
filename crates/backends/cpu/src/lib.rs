@@ -1,16 +1,15 @@
 #![warn(missing_docs)]
 //! CPU backend.
 //!
-//! Compiles a [`Validated`] module to word-addressed code — once, into a
-//! [`Code`] a caller keeps — and runs it once per output element. The backend is trusted Rust, but the Kernel it runs
-//! is not: every Host access goes through the capability-gated [`Scope`],
-//! and the backend creates and releases the outputs it allocates so a
-//! failed execution leaks nothing.
+//! Compiles a [`Validated`] module once into a [`Code`] the caller keeps,
+//! and runs it once per output element. Every Host access goes through
+//! the capability-gated [`Scope`]; a failed execution releases the
+//! outputs it created.
 //!
-//! Execution has two phases. The compute phase borrows the inputs through
-//! the scope once and runs rows in parallel; the write phase stores results
-//! sequentially. Results are identical to a single-threaded run, and the
-//! first failing pixel in row-major order is the one reported.
+//! The compute phase borrows inputs through the scope once and runs rows
+//! in parallel; the write phase stores results sequentially. Results equal
+//! a single-threaded run, and the first failing element in row-major
+//! order is the one reported.
 
 mod eval;
 
@@ -33,10 +32,8 @@ const PARALLEL_THRESHOLD: usize = 4096;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CpuBackend;
 
-/// A module compiled to the interpreter's word code. Compiling a
-/// Kernel of a hundred statements takes about eighty microseconds,
-/// which a frame should not pay for every node it runs, so a backend
-/// compiles once and binds an invocation to it.
+/// A module compiled to the interpreter's word code, compiled once and
+/// bound to each invocation.
 #[derive(Clone)]
 pub struct Code(std::sync::Arc<eval::Compiled>);
 
@@ -93,8 +90,7 @@ impl CpuBackend {
                 combine,
             );
         }
-        // The words are computed here before the Host holds them: asked
-        // first, so a domain past the budget costs nothing to refuse.
+        // The Host's budget is asked before any words are computed.
         let fields: Vec<_> = module
             .manifest
             .outputs
@@ -109,9 +105,8 @@ impl CpuBackend {
         let domain = invocation.domain;
         let stride: usize = strides.iter().sum();
         let count = domain.count();
-        // One output is the common case, and then what the elements
-        // wrote is already the Field's words in order: it goes in
-        // whole, rather than being gathered into a second buffer first.
+        // With one output, the elements' words are already the Field's
+        // words in order and go in whole.
         if let [port] = &module.manifest.outputs[..] {
             let handle = scope.create(port.ty.schema.clone(), domain)?;
             return match scope.write_values(handle, &results) {
@@ -158,8 +153,8 @@ fn output_strides(module: &Validated) -> Vec<usize> {
 }
 
 /// A reduction: the entry over the first input's domain, then a pairwise
-/// fold with `merge` in a fixed tree, so the result does not depend on
-/// how many threads ran the map. One `Rows` element comes out.
+/// fold with `merge` in a fixed tree, independent of thread count.
+/// Produces one `Rows` element.
 fn reduce(
     code: &std::sync::Arc<eval::Compiled>,
     module: &Validated,
@@ -203,8 +198,7 @@ fn reduce(
 
 /// A prefix: the entry over every element of the first input, then each
 /// element folded with everything before it, in element order. The rule
-/// is order-free, so this walk is one grouping of many and every
-/// backend's answer is this one.
+/// is order-free, so every backend's answer equals this walk's.
 fn prefix(
     code: &std::sync::Arc<eval::Compiled>,
     module: &Validated,
@@ -234,8 +228,7 @@ fn prefix(
             values[at..at + stride].copy_from_slice(&running);
         }
     }
-    // The output is the input's own count, which is what the walk just
-    // wrote, element for element.
+    // The output has the input's count.
     let output = scope.create(port.ty.schema.clone(), domain)?;
     if let Err(error) = scope.write_values(output, &values) {
         let _ = scope.release(output);
@@ -254,9 +247,8 @@ pub struct TraceValue {
     pub ty: Type,
     /// Its words, in the ABI's layout.
     pub words: Vec<u32>,
-    /// Whether the binding's block ran for this element: a `let` in the
-    /// branch of an `if` not taken did not, and its words mean nothing.
-    /// A `let` in a loop body counts as run when the loop ran.
+    /// Whether the binding's block ran for this element; `words` holds
+    /// meaning only when it did. A loop body runs when its loop does.
     pub ran: bool,
 }
 
@@ -292,10 +284,9 @@ pub struct TraceCall {
 /// How many calls a trace records.
 pub const CALL_RECORDS: usize = eval::CALL_RECORDS;
 
-/// Which values of the entry were computed for the element just run,
-/// read back from the conditions: a value in the branch of an `if` ran
-/// when the `if` ran and its condition chose that branch; a value in a
-/// loop ran when the loop did (its last iteration's value is shown).
+/// Which entry values ran for the element just run, read from the
+/// conditions: an `if` branch ran when its `if` ran and chose it; a loop
+/// value ran when its loop did (showing the last iteration).
 fn ran_values(
     entry: &orla_ir::Function,
     value: &dyn Fn(orla_ir::ValueId) -> Vec<u32>,
@@ -383,9 +374,8 @@ fn values_of(
 
 /// Runs one element of `module` on the interpreter and returns every
 /// binding of its entry: element `at` of a map (or of the map part of a
-/// reduction or a scatter), or step `at[0]` of a scan, the earlier steps
-/// run first so the memories and the carried value are as that step saw
-/// them. Nothing is written back; the scope's Fields are only read.
+/// reduction or a scatter), or step `at[0]` of a scan after running the
+/// earlier steps. The scope's Fields are only read.
 pub fn trace(
     module: &Validated,
     invocation: &Invocation,
@@ -499,9 +489,8 @@ pub fn trace(
 }
 
 /// A scan: the entry once per element of the first input, in order, each
-/// step reading the previous step's result and writing its own. Ordered
-/// work runs on one thread; that is its nature, not a limitation of the
-/// backend.
+/// step reading the previous step's result and writing its own, on one
+/// thread.
 fn scan(
     code: &std::sync::Arc<eval::Compiled>,
     module: &Validated,
@@ -521,8 +510,8 @@ fn scan(
         machine.run_scan_step(index as u32, &carried, out)?;
         carried.copy_from_slice(out);
     }
-    // The memories as the steps left them become the outputs after the
-    // first, in the manifest's order.
+    // The final memories are the outputs after the first, in manifest
+    // order.
     machine.finish()?;
     program.outcome()?;
     let memories = machine.take_memories();
@@ -559,9 +548,8 @@ fn scan(
 }
 
 /// A scatter: the entry over the domain, then every address and value
-/// applied to a copy of the target, one after another in element order.
-/// The order is the rule, so the result is the same on every backend,
-/// floats included.
+/// applied to a copy of the target in element order, which every backend
+/// matches, floats included.
 fn scatter(
     code: &std::sync::Arc<eval::Compiled>,
     module: &Validated,
@@ -582,8 +570,8 @@ fn scatter(
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let port = &module.manifest.outputs[0];
     let scalars = port.ty.schema.scalars();
-    // A sum is each element's whole total, which fails only where it
-    // does not fit, whatever the order: the element that fails is named.
+    // A sum is each element's whole total in any order; an overflow
+    // names the element whose total leaves the range.
     if combine == Combine::Sum {
         if !held.take(orla_rules::Sums::held_words(scalars, target.count())) {
             return Err(held.over());
@@ -636,11 +624,10 @@ fn scatter(
 type Pairs = (Vec<u32>, Vec<u32>);
 
 /// A scatter's pairs, in the order the rule applies them: element by
-/// element, the pairs each emits and then the one it returns, with the
-/// element each came from. Threads take runs of elements and their pairs
-/// are joined in run order, so the order is the one thread's would be.
-/// Every pair is held against the Host's room with the word naming its
-/// element: the returned ones before the run, the emitted as they come.
+/// element, its emitted pairs then its returned one, each with its
+/// element. Threads' runs join in run order, as one thread's would.
+/// Every pair and its element word are charged to the Host's budget: the
+/// returned pairs before the run, emitted ones as they come.
 fn compute_pairs(
     program: &eval::Program<'_>,
     pair_words: usize,
@@ -706,9 +693,8 @@ fn compute_pairs(
     Ok((pairs, sources))
 }
 
-/// Runs the entry point over every element of the program's domain, on
-/// as many threads as pay off. Returns every output's words per element,
-/// outputs concatenated.
+/// Runs the entry over the program's domain on as many threads as pay
+/// off. Returns every output's words per element, outputs concatenated.
 fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, ExecutionError> {
     let domain = program.domain;
     let width = domain.width() as usize;
@@ -719,8 +705,7 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
     let row_words = width * stride;
     let mut results = vec![0u32; rows * row_words];
     let element_count = width * rows;
-    // Split by elements and not by rows: a `Rows` domain is one row of
-    // a million, and splitting that by rows is one thread.
+    // Split by elements: a `Rows` domain is a single row.
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
@@ -766,16 +751,14 @@ fn compute(program: &eval::Program<'_>, strides: &[usize]) -> Result<Vec<u32>, E
 
 fn release_all(scope: &mut Scope<'_>, outputs: &[Handle]) {
     for output in outputs {
-        // The output was created through this scope, so release cannot be
-        // denied; a Host failure here would mean the handle is already gone.
+        // Created through this scope, so release is granted; an error
+        // means the handle is already gone.
         let _ = scope.release(*output);
     }
 }
 
 /// The interpreter's word code, compiled once when the module is
-/// prepared. A Kernel of a hundred statements takes tens of
-/// microseconds to compile, which is more than most nodes take to run,
-/// so a frame must not pay it per execution.
+/// prepared.
 struct CpuCode(Code);
 
 impl Prepared for CpuCode {

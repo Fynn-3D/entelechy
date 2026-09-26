@@ -1,8 +1,6 @@
-//! A WebAssembly module in its binary form, as much of it as the JIT
-//! writes: function types, the host's memory and function table
-//! imported, functions, one global, exports, and code. Nothing is
-//! validated here; the host compiles what is written and refuses a
-//! module that is wrong.
+//! The WebAssembly binary subset the JIT writes: types, imported memory
+//! and table, functions, one global, exports and code. The host
+//! validates the module when it compiles it.
 
 /// A value type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,8 +30,7 @@ impl Val {
     }
 }
 
-/// A function type: its parameters; functions here return nothing, or
-/// one value.
+/// A function type: its parameters and at most one result.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Signature {
     pub params: Vec<Val>,

@@ -1,6 +1,5 @@
-//! Operations that run the scene: one evaluation, many frames until a
-//! count or a value says to stop, a measurement, and the state and window
-//! runs see.
+//! Operations that run the scene: one evaluation, many frames up to a
+//! count or a condition, a measurement, and the state and window runs see.
 
 use orla_kernel::Context;
 use serde_json::{Value as Json, json};
@@ -10,12 +9,10 @@ use orla_session::Session;
 use crate::request::Request;
 use crate::wire::{context_of, evaluation_error, failure, report_json};
 
-/// The most frames one `advance` runs: past this, an agent asks again,
-/// which is where it can look at what it has.
+/// The most frames one `advance` (or `bench`) runs.
 const MAX_ADVANCE: u64 = 100_000;
 
-/// One word of a scalar value as a number; anything wider has no single
-/// value to compare.
+/// A Float, Int or Bool value as a number; other types are an error.
 fn scalar((ty, words): (orla_ir::Type, Vec<u32>)) -> Result<f64, String> {
     match (ty, words.first()) {
         (orla_ir::Type::Float, Some(word)) => Ok(f64::from(f32::from_bits(*word))),
@@ -48,9 +45,8 @@ pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json,
     Ok(report_json(session, &report))
 }
 
-/// What a change cost: the same frames several times, the least of the
-/// runs, as `orla bench` measures from a terminal. The clock advances as
-/// `advance` advances it, so a measurement is also a run of the scene.
+/// Measures the same frames several times, as `orla bench` does. The
+/// clock advances as in `advance`, so a measurement also runs the scene.
 pub(crate) fn bench(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let whole = |name: &str, default: u64| -> Result<u64, Json> {
         match request.get(name) {
@@ -121,8 +117,7 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
         ));
     }
     let base = context_of(session, request.json());
-    // `until` watches one value of one node: the agent's reason
-    // to stop before the count runs out.
+    // `until` watches one value of one node and stops the run early.
     let until = match request.get("until") {
         None | Some(Json::Null) => None,
         Some(Json::Object(test)) => {
@@ -153,9 +148,8 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
         }
         Some(_) => return Err(failure("`until` is an object")),
     };
-    // `save` writes node outputs when the run stops, by the
-    // rules `run --save` follows; a relative path is beside the
-    // scene.
+    // `save` writes node outputs when the run stops, as `run --save`
+    // does; a relative path is beside the scene.
     let mut saves: Vec<(orla_graph::NodeId, String, std::path::PathBuf)> = Vec::new();
     match request.get("save") {
         None | Some(Json::Null) => {}
@@ -176,8 +170,8 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
                         .unwrap_or_else(|| std::path::Path::new("."))
                         .join(resolved)
                 };
-                // An agent writes files by the allowance the person
-                // running the session gave, as a scene's outputs do.
+                // Writes follow the session's write grant, as a scene's
+                // outputs do.
                 let resolved = session
                     .allowed_write(&resolved)
                     .map_err(|why| failure(format!("cannot save {target}: {why}")))?;
@@ -186,8 +180,8 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
         }
         Some(_) => return Err(failure("`save` is an object of `node.port` to a path")),
     }
-    // What must stay materialized: what is watched and what is
-    // written. With nothing named, the whole scene runs.
+    // Watched and saved nodes stay materialized and are the demand;
+    // with none, the whole scene runs.
     let mut watched: Vec<orla_graph::NodeId> = Vec::new();
     if let Some((_, node, ..)) = &until {
         watched.push(node.clone());
@@ -265,8 +259,8 @@ pub(crate) fn advance(session: &mut Session, request: &Request) -> Result<Json, 
     outcome
 }
 
-/// Forgets committed state: all of it, or one port's with `node` (and
-/// `port`, `result` when not named).
+/// Forgets all committed state, or one port's with `node` (and `port`,
+/// default `result`).
 pub(crate) fn reset(session: &mut Session, request: &Request) -> Result<Json, Json> {
     if request.get("node").is_none() {
         if request.get("port").is_some() {

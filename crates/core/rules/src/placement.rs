@@ -1,8 +1,7 @@
-//! Where a picture lands in a window: fitted whole, its aspect kept,
-//! centred. The one rule a device's presenter and a CPU blit both show
-//! by, and that a pointer's position is read back through.
+//! Where a picture lands in a window: fitted whole, aspect kept,
+//! centred. Presenters, CPU blits and pointer mapping share this rule.
 
-/// Where the image landed inside the window, in window pixels.
+/// The image's rectangle inside the window, in window pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Placement {
     /// Left edge.

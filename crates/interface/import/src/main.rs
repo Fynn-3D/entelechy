@@ -1,7 +1,6 @@
-//! `orla-import`: brings a file in as the Host's files, from outside the
+//! `orla-import`: outside files as the Host's files, outside the
 //! runtime. A model becomes vertex and triangle rows and a PNG; a
-//! compressed sound becomes a WAV. The runtime learns no format here; a
-//! scene reads what this writes as inputs.
+//! compressed sound a WAV; a score a notes Field.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

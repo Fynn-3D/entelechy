@@ -1,9 +1,7 @@
-//! How a value of an IR type lies in memory for the JIT's code, native
-//! or WebAssembly alike: its scalars in layout order, each a lane of one
-//! width. A 32-bit scalar is one word; a `Double` or a `Long` is one
-//! 64-bit value that memory keeps as two words, the low one first
-//! (little-endian, as every target the JIT builds for is). Each code
-//! generator names a lane in its own machine's types.
+//! How a value of an IR type lies in memory for native and WebAssembly
+//! code: its scalars in layout order, one lane each. A 32-bit scalar is
+//! one word; a `Double` or `Long` is two words, low first
+//! (little-endian on every JIT target).
 
 use orla_abi::Type;
 use orla_ir::Module;
@@ -48,7 +46,7 @@ pub(crate) fn lanes(module: &Module, ty: Type) -> Vec<Lane> {
     }
 }
 
-/// A scalar's width in memory, however a code generator names it.
+/// A scalar's width in memory.
 pub(crate) trait Width: Copy {
     /// Bytes it takes.
     fn width(self) -> u32;

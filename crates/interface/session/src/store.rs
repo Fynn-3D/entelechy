@@ -1,9 +1,6 @@
-//! Where a session's documents are. The session reads its scene, the
-//! documents the scene uses, the files its inputs name, and writes what
-//! its outputs and its requests write, all through a [`Store`]: the
-//! disk, where a process has one, or [`Memory`], the files its caller
-//! handed in, where it has none (a page) or wants none. Which one it is
-//! is the caller's choice; nothing the session does depends on it.
+//! Where a session's documents are. Every session read and write goes
+//! through a [`Store`]: the [`Disk`], or [`Memory`], files the caller
+//! handed in (a page). The caller chooses; the session behaves the same.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -19,8 +16,7 @@ pub enum Kind {
     Dir,
 }
 
-/// What a file looked like when it was read: whenever the file changes,
-/// so does its stamp.
+/// A file's version as read; it changes whenever the file does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stamp(Seen);
 
@@ -28,7 +24,7 @@ pub struct Stamp(Seen);
 enum Seen {
     /// A file on disk: its modification time and length.
     Disk(Option<std::time::SystemTime>, u64),
-    /// A file handed in: the how-manieth it was.
+    /// A file handed in: the number of the write that made it.
     Memory(u64),
 }
 
@@ -36,17 +32,15 @@ enum Seen {
 pub trait Store: Send + Sync {
     /// The file's bytes.
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
-    /// Replaces the file whole, making the directories it needs: a
-    /// reader never sees half of it.
+    /// Replaces the file atomically, making the directories it needs.
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
     /// What is at `path`, if anything.
     fn kind(&self, path: &Path) -> Option<Kind>;
-    /// What a directory holds, in no order.
+    /// What a directory holds, unordered.
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>>;
-    /// The file's stamp now; `None` when there is none.
+    /// The file's stamp now, if it exists.
     fn stamp(&self, path: &Path) -> Option<Stamp>;
-    /// The file's one name, whatever the spelling that reached it; an
-    /// error when nothing is there.
+    /// The file's one name under any spelling; an error when absent.
     fn canonical(&self, path: &Path) -> io::Result<PathBuf>;
     /// `path` made whole: absolute where the store has a current
     /// directory, `.` and `..` folded, links unread.
@@ -145,9 +139,8 @@ impl Store for Disk {
         Some(Stamp(Seen::Disk(metadata.modified().ok(), metadata.len())))
     }
 
-    /// Where the platform resolves links, the path it resolves; where it
-    /// does not (WebAssembly under WASI, whose sandbox lets no link lead
-    /// out of the directories it was given), the path made whole.
+    /// The platform's resolved path; under WASI, whose sandbox keeps links
+    /// inside its directories, the path made whole.
     fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
         match path.canonicalize() {
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
@@ -168,17 +161,15 @@ impl Store for Disk {
     }
 }
 
-/// Files handed in by the caller, kept in memory: a page's, which has no
-/// disk, or a program's that carries its scenes inside itself. A path is
-/// its name with `.` and `..` folded; a directory is any path some file
-/// is under. There are no links, so every file has one name.
+/// Files handed in by the caller, kept in memory. A path is its name with
+/// `.` and `..` folded; a directory is any path a file is under; every
+/// file has one name.
 #[derive(Debug, Default)]
 pub struct Memory {
     held: Mutex<Held>,
 }
 
-/// The files, each with the write that made it, and how many writes
-/// there have been: a file's stamp is its write's number.
+/// The files, each with the number of the write that made it (its stamp).
 #[derive(Debug, Default)]
 struct Held {
     files: BTreeMap<PathBuf, (Vec<u8>, u64)>,
@@ -186,8 +177,7 @@ struct Held {
 }
 
 impl Memory {
-    /// Puts a file, replacing what was at `path`; the session reads it
-    /// on its next sync, as it would a file changed on disk.
+    /// Puts a file at `path`; the next sync reads it as a changed file.
     pub fn put(&self, path: &Path, bytes: Vec<u8>) {
         let _ = self.write(path, &bytes);
     }
@@ -281,8 +271,8 @@ mod tests {
         assert_eq!(folded(Path::new("../../b")), PathBuf::from("../../b"));
     }
 
-    /// Files handed in are found by any spelling, their directories are
-    /// what is under them, and a file put again has a new stamp.
+    /// Files are found by any spelling, imply their directories, and get a
+    /// new stamp when put again.
     #[test]
     fn memory_holds_files_and_the_directories_they_imply() {
         let memory = Memory::default();

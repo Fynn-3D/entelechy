@@ -1,21 +1,21 @@
-//! Ordered work on a second backend: a runtime over one backend with
-//! another for scans prepares and executes each mode where it belongs,
-//! and the scan's inputs reach it through Host memory.
+//! Ordered work on a second backend: a runtime with another backend for
+//! scans prepares and executes each mode where it belongs, and the scan's
+//! inputs reach it through Host memory.
 
 use std::sync::{Arc, Mutex};
 
 use orla_abi::{Capabilities, Capability, Domain, Handle, Invocation, Scope};
 use orla_kernel::{Backend, Expect, Runtime};
 
-/// A backend that records what it is asked to do, and does it on the CPU.
+/// A backend that records what it is asked, and does it on the CPU.
 struct Recorder {
     name: &'static str,
     log: Arc<Mutex<Vec<String>>>,
     cpu: orla_cpu::CpuBackend,
-    /// Declines a module holding a `Double`, as a device without one does.
+    /// Declines a module holding a `Double`, like a device without one.
     no_doubles: bool,
-    /// Leaves scans to another, as a device that would walk one on a
-    /// single thread does.
+    /// Leaves scans to another backend, like a device that would walk one
+    /// on a single thread.
     no_scans: bool,
 }
 
@@ -120,13 +120,13 @@ fn scans_go_to_the_ordered_backend_and_the_rest_stays() {
             "ordered executes t.scan@1",
         ]
     );
-    // Where each runs, and why the scan does not run on the main one.
+    // Where each runs, and why the scan is routed.
     assert_eq!(runtime.placement(&map).routed, None);
     assert_eq!(
         runtime.placement(&scan).routed.as_deref(),
         Some("not on main: a scan runs its steps in order, on one thread")
     );
-    // Backends that compute in Host memory carry nothing anywhere.
+    // Backends computing in Host memory move nothing.
     assert_eq!(runtime.take_moved(), orla_kernel::Moved::default());
     // Without a second backend, everything is the main one's.
     let plain = cpu(1 << 16);
@@ -175,14 +175,12 @@ fn what_the_main_backend_declines_goes_to_the_ordered_one_and_says_why() {
     );
 }
 
-/// A backend that claims a device time for every Kernel it runs and
-/// none for a native operation, which is what a device whose clock
-/// answers looks like beside a rasterizer that is not asked.
+/// A backend that reports a device time for every Kernel and none for a
+/// native operation.
 struct Clocked {
     cpu: orla_cpu::CpuBackend,
-    /// Whether the clock has something to say, taken when it is read:
-    /// what a device's timestamp is, so a call nobody timed answers
-    /// nothing rather than the call before it.
+    /// Whether the clock has a reading, taken when read, like a device
+    /// timestamp: an untimed call answers nothing.
     timed: std::sync::atomic::AtomicBool,
 }
 
@@ -215,8 +213,7 @@ impl Backend for Clocked {
         Backend::execute_native(&self.cpu, op, invocation, scope)
     }
     fn last_device_time(&self) -> Option<std::time::Duration> {
-        // A Kernel is timed; a native operation is not, and the runtime
-        // must not hand the Kernel's number to it.
+        // A Kernel is timed; a native operation is not.
         self.timed
             .swap(false, std::sync::atomic::Ordering::Relaxed)
             .then(|| std::time::Duration::from_millis(7))
@@ -253,7 +250,7 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
             .unwrap()
     };
     let vertices = run(&mut runtime, &points, 3)[0];
-    // A Kernel: the backend's clock answered.
+    // A Kernel: the backend's clock answers.
     assert_eq!(
         runtime.last_measured(),
         Some(std::time::Duration::from_millis(7))
@@ -278,10 +275,8 @@ fn a_node_the_backend_did_not_time_is_not_given_its_neighbours_number() {
             },
         )
         .unwrap();
-    // The reference rasterizer has no device and reports no time; the
-    // runtime must answer `None` rather than the Kernel's seven
-    // milliseconds, which is what a profile printed for a rasterize
-    // until it was asked to.
+    // The reference rasterizer has no device and reports no time: the
+    // runtime answers `None`, not the Kernel's seven milliseconds.
     assert_eq!(
         runtime.last_measured(),
         None,

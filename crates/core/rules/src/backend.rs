@@ -1,7 +1,7 @@
-//! The contract every backend implements: the interpreter, the JIT and
-//! the GPU each implement [`Backend`] in their own crate, and the
-//! Kernel Runtime holds whichever it is given. Nothing here depends on
-//! the runtime, so no backend does either.
+//! The contract every backend implements. The interpreter, the JIT and
+//! the GPU each implement [`Backend`] in their own crate; the Kernel
+//! Runtime holds whichever it is given. This crate is independent of
+//! the runtime.
 
 use std::any::Any;
 
@@ -11,16 +11,14 @@ use orla_ir::{Capabilities, Capability, KernelId, Manifest, Port, PortType, Type
 use crate::ExecutionError;
 
 /// An operation a backend performs natively: device access, not a Kernel.
-/// Native operations are published by the runtime itself, under
-/// generation zero, and cannot be replaced.
+/// The runtime publishes these under generation zero; they are fixed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NativeOp {
     /// Rasterizes `vertices` and `triangles` into a `surface` grid; see
     /// [`crate::raster`] for the contract.
     Rasterize,
-    /// The same, testing each fragment against the alpha of a `mask`: a
-    /// fragment below `cutout` is not drawn at all, which is what a
-    /// leaf's edge or a fence's holes need.
+    /// The same, dropping each fragment whose `mask` alpha is below
+    /// `cutout`.
     RasterizeCutout,
 }
 
@@ -36,10 +34,8 @@ impl NativeOp {
         }
     }
 
-    /// The structs the manifest's ports name, by the index it names them
-    /// with, so an element's field is read by name as a Kernel's would
-    /// be: a vertex, a triangle, a surface texel and, for the cutout, a
-    /// mask pixel.
+    /// The structs the manifest's ports name, by index: a vertex, a
+    /// triangle, a surface texel and, for the cutout, a mask pixel.
     pub fn structs(self) -> Vec<orla_ir::StructDef> {
         let def = |name: &str, fields: &[(&str, Type)]| orla_ir::StructDef {
             name: name.to_owned(),
@@ -148,8 +144,7 @@ impl NativeOp {
         }
     }
 
-    /// The contract as text, for inspection where a Kernel would show its
-    /// source.
+    /// The contract as text, shown where a Kernel shows its source.
     pub fn source(self) -> &'static str {
         match self {
             Self::RasterizeCutout => {
@@ -192,17 +187,14 @@ pub trait Prepared: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
-/// Whether a run that has been handed back failed after all: what a
-/// backend that does not wait for its device answers with. Waiting on it
-/// waits for the run.
+/// A deferred verdict on a run already handed back. Waiting on it waits
+/// for the run.
 pub trait Check: Send {
-    /// The run's first failure, as the reference would name it, or
-    /// nothing.
+    /// The run's first failure, as the reference names it, if any.
     fn wait(self: Box<Self>) -> Result<(), ExecutionError>;
 }
 
-/// What a run answers with when it is checked later: its outputs, and
-/// the check, when there is one.
+/// A run's outputs and its deferred check, if any.
 pub type Checked = (Vec<Handle>, Option<Box<dyn Check>>);
 
 /// An execution backend. `prepare` does all expensive work so that
@@ -211,22 +203,18 @@ pub trait Backend: Send + Sync {
     /// Short backend name for diagnostics, e.g. `cpu`.
     fn name(&self) -> &'static str;
 
-    /// Why this backend leaves `module` to another, when it does: one it
-    /// cannot run (a GPU without 64-bit arithmetic, say), or one it runs
-    /// badly (a scan's steps in order, on one of a GPU's threads). A
-    /// runtime with a second backend prepares the module there and
-    /// reports the reason beside the node; one without runs it here,
-    /// and [`Backend::prepare`] says what it cannot. `None` is a module
-    /// this backend takes.
+    /// Why this backend leaves `module` to another (one it cannot run,
+    /// or runs badly), or `None` when it takes it. A runtime with a
+    /// second backend prepares the module there and reports the reason
+    /// beside the node; otherwise it runs here and [`Backend::prepare`]
+    /// reports what it cannot do.
     fn declines(&self, module: &Validated) -> Option<String> {
         let _ = module;
         None
     }
 
-    /// Bytes this backend has brought to its device from Host memory
-    /// since it was made: inputs a node on another backend left there,
-    /// and inputs read from outside. A runtime reads it around an
-    /// execution. Zero for a backend that computes in Host memory.
+    /// Bytes this backend has uploaded from Host memory to its device
+    /// since it was made. Zero for a backend that computes in Host memory.
     fn uploaded(&self) -> u64 {
         0
     }
@@ -245,12 +233,10 @@ pub trait Backend: Send + Sync {
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError>;
 
-    /// Executes a prepared module as [`Backend::execute`] does, answering
-    /// with the outputs and, where the backend learns only later whether
-    /// the run failed (a device, which is not waited for), the check
-    /// that says so. A caller that waits for the check before it commits
-    /// anything holds the run to the reference's failures exactly; the
-    /// default answers at once and has none.
+    /// Executes as [`Backend::execute`] does, adding the check for a
+    /// failure the backend learns of later (a device). A caller that
+    /// waits for the check before committing matches the reference's
+    /// failures exactly. The default has no check.
     fn execute_checked(
         &self,
         prepared: &dyn Prepared,
@@ -262,8 +248,7 @@ pub trait Backend: Send + Sync {
             .map(|outputs| (outputs, None))
     }
 
-    /// Executes a native operation. The default is for backends that
-    /// have none.
+    /// Executes a native operation. The default fails.
     fn execute_native(
         &self,
         op: NativeOp,
@@ -278,44 +263,34 @@ pub trait Backend: Send + Sync {
         )))
     }
 
-    /// What the device took over the last execution, by its own clock,
-    /// when the backend measures it; the default is for backends whose
-    /// work is done when `execute` returns, which the caller times.
+    /// The last execution's time by the device's own clock, when the
+    /// backend measures it.
     fn last_device_time(&self) -> Option<std::time::Duration> {
         None
     }
 
-    /// What measuring one execution costs when the execution is
-    /// nothing: the submission and the wait a measured run puts around
-    /// every node, which is in every number it prints and belongs to
-    /// none of them. Zero for a backend whose work is done when
-    /// `execute` returns, since then the caller's clock is the whole of
-    /// it.
+    /// The overhead a measured run adds to every node (submission and
+    /// wait). Zero for a backend whose work is done when `execute`
+    /// returns.
     fn measurement_floor(&self) -> std::time::Duration {
         std::time::Duration::ZERO
     }
 
     /// Makes every execution wait for the device before it returns, so
-    /// a profile measures the work rather than the submission. It costs
-    /// a stall per node, so it is for measuring, not for running. A
-    /// backend whose work is done when `execute` returns is measured as
-    /// it is.
+    /// a profile measures the work. It stalls per node; it is for
+    /// measuring.
     fn set_measured(&self, on: bool) {
         let _ = on;
     }
 
-    /// Whether a measured run's times are what the device's own clock
-    /// said about the work, rather than what the call and its wait took.
+    /// Whether a measured run's times come from the device's own clock.
     fn measures_the_device(&self) -> bool {
         false
     }
 
     /// Runs a map `repeat` times, feeding input `chain.0` from output
-    /// `chain.1` each time: what a node placed several times over its
-    /// own output is. A backend that can do the whole run without
-    /// making a Field between the times answers with what the last time
-    /// gave; the default answers `None` and the caller runs the times
-    /// one by one.
+    /// `chain.1` each time, and answers with the last outputs. `None`
+    /// (the default) leaves the caller to run the times one by one.
     fn execute_repeated(
         &self,
         prepared: &dyn Prepared,
@@ -329,22 +304,17 @@ pub trait Backend: Send + Sync {
         None
     }
 
-    /// Waits for everything this backend has submitted to finish. The
-    /// default is for backends whose work is done when `execute`
-    /// returns; a device queue's is not, so anything that measures a
-    /// frame, or hands the machine to something else, has to ask.
+    /// Waits for everything this backend has submitted to finish.
     fn settle_device(&self) {}
 
-    /// Whether this backend's work is finished by a device of its own,
-    /// so that `execute` returning is not the work being done and
+    /// Whether a device of its own finishes this backend's work, so
     /// [`Backend::settle_device`] is what waits for it.
     fn has_device(&self) -> bool {
         false
     }
 
-    /// Downloads the bytes of a resource this backend left resident:
-    /// `byte_len` bytes of little-endian words. The default is for backends
-    /// that never do.
+    /// Downloads `byte_len` bytes of little-endian words of a resource
+    /// this backend left resident.
     fn download(
         &self,
         device: &(dyn Any + Send + Sync),
@@ -359,9 +329,8 @@ pub trait Backend: Send + Sync {
 mod tests {
     use super::*;
 
-    /// Every struct a native manifest's port names is one `structs`
-    /// defines, laid out as the port is: a field read by name reads the
-    /// words the port holds.
+    /// Every struct a native port names is defined by `structs`, laid
+    /// out as the port is.
     #[test]
     fn every_struct_a_native_port_names_is_defined_as_it_is_laid_out() {
         for op in NativeOp::ALL {

@@ -1,6 +1,5 @@
-//! Operations on a node's Fields: read what it holds, write its committed
-//! state, trace one element through its Kernel, and keep it materialized
-//! for reading.
+//! Operations on a node's Fields: read, write committed state, trace one
+//! element, and pin for reading.
 
 use orla_kernel::Shape;
 use serde_json::{Value as Json, json};
@@ -12,10 +11,8 @@ use orla_session::Session;
 use crate::request::Request;
 use crate::wire::{context_of, failure, trace_json};
 
-/// Refuses a name that is not a node of the loaded scene, naming the
-/// near miss where there is one. `pin` used to take any word and say
-/// `ok`, which a caller only found out about one request later, as a
-/// read that told it to pin.
+/// Refuses a name that is not a node of the loaded scene, naming the near
+/// miss where there is one.
 fn known_node(session: &Session, node: &str) -> Result<(), Json> {
     let Some(graph) = session.graph() else {
         return Err(failure("no scene is loaded"));
@@ -38,8 +35,7 @@ pub(crate) fn trace(session: &mut Session, request: &Request) -> Result<Json, Js
         request.get("element").and_then(Json::as_u64),
     ) {
         (Some(list), _) => {
-            // A coordinate past 32 bits stays past the end, rather than wrapping
-            // onto an element that is there.
+            // A coordinate past 32 bits saturates, staying past the end.
             let axis = |i: usize| {
                 list.get(i)
                     .and_then(Json::as_u64)
@@ -131,8 +127,7 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
         session
             .cached(&orla_graph::NodeId(node.to_owned()), port)
             .ok_or_else(|| {
-                // A name that is not a node at all is the likelier
-                // mistake, and pinning it again will not help.
+                // An unknown node name is reported before the pin hint.
                 if !graph.nodes.iter().any(|n| n.id.0 == node) {
                     let known: Vec<&str> = graph.nodes.iter().map(|n| n.id.0.as_str()).collect();
                     return failure(format!(
@@ -148,8 +143,8 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
         let name = request.get("output").and_then(Json::as_str);
         session.output(name).map_err(failure)?
     };
-    // A Field of pixels reads as an image; anything else reads as
-    // words with its shape and layout.
+    // A Field of pixels reads as an image; any other as words with its
+    // shape and layout.
     let (domain, schema) = {
         let host = session.runtime().host();
         (
@@ -220,14 +215,13 @@ pub(crate) fn unpin(session: &mut Session, request: &Request) -> Result<Json, Js
     Ok(json!({ "unpinned": node }))
 }
 
-/// The version of a snapshot's format: what a reader of one checks.
+/// The snapshot format's version, checked on read.
 pub const SNAPSHOT_VERSION: u32 = 1;
 
-/// The world as it stands, whole: the position, every published Kernel
-/// with its generation and source, every port's committed state with its
-/// layout, extent and words. Given back, or written to `to` where the
-/// session was started with `--allow file.write` for it; either way the
-/// session keeps nothing of it. Only committed state is taken.
+/// The whole world's committed state: the position, every published Kernel
+/// with generation and source, every port's state with layout, extent and
+/// words. Returned, or written to `to` where `--allow file.write` allows;
+/// the session keeps no copy.
 pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let snapshot = session.snapshot().map_err(failure)?;
     let laws: Vec<Json> = snapshot
@@ -277,7 +271,7 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
             .unwrap_or_else(|| std::path::Path::new("."))
             .join(path)
     };
-    // Written where the person running the session allowed, whole.
+    // Written whole, only where the session's grants allow.
     let target = session
         .write_file(&path, json.to_string().as_bytes())
         .map_err(|why| failure(format!("cannot write the snapshot: {why}")))?;
@@ -288,12 +282,10 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
     }))
 }
 
-/// Restores a snapshot's world: given inline, as `snapshot` gave it, or
-/// read `from` a file where the session may read. `laws` says whether
-/// the snapshot's Kernels come back with it or its state goes under the
-/// laws that run; there is no default, so a restore says which. The
-/// world stands only if a trial frame, under the context given as
-/// `evaluate` takes it, succeeds, and that frame commits nothing.
+/// Restores a snapshot given inline or read `from` a file the session may
+/// read. `laws` (required) chooses the snapshot's Kernels or the running
+/// ones. The world stands only if a trial frame under the given `evaluate`
+/// context succeeds; that frame commits nothing.
 pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let laws = match request.get("laws").and_then(Json::as_str) {
         Some("current") => orla_session::Laws::Current,
@@ -327,8 +319,7 @@ pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, 
         }
         _ => return Err(failure("`restore` takes a `snapshot`, or a file `from`")),
     };
-    // The structure is the scene as it stands unless the restore asks
-    // for the snapshot's.
+    // The structure defaults to the current scene.
     let structure = match request.get("structure").and_then(Json::as_str) {
         None | Some("current") => orla_session::Structure::Current,
         Some("snapshot") => orla_session::Structure::Snapshot,
@@ -396,8 +387,7 @@ fn snapshot_from(json: &Json) -> Result<orla_session::Snapshot, Json> {
         let schema: orla_kernel::Schema = text("layout")?
             .parse()
             .map_err(|e: String| bad(&format!("a state's layout: {e}")))?;
-        // Three whole sides, each one a Field may have: nothing dropped,
-        // nothing truncated.
+        // Exactly three sides, each a whole u32.
         let extent: Option<Vec<u32>> = state.get("extent").and_then(Json::as_array).map(|sides| {
             sides
                 .iter()

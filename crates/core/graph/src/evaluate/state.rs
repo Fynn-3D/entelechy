@@ -1,20 +1,15 @@
-//! State between evaluations: what a republished Kernel's new layout
-//! does to the committed state (migrated, restarted, or put back when the
-//! evaluation fails), the commit at the end, and writes from outside.
+//! State between evaluations: migration or restart on a layout change,
+//! restore on failure, the commit, and writes from outside.
 
 use super::*;
 
 impl Evaluator {
-    /// Before the nodes run: every `<~` port whose committed state no
-    /// longer has the port's shape and layout (a republished Kernel
-    /// changed what it carries) is carried over by the binding's
-    /// migration Kernel, a map from the old elements to the new run once
-    /// over the state; without one, the port restarts from its initial
-    /// source. What was committed is kept, not released: the caller
-    /// either lets it go once the evaluation commits
-    /// ([`Evaluator::release_replaced`]) or puts it back when it fails
-    /// ([`Evaluator::restore_replaced`]). A migration that fails, or gives
-    /// the wrong layout, puts back what this call had already changed.
+    /// Before the nodes run: every `<~` port whose committed state lacks
+    /// the port's shape and layout is carried over by its migration
+    /// Kernel, or restarts from its initial source without one. The
+    /// replaced state is kept for [`Evaluator::release_replaced`] or
+    /// [`Evaluator::restore_replaced`]. A failed migration puts back what
+    /// this call changed.
     pub(super) fn reconcile_state(
         &mut self,
         groups: &[Group],
@@ -117,9 +112,8 @@ impl Evaluator {
     /// Puts back the state [`Evaluator::reconcile_state`] replaced, last
     /// first, releasing what a migration carried in its place.
     pub(super) fn restore_replaced(&mut self, runtime: &mut Runtime) {
-        // One at a time, last first, so what is still to be put back is
-        // still held while the rest is: a handle two ports swapped is
-        // never released between them.
+        // One at a time, last first, so a handle two ports swapped stays
+        // held throughout.
         while let Some(Replaced { key, previous }) = self.replaced.pop() {
             let carried = match previous {
                 Some(previous) => self.ledger.commit_put(key, previous),
@@ -135,8 +129,8 @@ impl Evaluator {
         }
     }
 
-    /// Lets go of the state [`Evaluator::reconcile_state`] replaced, once
-    /// the evaluation has committed and nothing will put it back.
+    /// Releases the state [`Evaluator::reconcile_state`] replaced, once
+    /// the evaluation has committed.
     pub(super) fn release_replaced(&mut self, runtime: &mut Runtime) {
         while let Some(Replaced { previous, .. }) = self.replaced.pop() {
             if let Some(previous) = previous
@@ -148,18 +142,12 @@ impl Evaluator {
         }
     }
 
-    /// Makes `states` the whole committed world, as one change: every
-    /// `<~` port is given its state from `states`, and a port `states`
-    /// does not name starts again from its initial source. The world is
-    /// proved first: one frame is evaluated over it under `context`, a
-    /// port whose layout the Kernel no longer takes migrated as any
-    /// evaluation migrates it, and only when that frame succeeds does the
-    /// world stand. The frame itself commits nothing, so the next
-    /// evaluation is the one after the world `states` holds, and finds
-    /// what the trial computed in the cache. When the frame fails, or a
-    /// name is not a state port, the world is as it was and `states`
-    /// are released. Runs off the frame are let go either way: they
-    /// began in a world that is no longer the one restored from.
+    /// Makes `states` the whole committed world, atomically; a port
+    /// `states` does not name restarts from its initial source. One trial
+    /// frame under `context` proves it (migrating as any evaluation does)
+    /// and commits nothing; its results stay cached. When the trial fails
+    /// or a name is not a state port, the world is unchanged and `states`
+    /// are released. Runs off the frame are dropped either way.
     #[allow(clippy::too_many_arguments)]
     pub fn restore(
         &mut self,
@@ -210,8 +198,8 @@ impl Evaluator {
         for (_, running) in std::mem::take(&mut self.running) {
             runtime.discard_run(running.run);
         }
-        // Every port the world has or will have is replaced: what stood
-        // there kept, to be put back if the trial fails.
+        // Every port is replaced; what stood there is kept for a failed
+        // trial.
         let installed: BTreeMap<(NodeId, String), Handle> = states
             .into_iter()
             .map(|(node, port, handle)| ((node, port), handle))
@@ -229,18 +217,17 @@ impl Evaluator {
         self.trial = true;
         let proved = self.evaluate_with(graph, runtime, externals, context, params, None);
         self.trial = false;
-        // An evaluation that failed before it reached the state left what
-        // this replaced for its caller to put back.
+        // An evaluation that failed early leaves this replaced state to
+        // the caller.
         if proved.is_err() && !self.replaced.is_empty() {
             self.restore_replaced(runtime);
         }
         proved
     }
 
-    /// Undoes what an evaluation interrupted by a panic left half done,
-    /// before the next: a trial's flag, and state it replaced and never
-    /// put back or let go. A caller that catches a panic (the FFI) then
-    /// finds the world as it was before the evaluation that panicked.
+    /// Undoes what a panicking evaluation left half done (a trial's flag,
+    /// replaced state), so a caller that catches the panic finds the
+    /// world as it was before.
     pub(super) fn recover(&mut self, runtime: &mut Runtime) {
         self.trial = false;
         if !self.replaced.is_empty() {
@@ -255,14 +242,11 @@ impl Evaluator {
         runtime: &mut Runtime,
     ) -> Result<Vec<(NodeId, String)>, EvaluateError> {
         let mut advanced = Vec::new();
-        // What has advanced, for the test below: a list of them is a
-        // walk of every one already advanced, once a binding, which a
-        // graph of a thousand states pays a thousand times over. The
-        // list stays for the answer, which is in the order the bindings
-        // came.
+        // A set for the membership test; the list keeps binding order
+        // for the answer.
         let mut already: BTreeSet<(NodeId, String)> = BTreeSet::new();
-        // Every port's new state found first, and only then committed: a
-        // port that has none fails the commit before any other advances.
+        // Every port's new state is found before any commits, so a
+        // missing one fails the commit whole.
         let mut staged = Vec::new();
         for node in &graph.nodes {
             for binding in node.inputs.values() {
@@ -274,8 +258,7 @@ impl Evaluator {
                     continue;
                 };
                 let key = (node.clone(), port.clone());
-                // A run off the frame has not given this evaluation its
-                // value: the state stays until it lands.
+                // A run off the frame keeps its state until it lands.
                 if already.contains(&key) || self.running.contains_key(node) {
                     continue;
                 }
@@ -305,12 +288,9 @@ impl Evaluator {
         Ok(advanced)
     }
 
-    /// Forgets the committed state of `node.port` alone, so its `<~`
-    /// readers read their initial sources again on the next evaluation
-    /// while every other port keeps its state. Runs off the frame that
-    /// read it, or read what was computed from it, are let go: one that
-    /// landed after would commit the forgotten state again. Other runs go
-    /// on. The port must be state; one not committed yet is left as it is.
+    /// Forgets the committed state of `node.port` alone; its `<~` readers
+    /// read their initial sources next evaluation. Runs off the frame
+    /// that depend on it are dropped. The port must be state.
     pub fn reset_port(
         &mut self,
         graph: &Graph,
@@ -335,7 +315,7 @@ impl Evaluator {
     }
 
     /// Takes one port's committed state, releasing the Field when nothing
-    /// else holds it: a handle two ports share is released with the last.
+    /// else holds it.
     pub(super) fn forget_state(&mut self, key: &(NodeId, String), runtime: &mut Runtime) {
         if let Some(handle) = self.ledger.commit_take(key)
             && !self.ledger.is_cached(handle)
@@ -345,12 +325,9 @@ impl Evaluator {
         }
     }
 
-    /// Replaces the committed state of `node.port` with `words`, laid out
-    /// as the port's current value is, so the next evaluation's `<~`
-    /// readers start from it: how a Field comes in from outside, a saved
-    /// file for instance. The port must be state, read by some `<~`
-    /// binding, and must have been evaluated once, so its layout and
-    /// extent are known.
+    /// Replaces the committed state of `node.port` with `words`, in the
+    /// port's current layout; the next evaluation's `<~` readers start
+    /// from it. The port must be state and evaluated once.
     pub fn write(
         &mut self,
         graph: &Graph,
@@ -400,9 +377,8 @@ impl Evaluator {
     }
 }
 
-/// Runs a migration Kernel once over a state Field: a map with that one
-/// input, its parameters at their defaults, over the state's extent.
-/// Returns the new state, or why the Kernel cannot be one.
+/// Runs a migration Kernel (a one-input map, default parameters) once
+/// over a state Field's extent; returns the new state.
 pub(super) fn migrate(
     runtime: &mut Runtime,
     version: &Arc<KernelVersion>,
@@ -417,8 +393,7 @@ pub(super) fn migrate(
         .host()
         .domain(state)
         .map_err(|error| error.to_string())?;
-    // Its input must take the state as it is: the layout it was
-    // committed with, not the one the port wants now.
+    // Its input takes the state in its committed layout.
     let schema = runtime
         .host()
         .schema(state)
@@ -480,8 +455,7 @@ fn downstream_of_state(graph: &Graph, node: &NodeId, port: &str) -> BTreeSet<Nod
         .filter(|reader| reads_state(reader, node, port))
         .map(|reader| reader.id.clone())
         .collect();
-    // Who reads each node now, found once rather than a walk of the
-    // graph for every node reached.
+    // Who reads each node now, computed once.
     let mut readers: BTreeMap<&NodeId, Vec<&NodeId>> = BTreeMap::new();
     for reader in &graph.nodes {
         for binding in reader.inputs.values() {

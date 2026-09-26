@@ -1,9 +1,7 @@
-//! Random programs on the device against the interpreter, held to what a
-//! device promises exactly: integers and booleans, made from integers and
-//! booleans alone, word for word; and a program that fails fails alike.
-//! Its floats match to rounding only, and random float programs amplify
-//! rounding without bound, so the feature matrix holds them instead.
-//! `ORLA_FUZZ=<n>` runs more.
+//! Random programs on the device against the interpreter: integer and
+//! boolean programs word for word, and failures alike. Floats match only
+//! to rounding, which random programs amplify without bound; the feature
+//! matrix holds them. `ORLA_FUZZ=<n>` runs more.
 
 use orla_abi::{Capabilities, Capability, Host, Invocation, Scalar, Scope};
 use orla_compiler::compile;
@@ -37,7 +35,7 @@ fn random_programs_give_the_interpreters_integers_on_the_device() {
                 continue;
             }
         };
-        // What the device declines runs elsewhere; it is not the device's.
+        // A module the device declines runs elsewhere and is skipped.
         if gpu.declines(&module).is_some() {
             continue;
         }

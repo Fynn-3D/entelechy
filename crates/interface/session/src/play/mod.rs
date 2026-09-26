@@ -1,12 +1,8 @@
-//! The Player's frame, with no window: what every interface that plays
-//! a scene does the same way, whatever its devices. A window, a page's
-//! canvas and anything else that shows a scene hand their person's keys,
-//! pointer, wheel and pads here, ask for a frame, show the picture it
-//! names on their own device and play its sound on theirs, and print
-//! what it says. What F5, Tab and F10 mean, how a pad is a keyboard,
-//! which output is the picture and which the sound, how a replay drives
-//! the scene, and what the line of frame data says are decided once,
-//! here.
+//! The Player's frame, device-free. Every interface that plays a scene
+//! hands its keys, pointer, wheel and pads here, asks for a frame, and
+//! shows the picture and plays the sound it names. This module owns the
+//! meaning of F5, Tab and F10, the pad mapping, the picture and sound
+//! choice, replay driving and the frame-data line.
 
 pub mod hud;
 pub mod pad;
@@ -20,22 +16,16 @@ pub use pad::{Pad, PadAxis, PadButton};
 use crate::Session;
 use crate::replay::{Replay, Replayer};
 
-/// What a run of failures says on the way past.
-///
-/// A scene that cannot evaluate says so once a frame. Dragging a
-/// window's corner fails every frame, each one naming the size the
-/// window was, so the terminal fills with the same failure wearing
-/// different numbers. [`Reporting`] prints a failure's first frame,
-/// stays quiet while it keeps happening, and says when evaluating comes
-/// back.
+/// Deduplicates a run of failures: the first frame of a failure is
+/// reported, repeats that differ only in numbers are quiet, and the
+/// first working frame after them is reported.
 #[derive(Default)]
 pub struct Reporting {
     shape: String,
 }
 
 impl Reporting {
-    /// Whether this failure is worth printing: a new one, or one of
-    /// another shape than the one still happening.
+    /// Whether this failure is new: its shape differs from the current.
     pub fn failed(&mut self, message: &str) -> bool {
         let shape = failure_shape(message);
         if self.shape == shape {
@@ -45,8 +35,7 @@ impl Reporting {
         true
     }
 
-    /// Whether a frame that worked ends a run of failures, and so is
-    /// worth a line of its own.
+    /// Whether a working frame ends a run of failures.
     pub fn worked(&mut self) -> bool {
         let was_failing = !self.shape.is_empty();
         self.shape.clear();
@@ -54,8 +43,7 @@ impl Reporting {
     }
 }
 
-/// A failure's shape, with the numbers in it taken out: two failures
-/// that differ only in a size, a count or an element are one failure.
+/// A failure's message with each number replaced by `#`.
 fn failure_shape(message: &str) -> String {
     let mut shape = String::with_capacity(message.len());
     let mut inside = false;
@@ -95,11 +83,9 @@ pub fn to_output(
     ]
 }
 
-/// Converts linear float pixels to `0x00RRGGBB` and scales them with
-/// nearest-neighbour sampling into a `target_width x target_height` frame,
-/// preserving aspect ratio and letterboxing with black. Returns where the
-/// image was placed. This is the CPU path; the GPU backend presents
-/// resident images without it.
+/// CPU presentation: converts linear float pixels to `0x00RRGGBB`,
+/// scales them nearest-neighbour into the target frame at their aspect
+/// ratio, letterboxes with black, and returns the placement.
 pub fn present(
     pixels: &[[f32; 4]],
     width: u32,
@@ -128,8 +114,8 @@ pub fn present(
     placed
 }
 
-/// Browser-style key code for a key name as winit reports it: single
-/// characters by ASCII uppercase, plus the named keys Kernels commonly use.
+/// Browser-style key code for a key name: a single character by its
+/// ASCII uppercase, or a listed named key.
 pub fn key_code(name: &str) -> Option<i32> {
     let mut chars = name.chars();
     if let (Some(c), None) = (chars.next(), chars.next()) {
@@ -157,33 +143,30 @@ pub fn key_code(name: &str) -> Option<i32> {
     })
 }
 
-/// What the device showing the scene says about itself this frame.
+/// The showing device's state this frame.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
-    /// The window's size in physical pixels; zero by zero before there
-    /// is one.
+    /// Window size in physical pixels; zero before a window exists.
     pub window: [f32; 2],
-    /// Its scale factor.
+    /// Scale factor.
     pub scale: f32,
-    /// The sound device's sample rate, zero without one.
+    /// Sound sample rate; zero without a sound device.
     pub rate: f32,
 }
 
-/// A frame the play made: the evaluation's report, the picture to show
-/// (the graph's picture, or the node Tab previews) and the sound output,
-/// when the scene has one.
+/// A frame to show.
 pub struct Shown {
-    /// What the evaluation did.
+    /// The evaluation's report.
     pub report: Report,
-    /// The Field to show.
+    /// The picture: the graph's, or the node Tab previews.
     pub picture: Handle,
-    /// The first output that is rows of one or two floats.
+    /// The sound output, if any.
     pub sound: Option<Handle>,
 }
 
-/// What a frame came to.
+/// A frame's result.
 pub enum Frame {
-    /// A replay's next frame's time has not come; nothing was evaluated.
+    /// A replay's next frame is not due; nothing was evaluated.
     Wait,
     /// A frame to show.
     Shown(Box<Shown>),
@@ -192,31 +175,27 @@ pub enum Frame {
     Failed,
 }
 
-/// What a key asks of the device beyond the scene.
+/// A request from a key to the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Asked {
     /// Escape: stop playing (a window closes).
     Stop,
 }
 
-/// A scene played: the person's input, the preview, the line of frame
-/// data, the replay being played, and what the device last did with a
-/// picture, which is how the pointer is found in it.
+/// A scene being played: input, preview, frame-data line, replay, and
+/// the last picture placement, which maps the pointer.
 pub struct Play {
-    /// The host's clock, in seconds from any start.
+    /// The host's clock, in seconds.
     clock: fn() -> f64,
-    /// When this play began, by that clock.
     began: f64,
     input: InputState,
     pad: Pad,
-    /// Buttons and keys pressed since the last frame, and those released
-    /// before a frame saw them pressed: a press lasts a frame at least,
-    /// however quick the hand, or the scene would never see it.
+    /// Presses since the last frame, and releases a frame has not seen
+    /// pressed yet: every press lasts at least one frame.
     pressed: Vec<Held>,
     late: Vec<Held>,
-    /// The pointer in window pixels, as the device last said.
+    /// The pointer in window pixels.
     cursor: (f32, f32),
-    /// Where the picture landed in the window, and its size.
     placement: Placement,
     shown_size: (u32, u32),
     /// The node shown instead of the graph's picture.
@@ -225,20 +204,20 @@ pub struct Play {
     stats: hud::Stats,
     panel: Option<hud::Panel>,
     reported: Reporting,
-    /// A replay being played, and when its first frame was shown.
+    /// A replay and when its first frame was shown.
     replaying: Option<(Replayer, Option<f64>)>,
-    /// How the last picture reached the window, as the device said.
+    /// How the last picture reached the window.
     path: String,
     downloads: u64,
-    /// The sound device, as the device describes it, when one is open.
+    /// The open sound device's description.
     sound: Option<String>,
     status: String,
-    /// What is to be said: lines for the device to print or show.
+    /// Lines for the device to print or show.
     said: Vec<String>,
 }
 
 impl Play {
-    /// A play whose time is `clock`'s: the host's clock, in seconds.
+    /// A play timed by `clock`, the host's clock in seconds.
     pub fn new(clock: fn() -> f64) -> Self {
         Self {
             clock,
@@ -264,8 +243,8 @@ impl Play {
         }
     }
 
-    /// Plays `replay` over `session`: its inputs drive the scene at its
-    /// own times until it ends, and then the person does.
+    /// Plays `replay`: its inputs drive the scene at its times until it
+    /// ends; then the person does.
     pub fn replay(&mut self, replay: &Replay, session: &mut Session) {
         self.replaying = Some((Replayer::start(replay, session), None));
         self.said
@@ -293,10 +272,9 @@ impl Play {
         }
     }
 
-    /// A key, by its name as the device reports it (`a`, `ArrowLeft`,
-    /// `F5`), pressed or released. F5 resets the scene's state, Tab moves
-    /// the preview, F10 shows or hides the line of frame data, and Escape
-    /// asks the device to stop; every other key goes to the scene.
+    /// A key by name (`a`, `ArrowLeft`, `F5`). F5 resets state, Tab
+    /// moves the preview, F10 toggles the frame-data line, Escape asks
+    /// the device to stop; every other key goes to the scene.
     pub fn key(&mut self, session: &mut Session, name: &str, down: bool) -> Option<Asked> {
         match name {
             "Escape" => return Some(Asked::Stop),
@@ -326,8 +304,8 @@ impl Play {
         None
     }
 
-    /// A button or a key pressed or released; one released before any
-    /// frame saw it pressed is released after the next.
+    /// A press or release; a release before any frame saw the press
+    /// takes effect after the next frame.
     fn hold(&mut self, held: Held, down: bool) {
         if down {
             self.late.retain(|late| *late != held);
@@ -366,8 +344,8 @@ impl Play {
         self.update_pointer();
     }
 
-    /// The wheel turned by `(x, y)` lines, y positive away from the
-    /// person; it adds up until the next frame reads it.
+    /// Wheel lines, y positive away from the person; accumulated until
+    /// the next frame.
     pub fn wheel(&mut self, x: f32, y: f32) {
         self.input.wheel[0] += x;
         self.input.wheel[1] += y;
@@ -383,20 +361,18 @@ impl Play {
         self.pad.axis(&mut self.input, axis, value);
     }
 
-    /// The sound device, as the device describes it, once it is open.
+    /// Records the opened sound device's description.
     pub fn sound_opened(&mut self, description: impl Into<String>) {
         self.sound = Some(description.into());
     }
 
-    /// One frame: what changed on disk is read, a replay's frame is
-    /// taken when its time has come, the scene is evaluated, and the
-    /// picture and the sound are named for the device.
+    /// One frame: syncs disk changes, takes a due replay frame, evaluates,
+    /// and names the picture and sound.
     pub fn frame(&mut self, session: &mut Session, view: View) -> Frame {
         for event in session.sync() {
             self.said.push(event.to_string());
         }
-        // A replay, while it plays, is the input: its frame, at its time,
-        // under its pointer, keys and window; the person's hands wait.
+        // While a replay plays, it is the whole input.
         let replayed = match self.replay_frame(session) {
             Replayed::Wait => return Frame::Wait,
             Replayed::Frame(context) => Some(context),
@@ -406,8 +382,7 @@ impl Play {
         let started = (self.clock)();
         let context = replayed.unwrap_or_else(|| self.context(view));
         self.input.wheel = [0.0, 0.0];
-        // This frame has seen what was pressed; what was let go before it
-        // did is let go now, for the next.
+        // Presses are seen; late releases apply from the next frame.
         self.pressed.clear();
         for held in std::mem::take(&mut self.late) {
             self.set(held, false);
@@ -420,9 +395,6 @@ impl Play {
                     replayer.evaluated(report.clone());
                 }
                 let evaluated = (self.clock)() - started;
-                // The picture is the first output that is a grid of
-                // pixels, the sound the first that is rows of one or two
-                // floats: both go by structure, never by name.
                 let picture = self
                     .preview
                     .as_ref()
@@ -432,9 +404,8 @@ impl Play {
                 self.panel = self
                     .hud
                     .then(|| self.panel_for(session, &report, picture, &context));
-                // With the line on, the frame waits for the device to
-                // finish what evaluating gave it, so what it took is a
-                // number of its own rather than a share of presenting.
+                // With the line on, the frame settles the device so its
+                // time is measured on its own.
                 let device = (self.hud && session.runtime().has_device()).then(|| {
                     let waiting = (self.clock)();
                     session.runtime().settle_device();
@@ -456,8 +427,6 @@ impl Play {
             }
             Err(error) => {
                 let message = format!("evaluation failed: {error}");
-                // One failure a frame, each naming the size the window
-                // was, is one failure.
                 if self.reported.failed(&message) {
                     self.said.push(format!("{message}; last frame is kept"));
                 }
@@ -467,11 +436,9 @@ impl Play {
         }
     }
 
-    /// What the device did with the frame's picture: where in the window
-    /// it landed (`None`: where it was), its size, how it got there (`presented on the device`,
-    /// `downloaded and blitted`), whether that took a download, and how
-    /// long it took, in seconds. The pointer is found through where it
-    /// landed.
+    /// Records how the device showed the picture: placement (`None`:
+    /// unchanged), size, path (`presented on the device`, `downloaded
+    /// and blitted`), whether it downloaded, and seconds taken.
     pub fn placed(
         &mut self,
         placement: Option<Placement>,
@@ -489,9 +456,8 @@ impl Play {
             .presented(std::time::Duration::from_secs_f64(presenting.max(0.0)));
     }
 
-    /// Where the picture landed in the window, when the device knows
-    /// (`None`: where it was), and its size: how the pointer is found in
-    /// it.
+    /// Records the picture's placement (`None`: unchanged) and size,
+    /// which map the pointer.
     pub fn landed(&mut self, placement: Option<Placement>, size: (u32, u32)) {
         if let Some(placement) = placement {
             self.placement = placement;
@@ -500,25 +466,24 @@ impl Play {
         self.update_pointer();
     }
 
-    /// The line of frame data, when F10 has it shown.
+    /// The frame-data line, when F10 shows it.
     pub fn panel(&self) -> Option<&hud::Panel> {
         self.panel.as_ref()
     }
 
-    /// Why the last frame is what it is: `running`, a replay's time, or
-    /// the failure that kept the last picture.
+    /// `running`, a replay's time, or the failure that kept the last
+    /// picture.
     pub fn status(&self) -> &str {
         &self.status
     }
 
-    /// Adds to what there is to say: what the interface that plays found
-    /// before the play began, the backends it passed over.
+    /// Adds a line from the interface, such as a skipped backend.
     pub fn say(&mut self, line: String) {
         self.said.push(line);
     }
 
-    /// What there is to say since the last call: events, failures, the
-    /// preview, a replay's outcome. A device prints them, or shows them.
+    /// Lines since the last call: events, failures, the preview, a
+    /// replay's outcome.
     pub fn said(&mut self) -> Vec<String> {
         std::mem::take(&mut self.said)
     }
@@ -533,9 +498,8 @@ impl Play {
         );
     }
 
-    /// Moves the preview to the next node, or back to the graph output
-    /// after the last one. Previewed nodes are pinned so fusion keeps them
-    /// materialized.
+    /// Moves the preview to the next node, or to the graph output after
+    /// the last. A previewed node is pinned, so fusion keeps it.
     fn cycle_preview(&mut self, session: &mut Session) {
         let nodes: Vec<NodeId> = session
             .graph()
@@ -560,8 +524,8 @@ impl Play {
         self.said.push(format!("previewing {view}"));
     }
 
-    /// The replay's next frame, once its time has come. Past its last
-    /// frame what it observed is said, and the person has the scene.
+    /// The replay's next due frame. After the last, the outcome is said
+    /// and the person has the scene.
     fn replay_frame(&mut self, session: &mut Session) -> Replayed {
         let now = (self.clock)();
         let Some((replayer, since)) = &mut self.replaying else {
@@ -604,8 +568,8 @@ impl Play {
         }
     }
 
-    /// The F10 line for this frame: the smoothed times, then the backend,
-    /// the window, the shown image, what ran, and what waits off the frame.
+    /// The F10 line: smoothed times, backend, window, shown image, what
+    /// ran, and what waits off the frame.
     fn panel_for(
         &self,
         session: &Session,
@@ -628,8 +592,7 @@ impl Play {
             Some(sound) => format!(" | sound {sound}"),
             None => String::new(),
         };
-        // The nodes that left the main backend this frame, and what the
-        // trip carried.
+        // Nodes routed off the main backend, and the bytes carried.
         let routed: Vec<&orla_graph::Placed> = report
             .placements
             .iter()
@@ -677,16 +640,15 @@ enum Held {
     Key(i32),
 }
 
-/// What a replay says for the frame about to be made.
+/// A replay's answer for the next frame.
 enum Replayed {
     Wait,
     Frame(Context),
     Not,
 }
 
-/// The output a device shows: the scene's picture
-/// ([`Session::picture_of`]), or the graph's first output when it has
-/// none.
+/// The scene's picture ([`Session::picture_of`]), else the graph's
+/// first output.
 fn displayed(session: &Session, report: &Report) -> Handle {
     session.picture_of(report).unwrap_or(report.output)
 }
@@ -698,8 +660,7 @@ fn sound(session: &Session, report: &Report) -> Option<Handle> {
 
 #[cfg(test)]
 mod tests {
-    /// A hand on the window's corner: one failure a frame, each naming
-    /// the size the window was.
+    /// Failures differing only in numbers are one run, reported once.
     #[test]
     fn a_run_of_one_failure_is_printed_once() {
         let side = |v: &str| {
@@ -716,8 +677,7 @@ mod tests {
         assert!(reporting.failed(&side("933.5").replace("canvas", "heat")));
         assert!(reporting.failed("evaluation failed: node `bodies`: integer overflow"));
 
-        // A frame that works ends the run, and says so once; the same
-        // failure after it is news again.
+        // A working frame ends the run once; the failure is then new.
         assert!(reporting.worked());
         assert!(!reporting.worked(), "nothing was failing");
         assert!(reporting.failed(&side("953.5")));

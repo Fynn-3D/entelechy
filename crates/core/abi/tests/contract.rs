@@ -1,7 +1,5 @@
-//! The capabilities a Kernel may declare are the ABI: a source written
-//! against a version names these, and a Host grants no other. Adding,
-//! dropping or renaming one is an ABI change, made here together with
-//! `ABI_VERSION`, never by accident.
+//! The capabilities a Kernel may declare are the ABI: a Host grants no
+//! other. Adding, dropping or renaming one changes `ABI_VERSION` here.
 
 use orla_abi::{ABI_VERSION, Capability};
 

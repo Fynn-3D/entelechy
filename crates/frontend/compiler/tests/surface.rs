@@ -1,14 +1,11 @@
-//! What a Kernel may call and write is a contract with every source
-//! already written: `surface.txt` beside this file holds it at
-//! `LANGUAGE_VERSION` — every builtin with its signatures, the capability
-//! it needs and whether only the entry may call it, and every form with
-//! its shape. Docs are left out; they may say anything.
+//! A Kernel's callable surface is a contract with every written source:
+//! `surface.txt` beside this file holds it at `LANGUAGE_VERSION`, every
+//! builtin with its signatures, required capability and entry-only flag,
+//! and every form with its shape. Docs are excluded.
 //!
-//! The surface may grow at a version: a new builtin, a new signature, a
-//! capability no longer needed. What a source could write before must
-//! still compile, so dropping or changing anything else is a new version.
-//! The test fails on any difference. `ORLA_BLESS=1` rewrites the file,
-//! and refuses to when what it would drop has not had its version bumped.
+//! The surface may grow at a version; dropping or changing anything else
+//! takes a new version. The test fails on any difference. `ORLA_BLESS=1`
+//! rewrites the file, and refuses a drop without a version bump.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -24,7 +21,7 @@ struct Entry {
     lines: Vec<String>,
 }
 
-/// The surface as this compiler has it, by the name that keys each entry.
+/// The compiler's surface, keyed by entry name.
 fn current() -> BTreeMap<String, Entry> {
     let mut entries = BTreeMap::new();
     for builtin in help::builtins() {
@@ -99,8 +96,8 @@ fn parse(text: &str) -> (u32, BTreeMap<String, Entry>) {
     (version, entries)
 }
 
-/// What a source written against `before` could write and `now` no
-/// longer accepts, one line each.
+/// What a source written against `before` could write and `now` rejects,
+/// one line each.
 fn broken(before: &BTreeMap<String, Entry>, now: &BTreeMap<String, Entry>) -> Vec<String> {
     let flag = |header: &str, word: &str| header.split(' ').any(|part| part == word);
     let needs = |header: &str| {

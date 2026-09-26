@@ -1,19 +1,16 @@
-//! Cached, dirty-tracked evaluation of a graph against a runtime, with
-//! state committed between evaluations and pointwise chains fused.
+//! Cached, dirty-tracked evaluation of a graph, with state committed
+//! between evaluations and pointwise chains fused.
 //!
-//! Every node's outputs are cached and reused while its Kernel generation,
-//! parameters, domain, context, and upstream results are unchanged. State
-//! lives in `<~` bindings: a node reads a source's value as it was
-//! committed by the previous successful evaluation. All nodes of one
-//! evaluation read the same committed state; the evaluation commits
-//! atomically at its end, and a failed evaluation commits nothing, so state
-//! never advances past a failure.
+//! A node's outputs are reused while its Kernel generation, parameters,
+//! domain, context and upstream results are unchanged. `<~` bindings read
+//! the state committed by the previous successful evaluation; an
+//! evaluation commits atomically at its end, and a failed one commits
+//! nothing.
 //!
-//! Fusion: a producer whose single output is read by exactly one consumer,
-//! only through `sample`, over the same domain, and which is neither a graph
-//! output, a state source, nor pinned, is inlined into that consumer. The
-//! fused group executes as one Kernel and is one cache unit; the
-//! producer's image is never materialized. Pin a node to observe it.
+//! Fusion inlines a producer into its one consumer when its single output
+//! is read only through `sample`, over the same domain, and it is not a
+//! graph output, state source or pinned node. The group executes as one
+//! Kernel and one cache unit; pin a node to observe it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -51,30 +48,23 @@ pub struct Report {
     /// Every declared output by name.
     pub outputs: Vec<(String, Handle)>,
     /// Groups that ran as one Kernel: the executing node and the nodes it
-    /// absorbed, whose images were never materialized.
+    /// absorbed.
     pub fused: Vec<(NodeId, Vec<NodeId>)>,
-    /// How long each executed node's Kernel took, in evaluation order:
-    /// the backend's execute call, a GPU dispatch not waited for counting
-    /// as its submission; under a measured profile, what the device's own
-    /// clock says the work took.
+    /// Each executed node's Kernel time, in evaluation order: the execute
+    /// call (a GPU submission), or the device clock under a measured
+    /// profile.
     pub timings: Vec<(NodeId, std::time::Duration)>,
-    /// Where each executed node ran, in evaluation order: the backend,
-    /// why it was not the main one when it was not, and the bytes its
-    /// run carried between Host memory and a device.
+    /// Where each executed node ran, in evaluation order.
     pub placements: Vec<Placed>,
-    /// State ports whose committed value was carried into a new layout
-    /// by the binding's migration Kernel before the nodes ran.
+    /// State ports carried into a new layout by their migration Kernel.
     pub migrated: Migrated,
-    /// State ports whose committed value no longer had the port's layout
-    /// and, with no migration named, restarted from the initial source;
-    /// with why.
+    /// State ports whose layout changed with no migration, restarted from
+    /// the initial source, with why.
     pub reset: Reset,
-    /// `async` nodes whose run off the frame was going on, started by this
-    /// evaluation or an earlier one; their readers took their last
+    /// `async` nodes with a run in flight; their readers took the last
     /// output.
     pub pending: Vec<NodeId>,
-    /// `async` nodes whose run landed before this evaluation's nodes ran,
-    /// so their readers saw the new output.
+    /// `async` nodes whose run landed before this evaluation's nodes ran.
     pub landed: Vec<NodeId>,
 }
 
@@ -85,11 +75,11 @@ pub struct Placed {
     pub node: NodeId,
     /// The backend that ran it.
     pub backend: &'static str,
-    /// Why the main backend did not, when it did not.
+    /// Why the main backend did not run it, if so.
     pub routed: Option<String>,
-    /// Bytes its run brought to a device from Host memory.
+    /// Bytes moved from Host memory to a device.
     pub uploaded: u64,
-    /// Bytes its run brought back to Host memory from a device.
+    /// Bytes moved from a device to Host memory.
     pub downloaded: u64,
 }
 
@@ -101,13 +91,11 @@ pub type Migrated = Vec<(NodeId, String, KernelId)>;
 /// its port, and why.
 pub type Reset = Vec<(NodeId, String, String)>;
 
-/// A state port an evaluation changed before its nodes ran: what was
-/// committed, kept alive until the evaluation commits, so a failure can
-/// put it back.
+/// A state port an evaluation changed before its nodes ran, with what was
+/// committed, kept until the commit so a failure can put it back.
 struct Replaced {
     key: (NodeId, String),
-    /// What was committed there, or nothing: a restore that installs a
-    /// port the world had not committed yet.
+    /// What was committed there; `None` when a restore installed the port.
     previous: Option<Handle>,
 }
 
@@ -125,8 +113,7 @@ struct CacheKey {
     params: Vec<Value>,
     inputs: Vec<InputKey>,
     domain: Domain,
-    /// Present only for Kernels that read the clock, so pure nodes stay cached
-    /// across frames.
+    /// Present only for Kernels that read the clock.
     time: Option<u32>,
     /// Present only for Kernels that read input.
     input: Option<u64>,
@@ -146,15 +133,14 @@ struct Fused {
     version: Arc<KernelVersion>,
 }
 
-/// A fused version the runtime is still preparing. Until it arrives the
-/// group's nodes execute separately, which gives the same images.
+/// A fused version the runtime is still preparing; until it arrives the
+/// group's nodes execute separately.
 struct Pending {
     parts: Vec<(NodeId, Generation)>,
     ticket: Ticket,
 }
 
-/// An `async` node's run off the frame: the key it was started under,
-/// which the landed outputs are cached with.
+/// An `async` node's run off the frame, with the cache key it lands under.
 struct Running {
     run: Run,
     key: CacheKey,
@@ -168,13 +154,10 @@ struct Group {
     version: Arc<KernelVersion>,
     parts: Vec<(NodeId, Generation)>,
     absorbed: Vec<NodeId>,
-    /// How many times the Kernel runs, feeding `chain` from what the
-    /// time before gave. One for an ordinary node; `times = N` on a
-    /// node whose only changing input is its own output is N.
+    /// How many times the Kernel runs, each feeding `chain` from the one
+    /// before: 1, or N for `times = N` over the node's own output.
     repeat: u32,
-    /// The input this run feeds from the last output, and which output
-    /// it takes: the `carry port <- output` of the node that was
-    /// placed several times.
+    /// The `carry port <- output` pair a repeated run feeds itself by.
     chain: Option<(usize, usize)>,
 }
 
@@ -185,7 +168,7 @@ pub struct PlanEntry {
     pub node: NodeId,
     /// The Kernel it runs; a fused group runs a detached fused version.
     pub kernel: KernelId,
-    /// Producers inlined into it, whose images are never written.
+    /// Producers inlined into it.
     pub absorbed: Vec<NodeId>,
     /// The bindings the group executes with, absorbed producers' inputs
     /// renamed `producer/port`.
@@ -197,24 +180,22 @@ pub struct PlanEntry {
 /// Evaluates graphs and owns the cached node outputs and committed state.
 #[derive(Default)]
 pub struct Evaluator {
-    /// The cached node outputs and the committed state, and the counts
-    /// that say when a Field may be released ([`ledger::Ledger`]).
+    /// Cached outputs, committed state and their release counts.
     ledger: ledger::Ledger,
     epoch: u64,
     fusion: bool,
     pinned: BTreeSet<NodeId>,
     fused: BTreeMap<NodeId, Fused>,
-    /// The groups fusion declined, by consumer, at the generations it
-    /// declined them: not tried again until one of them changes.
+    /// Groups fusion declined, by consumer, at their generations; retried
+    /// when one changes.
     declined: BTreeMap<NodeId, Vec<(NodeId, Generation)>>,
     pending: BTreeMap<NodeId, Pending>,
     running: BTreeMap<NodeId, Running>,
     /// State an evaluation replaced before its nodes ran (a migration, a
-    /// restart), kept until it commits or put back when it fails; while
-    /// here it is held as committed state is.
+    /// restart), held until the commit or put back on failure.
     replaced: Vec<Replaced>,
-    /// Whether the evaluation running is a restore's trial: it runs as
-    /// any does and commits nothing ([`Evaluator::restore`]).
+    /// Whether the running evaluation is a restore's trial, which commits
+    /// nothing ([`Evaluator::restore`]).
     trial: bool,
 }
 
@@ -288,9 +269,8 @@ impl Evaluator {
     }
 
     /// Forgets committed state so `<~` bindings read their initial sources
-    /// again on the next evaluation. Cached outputs stay. Runs off the
-    /// frame are let go: they began from the state forgotten, and one
-    /// that landed after would commit it again.
+    /// next evaluation. Cached outputs stay; runs off the frame are
+    /// dropped, since they began from the forgotten state.
     pub fn reset_state(&mut self, runtime: &mut Runtime) {
         self.recover(runtime);
         for (_, running) in std::mem::take(&mut self.running) {
@@ -319,9 +299,8 @@ impl Evaluator {
         Some(cached.outputs[index])
     }
 
-    /// What would execute for `graph` right now: the groups in evaluation
-    /// order with what each absorbed. Prepares fused versions as evaluation
-    /// would, but executes nothing.
+    /// What would execute for `graph` now, in evaluation order. Prepares
+    /// fused versions; executes nothing.
     pub fn plan_summary(
         &mut self,
         graph: &Graph,
@@ -365,12 +344,9 @@ impl Evaluator {
         self.evaluate_with(graph, runtime, externals, context, params, None)
     }
 
-    /// Evaluates only what `demand` needs: the demanded nodes, whatever
-    /// they read through `<-`, every `<~` source (state must advance), and
-    /// any graph output that has never been produced. The rest keeps its
-    /// last value, so an output not demanded reads as of its last
-    /// evaluation. This is how a test that asserts on a state row skips
-    /// the picture.
+    /// Evaluates only what `demand` needs: the demanded nodes, what they
+    /// read through `<-`, every `<~` source, and any output never
+    /// produced. Everything else keeps its last value.
     pub fn evaluate_for(
         &mut self,
         graph: &Graph,
@@ -384,10 +360,9 @@ impl Evaluator {
         self.evaluate_with(graph, runtime, externals, context, params, Some(demand))
     }
 
-    /// The invocation `node` would execute with now, its Kernel `version`
-    /// unfused: the inputs from the cache and the committed state, the
-    /// params and the domain resolved as an evaluation resolves them. For
-    /// a trace, after an evaluation that produced what the node reads.
+    /// The unfused invocation `node` would execute with now, resolved as
+    /// an evaluation resolves it; valid after an evaluation produced
+    /// what the node reads.
     #[allow(clippy::too_many_arguments)]
     pub fn invocation(
         &self,
@@ -406,10 +381,6 @@ impl Evaluator {
     /// The nodes an evaluation under `demand` must run: see
     /// [`Evaluator::evaluate_for`].
     fn needed(&self, graph: &Graph, demand: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
-        // The walk below reaches every node the demand depends on, and
-        // finding each by name was a walk of the whole list — which a
-        // replay and the protocol pay every frame, since they are the
-        // two that evaluate for a demand.
         let at = graph.index();
         let mut needed: BTreeSet<NodeId> = demand.clone();
         // State: its producer must run, and its initial source is read
@@ -470,11 +441,10 @@ impl Evaluator {
         let needed = demand.map(|demand| self.needed(graph, demand));
         let groups = self.plan(graph, &order, runtime, externals, params, context)?;
         let (migrated, reset) = self.reconcile_state(&groups, runtime, context)?;
-        // Everything from here to the commit either commits or leaves the
-        // state as it was before this evaluation began: a node that fails
-        // after a migration puts the state it replaced back.
+        // From here to the commit, a failure leaves state as it was: a
+        // migration's replaced state is put back.
         let evaluated = (|| -> Result<Report, EvaluateError> {
-            // Nodes absorbed into a group are no longer materialized.
+            // Absorbed nodes release their cached outputs.
             let absorbed: BTreeSet<&NodeId> =
                 groups.iter().flat_map(|g| g.absorbed.iter()).collect();
             let stale: Vec<NodeId> = self
@@ -491,9 +461,8 @@ impl Evaluator {
             let mut fused = Vec::new();
             let mut timings = Vec::new();
             let mut placements = Vec::new();
-            // Every node run on the frame, in order, with what its runs
-            // answered besides their outputs: whether a device's run failed,
-            // known once the device is waited for, before anything commits.
+            // Every node run on the frame, in order, with its device
+            // status, checked before anything commits.
             let mut checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)> = Vec::new();
             runtime.take_checks();
             let mut pending = Vec::new();
@@ -532,12 +501,10 @@ impl Evaluator {
                     .iter()
                     .map(|port| port.name.clone())
                     .collect();
-                // A restore's trial runs every node on the frame: what it
-                // proves is the world restored, whole, and it leaves no run
-                // going that would land a world it may refuse.
+                // A restore's trial runs every node on the frame, leaving
+                // no run in flight.
                 if node.is_async && !self.trial && self.ledger.entry(&node.id).is_some() {
-                    // One run at a time; while it goes, the frame carries the
-                    // last output and the state this node feeds stays.
+                    // One run at a time; the frame carries the last output.
                     if !self.running.contains_key(&node.id) {
                         let run = runtime.execute_later(&group.version, &invocation).map_err(
                             |error| EvaluateError::Execution {
@@ -557,8 +524,8 @@ impl Evaluator {
                     pending.push(node.id.clone());
                     continue;
                 }
-                // A first run, or one with nothing cached to carry, is on the
-                // frame; a run still going for it is no longer wanted.
+                // A first run, or one with nothing cached, is on the frame
+                // and drops any run in flight.
                 if let Some(running) = self.running.remove(&node.id) {
                     runtime.discard_run(running.run);
                 }
@@ -606,8 +573,7 @@ impl Evaluator {
                     }
                     Source::Node { node, port } => {
                         self.cached(node, port).ok_or_else(|| {
-                            // What that node does write, so a port named
-                            // slightly wrong is named.
+                            // Its real outputs, for the suggestion.
                             let near = self.ledger.entry(node).and_then(|cached| {
                                 orla_abi::names::nearest(
                                     port,
@@ -630,8 +596,7 @@ impl Evaluator {
                 .map(|(_, handle)| *handle)
                 .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
             self.wait_for_checks(checks, runtime)?;
-            // A trial proves the world can run; the frame it ran is not
-            // the world's, and commits nothing.
+            // A trial commits nothing.
             let committed = if self.trial {
                 Vec::new()
             } else {
@@ -690,9 +655,8 @@ impl Evaluator {
         }
     }
 
-    /// Takes every run that has landed into the cache, as an execution on
-    /// the frame would have gone in. A run that failed fails the
-    /// evaluation the way a failure on the frame does.
+    /// Takes every landed run into the cache; a failed run fails the
+    /// evaluation.
     fn land(&mut self, runtime: &mut Runtime) -> Result<Vec<NodeId>, EvaluateError> {
         let mut landed = Vec::new();
         let ids: Vec<NodeId> = self.running.keys().cloned().collect();
@@ -707,9 +671,8 @@ impl Evaluator {
         Ok(landed)
     }
 
-    /// Waits for every run off the frame and takes each into the cache;
-    /// the next evaluation reads them, and commits the state they feed.
-    /// Returns the nodes that landed.
+    /// Waits for every run off the frame, takes each into the cache, and
+    /// returns the nodes that landed.
     pub fn settle(&mut self, runtime: &mut Runtime) -> Result<Vec<NodeId>, EvaluateError> {
         let mut landed = Vec::new();
         while let Some(id) = self.running.keys().next().cloned() {
@@ -743,14 +706,13 @@ impl Evaluator {
 }
 
 fn release(runtime: &mut Runtime, handle: Handle) {
-    // Handles here were created by executions this evaluator owns; a failure
-    // means the interface released them behind our back, which is the only
-    // case where ignoring the error is correct.
+    // The evaluator owns these handles; a failure means the interface
+    // already released one, so the error is ignored.
     let _ = runtime.host_mut().release(handle);
 }
 
-/// What a domain expression may take from the context: the window's size
-/// while one is open, and its scale.
+/// The context a domain expression reads: the window's size, while one
+/// is open, and its scale.
 fn window_context(context: &Context) -> impl Fn(&str) -> Option<Value> + '_ {
     move |name: &str| match name {
         "window" if context.has_window() => Some(Value::Vec2(context.window)),
@@ -759,9 +721,8 @@ fn window_context(context: &Context) -> impl Fn(&str) -> Option<Value> + '_ {
     }
 }
 
-/// The graph with every external the caller did not supply, and that has
-/// a fallback, read from its fallback instead; `None` when there is
-/// nothing to substitute, which is every graph whose files are all there.
+/// The graph with each unsupplied external that has a fallback read from
+/// it; `None` when nothing is substituted.
 fn substitute_fallbacks(graph: &Graph, externals: &BTreeMap<String, Handle>) -> Option<Graph> {
     let missing: BTreeMap<&str, &Source> = graph
         .fallbacks

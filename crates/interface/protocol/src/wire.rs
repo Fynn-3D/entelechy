@@ -1,6 +1,5 @@
-//! The JSON forms things take on the wire: values, a request's context,
-//! an evaluation's report, a trace, a manifest, the Graph, the session's
-//! events, and an error with its position.
+//! The JSON wire forms: values, a request's context, evaluation reports,
+//! traces, manifests, the Graph, session events and positioned errors.
 
 use orla_graph::{Binding, ParamValue, Source};
 use orla_ir::{Type, Validated};
@@ -10,8 +9,7 @@ use serde_json::{Value as Json, json};
 use orla_session::{Event, Session};
 
 /// The context an `evaluate`, `advance` or `trace` request describes:
-/// time, rate, the pointer, buttons, wheel and keys, and the window
-/// (the request's, else the session's, else none).
+/// time, rate, pointer, buttons, wheel, sticks, keys, and the window.
 pub fn context_of(session: &Session, request: &Json) -> Context {
     let number_at = |list: &Vec<Json>, index: usize| {
         list.get(index).and_then(Json::as_f64).unwrap_or(0.0) as f32
@@ -49,8 +47,8 @@ pub fn context_of(session: &Session, request: &Json) -> Context {
             wheel.get(1).and_then(Json::as_f64).unwrap_or(0.0) as f32,
         ];
     }
-    // A pad's axes: `"sticks": [[lx, ly], [rx, ry], [lt, rt]]`, as many
-    // pairs as are given.
+    // A pad's axes: `"sticks": [[lx, ly], [rx, ry], [lt, rt]]`, up to
+    // three pairs.
     if let Some(sticks) = request.get("sticks").and_then(Json::as_array) {
         for (slot, pair) in sticks.iter().take(3).enumerate() {
             if let Some(pair) = pair.as_array() {
@@ -112,7 +110,7 @@ fn plain_value(ty: Type, words: &[u32]) -> Value {
     orla_ir::template(ty, &[]).rebuilt(&mut words.iter().copied())
 }
 
-/// A type's name as the source spells it: a struct by its name.
+/// A type's source name; a struct by its name.
 pub fn type_name(module: &Validated, ty: Type) -> String {
     match ty {
         Type::Struct(index) => module.structs[index as usize].name.clone(),
@@ -150,8 +148,8 @@ pub fn words_json(module: &Validated, ty: Type, words: &[u32]) -> Json {
     }
 }
 
-/// A traced value's words as text, the way the source would write them;
-/// an `Int` of sixteen or more also in hex.
+/// A traced value's words as source text; an `Int` of magnitude 16 or
+/// more also in hex.
 pub fn words_text(module: &Validated, ty: Type, words: &[u32]) -> String {
     match ty {
         Type::Float => format!("{}", f32::from_bits(words[0])),
@@ -252,10 +250,9 @@ pub(crate) fn failure(message: impl Into<String>) -> Json {
     json!({ "message": message.into() })
 }
 
-/// A failed evaluation as data an agent can act on: the message, the node
-/// it belongs to when it belongs to one, and for a state migration that
-/// failed, the port and the migration's Kernel. `frame` says which frame
-/// of a run it was.
+/// A failed evaluation as data: the message, its node if any, for a
+/// failed state migration the port and migration Kernel, and a run's
+/// `frame`.
 pub(crate) fn evaluation_error(error: &orla_graph::EvaluateError, frame: Option<u64>) -> Json {
     let message = match frame {
         Some(frame) => format!("frame {frame}: {error}"),
@@ -275,8 +272,7 @@ pub(crate) fn evaluation_error(error: &orla_graph::EvaluateError, frame: Option<
     json
 }
 
-/// A diagnostic as data: its message, and its line and column when it
-/// has a place.
+/// A diagnostic as data: its message, and line and column when placed.
 pub(crate) fn diagnostic_json(diagnostic: &orla_session::Diagnostic) -> Json {
     let mut json = failure(diagnostic.message.clone());
     if let Some((line, column)) = diagnostic.at {
@@ -381,12 +377,10 @@ pub(crate) fn events_json(events: &[Event]) -> Vec<Json> {
         .collect()
 }
 
-/// Values cross the protocol as JSON numbers and booleans, a vector as
-/// an array of its components, a matrix as an array of its columns, and a
-/// struct or an array as an array of its members. A double is the JSON
-/// number that reads back as it; a long is a number while a double holds
-/// it exactly (up to 2^53), and a string of its digits beyond, which is
-/// what JSON's readers keep exact.
+/// A value as JSON: numbers and booleans, a vector as its components, a
+/// matrix as its columns, a struct or array as its members. A double is
+/// the number that reads back exactly; a long is a number up to 2^53 in
+/// magnitude and a string of digits beyond.
 pub fn value_json(value: &Value) -> Json {
     let columns = |v: &[f32], n: usize| json!(v.chunks(n).collect::<Vec<_>>());
     let dcolumns = |v: &[f64], n: usize| json!(v.chunks(n).collect::<Vec<_>>());
@@ -423,12 +417,12 @@ pub fn value_json(value: &Value) -> Json {
     }
 }
 
-/// Reads a value: integers become `Int` (a `Long` beyond 32 bits, and a
-/// string of digits is one too), other numbers are kept exact until the
-/// parameter they are given to says their width, booleans are `Bool`,
-/// and an array is the record of its items, which the parameter shapes:
-/// `[1, 2.5]` a `Vec2`, `[3, 4]` an `IVec2` or a `Vec2`, `[[1, 0], [0,
-/// 1]]` a `Mat2`, `[[0, 1, 0], 2]` a struct of a `Vec3` and a `Float`.
+/// Reads a value: an integer is an `Int` (a `Long` beyond 32 bits, as is
+/// a string of digits); another number stays exact until the receiving
+/// parameter gives its width; a boolean is a `Bool`; an array is a record
+/// the parameter shapes: `[1, 2.5]` a `Vec2`, `[3, 4]` an `IVec2` or
+/// `Vec2`, `[[1, 0], [0, 1]]` a `Mat2`, `[[0, 1, 0], 2]` a struct of a
+/// `Vec3` and a `Float`.
 pub fn value_from_json(json: &Json) -> Result<Value, Json> {
     match json {
         Json::Bool(v) => Ok(Value::Bool(*v)),

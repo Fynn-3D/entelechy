@@ -1,12 +1,10 @@
-//! What a rig is, as rows: the one statement of it the tests hold
-//! everything to. [`docs/RIGS.md`](../../../../docs/RIGS.md) says the
-//! same in words.
+//! A rig as rows: the one statement of it the tests hold everything to.
+//! [`docs/RIGS.md`](../../../../docs/RIGS.md) says the same in words.
 
 use std::path::Path;
 
-/// Every kind of row a rig comes in as: the file's suffix and its
-/// layout, `i` an `Int` and `f` a `Float`, in the order the ABI lays
-/// them out.
+/// Every kind of rig row: the file's suffix and its layout, `i` an `Int`
+/// and `f` a `Float`, in ABI order.
 pub const RIG_ROWS: &[(&str, &str)] = &[
     // position, normal, uv — the mesh at rest, in the skin's space
     ("vertices.field", "f,f,f,f,f,f,f,f"),
@@ -33,8 +31,8 @@ pub fn schema_of(path: &Path) -> String {
         .to_owned()
 }
 
-/// Holds every rig file in a directory to the contract, and says how
-/// many it found of each kind.
+/// Holds every rig file in a directory to the contract, returning the
+/// count of each kind.
 pub fn rows_keep_the_contract(dir: &Path) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap().flatten() {

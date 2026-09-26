@@ -1,9 +1,6 @@
-//! Edits of a document's text by what it declares: a statement named by
-//! its kind and name, or a member of a node's block by the node and the
-//! member, is replaced, added, or removed, and only its bytes change.
-//! Everything else stays as it was written, comments and layout
-//! included. What the result means is not checked here; the caller
-//! checks the whole document, as it checks any text.
+//! Edits of a document's text by what it declares: a statement by kind
+//! and name, or a node's member by node and member, is replaced, added
+//! or removed, changing only its bytes. The caller checks the result.
 
 use std::fmt;
 use std::ops::Range;
@@ -15,8 +12,8 @@ pub use orla_language::StatementKind;
 /// What an edit names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
-    /// A top-level statement: its kind and the name it declares (a
-    /// Kernel's id as written, a `use`'s path).
+    /// A top-level statement by kind and declared name (a Kernel's id as
+    /// written, a `use`'s path).
     Statement {
         /// Its kind.
         kind: StatementKind,
@@ -32,10 +29,9 @@ pub enum Target {
     },
 }
 
-/// One edit: the text that stands for its target from now on, or `None`
-/// to remove it. The text is the whole statement or member, declaring
-/// exactly what the target names; a target not yet written is added
-/// after the last of its kind.
+/// One edit: the target's new text, the whole statement or member
+/// declaring exactly what the target names, or `None` to remove it. A
+/// new target is added after the last of its kind.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edit {
     /// What it changes.
@@ -44,7 +40,7 @@ pub struct Edit {
     pub text: Option<String>,
 }
 
-/// Why an edit could not be made, and which one.
+/// Why an edit failed, and which one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditError {
     /// The edit's place in the list, from 0.
@@ -70,9 +66,8 @@ impl fmt::Display for Target {
     }
 }
 
-/// `document` with `edits` made in order, each on the text the one
-/// before left: all of them, or an error naming the first that cannot
-/// be made.
+/// `document` with `edits` made in order, all or none: the error names
+/// the first that fails.
 pub fn edit(document: &str, edits: &[Edit]) -> Result<String, EditError> {
     let mut text = document.to_owned();
     for (index, one) in edits.iter().enumerate() {
@@ -149,8 +144,7 @@ fn declares<'a>(fragment: &'a str, target: &Target) -> Result<&'a str, String> {
             }
         }
         Target::Member { member, .. } => {
-            // A member parses inside a block: one is made for it, and it
-            // must stay one member of that one block.
+            // A member parses inside a block made for it, as its one member.
             let probe = format!("node probe: probe.probe@1 {{\n{fragment}\n}}");
             let outline = outline(&probe)
                 .map_err(|e| format!("the text for {target} does not parse: {e}"))?;
@@ -195,10 +189,9 @@ fn splice(text: &str, range: Range<usize>, with: &str) -> String {
     out
 }
 
-/// Takes `range` out. Alone on its lines, the lines go with it, a
-/// comment after it on its last line too, and for a statement the
-/// comment lines right above it, which were about it; sharing a line,
-/// the spaces before it go.
+/// Takes `range` out. Alone on its lines, the lines go too, with a
+/// trailing comment and, for a statement, the comment lines right above
+/// it; sharing a line, the spaces before it go.
 fn remove(text: &str, range: Range<usize>, comments: bool) -> String {
     let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = text[range.end..]
@@ -224,8 +217,7 @@ fn remove(text: &str, range: Range<usize>, comments: bool) -> String {
     splice(text, start..line_end, "")
 }
 
-/// Where statements of each kind go when the document has none of that
-/// kind yet: after the last of the kinds that come before it.
+/// The order of statement kinds, for placing the first of a kind.
 fn order(kind: StatementKind) -> u8 {
     match kind {
         StatementKind::Package => 0,
@@ -241,9 +233,8 @@ fn order(kind: StatementKind) -> u8 {
     }
 }
 
-/// Adds a statement after the last of its kind; the first of its kind
-/// after the last of the kinds before it, a blank line between; the
-/// first of all at the end.
+/// Adds a statement after the last of its kind, or else after the last
+/// of the kinds before it with a blank line between, or else first.
 fn add_statement(text: &str, outline: &Outline, kind: StatementKind, fragment: &str) -> String {
     let same = outline.statements.iter().rev().find(|s| s.kind == kind);
     let before = outline
@@ -262,8 +253,7 @@ fn add_statement(text: &str, outline: &Outline, kind: StatementKind, fragment: &
             splice(text, at..at, &format!("\n{gap}{fragment}"))
         }
         None => match outline.statements.first() {
-            // Nothing comes before it: it goes first, a blank line
-            // between it and what was first.
+            // First of all: a blank line follows it.
             Some(first) => {
                 let at = text[..first.range.start].rfind('\n').map_or(0, |i| i + 1);
                 splice(text, at..at, &format!("{fragment}\n\n"))
@@ -281,8 +271,8 @@ fn add_statement(text: &str, outline: &Outline, kind: StatementKind, fragment: &
 }
 
 /// Adds a member at the end of a node's block, laid out as the block is:
-/// on the line of the last member when they share the block's line, on
-/// a line of its own, indented as the last member, when not.
+/// on the block's line when the members share it, else on its own line
+/// indented as the last member.
 fn add_member(text: &str, block: &orla_language::NodeBlock, fragment: &str) -> String {
     let same_line = |a: usize, b: usize| !text[a..b].contains('\n');
     match block.members.last() {
@@ -309,8 +299,8 @@ fn add_member(text: &str, block: &orla_language::NodeBlock, fragment: &str) -> S
     }
 }
 
-/// The end of the line `at` is on, before its newline: where something
-/// added after a statement begins, past whatever comment follows it.
+/// The end of the line `at` is on, before its newline, past any
+/// trailing comment.
 fn line_end(text: &str, at: usize) -> usize {
     text[at..].find('\n').map_or(text.len(), |i| at + i)
 }

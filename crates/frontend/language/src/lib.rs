@@ -1,11 +1,9 @@
 #![warn(missing_docs)]
 //! Orla language frontend (L5).
 //!
-//! One grammar serves two file roles. `.orla` files hold Kernels: pure
-//! capabilities, one or more per file. `.osn` files are node graphs: the
-//! file is the graph. A graph uses libraries, declares its inputs and
-//! outputs, and places nodes; a node either references a Kernel by id or
-//! carries its own Kernel inline, wiring its inputs where they are declared.
+//! One grammar, two file roles: a `.orla` file holds Kernels; a `.osn`
+//! file is a graph that uses libraries, declares inputs and outputs, and
+//! places nodes, each referencing a Kernel by id or carrying one inline.
 //!
 //! ```text
 //! use "kernels/";
@@ -27,9 +25,9 @@
 //! output result <- trail.result;
 //! ```
 //!
-//! Wiring is written only at the consumer: `port <- source` reads the source
-//! in this evaluation, `port <~ source from initial` reads it as committed by
-//! the previous evaluation. A source is a graph input by name or `node.port`.
+//! Wiring sits at the consumer: `port <- source` reads this evaluation's
+//! value, `port <~ source from initial` the previous commit's. A source is
+//! a graph input or `node.port`.
 //!
 //! Kernel syntax:
 //!
@@ -59,13 +57,10 @@ use std::ops::Range;
 pub use orla_abi::names::{did_you_mean, edit_distance, nearest, suggestion};
 pub use parser::{outline, parse, parse_document, parse_literal};
 
-/// The version of the Kernel language and the document format. Bumped
-/// when a document of the old one would no longer parse or mean the
-/// same.
+/// The version of the Kernel language and the document format.
 pub const LANGUAGE_VERSION: u32 = 1;
 
-/// `package name@version { language = N; ir = N; }`: what a package's
-/// manifest declares, the versions being the least it needs.
+/// `package name@version { language = N; ir = N; }`: a package manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageDecl {
     /// The package's id, `name@version`.
@@ -84,33 +79,30 @@ pub struct Document {
     pub package: Option<PackageDecl>,
     /// Files or directories whose Kernels this document uses.
     pub uses: Vec<Use>,
-    /// Struct types declared at the top level; every Kernel of the
-    /// document sees them before its own.
+    /// Top-level struct types, seen by every Kernel before its own.
     pub structs: Vec<StructDecl>,
-    /// Port type aliases declared at the top level, shared the same way.
+    /// Top-level port type aliases, shared the same way.
     pub types: Vec<TypeAlias>,
-    /// Functions declared at the top level, shared the same way; one with
-    /// a Field parameter is instantiated per port it is called with.
+    /// Top-level functions, shared the same way; one with a Field
+    /// parameter is instantiated per port it is called with.
     pub functions: Vec<FnDecl>,
     /// Kernels defined at the top level, document structs already prepended.
     pub kernels: Vec<Kernel>,
     /// External images the caller supplies: `input name: Image;`.
     pub inputs: Vec<PortDecl>,
-    /// Graph parameters: `param name: Type = default;`. Node values may
-    /// name them, and a parent graph or the caller may override them.
+    /// Graph parameters: `param name: Type = default;`, overridable by a
+    /// parent graph or the caller.
     pub params: Vec<ParamDecl>,
     /// Named results: `output name <- source;`.
     pub outputs: Vec<(Spanned<String>, SourceRef)>,
-    /// Outputs written to a file as well: `output name <- source to
-    /// "file";`, by the output's name.
+    /// Outputs also written to a file: `output name <- source to "file";`.
     pub writes: Vec<WriteDecl>,
     /// Nodes in document order.
     pub nodes: Vec<NodeDecl>,
 }
 
-/// Where each statement of a document was written, in its text: what an
-/// edit of the document names, and the bytes it replaces. The document
-/// itself says what the statements mean; this says only where they are.
+/// Where each statement of a document sits in its text: what an edit
+/// names and the bytes it replaces.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Outline {
     /// Top-level statements in document order.
@@ -122,13 +114,12 @@ pub struct Outline {
 pub struct Statement {
     /// What it declares.
     pub kind: StatementKind,
-    /// The name it declares as written: a node's, an output's, a Kernel's
-    /// id, a `use`'s path; empty for the one `package`.
+    /// The name it declares as written (a `use`'s path, a Kernel's id);
+    /// empty for `package`.
     pub name: String,
     /// From its first token to its last, the `;` or `}` included.
     pub range: Range<usize>,
-    /// A node's block of members, when it has one; an inline Kernel's
-    /// node has none.
+    /// A reference node's block of members.
     pub block: Option<NodeBlock>,
 }
 
@@ -186,8 +177,7 @@ pub struct NodeBlock {
     pub members: Vec<NodeMemberAt>,
 }
 
-/// Where one member of a node's block was written: `name = value;`, `port <- source;`,
-/// `port <~ ...;` or `carry port <- output;`.
+/// Where one member of a node's block was written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeMemberAt {
     /// The parameter or port it sets or wires.
@@ -196,24 +186,22 @@ pub struct NodeMemberAt {
     pub range: Range<usize>,
 }
 
-/// `to "file"` or `to bytes "file"` after an output: the file the Host
-/// writes the output's Field to, relative to the document, once an
-/// evaluation that changed it has committed.
+/// `to "file"` or `to bytes "file"` after an output: the file, relative
+/// to the document, the output's Field is written to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WriteDecl {
     /// The output written.
     pub output: String,
     /// The file.
     pub path: Spanned<String>,
-    /// Whether the Field is written as its bytes, one to an element of a
-    /// `Rows<Int>`, rather than in the format the file's extension names.
+    /// Written as bytes, one per `Rows<Int>` element; otherwise in the
+    /// format the file's extension names.
     pub bytes: bool,
 }
 
 impl Document {
     /// Puts declarations from used documents in front of every Kernel's
-    /// own, so a struct or type declared once is the same layout in every
-    /// file that uses it.
+    /// own, so a shared struct or type has one layout everywhere.
     pub fn inherit(&mut self, structs: &[StructDecl], types: &[TypeAlias], functions: &[FnDecl]) {
         if structs.is_empty() && types.is_empty() && functions.is_empty() {
             return;
@@ -240,8 +228,7 @@ impl Document {
     }
 }
 
-/// `use "path";`: a file of Kernels, or a directory of such files when the
-/// path ends with `/`.
+/// `use "path";`: a file of Kernels, or a directory when it ends with `/`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Use {
     /// The path as written, relative to the document.
@@ -255,9 +242,8 @@ pub struct NodeDecl {
     pub name: Spanned<String>,
     /// What the node executes.
     pub kind: NodeKind,
-    /// Members of a reference node's block; empty for inline Kernels, whose
-    /// wiring sits on their `input` lines and whose values are their
-    /// parameter defaults.
+    /// Members of a reference node's block; empty for an inline Kernel,
+    /// which wires on its `input` lines.
     pub members: Vec<NodeMember>,
 }
 
@@ -266,16 +252,14 @@ pub struct NodeDecl {
 pub enum NodeKind {
     /// A published Kernel, by id as written.
     Reference(Spanned<String>),
-    /// A Kernel written in place. With an id it is also published under
-    /// that id; without one it is anonymous and the loader names it after
-    /// the document and the node.
+    /// A Kernel written in place, published under its id if it has one;
+    /// the loader names an anonymous one after the document and node.
     Inline(Box<Kernel>),
-    /// Another `.osn` document placed as a node: `node fx: graph "path";`.
-    /// Its inputs are wired and its params set like a Kernel's.
+    /// Another `.osn` document as a node: `node fx: graph "path";`, wired
+    /// and set like a Kernel.
     SubGraph(Spanned<String>),
-    /// A Field of a type, filled: `node zeros: Rows<Float> { domain = 65; }`
-    /// is zeros, `value = 0.5;` fills with a literal; a type written as
-    /// an alias or a struct element needs the `value`.
+    /// A filled Field of a type: zeros, or `value = 0.5;`. An alias or
+    /// struct element type needs the `value`.
     Fill(Spanned<String>),
 }
 
@@ -286,8 +270,8 @@ pub enum NodeMember {
     Set(Spanned<String>, Expr),
     /// `port <- source;`
     Bind(Spanned<String>, SourceRef),
-    /// `carry port <- output;`: with `times = N;`, from the second time
-    /// on the port reads the previous time's output of that name.
+    /// `carry port <- output;`: with `times = N;`, each time after the
+    /// first reads the previous time's output.
     Carry(Spanned<String>, Spanned<String>),
     /// `port <~ source from initial [migrate kernel.id@v];`
     Previous {
@@ -297,8 +281,8 @@ pub enum NodeMember {
         source: SourceRef,
         /// What feeds the port before the first commit.
         initial: SourceRef,
-        /// The Kernel that carries committed state into this port's
-        /// layout when the two no longer agree, as `id@version`.
+        /// The Kernel (`id@version`) that migrates committed state into
+        /// this port's layout when the layouts differ.
         migration: Option<Spanned<String>>,
     },
 }
@@ -314,8 +298,8 @@ pub enum BindingDecl {
         source: SourceRef,
         /// What feeds the port before the first commit.
         initial: SourceRef,
-        /// The Kernel that carries committed state into this port's
-        /// layout when the two no longer agree, as `id@version`.
+        /// The Kernel (`id@version`) that migrates committed state into
+        /// this port's layout when the layouts differ.
         migration: Option<Spanned<String>>,
     },
 }
@@ -358,21 +342,18 @@ pub struct Spanned<T> {
 /// A parsed Kernel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Kernel {
-    /// Byte range of the whole `kernel ... }` item in its document, so a
-    /// Kernel can be quoted on its own.
+    /// Byte range of the whole `kernel ... }` item in its document.
     pub range: Range<usize>,
     /// The raw id text, e.g. `image.grayscale@1`; `None` for an anonymous
     /// inline Kernel.
     pub id: Option<Spanned<String>>,
     /// `domain = expr;`, allowed only in an inline node Kernel.
     pub domain: Option<Expr>,
-    /// Byte range of the whole `domain = expr;` statement in its document,
-    /// so the Kernel's text can be given without it.
+    /// Byte range of the `domain = expr;` statement in its document.
     pub domain_range: Option<Range<usize>>,
     /// Declared capability names.
     pub requires: Vec<Spanned<String>>,
-    /// `budget N;`: the loop iterations an element may run, when the
-    /// Kernel says; the default otherwise.
+    /// `budget N;`: the loop iterations an element may run.
     pub budget: Option<Spanned<u32>>,
     /// Inputs in declaration order.
     pub inputs: Vec<PortDecl>,
@@ -381,8 +362,7 @@ pub struct Kernel {
     /// Outputs in declaration order.
     pub outputs: Vec<PortDecl>,
     /// Memories in declaration order: `memory ram: Rows<Int>;`, a port an
-    /// ordered Kernel both reads and writes step by step, bound like an
-    /// input and read like an output.
+    /// ordered Kernel reads and writes step by step.
     pub memories: Vec<PortDecl>,
     /// Struct types in declaration order.
     pub structs: Vec<StructDecl>,
@@ -392,20 +372,15 @@ pub struct Kernel {
     pub functions: Vec<FnDecl>,
     /// The per-element body.
     pub compute: Block,
-    /// `merge(a, b) { ... }`: present for a reduction, folding two
-    /// `compute` results into one.
+    /// `merge(a, b) { ... }`: a reduction's fold of two results.
     pub merge: Option<MergeDecl>,
-    /// `scan with name = init { ... }`: present for a scan, whose body is
-    /// `compute` and whose carried value threads through the elements in
-    /// order.
+    /// `scan with name = init { ... }`: a scan's value carried through
+    /// the elements in order.
     pub carry: Option<CarryDecl>,
-    /// `scatter into base with combine { ... }`: present for a scatter,
-    /// whose body is `compute` and yields an address and a value per
-    /// element of the first input.
+    /// `scatter into base with combine { ... }`: a scatter, whose
+    /// `compute` yields an address and a value per first-input element.
     pub scatter: Option<ScatterDecl>,
-    /// `prefix with combine { ... }`: present for a prefix fold, whose
-    /// body is `compute` and whose every element's value meets everything
-    /// before it by the rule.
+    /// `prefix with combine { ... }`: a prefix fold.
     pub prefix: Option<PrefixDecl>,
 }
 
@@ -419,8 +394,7 @@ pub struct PrefixDecl {
     pub span: Span,
 }
 
-/// `scatter into base with combine { ... }`: the target input the output
-/// starts from and the rule a value meets the element there with.
+/// `scatter into base with combine { ... }`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScatterDecl {
     /// The input port the output starts from.
@@ -431,8 +405,7 @@ pub struct ScatterDecl {
     pub span: Span,
 }
 
-/// The carried value of a scan: its name and its value before the first
-/// element.
+/// The carried value of a scan.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CarryDecl {
     /// Name of the carried value inside the body.
@@ -457,8 +430,7 @@ pub struct MergeDecl {
     pub span: Span,
 }
 
-/// `type Name = Shape<Element>;`: another spelling of a port type. Aliases
-/// are transparent; the compiler checks the structure they name.
+/// `type Name = Shape<Element>;`: a transparent alias of a port type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeAlias {
     /// Alias name; must start with an uppercase letter.
@@ -486,29 +458,26 @@ pub struct PortDecl {
     pub ty: Spanned<String>,
     /// Wiring, only on inline Kernel inputs.
     pub binding: Option<BindingDecl>,
-    /// A file the input is read from, only on a document's inputs:
-    /// `input atlas: Image = "atlas.ppm";`.
+    /// Document inputs only: a file read, `= "atlas.ppm"`.
     pub file: Option<Spanned<String>>,
-    /// Text the input holds as its characters' codes, only on a
-    /// document's inputs: `input title: Rows<Int> = text "ORLA";`.
+    /// Document inputs only: text held as character codes, `= text "ORLA"`.
     pub text: Option<Spanned<String>>,
-    /// A directory of files the input reads frame by frame, only on a
-    /// document's inputs: `input clip: Image = frames "clip/" at 30;`.
+    /// Document inputs only: a directory read frame by frame,
+    /// `= frames "clip/" at 30`.
     pub frames: Option<FramesDecl>,
-    /// A file the input reads as its bytes, one to an element, only on a
-    /// document's inputs: `input level: Rows<Int> = bytes "level.bin";`.
+    /// Document inputs only: a file read as bytes, one per element,
+    /// `= bytes "level.bin"`.
     pub bytes: Option<Spanned<String>>,
-    /// What an input read from a file reads while the file is absent or
-    /// cannot be read: `input saved: Rows<Int> = bytes "saved.bin" else
-    /// fresh.result;`.
+    /// What a file input reads while its file is unreadable:
+    /// `... else fresh.result`.
     pub otherwise: Option<SourceRef>,
     /// Byte range of the wiring (`<- source`, `<~ source from initial`)
-    /// in the document, so a Kernel's text can be given without it.
+    /// in the document.
     pub binding_range: Option<Range<usize>>,
 }
 
-/// `frames "dir/" at N`: the files of a directory, in name order, one
-/// per frame at `rate` frames a second of the session's time.
+/// `frames "dir/" at N`: a directory's files in name order, one per frame
+/// at `rate` frames per second of session time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FramesDecl {
     /// The directory, as written.
@@ -526,8 +495,7 @@ pub struct ParamDecl {
     pub ty: Spanned<String>,
     /// Default value expression.
     pub default: Expr,
-    /// Byte range of the default expression in the document, so a graph
-    /// param it names can be replaced by its value in the Kernel's text.
+    /// Byte range of the default expression in the document.
     pub default_range: Range<usize>,
 }
 
@@ -536,8 +504,7 @@ pub struct ParamDecl {
 pub struct FnDecl {
     /// Function name.
     pub name: Spanned<String>,
-    /// Type parameters as written, `fn twice<T>(v: T) -> T`: names that
-    /// stand for whatever type the call gives them.
+    /// Type parameters as written, `fn twice<T>(v: T) -> T`.
     pub generics: Vec<Spanned<String>>,
     /// Arguments as `(name, type)`.
     pub args: Vec<(Spanned<String>, Spanned<String>)>,
@@ -547,18 +514,15 @@ pub struct FnDecl {
     pub body: Block,
 }
 
-/// How deep an expression or a block may nest, counting what encloses it
-/// and the operators chained before it (`a + b + c` is three deep at `c`).
-/// Past this a document is refused with an error, never a crash: every
-/// pass after the parser walks the tree by recursion, and a Kernel an
-/// agent publishes to a live session must not be able to exhaust the
-/// stack of the thread that compiles it.
+/// How deep an expression or block may nest, counting enclosing nodes and
+/// chained operators (`a + b + c` is three deep at `c`). A deeper document
+/// is refused with an error, so no Kernel can exhaust the compiling
+/// thread's stack.
 pub const MAX_NESTING: usize = 256;
 
-/// The stack a thread that reads or compiles a document is given: room
-/// for a tree [`MAX_NESTING`] deep through every pass that walks it by
-/// recursion, a debug build's frames included. Reserved, not committed:
-/// what is never touched costs no memory.
+/// The stack of a thread that reads or compiles a document: room for a
+/// tree [`MAX_NESTING`] deep through every recursive pass, in a debug
+/// build too. Reserved, committed only as touched.
 pub const DEEP_STACK: usize = 256 << 20;
 
 thread_local! {
@@ -566,11 +530,10 @@ thread_local! {
     static DEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Runs `work` on a thread with [`DEEP_STACK`] of stack and waits for it,
-/// or runs it here when this thread is such a one already, or when no
-/// thread can be had. Reading and compiling go through here, so how deep
-/// a document may nest does not depend on which thread asked: a live
-/// session's socket, a test's, the FFI's caller's.
+/// Runs `work` on a thread with [`DEEP_STACK`] of stack and waits for it;
+/// runs it here when this thread is one already or none can be spawned.
+/// Reading and compiling go through here, so the nesting limit is the
+/// same whichever thread asks.
 pub fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     if DEEP.with(std::cell::Cell::get) {
         return work();
@@ -598,9 +561,8 @@ pub fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     }
 }
 
-/// A sequence of `let` bindings ending in a result: `return expr;` in
-/// function and `compute` bodies, or a tail expression in `if` and `loop`
-/// blocks (both forms are accepted everywhere).
+/// `let` bindings ending in a result, written `return expr;` or as a tail
+/// expression, in any block.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
     /// Bindings in order.
@@ -668,7 +630,7 @@ pub enum ExprKind {
     /// `Double` where one is wanted.
     Float(f64),
     /// An integer literal such as `8`: an `Int`, or a `Long` where one
-    /// is wanted or where it does not fit in 32 bits.
+    /// is wanted or the value needs 64 bits.
     Int(i64),
     /// A float literal written with `d`, such as `0.1d`: a `Double`.
     Double(f64),
@@ -692,18 +654,17 @@ pub enum ExprKind {
     /// `array[index]`: the element at an `Int` index, clamped into the
     /// array; a literal index is checked when compiled.
     Subscript(Box<Expr>, Box<Expr>),
-    /// `Name { field: expr, ... }`, optionally starting from `..base` whose
-    /// unlisted fields are kept.
+    /// `Name { field: expr, ..base }`.
     Struct {
         /// The struct name.
         name: Spanned<String>,
-        /// The value whose fields fill in whatever is not listed.
+        /// The value supplying unlisted fields.
         base: Option<Box<Expr>>,
         /// Listed fields.
         fields: Vec<(Spanned<String>, Expr)>,
     },
-    /// `{ name: expr, ... }`: a Kernel's outputs by name, each once, which
-    /// is what the `compute` of a Kernel with several outputs gives.
+    /// `{ name: expr, ... }`: each output once by name, the result of a
+    /// multi-output Kernel's `compute`.
     Record(Vec<(Spanned<String>, Expr)>),
     /// Negation.
     Neg(Box<Expr>),
@@ -720,8 +681,7 @@ pub enum ExprKind {
         /// Block taken otherwise.
         otherwise: Box<Block>,
     },
-    /// `match value { 1 => a, 2 | 3 => { ... }, _ => b }` on an `Int`: the
-    /// arm whose values hold the scrutinee runs, else the last, `_`.
+    /// `match value { 1 => a, 2 | 3 => { ... }, _ => b }` on an `Int`.
     Match {
         /// The `Int` matched.
         scrutinee: Box<Expr>,
@@ -730,13 +690,12 @@ pub enum ExprKind {
         /// The `_` arm.
         otherwise: Box<Block>,
     },
-    /// `break expr;` among a loop body's statements: the loop stops
-    /// after this iteration and gives that value.
+    /// `break expr;` in a loop body: the loop ends after this iteration
+    /// with that value.
     Break(Box<Expr>),
     /// `loop count with name = init until done { body }`.
     Loop {
-        /// The iteration count: a literal, or any `Int` expression, read
-        /// once before the loop.
+        /// The iteration count, an `Int` read once before the loop.
         count: Box<Expr>,
         /// Name of the carried value inside `until` and `body`.
         name: Spanned<String>,

@@ -1,7 +1,5 @@
-//! A MIDI file brought in as the `.field` of notes a scene reads. The
-//! reading is [`orla_formats::midi`], which a scene also reaches live
-//! when an input names a `.mid` itself; this writes what it read beside
-//! the other imports, and says what was left out.
+//! A MIDI file as a notes `.field`, read by [`orla_formats::midi`],
+//! with what was left out named.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +15,7 @@ pub struct Imported {
     pub seconds: f32,
     /// The tracks the file holds.
     pub tracks: usize,
-    /// What was met and left out, in words.
+    /// What was left out, in words.
     pub left_out: Vec<String>,
 }
 

@@ -1,8 +1,6 @@
-//! A scene's change is one change: the Kernels of its own documents, the
-//! root and the graphs it places, and the graph they make publish
-//! together or not at all. The scene running keeps running, on the
-//! Kernels it ran on, until every Kernel of the change it is replaced by
-//! stands.
+//! A scene change is one change: the Kernels of its documents and the
+//! graph they make publish together or not at all. The running scene
+//! keeps its Kernels until every Kernel of its replacement stands.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,8 +8,8 @@ use std::sync::Arc;
 use orla_kernel::{Context, KernelId};
 use orla_session::{Event, Memory, Session};
 
-/// The root: `k.src` makes a picture under the output `port`, and a
-/// placed graph reads it.
+/// The root: `k.src` makes a picture under the output `port`, read by a
+/// placed graph.
 fn root(port: &str) -> String {
     format!(
         "node src: kernel k.src@1 {{ requires {{ field.write; }} output {port}: Image; domain = vec2(4, 4); compute {{ return vec4(0.5, 0.25, 0.75, 1.0); }} }}\n\
@@ -43,10 +41,8 @@ fn generation(session: &Session, id: &str) -> Option<u64> {
     session.runtime().kernel(&id).map(|v| v.generation().0)
 }
 
-/// One of the scene's documents refused refuses the change whole: the
-/// root's Kernel it would have published is not, and the scene running
-/// runs on as it did. (The root's Kernel used to publish anyway, and the
-/// graph kept running asked it for an output it no longer had.)
+/// One refused document refuses the change whole: the root's Kernel is
+/// not published, and the running scene runs on.
 #[test]
 fn a_refused_document_publishes_none_of_the_scenes_change() {
     let files = Arc::new(Memory::default());
@@ -61,7 +57,7 @@ fn a_refused_document_publishes_none_of_the_scenes_change() {
     let before = generation(&session, "k.src@1");
 
     // The root renames its output and rewires; the placed graph's Kernel
-    // no longer compiles.
+    // fails to compile.
     put(&files, "scene.osn", &root("out"));
     put(&files, "sub.osn", &sub("return nothing;"));
     let events = session.sync();
@@ -89,9 +85,8 @@ fn a_refused_document_publishes_none_of_the_scenes_change() {
     session.evaluate(&Context::default()).unwrap();
 }
 
-/// Where replacements are prepared off the frame, the new graph waits for
-/// its Kernels: every frame runs one whole scene, the old on its Kernels
-/// or the new on its own, never the new graph on the old Kernels.
+/// With off-frame preparation, the new graph waits for its Kernels: every
+/// frame runs one whole scene, old or new.
 #[test]
 fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
     let files = Arc::new(Memory::default());
@@ -120,10 +115,9 @@ fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
     session.evaluate(&Context::default()).unwrap();
 }
 
-/// The interpreter, slow to prepare, so that a replacement prepared off
-/// the frame is still being prepared when the sync that asked for it
-/// returns; and refusing any Kernel with an output named `refused`, a
-/// replacement that validates and fails to prepare.
+/// The interpreter with a slow prepare, so an off-frame replacement is
+/// still preparing when its sync returns; it refuses to prepare any
+/// Kernel with an output named `refused`.
 struct Deliberate;
 
 impl orla_kernel::Backend for Deliberate {
@@ -158,9 +152,8 @@ impl orla_kernel::Backend for Deliberate {
     }
 }
 
-/// A replacement refused off the frame refuses the scene that needs it:
-/// the scene running stays, with the Kernels it runs on. (The new graph
-/// used to be installed before its Kernels, and stayed when one failed.)
+/// A replacement refused off the frame refuses the scene needing it: the
+/// running scene stays, with its Kernels.
 #[test]
 fn a_scene_whose_kernel_fails_off_the_frame_is_refused_and_the_old_one_runs() {
     let files = Arc::new(Memory::default());
@@ -236,11 +229,8 @@ fn a_claimed_scene_landing_later_is_the_requests() {
     assert_eq!(scene.origin, asked);
 }
 
-/// A graph parameter set while a scene waits for its Kernels is judged
-/// by that scene, the newest the session has read, not by whichever
-/// runs at that moment: the same request has one answer however far the
-/// worker has got. (A param the new document dropped was taken and then
-/// silently lost, and one it declared refused.)
+/// A graph param set while a scene waits for its Kernels is judged by
+/// that newest-read scene, whatever the worker's progress.
 #[test]
 fn a_param_is_judged_by_the_newest_scene_read() {
     let scene = |param: &str, red: &str| {
@@ -289,9 +279,9 @@ fn a_param_is_judged_by_the_newest_scene_read() {
     assert!(session.params().get("speed").is_none());
 }
 
-/// A session opened on `best` reads its scene on the first backend that
-/// opens and takes it, and one it takes on none is refused with why;
-/// every backend passed over is said.
+/// A session opened on `best` runs its scene on the first backend that
+/// opens and takes it; if none does, it is refused naming every backend
+/// passed over.
 #[test]
 fn best_opens_where_the_scene_loads_and_says_why_when_it_loads_nowhere() {
     let files = Arc::new(Memory::default());
@@ -327,10 +317,8 @@ fn best_opens_where_the_scene_loads_and_says_why_when_it_loads_nowhere() {
     }
 }
 
-/// A scene a request claimed that a document changed on disk supersedes
-/// before it lands is not the request's: what lands is the document's,
-/// and the history says so. (The claim used to carry over to the scene
-/// read in its place.)
+/// A claimed scene superseded by a document edit on disk before it lands
+/// is the document's in the history, not the request's.
 #[test]
 fn a_claimed_scene_superseded_on_disk_is_the_documents() {
     let files = Arc::new(Memory::default());
@@ -352,7 +340,7 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
         session.scene_waiting(),
         "the claimed scene waits for its Kernel"
     );
-    // A person's edit on disk reads in its place before it lands.
+    // A person's edit on disk replaces it before it lands.
     put(&files, "scene.osn", &root("again"));
     let mut landed = false;
     for _ in 0..5_000 {

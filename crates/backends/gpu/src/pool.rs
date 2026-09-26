@@ -1,47 +1,39 @@
-//! What the backend keeps on the device between runs so that a run
-//! need not ask the device for memory: buffers and textures laid by,
-//! each pile bounded, and the image a run left resident.
+//! Device memory kept between runs: bounded piles of buffers and textures,
+//! and the image a run left resident.
 
 use super::*;
 
 /// A resident image: its pixels as a storage buffer of `vec4<f32>`.
 pub(crate) struct DeviceImage {
     pub(crate) buffer: wgpu::Buffer,
-    /// Where the buffer goes when the Field that held it is released,
-    /// so the next output of its size takes it rather than asking the
-    /// driver for another. `None` for a buffer that is not the
-    /// backend's to keep.
+    /// Where the buffer goes when its Field is released, for the next output
+    /// of its size. `None` when the buffer is not the backend's to keep.
     pub(crate) spare: Option<Spare>,
 }
 
-/// Buffers released Fields left behind, by size. Asking the driver for
-/// tens of megabytes is most of what a full-screen pass costs, and a
-/// scene asks for the same sizes every frame.
+/// Buffers released Fields left behind, by size, for the next outputs of
+/// those sizes.
 #[derive(Clone, Default)]
 pub(crate) struct Spare {
     pub(crate) held: Arc<Mutex<Vec<wgpu::Buffer>>>,
 }
 
-/// How many buffers the pile holds, and how much of it. A frame wants
-/// a handful of sizes; beyond that they are the driver's again. Ten
-/// million triangles drawn at 4K pass half a gigabyte of them a frame,
-/// and a pile smaller than that makes some anew every frame.
+/// How many buffers the pile holds, and how many bytes; beyond that they
+/// return to the driver. The byte bound holds a frame of ten million
+/// triangles drawn at 4K.
 pub(crate) const SPARE_BUFFERS: usize = 12;
 
 pub(crate) const SPARE_BYTES: u64 = 1024 * 1024 * 1024;
 
-/// The targets a rasterizer draws into, kept by shape between calls.
-/// They belong to the call and to nothing else, so they go back at the
-/// end of it; asking the driver for tens of megabytes of texture is
-/// most of what a pass of the rasterizer costs.
+/// The targets a rasterizer draws into, kept by shape between calls. Each
+/// belongs to one call and comes back at its end.
 #[derive(Clone, Default)]
 pub(crate) struct SpareTextures {
     pub(crate) held: Arc<Mutex<Vec<wgpu::Texture>>>,
 }
 
-/// How many targets the pile holds, and how much of it: a rasterizer
-/// wants three of a shape, and a scene rarely rasterizes into more than
-/// two shapes. Beyond that they are the driver's again.
+/// How many targets the pile holds, and how many bytes: three per shape,
+/// for about two shapes.
 pub(crate) const SPARE_TEXTURES: usize = 8;
 
 pub(crate) const SPARE_TEXTURE_BYTES: u64 = 512 * 1024 * 1024;
@@ -83,8 +75,7 @@ impl SpareTextures {
         })
     }
 
-    /// Keeps a target the call is done with, while the pile is small
-    /// enough to be worth keeping.
+    /// Keeps a target the call is done with, while the pile has room.
     pub(crate) fn keep(&self, texture: wgpu::Texture) {
         let bytes = |texture: &wgpu::Texture| -> u64 {
             let size = texture.format().target_pixel_byte_cost().unwrap_or(16) as u64;
@@ -99,17 +90,10 @@ impl SpareTextures {
 }
 
 impl Spare {
-    /// A buffer at least this size, from the pile or from the device.
-    ///
-    /// At least, not exactly: nothing reads past the element count the
-    /// uniform gives — no shader asks a buffer how long it is — so the
-    /// tail of a bigger one is never touched. It is what makes the pile
-    /// work for a scene whose Fields change size, which is every scene
-    /// that sizes a node by what a Kernel decided: a count that wanders
-    /// by a chunk between frames missed an exact match every time and
-    /// went to the driver. The smallest that fits is taken, and never
-    /// one more than twice the size, so a Field of a thousand elements
-    /// cannot be handed the buffer of a million.
+    /// A buffer at least this size, from the pile or from the device: the
+    /// smallest that fits, at most twice the size. Shaders read only up to the
+    /// element count the uniform gives, so a larger buffer's tail is never
+    /// touched, and Fields whose size varies between frames reuse buffers.
     pub(crate) fn take(
         &self,
         device: &wgpu::Device,
@@ -140,8 +124,7 @@ impl Spare {
         })
     }
 
-    /// Keeps a buffer a Field no longer holds, while the pile is small
-    /// enough to be worth keeping.
+    /// Keeps a buffer its Field released, while the pile has room.
     pub(crate) fn keep(&self, buffer: wgpu::Buffer) {
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         let bytes: u64 = held.iter().map(wgpu::Buffer::size).sum();
@@ -153,10 +136,9 @@ impl Spare {
 
 impl Drop for DeviceImage {
     fn drop(&mut self) {
-        // The Field that held this is gone, so nothing in the scene
-        // refers to the buffer; a command that reads it was submitted
-        // before whatever writes it next, and one queue runs its
-        // submissions in order.
+        // The Field is gone, so nothing in the scene refers to the buffer; a
+        // command that reads it was submitted before whatever writes it next,
+        // and one queue runs in order.
         if let Some(spare) = self.spare.take() {
             spare.keep(self.buffer.clone());
         }
@@ -164,8 +146,8 @@ impl Drop for DeviceImage {
 }
 
 impl GpuBackend {
-    /// The pile of buffers released Fields left behind, for the parts
-    /// of the backend that make outputs of their own.
+    /// The pile of released Fields' buffers, for the parts of the backend that
+    /// make their own outputs.
     pub(crate) fn spare(&self) -> Spare {
         self.spare.clone()
     }
@@ -204,9 +186,8 @@ impl GpuBackend {
         buffer
     }
 
-    /// A scatter's target, `count` elements of `words` words. It is
-    /// copied over whole before anything reads it, so it may come from
-    /// the pile.
+    /// A scatter's target, `count` elements of `words` words, from the pile:
+    /// it is copied over whole before anything reads it.
     pub(crate) fn target_buffer(&self, count: usize, words: usize) -> wgpu::Buffer {
         let size = (count * words * 4) as u64;
         self.spare.take(

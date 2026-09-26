@@ -1,10 +1,8 @@
-//! The GPU side of the native `rasterize` operation: the device's
-//! rasterizer through a render pipeline, with the same contract as
-//! [`orla_rules::raster`]. Two float render targets carry the surface
-//! attributes, a depth target settles order, and a compute pass compacts
-//! the targets into the tight word layout the Host expects, reading
-//! them where they were written, so the result is a resident grid like
-//! any other output and the surface is gathered once.
+//! The GPU side of native `rasterize`, with the contract of
+//! [`orla_rules::raster`]: a render pipeline into two float targets for
+//! the surface attributes and a depth target for order, then a compute
+//! pass compacting the targets, where they were written, into the Host's
+//! word layout as a resident grid.
 
 use std::sync::OnceLock;
 
@@ -297,9 +295,8 @@ fn build(device: &wgpu::Device, wait: crate::Wait) -> Result<RasterPipelines, St
     })
 }
 
-/// A target of this shape, from the backend's pile. Written as an
-/// attachment and read by the compact pass where it was written,
-/// rather than copied out first.
+/// A target of this shape from the backend's pile, written as an
+/// attachment and read in place by the compact pass.
 fn target(
     gpu: &GpuBackend,
     label: &str,
@@ -348,8 +345,8 @@ pub(crate) fn rasterize(
     let vertex_buffer = gpu.bind_input(scope, vertices, 0)?;
     let triangle_buffer = gpu.bind_input(scope, triangles, 1)?;
 
-    // The mask is always bound: without one it is a single white texel
-    // the shader is told not to read.
+    // The mask is always bound; with none it is a single white texel the
+    // shader leaves unread.
     let mask_size = match mask {
         Some(mask) => scope.size(mask)?,
         None => orla_abi::Domain::Grid(1, 1),
@@ -435,9 +432,9 @@ pub(crate) fn rasterize(
         ],
     });
 
-    // The set is made before the encoder so the opening timestamp is
-    // its first command; the render pass takes the first pair and the
-    // compact pass the second, and the span is the first to the last.
+    // The set is made before the encoder so the opening timestamp is its
+    // first command; the render pass takes the first pair, the compact pass
+    // the second.
     let timing_set = gpu.timing_set(4);
     let mut encoder = gpu
         .device
@@ -511,10 +508,8 @@ pub(crate) fn rasterize(
         pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
     }
     let guard = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-    // A native operation is a node like any other: under a measured run
-    // it waits for the device, so what times it is its work and not its
-    // submission, and it reports the device's own clock where there is
-    // one.
+    // Under a measured run a native operation waits for the device like any
+    // node, and reports the device's clock where there is one.
     let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 4);
     let submission = gpu.queue.submit(Some(encoder.finish()));
     gpu.settle_measured(submission, timing);
@@ -532,8 +527,8 @@ pub(crate) fn rasterize(
             spare: Some(gpu.spare()),
         }),
     )?;
-    // The targets were this call's own; the pile takes them back for
-    // the next rasterize of the same shape.
+    // The call's own targets go back to the pile for the next rasterize of
+    // the same shape.
     for texture in [a, b, depth] {
         gpu.targets().keep(texture);
     }

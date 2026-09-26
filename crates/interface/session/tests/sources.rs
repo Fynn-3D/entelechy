@@ -1,6 +1,6 @@
-//! What documents share through `use`: the same declaration reached from
-//! two files is one, wherever each file wrote it, and two different
-//! declarations of one name are refused.
+//! Declarations shared through `use`: one declaration reached from two
+//! files is one, wherever written; two different ones of a name are
+//! refused.
 
 use std::path::PathBuf;
 

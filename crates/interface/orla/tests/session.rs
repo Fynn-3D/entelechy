@@ -73,7 +73,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
 
     assert!(session.sync().is_empty(), "nothing changed on disk");
 
-    // Edit: turn grayscale into a red-channel pass-through.
+    // Edit: grayscale becomes a red-channel pass-through.
     let grayscale = dir.join("kernels/grayscale.orla");
     let source = std::fs::read_to_string(&grayscale).unwrap();
     std::fs::write(
@@ -108,7 +108,8 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
         .unwrap()
         .generation();
 
-    // Break it: the previous version keeps running and the diagnostic has a position.
+    // Broken: the previous version keeps running; the diagnostic has a
+    // position.
     std::fs::write(
         &grayscale,
         "kernel image.grayscale@1 {\n  requires { field.write; }\n  output result: Image;\n  compute { return oops; }\n}",
@@ -133,7 +134,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
     let report = session.evaluate(&Context::default()).unwrap();
     assert!(report.executed.is_empty());
 
-    // Remove it: the kernel retires and the graph reports the missing binding.
+    // Removed: the Kernel retires and the graph reports the missing binding.
     std::fs::remove_file(&grayscale).unwrap();
     let events = session.sync();
     assert!(
@@ -146,7 +147,7 @@ fn a_saved_edit_is_published_and_a_broken_edit_keeps_the_running_kernel() {
         "{error}"
     );
 
-    // Two documents claiming one id: the second is rejected, the first stays.
+    // Two documents claim one id: the second is rejected, the first stays.
     std::fs::write(
         &grayscale,
         "kernel image.pixelate@1 { requires { field.write; } output result: Image; compute { return vec4(0.0, 0.0, 0.0, 1.0); } }",
@@ -190,8 +191,7 @@ fn scene_edits_inline_kernels_and_externals_flow_through_the_session() {
         report.executed.is_empty(),
         "previous graph is still evaluated"
     );
-    // A text that parses and lowers but reads a node that is not there
-    // runs no frame: it is refused, and the graph running goes on.
+    // A text reading a missing node is refused; the running graph goes on.
     let dangling = format!(
         "{}\noutput extra <- nowhere.result;\n",
         text.replace("size = 8;", "size = 32;")
@@ -208,8 +208,8 @@ fn scene_edits_inline_kernels_and_externals_flow_through_the_session() {
         "the graph running is still evaluated"
     );
 
-    // A self-contained scene: an inline named kernel, an anonymous one, and
-    // an external input. Nothing is used from the kernels directory.
+    // A self-contained scene: an inline named Kernel, an anonymous one, and
+    // an external input.
     let photo = dir.join("photo.ppm");
     session.allow_write_to(&photo).unwrap();
     session.export(report.output, &photo).unwrap();
@@ -247,7 +247,7 @@ output result <- dim.result;",
         .unwrap();
     assert!(inverted[3] == 1.0 && inverted[0] <= 0.5);
 
-    // Editing only the anonymous kernel republishes only it.
+    // Editing only the anonymous Kernel republishes only it.
     let text = std::fs::read_to_string(&scene).unwrap();
     std::fs::write(
         &scene,
@@ -277,8 +277,7 @@ fn the_binary_checks_and_runs() {
         stdout.contains("graph `scene` with 3 node(s), 1 use(s)"),
         "{stdout}"
     );
-    // The IR shown is the IR a backend runs: a Kernel whose loop can
-    // pass a block shows where its work is counted and looked at.
+    // The IR shown is the IR a backend runs, block counting included.
     std::fs::write(
         dir.join("kernels/counted.orla"),
         "kernel t.counted@1 { requires { field.write; } param n: Int = 3; output result: Rows<Int>; compute { return loop n with a = 0 { a + 1 }; } }",
@@ -347,10 +346,8 @@ fn the_binary_checks_and_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `run` writes what it is asked to, each file in the format its name
-/// says, and nothing else: a picture saved with `--save` is not written
-/// again to a file nobody named, and `--out frame.png` is a PNG. (It
-/// used to write `output.ppm` every time, and PPM bytes to any name.)
+/// `run` writes only the files named, each in the format its extension
+/// names.
 #[test]
 fn run_writes_only_the_files_named_each_as_its_name_says() {
     let dir = scratch("run-writes");
@@ -445,7 +442,6 @@ fn every_example_replay_passes_and_failures_are_reported() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(stdout.contains("blinker.replay: ok"), "{stdout}");
-    // The same replays on the JIT: native code, the interpreter's words.
     let output = Command::new(orla)
         .arg("replay")
         .args(["--backend", "jit"])
@@ -559,7 +555,7 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
     )
     .unwrap();
     // The edit is noticed at once; the publish lands on a later sync, and
-    // every frame in between still runs the old version.
+    // frames in between run the old version.
     let mut events = session.sync();
     assert!(
         matches!(events.first(), Some(Event::Preparing { id, .. }) if id.to_string() == "image.grayscale@1"),
@@ -597,7 +593,7 @@ fn a_background_republish_keeps_the_running_kernel_until_the_worker_is_done() {
     assert_eq!(pixel[1], 0.0);
     assert!(pixel[0] > 0.5);
 
-    // A broken edit is rejected by the compiler at once, off no thread.
+    // A broken edit is rejected by the compiler at once.
     std::fs::write(
         &grayscale,
         "kernel image.grayscale@1 {\n  requires { field.write; }\n  output result: Image;\n  compute { return oops; }\n}",
@@ -624,7 +620,7 @@ fn libraries_share_declarations_through_use_and_refuse_conflicts() {
         "use \"types.orla\";\nkernel t.seed@1 { requires { field.write; } output result: Board; compute { return Cell { kind: 1, ttl: int(coord().x) }; } }\n",
     )
     .unwrap();
-    // The scene's inline Kernel sees the declarations through `use` as well.
+    // The scene's inline Kernel sees the declarations through `use`.
     std::fs::write(
         dir.join("scene.osn"),
         "use \"lib/\";\nnode seed: t.seed@1 { domain = vec2(4, 2); }\nnode show: kernel { requires { field.read; field.write; } input board: Board <- seed.result; output result: Image; compute { let c = sample(board); return vec4(float(c.ttl) / 4.0, float(c.kind), 0.0, 1.0); } }\noutput result <- show.result;\n",
@@ -637,7 +633,7 @@ fn libraries_share_declarations_through_use_and_refuse_conflicts() {
     let pixel = session.read_pixel(report.output, 3, 0).unwrap();
     assert_eq!(pixel, [0.75, 1.0, 0.0, 1.0]);
 
-    // A second declaration of the same struct with other fields is refused.
+    // A second declaration of the struct with other fields is refused.
     std::fs::write(
         dir.join("lib/other.orla"),
         "struct Cell { kind: Int; }\nkernel t.other@1 { requires { field.write; } output result: Rows<Cell>; compute { return Cell { kind: 0 }; } }\n",
@@ -681,7 +677,7 @@ output result <- view.result;
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{stdout}");
-    // The same name from a second file is a conflict, named by both files.
+    // The same name from a second file is a conflict naming both files.
     std::fs::write(
         dir.join("kernels/more.orla"),
         "fn twice(x: Float) -> Float { return x + x; }\n",
@@ -705,7 +701,7 @@ output result <- view.result;
 fn inputs_read_files_the_host_watches_and_outputs_save_as_files() {
     let dir = scratch("assets");
     let orla = env!("CARGO_BIN_EXE_orla");
-    // A 2x1 picture as a file, read by an input and copied by a Kernel.
+    // A 2x1 picture file, read by an input and copied by a Kernel.
     let picture = |left: [u8; 3]| {
         let mut bytes = b"P6\n2 1\n255\n".to_vec();
         bytes.extend_from_slice(&left);
@@ -731,7 +727,7 @@ output result <- copy.result;
     );
     let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(session.read_pixel(report.output, 0, 0).unwrap()[0], 1.0);
-    // The file changes: the next sync reads it again and the picture follows.
+    // The file changes: the next sync rereads it and the picture follows.
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(dir.join("photo.ppm"), picture([0, 255, 0])).unwrap();
     let events = session.sync();
@@ -741,8 +737,8 @@ output result <- copy.result;
     );
     let report = session.evaluate(&Context::default()).unwrap();
     assert_eq!(session.read_pixel(report.output, 0, 0).unwrap()[1], 1.0);
-    // A file that is not a Field is rejected with its path, and the
-    // previous value stays bound.
+    // A file that is not a Field is rejected with its path; the previous
+    // value stays bound.
     std::fs::write(dir.join("photo.ppm"), b"not a picture").unwrap();
     let events = session.sync();
     assert!(
@@ -753,7 +749,6 @@ output result <- copy.result;
     );
     assert!(session.evaluate(&Context::default()).is_ok());
 
-    // The binary saves any node's output as a Field file and a picture.
     std::fs::write(dir.join("photo.ppm"), picture([255, 0, 0])).unwrap();
     let output = Command::new(orla)
         .arg("run")
@@ -777,9 +772,8 @@ output result <- copy.result;
         picture([255, 0, 0])
     );
 
-    // PNG comes in as pixels or as a Grid<Float> by the input's type, and
-    // goes out as a file any viewer opens; WAV comes in as rows with its
-    // rate reported.
+    // PNG reads as pixels or Grid<Float> by the input's type and writes as
+    // a standard file; WAV reads as rows with its rate reported.
     let pixels = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
     std::fs::write(
         dir.join("photo.png"),
@@ -868,7 +862,7 @@ output result <- blocks.result;
         "{:?}",
         report.executed
     );
-    // A param that does not size the graph does not lower it again.
+    // A param that does not size the graph does not relower it.
     session
         .set_param("other", orla_kernel::Value::Int(1))
         .unwrap();
@@ -913,8 +907,8 @@ output result <- count.result;
     let host = session.runtime().host();
     assert_eq!(host.element(handle, 0).unwrap()[0], 2);
     assert_eq!(host.element(handle, 1).unwrap()[0], 'i' as u32);
-    // The document changes its text: the next sync writes it again and
-    // the rows follow, count included.
+    // The document's text changes: the next sync rewrites the rows, count
+    // included.
     std::thread::sleep(std::time::Duration::from_millis(20));
     write("Hey!");
     let events = session.sync();
@@ -931,7 +925,7 @@ output result <- count.result;
     let host = session.runtime().host();
     assert_eq!(host.element(handle, 0).unwrap()[0], 4);
     assert_eq!(host.element(handle, 1).unwrap()[0], 'e' as u32);
-    // An empty text is refused where it is written.
+    // An empty text is refused at its position.
     write("");
     let events = session.sync();
     assert!(
@@ -947,9 +941,9 @@ output result <- count.result;
 fn the_binary_traces_one_step_of_a_scan_and_profiles_a_run() {
     let orla = env!("CARGO_BIN_EXE_orla");
     let dir = scratch("trace");
-    // A tally over four cells of memory, six steps a frame: the first
-    // evaluation leaves [2, 2, 1, 1]; the next one's step 5 finds cell 1
-    // at 3, writes 4, and its `if` takes the branch with the product.
+    // A tally over four memory cells, six steps a frame: the first
+    // evaluation leaves [2, 2, 1, 1]; the next one's step 5 writes 4 to
+    // cell 1 and takes the `if` branch with the product.
     std::fs::write(
         dir.join("kernels/tally.orla"),
         "kernel tally.step@1 {
@@ -1011,7 +1005,7 @@ output result <- tally.result;
     ] {
         assert!(stdout.contains(line), "{line:?} in {stdout}");
     }
-    // A step outside the frame is refused, not computed.
+    // A step outside the frame is refused.
     let output = Command::new(orla)
         .args(["trace", "--node", "tally", "--element", "6"])
         .arg(dir.join("tally.osn"))
@@ -1040,7 +1034,7 @@ fn help_lists_the_builtins_and_the_forms_and_shows_one() {
     let output = Command::new(orla).arg("help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    // Builtins by name, and the forms of the language beside them.
+    // Builtins by name, and the language's forms beside them.
     for name in [
         "floor",
         "atan2",
@@ -1057,7 +1051,6 @@ fn help_lists_the_builtins_and_the_forms_and_shows_one() {
     ] {
         assert!(stdout.contains(&format!("  {name} ")), "{name} in {stdout}");
     }
-    // A form answers with its shape and what it means.
     let output = Command::new(orla).args(["help", "each"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[each n { body }]"), "{stdout}");
@@ -1093,9 +1086,8 @@ fn help_lists_the_builtins_and_the_forms_and_shows_one() {
     );
 }
 
-/// A package is a directory with a manifest; `pack` makes one file of
-/// it, `unpack` the directory again, `package` says what it holds, and a
-/// scene's `use` of it brings its Kernels in once its versions fit.
+/// `pack` makes one file, `unpack` restores the directory, `package` lists
+/// it, and a scene's `use` brings its Kernels in when versions fit.
 #[test]
 fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let orla = env!("CARGO_BIN_EXE_orla");
@@ -1147,7 +1139,7 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         "{stdout}"
     );
     // A scene beside the unpacked package uses it by name through
-    // ORLA_PACKAGES, and checks.
+    // ORLA_PACKAGES.
     let elsewhere = dir.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
     std::fs::write(
@@ -1167,9 +1159,8 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         stdout.contains("graph `scene` with 2 node(s), 1 use(s)"),
         "{stdout}"
     );
-    // A preset inside it is placed by the package's name too, and the
-    // `use` the preset itself writes is followed from where the package
-    // really is, not from where the scene said it was.
+    // A preset inside it is placed by the package name, and the preset's
+    // own `use` resolves from the package's real location.
     std::fs::write(
         elsewhere.join("preset.osn"),
         "use \"unpacked.orlapkg\";\nnode source: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(0.5, 0.5, 0.5, 1.0); } }\nnode look: graph \"unpacked.orlapkg/graphs/nes.osn\" { source <- source.result; cell = 4.0; }\noutput result <- look.result;\n",
@@ -1185,7 +1176,7 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     assert!(output.status.success(), "{stdout}");
     assert!(stdout.contains("graph `preset` with 3 node(s)"), "{stdout}");
 
-    // A package needing a newer language is refused, with the two versions.
+    // A package needing a newer language is refused with both versions.
     let manifest = unpacked.join("package.osn");
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(&manifest, text.replace("language = 1", "language = 99")).unwrap();
@@ -1201,7 +1192,6 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
         stdout.contains("package pixelfx@1 needs language 99, and this Orla has language 1"),
         "{stdout}"
     );
-    // `version` names every version on its own line.
     let output = Command::new(orla).arg("version").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -1244,7 +1234,7 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
         3 * 800,
         "three blocks of 800 frames"
     );
-    // The same frames again are the same bytes: the clock is the count.
+    // The same frames give the same bytes: the clock is the count.
     let first = std::fs::read(orla::render::picture_path(&out, 2)).unwrap();
     let again = std::env::temp_dir().join(format!("orla-render-again-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&again);
@@ -1261,8 +1251,8 @@ fn render_writes_a_png_per_frame_and_one_wav_of_every_block() {
         std::fs::read(orla::render::picture_path(&again, 2)).unwrap(),
         first
     );
-    // A scene with an async node is settled after every frame, so each
-    // frame's picture is of the step before it, none skipped.
+    // An async node is settled after every frame: each picture shows the
+    // step before it, none skipped.
     let machine = std::env::temp_dir().join(format!("orla-render-async-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&machine);
     let output = Command::new(orla)
@@ -1335,7 +1325,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     assert_eq!(red(&mut session, 0.9), 1.0);
     assert_eq!(red(&mut session, 1.0), 0.0);
     assert_eq!(red(&mut session, 2.0), 1.0, "wraps after the last frame");
-    // A frame dropped in is seen at the next sync and takes its turn.
+    // A new frame file is seen at the next sync.
     std::fs::write(
         dir.join("clip/2.png"),
         orla_formats::png::encode(2, 2, &[[0.0, 0.0, 1.0, 1.0]; 4]),
@@ -1344,7 +1334,7 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     let events = session.sync();
     assert!(events.iter().any(|event| matches!(event, Event::Loaded { detail, .. } if detail == "3 frame(s) at 1 a second")), "{events:?}");
     assert_eq!(red(&mut session, 2.0), 0.0);
-    // An empty directory is reported and evaluation says what is missing.
+    // An empty directory is reported, and evaluation names what is missing.
     std::fs::remove_dir_all(dir.join("clip")).unwrap();
     std::fs::create_dir_all(dir.join("clip")).unwrap();
     let events = session.sync();
@@ -1402,7 +1392,6 @@ fn a_filled_field_node_is_a_field_of_its_type_and_the_loop_count_may_be_a_param(
         .unwrap()
         .1;
     assert_eq!(read(&mut session, zeros), vec![0.0; 4]);
-    // Both the fill and the loop's count follow their graph params.
     session
         .set_param("level", orla_kernel::Value::Float(1.0))
         .unwrap();
@@ -1455,8 +1444,7 @@ fn a_name_a_kernel_cannot_find_names_the_file_that_declares_it() {
         "{reported}"
     );
     assert!(reported.contains("`use \"util.orla\";`"), "{reported}");
-    // Two documents that use each other are named, not reported as a
-    // declaration made twice.
+    // Two documents using each other are reported as a cycle.
     std::fs::write(
         dir.join("kernels/main.orla"),
         "use \"util.orla\";\nstruct Tint { r: Float; }\nkernel main.k@1 { requires { field.write; } output result: Rows<Float>; compute { return wobble(2.0); } }\n",
@@ -1520,7 +1508,7 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
         words(&mut session, report.output),
         vec![79, 82, 76, 65, 0, 255, 128]
     );
-    // The file is watched: an edit is the next sync's business.
+    // The file is watched: the next sync takes an edit.
     std::fs::write(dir.join("blob.bin"), [1u8, 2, 3, 4, 5, 6, 7]).unwrap();
     session.sync();
     let report = session.evaluate(&Context::default()).unwrap();
@@ -1528,7 +1516,6 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
         words(&mut session, report.output),
         vec![1, 2, 3, 4, 5, 6, 7]
     );
-    // An empty file has no extent, and says so.
     std::fs::write(dir.join("blob.bin"), []).unwrap();
     let events = session.sync();
     assert!(
@@ -1540,10 +1527,8 @@ fn a_bytes_input_reads_a_file_as_rows_of_one_integer() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// What a `--save` may name: a node, a node of a placed graph (whose
-/// own name carries dots, so the port is what follows the last one), or
-/// one of the scene's outputs. A name that is none of those says what
-/// it is instead of that it has no value.
+/// A placed graph's port follows the last dot; any other name is reported
+/// as what it is.
 #[test]
 fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
     let orla = env!("CARGO_BIN_EXE_orla");
@@ -1573,7 +1558,7 @@ fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // The same Field either way: the output is the node it is wired to.
+    // The same Field either way: an output is the node it is wired to.
     assert_eq!(
         std::fs::read(dir.join("by-output.field")).unwrap(),
         std::fs::read(dir.join("by-node.field")).unwrap()
@@ -1588,17 +1573,14 @@ fn a_save_names_a_node_a_placed_graphs_node_or_an_output() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `bench` measures the same frames several times and says the least of
-/// the runs; what it writes with `--json` it reads back with
-/// `--compare`, which is how a change is shown to cost nothing.
+/// `bench` reports the least of several runs; its `--json` output is read
+/// back by `--compare`.
 #[test]
 fn bench_measures_frames_and_compares_with_what_it_wrote() {
     let orla = env!("CARGO_BIN_EXE_orla");
     let dir = scratch("bench");
     let json = dir.join("before.json");
-    // A scene that changes with the clock: one whose nodes are all
-    // reused would measure only the finding of that out, which the
-    // table says in place of the numbers.
+    // A scene that changes with the clock, so its nodes run each frame.
     let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/collapse/scene.osn");
     let measure = |extra: &[&str]| {
         Command::new(orla)
@@ -1625,15 +1607,12 @@ fn bench_measures_frames_and_compares_with_what_it_wrote() {
     assert!(stdout.contains("2 frame(s) a run, 2 run(s)"), "{stdout}");
     assert!(stdout.contains("vs cpu"), "{stdout}");
     assert!(stdout.contains("ms a frame a node"), "{stdout}");
-    // The scene's own nodes are named, fused groups as the graph runs
-    // them.
+    // The scene's nodes are named, fused groups as the graph runs them.
     assert!(stdout.contains("steps/*.spread/*"), "{stdout}");
 
     let output = measure(&["--compare", json.to_str().unwrap()]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{stdout}");
-    // The comparison column carries what the earlier run said and by
-    // how much this one differs.
     assert!(
         stdout.contains("ms +") || stdout.contains("ms -"),
         "{stdout}"
@@ -1644,8 +1623,6 @@ fn bench_measures_frames_and_compares_with_what_it_wrote() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A command that evaluates once stops at a scene that does not load and
-/// says why, rather than evaluating a scene that is not there.
 #[test]
 fn a_scene_that_does_not_load_stops_a_command_with_why() {
     let orla = env!("CARGO_BIN_EXE_orla");
@@ -1684,12 +1661,8 @@ fn a_scene_that_does_not_load_stops_a_command_with_why() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// What a long session must not do: keep what it replaced. A thousand
-/// republishes of one Kernel, evaluated in step, leave one version of
-/// it, nothing waiting to be collected, and the Host holding only the
-/// Fields the frame needs. Memory measured outside this test stays
-/// flat over thousands of frames on all three backends; what is pinned
-/// here is the bookkeeping that would otherwise grow without bound.
+/// A thousand republishes leave one version, nothing awaiting collection,
+/// and only the frame's Fields held.
 #[test]
 fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
     let dir = scratch("long");
@@ -1698,7 +1671,7 @@ fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
     let kernels = session.runtime().kernels().count();
     assert!(kernels >= 3, "the scene publishes its Kernels: {kernels}");
     let context = Context::default();
-    // What one frame leaves live is what a thousand of them must.
+    // What one frame leaves live is what a thousand leave.
     session.evaluate(&context).unwrap();
     let live = session.runtime().host().live();
     for step in 0..1000 {
@@ -1731,10 +1704,7 @@ fn a_session_that_republishes_a_thousand_times_keeps_one_of_each() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// What `orla new` writes has to run, or the first fifteen minutes are
-/// spent on a broken scene. Each kind is made, checked and replayed
-/// here, so a change to the language that would break a template breaks
-/// this instead.
+/// Every `orla new` template is made, checked and replayed.
 #[test]
 fn what_new_writes_checks_and_replays() {
     let orla = env!("CARGO_BIN_EXE_orla");
@@ -1750,7 +1720,6 @@ fn what_new_writes_checks_and_replays() {
             "{}",
             String::from_utf8_lossy(&made.stderr)
         );
-        // Four files, the scene among them.
         let listed = String::from_utf8_lossy(&made.stdout);
         assert_eq!(listed.lines().count(), 4, "{listed}");
         assert!(dir.join("scene.osn").exists(), "{listed}");
@@ -1786,8 +1755,6 @@ fn what_new_writes_checks_and_replays() {
             String::from_utf8_lossy(&tested.stderr)
         );
 
-        // A second `new` over the same directory is refused rather than
-        //写 over what is there.
         let again = Command::new(orla)
             .args(["new", dir.to_str().unwrap()])
             .output()
@@ -1802,17 +1769,14 @@ fn what_new_writes_checks_and_replays() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A budget is a net, not a policy: a scene that wants more than the
-/// Host holds is told so and by how much, and a session that is given
-/// more runs it. The default holds a scene of millions of triangles,
-/// which a fixed sixty-four mebibytes did not.
+/// The default budget holds millions of triangles.
 #[test]
 fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
     let dir = std::env::temp_dir().join(format!("orla-budget-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // A grid of a million pixels: four million words, and one more copy
-    // of it for the second node.
+    // A grid of a million pixels: four million words, copied once more by
+    // the second node.
     std::fs::write(
         dir.join("scene.osn"),
         "node fill: kernel { requires { field.write; } output result: Image; domain = vec2(1024, 1024); compute { return vec4(coord().x, coord().y, 0.0, 1.0); } }\n\
@@ -1822,7 +1786,7 @@ fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
     .unwrap();
     let scene = dir.join("scene.osn");
 
-    // Two mebibytes hold neither of them.
+    // Two mebibytes hold neither.
     let mut small = Session::open(&scene, None, orla_session::budget_of_megabytes(2));
     small.sync();
     let refused = small.evaluate(&Context::default()).unwrap_err().to_string();
@@ -1831,7 +1795,7 @@ fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
         "{refused}"
     );
 
-    // Sixty-four hold both, and the words are the ones the Kernel wrote.
+    // Sixty-four hold both, with the words the Kernel wrote.
     let mut enough = Session::open(&scene, None, orla_session::budget_of_megabytes(64));
     enough.sync();
     let report = enough.evaluate(&Context::default()).unwrap();
@@ -1839,15 +1803,11 @@ fn a_session_holds_what_its_budget_says_and_says_so_when_it_cannot() {
     assert_eq!(image.width(), 1024);
     assert_eq!(image.pixels()[100][0], 50.0, "half of that pixel's own x");
 
-    // Mebibytes are words four to one.
     assert_eq!(orla_session::budget_of_megabytes(1), 256 * 1024);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A sub-graph's `times` may name a param the parent passes it, and the
-/// parent's own default must reach it: `times` is structural, resolved
-/// when the document is lowered, and a scene's parameter that silently
-/// did nothing is worse than one that is refused.
+/// `times` resolves when the document is lowered.
 #[test]
 fn a_parents_param_reaches_a_placed_graphs_times() {
     let orla = env!("CARGO_BIN_EXE_orla");
@@ -1876,7 +1836,7 @@ fn a_parents_param_reaches_a_placed_graphs_times() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{stdout}");
-    // The parent says two, so two: not the five the sub-graph declares.
+    // The parent says two, so two, not the sub-graph's five.
     assert!(
         stdout.contains("graph `scene` with 3 node(s)"),
         "the parent's default reaches `times`: {stdout}"
@@ -1886,9 +1846,8 @@ fn a_parents_param_reaches_a_placed_graphs_times() {
 
 #[test]
 fn narrow_fields_land_live_and_leave_as_their_bytes() {
-    // The packed example: what its files hold lands narrow, what its
-    // Kernels write lives narrow, and a narrow output saved as a Field
-    // file is its bytes, read back the same.
+    // The packed example: file data and Kernel outputs are narrow, and a
+    // narrow output saved as a Field file round-trips its bytes.
     let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/packed/scene.osn");
     let mut session = Session::open(&scene, None, 1 << 22);
     session.set_fusion(false);
@@ -1932,9 +1891,8 @@ fn narrow_fields_land_live_and_leave_as_their_bytes() {
 
 #[test]
 fn a_parameter_of_any_value_type_is_set_by_its_layout() {
-    // The cube takes its camera as a Mat4 and its style as a struct; a
-    // value of their layouts is taken in their shape, whatever it was
-    // spelled as, and a value of another layout is refused by name.
+    // The cube's camera is a Mat4 and its style a struct: a value of their
+    // layout is taken in their shape; another layout is refused by name.
     let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/cube/scene.osn");
     let mut session = Session::open(&scene, None, 1 << 22);
     assert!(session.sync().contains(&Event::SceneLoaded));
@@ -1982,8 +1940,8 @@ fn a_parameter_of_any_value_type_is_set_by_its_layout() {
     assert!(error.contains("param `style` is a Style"), "{error}");
 }
 
-/// The interpreter, declining every module that holds a `Double`: a
-/// device without doubles, for a session that has one to route around.
+/// The interpreter declining every module holding a `Double`: a device
+/// without doubles, for the session to route around.
 struct NoDoubles(orla_cpu::CpuBackend);
 
 impl orla_kernel::Backend for NoDoubles {
@@ -2047,7 +2005,7 @@ output result <- plain.result;
         (plain.1.backend, plain.1.routed.as_deref()),
         ("device", None)
     );
-    // Said once: a sync that changes nothing says nothing again.
+    // Reported once: a sync that changes nothing reports nothing.
     assert!(
         !session
             .sync()
@@ -2079,8 +2037,8 @@ output result <- m.result;
 ",
     )
     .unwrap();
-    // The same scene on the reference and on the device, taken through
-    // the same values: every answer the same, failure for failure.
+    // The same scene on the reference and the device, through the same
+    // values: every answer equal, failure for failure.
     let reference = Session::runtime_for(
         "cpu",
         orla_session::Limits {
@@ -2104,8 +2062,8 @@ output result <- m.result;
         };
         answers.push(evaluate(session));
         session.set_param("k", orla_kernel::Value::Int(1)).unwrap();
-        // Element 2 overflows, and again the next time: nothing computed
-        // from the failed run is kept.
+        // Element 2 overflows each time: nothing from the failed run is
+        // kept.
         answers.push(evaluate(session));
         answers.push(evaluate(session));
         session.set_param("k", orla_kernel::Value::Int(10)).unwrap();
@@ -2120,16 +2078,12 @@ output result <- m.result;
     assert!(answers[0][0].is_ok() && answers[0][3].is_ok());
 }
 
-/// A run is bounded as a whole: elements each well within their own
-/// budget still fail the run once together they pass what the Host lets
-/// one run take, alike on every backend, and the same Kernel with a
-/// bound it stays within runs. The whole is exact: elements that each
-/// run less than a block count every iteration, and a run of exactly
-/// the bound passes.
+/// Elements each within their own budget fail the run once together they
+/// pass its bound; the count is exact, and exactly the bound passes.
 #[test]
 fn a_run_past_the_hosts_work_fails_alike_on_every_backend() {
-    // A map, a map over a grid, a scan and a reduction: every element
-    // loops S times.
+    // A map, a grid map, a scan and a reduction: each element loops S
+    // times.
     let scenes = [
         "node w: kernel { requires { field.write; } param steps: Int = S; output result: Rows<Int>; domain = N;
             compute { return loop steps with a = 0 { a + 1 }; } }
@@ -2187,16 +2141,10 @@ output result <- w.result;",
     }
 }
 
-/// Whether a scene fits its work bounds is decided by its nodes, each
-/// held to its own budget and its own run: never by fusion, which is
-/// hidden from the author, nor by pinning a node to look at it, which
-/// turns fusion off. (Fused, two nodes that each fit shared one run's
-/// bound and failed, and a producer past its own budget hid in the sum of
-/// two.)
 #[test]
 fn work_bounds_hold_per_node_whether_or_not_nodes_fuse() {
     let dir = scratch("work-fused");
-    // Counts are params, so the loops are run, not folded away.
+    // Counts are params, so the loops run rather than fold.
     let pair = "node a: kernel { requires { field.write; } BUDGET param n: Int = STEPS; output result: Rows<Float>; domain = 700;
     compute { return float(loop n with x = 0 { x + 1 }); } }
 node b: kernel { requires { field.read; field.write; } param n: Int = 1000; input t: Rows<Float> <- a.result; output result: Rows<Float>;
@@ -2246,8 +2194,8 @@ output result <- b.result;";
 
 #[test]
 fn an_element_past_its_budget_fails_alike_on_every_backend() {
-    // Each element runs n + n * n iterations for its own n; with a budget
-    // of a thousand, element 32 is the first past it (31 runs 992).
+    // Element n runs n + n * n iterations; with a budget of a thousand,
+    // element 32 is the first past it (31 runs 992).
     let scenes = [
         "node w: kernel { requires { field.write; } budget 1000; output result: Rows<Int>; domain = 64;
             compute { let n = element(); return loop n with a = 0 { loop n with b = a { b + 1 } }; } }
@@ -2263,14 +2211,12 @@ output result <- w.result;",
 node w: kernel { requires { field.read; field.write; } budget 50; input t: Rows<Int> <- ticks.result; output result: Rows<Int>;
             compute { return 3; } merge(a, b) { return loop a with x = b { x + 1 }; } }
 output result <- w.result;",
-        // Element e's body runs e times before `until` stops the loop:
-        // the iteration `until` stops is not one whose body ran, so 1001
-        // is the first past a thousand.
+        // Element e's body runs e times before `until` stops the loop, so
+        // 1001 is the first past a thousand.
         "node w: kernel { requires { field.write; } budget 1000; output result: Rows<Int>; domain = 1100;
             compute { return loop 2000 with a = 0 until index() >= element() { a + 1 }; } }
 output result <- w.result;",
-        // A loop bounded where it is written cannot pass the budget: it
-        // is never counted, and never fails.
+        // A loop bounded where written is never counted and never fails.
         "node w: kernel { requires { field.write; } budget 1000; output result: Rows<Int>; domain = 64;
             compute { return loop 30 with a = 0 { loop 30 with b = a { b + 1 } }; } }
 output result <- w.result;",
@@ -2323,10 +2269,8 @@ output result <- w.result;",
     }
 }
 
-/// A domain an agent wrote is charged before a word of it is allocated,
-/// on every backend alike: past the budget or past what 32-bit indices
-/// reach, the node fails with why and the session goes on. (Before, the
-/// last wrapped to an empty Field that said it held 2^65 elements.)
+/// A domain is charged before any allocation: past the budget or 32-bit
+/// indices, the node fails with why and the session goes on.
 #[test]
 fn a_domain_past_the_budget_fails_the_node_not_the_process() {
     let scenes = [
@@ -2371,7 +2315,6 @@ fn a_domain_past_the_budget_fails_the_node_not_the_process() {
             assert!(error.contains(why), "{backend}, {domain}: {error}");
             assert_eq!(session.runtime().host().used_words(), 0, "{backend}");
         }
-        // The same session, a domain it can hold: it evaluates.
         std::fs::write(dir.join("scene.osn"), "node w: kernel { requires { field.write; } output result: Rows<Int>; domain = 8; compute { return 2; } }\noutput result <- w.result;").unwrap();
         session.sync();
         assert!(session.evaluate(&Context::default()).is_ok(), "{backend}");
@@ -2379,11 +2322,8 @@ fn a_domain_past_the_budget_fails_the_node_not_the_process() {
 }
 
 /// The raster package's cutout and `native.rasterize@2` draw the same
-/// surface on the interpreter and the JIT — which triangle at every
-/// pixel, and its depth to the bit — since there the fast path is the
-/// package's rule written in Rust. (`examples/mesh/tests/cutout.replay`
-/// holds all three backends, a device's rasterizer to an edge pixel or
-/// two.)
+/// surface on the interpreter and the JIT: the same triangle at every
+/// pixel, its depth to the bit.
 #[test]
 fn the_package_cutout_is_the_fast_paths_to_the_bit_off_the_device() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -2405,11 +2345,10 @@ fn the_package_cutout_is_the_fast_paths_to_the_bit_off_the_device() {
     }
 }
 
-/// A document's Kernels change together. Two that change the struct
-/// they pass between them, one of which does not compile yet: neither is
-/// published, so the pair that ran goes on running, never a new one
-/// beside an old one. Fixed, both land in the same sync, on the worker
-/// as well as inline.
+/// A document's Kernels change together: when one of two Kernels sharing
+/// a changed struct does not compile, neither publishes and the running
+/// pair stays. Fixed, both land in the same sync, on the worker and
+/// inline.
 #[test]
 fn a_documents_kernels_publish_together_or_not_at_all() {
     let dir = std::env::temp_dir().join(format!("orla-together-{}", std::process::id()));
@@ -2471,7 +2410,6 @@ fn a_documents_kernels_publish_together_or_not_at_all() {
         assert_eq!(generation(&session, "t.use@1"), used);
         assert_eq!(value(&mut session), 30, "the pair that ran runs");
 
-        // Fixed: both land, together.
         std::fs::write(dir.join("pair.orla"), pair("b", false)).unwrap();
         // On the worker, the replacements land in a later sync.
         let mut landed = published(&session.sync());
@@ -2489,15 +2427,11 @@ fn a_documents_kernels_publish_together_or_not_at_all() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A replay played as the Player plays it: the whole scene evaluated
-/// every frame (the window shows the picture), after one frame before
-/// the window opens, holds what `orla replay` holds evaluating only what
-/// its checks need.
+/// The Player's way (the whole scene each frame, one frame before the
+/// window opens) holds what `orla replay` holds.
 #[test]
 fn a_replay_played_as_a_window_plays_it_holds_as_it_does_headless() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/voxel/tests");
-    // The small window's replay; a larger one holds the same way, and
-    // renders each frame at its size.
     for name in ["voxel.replay"] {
         let text = std::fs::read_to_string(base.join(name)).unwrap();
         let replay = orla::replay::parse(&text, &base).unwrap();
@@ -2531,10 +2465,8 @@ fn a_replay_played_as_a_window_plays_it_holds_as_it_does_headless() {
     }
 }
 
-/// A param reaches the scene only as one its document declares: one set
-/// before the scene loads that it does not declare stops the load with
-/// why, and a value held for a param goes when the document stops
-/// declaring it.
+/// An undeclared param set before load stops the load with why; a held
+/// value goes when its declaration goes.
 #[test]
 fn a_param_is_one_the_document_declares() {
     let dir = scratch("declared");
@@ -2585,7 +2517,7 @@ output result <- gray.result;
         session.params().get("level"),
         Some(&orla_kernel::Value::Float(1.0))
     );
-    // The document stops declaring it: the value held goes with it.
+    // The document drops the declaration: the held value goes with it.
     std::fs::write(
         &scene,
         text.replace("param level: Float = 0.5;\n", "")
@@ -2604,9 +2536,7 @@ output result <- gray.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A session writes a file only where it may: `save` and `export` ask
-/// the session's allowance whoever calls them, and a file the person
-/// named is allowed alone, not the directory around it.
+/// A named file allows that file alone, not its directory.
 #[test]
 fn save_and_export_write_only_where_the_session_may() {
     let dir = scratch("guarded-writes");
@@ -2629,7 +2559,7 @@ fn save_and_export_write_only_where_the_session_may() {
         "{refused}"
     );
     assert!(!out.exists() && !field.exists(), "nothing was written");
-    // Named, the one file is written; its neighbour still is not.
+    // Named, the file is written; its neighbour is not.
     session.allow_write_to(&out).unwrap();
     session.export(report.output, &out).unwrap();
     assert!(out.exists());
@@ -2643,9 +2573,7 @@ fn save_and_export_write_only_where_the_session_may() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A scene edited on the disk whose own Kernel is refused does not replace
-/// the scene running, and the Kernels it no longer places stay published
-/// while that scene may run them.
+/// The Kernels the running scene uses stay published.
 #[test]
 fn a_refused_scene_edit_leaves_the_scene_running() {
     let dir = scratch("atomic-scene");

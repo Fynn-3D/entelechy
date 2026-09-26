@@ -1,6 +1,4 @@
-//! Doubles and longs on the interpreter, against what Rust's own `f64`
-//! and `i64` say: the JIT is held to the interpreter by the feature
-//! matrix, and the interpreter is held here to the numbers themselves.
+//! Doubles and longs on the interpreter, held to Rust's `f64` and `i64`.
 
 use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scalar, Scope, Value};
 use orla_compiler::compile;
@@ -12,8 +10,8 @@ fn granted() -> Capabilities {
         .collect()
 }
 
-/// Runs a Kernel over `count` rows with its params, returning the words
-/// of its one output.
+/// Runs a Kernel over `count` rows with its params, returning its one
+/// output's words.
 fn run(source: &str, params: Vec<Value>, count: u32) -> Result<Vec<u32>, ExecutionError> {
     let module = compile(source).unwrap_or_else(|error| panic!("{error}\n{source}"));
     let mut host = Host::new(1 << 20);
@@ -45,7 +43,7 @@ fn longs(words: &[u32]) -> Vec<i64> {
 #[test]
 fn a_double_is_the_double_rust_computes() {
     // Survey coordinates: a tenth of a millimetre half a million metres
-    // out, which a float cannot see and a double can.
+    // out, visible to a double and not to a float.
     let source = "kernel wide.d@1 {
         requires { field.write; }
         param origin: Double = 500000.123456789;
@@ -70,7 +68,7 @@ fn a_double_is_the_double_rust_computes() {
     assert_eq!(out[0], 0.1 + 0.2);
     assert_eq!(out[1], (origin + 0.0001) - origin);
     assert!((out[1] - 0.0001).abs() < 1e-10, "{}", out[1]);
-    // The same subtraction in floats sees nothing, or a step of its own.
+    // The same subtraction in floats loses it.
     let floats = f64::from((origin + 0.0002) as f32 - origin as f32);
     assert_eq!(out[2], floats);
     assert!(
@@ -124,7 +122,7 @@ fn a_long_is_the_long_rust_computes_and_fails_where_it_would() {
     assert_eq!(out[0], big * 3);
     assert_eq!(out[1], i64::MIN);
     assert_eq!(out[2], ((big << 30) as u64 >> 62) as i64);
-    // A shift's count is taken modulo 64: `-1 >> 6`, `1 << 0`, `1 << 63`.
+    // A shift's count is modulo 64: `-1 >> 6`, `1 << 0`, `1 << 63`.
     let (minus, one) = (-1i64, 1i64);
     assert_eq!(out[3], (minus >> 6) + one + (one << 63));
     assert_eq!(out[4], -2 + 3 + 7);
@@ -133,8 +131,7 @@ fn a_long_is_the_long_rust_computes_and_fails_where_it_would() {
     assert_eq!(out[6], i64::MIN);
     assert_eq!(out[7], i64::MAX / big % 1000);
     assert_eq!(out[8], big);
-    // A division by nothing fails, as an `Int`'s does, and so does a sum
-    // past the end.
+    // Division by zero and a sum overflow fail, as for `Int`.
     let zero = run(source, vec![Value::Long(big), Value::Long(0)], 9).unwrap_err();
     assert!(zero.to_string().contains("division by zero"), "{zero}");
     let overflow = run(
@@ -149,9 +146,8 @@ fn a_long_is_the_long_rust_computes_and_fails_where_it_would() {
 
 #[test]
 fn a_written_number_takes_the_width_it_meets() {
-    // Beside a double a written float is a double, and beside a long a
-    // written integer is a long, too big for an `Int` or not; with a
-    // name it keeps the width it was named with.
+    // A written float beside a double is a double, a written integer
+    // beside a long is a long; a named one keeps its named width.
     let source = "kernel wide.w@1 {
         requires { field.write; }
         struct Out { a: Double; b: Double; c: Long; d: Long; e: Float; f: DVec2; }
@@ -183,7 +179,7 @@ fn a_written_number_takes_the_width_it_meets() {
     assert_eq!(longs(&words[4..8]), vec![5_000_000_000, 7]);
     assert_eq!(f32::from_bits(words[8]), 0.1f32);
     assert_eq!(doubles(&words[9..13]), vec![0.1 * 3.0, 0.2 * 3.0]);
-    // A float and a double do not meet without a conversion.
+    // A float and a double meet only through a conversion.
     let error = compile(
         "kernel wide.m@1 { requires { field.write; } output result: Rows<Double>;
             compute { let f = 0.5; return double(element()) + f; } }",
@@ -194,8 +190,8 @@ fn a_written_number_takes_the_width_it_meets() {
 
 #[test]
 fn a_value_given_is_taken_in_the_width_it_is_given_to() {
-    // What a scene or an agent writes has no width of its own: a float
-    // given to a double is the decimal it reads as.
+    // A written value has no width: a float given to a double is the
+    // decimal it reads as.
     let taken = Value::Float(0.001).shaped_like(&Value::Double(0.0));
     assert_eq!(taken, Some(Value::Double(0.001)));
     let taken = Value::Double(0.1).shaped_like(&Value::Float(0.0));
@@ -219,9 +215,9 @@ fn a_value_given_is_taken_in_the_width_it_is_given_to() {
 
 #[test]
 fn written_numbers_are_exact_until_they_meet_a_width_whole() {
-    // Arithmetic between written numbers is done exact; a vector, an
-    // array or a branch of written numbers takes the width it meets as
-    // a whole; a written integer is a float where one is wanted.
+    // Arithmetic on written numbers is exact; a vector, array or branch of
+    // them takes the width it meets as a whole; a written integer is a
+    // float where one is wanted.
     let source = "kernel wide.x@1 {
         requires { field.write; }
         struct Poly { pts: [Double; 2]; w: DVec2; }

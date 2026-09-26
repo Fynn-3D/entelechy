@@ -1,8 +1,5 @@
-//! DEFLATE (RFC 1951) and zlib (RFC 1950) decoding, and a stored-block
-//! zlib encoder, for reading and writing PNG files with no dependency.
-//! The decoder is plain: canonical Huffman tables read one bit at a time,
-//! which is fast enough for assets and simple enough to be obviously
-//! right.
+//! DEFLATE (RFC 1951) and zlib (RFC 1950) decoding, bit by bit through
+//! canonical Huffman tables, and a stored-block zlib encoder, for PNG.
 
 use std::fmt;
 
@@ -284,8 +281,7 @@ pub fn unzlib(bytes: &[u8]) -> Result<Vec<u8>, InflateError> {
     Ok(out)
 }
 
-/// Wraps bytes as a zlib stream of stored blocks: valid everywhere, no
-/// smaller than the input.
+/// Wraps bytes as a zlib stream of stored (uncompressed) blocks.
 pub fn zlib_stored(bytes: &[u8]) -> Vec<u8> {
     let mut out = vec![0x78, 0x01];
     let mut chunks = bytes.chunks(65535).peekable();

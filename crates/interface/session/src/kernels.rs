@@ -1,14 +1,11 @@
-//! Which document published which Kernel. The ledger owns that and
-//! nothing else: the Kernels themselves are the runtime's, which the
-//! session hands in, and what a document says is read by the scene.
+//! The ledger of which document published which Kernel. The runtime
+//! owns the Kernels; the scene reads the documents.
 //!
-//! What changes, changes as one [`Change`]: the Kernels of the documents
-//! it reads, prepared (a running Kernel's replacement off the caller's
-//! thread), then swapped in together, or, when any of them fails, none,
-//! and every Kernel they had goes on running as it was. A library
-//! document is a change of its own; the scene's documents, the root and
-//! the graphs it places, are one change with the graph they make, which
-//! the scene puts in place when the change publishes.
+//! A [`Change`] prepares its documents' Kernels (a running Kernel's
+//! replacement off the caller's thread) and swaps them in together, or,
+//! if any fails, none, leaving the running ones as they were. A library
+//! document is its own change; the root and its placed graphs are one
+//! change with the graph they make.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,26 +29,21 @@ pub(crate) struct Defined {
 struct DocumentState {
     stamp: Option<Stamp>,
     kernels: BTreeMap<KernelId, String>,
-    /// The Kernels as they were parsed, which a trace compiles again
-    /// without the optimizer so that it walks what the source says.
+    /// Parsed Kernels, which a trace compiles unoptimized.
     asts: BTreeMap<KernelId, Kernel>,
-    /// The shared declarations the document's Kernels were compiled
-    /// with; when they change, every Kernel republishes even though its
-    /// own text did not.
+    /// Key of the shared declarations the Kernels compiled with; a
+    /// change republishes every Kernel.
     declarations: String,
 }
 
-/// One document's change the runtime is still preparing: every Kernel
-/// it publishes, ready or on the worker, swapped in together once all
-/// are ready, or none when any fails.
+/// One document's Kernels being prepared, swapped in together once all
+/// are ready, or none if any fails.
 pub(crate) struct Batch {
     items: Vec<Item>,
-    /// Kernels the document no longer defines: retired when the batch
-    /// publishes.
+    /// Kernels the document dropped, retired when the batch publishes.
     leaving: Vec<KernelId>,
-    /// What the ledger held for the document before this change: put
-    /// back when the batch fails, so a fix later republishes everything
-    /// the change had.
+    /// The document's prior ledger entry, restored if the batch fails,
+    /// so a later fix republishes the whole change.
     before: DocumentState,
 }
 
@@ -69,7 +61,7 @@ enum Prep {
 }
 
 impl Batch {
-    /// Lets go of what is still being prepared.
+    /// Discards what is still being prepared.
     fn discard(self, runtime: &mut Runtime) {
         for item in self.items {
             if let Prep::Waiting(ticket) = item.prep {
@@ -79,9 +71,8 @@ impl Batch {
     }
 }
 
-/// One change: its documents' Kernels, published together once every
-/// one is ready, or none of them; with `scene`, it is the scene's own,
-/// and the graph the scene lowered waits on it.
+/// Documents' Kernels published together once all are ready, or none;
+/// with `scene`, the scene's lowered graph waits on it.
 pub(crate) struct Change {
     pub(crate) documents: Vec<(PathBuf, Batch)>,
     pub(crate) scene: bool,
@@ -90,24 +81,22 @@ pub(crate) struct Change {
 /// The ledger of published Kernels by the document that owns each.
 #[derive(Default)]
 pub(crate) struct Kernels {
-    /// Kernel text by id for every document that published Kernels; the
-    /// root document is one of them.
+    /// Each publishing document's state, the root's included.
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
-    /// The changes still being prepared, in the order they were made.
+    /// Changes being prepared, in order.
     pending: Vec<Change>,
 }
 
-/// Which document published which Kernel, kept to be put back whole
-/// ([`Kernels::put_back`]).
+/// A copy of the ledger to restore whole ([`Kernels::put_back`]).
 pub(crate) struct Kept {
     documents: BTreeMap<PathBuf, DocumentState>,
     owners: BTreeMap<KernelId, PathBuf>,
 }
 
 impl Kernels {
-    /// The ledger as it is, to put back when a change is refused after
-    /// it published: the runtime's own registry is put back beside it.
+    /// A copy to restore, beside the runtime's registry, when a
+    /// published change is refused.
     pub(crate) fn keep(&self) -> Kept {
         Kept {
             documents: self.documents.clone(),
@@ -115,8 +104,7 @@ impl Kernels {
         }
     }
 
-    /// Puts back the ledger [`Kernels::keep`] kept, letting go of every
-    /// change still being prepared.
+    /// Restores what [`Kernels::keep`] kept, discarding pending changes.
     pub(crate) fn put_back(&mut self, kept: Kept, runtime: &mut Runtime) {
         for change in std::mem::take(&mut self.pending) {
             for (_, batch) in change.documents {
@@ -139,14 +127,14 @@ impl Kernels {
             .is_some_and(|state| state.stamp == stamp)
     }
 
-    /// Notes that `path` was read at `stamp` and publishes nothing new,
-    /// so an unreadable document is not read again until it changes.
+    /// Records `path` as read at `stamp` without publishing, so an
+    /// unreadable document is reread only when it changes.
     pub(crate) fn mark_read(&mut self, path: PathBuf, stamp: Option<Stamp>) {
         self.documents.entry(path).or_default().stamp = stamp;
     }
 
-    /// A diagnostic with the file that declares what it could not find,
-    /// searched among the documents this ledger knows.
+    /// `error` located in the known document that declares what it
+    /// could not find.
     pub(crate) fn located(
         &self,
         store: &dyn Store,
@@ -157,9 +145,8 @@ impl Kernels {
         located(store, error, document, root, &self.documents())
     }
 
-    /// Makes `change`, and publishes what of it and of every change before
-    /// it is ready: the outcome of the scene's change, when it had one
-    /// and it came to one ([`Kernels::collect`]).
+    /// Queues `change` and publishes every ready change; returns the
+    /// scene's outcome as [`Kernels::collect`] does.
     pub(crate) fn make(
         &mut self,
         change: Change,
@@ -170,10 +157,9 @@ impl Kernels {
         self.collect(runtime, events)
     }
 
-    /// Publishes every change whose Kernels the worker has all finished,
-    /// each as one; a change of which one failed publishes nothing. The
-    /// outcome of the scene's change, when it came to one: `true` when it
-    /// published, `false` when it was refused.
+    /// Publishes each change whose Kernels are all prepared; a change
+    /// with a failure publishes nothing. Returns the scene's outcome, if
+    /// decided: `true` published, `false` refused.
     pub(crate) fn collect(
         &mut self,
         runtime: &mut Runtime,
@@ -184,8 +170,7 @@ impl Kernels {
             let mut failed = Vec::new();
             let mut waiting = false;
             for (path, batch) in &mut change.documents {
-                // What the worker refused is gone from the batch; what is
-                // left is what the refusal holds back.
+                // Refused items leave the batch; the rest are held back.
                 batch.items.retain_mut(|item| {
                     let Prep::Waiting(ticket) = item.prep else {
                         return true;
@@ -223,9 +208,8 @@ impl Kernels {
         scene
     }
 
-    /// Waits until every change being prepared has been published or
-    /// refused: what must stand before a world that depends on it runs.
-    /// The outcome of the scene's change, as [`Kernels::collect`] says.
+    /// Waits until every pending change is published or refused; returns
+    /// the scene's outcome as [`Kernels::collect`] does.
     pub(crate) fn wait(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) -> Option<bool> {
         let mut scene = None;
         while !self.pending.is_empty() {
@@ -237,8 +221,7 @@ impl Kernels {
         scene
     }
 
-    /// Refuses a change before it is made: nothing of it is published,
-    /// and each of its documents is held as it was.
+    /// Refuses an unmade change; its documents stay as they were.
     pub(crate) fn refuse(
         &mut self,
         change: Change,
@@ -248,8 +231,7 @@ impl Kernels {
         self.abandon(change, false, runtime, events);
     }
 
-    /// Lets go of the scene's change still being prepared, superseded by
-    /// a newer one: nothing of it is published.
+    /// Abandons the scene's pending change for a newer one.
     pub(crate) fn supersede_scene(&mut self, runtime: &mut Runtime, events: &mut Vec<Event>) {
         let (scene, rest): (Vec<Change>, Vec<Change>) = std::mem::take(&mut self.pending)
             .into_iter()
@@ -260,9 +242,8 @@ impl Kernels {
         }
     }
 
-    /// Swaps a ready change in, all at once, and retires what its
-    /// documents no longer define; refused by the registry, nothing of
-    /// it is. The scene's outcome, when it was the scene's change.
+    /// Swaps a ready change in at once and retires dropped Kernels; if
+    /// the registry refuses, nothing changes. Returns the scene's outcome.
     fn publish(
         &mut self,
         change: Change,
@@ -331,13 +312,11 @@ impl Kernels {
         }
     }
 
-    /// A change that failed: nothing of it is published, what it still
-    /// prepares is let go, and each of its documents is held as it was,
-    /// read at its new stamp so it is read again when it changes. A
-    /// library document's change that held back more than what failed
-    /// (or, `held`, a change the registry refused whole) says so; the
-    /// scene's says it with its refusal. The scene's outcome, when it was
-    /// the scene's change.
+    /// Drops a failed change: publishes nothing, discards pending
+    /// preparation, and restores each document's state at its new stamp.
+    /// A library change that held back more than the failure (or `held`:
+    /// refused whole by the registry) reports it; the scene reports its
+    /// own. Returns the scene's outcome.
     fn abandon(
         &mut self,
         change: Change,
@@ -366,14 +345,11 @@ impl Kernels {
         scene.then_some(false)
     }
 
-    /// Publishes the Kernels a document now defines, as one change:
-    /// retires the ones that left, keeps the unchanged, republishes the
-    /// changed, and reports each. When any of them does not compile or
-    /// prepare, none is published and none retired. `declarations` keys
-    /// what the Kernels inherit; a change there republishes them all.
-    /// `root` is the scene, for diagnostics. What was made publishes with
-    /// what else is ready, the scene's change among it, whose outcome it
-    /// answers ([`Kernels::collect`]).
+    /// Publishes a document's Kernels as one change: retires dropped
+    /// ones, keeps unchanged ones, republishes changed ones. If any fails
+    /// to compile or prepare, nothing is published or retired.
+    /// `declarations` keys what the Kernels inherit; `root` is for
+    /// diagnostics. Returns the scene's outcome ([`Kernels::collect`]).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn publish_document(
         &mut self,
@@ -406,11 +382,9 @@ impl Kernels {
         None
     }
 
-    /// A document's change compiled and handed to be prepared, nothing of
-    /// it published: what [`Kernels::publish_document`] publishes alone,
-    /// and a scene's documents together, as one [`Change`].
-    /// `None` when any of its Kernels was refused, the document held
-    /// back as it was.
+    /// Compiles a document's Kernels and starts preparing them, for a
+    /// [`Change`] to publish. `None` if any is refused; the document then
+    /// stays as it was.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn stage_document(
         &mut self,
@@ -423,8 +397,8 @@ impl Kernels {
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) -> Option<Batch> {
-        // A newer change of a library document supersedes one still being
-        // prepared (the scene's own are superseded whole, by the scene).
+        // A newer library change supersedes its pending one; the scene
+        // supersedes its own changes whole.
         if let Some(at) = self
             .pending
             .iter()
@@ -483,7 +457,7 @@ impl Kernels {
                 }
             };
             let prep = match runtime.kernel(&id) {
-                // Something is running: its replacement may take its time.
+                // A running Kernel's replacement prepares in the background.
                 Some(running) => {
                     let ticket = runtime.prepare_later(module, text);
                     if runtime.background() {
@@ -541,7 +515,7 @@ impl Kernels {
         Some(batch)
     }
 
-    /// Retires every Kernel a document published, and forgets it.
+    /// Retires a document's Kernels and forgets the document.
     pub(crate) fn retire_document(
         &mut self,
         path: &Path,
@@ -585,8 +559,7 @@ impl Kernels {
         }
     }
 
-    /// Retires a Kernel whoever published it; returns whether one was
-    /// registered.
+    /// Retires a Kernel of any owner; returns whether it was registered.
     pub(crate) fn retire_kernel(&mut self, id: &KernelId, runtime: &mut Runtime) -> bool {
         self.owners.remove(id);
         self.forget_pending(id, runtime);
@@ -596,7 +569,7 @@ impl Kernels {
         runtime.retire(id).is_some()
     }
 
-    /// Takes `id` out of whatever change is still preparing it.
+    /// Removes `id` from any pending change.
     fn forget_pending(&mut self, id: &KernelId, runtime: &mut Runtime) {
         let batches = self
             .pending
@@ -615,9 +588,8 @@ impl Kernels {
         }
     }
 
-    /// The Kernel as its document wrote it, compiled without the
-    /// optimizer; `None` for one no document owns, or one whose source
-    /// no longer compiles on its own.
+    /// The Kernel's source compiled unoptimized; `None` when no document
+    /// owns it or it fails to compile alone.
     pub(crate) fn unoptimized(&self, id: &KernelId) -> Option<orla_kernel::Validated> {
         let kernel = self
             .documents

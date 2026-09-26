@@ -1,13 +1,11 @@
-//! The WGSL every shader begins with: the checked integer helpers, the
-//! 64-bit arithmetic a device without it is given, the context, the
-//! struct declarations, and the helpers that read and write a Kernel's
-//! memories.
+//! The WGSL preamble of every shader: context, structs, checked integer
+//! and 64-bit helpers, input loaders, and memory writers.
 
 use super::*;
 
-/// The integer arithmetic that records its failures: each gives what
-/// WGSL's own gives (the sum modulo 2^32, `x / 0` the dividend, `x % 0`
-/// zero) and, where the reference fails, records the element and why.
+/// Checked integer arithmetic: WGSL's results (wrapping, `x / 0` is `x`,
+/// `x % 0` is zero), recording the element and code where the reference
+/// fails.
 pub(crate) const CHECKED_HELPERS: &str = "
 fn add_i32(a: i32, b: i32) -> i32 {
     let r = a + b;
@@ -48,7 +46,7 @@ fn urem_checked(a: u32, b: u32) -> u32 {
 }
 ";
 
-/// The checked arithmetic componentwise, for an integer vector of `n`.
+/// Checked arithmetic componentwise over an `n`-lane integer vector.
 pub(crate) fn checked_vector_helpers(n: u8) -> String {
     let letters = ["x", "y", "z"];
     let mut out = String::new();
@@ -77,11 +75,9 @@ pub(crate) fn checked_vector_helpers(n: u8) -> String {
     out
 }
 
-/// What a module holding a `Long` needs besides WGSL's own: a division
-/// and a remainder (the device compiler refuses the ones naga writes for
-/// 64 bits), a sign, and a float's conversion, each the reference's
-/// rule, and none of them through `select`, which the device compiler
-/// cannot pick for a 64-bit integer.
+/// `Long` helpers by the reference's rules: checked arithmetic, division
+/// and remainder (naga's 64-bit ones fail to compile on the device),
+/// sign, and float conversion, all free of `select` on 64-bit values.
 pub(crate) const LONG_HELPERS: &str = "
 // The quotient and remainder of magnitudes, a bit at a time.
 fn udivmod_u64(n: u64, d: u64) -> vec2<u64> {
@@ -211,7 +207,7 @@ fn to_long3(v: vec3<f32>) -> vec3<i64> {
 }
 ";
 
-/// A Long's words, which the scatter passes load pairs of longs with.
+/// A Long's words, also used by the scatter passes.
 pub(crate) const LONG_WORDS: &str = "
 // The words of a Long, the low one first.
 fn long_low(x: i64) -> u32 {
@@ -225,12 +221,9 @@ fn long_of(low: u32, high: u32) -> i64 {
 }
 ";
 
-/// The preamble both shaders share: the context and params uniforms, the
-/// output buffer when `with_output`, every input's buffer, the structs,
-/// the key and button readers, every input's loader and address, the
-/// normalizers, mixers, linear readers and memory writers. A `merge` may
-/// read inputs, params and the context like any function, so the fold
-/// shader carries the same.
+/// The preamble of the map and fold shaders: uniforms, outputs when
+/// `with_output`, inputs, structs, input readers and addresses, helpers,
+/// mixers, linear readers and memory writers.
 pub(crate) fn emit_preamble(
     out: &mut String,
     module: &Module,
@@ -239,7 +232,7 @@ pub(crate) fn emit_preamble(
 ) {
     let manifest = &module.manifest;
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
-    // The packed inputs' offsets follow the parameters, four a slot.
+    // Packed input offsets follow the parameters, four per slot.
     let params_len = (param_slots(module).1 + packed.len().div_ceil(4)).max(1);
     let _ = writeln!(
         out,
@@ -274,7 +267,7 @@ pub(crate) fn emit_preamble(
         if packed.contains(&index) {
             continue;
         }
-        // A memory is written by the steps, so its binding is read-write.
+        // A memory's binding is read-write.
         let access = if manifest.memories.contains(&port.name) {
             "read_write"
         } else {
@@ -407,14 +400,13 @@ fn to_int3(v: vec3<f32>) -> vec3<i32> {{
     return vec3<i32>(to_int(v.x), to_int(v.y), to_int(v.z));
 }}"
     );
-    // Where a failure is recorded: this invocation's element, set by
-    // the pass's `main`, and the word the pass binds when it can fail.
+    // This invocation's element (set by `main`), its failure flag and
+    // its work count.
     out.push_str(
         "var<private> current: u32;\nvar<private> failed_here: bool;\nvar<private> work: u32;\n",
     );
-    // The element's loop iterations, and the next count that needs a
-    // look: the end of its block or one past the budget. An iteration is
-    // then one add and one compare.
+    // The next work count that needs a look: the end of the block or one
+    // past the budget, so an iteration costs one add and one compare.
     let budget = manifest.budget;
     let _ = writeln!(
         out,
@@ -428,10 +420,8 @@ fn begin_work() {{
         orla_ir::WORK_BLOCK.min(budget + 1)
     );
     if can_fail(module) {
-        // An invocation records its first failure only: the reference
-        // stops at it, so a failure after it within the same element (a
-        // sum over the dividend a division by zero gave) is not what it
-        // names.
+        // An invocation records only its first failure, where the
+        // reference stops.
         let _ = writeln!(
             out,
             "struct Failure {{ word: atomic<u32>, blocks: atomic<u32>, limit: u32, left: atomic<u32>, total: atomic<u32> }}
@@ -453,10 +443,9 @@ fn spend(blocks: u32) -> bool {{
 }}"
         );
         if module.accounted() {
-            // `Op::Look`: past the budget, the element fails; the blocks
-            // filled since the last look go to the run's total, and past
-            // that its count is set past the budget, so every look after
-            // says so too.
+            // `Op::Look`: past the budget the element fails; otherwise the
+            // blocks since the last look go to the run's total, and past
+            // the run's limit the count is pinned past the budget.
             let _ = writeln!(
                 out,
                 "fn look() -> bool {{
@@ -510,7 +499,7 @@ fn settle_left() {{
     }
     for (index, port) in manifest.inputs.iter().enumerate() {
         let element = port.element();
-        // Words an element takes, or bytes when the input keeps it narrow.
+        // Words per element, or bytes for a narrow input.
         let encoding = input_encoding(module, index);
         let stride = if encoding == Encoding::Word {
             port.ty.schema.value_words()
@@ -568,10 +557,9 @@ fn settle_left() {{
             ),
         };
     }
-    // The truncated remainder exactly: WGSL's `%` rounds the quotient
-    // before truncating it, so 7.5 % 0.3 comes out 0 where the CPU has
-    // 0.3 - epsilon; the fused multiply-add keeps the remainder exact
-    // and a remainder of the wrong sign is one divisor off.
+    // The exact truncated float remainder (WGSL's `%` rounds the
+    // quotient first): `fma` keeps it exact, and a wrong-signed result
+    // is corrected by one divisor.
     for ty in [Type::Float, Type::Vec2, Type::Vec3, Type::Vec4] {
         let name = wgsl_type(ty);
         let _ = writeln!(
@@ -585,8 +573,7 @@ fn settle_left() {{
             ty.components().unwrap_or(1)
         );
     }
-    // Integer division and remainder through a dividend the compiler
-    // cannot narrow (see `OPAQUE_ONE`), scalar and vector.
+    // Dividends the compiler cannot narrow (see `OPAQUE_ONE`).
     let _ = writeln!(
         out,
         "fn whole_i32(x: i32) -> i32 {{ return x * i32({OPAQUE_ONE}); }}
@@ -594,10 +581,10 @@ fn whole_u32(x: u32) -> u32 {{ return x * u32({OPAQUE_ONE}); }}
 fn whole_v2(x: vec2<i32>) -> vec2<i32> {{ return x * i32({OPAQUE_ONE}); }}
 fn whole_v3(x: vec3<i32>) -> vec3<i32> {{ return x * i32({OPAQUE_ONE}); }}"
     );
-    // Rotations by a runtime count (WGSL refuses a shift by the width),
+    // Rotations by a runtime count (a shift by the width is invalid),
     // the high half of a 64-bit product from 16-bit halves, and unsigned
-    // division through the signed one, which this GPU gets right where
-    // its native `u32 / u32` is wrong for dividends with the top bit set.
+    // division through the signed one: native `u32 / u32` is wrong on
+    // Metal for dividends with the top bit set.
     let _ = writeln!(
         out,
         "fn rotl_i32(x: i32, n: i32) -> i32 {{
@@ -649,7 +636,7 @@ fn urem_u32(a: u32, b: u32) -> u32 {{
     out.push('\n');
 }
 
-/// Whether a type is floats all the way down, so it can be interpolated.
+/// Whether a type is all floats, so it can be interpolated.
 pub(crate) fn all_floats(module: &Module, ty: Type) -> bool {
     match ty {
         Type::Float
@@ -667,8 +654,8 @@ pub(crate) fn all_floats(module: &Module, ty: Type) -> bool {
     }
 }
 
-/// `mix` over a type: WGSL's own for scalars and vectors, a generated
-/// fieldwise one for structs of floats.
+/// `mix` over a type: WGSL's for scalars and vectors, per column for
+/// matrices, generated `mix_S{k}` for float structs.
 pub(crate) fn mix_call(module: &Module, ty: Type, a: &str, b: &str, t: &str) -> String {
     match ty {
         Type::Struct(index) => format!("mix_S{index}({a}, {b}, {t})"),
@@ -680,8 +667,8 @@ pub(crate) fn mix_call(module: &Module, ty: Type, a: &str, b: &str, t: &str) -> 
     }
 }
 
-/// Emits `mix_S{k}` for every struct of floats, in table order so nested
-/// structs come first.
+/// Emits `mix_S{k}` for every float struct, in table order (nested
+/// first).
 pub(crate) fn emit_mixers(out: &mut String, module: &Module) {
     for (index, def) in module.structs.iter().enumerate() {
         if !all_floats(module, Type::Struct(index as u32)) {
@@ -709,9 +696,9 @@ pub(crate) fn emit_mixers(out: &mut String, module: &Module) {
     }
 }
 
-/// Emits `store_in{i}(index, v)` and `inside_in{i}(c)` for a memory: the
-/// element store, and whether an address lands inside the memory (floored,
-/// NaN never does), since a `put` outside is dropped.
+/// Emits a memory's `store_in{i}(index, v)` and `inside_in{i}(c)`, the
+/// latter true for a floored address inside it (never NaN); a `put`
+/// outside is dropped.
 pub(crate) fn emit_memory_writer(
     out: &mut String,
     module: &Module,
@@ -730,8 +717,8 @@ pub(crate) fn emit_memory_writer(
             stores.join("\n").replace("out0[", &format!("in{index}["))
         )
     } else {
-        // One invocation walks a scan, so a narrow scalar is written by
-        // reading its word, replacing its bytes and writing the word.
+        // A scan runs in one invocation, so a narrow scalar is written by
+        // read-modify-write of its word.
         let schema = &port.ty.schema;
         let mask = if encoding.bytes() == 1 {
             "0xFFu"

@@ -1,12 +1,10 @@
-//! Checking a document without opening a session over it: what `orla
-//! check` reports, read through a store as every document is.
+//! `orla check`: a document checked through a store, without a session.
 
 use std::path::Path;
 
 use crate::{Store, declarations_for, declarations_within, read_document, used_documents};
 
-/// What checking a document found: the lines to report, in order, and
-/// how many of them are problems.
+/// What checking a document found: the lines to report, in order.
 #[derive(Debug, Default)]
 pub struct Checked {
     /// Each line, and whether it is a problem.
@@ -20,10 +18,9 @@ impl Checked {
     }
 }
 
-/// Checks the document at `path`: it parses, lowers with the documents
-/// and sub-graphs it reaches, its Kernels and those of the documents it
-/// uses compile, and its graph orders. With `show_ir`, each Kernel's
-/// accounted IR is reported too.
+/// Checks that the document at `path` parses, lowers with what it
+/// reaches, compiles with the documents it uses, and orders its graph.
+/// `show_ir` also reports each Kernel's accounted IR.
 pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked {
     let mut checked = Checked::default();
     let file = path.display().to_string();
@@ -90,8 +87,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                         .to_string()
                         .trim_end()
                 );
-                // What a backend runs, not a step before it: the
-                // module with its work accounted.
+                // The accounted module, as a backend runs it.
                 if show_ir {
                     match orla_ir::account(&module) {
                         Ok(run) => say!(note, "{run}"),
@@ -104,8 +100,7 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
             }
         }
     }
-    // The documents it uses, with their own declarations: a scene is
-    // not checked until its libraries are.
+    // The used documents, each with its own declarations.
     match used_documents(store, base, &document.uses) {
         Ok(used) => {
             let mut compiled = 0;

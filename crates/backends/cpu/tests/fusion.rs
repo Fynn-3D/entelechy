@@ -33,8 +33,7 @@ fn run(
 
 #[test]
 fn fused_pointwise_chain_is_bit_identical_to_the_materialized_chain() {
-    // As lowered, with their helpers: what fusion does with a function
-    // is what is looked at (optimized, they are written out and gone).
+    // Unoptimized, so the helpers stay for fusion to handle.
     let gradient = compile_unoptimized(GRADIENT).unwrap();
     let grayscale = compile_unoptimized(GRAYSCALE).unwrap();
     let fused = fuse(&grayscale, 0, &gradient, "source").unwrap();
@@ -79,10 +78,9 @@ fn addressed_inputs_do_not_fuse() {
 
 #[test]
 fn producer_helpers_with_struct_arguments_survive_fusion() {
-    // The consumer has structs of its own, so a producer struct the
-    // consumer does not have is appended; a helper taking it as an
-    // argument must shift exactly once. The element type the two share
-    // is the same struct in the fused table, not a copy of it.
+    // The consumer has its own structs, so a producer struct it lacks is
+    // appended and a helper taking it shifts exactly once; the shared
+    // element type is one struct in the fused table.
     let producer = compile_unoptimized(
         "kernel test.points@1 { requires { field.write; } output result: Rows<Point>; struct Point { p: Vec2; w: Float; } struct Wide { a: Float; b: Float; c: Float; } fn nudge(a: Wide) -> Point { return Point { p: vec2(a.a + 1.0, a.b), w: a.c }; } compute { return nudge(Wide { a: float(element()), b: 0.0, c: 2.0 }); } }",
     )
@@ -128,12 +126,9 @@ fn producer_helpers_with_struct_arguments_survive_fusion() {
 
 #[test]
 fn a_whole_element_the_consumer_passes_on_keeps_its_own_struct() {
-    // The consumer's sample of the fused input becomes the producer's
-    // result, so a whole element it hands around — one arm of an `if`,
-    // the other arm a struct it builds itself — has to be the same
-    // struct as its own. If the producer's copy were added to the table
-    // beside it, the two arms would yield different types and the fused
-    // module would not validate.
+    // The consumer's sample becomes the producer's result, so a whole
+    // element it passes (one `if` arm, beside a struct it builds) is the
+    // same struct as its own, and the fused module validates.
     let producer = compile(
         "kernel test.faces@1 { requires { field.write; } output result: Rows<Tri>; struct Tri { a: Int; b: Int; c: Int; } compute { let i = element(); return Tri { a: i, b: i + 1, c: i + 2 }; } }",
     )
@@ -219,8 +214,7 @@ fn a_producer_of_several_outputs_fuses_whole_and_changes_no_bit() {
     let together = run(&fused, vec![other], vec![Value::Float(0.5)], &mut host);
     assert_eq!(separate, together, "fusion must not change a single bit");
 
-    // Two links to one input, or a link to an output that is not there,
-    // are refused rather than guessed at.
+    // Two links to one input, or a link to a missing output, are refused.
     assert!(fuse_outputs(&show, &[(1, 1), (1, 0)], &split, "split").is_err());
     assert!(fuse_outputs(&show, &[(1, 3)], &split, "split").is_err());
     // A link whose layouts differ is the scene's mismatch, not fusion's.

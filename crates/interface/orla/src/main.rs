@@ -215,12 +215,12 @@ struct RunOptions {
     /// limits and allowances.
     session: orla_session::SessionOptions,
     saves: Vec<(String, String, PathBuf)>,
-    /// Where the scene's picture goes, when a file is named.
+    /// The file the scene's picture goes to.
     out: Option<PathBuf>,
     watch: bool,
     /// The window's size in pixels and scale factor, for `window()`.
     window: Option<([f32; 2], f32)>,
-    /// Whether to print each executed node's time.
+    /// Print each executed node's time.
     profile: bool,
 }
 
@@ -330,7 +330,6 @@ fn render(args: &[String]) -> Result<(), String> {
             orla::render::SOUND_NAME
         );
     }
-    // What the frames wrote, and what they were not allowed to.
     report_events(&session.sync());
     for (node, port, path) in &options.saves {
         session
@@ -375,8 +374,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
 fn run(args: &[String]) -> Result<(), String> {
     let options = parse_run(args)?;
     let mut session = options.session.open("jit")?;
-    // A profile waits for the device after each node, so the times are
-    // the work rather than the submission.
+    // A profile waits for the device after each node.
     session.set_measured(options.profile);
     // A file named on the command line is the person's own allowance.
     for (node, _, path) in &options.saves {
@@ -388,7 +386,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let events = session.sync();
     report_events(&events);
-    // Watching, a scene that does not load yet may be fixed and saved.
+    // Under `--watch`, a scene that fails to load may be fixed later.
     if !options.watch {
         loaded(&session, &events)?;
     }
@@ -404,7 +402,6 @@ fn run(args: &[String]) -> Result<(), String> {
     );
     let _ = &clock;
     if !options.watch {
-        // What the evaluation wrote, and what it was not allowed to.
         report_events(&session.sync());
         return if healthy {
             Ok(())
@@ -499,8 +496,7 @@ fn new_scene(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// `orla bench`: the same frames, several times, on one backend or all
-/// of them.
+/// `orla bench`: the same frames, repeated, on one backend or several.
 fn measure(args: &[String]) -> Result<(), String> {
     let mut options = orla_session::bench::Options::default();
     let mut backends: Vec<String> = Vec::new();
@@ -508,7 +504,7 @@ fn measure(args: &[String]) -> Result<(), String> {
     while let Some(arg) = iter.next() {
         let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
         match arg.as_str() {
-            // Several backends, one after another: bench's own.
+            // Repeatable: backends run one after another.
             "--backend" => {
                 backends.push(value("--backend")?);
                 continue;
@@ -554,8 +550,7 @@ fn measure(args: &[String]) -> Result<(), String> {
         }
     }
     options.session.scene()?;
-    // `--backend all` is every backend this build has, fastest last so
-    // the table reads from the reference down to it.
+    // `--backend all`: every backend this build has, reference first.
     if backends.iter().any(|name| name == "all") {
         backends = ["cpu", "jit", "gpu"]
             .iter()
@@ -584,8 +579,8 @@ fn measure(args: &[String]) -> Result<(), String> {
 }
 
 fn graph(args: &[String]) -> Result<(), String> {
-    // The session's own flags, as `run` reads them: the plan printed is
-    // the one `run` would execute with the same params and inputs.
+    // `run`'s session flags: the plan printed is the one `run` executes
+    // with the same params and inputs.
     let mut options = orla_session::SessionOptions::default();
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
@@ -657,11 +652,12 @@ fn serve(args: &[String]) -> Result<(), String> {
             other => return Err(format!("unknown flag {other}")),
         }
     }
-    // Allowed by whoever started the server, never by what connects to it.
+    // Allowances come from whoever started the server, never from a
+    // client.
     let mut session = options.open("jit")?;
     session.set_window(window);
-    // An agent composes this scene and reads back what it holds: what it
-    // reads is held to its documents' directories and what is allowed.
+    // Reads are held to the scene's documents' directories and the
+    // allowances.
     session.restrict_reads()?;
     report_events(&session.sync());
     session.set_background(true);
@@ -673,8 +669,7 @@ fn serve(args: &[String]) -> Result<(), String> {
         eprintln!("listening on {bound}");
     }
     if orla_protocol::stdin_into(sink).is_err() {
-        // No thread to read with: each request is read and answered in
-        // turn, here.
+        // Without a reader thread, requests are answered in turn here.
         for incoming in orla_protocol::stdin_lines() {
             if orla_protocol::answer(&mut session, incoming) {
                 break;
@@ -682,8 +677,8 @@ fn serve(args: &[String]) -> Result<(), String> {
         }
         return Ok(());
     }
-    // A `compose` or a `publish` waiting for what it changed to stand is
-    // answered once it does; meanwhile every other request is.
+    // A `compose` or `publish` is answered once its change stands; other
+    // requests are answered meanwhile.
     let mut answers = orla_protocol::Answers::new();
     loop {
         let incoming = if answers.waiting() {
@@ -962,9 +957,7 @@ fn report_events(events: &[Event]) {
     }
 }
 
-/// Whether the scene loaded: an error naming why it did not, so a
-/// command that evaluates once stops there instead of evaluating
-/// nothing.
+/// Whether the scene loaded; the error names why it did not.
 fn loaded(session: &Session, events: &[Event]) -> Result<(), String> {
     if session.graph().is_some() {
         return Ok(());
@@ -1001,8 +994,7 @@ fn evaluate_and_export(
     };
     match session.evaluate(&context) {
         Ok(report) => {
-            // A device's work is submitted and not waited for, so the
-            // time below would be the asking rather than the doing.
+            // Wait for the device so the time below is the work.
             session.runtime().settle_device();
             let executed = report
                 .executed
@@ -1023,17 +1015,14 @@ fn evaluate_and_export(
                 .collect::<Vec<_>>()
                 .join(", ");
             if profile {
-                // `run` evaluates once, so a profile is of the first
-                // frame: what it prints includes compiling every Kernel
-                // and asking the driver for every buffer. `bench
-                // --nodes` throws that frame away and measures a scene
-                // that is already running.
-                // What measuring a node costs before the node does
-                // anything comes off every line; see
-                // `orla_kernel::Backend::measurement_floor`.
+                // A profile of the first frame includes compilation and
+                // allocation; `bench --nodes` measures a running scene.
+                // The measurement floor
+                // (`orla_kernel::Backend::measurement_floor`) comes off
+                // every line.
                 let floor = session.measurement_floor().as_secs_f64() * 1000.0;
-                // Where each ran, why when it left the main backend, and
-                // what that carried between Host memory and a device.
+                // Each node's placement, the reason when off the main
+                // backend, and its Host/device traffic.
                 for ((node, took), placed) in report.timings.iter().zip(&report.placements) {
                     let name = node.to_string();
                     let ms = (took.as_secs_f64() * 1000.0 - floor).max(0.0);
@@ -1071,7 +1060,6 @@ fn evaluate_and_export(
                     }
                 }
             }
-            // The output goes to `--out` when it is a picture; rows or a
             for (node, port, kernel) in &report.migrated {
                 eprintln!("state of `{node}.{port}` carried into its new layout by {kernel}");
             }
@@ -1091,8 +1079,7 @@ fn evaluate_and_export(
             if !report.pending.is_empty() {
                 eprintln!("still running off the frame: [{}]", names(&report.pending));
             }
-            // The scene's picture goes to `--out`, when one is named; any
-            // other output (rows, a volume) is reached with `--save`.
+            // The picture goes to `--out`; other outputs to `--save`.
             let evaluated = format!(
                 "evaluated in {:?}: executed [{executed}], reused {}",
                 started.elapsed(),
@@ -1127,9 +1114,7 @@ fn evaluate_and_export(
             }
         }
         Err(error) => {
-            // Where the node was written, as a Kernel's diagnostics say
-            // it: a scene's failures named only which node, and a node
-            // of a placed sub-graph has a name nobody wrote.
+            // Prefix the failing node's source location.
             let at = error
                 .node()
                 .and_then(|node| session.graph()?.node(node)?.at.clone())

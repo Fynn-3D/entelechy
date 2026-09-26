@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 //! Compiler: `.orla` source → AST → semantic analysis → validated Orla IR.
 //!
-//! Every diagnostic carries a source position so an agent can repair the
-//! Kernel without guessing. The compiler never executes anything.
+//! Every diagnostic carries a source position. The compiler executes
+//! nothing.
 
 pub mod help;
 mod lower;
@@ -24,8 +24,7 @@ pub enum CompileError {
         /// What is wrong.
         message: String,
     },
-    /// The produced IR failed validation. This indicates a compiler bug and
-    /// is reported rather than hidden.
+    /// The produced IR failed validation: a compiler bug.
     Validation(orla_ir::ValidationError),
 }
 
@@ -85,9 +84,8 @@ pub fn compile_kernel(
     })
 }
 
-/// Compiles one parsed Kernel as [`compile_kernel`] does, but leaves the
-/// IR as the lowering made it: what a trace walks, where the functions
-/// are still called and every `let` is the source's own.
+/// [`compile_kernel`] without optimization: the IR a trace walks, with
+/// its calls and the source's own `let`s.
 pub fn compile_kernel_unoptimized(
     kernel: &orla_language::Kernel,
     id: Option<&orla_ir::KernelId>,
@@ -98,8 +96,8 @@ pub fn compile_kernel_unoptimized(
     })
 }
 
-/// Compiles one Kernel source as [`compile`] does, but leaves the IR as
-/// the lowering made it: what the optimizer is held to.
+/// [`compile`] without optimization: the reference the optimizer is held
+/// to.
 pub fn compile_unoptimized(source: &str) -> Result<Validated, CompileError> {
     orla_language::on_a_deep_stack(|| {
         let kernel = orla_language::parse(source)?;
@@ -108,17 +106,15 @@ pub fn compile_unoptimized(source: &str) -> Result<Validated, CompileError> {
     })
 }
 
-/// Evaluates a literal expression as a plain value: numbers, `true` and
-/// `false`, negation, and `vec2`/`vec3`/`vec4` of float literals. This is
-/// the value grammar shared by Kernel parameter defaults and graph
-/// documents.
+/// Evaluates a literal as a plain value: numbers, booleans, negation, and
+/// `vec2`/`vec3`/`vec4` of floats. Parameter defaults and graph documents
+/// share this grammar.
 pub fn literal(expr: &orla_language::Expr) -> Result<orla_ir::Value, CompileError> {
     lower::literal(expr)
 }
 
-/// A literal given for a value of the type `ty` names (`Double`,
-/// `[DVec2; 4]`, a struct), over the struct declarations a document
-/// makes or uses: read exact and shaped into that type.
+/// A literal read exact and shaped into the type `ty` names (`Double`,
+/// `[DVec2; 4]`, a struct), over a document's struct declarations.
 pub fn literal_of_type(
     expr: &orla_language::Expr,
     ty: &orla_language::Spanned<String>,
@@ -127,9 +123,8 @@ pub fn literal_of_type(
     lower::literal_of_type(expr, ty, structs)
 }
 
-/// Evaluates a literal that a type will shape, keeping every written
-/// float exact until the type says its width: [`literal_in`] for a place
-/// that knows its type.
+/// [`literal_in`] for a place that knows its type: written floats stay
+/// exact until the type sets their width.
 pub fn literal_exact(
     expr: &orla_language::Expr,
     fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
@@ -137,9 +132,8 @@ pub fn literal_exact(
     lower::literal_exact(expr, fields_of)
 }
 
-/// Evaluates a literal of any value a Kernel can hold, before it has a
-/// type: a struct literal's fields in the order `fields_of` lists them
-/// for its name, an array or a struct as a record of its members.
+/// Evaluates an untyped literal of any Kernel value: a struct's fields
+/// in the order `fields_of` gives, an array or struct as a record.
 /// [`orla_ir::value_as`] shapes it into a type.
 pub fn literal_in(
     expr: &orla_language::Expr,

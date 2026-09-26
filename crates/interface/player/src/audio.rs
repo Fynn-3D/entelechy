@@ -1,22 +1,17 @@
-//! The sound card as a device adapter. It claims a graph output that is
-//! rows of one or two floats, takes each evaluation's block into a ring,
-//! and feeds the device from that ring in its real-time callback. The
-//! callback never waits on the Graph, the GPU, or an allocation: when the
-//! ring is empty it plays silence and counts an underrun.
-//!
-//! The adapter provides device access, not a signal model: sample rate
-//! and block size are facts it reports; oscillators, envelopes, and mixing
-//! are Kernels.
+//! The sound card as a device adapter: each evaluation's block of rows
+//! of one or two floats goes into a ring the real-time callback drains.
+//! The callback never waits on the Graph, the GPU, or an allocation; on
+//! an empty ring it plays silence and counts an underrun. Sample rate
+//! and block size are reported; signal models are Kernels.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-/// A single-producer, single-consumer ring of interleaved samples. The
-/// producer is the frame thread, the consumer the device callback. Slots
-/// hold float bits in atomics, so the ring needs no lock and no unsafe
-/// code; the indices are published with release/acquire ordering.
+/// A lock-free single-producer (frame thread), single-consumer (device
+/// callback) ring of interleaved samples: float bits in atomic slots,
+/// indices published with release/acquire ordering.
 pub struct Ring {
     samples: Box<[AtomicU32]>,
     /// Next sample to read; advanced by the consumer.
@@ -57,9 +52,8 @@ impl Ring {
         self.samples.len() - 1 - self.len()
     }
 
-    /// Writes as many of `block` as fit and returns how many; a block that
-    /// does not fit is written partially, so the producer should check
-    /// [`Ring::room`] first when it wants all-or-nothing.
+    /// Writes as many of `block` as fit and returns how many; check
+    /// [`Ring::room`] first for all-or-nothing.
     pub fn push(&self, block: &[f32]) -> usize {
         let capacity = self.samples.len();
         let count = block.len().min(self.room());
@@ -72,8 +66,8 @@ impl Ring {
         count
     }
 
-    /// Fills `out` from the ring, silence where it runs dry; returns how
-    /// many samples were real.
+    /// Fills `out` from the ring, silence where it runs dry; returns the
+    /// number of real samples.
     pub fn pop(&self, out: &mut [f32]) -> usize {
         let capacity = self.samples.len();
         let count = out.len().min(self.len());
@@ -114,9 +108,8 @@ pub struct Audio {
 }
 
 impl Audio {
-    /// Opens the default output device, preferring 48 kHz stereo floats
-    /// and taking what the device offers otherwise. `block` is the number
-    /// of frames one evaluation produces, which sizes the ring.
+    /// Opens the default output device, preferring 48 kHz stereo floats.
+    /// `block`, the frames one evaluation produces, sizes the ring.
     pub fn open(block: usize) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
@@ -146,8 +139,7 @@ impl Audio {
             buffer_size: cpal::BufferSize::Default,
         };
         let ring = Arc::new(Ring::new(block.max(64) * channels * BLOCKS_AHEAD));
-        // One block of silence ahead, so the device's first callbacks do
-        // not count as underruns while the first block is computed.
+        // One block of silence ahead covers the first block's computation.
         ring.push(&vec![0.0; block.max(64) * channels]);
         let consumer = Arc::clone(&ring);
         let stream = device
@@ -178,17 +170,14 @@ impl Audio {
         self.rate
     }
 
-    /// Whether the ring can take another block of the last block's size:
-    /// when it cannot, the device has not yet consumed what it was given,
-    /// and evaluating again would only drop the result.
+    /// Whether the ring has room for another block of the last size.
     pub fn has_room(&self) -> bool {
         self.ring.room() >= self.block.max(1) * self.channels
     }
 
-    /// Queues one block of frames laid out as `words_per_frame` floats
-    /// each (one for mono, two for stereo), spreading mono to every
-    /// channel. A block that does not fit is dropped whole, so a frame
-    /// boundary never lands mid-block.
+    /// Queues one block of frames of `words_per_frame` floats (1 mono,
+    /// 2 stereo), spreading mono to every channel. A block that does not
+    /// fit is dropped whole.
     pub fn push(&mut self, words: &[u32], words_per_frame: usize) -> bool {
         if words_per_frame == 0 {
             return false;

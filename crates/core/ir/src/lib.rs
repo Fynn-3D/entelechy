@@ -1,13 +1,11 @@
 #![warn(missing_docs)]
 //! Orla IR (L3).
 //!
-//! The IR is the true internal representation of a Kernel. It is typed,
-//! SSA-like (every instruction defines exactly one value and may only refer
-//! to values defined before it in the same or an enclosing block),
-//! structured (control flow is `if` and bounded `loop` expressions, never
-//! jumps), deterministic, inspectable, and independent of any backend. Host
-//! access appears only as explicit operations, so a validator can prove
-//! which capabilities a Kernel needs before it ever runs.
+//! The typed, SSA-like, structured, backend-independent form of a Kernel.
+//! Each instruction defines one value and refers only to values defined
+//! before it in its block or an enclosing one; control flow is `if` and
+//! bounded `loop`. Host access is explicit operations, so validation proves
+//! a Kernel's capabilities before it runs.
 
 mod account;
 mod display;
@@ -28,12 +26,11 @@ pub use orla_abi::{
 };
 pub use validate::{Validated, ValidationError, linear_index_type, validate};
 
-/// The version of the IR: its operations, types and rules. Bumped when
-/// a module of the old one would no longer validate or mean the same.
+/// The IR version, raised when a module's validity or meaning changes.
 pub const IR_VERSION: u32 = 1;
 
-/// Stable identity of a Kernel: a dotted name and a version, e.g.
-/// `image.grayscale@1`. Graphs bind to this, never to source paths.
+/// Stable identity of a Kernel, `name@version` (`image.grayscale@1`).
+/// Graphs bind to it, never to source paths.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KernelId {
     name: String,
@@ -117,8 +114,7 @@ pub struct Port {
 }
 
 impl Port {
-    /// The value type the entry point produces or `sample` yields for this
-    /// port: its element type.
+    /// The element type the entry produces or `sample` yields for this port.
     pub fn element(&self) -> Type {
         self.ty.element
     }
@@ -168,15 +164,13 @@ pub fn schema_of(ty: Type, structs: &[StructDef]) -> Option<Schema> {
 pub struct Param {
     /// Parameter name.
     pub name: String,
-    /// Its type: any value type, a struct or an array of the module
-    /// included.
+    /// Its type: any value type, the module's structs and arrays included.
     pub ty: Type,
     /// Default value, of that type.
     pub default: Value,
 }
 
-/// A value of type `ty` with every word zero: the shape a value given for
-/// a parameter of that type is taken into.
+/// A value of type `ty` with every word zero.
 pub fn template(ty: Type, structs: &[StructDef]) -> Value {
     match ty {
         Type::Float => Value::Float(0.0),
@@ -211,10 +205,8 @@ pub fn template(ty: Type, structs: &[StructDef]) -> Value {
     }
 }
 
-/// `value` as a value of type `ty`, when its layout is the type's (an
-/// integer standing in for a float, a number of one width for the other:
-/// [`Number::as_kind`](orla_abi::Number::as_kind)); `None` when it is
-/// another layout.
+/// `value` retyped as `ty` when their layouts match (see
+/// [`Number::as_kind`](orla_abi::Number::as_kind)); otherwise `None`.
 pub fn value_as(value: &Value, ty: Type, structs: &[StructDef]) -> Option<Value> {
     value.shaped_like(&template(ty, structs))
 }
@@ -234,15 +226,13 @@ pub struct Manifest {
     pub params: Vec<Param>,
     /// Outputs in declaration order.
     pub outputs: Vec<Port>,
-    /// Names of the memories: ports that appear in `inputs` (bound by the
-    /// graph, read with `at`) and in `outputs` (what the steps left there),
-    /// which an ordered Kernel writes step by step with [`Op::Put`]. They
-    /// come last in both lists, in one order.
+    /// Names of the memories: ports in both `inputs` (bound by the graph,
+    /// read with `at`) and `outputs`, which an ordered Kernel writes step by
+    /// step with [`Op::Put`]. They come last in both lists, in one order.
     pub memories: Vec<String>,
-    /// The loop iterations one element may run, every loop's and every
-    /// nested one's counted: a step of a scan, a merge of a reduction,
-    /// an element of anything else. Past it the element fails, on every
-    /// backend alike; see [`Module::counts_work`].
+    /// Loop iterations one element (a scan step, a reduction merge) may run,
+    /// nested loops included; past it the element fails on every backend.
+    /// See [`Module::counts_work`].
     pub budget: u32,
 }
 
@@ -252,36 +242,29 @@ pub enum Mode {
     /// The entry runs once per element of the output domain.
     #[default]
     Map,
-    /// The entry runs once per element of the first input's domain and
-    /// the results are folded pairwise by the module's `merge` function
-    /// into the single element of a `Rows` output. `merge` must be
-    /// associative and commutative: the fold's tree is the backend's.
+    /// The entry runs per element of the first input; `merge` folds the
+    /// results pairwise into the single element of a `Rows` output. `merge`
+    /// is associative and commutative: the backend picks the fold's tree.
     Reduce,
-    /// The entry runs once per element of the first input's rows, in
-    /// order, reading the previous step's result through [`Op::Carried`]
-    /// (the module's `init` before the first) and writing each step's
-    /// result as that element of a `Rows` output of the same count.
+    /// The entry runs per row of the first input, in order, reading the
+    /// previous result through [`Op::Carried`] (`init` before the first) and
+    /// writing each result to that element of a `Rows` output.
     Scan,
-    /// The entry runs once per element of the first input's domain and
-    /// yields an address into the `base` input and a value; the output is
-    /// `base` with every value combined into the element at its address,
-    /// as if the sources were applied one after another in element order;
-    /// under [`Combine::Sum`] an integer is instead the element's whole
-    /// total, which no order changes. An address outside `base` is
-    /// dropped. `base` has the output's
-    /// shape and layout, and sizes the output.
+    /// The entry runs per element of the first input, yielding an address
+    /// into `base` and a value. The output is `base` with each value combined
+    /// into its address as if applied in element order; under
+    /// [`Combine::Sum`] an integer is the element's whole total. Addresses
+    /// outside `base` are dropped; `base` has the output's shape and layout.
     Scatter {
         /// Index of the input the output starts from.
         base: u32,
         /// How a value meets the element already there.
         combine: Combine,
     },
-    /// The entry runs once per element of the first input's rows and
-    /// each element of the `Rows` output is its own value combined with
-    /// every value before it, by [`Combine`] — an inclusive prefix fold.
-    /// The rule must be order-free (integer `sum`, `min`, `max`), so a
-    /// backend may group the fold as it likes and still give the words
-    /// the reference gives.
+    /// The entry runs per row of the first input; each element of the `Rows`
+    /// output is its value combined by [`Combine`] with every value before
+    /// it (an inclusive prefix fold). The rule is order-free (integer `sum`,
+    /// `min`, `max`), so any grouping gives the reference's words.
     Prefix {
         /// How a value meets everything before it.
         combine: Combine,
@@ -310,9 +293,8 @@ impl Mode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Combine {
     /// Fieldwise addition. A float adds in element order; an integer is the
-    /// element's whole total, what it held and every value added to it,
-    /// and fails only when that total does not fit, at the first element
-    /// whose total does not (`orla_rules::Sums`).
+    /// element's whole total and fails, at the first element, only when that
+    /// total overflows (`orla_rules::Sums`).
     Sum,
     /// Fieldwise minimum.
     Min,
@@ -344,11 +326,9 @@ impl Combine {
         }
     }
 
-    /// Whether the rule gives one answer whatever order the pairs come
-    /// in, over an element of `element`: `min` and `max` always, `sum`
-    /// when no scalar is a float, whose sum depends on its order. Only
-    /// such a rule takes pairs a scatter emits, which a device applies as
-    /// they come.
+    /// Whether the rule's answer over `element` is independent of pair
+    /// order: `min` and `max` always, `sum` when no scalar is a float. Only
+    /// such a rule takes pairs a scatter emits.
     pub fn order_free(self, element: Type, structs: &[StructDef]) -> bool {
         match self {
             Self::Min | Self::Max => true,
@@ -375,9 +355,8 @@ impl fmt::Display for Mode {
     }
 }
 
-/// Index of a value within a function. Ids are assigned in pre-order over
-/// the function's instructions, nested blocks included, so `ValueId(n)` is
-/// also the value's slot in a flat frame.
+/// Index of a value within a function, assigned in pre-order over its
+/// instructions, nested blocks included; also its slot in a flat frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueId(pub u32);
 
@@ -426,24 +405,20 @@ pub enum BinaryOp {
     Shl,
     /// `a >> b` on integers, arithmetic; the count is taken modulo 32.
     Shr,
-    /// `a >>> b` on integers, logical (zeros shifted in); the count is
-    /// taken modulo 32.
+    /// `a >>> b` on integers, logical; the count is taken modulo 32.
     Ushr,
 }
 
 impl BinaryOp {
     /// Result type of `a op b`, or `None` when the operands cannot combine.
-    /// Both sides are of one scalar kind: a `Float` never meets a
-    /// `Double`, nor an `Int` a `Long`, without a conversion. Arithmetic:
-    /// vectors combine componentwise with vectors of the same size or with
-    /// a scalar of their kind on either side. Matrices add and subtract
-    /// with matrices of their order and scale by a scalar; their products
-    /// are not an operation of the IR but the formulas the compiler writes
-    /// for them.
-    /// Comparisons take two scalars of one type and give `Bool`; equality
-    /// also compares `Bool`s, whole vectors and whole matrices. `&&` and
-    /// `||` take `Bool`s. The bit operators and shifts take integers of
-    /// either width, and integer vectors, with a scalar broadcasting.
+    /// Both sides share one scalar kind (`Float`/`Double` and `Int`/`Long`
+    /// meet only through a conversion). Vectors combine componentwise with
+    /// same-size vectors or a scalar of their kind. Matrices add and
+    /// subtract with their own order and scale by a scalar; the compiler
+    /// writes their products out. Comparisons take two scalars of one type
+    /// and give `Bool`; equality also compares `Bool`s and whole vectors and
+    /// matrices. `&&` and `||` take `Bool`s. Bit operators and shifts take
+    /// integers of either width and integer vectors, a scalar broadcasting.
     pub fn result_type(self, a: Type, b: Type) -> Option<Type> {
         let kind = a.scalar()?;
         if b.scalar()? != kind {
@@ -463,8 +438,7 @@ impl BinaryOp {
         };
         match self {
             // A matrix adds and subtracts with its own type and scales by
-            // a scalar; a product of matrices is a formula the compiler
-            // writes out.
+            // a scalar.
             Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Rem
                 if a.order().is_some() || b.order().is_some() =>
             {
@@ -488,8 +462,7 @@ impl BinaryOp {
             {
                 Some(Type::Bool)
             }
-            // Vectors and matrices compare whole: equal when every
-            // component is.
+            // Vectors and matrices are equal when every component is.
             Self::Equal | Self::NotEqual if a == b => Some(Type::Bool),
             Self::And | Self::Or if a == Type::Bool && b == Type::Bool => Some(Type::Bool),
             _ => None,
@@ -542,8 +515,8 @@ impl UnaryOp {
     }
 }
 
-/// Pure math intrinsics. Their signatures are the single source of truth
-/// shared by the compiler, the validator, and every backend.
+/// Pure math intrinsics; their signatures are the one source for the
+/// compiler, the validator and every backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Intrinsic {
     /// Largest integer value not greater than the input, componentwise.
@@ -594,15 +567,14 @@ pub enum Intrinsic {
     ToInt,
     /// Convert any number, or a `Bool` as 0 or 1, to `Double`.
     ToDouble,
-    /// Convert any number (a float truncating toward zero), or a `Bool`
-    /// as 0 or 1, to `Long`.
+    /// Convert any number (floats truncating) or `Bool` (0 or 1) to `Long`.
     ToLong,
     /// `pow(base, exponent)` componentwise; a `Float` exponent broadcasts.
     Pow,
     /// `e^x` componentwise.
     Exp,
-    /// `step(edge, x)`: 1 where `x >= edge`, else 0, componentwise; a
-    /// `Float` edge broadcasts.
+    /// `step(edge, x)`: 1 where `x >= edge`, else 0; a `Float` edge
+    /// broadcasts.
     Step,
     /// `smoothstep(low, high, x)` componentwise; `Float` edges broadcast.
     Smoothstep,
@@ -811,8 +783,7 @@ impl Intrinsic {
             .map(|(intrinsic, _)| *intrinsic)
     }
 
-    /// Result type for the given argument types, or `None` if the call is
-    /// ill-typed.
+    /// Result type for the argument types, or `None` if ill-typed.
     pub fn result_type(self, args: &[Type]) -> Option<Type> {
         // A float of either width, or a vector of them.
         let float_like = |ty: Type| ty.is_float_kind() && ty.order().is_none();
@@ -820,8 +791,7 @@ impl Intrinsic {
         let int_like = |ty: Type| ty.is_int_kind();
         let vector = |ty: Type| ty.lanes().is_some();
         let scalar = |ty: Type| ty.scalar().unwrap_or(ty);
-        // What a conversion to `to` gives: the argument's shape in `to`'s
-        // kind, from any other kind.
+        // A conversion to `to`: the argument's shape in `to`'s kind.
         let convert = |to: Type| match args {
             [a] if a.scalar().is_some_and(|from| from != to) => a.with_scalar(to),
             _ => None,
@@ -911,30 +881,26 @@ pub struct Field {
     pub ty: Type,
 }
 
-/// A Kernel-defined record type. Struct `i` may only contain structs with
-/// index less than `i`, which rules out recursion by construction.
+/// A Kernel-defined record type. Struct `i` contains only structs below
+/// `i`, so none is recursive.
 ///
-/// A fixed-size array `[T; N]` is a struct of `N` fields of one type `T`,
-/// named `0` to `N - 1`, with `element` set to `T`: it lays out, builds
-/// and extracts like any struct, and may also be indexed at run time
-/// with [`Op::Index`].
+/// An array `[T; N]` is a struct of `N` fields of type `T` named `0` to
+/// `N - 1`, with `element` set to `T`; [`Op::Subscript`] also indexes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructDef {
     /// Name for inspection and diagnostics; an array's is `[T; N]`.
     pub name: String,
     /// Fields in declaration order.
     pub fields: Vec<Field>,
-    /// The element type when the struct is an array, whose fields are
-    /// all of it.
+    /// The element type when the struct is an array.
     pub element: Option<Type>,
 }
 
 /// Largest element count an array type may declare.
 pub const MAX_ARRAY_COUNT: u32 = 4096;
 
-/// How many words a value of this type takes in the flat layout the
-/// Host, the backends and this IR share: a struct is its fields end to
-/// end with nothing between them, a matrix its columns.
+/// Words a value of this type takes in the flat layout the Host, backends
+/// and IR share: a struct's fields end to end, a matrix's columns.
 pub fn words(structs: &[StructDef], ty: Type) -> usize {
     match ty {
         Type::Struct(index) => structs[index as usize]
@@ -946,9 +912,8 @@ pub fn words(structs: &[StructDef], ty: Type) -> usize {
     }
 }
 
-/// Where part `k` of a value of this type begins and what it is: a
-/// field of a struct, a column of a matrix, a component of a vector,
-/// which is what [`Op::Extract`] takes.
+/// Where part `k` (struct field, matrix column or vector component) of a
+/// value of this type begins and its type, as [`Op::Extract`] takes it.
 pub fn part_at(structs: &[StructDef], ty: Type, k: usize) -> Option<(usize, Type)> {
     match ty {
         Type::Struct(index) => {
@@ -973,9 +938,8 @@ pub fn part_at(structs: &[StructDef], ty: Type, k: usize) -> Option<(usize, Type
     }
 }
 
-/// What a value of this type holds when it is indexed: the part's type,
-/// how many there are and how many words apart they lie, which is what
-/// [`Op::Subscript`] takes, clamping the index into `0..count`.
+/// The part type, count and word stride of an indexed value of this type,
+/// as [`Op::Subscript`] takes them, clamping the index into `0..count`.
 pub fn elements_of(structs: &[StructDef], ty: Type) -> Option<(Type, usize, usize)> {
     match ty {
         Type::Struct(index) => {
@@ -1036,11 +1000,9 @@ pub struct Block {
 }
 
 impl Op {
-    /// The blocks the op carries, in order: an `if`'s two, a `match`'s
-    /// arms and then its default, a `loop`'s test and then its body; none
-    /// for any other op. A walk over a function's nested instructions
-    /// goes through here, so an op that comes to carry a block is walked
-    /// by every walk at once.
+    /// The blocks the op carries, in order: an `if`'s two, a `match`'s arms
+    /// then its default, a `loop`'s test then its body. Every walk over
+    /// nested instructions goes through here.
     pub fn blocks(&self) -> Vec<&Block> {
         match self {
             Op::If {
@@ -1080,18 +1042,15 @@ impl Op {
 /// Largest iteration bound a `loop` may declare.
 pub const MAX_LOOP_COUNT: u32 = 65_536;
 
-/// The work budget a Kernel has when it declares none: loop iterations
-/// an element may run.
+/// The default work budget: loop iterations an element may run.
 pub const DEFAULT_BUDGET: u32 = 1 << 24;
 
 /// The largest work budget a Kernel may declare.
 pub const MAX_BUDGET: u32 = 1 << 30;
 
-/// The loop iterations an element hands to its run's total at a time.
-/// A run's total is counted in whole blocks: an element's iterations
-/// short of a block are its own, so the total never costs more than one
-/// shared addition per block, and a Kernel whose elements cannot fill
-/// one is never counted.
+/// The loop iterations an element adds to its run's total at a time. The
+/// total counts whole blocks: one shared addition per block, and a Kernel
+/// whose elements cannot fill one is not counted.
 pub const WORK_BLOCK: u32 = 1024;
 
 /// One SSA operation. Host access is explicit and named.
@@ -1107,13 +1066,11 @@ pub enum Op {
     Unary(UnaryOp, ValueId),
     /// Binary operation.
     Binary(BinaryOp, ValueId, ValueId),
-    /// Build a vector from float components, an integer vector from
-    /// `Int`s, a matrix from its column vectors, or a struct from its
-    /// fields; the instruction type says which.
+    /// Build a vector, integer vector, matrix (from columns) or struct
+    /// (from fields); the instruction type says which.
     Construct(Vec<ValueId>),
-    /// Extract a float component from a vector, a column from a matrix,
-    /// a field from a struct, or an element of an array at a constant
-    /// index.
+    /// Extract a vector component, matrix column, struct field or array
+    /// element at a constant index.
     Extract(ValueId, u32),
     /// The element of an array, the column of a matrix or the component
     /// of a vector at an `Int` index, clamped into range.
@@ -1122,8 +1079,7 @@ pub enum Op {
     Call(u32, Vec<ValueId>),
     /// A pure intrinsic.
     Intrinsic(Intrinsic, Vec<ValueId>),
-    /// Evaluate `then` or `otherwise` depending on a `Bool` and yield that
-    /// block's result. Only the taken block runs.
+    /// Yield `then` or `otherwise` by a `Bool`; only the taken block runs.
     If {
         /// The condition.
         condition: ValueId,
@@ -1132,9 +1088,8 @@ pub enum Op {
         /// Block taken otherwise.
         otherwise: Block,
     },
-    /// Evaluate the arm whose values hold the `Int` `scrutinee`, else
-    /// `otherwise`, and yield that block's result. Only that block runs.
-    /// No value appears in two arms.
+    /// Yield the arm whose values hold the `Int` `scrutinee`, else
+    /// `otherwise`; only that block runs. No value appears in two arms.
     Match {
         /// The `Int` matched.
         scrutinee: ValueId,
@@ -1143,17 +1098,15 @@ pub enum Op {
         /// The block taken when no arm holds the value.
         otherwise: Block,
     },
-    /// Run `body` at most `count` times, threading one carried value: it
-    /// starts as `init`, each iteration reads it through [`Op::Carried`] and
-    /// yields its replacement. Before each iteration `until` is evaluated
-    /// with the current carried value; when it holds, the loop stops. The
-    /// instruction's value is the final carried value.
+    /// Run `body` at most `count` times, threading one carried value from
+    /// `init`: each iteration reads it through [`Op::Carried`] and yields
+    /// its replacement. `until`, tested on the carried value before each
+    /// iteration, stops the loop when it holds. Yields the final value.
     Loop {
         /// Compile-time iteration bound, at most [`MAX_LOOP_COUNT`].
         count: u32,
-        /// A run-time count as `Int`, read once before the loop, when the
-        /// source gave one: the loop then runs `bound` times clamped to
-        /// `0..=count`.
+        /// An optional run-time `Int`, read once before the loop: the loop
+        /// runs its value clamped to `0..=count` times.
         bound: Option<ValueId>,
         /// Initial carried value.
         init: ValueId,
@@ -1189,10 +1142,9 @@ pub enum Op {
     /// What the wheel scrolled since the last evaluation, as `Vec2`.
     /// Context: `input.read`.
     Wheel,
-    /// A pad's axis pair by number, as `Vec2`: 0 the left stick, 1 the
-    /// right, 2 the two triggers. Sticks run `-1..1` with `y` away from
-    /// the person, triggers `0..1`; all zero without a pad.
-    /// Context: `input.read`.
+    /// A pad's axis pair by number as `Vec2`: 0 left stick, 1 right, 2 the
+    /// triggers. Sticks run `-1..1` (`y` away from the person), triggers
+    /// `0..1`; zero without a pad. Context: `input.read`.
     Stick(ValueId),
     /// The window's size in physical pixels as `Vec2`, zero by zero
     /// without a window. Context: `input.read`.
@@ -1213,70 +1165,56 @@ pub enum Op {
     /// (`Int`, `Vec2`, or `Vec3`; clamped), as its element type. Host call:
     /// `field.read`.
     At(u32, ValueId),
-    /// Part of one element of an input: what an `extract` or a
-    /// `subscript` of a whole element comes to when nothing needs the
-    /// whole. The path says which part, field by field and index by
-    /// index; a backend reads only the words it names, where reading
-    /// the element would have copied all of them. The element is the
-    /// one at the address, as [`Op::At`] takes it, or this element's
-    /// own where there is none, as [`Op::Sample`] reads it, which is
-    /// entry point only. Host call: `field.read`.
+    /// Part of one input element, named by a path; a backend reads only the
+    /// words it names. The element is the one at the address, as [`Op::At`]
+    /// takes it, or else this element's own, as [`Op::Sample`] reads it
+    /// (entry point only). Host call: `field.read`.
     Part {
         /// The input read, by manifest index.
         input: u32,
-        /// The address, of the input's index type, or `None` for this
-        /// element's own.
+        /// The address, of the input's index type; `None` for this element.
         at: Option<ValueId>,
         /// The way from the whole element to the part, outermost first.
         path: Vec<Step>,
     },
-    /// The element of an input at an address of the input's index type,
-    /// interpolated linearly between the neighbouring elements (bilinear
-    /// over a grid, trilinear over a volume; clamped at the edges), as
-    /// its element type. Only for inputs whose layout is all floats.
-    /// Host call: `field.read`.
+    /// The input element at an address of its index type, interpolated
+    /// linearly (bilinear on a grid, trilinear on a volume; clamped at the
+    /// edges). All-float layouts only. Host call: `field.read`.
     AtLinear(u32, ValueId),
     /// Number of elements of an input as `Int`. Host call: `field.read`.
     Count(u32),
     /// Extent of an input as its index type. Host call: `field.read`.
     Size(u32),
-    /// Writes a value at an address of the input's index type into a
-    /// memory input, in step order, later reads of it seeing the write; an
-    /// address outside the memory is dropped. Yields the value written.
-    /// Host call: `field.write`. Entry point of an ordered Kernel only.
+    /// Writes a value into a memory input at an address of its index type,
+    /// in step order; later reads see it, an address outside is dropped.
+    /// Yields the value. Host call: `field.write`. Ordered Kernel entry only.
     Put(u32, ValueId, ValueId),
-    /// Gives one more pair of a scatter: an address into the target and a
-    /// value of its element, as a struct of two fields laid out as the
-    /// pair the entry returns. The running element's pairs are the ones it
+    /// Emits one more scatter pair (target address, element value), laid
+    /// out as the pair the entry returns. An element's pairs are those it
     /// emits, in order, then the one it returns; an address outside the
-    /// target is dropped. Yields the pair. Host call: `field.write`. A
-    /// scatter's entry and what it calls only, under an order-free rule.
+    /// target is dropped. Yields the pair. Host call: `field.write`. Only in
+    /// a scatter's entry and its callees, under an order-free rule.
     Emit(ValueId),
-    /// Adds to the running element's work the iterations whose body ran
-    /// of the loop the operand names, which is the instruction right
-    /// before it, and yields them as `Int`. Placed by [`account`] and
-    /// never written; see [`Module::worst_work`] for when.
+    /// Adds the body iterations of the loop just before it (the operand) to
+    /// the element's work and yields them as `Int`. Placed only by
+    /// [`account()`]; see [`Module::worst_work`].
     Spend(ValueId),
-    /// Looks at the running element's work, as `Bool`: `true` once the
-    /// element has run more loop iterations than its Kernel's budget, or
-    /// its run more than the Host's bound, each a failure recorded where
-    /// it is seen, when the element stops its loops. Otherwise it hands
-    /// the run's total the blocks of [`WORK_BLOCK`] the element has
-    /// filled since it last looked. Placed by [`account`] and never
-    /// written.
+    /// Checks the element's work, as `Bool`: `true` (a failure, recorded
+    /// where seen; the element stops its loops) once it passes its Kernel's
+    /// budget or its run the Host's bound. Otherwise hands the run's total
+    /// the [`WORK_BLOCK`]s filled since the last check. Placed only by
+    /// [`account()`].
     Look,
 }
 
-/// One step from a whole value towards a part of it, as [`Op::Part`]
-/// takes them.
+/// One step from a whole value towards a part, as [`Op::Part`] takes it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Step {
     /// A field of a record, a column of a matrix or a component of a
     /// vector, by index: what [`Op::Extract`] takes.
     Field(u32),
-    /// The element of an array, the column of a matrix or the component
-    /// of a vector at an `Int`, clamped into range: what
-    /// [`Op::Subscript`] takes.
+    /// The array element, matrix column or vector component at a clamped
+    /// `Int`: what [`Op::Subscript`] takes.
     Index(ValueId),
 }
 
@@ -1285,16 +1223,15 @@ pub enum Step {
 pub struct PartLayout {
     /// The words before the part that are known without running.
     pub base: usize,
-    /// The index steps left to work out as it runs: the value holding
-    /// each index, how many there are to choose from, and how many
-    /// words one takes.
+    /// The index steps resolved at run time: each index's value, choice
+    /// count and word stride.
     pub steps: Vec<(ValueId, usize, usize)>,
     /// What the path names.
     pub ty: Type,
 }
 
-/// Where a path through an element of this type leads. `None` where the
-/// path does not fit the type, which validation refuses.
+/// Where a path through an element of this type leads; `None` when the
+/// path does not fit the type.
 pub fn part_layout(structs: &[StructDef], element: Type, path: &[Step]) -> Option<PartLayout> {
     let mut ty = element;
     let mut base = 0;
@@ -1327,9 +1264,8 @@ pub struct Instruction {
     pub op: Op,
 }
 
-/// A function: arguments, a top-level block, and results. Function `i` may
-/// only call functions with index less than `i`, which rules out recursion
-/// by construction.
+/// A function: arguments, a top-level block and results. Function `i`
+/// calls only functions below `i`, so none is recursive.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Function {
     /// Name for inspection and diagnostics.
@@ -1340,9 +1276,8 @@ pub struct Function {
     pub body: Vec<Instruction>,
     /// Values returned, in order.
     pub results: Vec<ValueId>,
-    /// Named values, for inspection: the `let` bindings in source order,
-    /// each with the value it names. No part of the program's meaning;
-    /// a trace reads them.
+    /// The `let` bindings in source order with the values they name, for
+    /// inspection and traces; they carry no meaning.
     pub bindings: Vec<(ValueId, String)>,
 }
 
@@ -1365,9 +1300,8 @@ impl Function {
         count(&self.body)
     }
 
-    /// The type of the instruction that defines `id`, however deep in the
-    /// function's blocks; none when an instruction does not define it (an
-    /// argument, or no value of the function).
+    /// The type of the instruction defining `id` at any depth; `None` for
+    /// an argument or a value the function lacks.
     pub fn type_of(&self, id: ValueId) -> Option<Type> {
         fn find(instructions: &[Instruction], id: ValueId) -> Option<Type> {
             instructions.iter().find_map(|instruction| {
@@ -1384,9 +1318,8 @@ impl Function {
         find(&self.body, id)
     }
 
-    /// The type of the function's first result, wherever it is defined:
-    /// what a caller of it receives. A result no instruction defines is
-    /// read as a `Float`.
+    /// The type of the first result, as a caller receives it; `Float` when
+    /// no instruction defines it.
     pub fn result_type(&self) -> Type {
         self.results
             .first()
@@ -1396,8 +1329,7 @@ impl Function {
 }
 
 impl Function {
-    /// Whether any value the function computes, argument or instruction,
-    /// matches `holds`.
+    /// Whether any argument or computed value matches `holds`.
     pub fn any_type(&self, holds: &dyn Fn(Type) -> bool) -> bool {
         fn walk(instructions: &[Instruction], holds: &dyn Fn(Type) -> bool) -> bool {
             instructions.iter().any(|instruction| {
@@ -1441,18 +1373,14 @@ fn block_work(instructions: &[Instruction], functions: &[u64]) -> u64 {
     })
 }
 
-/// The most loop iterations one run of a loop may take, its nested
-/// loops' included, and still only be looked at when it finishes. A loop
-/// adds the iterations it ran as it finishes, and an element looks at its
-/// work (its budget, and the blocks it owes the run) when it finishes;
-/// a loop that can run more than this also looks at the start of each of
-/// its iterations. An innermost loop never looks, and pays one addition;
-/// an element runs at most this far past a bound before it is stopped.
+/// The most iterations one run of a loop, nested ones included, may take
+/// while its work is checked only at its end. A loop that can run more
+/// also checks at the start of each iteration, so an element runs at most
+/// this far past a bound. An innermost loop costs one addition.
 pub const LOOK_WORK: u64 = 1 << 20;
 
-/// Whether a loop of `count` iterations looks at its element's work at
-/// the start of each, `functions` the most one call of each function may
-/// run ([`Module::functions_work`]); see [`LOOK_WORK`].
+/// Whether a loop of `count` iterations checks its element's work at each
+/// iteration; `functions` is [`Module::functions_work`]. See [`LOOK_WORK`].
 pub fn loop_looks(count: u32, until: Option<&Block>, body: &Block, functions: &[u64]) -> bool {
     let inner = block_work(&body.body, functions)
         .saturating_add(until.map_or(0, |until| block_work(&until.body, functions)));
@@ -1481,11 +1409,9 @@ pub struct Module {
 }
 
 impl Module {
-    /// The most loop iterations one element can run, whatever its inputs:
-    /// every loop at its bound (a count known when the Kernel compiled,
-    /// or [`MAX_LOOP_COUNT`] for one read at run time), nested loops
-    /// multiplied, the longer arm of a branch, calls counted where they
-    /// are made. Saturates.
+    /// The most loop iterations one element can run: every loop at its bound
+    /// ([`MAX_LOOP_COUNT`] for a run-time count), nested loops multiplied,
+    /// the longer branch arm, calls counted where made. Saturates.
     pub fn worst_work(&self) -> u64 {
         let per_function = self.functions_work();
         std::iter::once(&self.entry)
@@ -1496,8 +1422,7 @@ impl Module {
             .unwrap_or(0)
     }
 
-    /// Whether the module's work is accounted in it ([`account`]): an
-    /// element looks when it finishes.
+    /// Whether [`account()`] has placed the module's work checks.
     pub fn accounted(&self) -> bool {
         std::iter::once(&self.entry)
             .chain(&self.merge)
@@ -1516,25 +1441,20 @@ impl Module {
     }
 
     /// Whether a backend counts this module's work as it runs: only when
-    /// its worst case can pass its budget, or fill a [`WORK_BLOCK`] of
-    /// its run's total. A module whose elements run fewer iterations,
-    /// which is most of them, runs uncounted everywhere.
+    /// its worst case can pass its budget or fill a [`WORK_BLOCK`].
     pub fn counts_work(&self) -> bool {
         let worst = self.worst_work();
         worst > u64::from(self.manifest.budget) || worst >= u64::from(WORK_BLOCK)
     }
 
-    /// Whether the module holds a 64-bit value anywhere: a port, a
-    /// parameter, a struct's field, or a value any function computes.
-    /// A backend without 64-bit arithmetic asks this before it takes
-    /// the module.
+    /// Whether any port, parameter, struct field or computed value is 64-bit;
+    /// a backend without 64-bit arithmetic refuses such a module.
     pub fn holds_64bit(&self) -> bool {
         self.holds(Type::Double) || self.holds(Type::Long)
     }
 
-    /// Whether the module holds a value made of `scalar` anywhere: a
-    /// port, a parameter, a struct's field, or a value any function
-    /// computes.
+    /// Whether any port, parameter, struct field or computed value is made
+    /// of `scalar`.
     pub fn holds(&self, scalar: Type) -> bool {
         let made_of = |ty: Type| ty.scalar() == Some(scalar);
         let kind = scalar_kind(scalar);

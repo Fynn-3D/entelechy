@@ -228,8 +228,7 @@ pub(super) enum Instr {
         n: usize,
     },
     /// Two float operations as one: `g(f(a, b), c)`, or `g(c, f(a, b))`
-    /// with `flip`. A value a single operation reads once never reaches
-    /// the frame, and one dispatch does the work of two.
+    /// with `flip`, in one dispatch; the intermediate stays off the frame.
     FBin2 {
         f: F2,
         g: F2,
@@ -463,11 +462,10 @@ pub(super) enum Instr {
         kind: Address,
         n: usize,
     },
-    /// `dst` = the `n` words of one element of `input` that a path
-    /// through the element names: `base` words in, then each index
-    /// step, the index clamped into its count and taken as that many
-    /// words. The element is the one at `address`, or this element's
-    /// own where there is none, as `Sample` reads it.
+    /// `dst` = the `n` words a path names inside one element of `input`:
+    /// `base` words in, then per index step the clamped index times its
+    /// stride. The element is at `address`, or this element's own (as
+    /// `Sample` reads it) without one.
     Part {
         dst: usize,
         input: usize,
@@ -491,20 +489,18 @@ pub(super) enum Instr {
         value: usize,
         n: usize,
     },
-    /// Gives the scatter one more pair: the pair's words, kept by the
-    /// machine in the order they come, and the instruction's own value.
+    /// Appends the pair's words to the machine's emitted pairs, in order.
     Emit {
         dst: usize,
         pair: usize,
         n: usize,
     },
-    /// Adds the iterations whose body ran, of the loop just finished, to
-    /// the element's work.
+    /// Adds the finished loop's run iterations to the element's work.
     Spend {
         dst: usize,
     },
-    /// Looks at the element's work: a failure past a bound, the blocks
-    /// filled handed to the run.
+    /// Checks the element's work: fails past a bound, and hands filled
+    /// blocks to the run.
     Look {
         dst: usize,
     },

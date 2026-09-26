@@ -1,5 +1,5 @@
-//! A request as its operation reads it: the fields it names, and one way
-//! of saying that one is missing or of the wrong kind.
+//! A request as its operation reads it, with one error form for a
+//! missing or mistyped field.
 
 use orla_kernel::KernelId;
 use serde_json::Value as Json;
@@ -52,8 +52,8 @@ impl<'a> Request<'a> {
             .ok_or_else(|| failure(format!("`{name}` must be a string")))
     }
 
-    /// The Kernel it names: in `kernel`, or, for clients from before the
-    /// field had its own name, in `id`, which is also the request's own.
+    /// The Kernel it names, in `kernel`, else in `id` (which is also the
+    /// request's own id).
     pub(crate) fn kernel(&self) -> Result<KernelId, Json> {
         let named = self
             .json

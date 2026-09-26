@@ -1,7 +1,6 @@
-//! Operations that create: the scene document written, Kernels prepared,
-//! published and retired, parameters set. Publication is checked against
-//! the generation the agent expects, and a rejected change leaves the
-//! running version alive.
+//! Operations that create: writing the scene, preparing, publishing and
+//! retiring Kernels, setting parameters. A publish is checked against the
+//! expected generation; a rejected change leaves the running version.
 
 use orla_kernel::{Expect, Generation};
 use serde_json::{Value as Json, json};
@@ -13,18 +12,17 @@ use crate::wire::{
     diagnostic_json, events_json, failure, manifest_json, value_from_json, value_json,
 };
 
-/// Replaces the scene document and syncs: checked first, so a text that
-/// would be rejected never reaches the disk, and with `expect`, only if
-/// the document is still the version the agent read. The new text is
-/// given whole (`text`), or as `edits` of the one on disk, each naming a
-/// statement or a node's member and only its bytes changing.
+/// Replaces the scene document and syncs. The text is checked before it
+/// reaches disk; with `expect`, the document must still be that version.
+/// The text comes whole (`text`) or as `edits` of the one on disk, each
+/// changing only the bytes of the statement or node member it names.
 pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, Json> {
     compose_with(session, request, true)
 }
 
-/// [`compose`], answered once its scene stands when `settle` says so;
-/// otherwise with what the sync said, the scene perhaps still waiting for
-/// its Kernels ([`crate::Answers`] answers it once it lands).
+/// [`compose`]; with `settle`, answered once the scene lands, otherwise
+/// with the sync's events while the scene may still wait for its Kernels
+/// ([`crate::Answers`] answers it once it lands).
 pub(crate) fn compose_with(
     session: &mut Session,
     request: &Request,
@@ -59,10 +57,9 @@ pub(crate) fn compose_with(
         }
         _ => request.text("text")?,
     };
-    // Rejected as a sync would reject it, the document on disk, and so
-    // the scene running, are left as they were; replaced, it is replaced
-    // whole, so a reader, the session's own watcher included, never sees
-    // half of it.
+    // A text a sync rejects leaves the disk and the running scene as they
+    // are; an accepted one replaces the file whole, so every reader,
+    // the session's watcher included, sees one version.
     if let Err(why) = session
         .write_scene(&text)
         .map_err(|e| failure(e.to_string()))?
@@ -72,8 +69,8 @@ pub(crate) fn compose_with(
             "version": current,
         }));
     }
-    // The scene this reads is this request's change, answered whole: its
-    // Kernels published and the scene replaced, or refused.
+    // The scene read here is this request's change: its Kernels published
+    // and the scene replaced, or refused, as one.
     session.claim_scene();
     let events = if settle {
         session.sync_settled()
@@ -86,10 +83,10 @@ pub(crate) fn compose_with(
     }))
 }
 
-/// `edits` as the scene takes them: each an object naming its target by
-/// its kind (`node`, `output`, `param`, `input`, `kernel`, `struct`,
-/// `type`, `fn`, `use`), with `member` for a member of a node's block,
-/// and `text`, the statement or member whole, or null to remove it.
+/// `edits` as the scene takes them: each object names its target by kind
+/// (`node`, `output`, `param`, `input`, `kernel`, `struct`, `type`, `fn`,
+/// `use`), optionally a node's `member`, and `text`, the whole statement
+/// or member, or null to remove it.
 fn edits_from_json(edits: &Json) -> Result<Vec<orla_scene::edit::Edit>, Json> {
     use orla_scene::edit::{Edit, StatementKind, Target};
     const KINDS: [(&str, StatementKind); 9] = [
@@ -158,9 +155,8 @@ fn edits_from_json(edits: &Json) -> Result<Vec<orla_scene::edit::Edit>, Json> {
         .collect()
 }
 
-/// A document's version: a digest of its text
-/// ([`orla_session::history::digest`]), the same in every build and on
-/// every platform.
+/// A document's version: the digest of its text
+/// ([`orla_session::history::digest`]), stable across builds and platforms.
 pub(crate) fn document_version(text: &str) -> String {
     format!("{:016x}", orla_session::history::digest(text))
 }
@@ -201,8 +197,8 @@ pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, 
     }
 }
 
-/// A `publish` begun: its source compiled, and prepared off the frame
-/// where the session prepares replacements so.
+/// A begun `publish`: its source compiled, and prepared off the frame
+/// where the session does so.
 pub(crate) fn publish_begin(
     session: &mut Session,
     request: &Request,
@@ -256,8 +252,8 @@ pub(crate) fn param(session: &mut Session, request: &Request) -> Result<Json, Js
     let given = value_from_json(request.field("value")?)?;
     session.set_param(&name, given).map_err(failure)?;
     let value = session.params().get(&name).cloned().expect("just set");
-    // A param that sizes the graph lowers the document again now, as
-    // this request's change.
+    // A param that sizes the graph lowers the document now, as this
+    // request's change.
     session.claim_scene();
     let events = session.sync();
     Ok(json!({ "name": name, "value": value_json(&value), "events": events_json(&events) }))

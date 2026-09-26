@@ -1,8 +1,7 @@
-//! The Player's frame with no window (`orla_session::play`): what every
-//! interface that plays a scene shares. The keys' meanings, the preview,
-//! the line of frame data, the pointer found in the picture, which
-//! output is the sound, a failure said once, and a replay played to its
-//! end, each held here without a device.
+//! The Player's frame without a window (`orla_session::play`), shared by
+//! every interface that plays a scene: keys, preview, frame-data line,
+//! pointer placement, the sound output, failures reported once, and
+//! replays played to their end.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,8 +42,8 @@ fn open(dir: &Path) -> Session {
     session
 }
 
-/// A clock that moves a second each time it is read, so a replay's
-/// times come at once.
+/// A clock that advances a second per read, so a replay's times come at
+/// once.
 fn racing() -> f64 {
     static TICKS: AtomicU64 = AtomicU64::new(0);
     TICKS.fetch_add(1, Ordering::Relaxed) as f64
@@ -74,10 +73,10 @@ fn red(session: &mut Session, picture: orla_kernel::Handle) -> f32 {
     f32::from_bits(session.runtime().host().element(picture, 0).unwrap()[0])
 }
 
-/// The picture is the first grid of pixels and the sound the first rows
-/// of floats; F5 starts the state again; a letter reaches the scene's
-/// `key`; Tab shows the nodes one by one and then the picture again;
-/// F10 shows the line of frame data; Escape asks the device to stop.
+/// The picture is the first pixel grid and the sound the first float
+/// rows; F5 restarts the state; a letter reaches the scene's `key`; Tab
+/// cycles the nodes and back to the picture; F10 shows the frame-data
+/// line; Escape asks the device to stop.
 #[test]
 fn the_keys_mean_what_they_mean_in_every_interface() {
     let dir = scratch("keys");
@@ -133,7 +132,7 @@ fn the_keys_mean_what_they_mean_in_every_interface() {
     assert_eq!(play.key(&mut session, "Escape", true), Some(Asked::Stop));
 }
 
-/// The pointer is found in the picture through where the device said it
+/// The pointer is placed in the picture from where the device says it
 /// landed, clamped to its edges.
 #[test]
 fn the_pointer_is_found_in_the_picture_where_it_landed() {
@@ -156,7 +155,7 @@ fn the_pointer_is_found_in_the_picture_where_it_landed() {
         [0.0, 0.0],
         "the letterbox clamps"
     );
-    // Where it was, when the device cannot say this frame.
+    // The last place, when the device cannot say this frame.
     play.placed(None, (4, 2), "window not ready", false, 0.0);
     play.pointer(60.0, 25.0);
     assert_eq!(play.context(VIEW).input.pointer, [2.0, 1.0]);
@@ -167,8 +166,7 @@ fn the_pointer_is_found_in_the_picture_where_it_landed() {
     assert_eq!(context.input.wheel, [0.0, 2.0]);
 }
 
-/// A failure every frame is said once, and a frame that works again says
-/// so.
+/// A failure every frame is reported once, and recovery is reported.
 #[test]
 fn a_failure_is_said_once() {
     let dir = scratch("failure");
@@ -195,9 +193,8 @@ fn a_failure_is_said_once() {
     assert!(play.said().iter().any(|line| line == "evaluating again"));
 }
 
-/// A replay drives the scene at its own times, its checks run as they
-/// come, and at its end what it observed is said and the person has the
-/// scene.
+/// A replay runs its checks as they come; at its end its observations are
+/// reported and the person has the scene.
 #[test]
 fn a_replay_plays_to_its_end_and_says_what_it_saw() {
     let replay_path =
@@ -224,8 +221,8 @@ fn a_replay_plays_to_its_end_and_says_what_it_saw() {
     );
 }
 
-/// A press shorter than a frame is seen by the next frame, and released
-/// after it: a quick hand is not lost between two frames.
+/// A press shorter than a frame is seen by the next frame and released
+/// after it.
 #[test]
 fn a_press_lasts_a_frame_however_quick() {
     let dir = scratch("quick");
@@ -251,16 +248,15 @@ fn a_press_lasts_a_frame_however_quick() {
         !after.pointer_down && !after.key(65),
         "and the next one sees it let go"
     );
-    // A press held across frames is released when it is let go.
+    // A press held across frames is released when let go.
     play.button(0, true);
     shown(&mut play, &mut session);
     play.button(0, false);
     assert!(!play.context(VIEW).input.pointer_down);
 }
 
-/// A placed graph's node carries its place in its id (`fx.gray`), so a
-/// replay naming its port means the last dot: every step that names a
-/// port reads it the same way.
+/// A placed graph's node id carries its place (`fx.gray`), so every
+/// replay step naming a port takes it after the last dot.
 #[test]
 fn a_placed_nodes_port_is_what_follows_the_last_dot() {
     use orla_session::replay::{Step, parse};

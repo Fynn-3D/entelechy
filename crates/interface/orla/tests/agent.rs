@@ -1,25 +1,12 @@
-//! Agents at work, live: not a record played back but a client that
-//! decides each request from the answer to the one before, through
-//! `orla serve` and nothing else.
+//! Live agents: clients choosing each request from the last answer,
+//! through `orla serve` alone and no Rust API of Orla's.
 //!
-//! One is given the running picture inverted as its goal, and a first
-//! draft of a Kernel with the slips a writer makes. It finds what the
-//! scene outputs, repairs the draft from the positioned diagnostics and
-//! `help`'s `similar` alone, publishes against the generation it expects,
-//! is refused where it should be and sees the running Kernel survive,
-//! composes the Kernel into the scene, and holds the picture to the goal.
+//! One repairs a draft with typos from diagnostics and `help`, publishes,
+//! composes it into the scene, and holds the picture to its inverse.
 //!
-//! The other changes what a running state carries. It finds the state in
-//! the graph, learns its fields by tracing an element, runs until a value
-//! says to stop, and publishes a migration whose first draft takes the
-//! wrong layout. The evaluation refuses it, naming the node and the
-//! migration, and keeps the state; the agent reads the state's layout,
-//! repairs the migration from it, and holds the count to going on from
-//! where it was.
-//!
-//! Any agent in any language speaks this; the test is written in Rust
-//! because the workspace's tests are, and it touches no Rust API of
-//! Orla's.
+//! The other changes a running state's layout: a first migration with the
+//! wrong layout is refused and the state kept; repaired from the state's
+//! layout, the count goes on.
 
 use std::io::{BufRead, BufReader, Lines, Write};
 use std::path::{Path, PathBuf};
@@ -55,8 +42,7 @@ impl Agent {
         }
     }
 
-    /// One request, and its answer: `Ok` with what came back, or `Err`
-    /// with the error object.
+    /// One request: `Ok` with its answer, or `Err` with the error object.
     fn ask(&mut self, op: &str, fields: Json) -> Result<Json, Json> {
         let mut request = fields;
         request["op"] = json!(op);
@@ -77,7 +63,7 @@ impl Agent {
         }
     }
 
-    /// What a node holds now: its layout as a file spells it, and its words.
+    /// A node's current layout, as a file spells it, and its words.
     fn state(&mut self, node: &str) -> (String, Vec<u32>) {
         let read = self
             .ask("read", json!({ "node": node }))
@@ -117,7 +103,7 @@ impl Drop for Agent {
     }
 }
 
-/// The word of `source` at a diagnostic's line and column, both from one.
+/// The word of `source` at a diagnostic's 1-based line and column.
 fn word_at(source: &str, line: u64, column: u64) -> (usize, String) {
     let start: usize = source
         .lines()
@@ -133,10 +119,9 @@ fn word_at(source: &str, line: u64, column: u64) -> (usize, String) {
     (start, word)
 }
 
-/// Prepares `draft` until it compiles, each time taking the word the
-/// diagnostic points at, asking `help` what it might have meant, and
-/// putting the first suggestion in its place. Returns the source that
-/// compiled and the repairs made, as `(wrong, right)`.
+/// Prepares `draft` until it compiles, replacing the word each diagnostic
+/// points at with `help`'s first suggestion. Returns the compiled source
+/// and the repairs as `(wrong, right)`.
 fn repair(agent: &mut Agent, draft: &str) -> (String, Vec<(String, String)>) {
     let mut source = draft.to_owned();
     let mut repairs = Vec::new();
@@ -170,8 +155,8 @@ fn repair(agent: &mut Agent, draft: &str) -> (String, Vec<(String, String)>) {
     panic!("the draft did not compile after eight repairs: {repairs:?}");
 }
 
-/// The Kernel the agent means to write, with the slips of a first draft:
-/// a misspelt `sample` and a misspelt `clamp`, twice.
+/// The intended Kernel with first-draft typos: a misspelt `sample` and a
+/// misspelt `clamp`, twice.
 const DRAFT: &str = "\
 // The picture with every colour turned to its opposite.
 kernel agent.invert@1 {
@@ -208,8 +193,7 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
     let scene = scene("grayscale");
     let mut agent = Agent::start(&scene);
 
-    // Look before touching: the versions it speaks, and what the scene
-    // shows the person.
+    // The versions it speaks, and what the scene shows.
     let status = agent.ask("status", json!({})).unwrap();
     assert!(status["versions"]["api"].is_u64(), "{status}");
     let graph = agent.ask("graph", json!({})).unwrap();
@@ -222,7 +206,7 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
     let shown = output["source"].as_str().unwrap().to_owned();
     let before = agent.picture("result");
 
-    // An operation it guessed at is answered with the ones there are.
+    // An unknown operation is answered with the ones there are.
     let guess = agent.ask("compile", json!({})).unwrap_err();
     assert!(
         guess["operations"]
@@ -250,8 +234,8 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
         .unwrap();
     let generation = published["generation"].as_u64().unwrap();
 
-    // A second writer expecting nothing is refused, and a broken
-    // replacement leaves the running version where it was.
+    // A second writer expecting nothing is refused; a broken replacement
+    // leaves the running version.
     agent
         .ask("publish", json!({ "source": source, "expect": "absent" }))
         .expect_err("publishing over a Kernel that exists, expecting none, is refused");
@@ -268,7 +252,7 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
         .expect("the published Kernel is running");
     assert_eq!(running["generation"].as_u64(), Some(generation));
 
-    // Compose it between what the scene showed and the person.
+    // Compose it between the scene's picture and its output.
     let document = agent.ask("document", json!({})).unwrap();
     let text = document["text"].as_str().unwrap();
     let line = format!("output result <- {shown};");
@@ -294,7 +278,7 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
         "{events}"
     );
 
-    // Hold the picture to the goal: every colour turned to its opposite.
+    // The goal: every colour turned to its opposite.
     let after = agent.picture("result");
     assert_eq!(after.len(), before.len());
     let mut changed = false;
@@ -321,8 +305,8 @@ fn scalar_type(letter: &str) -> &'static str {
     }
 }
 
-/// A migration from the state as the agent believes it is laid out,
-/// `fields` of `(name, type)`, to the same fields and a `doubled` Int.
+/// A migration from the believed layout, `fields` of `(name, type)`, to
+/// the same fields and a `doubled` Int.
 fn widen(fields: &[(String, String)], generation: &str) -> String {
     let old: Vec<String> = fields
         .iter()
@@ -357,7 +341,7 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
     let scene = scene("migrate");
     let mut agent = Agent::start(&scene);
 
-    // Find the state: a node whose port reads what it committed before.
+    // The state: a node whose port reads what it committed before.
     let graph = agent.ask("graph", json!({})).unwrap();
     let (node, port, kernel) = graph["nodes"]
         .as_array()
@@ -379,8 +363,7 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
         })
         .expect("the scene carries state");
 
-    // Learn what the state holds by tracing one element through its
-    // Kernel: the result's fields, by name.
+    // The state's fields, by name, from tracing one element.
     let manifest = agent.ask("kernel", json!({ "kernel": kernel })).unwrap();
     let element = manifest["outputs"][0]["type"]
         .as_str()
@@ -417,7 +400,7 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
     let (layout, words) = agent.state(&node);
     assert_eq!((layout.as_str(), words.as_slice()), ("i", &[5][..]));
 
-    // The new step carries `doubled` too: the running source, edited.
+    // The new step, the running source edited, carries `doubled`.
     let step = manifest["source"].as_str().unwrap();
     let counted = "Tally { count: t.count + 1 }";
     assert!(
@@ -435,8 +418,8 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
             "Tally { count: t.count + 1, doubled: (t.count + 1) * 2 }",
         );
 
-    // A first draft of the migration types the fields from the trace's
-    // JSON, where every number looks alike: it takes each as a Float.
+    // The first draft types every field as Float, as the trace's JSON
+    // shows every number alike.
     let guessed: Vec<(String, String)> = names
         .iter()
         .map(|name| (name.clone(), "Float".to_owned()))
@@ -460,8 +443,8 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
     );
     agent.ask("compose", json!({ "text": composed })).unwrap();
 
-    // The evaluation refuses the draft, says whose state and which
-    // migration, and keeps the state as it was.
+    // The evaluation refuses the draft, naming state and migration, and
+    // keeps the state.
     let refused = agent
         .ask("evaluate", json!({ "time": 1.0 }))
         .expect_err("a migration that takes the wrong layout fails the evaluation");
@@ -475,7 +458,7 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
         "a refused migration leaves the state as it was"
     );
 
-    // Repair from the state itself: its layout says what each field is.
+    // Repair from the state's layout.
     let typed: Vec<(String, String)> = names
         .iter()
         .zip(layout.split(','))
@@ -497,8 +480,7 @@ fn an_agent_changes_what_a_running_state_carries_and_keeps_it() {
         "{migrated}"
     );
 
-    // The goal: the count went on from where it was, never restarted, and
-    // carries its double.
+    // The count went on from where it was, and carries its double.
     let (layout, words) = agent.state(&node);
     assert_eq!((layout.as_str(), words.as_slice()), ("i,i", &[6, 12][..]));
     agent.ask("advance", json!({ "frames": 3 })).unwrap();

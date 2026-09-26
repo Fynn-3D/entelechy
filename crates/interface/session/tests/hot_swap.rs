@@ -67,7 +67,7 @@ fn publish_is_an_atomic_swap_that_keeps_pinned_versions_valid() {
     assert_eq!(second.generation(), Generation(2));
     assert_eq!(runtime.kernel(&id()).unwrap().generation(), Generation(2));
 
-    // The old version is still executable by whoever pinned it.
+    // The old version still executes for whoever pinned it.
     assert_eq!(run(&mut runtime, &first, input), [0.25, 0.5, 0.75, 1.0]);
     assert_eq!(run(&mut runtime, &second, input), [1.0, 0.5, 0.75, 1.0]);
     assert_eq!(first.source(), source("c.r"));
@@ -128,15 +128,15 @@ fn execution_is_scoped_to_the_manifest_capabilities() {
 fn background_preparation_resolves_through_tickets() {
     let mut runtime = cpu(64);
     let input = runtime.host_mut().create_image(1, 1).unwrap();
-    // Inline: a ticket is ready as soon as it is issued.
+    // Inline: a ticket is ready when issued.
     let module = orla_compiler::compile(&source("0.25")).unwrap();
     let ticket = runtime.prepare_later(module, source("0.25"));
     let candidate = runtime.poll(ticket).unwrap().unwrap();
     assert_eq!(candidate.id(), &id());
     assert!(runtime.poll(ticket).is_none(), "a ticket is redeemed once");
 
-    // With a worker: the running version keeps executing until the
-    // replacement is collected and published.
+    // With a worker: the running version executes until the replacement
+    // is collected and published.
     runtime.set_background(true);
     assert!(runtime.background());
     let running = load(&mut runtime, &source("0.5"));
@@ -157,8 +157,8 @@ fn background_preparation_resolves_through_tickets() {
         .unwrap();
     assert_eq!(run(&mut runtime, &published, input)[0], 0.75);
 
-    // A discarded ticket never surfaces, and stopping the worker keeps
-    // what it finished.
+    // A discarded ticket never surfaces; stopping the worker keeps what it
+    // finished.
     let module = orla_compiler::compile(&source("0.1")).unwrap();
     let dropped = runtime.prepare_later(module, source("0.1"));
     runtime.discard(dropped);
@@ -258,8 +258,8 @@ fn cpu(budget_words: usize) -> orla_kernel::Runtime {
     orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
 }
 
-/// Compiles and publishes a Kernel as a session does: the runtime takes
-/// validated IR, and compiling is the caller's step.
+/// Compiles and publishes a Kernel as a session does: compiling is the
+/// caller's step, the runtime takes validated IR.
 fn load(
     runtime: &mut orla_kernel::Runtime,
     source: &str,
@@ -278,7 +278,7 @@ fn prepare(
 }
 
 /// A backend that loses the last Field it makes: a broken contract the
-/// runtime must refuse to pass on.
+/// runtime refuses to pass on.
 struct Lossy;
 
 impl orla_kernel::Backend for Lossy {
@@ -344,8 +344,7 @@ fn a_backend_that_answers_with_the_wrong_count_of_fields_is_refused() {
     );
 }
 
-/// A backend that panics on a module containing `PANIC`: a backend bug
-/// a live session must survive.
+/// A backend that panics on a module containing `PANIC`.
 struct Brittle;
 
 impl orla_kernel::Backend for Brittle {
@@ -374,10 +373,9 @@ impl orla_kernel::Backend for Brittle {
     }
 }
 
-/// A backend that panics preparing a Kernel rejects it, inline or on the
-/// worker: the worker answers the ticket and goes on preparing, and the
-/// Kernel running is untouched. (A panic on the worker used to end it
-/// without an answer, and the publish waited for ever.)
+/// A backend panic while preparing rejects the Kernel, inline or on the
+/// worker: the worker answers the ticket and goes on, and the running
+/// Kernel is untouched.
 #[test]
 fn a_backend_that_panics_preparing_rejects_the_kernel_and_the_worker_lives() {
     let mut runtime = Runtime::with_backend(1 << 12, Box::new(Brittle));
@@ -423,8 +421,8 @@ fn compile_ok(source: &str) -> orla_kernel::Validated {
     orla_compiler::compile(source).unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// Candidates published as one change are checked before any is swapped
-/// in: one stale expectation, and none is published.
+/// Candidates published as one change are all checked before any swaps:
+/// one stale expectation, and none is published.
 #[test]
 fn publishing_several_is_all_or_nothing() {
     let mut runtime = cpu(64);
@@ -467,10 +465,8 @@ fn publishing_several_is_all_or_nothing() {
     );
 }
 
-/// What a Kernel requires is granted by whoever runs the runtime, not
-/// taken: one that requires a capability not granted is refused when it
-/// is prepared, inline or on the worker, and the version running goes
-/// on; one that requires only what is granted is taken.
+/// A Kernel requiring an ungranted capability is refused at prepare,
+/// inline or on the worker; the running version goes on.
 #[test]
 fn a_kernel_requiring_what_is_not_granted_is_refused_and_the_running_one_stays() {
     let mut runtime = cpu(64);

@@ -1,6 +1,5 @@
-//! How long the device took: its own clock where it has one, else the
-//! call and the wait after it, and the floor below which a time says
-//! nothing.
+//! Device time: the device's own clock where it answers, else the call and
+//! its wait, and the floor below which a time says nothing.
 
 use super::*;
 
@@ -9,10 +8,10 @@ use super::*;
 pub(crate) mod clock {
     /// Nobody has asked yet.
     pub const UNTRIED: u8 = 0;
-    /// The clock answered, so a profile prints what the device says.
+    /// The clock answered: a profile prints the device's time.
     pub const ANSWERED: u8 = 1;
-    /// The driver took the queries and resolved nothing, so a profile
-    /// prints the call and its wait, and nothing asks again.
+    /// The driver resolved nothing: a profile prints the call and its wait,
+    /// and nothing asks again.
     pub const SILENT: u8 = 2;
 }
 
@@ -23,9 +22,9 @@ impl GpuBackend {
         self.measured.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// What the device took over the last measured execution, by its own
-    /// clock; `None` when nothing was measured or the adapter has no
-    /// timestamps. Taken once.
+    /// The device time of the last measured execution, by its own clock;
+    /// `None` when nothing was measured or the adapter has no timestamps.
+    /// Taken once.
     pub fn last_device_time(&self) -> Option<std::time::Duration> {
         let nanos = self
             .last_nanos
@@ -33,10 +32,9 @@ impl GpuBackend {
         (nanos != u64::MAX).then(|| std::time::Duration::from_nanos(nanos))
     }
 
-    /// The query set a measured call writes its passes' edges into, or
-    /// `None` when nothing is being measured or the adapter has no
-    /// timestamps. Made before the encoder so the opening timestamp is
-    /// its first command.
+    /// The query set a measured call writes its passes' edges into; `None`
+    /// when nothing is measured or the adapter has no timestamps. Made before
+    /// the encoder so the opening timestamp is its first command.
     pub(crate) fn timing_set(&self, count: u32) -> Option<wgpu::QuerySet> {
         let worth_asking = self.clock.load(std::sync::atomic::Ordering::Relaxed) != clock::SILENT;
         (self.measured() && self.timestamps && worth_asking).then(|| {
@@ -48,8 +46,8 @@ impl GpuBackend {
         })
     }
 
-    /// Copies a call's timestamps out where the Host can read them,
-    /// added to the same encoder so they cost no submission of their own.
+    /// Copies a call's timestamps to Host-readable memory, in the same
+    /// encoder, with no submission of its own.
     pub(crate) fn resolve_timing(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -76,10 +74,9 @@ impl GpuBackend {
         })
     }
 
-    /// Waits for a measured call and records what the device's own clock
-    /// said about it, from the first timestamp to the last. Does nothing
-    /// when the run is not being measured: a submission a later node
-    /// reads needs no wait, since one queue runs in order.
+    /// Waits for a measured call and records its device time, first timestamp
+    /// to last. An unmeasured run returns at once: one queue runs in order,
+    /// so a later node's submission needs no wait.
     pub(crate) fn settle_measured(
         &self,
         submission: wgpu::SubmissionIndex,
@@ -104,9 +101,8 @@ impl GpuBackend {
             let period = self.queue.get_timestamp_period() as f64;
             drop(bytes);
             read.unmap();
-            // Some drivers take the queries and write nothing (Metal
-            // through wgpu, at the time of writing): then there is no
-            // device time and the wait is the answer.
+            // A driver may take the queries and write nothing: then the wait is
+            // the answer.
             let (answer, kind) = if end > begin {
                 (((end - begin) as f64 * period) as u64, clock::ANSWERED)
             } else {
@@ -120,12 +116,9 @@ impl GpuBackend {
         }
     }
 
-    /// What a measured execution's wait costs when there is nothing to
-    /// wait for: one empty submission polled to completion, the least of
-    /// sixteen. Every node a profile times carries exactly this before
-    /// it does any work of its own, so a profile that does not take it
-    /// off reports a tenth of a millisecond for a node that writes four
-    /// kibibytes.
+    /// The cost of a measured execution's wait with nothing to wait for: one
+    /// empty submission polled to completion, the least of sixteen. Every
+    /// node a profile times carries it before its own work.
     pub fn wait_floor(&self) -> std::time::Duration {
         let mut least = std::time::Duration::MAX;
         for _ in 0..16 {
@@ -142,13 +135,10 @@ impl GpuBackend {
         least
     }
 
-    /// Whether the device's own clock has answered a measured
-    /// execution. The adapter's feature bit is not the answer: Metal
-    /// through wgpu takes the queries and resolves them to zeros, so
-    /// this is set the first time a resolve comes back with two
-    /// different numbers in it. Until then a measured run's numbers are
-    /// the call and its wait, not the work, and whatever prints them
-    /// has to say so.
+    /// Whether the device's own clock has answered a measured execution: set
+    /// the first time a resolve returns two different numbers, since a driver
+    /// may take the queries and resolve zeros. Until then a measured run's
+    /// numbers are the call and its wait, and whatever prints them says so.
     pub fn device_clock_answered(&self) -> bool {
         self.clock.load(std::sync::atomic::Ordering::Relaxed) == clock::ANSWERED
     }

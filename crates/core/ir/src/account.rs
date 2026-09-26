@@ -1,11 +1,9 @@
-//! A module's work, accounted in its own IR. Every loop is followed by
-//! an [`Op::Spend`] of the iterations whose body ran; every element
-//! looks ([`Op::Look`]) when it finishes, and so does every iteration of
-//! a loop that can run more than [`crate::LOOK_WORK`] by itself, which leaves
-//! the loop once the element must stop. The rule of where work is
-//! counted and where it is looked at is written here once, and a backend
-//! runs it as it runs any other operation: it implements what a spend
-//! and a look are, never where they go.
+//! A module's work, accounted in its own IR. Every loop is followed by an
+//! [`Op::Spend`] of its body's iterations; every element checks
+//! ([`Op::Look`]) when it finishes, as does every iteration of a loop that
+//! can run more than [`crate::LOOK_WORK`], leaving once the element must
+//! stop. Placement is decided here; a backend implements only what a spend
+//! and a look do.
 
 use crate::optimize::renumbered;
 use crate::{
@@ -13,11 +11,9 @@ use crate::{
     validate,
 };
 
-/// The module with its work accounted, when it counts its work
-/// ([`Module::counts_work`]); the module as it is otherwise. A module
-/// already accounted is given back as it is. The accounted module is
-/// validated again: a rewrite that broke it is an error the caller
-/// reports, never a panic on the thread that prepares a Kernel.
+/// The module with its work accounted when [`Module::counts_work`] and not
+/// yet accounted; otherwise unchanged. The result is validated again, and a
+/// broken rewrite is an error for the caller to report.
 pub fn account(module: &Validated) -> Result<Validated, crate::ValidationError> {
     if !module.counts_work() || module.accounted() {
         return Ok(module.clone());
@@ -53,9 +49,9 @@ pub fn account(module: &Validated) -> Result<Validated, crate::ValidationError> 
     validate(accounted)
 }
 
-/// The instructions with every loop followed by its spend, and the
-/// loops that look given a look at the start of their `until`. New
-/// values take ids from `next` up; the function is numbered again after.
+/// The instructions with every loop followed by its spend and a look at
+/// the start of each checking loop's `until`. New ids start at `next`;
+/// the function is renumbered after.
 fn block(instructions: &[Instruction], functions: &[u64], next: &mut u32) -> Vec<Instruction> {
     let fresh = |ty: Type, op: Op, next: &mut u32| {
         let id = ValueId(*next);
@@ -100,8 +96,8 @@ fn block(instructions: &[Instruction], functions: &[u64], next: &mut u32) -> Vec
                 let looks = loop_looks(*count, until.as_ref(), body, functions);
                 let mut until = until.as_ref().map(|until| nested(until, next));
                 if looks {
-                    // The look comes first: an element that must stop
-                    // leaves before its iteration's `until` runs.
+                    // The look precedes `until`, so a stopped element
+                    // leaves first.
                     let look = fresh(Type::Bool, Op::Look, next);
                     until = Some(match until {
                         None => Block {

@@ -1,5 +1,4 @@
-//! The translation of a function's instructions into WGSL statements,
-//! one value a line, and of the functions a Kernel declares.
+//! Instructions to WGSL statements, one value a line, per function.
 
 use super::*;
 
@@ -27,8 +26,7 @@ pub(crate) fn emit_function(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    // A map's entry with several outputs stores each where it goes: WGSL
-    // returns one value, and there is nothing to gain by packing them.
+    // A map entry with several outputs stores each one itself.
     let stores = entry && written_outputs(module) > 1;
     if stores {
         let _ = writeln!(out, "fn {name}({args}) {{");
@@ -54,11 +52,10 @@ pub(crate) fn emit_function(
     let _ = writeln!(out, "}}");
 }
 
-/// Whether a block is short plain arithmetic, which costs less computed
-/// than branched around: no loop, branch, call or write.
+/// Whether a block is short plain arithmetic, cheaper computed than
+/// branched around: no loop, branch, call, write, or failing operation.
 pub(crate) fn speculable(block: &Block) -> bool {
-    // An arm that can fail is not computed where it is not taken: the
-    // failure would be recorded for work the reference never does.
+    // A failing arm runs only when taken, so failures match the reference.
     block.body.len() <= 16
         && block.body.iter().all(|instruction| {
             !matches!(
@@ -75,8 +72,7 @@ pub(crate) fn speculable(block: &Block) -> bool {
         })
 }
 
-/// The suffix of the checked helper for an integer type: `i32`,
-/// `i32x2`, `i64x3` and the rest.
+/// The checked helper suffix for an integer type: `i32`, `i32x2`, `i64x3`.
 pub(crate) fn checked_name(ty: Type) -> String {
     let base = if ty.is_64bit() { "i64" } else { "i32" };
     match ty.lanes() {
@@ -85,8 +81,7 @@ pub(crate) fn checked_name(ty: Type) -> String {
     }
 }
 
-/// Whether WGSL's `select` chooses between two values of a type: a
-/// scalar or a vector, and never a 64-bit one.
+/// Whether `select` takes the type: a 32-bit scalar or vector.
 pub(crate) fn selectable(ty: Type) -> bool {
     matches!(ty, Type::Scalar(_) | Type::Vector(..)) && !ty.is_64bit()
 }
@@ -123,8 +118,7 @@ impl Emitter<'_> {
         let expression = match op {
             Op::Const(value) => literal(value),
             Op::Param(index) => {
-                // The parameter's words from its slots, as the type builds
-                // them: the uniform holds words, as the interpreter does.
+                // The parameter built from its words in the uniform.
                 let (starts, _) = param_slots(self.module);
                 let start = starts[*index as usize];
                 let ty = self.module.manifest.params[*index as usize].ty;
@@ -145,12 +139,11 @@ impl Emitter<'_> {
                 compose(self.module, ty, 0, &word).0
             }
             Op::Arg(index) => format!("a{index}"),
-            // naga has no negation of a matrix; a scale by -1 flips the
-            // same bits.
+            // A matrix negates as a scale by -1, which naga supports.
             Op::Unary(UnaryOp::Neg, a) if self.type_of(*a).order().is_some() => {
                 format!("({} * -1.0)", v(a))
             }
-            // An integer negated records the least one's overflow.
+            // Integer negation records the least integer's overflow.
             Op::Unary(UnaryOp::Neg, a) if ty.is_int_kind() => {
                 format!("neg_{}({})", checked_name(*ty), v(a))
             }
@@ -178,13 +171,11 @@ impl Emitter<'_> {
                     BinaryOp::Shr => ">>",
                     BinaryOp::Ushr => ">>",
                 };
-                // A whole-vector comparison folds the componentwise one; a
-                // shift takes its count unsigned, masked to the width.
+                // Vector equality folds the componentwise comparison.
                 let vector = self.type_of(*a).lanes().is_some();
                 let matrix = self.type_of(*a).order().map(usize::from);
-                // An integer vector beside an Int: WGSL's bit operators
-                // and shifts take two operands of one type, so the Int
-                // widens; the shift count is unsigned, masked to the width.
+                // Beside an integer vector, an Int operand widens to it;
+                // a shift count is unsigned, masked to the width.
                 let int_vector = ty.int_components().is_some();
                 let widen = |id: &ValueId| {
                     if self.type_of(*id) == *ty {
@@ -195,8 +186,7 @@ impl Emitter<'_> {
                 };
                 let count = |id: &ValueId| {
                     let n = ty.int_components().unwrap_or(1);
-                    // A whole vector converts; a scalar converts first,
-                    // then splats, as WGSL does not do both in one.
+                    // A scalar count converts, then splats.
                     let unsigned = if self.type_of(*id) == Type::Int {
                         format!("u32({})", v(id))
                     } else {
@@ -204,9 +194,9 @@ impl Emitter<'_> {
                     };
                     format!("(vec{n}<u32>({unsigned}) & vec{n}<u32>(31u))")
                 };
-                // A long: the bit operators with a scalar widened beside a
-                // vector, a shift's count modulo 64, and the division and
-                // remainder the preamble writes.
+                // Long: bit operators widen a scalar beside a vector,
+                // shift counts are modulo 64, division and remainder call
+                // the preamble.
                 let long = self.type_of(*a).scalar() == Some(Type::Long);
                 let lanes = ty.lanes().map(|(n, _)| n);
                 let count64 = |id: &ValueId| match lanes {
@@ -225,8 +215,7 @@ impl Emitter<'_> {
                     Some(n) => format!("vec{n}<u64>"),
                     None => "u64".to_owned(),
                 };
-                // Integer arithmetic records what fails, both operands at
-                // the result's width.
+                // Checked integer arithmetic, operands at the result's width.
                 let checked = match op {
                     BinaryOp::Add => Some("add"),
                     BinaryOp::Sub => Some("sub"),
@@ -284,8 +273,7 @@ impl Emitter<'_> {
                         }
                     }
                     BinaryOp::Rem if *ty != Type::Int && !int_vector => {
-                        // Both operands at the result's width: a Float
-                        // beside a vector broadcasts.
+                        // A Float beside a vector broadcasts.
                         let widen = |id: &ValueId| {
                             if self.type_of(*id) == *ty {
                                 v(id)
@@ -300,11 +288,9 @@ impl Emitter<'_> {
                             widen(b)
                         )
                     }
-                    // `isnan(x)` is `x != x`, which a compiler told
-                    // there are no NaNs folds to false — and this one is
-                    // told that. On the words it is the ones exponent
-                    // with something in the mantissa, which nothing can
-                    // fold away.
+                    // `x != x` is `is_nan`, which tests the bits (all-ones
+                    // exponent, nonzero mantissa): the shader compiler
+                    // assumes no NaNs and folds the float comparison.
                     BinaryOp::NotEqual if a == b && self.type_of(*a) == Type::Float => {
                         format!("is_nan({})", v(a))
                     }
@@ -319,8 +305,8 @@ impl Emitter<'_> {
                     BinaryOp::Ushr => {
                         format!("i32(u32({}) >> (u32({}) & 31u))", v(a), v(b))
                     }
-                    // The dividend through `whole_*`: a value the compiler
-                    // narrowed (the top half of a word) divided wrongly.
+                    // The dividend passes through `whole_*`; see
+                    // `OPAQUE_ONE`.
                     BinaryOp::Div | BinaryOp::Rem if *ty == Type::Int || int_vector => {
                         let whole = match ty.int_components() {
                             Some(2) => "whole_v2",
@@ -371,8 +357,7 @@ impl Emitter<'_> {
                 args.iter().map(v).collect::<Vec<_>>().join(", ")
             ),
             Op::Intrinsic(intrinsic, args) => self.intrinsic(*intrinsic, args, *ty),
-            // The iterations whose body ran are the loop's own counter,
-            // kept after it: one addition.
+            // The loop's counter holds the iterations whose body ran.
             Op::Spend(counted) => {
                 self.line(depth, &format!("work = work + u32(it{});", counted.0));
                 self.line(depth, &format!("let v{}: i32 = it{};", id.0, counted.0));
@@ -383,14 +368,13 @@ impl Emitter<'_> {
                 return;
             }
             Op::Emit(pair) => {
-                // Combined into the target now; the value is the pair.
+                // Combined into the target; the value is the pair.
                 self.line(depth, &format!("{}({});", emit_name(*ty), v(pair)));
                 self.line(depth, &format!("let v{}: {ty_name} = {};", id.0, v(pair)));
                 return;
             }
             Op::Put(input, index, value) => {
-                // The store, when the address is inside; the value is the
-                // instruction's own.
+                // Stores when the address is inside; the value is `value`.
                 self.line(
                     depth,
                     &format!(
@@ -403,11 +387,8 @@ impl Emitter<'_> {
                 self.line(depth, &format!("let v{}: {ty_name} = {};", id.0, v(value)));
                 return;
             }
-            // Two short arms of plain arithmetic are both computed and
-            // one is chosen: a branch costs a device more than the few
-            // operations it would skip, and nothing a device computes
-            // fails. A long is never chosen by `select`, which Metal
-            // cannot pick for one.
+            // Two speculable arms are both computed and one is chosen by
+            // `select` (32-bit types only: Metal lacks a 64-bit select).
             Op::If {
                 condition,
                 then,
@@ -470,12 +451,10 @@ impl Emitter<'_> {
                     Some(bound) => format!("clamp({}, 0i, {count}i)", v(bound)),
                     None => format!("{count}i"),
                 };
-                // `it` and the value's number: a plain `i` would spell
-                // `i32` at value 32, which WGSL reads as the type.
+                // The counter is `it<id>`, which never spells a WGSL type.
                 let counts = self.module.accounted();
-                // A loop of a module that counts keeps `it` after it: the
-                // iterations whose body ran, all of them unless `until`
-                // stopped one, which the spend after it adds.
+                // An accounted module keeps `it` after the loop: the
+                // iterations whose body ran, which the following spend adds.
                 if counts {
                     self.line(depth, &format!("var it{}: i32 = 0;", id.0));
                     self.line(
@@ -543,8 +522,7 @@ impl Emitter<'_> {
                 }
             }
             Op::Sample(input) => {
-                // Validation made the input's shape the output's, so this
-                // element's own address is the right one.
+                // The input has the output's shape: read this element.
                 let own = match self.output_shape() {
                     Shape::Rows => "i32(element)",
                     Shape::Grid => "coord.xy",
@@ -554,8 +532,8 @@ impl Emitter<'_> {
             }
             Op::At(input, index) => format!("load_in{input}(index_in{input}({}))", v(index)),
             Op::Part { input, at, path } => {
-                // The words this part is made of and nothing else:
-                // where the path leads, held inside the element.
+                // Only the part's words, at the path's offset, clamped
+                // inside the element.
                 let manifest = &self.module.manifest;
                 let stride = manifest.inputs[*input as usize].ty.schema.value_words();
                 let element = manifest.inputs[*input as usize].element();
@@ -571,8 +549,7 @@ impl Emitter<'_> {
                     );
                 }
                 let last = stride.saturating_sub(type_words(self.module, *ty));
-                // The element the address names, or this element's
-                // own where there is none, as a sample reads it.
+                // The addressed element, else this one.
                 let element = match at {
                     Some(at) => v(at),
                     None => match self.output_shape() {
@@ -582,8 +559,7 @@ impl Emitter<'_> {
                     },
                 };
                 let base = format!("b{}", id.0);
-                // In words, or in bytes where the input keeps its scalars
-                // narrow: the element's bytes, then the scalars'.
+                // In words, or in bytes for a narrow input.
                 let encoding = input_encoding(self.module, *input as usize);
                 let (element_size, scalar_size) = if encoding == Encoding::Word {
                     (stride, 1)
@@ -637,10 +613,9 @@ impl Emitter<'_> {
         };
         match intrinsic {
             Intrinsic::ToFloat => format!("{}({list})", wgsl_type(ty)),
-            // A long keeps its low 32 bits, as the reference's does.
+            // A long keeps its low 32 bits.
             Intrinsic::ToInt if from == Some(Type::Long) => format!("{}({list})", wgsl_type(ty)),
-            // Saturating from a float, as `to_int` does; from an integer
-            // or a Bool, WGSL's own.
+            // Saturating from a float; WGSL's conversion otherwise.
             Intrinsic::ToLong if from == Some(Type::Float) => {
                 format!("{}({list})", suffix("to_long"))
             }
@@ -649,8 +624,8 @@ impl Emitter<'_> {
                 Some(n) => format!("sign_i64x{n}({list})"),
                 None => format!("sign_i64({list})"),
             },
-            // Saturating, as the reference converts; see `to_int` in
-            // the preamble. A Bool is a 0 or a 1 and needs none of it.
+            // Saturating (`to_int` in the preamble); a Bool converts
+            // directly.
             Intrinsic::ToInt => match (self.type_of(args[0]), ty) {
                 (Type::Bool, _) => format!("{}({list})", wgsl_type(ty)),
                 (_, Type::IVec2) => format!("to_int2({list})"),
@@ -658,12 +633,10 @@ impl Emitter<'_> {
                 _ => format!("to_int({list})"),
             },
             Intrinsic::Pow => format!("pow({}, {})", v(&args[0]), splat(&args[1], ty)),
-            // The angle at the origin, which a device's own does not
-            // give; see `atan2_ref` in the preamble.
+            // `atan2_ref` defines the angle at the origin.
             Intrinsic::Atan2 => format!("atan2_ref({}, {})", v(&args[0]), v(&args[1])),
-            // Float `min`, `max` and `clamp` keep the rule every backend
-            // keeps (a NaN gives way, of two equal zeros `max` the positive
-            // and `min` the negative); see `max_ref` in the preamble.
+            // Float `min`, `max`, `clamp` follow the shared rule; see
+            // `max_ref` in the preamble.
             Intrinsic::Min | Intrinsic::Max | Intrinsic::Clamp if float_lanes(ty) => {
                 let suffix = match ty {
                     Type::Vec2 => "2",
@@ -681,7 +654,7 @@ impl Emitter<'_> {
                     ),
                 }
             }
-            // WGSL wants every operand the result's type; a Float broadcasts.
+            // Every operand at the result's type; a Float broadcasts.
             Intrinsic::Min | Intrinsic::Max | Intrinsic::Clamp | Intrinsic::Mix => format!(
                 "{}({})",
                 intrinsic.name(),
@@ -719,8 +692,7 @@ impl Emitter<'_> {
                 v(&args[1])
             ),
             Intrinsic::Step => format!("step({}, {})", splat(&args[0], ty), v(&args[1])),
-            // The interpreter's rule, not the device's `smoothstep`, whose
-            // result where `low >= high` is the driver's to choose; see
+            // The interpreter's rule, defined where `low >= high`; see
             // `smoothstep_ref` in the preamble.
             Intrinsic::Smoothstep => format!(
                 "smoothstep_ref{}({}, {}, {})",
@@ -738,8 +710,8 @@ impl Emitter<'_> {
         }
     }
 
-    /// The shape the entry maps over: the output's, or the first input's
-    /// for a reduction.
+    /// The shape the entry maps over: the output's for a map, else the
+    /// first input's.
     fn output_shape(&self) -> Shape {
         let manifest = &self.module.manifest;
         match manifest.mode {
@@ -759,8 +731,8 @@ impl Emitter<'_> {
     }
 }
 
-/// Whether a value of `ty` is floats, one or a vector of them: what the
-/// float rule of `min`, `max` and `clamp` applies to.
+/// Whether `ty` is a Float or float vector, where the float rule of
+/// `min`, `max` and `clamp` applies.
 pub(crate) fn float_lanes(ty: Type) -> bool {
     matches!(ty, Type::Float | Type::Vec2 | Type::Vec3 | Type::Vec4)
 }

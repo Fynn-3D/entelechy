@@ -1,7 +1,6 @@
-//! Compressed sound as a WAV the Host reads: MP3, OGG Vorbis, FLAC, AAC in
-//! MP4, and more, decoded by symphonia and written as 16-bit PCM at the
-//! file's own rate, one or two channels. A WAV is what `input` takes, so
-//! nothing in the runtime learns a lossy format.
+//! Compressed sound (MP3, OGG Vorbis, FLAC, AAC in MP4, ...) decoded by
+//! symphonia into a 16-bit PCM WAV at the file's own rate, one or two
+//! channels, which `input` reads.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +16,7 @@ use symphonia::core::probe::Hint;
 pub struct Imported {
     /// The WAV written.
     pub file: PathBuf,
-    /// Frames per second, as the source says.
+    /// Frames per second of the source.
     pub rate: u32,
     /// Channels kept: 1 or 2.
     pub channels: usize,
@@ -105,10 +104,8 @@ pub fn import(path: &Path, out_dir: &Path) -> Result<Imported, String> {
 mod tests {
     use super::*;
 
-    /// The fixtures are a 440 Hz tone at half amplitude, 0.3 s at 22050
-    /// Hz, made with ffmpeg (the OGG in stereo, as its encoder insists);
-    /// the decoders must give back the rate, the channels, the loudness,
-    /// and the pitch, counted in zero crossings.
+    /// Fixtures: a 440 Hz tone at half amplitude, 0.3 s at 22050 Hz (the
+    /// OGG in stereo). Decoding keeps rate, channels, loudness and pitch.
     fn check(name: &str, channels: usize) {
         let dir = std::env::temp_dir().join(format!("orla-audio-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

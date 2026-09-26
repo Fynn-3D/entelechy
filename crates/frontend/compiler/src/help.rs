@@ -1,9 +1,7 @@
-//! What a Kernel may call, as `help` tells it: every builtin with its
-//! signatures, one sentence, and the capability it needs, and every form
-//! the language and the graph documents are written in. The math
-//! intrinsics come from the IR's own table and typing rules, so what is
-//! listed is what compiles; the Field, context and construction builtins
-//! are the ones the lowering dispatches, described beside it.
+//! What `help` lists: every builtin with its signatures, sentence and
+//! capability, and every language and document form. Math intrinsics
+//! come from the IR's table and typing rules; the other builtins are the
+//! ones the lowering dispatches.
 
 use orla_ir::{Intrinsic, Type};
 
@@ -30,8 +28,8 @@ fn plain() -> impl Iterator<Item = Type> + Clone {
     Type::NAMED.iter().map(|(ty, _)| *ty)
 }
 
-/// The signatures of an intrinsic, found by asking its typing rule about
-/// every combination of the plain types.
+/// An intrinsic's signatures: its typing rule asked about every
+/// combination of the plain types.
 fn intrinsic_signatures(intrinsic: Intrinsic, name: &str) -> Vec<String> {
     let args = intrinsic.argument_names();
     let mut out = Vec::new();
@@ -188,8 +186,7 @@ pub fn builtins() -> Vec<Builtin> {
     out
 }
 
-/// One form of the language, as `help` shows it: what is written, where,
-/// and what it means.
+/// One form of the language, as `help` shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Form {
     /// The word to ask for: `loop`, `each`, `scatter`, `node`.
@@ -442,7 +439,6 @@ mod tests {
             );
             assert_eq!(form_named(form.name), Some(form));
         }
-        // A form and a builtin are both found by name.
         assert_eq!(form_named("loop").unwrap().kind, "expression");
         assert!(builtin("mix").is_some());
         assert!(similar("lopo").contains(&"loop"));

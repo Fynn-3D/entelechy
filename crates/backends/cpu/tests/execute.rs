@@ -373,7 +373,7 @@ fn structs_carry_several_values_through_loops_calls_and_branches() {
         [2.0, 4.0, -1.0, 1.0],
     );
     near(host.read_pixel(output, 2, 1).unwrap(), [2.0, 4.0, 8.0, 1.0]);
-    // x = 0: the first step already reaches t >= 0.
+    // x = 0: the first step reaches t >= 0.
     near(
         host.read_pixel(output, 0, 0).unwrap(),
         [0.5, 1.0, -1.0, 1.0],
@@ -434,8 +434,8 @@ fn fields_carry_struct_elements_with_exact_integers() {
 
 #[test]
 fn reductions_fold_exactly_in_a_fixed_tree() {
-    // Sum, maximum, and count over 1000 rows of ints and floats; the ints
-    // are exact whatever the tree, the floats follow the pairwise tree.
+    // Sum, maximum and count over 1000 rows: ints exact, floats follow the
+    // pairwise tree.
     let source = "kernel test.stats@1 { requires { field.read; field.write; } input rows: Rows<Item>; output result: Rows<Stats>; struct Item { value: Int; weight: Float; } struct Stats { sum: Int; max: Int; weight: Float; count: Int; } compute { let it = sample(rows); return Stats { sum: it.value, max: it.value, weight: it.weight, count: 1 }; } merge(a, b) { return Stats { sum: a.sum + b.sum, max: max(a.max, b.max), weight: a.weight + b.weight, count: a.count + b.count }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(module.manifest.mode, orla_ir::Mode::Reduce);
@@ -474,7 +474,7 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
     assert!((weight - 124_875.0).abs() < 8.0, "{weight}");
     assert_eq!(stats[3], count);
 
-    // The output domain of a reduction is fixed.
+    // A reduction's output domain is fixed.
     let bad = Invocation {
         inputs: vec![rows],
         params: vec![],
@@ -485,7 +485,7 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
     let error = CpuBackend.execute(&module, &bad, &mut scope).unwrap_err();
     assert!(error.to_string().contains("one element"), "{error}");
 
-    // A single-element input folds nothing and still yields its value.
+    // A single-element input yields its value.
     let one = host
         .adopt(
             orla_abi::FieldData::from_storage(
@@ -514,8 +514,8 @@ fn reductions_fold_exactly_in_a_fixed_tree() {
 
 #[test]
 fn scans_thread_the_carried_value_in_order() {
-    // A prefix sum over ints (exact) and a one-pole filter over floats,
-    // both in one struct, with the element index available.
+    // A prefix sum of ints (exact) and a one-pole filter of floats in one
+    // struct, with the element index.
     let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.5; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; last: Int; } scan with run = Run { total: 0, y: 0.0, last: -1 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k, last: index() }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(module.manifest.mode, orla_ir::Mode::Scan);
@@ -604,8 +604,8 @@ fn the_device_rate_reaches_kernels_as_context() {
 
 #[test]
 fn linear_interpolation_blends_neighbours_and_clamps() {
-    // A 2x2 image: reading at pixel centres is exact, halfway blends, and
-    // beyond the edge clamps.
+    // A 2x2 image: pixel centres are exact, halfway blends, beyond the edge
+    // clamps.
     let module = compile(
         "kernel test.lerp@1 { requires { field.read; field.write; } input source: Image; param at: Vec2 = vec2(0.5, 0.5); output result: Rows<Vec4>; compute { return at_linear(source, at); } }",
     )
@@ -712,9 +712,8 @@ fn remainder_truncates_like_division_and_vectors_compare_whole() {
 
 #[test]
 fn scatters_combine_into_the_target_in_element_order() {
-    // Particles splat weights into a grid of floats by `sum`; an id grid
-    // takes the last particle's id by `last`; a struct element is
-    // combined fieldwise by `max`; addresses outside the grid are dropped.
+    // Weights splat into a float grid by `sum`, ids by `last`, a struct
+    // fieldwise by `max`; addresses outside the grid are dropped.
     let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; } struct Splat { cell: Vec2; mass: Float; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, mass: d.weight }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     assert!(matches!(
@@ -964,8 +963,8 @@ fn bit_operators_work_on_ints_with_the_count_modulo_32() {
             0x3C << 16
         ]
     );
-    // A negative number shifts right arithmetically with `>>` and
-    // logically with `>>>`, and its bits are two's complement.
+    // A negative number: `>>` is arithmetic, `>>>` logical, bits two's
+    // complement.
     assert_eq!(
         run(&mut host, -8, 1),
         [
@@ -986,9 +985,9 @@ fn bit_operators_work_on_ints_with_the_count_modulo_32() {
 
 #[test]
 fn memories_are_written_step_by_step_and_come_out_as_outputs() {
-    // Each step counts a visit in its cell and reads the count back at
-    // once; a write outside the memory is dropped; the input itself is
-    // untouched and the memory is the second output.
+    // Each step counts a visit in its cell and reads it back; a write
+    // outside the memory is dropped; the input is untouched and the memory
+    // is the second output.
     let source = "kernel test.tally@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory ram: Rows<Int>; output result: Rows<Int>; scan with acc = 0 { let cell = index() % 4; let v = at(ram, cell) + 1; put(ram, cell, v); put(ram, 99, 7); put(ram, -1, 7); return at(ram, cell); } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let mut host = Host::new(1 << 16);
@@ -1034,8 +1033,8 @@ fn memories_are_written_step_by_step_and_come_out_as_outputs() {
 
 #[test]
 fn a_match_takes_the_arm_holding_the_value_or_the_last() {
-    // Several values an arm, negative values, a block arm with a `let`,
-    // and the `_` arm; nested in a loop so it runs per iteration.
+    // Several values per arm, negatives, a block arm with `let`, and `_`,
+    // inside a loop.
     let source = "kernel test.pick@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element() - 3; let picked = match i { 0 => 100, 1 | 2 => { let doubled = i * 2; doubled }, -1 | -3 => -7, 5 => 5, _ => 42 }; let summed = loop 4 with acc = 0 { acc + match index() { 0 | 3 => 1, _ => 10 } }; return picked * 1000 + summed; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let mut host = Host::new(64);
@@ -1052,13 +1051,12 @@ fn a_match_takes_the_arm_holding_the_value_or_the_last() {
     let words: Vec<i32> = (0..10)
         .map(|i| host.element(output, i).unwrap()[0] as i32)
         .collect();
-    // i = -3 .. 6; the loop adds 1 + 10 + 10 + 1 = 22 every time.
+    // i = -3 .. 6; the loop adds 1 + 10 + 10 + 1 = 22 each time.
     let picked = [-7, 42, -7, 100, 2, 4, 42, 42, 5, 42];
     assert_eq!(words, picked.map(|p| p * 1000 + 22).to_vec(), "{words:?}");
 }
 
-/// `&&` and `||` answer without asking the other side when the first
-/// settles it: a guard guards, and what it guards never runs.
+/// `&&` and `||` short-circuit: a guard guards.
 #[test]
 fn logical_operators_do_not_ask_the_other_side_when_the_first_settles_it() {
     let source = "kernel test.guard@1 { requires { field.write; } param n: Int = 0; output result: Rows<Int>; compute { let safe = n != 0 && 100 / n > 3; let either = n == 0 || 100 / n > 3; return int(safe) + int(either) * 2; } }";
@@ -1076,18 +1074,16 @@ fn logical_operators_do_not_ask_the_other_side_when_the_first_settles_it() {
         let word = scope.element(outputs[0], 0).unwrap()[0] as i32;
         Ok::<i32, ExecutionError>(word)
     };
-    // With n zero neither division happens: the guard is false and the
-    // other side is true without asking.
+    // n zero: neither division runs.
     assert_eq!(run(0).unwrap(), 2);
-    // With n small both sides run and both hold.
+    // n small: both sides run and hold.
     assert_eq!(run(4).unwrap(), 3);
-    // With n large the quotient is small: neither holds.
+    // n large: the quotient is small, neither holds.
     assert_eq!(run(100).unwrap(), 0);
 }
 
-/// A `break` stops its own loop and gives its value: the iterations
-/// after it do not run, the loops around it are untouched, and work
-/// that would fail is proof of both.
+/// Enclosing loops continue; failing work in the skipped iterations proves
+/// they never run.
 #[test]
 fn a_break_stops_its_loop_and_the_rest_of_it_never_runs() {
     let source = "kernel test.stop@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element(); let zero = i - i; let first = loop 20 with best = -1 { let c = i + index(); if c % 7 == 0 { break c; } best }; let armed = loop 8 with acc = 0 { match index() { 0 | 1 => acc + 1, 5 => { break acc * 100; }, _ => acc + 2 } }; let nested = loop 4 with outer = 0 { let inner = loop 4 with a = 0 { if a > 2 { break a; } a + 1 }; if outer > 5 { break outer; } outer + inner }; let safe = loop 8 with a = 1 { if a > 4 { break a; } a * 2 + 100 / a }; let after = loop 6 with a = 0 { if index() == 2 { break a; } a + 100 / (2 - index()) }; return first * 1000 + armed + nested * 10 + safe + after; } }";
@@ -1106,14 +1102,11 @@ fn a_break_stops_its_loop_and_the_rest_of_it_never_runs() {
     let words: Vec<i32> = (0..8)
         .map(|i| host.element(output, i).unwrap()[0] as i32)
         .collect();
-    // `first` is the next multiple of seven at or above the element.
-    // `armed` breaks in a `match` arm on the sixth iteration, having
-    // counted 1 + 1 + 2 + 2 + 2 = 8, so 800. `nested`'s inner loop
-    // breaks at 3 and its outer at 6, which is 60 here. `safe` is 1,
-    // then 2 + 100, and 102 is over four, so it stops with 102 and the
-    // division by the carried value never sees a larger one. `after`
-    // adds 100/2 and 100/1 and breaks on the third iteration, which
-    // would divide by zero if it ran: that it finishes is the proof.
+    // `first`: the next multiple of seven at or above the element.
+    // `armed` breaks in a `match` arm on the sixth iteration having counted
+    // 8, so 800. `nested` breaks at 3 inner, 6 outer: 60. `safe` stops at
+    // 102 before dividing by a larger value. `after` breaks on the third
+    // iteration, which would divide by zero.
     let expected: Vec<i32> = (0..8)
         .map(|i| {
             let first = (i + 6) / 7 * 7;
@@ -1125,8 +1118,8 @@ fn a_break_stops_its_loop_and_the_rest_of_it_never_runs() {
 
 #[test]
 fn a_scatter_emits_as_many_pairs_as_it_likes() {
-    // Each value is spread over three slots from twice its own index, by
-    // pairs emitted in a loop; the pair it returns is outside and dropped.
+    // Each value spreads over three slots from twice its index, emitted in
+    // a loop; the returned pair is outside and dropped.
     let source = "kernel test.spread@1 { requires { field.read; field.write; }
         input values: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
         struct Put { at: Int; value: Int; }
@@ -1174,9 +1167,8 @@ fn a_scatter_emits_as_many_pairs_as_it_likes() {
     assert_eq!(got, expected);
 }
 
-/// An `if` of statements alone emits when it holds and the body goes on:
-/// a chain of them picks one slot or two, an empty arm does nothing, and
-/// a guard after them still returns early.
+/// The body goes on after it: chains pick one slot or two, an empty arm
+/// does nothing, and a later guard still returns early.
 #[test]
 fn an_if_of_statements_emits_when_it_holds() {
     let source = "kernel test.pick@1 { requires { field.read; field.write; }
@@ -1222,10 +1214,7 @@ fn an_if_of_statements_emits_when_it_holds() {
     assert_eq!(got, vec![3, 22, 1 + 2 + 3 + 4, 200]);
 }
 
-/// A scatter's domain has the shape its entry was compiled over, its first
-/// input's: a grid domain for a scatter over rows would have `element()`
-/// and `domain()` read one shape as another (the interpreter read a
-/// float's bits as a count), so it is refused, as a map's is.
+/// A scatter's domain has its first input's shape, as a map's does.
 #[test]
 fn a_scatter_over_rows_refuses_a_grid_domain() {
     let module = compile(
@@ -1260,17 +1249,16 @@ fn a_scatter_over_rows_refuses_a_grid_domain() {
         matches!(error, ExecutionError::DomainShape { .. }),
         "{error}"
     );
-    // Over rows it is what it says: seven elements.
+    // Over rows: seven elements.
     let output = CpuBackend
         .execute(&module, &invocation(Domain::Rows(7)), &mut scope)
         .unwrap()[0];
     assert_eq!(host.data(output).unwrap().values()[0], 7);
 }
 
-/// An integer sum is each element's whole total on interpreter as on every
-/// backend: one that passes the end of the range and comes back fits,
-/// and one that does not fit fails at the first element whose total
-/// does not, whatever order the backend adds in.
+/// An integer sum is judged by each element's whole total on every
+/// backend: a total that fits passes though a partial sum overflows; one
+/// that does not fails at the first such element, in any addition order.
 #[test]
 fn integer_sums_are_whole_totals_on_interpreter_as_everywhere() {
     let Some(backend) = Some(orla_cpu::CpuBackend) else {

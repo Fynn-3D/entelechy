@@ -1,9 +1,8 @@
 //! WGSL emission from validated Orla IR.
 //!
-//! Every value slot becomes a WGSL `let` (straight-line values) or `var`
-//! (results of `if` and `loop`). Blocks map to WGSL blocks, so IR scoping
-//! and WGSL scoping coincide. Resources are storage buffers of `u32` words,
-//! one per scalar, plus two small uniform arrays for context and parameters.
+//! A value slot is a WGSL `let`, or a `var` for `if` and `loop` results;
+//! IR blocks are WGSL blocks. Resources are storage buffers of `u32`
+//! words, one per scalar, plus uniform arrays for context and parameters.
 
 use std::fmt::Write;
 
@@ -39,22 +38,19 @@ pub const OUTPUT_BINDING: u32 = 2;
 /// `INPUT_BINDING + i`.
 pub const INPUT_BINDING: u32 = 3;
 
-/// Binding index of the record a pass that can fail keeps. Its first
-/// word is the first failure: all ones less the element times four plus
-/// the failure's code, the greatest kept, so the first element in
-/// row-major order is the one named, as the reference names it; zero is
-/// none. Its second counts the blocks of work the run has taken, and its
-/// third is the most it may take ([`orla_rules::Run`]).
+/// Binding index of a failing pass's record. Word 0 is the first
+/// failure: all ones less `element * 4 + code`, the greatest kept, so
+/// it names the first element in row-major order; zero is none. Word 1
+/// counts blocks of work taken, word 2 is the most allowed
+/// ([`orla_rules::Run`]).
 pub const FAILURE_BINDING: u32 = 90;
 
-/// How deeply WGSL lets braces nest: a shader past it does not compile.
+/// The deepest brace nesting WGSL compiles.
 pub const BRACE_LIMIT: usize = 127;
 
-/// How deeply the module's shader nests its braces, at most: a function's
-/// body is one, an `if` one more for its arms, a loop one more for its
-/// body and its `until`, a `match` two, for the switch and its cases.
-/// An `if` the emitter turns into a `select` opens none, but is counted
-/// all the same, so this is never less than what is emitted.
+/// An upper bound on the module shader's brace depth: a function body
+/// is one, an `if` or a loop one more, a `match` two. An `if` emitted as
+/// a `select` still counts.
 pub fn brace_depth(module: &Module) -> usize {
     fn nest(instructions: &[Instruction]) -> usize {
         instructions
@@ -90,18 +86,16 @@ pub fn brace_depth(module: &Module) -> usize {
         .unwrap_or(1)
 }
 
-/// Binding index of the inputs a pass packs into one buffer when it
-/// binds more than the device does at once; see [`packed_inputs`].
+/// Binding index of the buffer that packs inputs; see [`packed_inputs`].
 pub const PACKED_BINDING: u32 = 91;
 
-/// Buffers a module's widest pass binds when nothing is packed: its two
-/// uniforms (the context and the parameters), every input, every output
-/// it writes, the failure record where its arithmetic can fail, and an
-/// emitting scatter's target.
+/// `(uniforms, storage)` buffers the module's widest pass binds unpacked:
+/// context and parameters, every input, every written output, the
+/// failure record where arithmetic can fail, an emitting scatter's target.
 pub fn bindings(module: &Module) -> (usize, usize) {
     let inputs = module.manifest.inputs.len();
     let failure = usize::from(can_fail(module));
-    // A reduction's fold pass is its widest: a third uniform (the level's
+    // A reduction's widest pass is its fold: a third uniform (the level's
     // count) and the level it reads beside the one it writes.
     if module.manifest.mode == Mode::Reduce {
         return (3, inputs + 2 + failure);
@@ -111,13 +105,11 @@ pub fn bindings(module: &Module) -> (usize, usize) {
     (2, storage)
 }
 
-/// The inputs a module packs into one buffer so it binds no more than
-/// `most` buffers in all and `most_storage` storage buffers: none when it
-/// fits, else the fewest that do, the last read-only inputs first (a
-/// memory is written, so it keeps its own). Packing `k` inputs binds
-/// `k - 1` fewer buffers, since the pack is one. Empty too when packing
-/// every read-only input would not be enough, which leaves the module
-/// wider than the device.
+/// The inputs packed into one buffer so the module binds at most `most`
+/// buffers and `most_storage` storage buffers: the fewest that fit, last
+/// read-only inputs first (a memory keeps its own). Packing `k` inputs
+/// saves `k - 1` bindings. Empty when the module fits, or when packing
+/// every read-only input is still too wide.
 pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<usize> {
     let (uniforms, storage) = bindings(module);
     let over = (uniforms + storage)
@@ -143,9 +135,9 @@ pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<u
     packed
 }
 
-/// Where the words of input `index` are read from: its own buffer, or
-/// the pack at the offset the parameters carry for it, in the unit the
-/// input's loads count in (words, or bytes where it is kept narrow).
+/// `(buffer, offset prefix)` input `index` reads from: its own buffer, or
+/// the pack at the offset the parameters carry, in the input's load unit
+/// (words, or bytes where it is narrow).
 fn input_source(
     module: &Module,
     packed: &[usize],
@@ -165,21 +157,20 @@ fn input_source(
     ("inputs_packed".to_owned(), format!("{offset} + "))
 }
 
-/// The bytes of the failure record: the first failing element's word,
-/// the blocks of work taken, the most there may be, what was left short
-/// of a block, and the first element whose whole sum does not fit
-/// ([`sums_whole`]), rounded to a multiple of sixteen.
+/// Bytes of the failure record, rounded to sixteen: the first failure,
+/// blocks taken, their limit, the remainder short of a block, and the
+/// first element whose whole sum overflows ([`sums_whole`]).
 pub const FAILURE_BYTES: u64 = 32;
 
-/// The failure record as a pass that only records a sum declares it.
+/// The failure record as declared by a pass that only records a sum.
 pub(crate) const FAILURE_STRUCT: &str = "struct Failure { word: atomic<u32>, blocks: atomic<u32>, limit: u32, left: atomic<u32>, total: atomic<u32> }";
 
 /// Binding index of an emitting scatter's high words, beside its target.
 pub const EMIT_HIGHS_BINDING: u32 = 92;
 
-/// Whether a scatter or a prefix sums integers, each total kept whole, a
-/// word and a high word beside it, and checked once every value is in.
-/// Such a module records the first element whose total does not fit.
+/// Whether a scatter or prefix sums integers whole: each total is a word
+/// and a high word, checked once every value is in, and the first
+/// element whose total overflows is recorded.
 pub fn sums_whole(module: &Module) -> bool {
     let (scalars, combine) = match module.manifest.mode {
         Mode::Scatter { base, combine } => (
@@ -192,10 +183,9 @@ pub fn sums_whole(module: &Module) -> bool {
     combine == Combine::Sum && scalars.iter().any(|s| matches!(s, orla_abi::Scalar::Int))
 }
 
-/// Whether a whole sum keeps its high words in a buffer beside what it
-/// totals: a prefix, and a scatter that adds in parallel. A scatter that
-/// also sums floats folds each element's values in order, and keeps its
-/// high words as it folds.
+/// Whether a whole sum keeps its high words in a separate buffer: a
+/// prefix, and a parallel scatter. An ordered scatter keeps them as it
+/// folds.
 pub fn highs_beside(module: &Module) -> bool {
     sums_whole(module)
         && (matches!(module.manifest.mode, Mode::Prefix { .. })
@@ -209,12 +199,11 @@ pub const FAILED_DIVISION: u32 = 2;
 /// A failure's code in the word: more loop iterations than the budget.
 pub const FAILED_BUDGET: u32 = 3;
 
-/// Whether any function of the module does integer arithmetic that can
-/// fail: `+ - *` past the ends of the range, `/ %` by zero, `-` of the
-/// least integer, `udiv` and `urem` by zero. Such a module's passes
-/// record their first failure; any other pays nothing for the checking.
+/// Whether the module's integer arithmetic can fail (`+ - *` overflow,
+/// `/ %` `udiv` `urem` by zero, `-` of the least integer) or its work is
+/// accounted. Only such a module's passes record failures.
 pub fn can_fail(module: &Module) -> bool {
-    // A module whose work is accounted fails where its looks say.
+    // An accounted module fails when its loops exceed the budget.
     module.accounted()
         || module
             .functions
@@ -225,7 +214,7 @@ pub fn can_fail(module: &Module) -> bool {
             .any(|function| function.body.iter().any(fails_within))
 }
 
-/// Whether an instruction, or any inside it, can fail.
+/// Whether an instruction or any nested one can fail.
 fn fails_within(instruction: &Instruction) -> bool {
     let nested = |blocks: &[&Block]| {
         blocks
@@ -253,9 +242,8 @@ fn fails(op: &Op, ty: Type) -> bool {
     }
 }
 
-/// How many outputs the main pass writes: a map's every output, each to a
-/// buffer of its own; one for the other modes, whose single output is
-/// what their later passes work on.
+/// Outputs the main pass writes: every output of a map, each in its own
+/// buffer; one for other modes.
 pub fn written_outputs(module: &Module) -> usize {
     match module.manifest.mode {
         Mode::Map => module.manifest.outputs.len().max(1),
@@ -264,7 +252,7 @@ pub fn written_outputs(module: &Module) -> usize {
 }
 
 /// Binding index of output `k`: the first at [`OUTPUT_BINDING`], the
-/// others after the inputs, so no input moves when a map has several.
+/// others after the inputs.
 pub fn output_binding(module: &Module, k: usize) -> u32 {
     if k == 0 {
         OUTPUT_BINDING
@@ -278,26 +266,23 @@ pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
 /// button bits]`, `[pointer.x, pointer.y, depth, rate]`, two slots of key
 /// bits, `[wheel.x, wheel.y, window.x, window.y]`, and `[scale, fold, 0,
-/// 0]`, where `fold` is the elements each unit of `gid.y` stands for
-/// when a long `Rows` domain is dispatched as a grid of workgroups (zero
-/// otherwise). Each input then has `[width, height, depth, 0]`.
+/// 0]`, where `fold` is the elements per unit of `gid.y` for a long
+/// `Rows` domain dispatched as a grid (else zero). Each input then has
+/// `[width, height, depth, 0]`.
 pub const CONTEXT_HEAD: usize = 8;
 
-/// The context word holding 1, as an expression: a value the shader
-/// compiler cannot fold, multiplied into an integer dividend so that a
-/// value it narrowed (the top sixteen bits of a word, say) is a whole
-/// `i32` again when it divides. Metal divided such a narrowed value by
-/// a constant wrongly (`(x >>> 16) % 7` came out 8192 for a zero).
+/// The context word holding 1, which the shader compiler cannot fold.
+/// Multiplied into an integer dividend, it makes a narrowed value (such
+/// as `x >>> 16`) a whole `i32` for division, which Metal miscompiles.
 pub const OPAQUE_ONE: &str = "ctx[5].z";
 
-/// The most workgroups one dispatch dimension takes.
+/// The most workgroups in one dispatch dimension.
 pub const MAX_GROUPS: u32 = 65535;
 
-/// The workgroups a one-dimensional pass of `groups` dispatches: one row
-/// while they fit in a dimension, rows of `MAX_GROUPS` beyond. A pass
-/// reads its index as `gid.x + gid.y * span`, the span being its
-/// workgroup size times `MAX_GROUPS`, and its bounds check turns away
-/// the threads past the end of the last row.
+/// `(x, y)` workgroups for a one-dimensional pass of `groups`: rows of at
+/// most `MAX_GROUPS`. The pass's index is `gid.x + gid.y * span`, span
+/// being workgroup size times `MAX_GROUPS`; its bounds check drops the
+/// threads past the end.
 pub fn folded(groups: u32) -> (u32, u32) {
     if groups <= MAX_GROUPS {
         (groups, 1)
@@ -306,9 +291,8 @@ pub fn folded(groups: u32) -> (u32, u32) {
     }
 }
 
-/// How a map over `domain` is dispatched: the workgroups in x, y and z,
-/// and the fold (elements per unit of `gid.y`) when rows are too many
-/// for one dimension.
+/// A map's dispatch over `domain`: workgroups in x, y, z, and the fold
+/// (elements per unit of `gid.y`) when rows exceed one dimension.
 pub fn dispatch(domain: orla_abi::Domain) -> (u32, u32, u32, u32) {
     let groups_x = domain.width().div_ceil(WORKGROUP);
     if domain.shape() == orla_abi::Shape::Rows && groups_x > MAX_GROUPS {
@@ -325,22 +309,19 @@ pub fn dispatch(domain: orla_abi::Domain) -> (u32, u32, u32, u32) {
     }
 }
 
-/// The shader's name for helper function `index` of a module. A name the
-/// source wrote never reaches the shader, and a name WGSL has for itself
-/// must not either: `f32` is its type, and a 33rd helper once took that
-/// name. No word WGSL reserves or predeclares is letters, an underscore
-/// and digits, so no number of helpers meets one.
+/// The shader's name for helper function `index`. Source names stay out
+/// of the shader; `fn_<digits>` matches no WGSL reserved or predeclared
+/// word.
 fn function_name(index: usize) -> String {
     format!("fn_{index}")
 }
 
-/// The shader's name for field `k` of a struct, by the same rule.
+/// The shader's name for struct field `k`, by the same rule.
 fn member_name(k: usize) -> String {
     format!("m_{k}")
 }
 
-/// The path to field `k` of a struct value: a named field, or an
-/// array's element.
+/// The path to field `k` of a struct value: a member or an array index.
 fn field_path(module: &Module, index: u32, k: usize) -> String {
     if module.structs[index as usize].is_array() {
         format!("[{k}]")
@@ -349,8 +330,8 @@ fn field_path(module: &Module, index: u32, k: usize) -> String {
     }
 }
 
-/// The declaration of struct `index`: a WGSL struct, or an alias of an
-/// array, which builds with the same `S{index}(...)` constructor.
+/// The declaration of struct `index`: a WGSL struct, or an array alias;
+/// both build with `S{index}(...)`.
 fn struct_decl(module: &Module, index: usize) -> String {
     let def = &module.structs[index];
     match def.element {
@@ -392,8 +373,8 @@ fn scalar_type(kind: Scalar) -> &'static str {
     }
 }
 
-/// `f(m[0]), f(m[1]), ...` over a matrix's columns, for the builtins
-/// WGSL has for vectors but not for matrices.
+/// A matrix of `f(0), f(1), ...` over its columns, for vector-only
+/// builtins.
 fn per_column(ty: Type, f: impl Fn(usize) -> String) -> String {
     let n = usize::from(ty.order().unwrap_or(0));
     let columns = (0..n).map(f).collect::<Vec<_>>().join(", ");
@@ -401,9 +382,8 @@ fn per_column(ty: Type, f: impl Fn(usize) -> String) -> String {
 }
 
 fn literal(value: &Value) -> String {
-    // WGSL evaluates an expression of constants when it compiles, and
-    // refuses one that is not finite: a NaN or an infinity the optimizer
-    // folded is written as its bits.
+    // WGSL rejects non-finite constant expressions: a NaN or infinity is
+    // written as its bits.
     let f = |v: f32| {
         if v.is_finite() {
             format!("{v:?}")
@@ -426,7 +406,7 @@ fn literal(value: &Value) -> String {
     };
     match value {
         Value::Float(v) => f(*v),
-        // WGSL has no literal for the most negative int; its bits do.
+        // The most negative int is written as its bits.
         Value::Int(i32::MIN) => "bitcast<i32>(0x80000000u)".to_owned(),
         Value::Int(v) => format!("{v}i"),
         Value::Bool(v) => v.to_string(),
@@ -443,15 +423,14 @@ fn literal(value: &Value) -> String {
         Value::Long(v) => long_literal(*v),
         Value::LVec2(v) => format!("vec2<i64>({})", longs(v)),
         Value::LVec3(v) => format!("vec3<i64>({})", longs(v)),
-        // The validator refuses a constant record: a struct or an array
-        // is built by `Construct`.
+        // Records are built by `Construct`; the validator refuses
+        // record constants.
         Value::Record(_) => unreachable!("a constant of the IR is never a record"),
         other => unreachable!("the GPU refuses a module holding {other}"),
     }
 }
 
-/// A `Long` as WGSL writes one; the most negative has no literal, and
-/// is one below the next.
+/// A `Long` literal; the most negative is written as `-MAX - 1`.
 fn long_literal(v: i64) -> String {
     if v == i64::MIN {
         "(-9223372036854775807li - 1li)".to_owned()
@@ -460,8 +439,8 @@ fn long_literal(v: i64) -> String {
     }
 }
 
-/// A pass's call that keeps what an element ran short of a block, when
-/// the module counts its work.
+/// The call that keeps an element's remainder short of a block, in an
+/// accounted module.
 fn keep_left(module: &Module) -> &'static str {
     if module.accounted() {
         "keep_left();"
@@ -470,7 +449,7 @@ fn keep_left(module: &Module) -> &'static str {
     }
 }
 
-/// A pass's call that hands the run what its elements kept, at its end.
+/// The call at a pass's end that settles its elements' remainders.
 fn settle_left(module: &Module) -> &'static str {
     if module.accounted() {
         "settle_left();"

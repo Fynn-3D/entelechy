@@ -1,32 +1,22 @@
-//! The tree a reduction folds in, which every backend folds in, so that
-//! a float sum does not depend on where it ran.
+//! The tree every backend folds a reduction in, so a float sum is the
+//! same wherever it runs.
 //!
 //! A level of `n` elements becomes a level of `n.div_ceil(2)`: element
 //! `i` is `merge(in[2i], in[2i + 1])`, and an odd last element is
-//! carried up untouched. Repeat until one is left. `merge` is
-//! associative and commutative by the language's rule, so the shape of
-//! the tree is free; what is not free is that the three backends agree
-//! on it, since a float sum rounds in the order it is added.
+//! carried up untouched, until one is left.
 //!
-//! A backend may do several of those levels in one pass, since the tree
-//! is the same however it is walked: [`LEVELS_AT_ONCE`] of them fold a
-//! run of [`FOLD`] into one element, by the same pairwise tree. It
-//! matters on a device, where a level is a dispatch with a bind group
-//! and a uniform of its own — for a few thousand elements those were
-//! most of what a reduction cost. It does not matter where the levels
-//! are loops, and the interpreter and the JIT walk one level at a time:
-//! the sixteen merges of a run are a chain, and a level of pairs is
-//! sixteen chains the machine can run at once.
+//! A backend may fold [`LEVELS_AT_ONCE`] levels in one pass, turning a
+//! run of [`FOLD`] elements into one by the same pairwise tree.
 
 /// How many levels of the tree a backend may fold in one pass.
 pub const LEVELS_AT_ONCE: u32 = 4;
 
-/// How many elements of a level one pass of [`LEVELS_AT_ONCE`] levels
-/// folds into one: the run a backend takes at a time.
+/// The run of elements one pass of [`LEVELS_AT_ONCE`] levels folds
+/// into one.
 pub const FOLD: usize = 1 << LEVELS_AT_ONCE;
 
 /// How many elements are left after folding `count` of them by
-/// [`FOLD`], which is [`LEVELS_AT_ONCE`] levels of the tree at once.
+/// [`FOLD`].
 pub fn after_fold(count: usize) -> usize {
     let mut left = count;
     for _ in 0..LEVELS_AT_ONCE {
@@ -39,9 +29,8 @@ pub fn after_fold(count: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// Folding a run by the pairwise tree is the same as folding the
-    /// whole level pairwise that many times, which is what lets a
-    /// backend do several levels in one pass and change no value.
+    /// Folding a run by the pairwise tree equals folding the whole
+    /// level pairwise that many times.
     #[test]
     fn a_run_folded_at_once_is_the_levels_one_at_a_time() {
         let pairwise = |level: &[String]| -> Vec<String> {

@@ -1,8 +1,7 @@
-//! The Fields a scene's inputs hold: a file's, read again when it
-//! changes; a frame of a directory, chosen by the time; a text, written
-//! as its characters' codes; or what the caller bound. These own their
-//! handles in the Host and nothing else, and every handle they replace
-//! or forget is released there.
+//! The Fields a scene's inputs hold: a file (reread on change), a
+//! directory frame chosen by time, a text as character codes, or a
+//! caller binding. Inputs own their Host handles and release each one
+//! they replace or forget.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -19,8 +18,7 @@ struct Asset {
     stamp: Option<Stamp>,
 }
 
-/// An input read frame by frame from a directory: its files in name
-/// order, and which of them the Host holds now.
+/// A directory input: frame files in name order and the one held now.
 struct Sequence {
     dir: PathBuf,
     ty: String,
@@ -51,43 +49,36 @@ fn frame_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// The inputs of a scene and the Fields they hold.
 #[derive(Default)]
 pub(crate) struct Inputs {
-    /// The Field each input holds now, by name.
+    /// The Field each input holds, by name.
     handles: BTreeMap<String, Handle>,
-    /// Inputs read from files, with the stamp each was last read at.
+    /// File inputs with their last-read stamps.
     assets: BTreeMap<String, Asset>,
-    /// Inputs read frame by frame from directories.
+    /// Directory inputs.
     sequences: BTreeMap<String, Sequence>,
-    /// Inputs written as text, with the text each holds.
+    /// Text inputs with their text.
     texts: BTreeMap<String, String>,
-    /// What went wrong selecting a frame, reported by the next sync.
+    /// Frame selection failures, reported by the next sync.
     frame_events: Vec<Event>,
-    /// Whether reads are held to [`Inputs::readable`]: where an agent
-    /// composes the scene and reads back what it holds.
+    /// Whether reads are held to [`Inputs::readable`] (an agent composes
+    /// the scene).
     restricted: bool,
-    /// Directories the person running the session allowed reads from,
-    /// resolved.
+    /// Resolved directories the person allowed reads from.
     allowed: Vec<PathBuf>,
-    /// The directories the scene names ([`crate::scene::Scene::read_from`]),
-    /// resolved: each document reads beside itself, and a scene reads in
-    /// what it uses. Where reads are held, these are the directories of the
-    /// scene the person opened, as it first loaded, and nothing a later
-    /// document says widens them: an agent that composes the scene cannot
-    /// grant itself reads by what it writes.
+    /// Resolved directories the scene names
+    /// ([`crate::scene::Scene::read_from`]). Where reads are held, these
+    /// are fixed at the opened scene's first load: an agent composing
+    /// the scene cannot grant itself reads by what it writes.
     beside: Vec<PathBuf>,
-    /// Whether `beside` holds what the opened scene read from, so it no
-    /// longer follows the documents.
+    /// Whether `beside` is fixed.
     settled: bool,
-    /// Whether a sync has read the scene: from then on whether reads are
-    /// held is settled.
+    /// Whether a sync has read the scene, fixing whether reads are held.
     synced: bool,
 }
 
 impl Inputs {
-    /// Holds reads to the documents' own directories and the ones
-    /// [`Inputs::allow_reads`] allowed.
-    /// Decided before the scene is first read, or not at all: what may
-    /// be read is then the directories of the scene as it first loads,
-    /// whatever happens after, and never depends on when it was asked.
+    /// Holds reads to the documents' directories and those
+    /// [`Inputs::allow_reads`] allowed. Callable only before the first
+    /// sync, so the readable set is the first-loaded scene's directories.
     pub(crate) fn restrict_reads(&mut self) -> Result<(), String> {
         if self.synced && !self.restricted {
             return Err("reads are held from before the scene is first read, or not at all".into());
@@ -111,11 +102,10 @@ impl Inputs {
         Ok(())
     }
 
-    /// Whether `path` may be read: it is inside an allowed directory once
-    /// `..` and links are followed, so no spelling reaches past one.
+    /// Whether `path` may be read: after resolving `..` and links, it is
+    /// inside a package, a scene directory or an allowed directory.
     pub(crate) fn readable(&self, store: &dyn Store, path: &Path) -> Result<(), String> {
-        // Until the opened scene has loaded once, what it reads is the
-        // person's own; from then on it is held.
+        // The opened scene's first load reads freely; later reads are held.
         if !self.restricted || !self.settled {
             return Ok(());
         }
@@ -135,7 +125,7 @@ impl Inputs {
         ))
     }
 
-    /// The Field each input holds now, by name.
+    /// The Field each input holds, by name.
     pub(crate) fn handles(&self) -> &BTreeMap<String, Handle> {
         &self.handles
     }
@@ -161,9 +151,8 @@ impl Inputs {
         }
     }
 
-    /// Brings every input in line with what `graph` declares: files that
-    /// are new or changed are read, directories listed, texts written,
-    /// and inputs the scene no longer declares forgotten.
+    /// Syncs inputs to what `graph` declares: reads new or changed files,
+    /// lists directories, writes texts, forgets undeclared inputs.
     pub(crate) fn sync(
         &mut self,
         store: &dyn Store,
@@ -186,13 +175,12 @@ impl Inputs {
         self.sync_texts(graph, host, events);
     }
 
-    /// What went wrong bringing in a frame since the last call.
+    /// Frame failures since the last call.
     pub(crate) fn take_frame_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.frame_events)
     }
 
-    /// Reads every input's file that is new or changed since it was last
-    /// read, and forgets inputs the scene no longer declares.
+    /// Reads new or changed input files; forgets undeclared ones.
     fn sync_assets(
         &mut self,
         store: &dyn Store,
@@ -234,8 +222,7 @@ impl Inputs {
                     stamp: current,
                 },
             );
-            // Asked when the file is read, so a refusal is said once until
-            // the file or the scene changes.
+            // Checked at read time, so a refusal reports once per change.
             if let Err(why) = self.readable(store, &path) {
                 self.forget(host, &name);
                 events.push(Event::Rejected {
@@ -261,8 +248,7 @@ impl Inputs {
             });
             let (data, detail) = match read {
                 Ok(loaded) => loaded,
-                // An input with somewhere else to read reads it while its
-                // file is not there: that is a state, not a failure.
+                // A missing file with a fallback is absent, not failed.
                 Err(_)
                     if !store.exists(&path)
                         && graph.is_some_and(|g| g.fallback(&name).is_some()) =>
@@ -292,9 +278,8 @@ impl Inputs {
         }
     }
 
-    /// Lists every `frames` input's directory anew, and forgets sequences
-    /// the scene no longer declares. A listing that changed starts over:
-    /// the frame whose turn it is comes in at the next evaluation.
+    /// Relists each `frames` directory and forgets undeclared ones. A
+    /// changed listing resets; the due frame loads at the next evaluation.
     fn sync_sequences(
         &mut self,
         store: &dyn Store,
@@ -365,10 +350,9 @@ impl Inputs {
         }
     }
 
-    /// Brings in the frame whose turn it is at `time` for every `frames`
-    /// input: frame `floor(time * rate)`, wrapping at the end. A frame
-    /// that cannot be read is reported by the next sync and the input
-    /// keeps the frame it had.
+    /// Loads frame `floor(time * rate)`, wrapping, for each `frames`
+    /// input. An unreadable frame is reported by the next sync and the
+    /// input keeps its frame.
     pub(crate) fn select_frames(&mut self, store: &dyn Store, host: &mut Host, time: f32) {
         let names: Vec<String> = self.sequences.keys().cloned().collect();
         for name in names {
@@ -408,9 +392,8 @@ impl Inputs {
         }
     }
 
-    /// Writes every input's text that is new or changed into the Host as
-    /// `Rows<Int>` of its characters' codes, and forgets texts the scene no
-    /// longer declares.
+    /// Writes new or changed texts as `Rows<Int>` of character codes;
+    /// forgets undeclared ones.
     fn sync_texts(&mut self, graph: Option<&Graph>, host: &mut Host, events: &mut Vec<Event>) {
         let wanted: Vec<(String, String)> =
             graph.map(|graph| graph.texts.clone()).unwrap_or_default();
@@ -449,9 +432,8 @@ impl Inputs {
     }
 }
 
-/// A Field read from a file, kept as the input's type says: what a
-/// file decodes to is whole words, and an input declared
-/// `Grid<Vec4 as unorm8>` keeps it as bytes from the moment it lands.
+/// A decoded Field re-encoded as the input's type says: an input
+/// declared `Grid<Vec4 as unorm8>` holds bytes.
 fn kept_as(data: FieldData, ty: &str) -> Result<FieldData, String> {
     let Some(name) = ty
         .split_once(" as ")

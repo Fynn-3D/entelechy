@@ -1,9 +1,8 @@
-//! The `.field` file is a contract other programs keep: Blender's and
-//! Godot's bridges, the importer and the exporter, `run --save` and a
-//! scene's inputs all write and read it. Its bytes are pinned here, every
-//! scalar and a spread of narrow encodings, both ways; and every file a
-//! past Orla wrote into this repository still reads. A change that breaks
-//! either is a new format, and says so with a new `ORLAFIELD` version.
+//! The `.field` file is a contract other programs keep: the bridges, the
+//! importer and exporter, `run --save` and scene inputs. Its bytes are
+//! pinned both ways for every scalar and a spread of narrow encodings,
+//! and every file in this repository reads. Breaking either takes a new
+//! `ORLAFIELD` version.
 
 use std::path::Path;
 
@@ -23,8 +22,8 @@ fn file(header: &str, elements: &[u8]) -> Vec<u8> {
     bytes
 }
 
-/// Holds `data` to `bytes` both ways: it encodes to exactly these bytes,
-/// and these bytes decode to exactly it.
+/// Holds `data` to `bytes` both ways: each encodes and decodes to exactly
+/// the other.
 fn pinned(data: FieldData, bytes: Vec<u8>) {
     assert_eq!(
         encode_data(&data),
@@ -119,8 +118,8 @@ fn a_narrow_scalar_keeps_only_its_bytes() {
 
 #[test]
 fn every_encoding_a_file_may_name_is_spelled_as_it_was() {
-    // A whole word is what a scalar is when no encoding is named, so a
-    // file never spells `word`.
+    // A scalar with no named encoding is a whole word; a file never
+    // spells `word`.
     for name in [
         "f16", "unorm8", "snorm8", "unorm16", "u8", "i8", "u16", "i16",
     ] {

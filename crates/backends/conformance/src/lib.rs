@@ -1,28 +1,21 @@
 #![warn(missing_docs)]
-//! The feature matrix: every feature of the Kernel language under every
-//! execution mode, as complete Kernels with their inputs, params and
-//! context, so a backend can be held to the interpreter across the
-//! whole cross product rather than where an example happens to look.
+//! The feature matrix: every Kernel language feature under every
+//! execution mode, as complete Kernels with inputs, params and context,
+//! so a backend is held to the interpreter across the cross product.
 //!
-//! The rows fall in two parts. The features are what the language can
-//! write, one row a form, which holds a backend to the interpreter on
-//! the words it computes. The semantics are what the language promises
-//! about what it computes: what is not taken is not computed, a read
-//! past an edge is the edge, a quotient truncates toward zero, and a
-//! float says what it says where no number answers. Those rows carry
-//! work that would fail if it ran, so a run that finishes is the proof;
-//! the interpreter and the JIT report such a failure, which is what
-//! makes the row bite, and the GPU agrees on the words either way.
+//! Feature rows hold a backend to the interpreter on the words it
+//! computes. Semantic rows (untaken work, edges, truncation, float
+//! edges) carry work that fails if it runs, so a finished run is the
+//! proof; the interpreter and the JIT report the failure, and the GPU
+//! agrees on the words.
 //!
-//! A feature is a snippet that computes an `Out` from an environment
-//! every mode's wrapper provides: `i: Int`, `x: Float`, the inputs
-//! `rows`, `ints` and `cells`, `sampled` (the element's own sample of an
-//! input of the output's shape), the params `k`, `n`, `flag` and `v`,
-//! and three functions. A mode's wrapper puts the snippet in a map over
-//! rows, a map over a grid, a reduction, a scan with a memory, a
-//! scatter, a scatter that emits, a prefix, and a map writing four
-//! outputs by name, and
-//! returns what that mode returns.
+//! A feature is a snippet computing an `Out` from the environment every
+//! mode's wrapper provides: `i: Int`, `x: Float`, the inputs `rows`,
+//! `ints` and `cells`, `sampled` (the element's own sample of an input
+//! of the output's shape), the params `k`, `n`, `flag` and `v`, and
+//! three functions. The modes are a map over rows, a map over a grid, a
+//! reduction, a scan with a memory, a scatter, an emitting scatter, a
+//! prefix, and a map writing four named outputs.
 
 use orla_abi::{Context, Domain, Encoding, InputState, Scalar, Schema, Value};
 
@@ -49,10 +42,8 @@ pub struct Case {
 /// `Out` they yield.
 pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        // `max` of a negative and a positive zero is the positive one,
-        // `min` the negative, whichever comes first; `clamp` is `max`
-        // then `min`. Held by the zeros' bits: a device's fast arithmetic
-        // may lose a zero's sign in a sum or a division, never in these.
+        // `max` of the two zeros is the positive one, `min` the negative,
+        // in either order; `clamp` is `max` then `min`. Compared by bits.
         (
             "signed zeros in min max clamp",
             "let nz = from_bits((1 << 31) + i * 0); let pz = from_bits(i * 0);",
@@ -110,10 +101,7 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             // What is not taken is not computed: every division here
-            // would fail if the side holding it ran, so a run that
-            // finishes is the proof. The GPU reports no failure, but
-            // the interpreter and the JIT do, and all three must agree
-            // on the words.
+            // fails if its side runs, so a finished run is the proof.
             "not taken",
             "let zero = i - i; let branch = if i == 0 { -1 } else { 100 / i }; let arm = match i % 4 { 0 => -1, _ => 100 / (i % 4) }; let guarded = i != 0 && 100 / i > 3; let either = i == 0 || 100 / i > 3; let early = loop 8 with a = 1 until a > 0 { 100 / zero }; let never = loop i % 1 with a = 2 { 100 / zero };",
             "Out { f: float(branch + arm), i: branch + arm + early + never + int(guarded) + int(either) * 2, b: guarded != either, v: vec3(0.0, 0.0, 0.0) }",
@@ -126,47 +114,38 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: far + corner + lin + column, i: picked, b: far > lin, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
-            // A part of an element is read on its own: the words a
-            // field or an index names and no others, wherever they
-            // begin. An index past the end clamps as an array's does,
-            // and the element the address names clamps as a Field's.
+            // A part of an element reads exactly the words its field or
+            // index names. The index clamps as an array's, the element
+            // address as a Field's.
             "parts of an element",
             "let patch = at(parts, i % 8); let p = patch.points[i % 4] + patch.points[i - 9] + patch.points[i + 9]; let deep = patch.links[i % 3][i % 2] + patch.links[i + 40][1] + patch.links[0 - i][0]; let far = at(parts, i + 100).label + int(at(parts, 0 - i).points[2].z * 10.0); let corner = at(parts, i % 8).points[0].y; let here = near.points[i % 4] + near.points[i + 9]; let own = near.links[i % 3][i % 2] + near.label;",
             "Out { f: p.x + p.z + corner + here.y, i: deep + far + patch.label + own, b: p.y > 0.0, v: p + here }",
         ),
         (
-            // What a float does where no number answers: an infinity
-            // where a positive is divided by nothing, a not-a-number
-            // where nothing is, and nothing equals or orders against a
-            // not-a-number. The words themselves are not compared,
-            // since a payload is a backend's own business; what it says
-            // about them is. `sqrt` of a negative is left out: the CPU
-            // and the JIT have NaN there and a driver's fast math need
-            // not, which the caveat in the documents names.
+            // Infinity from x / 0, NaN from 0 / 0, and NaN equal to and
+            // ordered against nothing. Compared by what the tests say,
+            // since a NaN payload is the backend's; `sqrt` of a negative
+            // is outside the contract (see the documents' caveat).
             "float edges",
             "let zero = x - x; let up = 1.0 / zero; let down = (0.0 - 1.0) / zero; let undefined = zero / zero; let same = undefined == undefined; let ordered = undefined < 1.0 || undefined > 1.0; let big = up > 1000000000.0;",
             "Out { f: 0.0, i: int(isinf(up)) + int(isinf(down)) * 2 + int(isnan(undefined)) * 4 + int(same) * 8 + int(ordered) * 16 + int(big) * 32 + int(up > down) * 64, b: isnan(undefined), v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
-            // The ends of the range, which a device clamps as a float
-            // and the reference clamps as an integer, and what is not a
-            // number, which a device left to its driver.
+            // Float to Int at the ends of the range and at NaN.
             "conversion edges",
             "let zero = x - x; let up = 1.0 / zero; let undefined = zero / zero; let huge = 1000000000000000.0 * 1000000000000000.0; let top = int(huge) / 1000 + int(up) / 2000 + int(2147483647.0) / 4000 + int(2147483648.0) / 8000; let bottom = int(0.0 - huge) / 1000 + int(0.0 - up) / 2000 + int(0.0 - 2147483648.0) / 4000; let none = int(undefined); let closest = int(1.9999999) + int(0.0 - 1.9999999) * 3 + int(16777217.0) / 16;",
             "Out { f: float(none), i: top + bottom + none * 3 + closest, b: none == 0, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
-            // The middle of anything drawn in polar coordinates, where a
-            // device's own `atan2` answers what is not a number, and the
-            // axis below it, where the sign of a zero decides the side.
+            // `atan2` at the origin, and on the negative axis where a
+            // zero's sign decides the side.
             "angles at the origin",
             "let zero = x - x; let minus = zero * (0.0 - 1.0); let one = 1.0 + zero; let a = atan2(zero, zero) + atan2(zero, minus) * 2.0 + atan2(minus, zero) * 4.0; let b = atan2(minus, minus) * 8.0 + atan2(minus, one) * 16.0 + atan2(minus, 0.0 - one) * 32.0; let c = atan2(zero, one) + atan2(one, zero) * 2.0;",
             "Out { f: a + b + c, i: int(isnan(a)) + int(isnan(b)) * 2, b: a + b < 0.0, v: vec3(a, b, c) }",
         ),
         (
-            // What is not a number, through the functions that choose:
-            // `clamp` and `smoothstep` must agree about it, and once did
-            // not.
+            // NaN through the choosing functions (`min`, `max`, `clamp`,
+            // `smoothstep`, `step`).
             "not a number through",
             "let zero = x - x; let undefined = zero / zero; let one = 1.0 + zero; let chosen = min(undefined, one) + min(one, undefined) * 2.0 + max(undefined, one) * 4.0 + max(one, undefined) * 8.0; let held = clamp(undefined, zero, one) + saturate(undefined) * 2.0 + smoothstep(zero, one, undefined) * 4.0; let stepped = step(undefined, one) + step(one, undefined) * 2.0; let through = mix(zero, one, undefined) + abs(undefined) + floor(undefined);",
             "Out { f: chosen + held + stepped, i: int(isnan(through)) + int(isnan(held)) * 2 + int(isnan(chosen)) * 4, b: isnan(through), v: vec3(chosen, held, stepped) }",
@@ -180,8 +159,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: fq + fr, i: q + r * 3 + u + ur * 5 + neg * 7, b: r < 0, v: vec3(float(q), fr, float(ur)) }",
         ),
         (
-            // `&&` and `||` ask the other side only where the first
-            // settles nothing, which is why the division here is safe.
+            // `&&` and `||` evaluate the right side only when the left
+            // leaves the answer open.
             "short circuit",
             "let guarded = i != 0 && 100 / i > 3; let either = i == 0 || 100 / max(i, 1) < 2; let mixed = (x > 0.5 || i > 2) && !(i == 1 && x < 0.1); let chain = i > 0 && i < 9 && x > 0.0 && guarded;",
             "Out { f: if chain { x } else { -x }, i: int(guarded) * 2 + int(either) * 3 + int(mixed) * 5, b: guarded || mixed, v: vec3(0.0, 0.0, 0.0) }",
@@ -197,15 +176,14 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
             "Out { f: walked.a, i: walked.b + nested + counted + clamped + deep, b: walked.on, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
-            // A `break` stops its own loop and gives its value: every
-            // shape of it, and the loops around it untouched.
+            // A `break` ends its own loop with its value; outer loops
+            // continue.
             "break",
             "let first = loop 20 with best = -1 { let c = i + index(); if c % 7 == 0 { break c; } best }; let armed = loop 8 with acc = 0 { match index() { 0 | 1 => acc + 1, 5 => { break acc * 100; }, _ => acc + 2 } }; let nested = loop 4 with outer = 0 { let inner = loop 4 with a = 0 { if a > 2 { break a; } a + 1 }; if outer > 5 { break outer; } outer + inner }; let tested = loop 12 with a = x until a > 3.0 { if a > 2.0 { break a * 10.0; } a + 0.7 }; let counted = loop n with a = 0 { if index() > i % 5 { break a * 2; } a + index() }; let never = loop 5 with a = 1 { if i < 0 { break 99; } a * 2 };",
             "Out { f: tested, i: first + armed + nested + counted + never, b: tested > 20.0, v: vec3(0.0, 0.0, 0.0) }",
         ),
         (
-            // One function written once, lowered for each type a call
-            // gives it.
+            // One function, lowered for each type a call gives it.
             "type parameters",
             "let f = twice(x * 0.5); let a = twice(i); let w = twice(v); let c = twice(Cell { a: x, b: i, on: true }.a); let chosen = pick(x, 1.5, i % 2 == 0); let which = pick(i, n, flag) + width(x) + width(ivec2(i, 2)) + width(vec4(x, 1.0, 2.0, 3.0));",
             "Out { f: f + c + chosen, i: a + which, b: w.x > 1.0, v: w }",
@@ -232,12 +210,9 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "more math",
-            // No NaN is made here: the GPU's driver may fold `inf * 0`
-            // under fast math where the CPU has NaN; a NaN that arrives
-            // in a Field is seen alike (the address tests cover that).
-            // `mod` by 0.71, not 0.7: at an exact multiple the remainder
-            // is a knife-edge (0 or nearly the divisor) that the GPU's
-            // contracted multiply-subtract lands on the other side of.
+            // Makes no NaN: a GPU driver's fast math may fold `inf * 0`.
+            // `mod` by 0.71 keeps every remainder off an exact multiple,
+            // where a contracted multiply-subtract may land either side.
             "let m = trunc(x * 3.3) + exp2(x * 0.5) + log2(x + 1.0) + sinh(x * 0.2) + cosh(x * 0.2) + tanh(x) + inversesqrt(x + 1.0) + distance(v, vec3(x, 0.0, 0.0)) + radians(x) + degrees(x) + saturate(x - 2.0) + fma(x, 2.0, 1.0) + mod(x, 0.71) + mod(-x, 0.71) - trunc(-x * 1.5);",
             "Out { f: m, i: int(isinf(x / 0.0)) * 2 + int(isnan(x)) * 4 + int(isinf(x)) * 8, b: isnan(x) || isinf(x), v: refract(normalize(vec3(x, -1.0, 0.0)), vec3(0.0, 1.0, 0.0), 0.7) + saturate(vec3(x, -1.0, 2.0)) + mod(vec3(x, 2.0, -3.0), 0.71) + fma(v, v, v) + trunc(vec3(x, -x, 2.5)) }",
         ),
@@ -264,8 +239,8 @@ pub fn features() -> Vec<(&'static str, &'static str, &'static str)> {
         (
             "narrow division",
             // The top half of a word, then a signed division by a
-            // constant: Metal narrowed the dividend to sixteen bits and
-            // divided wrongly until the GPU backend guarded its dividends.
+            // constant: the dividend a shader compiler may narrow to
+            // sixteen bits, which the GPU backend guards.
             "let word = add_wrap(mul_wrap(i, 0x10001), 0x12345); let hi = word >>> 16; let hv = ivec2(word, word * 3) >>> 16; let narrow = hi % 7 + hi / 7 + (hi % 6) * 10 + urem(hi, 7) + udiv(hi, 3) + ((word >> 16) & 0xFFFF) % 7 + (hv % 7).x + (hv / 7).y;",
             "Out { f: 0.0, i: narrow, b: hi % 7 == 0, v: vec3(0.0, 0.0, 0.0) }",
         ),
@@ -358,9 +333,8 @@ fn map_grid(lets: &str, out: &str) -> String {
     )
 }
 
-/// A map writing four outputs from one element: the whole `Out`, a
-/// vector, an integer and a flag, given by name in another order than
-/// they are declared, so a backend is held to each Field it writes.
+/// A map writing four outputs from one element (the whole `Out`, a
+/// vector, an integer, a flag), named in an order other than declared.
 fn map_several(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.map_several@1 {{ {HEAD}
@@ -397,10 +371,8 @@ fn scan(lets: &str, out: &str) -> String {
     )
 }
 
-/// A prefix folds with a named rule instead of a carried value, so the
-/// mode's row is the rule's: `max` over a float, an int and a vector,
-/// which every backend must order the same way whatever grouping it
-/// folds in.
+/// A prefix folding with the named rule `max` over a float, an int and
+/// a vector; every grouping gives the same result.
 fn prefix(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.prefix@1 {{ {HEAD}
@@ -421,9 +393,8 @@ fn scatter(lets: &str, out: &str) -> String {
     )
 }
 
-/// A scatter whose element emits a pair per `fan` before the one it
-/// returns, under `max`, the rule `emit` takes: floats as their order,
-/// integers as theirs, whatever order a backend lands them in.
+/// A scatter under `max` whose element emits a pair per `fan` before
+/// the one it returns; the result is independent of landing order.
 fn scatter_emitting(lets: &str, out: &str) -> String {
     format!(
         "kernel matrix.scatter_emitting@1 {{ {HEAD}
@@ -493,7 +464,7 @@ fn parts_input() -> (Schema, Domain, Vec<u32>) {
     (Schema::new(scalars), Domain::Rows(8), words)
 }
 
-/// The same element over a grid, which a sample reads at its own place.
+/// The same element over a grid, read by `sample`.
 fn patches_input() -> (Schema, Domain, Vec<u32>) {
     let (schema, _, _) = parts_input();
     let words = (0..64u32)
@@ -537,8 +508,8 @@ fn params() -> Vec<Value> {
     ]
 }
 
-/// The context every case runs under: a time, a rate, a window, the
-/// pointer with two buttons held, a wheel, and three keys down.
+/// The context every case runs under: time, rate, window, pointer with
+/// two buttons held, wheel, three keys down, and a pad.
 pub fn context() -> Context {
     let mut input = InputState::default();
     input.pointer = [12.5, 7.25];
@@ -548,8 +519,7 @@ pub fn context() -> Context {
     input.set_key(65, true);
     input.set_key(37, true);
     input.set_key(32, true);
-    // A pad: both sticks off centre, one trigger half down, and three
-    // of its buttons held.
+    // Pad: sticks off centre, a trigger half down, three buttons held.
     input.sticks = [[0.625, -0.375], [-0.8125, 0.25], [0.5, 0.0]];
     input.set_button(orla_abi::pad::SOUTH, true);
     input.set_button(orla_abi::pad::NORTH, true);
@@ -575,8 +545,8 @@ pub fn cases() -> Vec<Case> {
     out
 }
 
-/// A Kernel of `mode` with the inputs, domain, params and context that
-/// mode's cases run with.
+/// A Kernel of `mode` with that mode's inputs, domain, params and
+/// context.
 fn case_in(feature: &str, mode: &str, source: String) -> Case {
     let (inputs, domain) = match mode {
         "map over rows" => (
@@ -595,8 +565,7 @@ fn case_in(feature: &str, mode: &str, source: String) -> Case {
             vec![rows(), ints(), cells(), parts_input(), patches_input()],
             Domain::Rows(1),
         ),
-        // A prefix maps over its first input and gives a row of
-        // the same count, as a scan does.
+        // A prefix maps over its first input, as a scan does.
         "prefix" => (
             vec![rows(), ints(), cells(), parts_input(), patches_input()],
             Domain::Rows(COUNT),
@@ -621,8 +590,7 @@ fn case_in(feature: &str, mode: &str, source: String) -> Case {
             ],
             Domain::Rows(COUNT),
         ),
-        // An emitting scatter's target holds `Run`s, and starts
-        // below what most pairs give, so what lands shows.
+        // The target holds `Run`s starting below most pairs.
         "scatter emitting" => (
             vec![
                 rows(),
@@ -675,8 +643,8 @@ fn case_in(feature: &str, mode: &str, source: String) -> Case {
 /// the `Wide` they yield. The environment is `i: Int`, `x: Double` and
 /// `n: Long` from the element, the inputs `rows: Rows<Double>` and `ids:
 /// Rows<Long>`, the params `big`, `origin`, `scale`, `frame` and
-/// `steps`, and two functions. A GPU takes none of these; the rows hold
-/// the JIT to the interpreter, and say what the GPU refuses.
+/// `steps`, and two functions. The JIT is held to the interpreter; the
+/// GPU refuses these rows.
 pub fn wide_features() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         (
@@ -736,9 +704,8 @@ const WIDE_HEAD: &str = "requires { field.read; field.write; }
 
 const WIDE_ENV: &str = "let x = double(i) * 0.37 + 0.1; let n = long(i);";
 
-/// The 64-bit modes: a name, a wrapper, and whether its first input is a
-/// row of ticks (a scan's, which maps over it) or the target of a
-/// scatter follows the inputs.
+/// The 64-bit modes: a name, a wrapper, and whether its first input is
+/// a scan's row of ticks or a scatter's target follows the inputs.
 fn wide_modes() -> Vec<(&'static str, Wrapper)> {
     fn map_rows(lets: &str, out: &str) -> String {
         format!(
@@ -878,8 +845,8 @@ pub fn wide_cases() -> Vec<Case> {
     out
 }
 
-/// The features of `Long` alone, which a device with 64-bit integers
-/// runs in a map and a reduction: a name, `let`s over the environment
+/// The `Long`-only features, which a device with 64-bit integers runs
+/// in a map and a reduction: a name, `let`s over the environment
 /// (`i: Int`, `n: Long`, the input `ids: Rows<Long>`, the params `big`,
 /// `origin` and `steps`), and the `Lng` they yield.
 pub fn long_features() -> Vec<(&'static str, &'static str, &'static str)> {
@@ -896,8 +863,8 @@ pub fn long_features() -> Vec<(&'static str, &'static str, &'static str)> {
         ),
         (
             "long conversions",
-            // Floats with exact products: a device's contraction must not
-            // move a truncation by one.
+            // Floats with exact products, so contraction keeps every
+            // truncation.
             "let f = float(i) * 0.25 + 0.5; let back = int(big) + int(n * 3l); let lng = long(f * 1024.0) + long(i) + long(i > 2) + long(-f); let lv = long(vec2(f, -f)) + long(ivec2(i, 3)); let zero = f - f; let ledge = long(1.0 / zero) / 8 + long(zero / zero) + long(-1.0 / zero) / 8; let fl = float(lvec2(n, big)); let iv = int(lvec3(big, n, -n));",
             "Lng { l: lng + lv.y + lv.x + ledge, v: lvec3(lv, n), f: fl.y + float(big) + fl.x, i: back + iv.x + iv.z, b: f > 1.0 }",
         ),
@@ -1016,8 +983,7 @@ pub fn compare(
         let scalar = scalars[index % stride];
         let (a, b) = (reference[index], candidate[index]);
         let (wa, wb) = (wide(reference, index), wide(candidate, index));
-        // Equal is equal, infinities included, whose difference is not
-        // a number.
+        // Exact equality first: infinities differ by NaN.
         let near = |fa: f64, fb: f64, relative: f64, absolute: f64| {
             fa == fb
                 || (fa.is_nan() && fb.is_nan())
@@ -1030,8 +996,7 @@ pub fn compare(
                 f64::from(relative),
                 f64::from(absolute),
             ),
-            // A double is held to the same rule a float is, scaled to
-            // its own precision.
+            // The float rule, scaled to double precision.
             Scalar::Double => near(
                 f64::from_bits(wa),
                 f64::from_bits(wb),
@@ -1064,7 +1029,7 @@ pub fn compare(
 
 /// Floats that test a narrow encoding's rule: exact values, ties, values
 /// past the range on both sides, and for a half the subnormals and the
-/// infinities. No NaN: a device's arithmetic does not promise one.
+/// infinities. NaN is outside a device's promise, so none appears.
 fn narrow_floats(count: usize) -> Vec<f32> {
     let edges = [
         0.0,
@@ -1104,13 +1069,10 @@ fn narrow_ints(count: usize) -> Vec<i32> {
         .collect()
 }
 
-/// The narrow encodings under the reads and writes a Kernel does: every
-/// encoding read by `sample`, `at` over rows and over a grid, a part of an
-/// element, `at_linear` for the float ones, and written by a map (a copy,
-/// and a value computed from it) and by the steps of a scan into a
-/// memory. The inputs are given as the Kernel's words and kept narrow by
-/// the Host's rule; a backend is held to the interpreter on the words it
-/// reads back.
+/// Every narrow encoding read by `sample`, `at` over rows and a grid, a
+/// part of an element and (floats) `at_linear`, and written by a map and
+/// by a scan's steps into a memory. Inputs are Kernel words narrowed by
+/// the Host's rule.
 pub fn narrow_cases() -> Vec<Case> {
     let mut out = Vec::new();
     let words = |values: &[f32]| values.iter().map(|v| v.to_bits()).collect::<Vec<u32>>();
@@ -1348,16 +1310,14 @@ fn element_shapes() -> Vec<ElementShape> {
     ]
 }
 
-/// The count of elements a shape case runs over: enough that the
-/// interpreter and the JIT split them among threads, and the JIT cuts
-/// the target into parts.
+/// The elements a shape case runs over: enough for the interpreter and
+/// the JIT to split them among threads and the JIT to part the target.
 pub const SHAPE_COUNT: u32 = 20_000;
 
 /// Every element shape a scatter's target may hold, under every rule,
 /// into rows and into a volume, returning its pairs and emitting more
 /// where the rule lets it. The one input is a row of Ints, so every pair
-/// is wider than anything the Kernel reads: what the matrix above, whose
-/// inputs are wide, cannot show.
+/// is wider than anything the Kernel reads.
 pub fn shape_cases() -> Vec<Case> {
     let keys = (
         Schema::new(vec![Scalar::Int]),
@@ -1366,8 +1326,8 @@ pub fn shape_cases() -> Vec<Case> {
             .map(|i| i.wrapping_mul(2_654_435_761) >> 8)
             .collect::<Vec<u32>>(),
     );
-    // The target's shape: its declaration, its extent, and an address
-    // from `{k}`, some of them outside.
+    // Target: declaration, extent, and an address from `{k}` (some
+    // outside).
     let targets = [
         ("rows", "Rows", "Int", Domain::Rows(61), "{k} % 67 - 3"),
         (
@@ -1413,8 +1373,8 @@ pub fn shape_cases() -> Vec<Case> {
                         value = shape.value.replace("{k}", "k"),
                         fan = fan.replace("{k}", "k"),
                     );
-                    // A target that starts in the middle, so that every
-                    // rule has something to keep and something to take.
+                    // Starts mid-range, so every rule keeps some and
+                    // takes some.
                     let start: Vec<u32> = shape
                         .scalars
                         .iter()
@@ -1478,11 +1438,9 @@ impl Summed {
     }
 }
 
-/// Integer sums, under a scatter and a prefix: each element's whole
-/// total, which fails only where it does not fit, at the first element
-/// whose total does not, whatever order a backend adds in. A total that
-/// passes the end of the range on the way and comes back is a total that
-/// fits.
+/// Integer sums under a scatter and a prefix: each element's whole
+/// total, in any adding order. Overflow is reported at the first element
+/// whose total leaves the range; a total that wraps and returns fits.
 pub fn sum_cases() -> Vec<(Case, Summed)> {
     const MAX: i32 = i32::MAX;
     const MIN: i32 = i32::MIN;
@@ -1495,8 +1453,7 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
     };
     let words = |values: &[i32]| Summed::Words(values.iter().map(|v| *v as u32).collect());
     let scatter = |name: &str, emits: bool, ats: &[i32], values: &[i32], target: &[i32], summed| {
-        // Emitting, each element lands its value in two halves: one
-        // emitted, one returned.
+        // Emitting: half the value emitted, half returned.
         let body = if emits {
             "let i = element(); let v = at(values, i); emit(Pair { at: at(ats, i), value: v / 2 }); return Pair { at: at(ats, i), value: v - v / 2 };"
         } else {
@@ -1538,8 +1495,8 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
             summed,
         )
     };
-    // Forty-eight to one element, two thousand million each way: the
-    // total is nothing, and every order passes the end on the way.
+    // 48 values of +-2e9 into one element: total zero, and every order
+    // wraps on the way.
     let swings: Vec<i32> = (0..48)
         .map(|i| {
             if i % 2 == 0 {
@@ -1549,9 +1506,9 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
             }
         })
         .collect();
-    // A row long enough to cross a device's blocks: the first element the
-    // least there is, then a million each. A block's own total passes the
-    // end; every prefix fits, until the million more of the second.
+    // A row crossing a device's blocks: `MIN`, then `each` per element.
+    // A block's own total wraps; every prefix fits at a million each
+    // and overflows at 1.1 million.
     let long = |each: i32| {
         std::iter::once(MIN)
             .chain(std::iter::repeat_n(each, 4095))
@@ -1567,8 +1524,8 @@ pub fn sum_cases() -> Vec<(Case, Summed)> {
             })
             .collect::<Vec<i32>>()
     };
-    // A record of a float and an integer: the float in element order, the
-    // integer whole.
+    // A record of a float (summed in element order) and an integer
+    // (summed whole).
     let mixed = |name: &str, values: &[i32], target: &[i32], summed| {
         let record = |ints: &[i32]| {
             (

@@ -20,9 +20,7 @@ impl Evaluator {
         for index in order {
             let node = &graph.nodes[*index];
             let version = runtime.kernel(&node.kernel).ok_or_else(|| {
-                // Everything published, so a Kernel named
-                // slightly wrong is named rather than searched
-                // for.
+                // Everything published, for the suggestion.
                 let wanted = node.kernel.to_string();
                 let published: Vec<String> = runtime
                     .kernels()
@@ -79,9 +77,8 @@ impl Evaluator {
         let nodes = graph.index();
         let mut domains: BTreeMap<NodeId, Domain> = BTreeMap::new();
         let mut absorbed_into: BTreeMap<NodeId, usize> = BTreeMap::new();
-        // Where each group is, by the node it is named for. Groups are
-        // never added or removed while this runs, only rewired, so the
-        // positions hold.
+        // Each group's position by node; groups are only rewired here,
+        // so positions hold.
         let at: BTreeMap<NodeId, usize> = groups
             .iter()
             .enumerate()
@@ -125,8 +122,7 @@ impl Evaluator {
                 let consumer = &groups[position];
                 // Every port of this consumer the producer feeds, as
                 // (port, consumer input, producer output). The producer
-                // fuses only when these are all its readers: a map of
-                // several outputs goes in whole or not at all.
+                // fuses only when these are all its readers.
                 let consumer_manifest = consumer.version.manifest();
                 let producer_manifest = groups[producer_position].version.manifest();
                 let mut links: Vec<(String, u32, u32)> = Vec::new();
@@ -162,8 +158,8 @@ impl Evaluator {
                             .unwrap_or(0);
                         read == linked
                     });
-                // A narrow output rounds what passes through it; fused, the
-                // consumer would read the value before the rounding.
+                // A narrow output rounds its values, so it stays
+                // materialized.
                 let narrow = links.iter().any(|link| {
                     !producer_manifest.outputs[link.2 as usize]
                         .ty
@@ -173,17 +169,13 @@ impl Evaluator {
                 if links.is_empty() || !only_readers || narrow {
                     continue;
                 }
-                // The consumer's first input decides its extent when it
-                // sets none; whether that input is one of these matters
-                // below.
+                // Whether the producer feeds the consumer's first input,
+                // which sets its extent when it has no `domain`.
                 let reads_first = links.iter().any(|link| link.1 == 0);
-                // A consumer with no `domain` of its own runs over its
-                // first input's extent, so when that input is the
-                // producer the two are the same extent whatever it
-                // turns out to be. That is how a node whose size a
-                // Kernel decides this frame is still fused into: the
-                // producer's expression moves onto the fused node,
-                // under the names fusion gives its ports.
+                // A consumer with no `domain` runs over its first input's
+                // extent; when that input is the producer, the extents
+                // match and the producer's expression moves onto the
+                // fused node under the fused port names.
                 let carried = match (producer_domain, planned) {
                     (Some(a), Some(b)) if a == b => None,
                     (None, None)
@@ -202,9 +194,8 @@ impl Evaluator {
                     }
                     _ => continue,
                 };
-                // Native operations have no IR to inline or be inlined into,
-                // and a reduction neither maps over its output nor yields
-                // one element per consumer element.
+                // Only IR maps fuse: native operations have no IR, and a
+                // reduction is not one element per consumer element.
                 let (Some(consumer_module), Some(producer_module)) = (
                     consumer.version.module(),
                     groups[producer_position].version.module(),
@@ -294,21 +285,17 @@ impl Evaluator {
             .filter(|group| !absorbed_into.contains_key(&group.node.id))
             .collect();
         let executing = self.repeated(executing, &readers);
-        // Keep every group's version while its node is in the graph: a
-        // chain is planned from its head each time, so the inner groups
-        // (gray with source, under inv) are needed again next time.
+        // Keep every group's version while its node is in the graph; a
+        // chain is planned from its head each time.
         let present: BTreeSet<&NodeId> = graph.nodes.iter().map(|node| &node.id).collect();
         self.fused.retain(|node, _| present.contains(node));
         self.forget_pending(runtime, |node| present.contains(node));
         Ok(executing)
     }
 
-    /// A node placed several times over its own output is one execution
-    /// that repeats. `times = N` with a `carry` writes N nodes, each
-    /// taking the one before it on one port and alike in every other
-    /// way; nothing between them is read by anything else, so nothing
-    /// between them has to be made. The last node keeps its name and
-    /// its output, as a fused consumer does.
+    /// Runs `times = N` with a `carry` (N nodes, each chained to the one
+    /// before on one port) as one repeated execution; intermediates are
+    /// never made. The last node keeps its name and output.
     pub(super) fn repeated(
         &self,
         groups: Vec<Group>,
@@ -330,8 +317,7 @@ impl Evaluator {
             absorbed.extend(group.absorbed.iter().cloned());
             let mut parts = previous.parts.clone();
             parts.extend(group.parts.iter().cloned());
-            // The run takes the first node's inputs and the last node's
-            // name: what it gives is what the last one would have.
+            // The run takes the first node's inputs and the last's name.
             let mut node = group.node.clone();
             node.inputs = previous.node.inputs.clone();
             out.push(Group {
@@ -346,20 +332,17 @@ impl Evaluator {
         out
     }
 
-    /// Whether `next` is `previous` again, taking what it made: the same
-    /// Kernel of the same generation, one input bound to the one before
-    /// and every other binding and parameter the same, nothing else
-    /// reading what passes between them, and nothing pinned, fused or
-    /// off the frame. The ports it chains, as indices into the
-    /// manifest's inputs and outputs.
+    /// The chained ports (manifest input and output indices) when `next`
+    /// repeats `previous`: same Kernel and generation, one input bound to
+    /// `previous`, everything else equal, no other readers in between,
+    /// and nothing pinned, fused or off the frame.
     pub(super) fn chained(
         &self,
         previous: &Group,
         next: &Group,
         readers: &BTreeMap<(NodeId, String), usize>,
     ) -> Option<(usize, usize)> {
-        // The one before is either a node of its own or a run of this
-        // same chain already; what follows is always a plain node.
+        // `previous` is a node or a run of this chain; `next` is a node.
         let joinable = match previous.chain {
             None => previous.absorbed.is_empty(),
             Some(_) => true,
@@ -379,13 +362,11 @@ impl Evaluator {
             return None;
         }
         let manifest = next.version.manifest();
-        // Only a map: a reduction, a scan and a scatter each mean
-        // something of their own about what they run over.
+        // Only a map repeats.
         if manifest.mode != orla_ir::Mode::Map || next.version.module().is_none() {
             return None;
         }
-        // Exactly one port differs, and it is bound to what the one
-        // before it made.
+        // Exactly one port differs, bound to the previous output.
         let mut chained = None;
         for (port, binding) in &next.node.inputs {
             if previous.node.inputs.get(port) == Some(binding) {
@@ -408,9 +389,8 @@ impl Evaluator {
         if previous.node.inputs.len() != next.node.inputs.len() {
             return None;
         }
-        // A map of several outputs repeats only when the one it chains is
-        // all anyone reads of the times before the last: the run keeps
-        // the last time's outputs and nothing in between.
+        // A map of several outputs repeats only when the chained output
+        // is the only one read before the last time.
         let (_, carried) = chained?;
         let unread = manifest.outputs.iter().enumerate().all(|(k, port)| {
             k == carried
@@ -424,10 +404,8 @@ impl Evaluator {
         chained
     }
 
-    /// The fused version for `parts`, if it is ready: kept from an earlier
-    /// evaluation, prepared inline, or collected from the runtime's worker.
-    /// `None` means it is still being prepared and the nodes run separately
-    /// this time.
+    /// The fused version for `parts` when ready (kept, prepared inline, or
+    /// collected from the worker); `None` while it is still preparing.
     pub(super) fn fused_version(
         &mut self,
         runtime: &mut Runtime,
@@ -453,12 +431,9 @@ impl Evaluator {
                 if let Some(superseded) = other {
                     runtime.discard(superseded.ticket);
                 }
-                // What fusion declines runs unfused: a producer whose
-                // Field the consumer's port cannot take (the scene's
-                // mistake, which the binding check goes on to name), or a
-                // Kernel whose work is counted and held to its own
-                // budget. Anything else a fusion refuses is this engine's
-                // own fault and is reported.
+                // A declined fusion (a Field the port cannot take, a
+                // budgeted Kernel) runs unfused; any other refusal is an
+                // engine error.
                 let module = match fuse() {
                     Ok(module) => module,
                     Err(error) if error.declines => {
@@ -540,9 +515,8 @@ impl Evaluator {
             Source::External(name) => externals.get(name).and_then(|h| size(*h)),
             Source::Node { node, .. } => domains.get(node).copied(),
         };
-        // A memory port of a node has the memory's extent, not the node's
-        // domain (a scan runs over its ticks, its grid memory is a grid):
-        // what it committed last, else what its initial value is sized.
+        // A memory port has the memory's extent: its last commit, else
+        // its initial value's.
         let of_source = |source: &Source| match source {
             Source::Node { node, port } => {
                 match nodes
@@ -592,10 +566,8 @@ impl Evaluator {
                         None => manifest_default.or_else(|| graph_param(graph, name, overrides)),
                     }
                 };
-                // A domain that reads a number out of a Field is not
-                // knowable before that Field exists, so a group whose
-                // domain does is planned as unknown, and nothing fuses
-                // into it.
+                // A domain that reads a Field's value is unknown before
+                // execution, so nothing fuses into it.
                 expr.resolve(&port, &param, &window_context(context), &|_, _| None)
                     .ok()
             }
@@ -641,8 +613,7 @@ pub(super) fn graph_param(
     })
 }
 
-/// `; did you mean `x`?` where there is one; see
-/// [`orla_abi::names::nearest`], which found it.
+/// `; did you mean `x`?` for [`orla_abi::names::nearest`]'s match.
 pub(super) fn suggest(near: &Option<String>) -> String {
     orla_abi::names::suggestion(near.as_deref())
 }

@@ -1,4 +1,4 @@
-//! Standard base64, as the protocol carries bytes and glTF embeds them.
+//! Standard base64, for protocol and glTF bytes.
 
 /// Decodes standard base64, with or without padding.
 pub fn unbase64(text: &str) -> Result<Vec<u8>, String> {

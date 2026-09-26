@@ -1,6 +1,6 @@
 //! How requests arrive and answers leave: standard input and output, a
-//! socket of JSON lines, and a WebSocket carrying the same lines. The
-//! transport is a detail; every request is answered by [`crate::handle`].
+//! socket of JSON lines, or a WebSocket carrying the same lines. Every
+//! request is answered by [`crate::handle`].
 
 use std::io::{BufRead, Write};
 
@@ -30,20 +30,18 @@ pub fn serve(
     Ok(())
 }
 
-/// One request line and where its answer goes: the process's standard
-/// output, or the socket it came in on. The transports below feed these
-/// to whoever serves the session, a loop or a window.
+/// One request line and where its answer goes. Transports feed these to
+/// whatever serves the session, a loop or a window.
 pub struct Incoming {
     /// The request line.
     pub line: String,
     /// Where the response line goes.
     pub reply: Reply,
     /// Whether it came on standard input, where `quit` ends the process;
-    /// on a socket, `quit` ends that connection.
+    /// on a socket, `quit` ends the connection.
     pub local: bool,
-    /// The channel it came on: `stdin`, `socket 3`, `websocket 4`,
-    /// numbered in the order connections opened. What the session
-    /// records of a change it made says so.
+    /// The channel it came on (`stdin`, `socket 3`, `websocket 4`, numbered
+    /// in opening order), recorded as the origin of its changes.
     pub from: String,
 }
 
@@ -52,10 +50,9 @@ pub struct Incoming {
 pub enum Reply {
     /// A connection's own writer, which outlives the answer.
     Connection(std::sync::mpsc::Sender<String>),
-    /// The process's standard output, written where the answer is made.
-    /// A `quit` on standard input ends the process, and a writer of its
-    /// own might not have written the answer to it by then: this is why
-    /// the last answer used to go missing about once in a hundred runs.
+    /// The process's standard output, written synchronously where the
+    /// answer is made, so a `quit`'s answer is out before the process
+    /// ends.
     Stdout,
 }
 
@@ -76,10 +73,9 @@ impl Reply {
     }
 }
 
-/// Feeds standard input's lines to `sink`, from a thread of its own; the
-/// answers are written on standard output where they are made. Where no
-/// thread can be started (WebAssembly) it says so, and its caller reads
-/// [`stdin_lines`] itself, answering each before it reads the next.
+/// Feeds standard input's lines to `sink` from its own thread. Where no
+/// thread starts (WebAssembly) it returns the error, and the caller reads
+/// [`stdin_lines`] itself, answering each before the next.
 pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("orla stdin".into())
@@ -107,19 +103,15 @@ pub fn stdin_lines() -> impl Iterator<Item = Incoming> {
         })
 }
 
-/// Listens on `address` (`127.0.0.1:7788`, or port 0 for any) and feeds
-/// every connection's lines to `sink`; each connection's answers go back
-/// on its socket, one line each, from a thread of its own. Returns the
-/// address bound. The protocol is the same on a socket as on standard
-/// input, so a tool in another program, Blender say, talks to a running
-/// window. A connection that opens with an HTTP request is a browser:
-/// it is upgraded to a WebSocket and the same lines travel as text
-/// frames ([`crate::websocket`]).
+/// Listens on `address` (`127.0.0.1:7788`, or port 0 for any), feeds every
+/// connection's lines to `sink`, and returns the bound address. Each
+/// connection's answers go back on its socket from its own thread. A
+/// connection opening with `GET` is upgraded to a WebSocket carrying the
+/// same lines as text frames ([`crate::websocket`]), admitted by origin
+/// ([`crate::websocket::Origins`]).
 ///
-/// A browser's page is admitted by its origin ([`crate::websocket::Origins`]),
-/// and a connection that opens with any other HTTP request is closed:
-/// a page on the web can send one to this machine, and its body would
-/// otherwise be read as request lines.
+/// A connection opening with any other HTTP request is refused and
+/// closed, so a web page's request body is never read as request lines.
 pub fn listen(
     address: &str,
     sink: std::sync::mpsc::Sender<Incoming>,
@@ -149,8 +141,8 @@ pub fn listen(
     Ok(bound)
 }
 
-/// Whether a connection opens as an HTTP request other than an upgrade:
-/// a method word in capitals and a space. A request line is never one.
+/// Whether a connection opens as an HTTP request: a capitalized method
+/// word and a space, which a JSON request line never starts with.
 fn is_http(opening: &[u8]) -> bool {
     let word = opening
         .iter()
@@ -159,8 +151,7 @@ fn is_http(opening: &[u8]) -> bool {
     word >= 3 && opening.get(word) == Some(&b' ')
 }
 
-/// Answers an HTTP request that is not a WebSocket upgrade and closes:
-/// what a page elsewhere could send with a form or a fetch.
+/// Answers a non-upgrade HTTP request with 400 and closes.
 fn refuse_http(mut stream: std::net::TcpStream) {
     let body = "Orla's creation protocol takes JSON lines, or a WebSocket; see docs/PROTOCOL.md.\n";
     let _ = write!(
@@ -190,8 +181,8 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
     let (reply, answers) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         for line in answers {
-            // An empty line is the sign to close: sent after a quit's
-            // answer, it ends the connection from this side.
+            // An empty line, sent after a quit's answer, closes the
+            // connection.
             if line.is_empty()
                 || writeln!(writer, "{line}")
                     .and_then(|_| writer.flush())
@@ -235,9 +226,8 @@ fn serve_lines(stream: std::net::TcpStream, sink: std::sync::mpsc::Sender<Incomi
     }
 }
 
-/// One connection of WebSocket frames: the handshake, then a text frame
-/// per request line and one per answer; pings are answered, a close
-/// frame or a quit ends it.
+/// One WebSocket connection: the handshake, then a text frame per request
+/// and per answer; pings are answered; a close frame or a quit ends it.
 fn serve_websocket(
     stream: std::net::TcpStream,
     sink: std::sync::mpsc::Sender<Incoming>,

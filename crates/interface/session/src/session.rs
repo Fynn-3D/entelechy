@@ -1,6 +1,6 @@
-//! The session itself: the four parts, the runtime they share, and the
-//! order they sync in. Its fields are private to this module, so a part
-//! handed a session still reaches only what the session hands it.
+//! The session: the four parts, their shared runtime, and their sync
+//! order. Its fields are private to this module; a part reaches only what
+//! the session hands it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -27,23 +27,19 @@ pub struct Session {
     evaluator: Evaluator,
     /// Where each node was last said to run, so a change is said once.
     placed: BTreeMap<String, Option<String>>,
-    /// The window a headless session reports when an evaluation names
-    /// none: its size in pixels and its scale factor.
+    /// The headless window: size in pixels and scale factor.
     window: Option<([f32; 2], f32)>,
     /// What changed the world, and what was refused.
     history: crate::history::History,
-    /// Where what the session is asked to do comes from now.
+    /// Where the current request comes from.
     origin: crate::Origin,
-    /// Which request, if any, the scene being read is the change of
-    /// ([`Session::claim_scene`]), rather than one found on disk.
+    /// The request whose change the scene being read is
+    /// ([`Session::claim_scene`]).
     claim: Claim,
 }
 
-/// A request's claim on the scene it made, through what the scene comes
-/// to: asked for by the request being answered, waiting for its Kernels
-/// while the request waits for it, landed and what the sync it landed on
-/// said, for the request to answer with. A scene read in its place, a
-/// document changed on disk, ends it.
+/// A request's claim on the scene it wrote, from asked to landed. A scene
+/// read in its place (a document changed on disk) ends it.
 #[derive(Default)]
 pub(crate) enum Claim {
     /// No request's.
@@ -51,11 +47,10 @@ pub(crate) enum Claim {
     None,
     /// The next scene read is the change of the request being answered.
     Asked,
-    /// The scene a request made waits for its Kernels; it is that
-    /// request's when it lands.
+    /// The request's scene waits for its Kernels.
     Waiting(crate::Origin),
-    /// The scene a request made landed on a sync after the request's own:
-    /// what that sync said ([`Session::take_landing`]).
+    /// The request's scene landed on a later sync, with that sync's
+    /// events ([`Session::take_landing`]).
     Landed(Vec<Event>),
 }
 
@@ -67,8 +62,8 @@ fn no_scene() -> EvaluateError {
 }
 
 impl Session {
-    /// Creates a CPU-backed session; call [`Session::sync`] to load files.
-    /// `library` is an extra directory or file of Kernels to use.
+    /// Creates a CPU-backed session; [`Session::sync`] loads files.
+    /// `library` is an extra directory or file of Kernels.
     pub fn open(scene: &Path, library: Option<&Path>, budget_words: usize) -> Self {
         Self::open_with(
             scene,
@@ -77,15 +72,13 @@ impl Session {
         )
     }
 
-    /// Creates a session over a runtime built by the caller, for choosing
-    /// the backend.
+    /// Creates a session over a runtime the caller built.
     pub fn open_with(scene: &Path, library: Option<&Path>, runtime: Runtime) -> Self {
         Self::open_in(Arc::new(crate::Disk), scene, library, runtime)
     }
 
     /// Creates a session whose documents are in `store`: the disk, or
-    /// the files a caller with none (a page) hands in
-    /// ([`crate::Memory`]).
+    /// files handed in ([`crate::Memory`]).
     pub fn open_in(
         store: Arc<dyn Store>,
         scene: &Path,
@@ -107,10 +100,9 @@ impl Session {
         }
     }
 
-    /// Where the session's documents are. Only the session reads and
-    /// writes them: what a caller reads or writes on another's behalf goes
+    /// Where the session's documents are. Callers acting for others go
     /// through [`Session::read_file`], [`Session::write_file`] and
-    /// [`Session::write_scene`], which ask what may be first.
+    /// [`Session::write_scene`], which check allowances first.
     pub(crate) fn store(&self) -> &dyn Store {
         self.scene.store().as_ref()
     }
@@ -120,17 +112,15 @@ impl Session {
         &self.runtime
     }
 
-    /// Builds a runtime over a named backend ([`Session::build`]), the
-    /// device, if any, waited for by blocking.
+    /// Builds a runtime over a named backend ([`Session::build`]),
+    /// blocking on the device.
     pub fn runtime_for(backend: &str, limits: Limits) -> Result<Runtime, String> {
         Self::build(backend, limits, orla_gpu::Wait::blocking()).map(|built| built.runtime)
     }
 
-    /// Builds a runtime over the backend named: `cpu`, `gpu`, `jit`, or
-    /// `best`, the GPU where there is a device, else the JIT, else the
-    /// interpreter, which is what an interface that names none runs on.
-    /// The device, if any, is waited for as `wait` says: a page, which
-    /// cannot block, gives its host turns until the device answers.
+    /// Builds a runtime over `cpu`, `gpu`, `jit`, or `best` (the first of
+    /// GPU, JIT, interpreter that opens). The device is waited for as
+    /// `wait` says.
     pub fn build(
         backend: &str,
         limits: Limits,
@@ -159,13 +149,12 @@ impl Session {
         Err(format!("no backend opens: {}", passed_over.join("; ")))
     }
 
-    /// Opens `scene` in `store` on `backend` and reads it, its reads held
-    /// from the start when `hold_reads` ([`Session::restrict_reads`]).
-    /// With `best`, the first of the GPU, the JIT and the interpreter on
-    /// which a runtime opens and the scene loads: a scene a device will
-    /// not take (a shader its driver refuses) runs on the next, and each
-    /// passed over is said with why. Refused, it says why the scene did
-    /// not load on the last tried.
+    /// Opens `scene` in `store` on `backend` and reads it, reads
+    /// restricted from the start when `hold_reads`
+    /// ([`Session::restrict_reads`]). With `best`, the first of GPU, JIT,
+    /// interpreter on which the runtime opens and the scene loads; each
+    /// passed over is listed with why. The error is why the scene failed
+    /// on the last tried.
     pub fn open_loaded(
         store: Arc<dyn Store>,
         scene: &Path,
@@ -232,8 +221,7 @@ impl Session {
                 None,
             )),
             "gpu" => {
-                // A GPU walks a scan on one thread; the JIT takes the
-                // scans, the GPU everything else.
+                // The JIT runs scans; the GPU runs everything else.
                 let gpu =
                     orla_gpu::GpuBackend::with_wait(wait).map_err(|error| error.to_string())?;
                 let display = gpu.display();
@@ -251,8 +239,7 @@ impl Session {
         }
     }
 
-    /// The JIT, where there is somewhere to run the code it makes: the
-    /// machine itself, or where Orla is WebAssembly, a host that loads it.
+    /// The JIT, where the machine or a WebAssembly host runs its code.
     fn jit() -> Result<Box<dyn Backend>, String> {
         orla_jit::JitBackend::new().map(|jit| Box::new(jit) as Box<dyn Backend>)
     }
@@ -268,9 +255,8 @@ impl Session {
     }
 
     /// Overrides a graph parameter for later evaluations, in the shape of
-    /// its declared type: `[[1, 0], [0, 1]]` for a `Mat2`, an integer for a
-    /// float. A value of another layout is refused. Unknown names are kept
-    /// as given and take effect if the graph later declares them.
+    /// its declared type (`[[1, 0], [0, 1]]` for a `Mat2`); another layout
+    /// is refused. Unknown names are kept for a later declaration.
     pub fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
         self.scene.set_param(name, value)?;
         self.history.changed(
@@ -305,9 +291,8 @@ impl Session {
         Ok(())
     }
 
-    /// Reconciles the runtime with the files in its store and reports what
-    /// changed: replacements the worker finished publish first, then the
-    /// documents are read, then the inputs, and last where each node runs.
+    /// Reconciles the runtime with its store and reports what changed, in
+    /// order: finished replacements, documents, inputs, placements.
     pub fn sync(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         let store = Arc::clone(self.scene.store());
@@ -332,21 +317,17 @@ impl Session {
     }
 
     /// Allows the scene's outputs to be written to files in `dir` and
-    /// under it (`output name <- source to "file";`). Nothing is written
-    /// anywhere else, and nothing at all until something is allowed.
+    /// under it (`output name <- source to "file";`). Outputs are written
+    /// only where allowed.
     pub fn allow_writes(&mut self, dir: &Path) -> Result<(), String> {
         self.writes.allow(self.scene.store().as_ref(), dir)
     }
 
-    /// Holds what the scene's inputs read to the directories the scene
-    /// names, its own, the graphs' it places and the libraries and
-    /// packages it uses, and the ones [`Session::allow_reads`] allowed:
-    /// for a session an agent composes and reads back from (`serve`, the
-    /// Player's `--serve`, a program's `orla_request`), where a scene a
-    /// person runs reads what it names. Decided when the session is
-    /// opened, before its first sync, or refused: the directories are
-    /// those of the scene as it first loads, and nothing after changes
-    /// them.
+    /// Restricts input reads to the scene's own directories (its own, its
+    /// placed graphs', its libraries' and packages') and those
+    /// [`Session::allow_reads`] allowed; for sessions an agent drives
+    /// (`serve`, `--serve`, `orla_request`). Refused after the first
+    /// sync; the directories are fixed as the scene first loads.
     pub fn restrict_reads(&mut self) -> Result<(), String> {
         self.inputs.restrict_reads()
     }
@@ -357,9 +338,8 @@ impl Session {
         self.inputs.allow_reads(self.scene.store().as_ref(), dir)
     }
 
-    /// Allows a write to the one file `path`: a file the person running
-    /// the session named themselves, as a command line's `--save` or
-    /// `--out` does. Nothing else under its directory is allowed by it.
+    /// Allows a write to the one file `path`, named by the person running
+    /// the session (`--save`, `--out`). Its directory stays closed.
     pub fn allow_write_to(&mut self, path: &Path) -> Result<(), String> {
         self.writes.allow_file(self.scene.store().as_ref(), path)
     }
@@ -373,11 +353,9 @@ impl Session {
     }
 
     /// Whether `text`, as the scene document, would be taken whole: it
-    /// lowers, the documents it places load, and every Kernel it defines
-    /// itself compiles and requires only what the session grants. Nothing
-    /// is written, published or run: what a
-    /// caller asks before it replaces the document, so a rejected text
-    /// never reaches the disk.
+    /// lowers, its placed documents load, and each Kernel it defines
+    /// compiles within the session's grants. Side-effect free; callers ask
+    /// before replacing the document.
     pub fn check_scene(&self, text: &str) -> Result<(), crate::Diagnostic> {
         let granted = |module: &orla_ir::Validated| {
             self.runtime
@@ -395,10 +373,9 @@ impl Session {
         self.inputs.readable(self.scene.store().as_ref(), path)
     }
 
-    /// Where a write to `path` lands, once it is known to be inside a
-    /// directory [`Session::allow_writes`] allowed: what a caller acting
-    /// for someone other than the person running the session, an agent
-    /// over the protocol, asks before it writes anywhere.
+    /// Where a write to `path` lands, if inside an allowed directory
+    /// ([`Session::allow_writes`]). Callers acting for an agent ask this
+    /// before every write.
     pub fn allowed_write(&self, path: &Path) -> Result<std::path::PathBuf, String> {
         self.writes.place(self.scene.store().as_ref(), path)
     }
@@ -426,10 +403,9 @@ impl Session {
         Ok(target)
     }
 
-    /// Replaces the scene document with `text`, whole, once it is known to
-    /// load as a sync would load it ([`Session::check_scene`]): refused,
-    /// the document, and so the scene running, are left as they were. The
-    /// outer error is the store's; the inner, why the scene was refused.
+    /// Replaces the scene document with `text`, whole, once
+    /// [`Session::check_scene`] accepts it; a refusal leaves the document
+    /// as it is. The outer error is the store's; the inner, the refusal.
     pub fn write_scene(&self, text: &str) -> Result<Result<(), crate::Diagnostic>, SessionError> {
         if let Err(why) = self.check_scene(text) {
             return Ok(Err(why));
@@ -441,9 +417,8 @@ impl Session {
         Ok(Ok(()))
     }
 
-    /// Where every node of the scene runs: the backend, and why it is not
-    /// the main one when it is not. A node whose Kernel is not published
-    /// is left out.
+    /// Where each node with a published Kernel runs, and why when off the
+    /// main backend.
     pub fn placements(&self) -> Vec<(String, orla_kernel::Placement)> {
         let Some(graph) = self.scene.graph() else {
             return Vec::new();
@@ -458,8 +433,7 @@ impl Session {
             .collect()
     }
 
-    /// Says which nodes run off the main backend, once each time that
-    /// changes.
+    /// Reports nodes off the main backend, once per change.
     fn sync_placements(&mut self, events: &mut Vec<Event>) {
         let now = self.placements();
         for (node, placement) in &now {
@@ -481,9 +455,8 @@ impl Session {
             .collect();
     }
 
-    /// Prepares replacements of running Kernels and fused groups on a
-    /// worker thread, so a republish never stalls the caller; a
-    /// replacement publishes on the first sync after it is ready.
+    /// Prepares replacements of Kernels and fused groups on a worker
+    /// thread; each publishes on the first sync after it is ready.
     pub fn set_background(&mut self, enabled: bool) {
         self.runtime.set_background(enabled);
     }
@@ -493,15 +466,14 @@ impl Session {
         self.runtime.background()
     }
 
-    /// Whether the scene last read waits for its Kernels, prepared off the
-    /// frame, before it replaces the one running.
+    /// Whether the scene last read waits for its Kernels before it
+    /// replaces the running one.
     pub fn scene_waiting(&self) -> bool {
         self.scene.waiting()
     }
 
-    /// What the sync on which the scene a request claimed landed said, a
-    /// sync after the request's own: the request answers with it once. A
-    /// scene that landed on the request's own sync leaves nothing here.
+    /// The events of the later sync on which a request's claimed scene
+    /// landed, taken once. Empty when it landed on the request's own sync.
     pub fn take_landing(&mut self) -> Option<Vec<Event>> {
         match std::mem::take(&mut self.claim) {
             Claim::Landed(events) => Some(events),
@@ -512,10 +484,8 @@ impl Session {
         }
     }
 
-    /// Starts publishing Kernel source that did not come from a document,
-    /// as [`Session::publish_source`] does, without waiting for it to be
-    /// prepared: compiled here, refused here if it does not compile, and
-    /// prepared off the frame where replacements are
+    /// Starts [`Session::publish_source`] without waiting: compiles (or
+    /// refuses) now, prepares where replacements prepare
     /// ([`Session::set_background`]). [`Session::publishing`] finishes it.
     pub fn publish_later(
         &mut self,
@@ -535,9 +505,8 @@ impl Session {
         }
     }
 
-    /// Finishes what [`Session::publish_later`] started, once it is
-    /// prepared: published with the expectation it was given, or refused;
-    /// `None` while it is still being prepared.
+    /// Finishes [`Session::publish_later`] once prepared: published under
+    /// its expectation, or refused; `None` while preparing.
     pub fn publishing(
         &mut self,
         publishing: &Publishing,
@@ -562,8 +531,7 @@ impl Session {
         Some(published)
     }
 
-    /// Records a Kernel source refused, by the id it names when it names
-    /// one it can.
+    /// Records a refused Kernel source, by its id when it parses.
     fn refused_source(&mut self, source: &str, error: &crate::Diagnostic) {
         let subject = orla_language::parse_document(source)
             .ok()
@@ -577,10 +545,9 @@ impl Session {
         );
     }
 
-    /// Publishes Kernel source that did not come from a document, for the
-    /// creation protocol. The source holds exactly one Kernel. Ownership
-    /// stays with documents: a document that later defines the id
-    /// republishes it from the file.
+    /// Publishes a source holding exactly one Kernel, outside any
+    /// document. Documents own ids: one that later defines the id
+    /// republishes it.
     pub fn publish_source(
         &mut self,
         source: &str,
@@ -595,10 +562,8 @@ impl Session {
         }
     }
 
-    /// Prepares `source`, a document holding one Kernel, without
-    /// publishing it. The Kernel sees the declarations the source makes
-    /// or `use`s, and the scene's shared ones after those, so a Kernel
-    /// from a file republishes through the protocol as it is.
+    /// Prepares `source`, one Kernel, without publishing it. It sees its
+    /// own and `use`d declarations, then the scene's shared ones.
     pub fn prepare_source(
         &self,
         source: &str,
@@ -616,8 +581,7 @@ impl Session {
         retired
     }
 
-    /// The Field an input of the scene holds now: a file's, a text's, a
-    /// frame's, or what the caller supplied.
+    /// The Field a scene input holds now.
     pub fn external(&self, name: &str) -> Option<Handle> {
         self.inputs.handles().get(name).copied()
     }
@@ -627,8 +591,7 @@ impl Session {
         self.evaluator.cached(node, port)
     }
 
-    /// Waits for every `async` node's run off the frame and takes it in;
-    /// the next evaluation reads what landed. See
+    /// Waits for every `async` node's run and takes it in; see
     /// [`orla_graph::Evaluator::settle`].
     pub fn settle(&mut self) -> Result<Vec<orla_graph::NodeId>, EvaluateError> {
         self.evaluator.settle(&mut self.runtime)
@@ -655,7 +618,7 @@ impl Session {
             context,
             self.scene.params(),
         )?;
-        // Committed: what the evaluation changed may now leave the session.
+        // Committed: changed outputs may now be written.
         self.writes.after(
             self.scene.store().as_ref(),
             &self.scene.files().writes,
@@ -720,9 +683,8 @@ impl Session {
             .changed(crate::Change::Reset, self.origin.clone());
     }
 
-    /// Forgets the committed state of `node.port` alone; its `<~` readers
-    /// restart from their initial sources on the next evaluation, and
-    /// every other port keeps its state. The port must be state.
+    /// Forgets the committed state of the state port `node.port` alone;
+    /// its `<~` readers restart on the next evaluation.
     pub fn reset_port(
         &mut self,
         node: &orla_graph::NodeId,
@@ -742,7 +704,7 @@ impl Session {
     }
 
     /// Sets the window a headless session reports when an evaluation names
-    /// none: the size in pixels and the scale factor; `None` for no window.
+    /// none: size in pixels and scale factor.
     pub fn set_window(&mut self, window: Option<([f32; 2], f32)>) {
         self.window = window;
     }
@@ -753,23 +715,19 @@ impl Session {
     }
 
     /// Makes the backend wait for its device after every node, so a
-    /// profile measures the work rather than the submission; on the GPU
-    /// that is the difference between a dispatch and a picture. The CPU
-    /// and the JIT are measured as they are.
+    /// profile measures the work, not the submission.
     pub fn set_measured(&mut self, on: bool) {
         self.runtime.backend().set_measured(on);
     }
 
-    /// What measuring one node costs before the node does anything, so
-    /// a profile can take it off what it prints; see
-    /// [`orla_kernel::Backend::measurement_floor`]. Ask after a
-    /// measured run: a backend only knows once it has tried.
+    /// The fixed cost of measuring one node; see
+    /// [`orla_kernel::Backend::measurement_floor`]. Known after a
+    /// measured run.
     pub fn measurement_floor(&self) -> std::time::Duration {
         self.runtime().measurement_floor()
     }
 
-    /// Whether a profile's numbers are what the device's own clock said
-    /// about the work, rather than what the call and its wait took.
+    /// Whether a profile's numbers come from the device's own clock.
     pub fn measures_the_device(&self) -> bool {
         self.runtime().backend().measures_the_device()
     }
@@ -807,12 +765,11 @@ impl Session {
 
     // What follows observes: each hands [`observe`] the parts it reads.
 
-    /// Writes a node's output as a file: `.field` for any Field, `.png` or
-    /// `.ppm` for a grid of pixels (a `Grid<Float>` as gray), `.pgm` for a
-    /// `Grid<Float>`, `.wav` at 48 kHz for rows of one or two floats, `.mid`
-    /// for rows of notes. The node must have been evaluated and kept
-    /// materialized (pinned). The file must be one the session may write
-    /// ([`Session::allowed_write`]), whoever asks.
+    /// Writes an evaluated, pinned node's output as a file: `.field` for
+    /// any Field, `.png`/`.ppm` for pixels (a `Grid<Float>` as gray),
+    /// `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
+    /// floats, `.mid` for rows of notes. Only where
+    /// [`Session::allowed_write`] allows, whoever asks.
     pub fn save(
         &mut self,
         node: &orla_graph::NodeId,
@@ -831,18 +788,15 @@ impl Session {
         )
     }
 
-    /// How many elements a node's output holds: what a node whose
-    /// `domain` a Kernel decided came out as.
+    /// How many elements a node's output holds.
     pub fn element_count(&self, node: &orla_graph::NodeId, port: &str) -> Result<usize, String> {
         observe::element_count(&self.evaluator, &self.runtime, node, port)
     }
 
     /// Runs one element of `node`'s Kernel on the interpreter and returns
-    /// every binding of it: element `at` of a map, step `at[0]` of a scan.
-    /// The scene is evaluated first under `context`, with the node's
-    /// sources pinned so their Fields exist, and the node's invocation is
-    /// what an evaluation would give it now; nothing is committed by the
-    /// trace itself. Pins the trace added are removed again.
+    /// every binding: element `at` of a map, step `at[0]` of a scan. The
+    /// scene is evaluated first under `context` with the node's sources
+    /// pinned; the trace commits nothing and removes the pins it added.
     pub fn trace(
         &mut self,
         node: &orla_graph::NodeId,
@@ -850,8 +804,7 @@ impl Session {
         context: &Context,
     ) -> Result<(Trace, KernelId), String> {
         let (target, version) = observe::trace_target(self.scene.graph(), &self.runtime, node)?;
-        // The sources the node reads must have Fields: pin them for this
-        // evaluation, then let fusion have them back.
+        // Pin the node's sources for this evaluation so they have Fields.
         let pinned: Vec<orla_graph::NodeId> = observe::trace_sources(&target)
             .into_iter()
             .filter(|source| !self.evaluator.pins().contains(source))
@@ -882,9 +835,8 @@ impl Session {
         traced.map(|trace| (trace, target.kernel.clone()))
     }
 
-    /// One element field of a node's output: the value's type and its
-    /// words. `node.port[index].field.field` is how a replay and the
-    /// protocol both name it; [`parse_target`] reads that spelling.
+    /// One element field of a node's output: its type and words. Named
+    /// `node.port[index].field.field` ([`crate::observe::parse_target`]).
     pub fn element_field(
         &mut self,
         node: &orla_graph::NodeId,
@@ -902,10 +854,9 @@ impl Session {
         )
     }
 
-    /// Writes a Field to a file as its extension says (`.png`, `.ppm`,
-    /// `.field`, ...), as [`Session::save`] writes a port, brought back
-    /// from the device first. The file must be one the session may
-    /// write ([`Session::allowed_write`]), whoever asks.
+    /// Writes a Field to a file in the format its extension names, as
+    /// [`Session::save`] does. Only where [`Session::allowed_write`]
+    /// allows, whoever asks.
     pub fn export(&mut self, handle: Handle, path: &Path) -> Result<(), SessionError> {
         let path = self.allowed_write(path).map_err(SessionError::Observe)?;
         observe::write(
@@ -922,8 +873,7 @@ impl Session {
     }
 
     /// A Field's data as the Host holds it, brought back from the device
-    /// first when one holds it: what a front reads to answer or show,
-    /// asking the session rather than reaching into its runtime.
+    /// first.
     pub fn field(&mut self, handle: Handle) -> Result<&orla_kernel::FieldData, SessionError> {
         self.runtime
             .materialize(handle)
@@ -931,9 +881,8 @@ impl Session {
         self.runtime.host().data(handle).map_err(SessionError::Host)
     }
 
-    /// The output of `report` a scene shows: the first that is a picture,
-    /// a grid of pixels one deep. Every interface that shows a scene
-    /// shows this one.
+    /// The output of `report` every interface shows: the first grid of
+    /// pixels one deep.
     pub fn picture_of(&self, report: &orla_graph::Report) -> Option<Handle> {
         let host = self.runtime.host();
         report
@@ -948,9 +897,9 @@ impl Session {
             })
     }
 
-    /// The Field of the scene output named `name`, or of its first when
-    /// `None`, as the last evaluation left it. Every interface that reads
-    /// an output by name reads this one.
+    /// The Field of the scene output `name` (the first when `None`) as
+    /// the last evaluation left it; the one place outputs are read by
+    /// name.
     pub fn output(&self, name: Option<&str>) -> Result<Handle, String> {
         let graph = self.graph().ok_or("no scene is loaded")?;
         let (name, source) = match name {
@@ -975,11 +924,9 @@ impl Session {
         }
     }
 
-    /// Where the device holds `handle` and its size, when it is a picture
-    /// the device can show as it lies: a grid of float pixels one deep.
-    /// Anything else, a picture kept narrow included, is brought back
-    /// ([`Session::picture`]) to be shown. Every interface that presents
-    /// from the device asks this.
+    /// Where the device holds `handle` and its size, when it is wide
+    /// float pixels one deep, shown as it lies. Anything else is shown
+    /// through [`Session::picture`].
     pub fn on_device(
         &self,
         handle: Handle,
@@ -997,9 +944,8 @@ impl Session {
         Some((device, width, height))
     }
 
-    /// The output of `report` a scene sounds, and its channels: the first
-    /// that is rows of one float (mono) or two (stereo). Every interface
-    /// that plays a scene's sound plays this one.
+    /// The output of `report` every interface plays, and its channels:
+    /// the first rows of one float (mono) or two (stereo).
     pub fn sound_of(&self, report: &orla_graph::Report) -> Option<(Handle, usize)> {
         let host = self.runtime.host();
         report.outputs.iter().find_map(|(_, handle)| {
@@ -1016,8 +962,7 @@ impl Session {
         })
     }
 
-    /// A Field of pixels as an image, brought back from the device first
-    /// when one holds it.
+    /// A Field of pixels as an image, brought back from the device first.
     pub fn picture(&mut self, handle: Handle) -> Result<orla_kernel::Image, SessionError> {
         self.runtime
             .image(handle)

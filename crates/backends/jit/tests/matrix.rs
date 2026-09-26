@@ -63,7 +63,7 @@ fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
     );
 }
 
-/// What each case's JIT run says against the interpreter's, bit for bit.
+/// Each case's JIT run against the interpreter's, bit for bit.
 fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
     let jit = JitBackend::new().unwrap();
     let mut failures = Vec::new();
@@ -141,10 +141,9 @@ fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
     failures
 }
 
-/// An integer sum is each element's whole total on jit as on every
-/// backend: one that passes the end of the range and comes back fits,
-/// and one that does not fit fails at the first element whose total
-/// does not, whatever order the backend adds in.
+/// An integer sum is judged by each element's whole total on every
+/// backend: a total that fits passes though a partial sum overflows; one
+/// that does not fails at the first such element, in any addition order.
 #[test]
 fn integer_sums_are_whole_totals_on_jit_as_everywhere() {
     let Some(backend) = orla_jit::JitBackend::new().ok() else {

@@ -1,8 +1,7 @@
-//! What the shader names, without a device: a Kernel with more helpers
-//! and wider structs than there are numbers WGSL spells its own types
-//! with, and a scatter, whose pair is a struct of the shader's making,
-//! emit no declaration WGSL already has a meaning for. The device test in
-//! `parity.rs` runs the same Kernel; this one holds where there is none.
+//! Shader names, without a device: a Kernel with more helpers and wider
+//! structs than WGSL has numbered type names, and a scatter with its
+//! synthesized pair struct, declare no name WGSL already means. The same
+//! Kernel runs on a device in `parity.rs`.
 
 use orla_compiler::compile;
 use orla_gpu::wgsl::{emit, emit_scatter_gather};
@@ -88,8 +87,7 @@ fn many_helpers_and_fields_are_named_apart_from_wgsl() {
         }} }}",
         last = MANY - 1
     );
-    // As lowered: the optimizer writes the helpers out where they are
-    // called and drops them, and what is looked at is a shader of many.
+    // Unoptimized, so the shader keeps its many helpers.
     let module =
         orla_compiler::compile_unoptimized(&source).unwrap_or_else(|error| panic!("{error}"));
     let shader = emit(&module);

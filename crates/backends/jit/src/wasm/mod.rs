@@ -1,11 +1,9 @@
-//! The JIT where Orla is WebAssembly: a Kernel's IR written as a
-//! WebAssembly module ([`translate`]), which the host compiles and puts
-//! into Orla's own function table (`orla.load`, an import of the
-//! `wasm-host` feature). The module imports Orla's memory and table, so
-//! the code reads the context, the views and the Fields where they lie,
-//! and calls the crate's helpers by the index a pointer to each is. The
-//! index the host gives back is a function pointer here, and the rest of
-//! the crate calls it as it calls native code.
+//! The JIT on WebAssembly: a Kernel's IR written as a module
+//! ([`translate`]) that the host loads into Orla's function table
+//! (`orla.load`, imported under `wasm-host`). The module imports Orla's
+//! memory and table, so it reads Fields in place and calls helpers by
+//! their table index. The returned index is a function pointer, called
+//! like native code.
 
 mod encode;
 mod translate;
@@ -39,9 +37,9 @@ unsafe fn load(_: *const u8, _: usize, _: *mut u32, _: u32) -> i32 {
 #[cfg(not(feature = "wasm-host"))]
 unsafe fn unload(_: *const u32, _: u32) {}
 
-/// A module's code where the host loaded it: the entry's index in the
-/// table, a scan's `init`, a reduction's `merge`, and the memory its
-/// slots and constant tables take, which lives as long as the code.
+/// A loaded module: the entry, a scan's `init` and a reduction's
+/// `merge` as table indices, and the slot and constant-table memory,
+/// which lives as long as the code.
 pub struct Compiled {
     pub entry: usize,
     pub init: Option<usize>,
@@ -52,8 +50,7 @@ pub struct Compiled {
 
 impl Drop for Compiled {
     fn drop(&mut self) {
-        // No execution holds this version any more: the runtime drops
-        // the prepared code after the last execution lets go.
+        // The runtime drops prepared code after its last execution.
         unsafe { unload(self.slots.as_ptr(), self.slots.len() as u32) };
     }
 }
@@ -149,7 +146,7 @@ pub fn compile(module: &Validated) -> Result<Compiled, String> {
         functions.push((ty, body));
         has_merge = true;
     }
-    // The slots and the constant tables, in memory of the Kernel's own.
+    // The slots and the constant tables, in the Kernel's own memory.
     let mut frame = vec![0u64; (shared.frame as usize).div_ceil(8).max(1)];
     for (offset, words) in &shared.tables {
         for (k, word) in words.iter().enumerate() {

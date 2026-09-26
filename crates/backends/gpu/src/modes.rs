@@ -63,10 +63,9 @@ impl GpuBackend {
             mapped_at_creation: false,
         });
         let (groups_x, groups_y, groups_z, _) = wgsl::dispatch(domain);
-        // Two buffers take turns: what a time wrote is what the next
-        // reads, and what it read is free for the time after. The Field
-        // the run was given is read once, by the pass already recorded,
-        // and never written.
+        // Two buffers take turns: what a time wrote the next reads, and what it
+        // read is free for the time after. The Field the run was given is only
+        // read, by the pass already recorded.
         let mut reads = output_buffer.clone();
         let mut writes = spare;
         for _ in 1..repeat {
@@ -128,17 +127,14 @@ impl GpuBackend {
         )
     }
 
-    /// A prefix fold on the device: three passes over the map's output,
-    /// in place. One invocation walks each block of `elements a block`
-    /// and leaves its total; one invocation scans the blocks' totals;
-    /// one invocation an element takes its block's offset. The rule is
-    /// order-free, so this grouping answers with the reference's words,
-    /// and nothing here needs shared memory or a barrier — a block is a
-    /// walk, and the passes are ordered by being passes.
+    /// A prefix fold on the device: three passes over the map's output, in
+    /// place. One invocation walks each block and leaves its total, one scans
+    /// the blocks' totals, and one per element adds its block's offset. The
+    /// rule is order-free, so this grouping gives the reference's words; the
+    /// passes order themselves, with no shared memory or barrier.
     ///
-    /// A block holds about the square root of the count, which is what
-    /// makes the two walks the same length: the blocks' own walk is as
-    /// long as one block.
+    /// A block holds about the square root of the count, so both walks are
+    /// the same length.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_prefix(
         &self,
@@ -265,11 +261,9 @@ impl GpuBackend {
         let final_buffer = mapped;
         let stride = output_words as u64 * 4;
         let mut count = element_count as u64;
-        // The level between the levels, from the pile: a scene reduces
-        // the same count every frame, and asking the driver for it
-        // again is what the pile is for. Every element a level reads
-        // was written by the level before it, so nothing stale is ever
-        // seen.
+        // The level between levels, from the pile: a scene reduces the same
+        // count every frame. Every element a level reads was written by the
+        // level before, so nothing stale is seen.
         let other = self.spare.take(
             &self.device,
             (orla_rules::reduce::after_fold(count as usize) as u64 * stride).max(16),
@@ -345,10 +339,9 @@ impl GpuBackend {
             count = u64::from(ahead);
             std::mem::swap(&mut current, &mut next);
         }
-        // One of the two is the answer and goes on to be the Field; the
-        // other is this call's own and goes back. What read it was
-        // submitted before whatever writes it next, and one queue runs
-        // its submissions in order.
+        // One of the two is the answer and becomes the Field; the other goes
+        // back to the pile. What read it was submitted before whatever writes
+        // it next, and one queue runs in order.
         self.spare.keep(next);
         current
     }
@@ -441,14 +434,12 @@ impl GpuBackend {
         compute.dispatch_workgroups(x, y, 1);
     }
 
-    /// A scatter's combine: the target made ready (unless the entry,
-    /// emitting, had it ready already), then the pairs applied by the
-    /// plan. A float sum sorts the pairs by target
-    /// and source (a bitonic sort, one small dispatch per step) and folds
-    /// each target's run in source order; the order-free rules apply one
-    /// invocation per pair with atomics, `min` and `max` over floats
-    /// between two key passes, `last` followed by a gather. Returns the
-    /// target.
+    /// A scatter's combine: the target made ready (unless the emitting entry
+    /// did), then the pairs applied by the plan. A float sum sorts pairs by
+    /// target and source (bitonic, one small dispatch per step) and folds each
+    /// target's run in source order; order-free rules apply one invocation per
+    /// pair with atomics, `min` and `max` over floats between two key passes,
+    /// `last` followed by a gather. Returns the target.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn combine(
         &self,
@@ -465,8 +456,8 @@ impl GpuBackend {
         timing: Option<&wgpu::QuerySet>,
     ) -> wgpu::Buffer {
         let final_buffer = pairs;
-        // Ready already when the entry emitted into it, and then the entry
-        // landed every pair itself: nothing is left to apply.
+        // Ready already when the entry emitted into it; the entry then landed
+        // every pair itself, and nothing is left to apply.
         let landed = target.is_some();
         let whole = matches!(
             scatter,

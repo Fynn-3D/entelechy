@@ -1,21 +1,18 @@
 //! Presenting a resident image to a window without reading it back.
 //!
 //! The Player takes a [`Display`] from the backend before the backend goes
-//! to a runtime, and hands it a window; the display configures a surface
-//! on it and draws the output image with one fullscreen triangle whose
-//! fragment shader samples the image's storage buffer directly, letterboxed
-//! and nearest-neighbour scaled. The image never crosses to the Host. An
-//! overlay, `0x00RRGGBB` pixels the caller rendered, may sit in the
-//! window's top-left corner over the picture.
+//! to a runtime, and hands it a window. The display draws the output image
+//! with one fullscreen triangle sampling its storage buffer, letterboxed
+//! and nearest-neighbour scaled, with an optional `0x00RRGGBB` overlay in
+//! the window's top-left corner.
 
 use std::any::Any;
 
 use crate::{DeviceImage, GpuBackend};
 
-/// The GPU's device as a window reaches it. It is taken from a backend
-/// before the backend is given to a runtime and shares its device, so an
-/// interface draws what the backend left resident without asking the
-/// runtime which backend it holds: the runtime only knows a `Backend`.
+/// The GPU device as a window reaches it: taken from a backend before the
+/// backend goes to a runtime, sharing its device, so an interface draws
+/// what the backend left resident; the runtime knows only a `Backend`.
 #[derive(Clone)]
 pub struct Display {
     instance: wgpu::Instance,
@@ -38,8 +35,8 @@ impl GpuBackend {
     }
 }
 
-/// Where a picture lands in a window: the rule every interface shows by,
-/// the device's presenter and a CPU blit alike.
+/// Where a picture lands in a window: one rule for the device's presenter
+/// and a CPU blit alike.
 pub use orla_rules::placement::{Placement, placement};
 
 /// The WGSL that blits a `vec4<f32>` storage buffer onto the surface.
@@ -218,11 +215,10 @@ impl Display {
         })
     }
 
-    /// Draws a resident image into the presenter's surface, with `overlay`
-    /// over its top-left corner when given. `device` is the image's
-    /// resident object from the Host. Returns where the image was placed,
-    /// or `None` when the window cannot take a frame right now (occluded,
-    /// or the surface timed out). Nothing is read back.
+    /// Draws a resident image (`device`, the Host's resident object) into the
+    /// surface, with `overlay` over its top-left corner. Returns where the
+    /// image was placed, or `None` when the window takes no frame now
+    /// (occluded, or the surface timed out). Nothing is read back.
     #[allow(clippy::too_many_arguments)]
     pub fn present(
         &self,

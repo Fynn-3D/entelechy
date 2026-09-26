@@ -1,35 +1,22 @@
-//! A node's `domain` as written: a literal extent, or an expression over
-//! the node's own inputs and parameters, resolved when the node binds.
+//! A node's `domain`: a literal extent, or an expression over the node's
+//! inputs, parameters and context, resolved when the node binds.
 //!
-//! The expression language is deliberately small: numbers, `vec2` and
-//! `vec3`, `+ - * /`, negation, `count(port)` and `size(port)` over the
-//! node's input ports, `value(port)` and `value(port, i)` for a number a
-//! Kernel put in one, `window()` and `scale()` from the context, `max`,
-//! `min`, `floor`, `ceil`, and names that are the node's parameters or the
-//! graph's. It says how big an output is in terms of what comes in, so a
-//! Kernel that changes topology (four triangles per triangle, a map at
-//! sixteen pixels per tile) can size its output without the graph
-//! repeating the arithmetic by hand, and a picture can fill the window.
+//! Terms: numbers, `vec2`, `vec3`, `+ - * /`, negation, `count(port)`,
+//! `size(port)`, `value(port)`, `value(port, i)`, `window()`, `scale()`,
+//! `max`, `min`, `floor`, `ceil`, and parameter names.
 //!
-//! `value(port)` is the one term that reads data rather than shape: the
-//! Field bound to that port is materialized and one of its numbers sizes
-//! the node. It is how a scene runs over as much as a Kernel decided
-//! there is this frame — how many chunks are in front of the eye, how
-//! many particles are alive — rather than over a maximum it always pays
-//! for. The Field is brought to the Host to read, which on a device is a
-//! wait, so the port is held to a row of scalars and to
-//! [`VALUE_MAX_ELEMENTS`] of them: it is for counts, not for data.
+//! `value(port)` reads data: one number of the Field bound to the port,
+//! brought to the Host. The port holds a row of at most
+//! [`VALUE_MAX_ELEMENTS`] scalars: counts, not data.
 //!
 //! Values come in and only an extent comes out: the Graph computes
-//! structure and never values (`docs/DECISIONS.md`).
+//! structure, never values.
 
 use std::fmt;
 
 use orla_abi::{Domain, Value};
 
-/// The most elements a Field may hold and still be read by `value(port)`:
-/// enough for a row of counts, few enough that reading one is never a
-/// download of a scene's data.
+/// The most elements a Field read by `value(port)` may hold.
 pub const VALUE_MAX_ELEMENTS: usize = 1024;
 
 /// How a node's output extent is given.
@@ -99,10 +86,9 @@ pub enum DomainExpr {
     /// `Vec3`.
     Size(String),
     /// `value(port)` or `value(port, i)`: element `i` of the Field the
-    /// port is bound to, which is a number a Kernel wrote.
+    /// port is bound to.
     Value(String, u32),
-    /// `window()`, the window's size in pixels, or `scale()`, its scale
-    /// factor: context, by name.
+    /// `window()` (size in pixels) or `scale()` (scale factor).
     Context(String),
     /// `vec2(...)` or `vec3(...)`.
     Vector(Vec<DomainExpr>),
@@ -128,9 +114,8 @@ impl fmt::Display for DomainError {
 }
 
 impl DomainExpr {
-    /// Every `value(port, i)` the expression reads, so a caller can bring
-    /// those Fields to the Host before resolving: the resolver itself
-    /// only looks things up.
+    /// Every `value(port, i)` the expression reads; the caller brings
+    /// those Fields to the Host before resolving.
     pub fn values_read(&self) -> Vec<(String, u32)> {
         let mut out = Vec::new();
         self.collect_values(&mut out);
@@ -163,11 +148,8 @@ impl DomainExpr {
         }
     }
 
-    /// The same expression on a node that absorbed this one's: every
-    /// port, and every name that is one of this Kernel's parameters,
-    /// under the `prefix/name` fusion gives them. A name that is not a
-    /// parameter of the Kernel is the graph's, which fusion does not
-    /// rename.
+    /// The expression on a fused node: ports and this Kernel's parameter
+    /// names under `prefix/name`; graph parameter names stay.
     pub fn renamed(&self, prefix: &str, params: &[String]) -> Self {
         let rename = |name: &String| format!("{prefix}/{name}");
         let inner = |parts: &[Self]| -> Vec<Self> {
@@ -201,9 +183,8 @@ impl DomainExpr {
         }
     }
 
-    /// The expression with every name `given` answers for replaced by
-    /// what it gives, and every other name kept: how a placed graph's own
-    /// parameters become the values its parent passed.
+    /// Replaces every name `given` answers for; other names stay. A
+    /// placed graph's parameters take the values its parent passed.
     pub fn with_names(&self, given: &dyn Fn(&str) -> Option<DomainExpr>) -> Self {
         let inner = |parts: &[Self]| -> Vec<Self> {
             parts.iter().map(|part| part.with_names(given)).collect()
@@ -238,14 +219,10 @@ impl DomainExpr {
         }
     }
 
-    /// Resolves the expression to an extent. `port` gives the extent an
-    /// input port is bound to, `param` the value of a parameter,
-    /// `context` the window's size (`window`) or scale (`scale`), and
-    /// `element` a number a Kernel wrote, each `None` when unknown.
-    ///
-    /// Values come in and only an extent comes out: the arithmetic is
-    /// over [`Size`], which holds counts and measures and nothing a Kernel
-    /// could be given, so the Graph computes structure and never values.
+    /// Resolves the expression to an extent. `port` gives an input's
+    /// extent, `param` a parameter, `context` `window` or `scale`, and
+    /// `element` a number a Kernel wrote; each is `None` when unknown.
+    /// The arithmetic is over [`Size`], so only structure comes out.
     pub fn resolve(
         &self,
         port: &dyn Fn(&str) -> Option<Domain>,
@@ -269,11 +246,8 @@ impl DomainExpr {
                 .filter(|v| (1..=i64::from(u32::MAX)).contains(v))
                 .map(|v| v as u32)
                 .ok_or_else(|| {
-                    // Two cases are worth naming the remedy for: a count
-                    // a Kernel works out reaches zero the frame it culls
-                    // everything, and a side is fractional as soon as
-                    // somebody drags a window's corner to an odd width or
-                    // a Kernel writes a count as a `Float`.
+                    // A zero count and a fractional side each get a
+                    // remedy in the message.
                     let hint = match n {
                         _ if n.exact() == 0.0 => {
                             "; a count that can reach zero wants `max(..., 1)`"
@@ -403,10 +377,8 @@ struct Inputs<'a> {
     element: &'a dyn Fn(&str, u32) -> Option<Value>,
 }
 
-/// A number the Graph counts with: a whole number, exact, which is what
-/// counts, sides and integer parameters are; or a measure, which may have
-/// a fraction (a window's scale, a float parameter) and must come out
-/// whole before it sizes anything.
+/// A number the Graph counts with: an exact whole number, or a measure
+/// (a scale, a float parameter) that must come out whole to size anything.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Number {
     Whole(i64),
@@ -429,8 +401,7 @@ impl Number {
         }
     }
 
-    /// `floor` or `ceil`: a whole number, which a measure too large to
-    /// count is not.
+    /// `floor` or `ceil` to a whole number; fails when too large to count.
     fn rounded(self, f: fn(f64) -> f64) -> Result<Self, DomainError> {
         match self {
             Self::Whole(v) => Ok(Self::Whole(v)),
@@ -445,11 +416,9 @@ impl Number {
         }
     }
 
-    /// `self op other`: whole numbers stay whole and exact, and fail
-    /// rather than wrap; a division of whole numbers that leaves a
-    /// remainder is the measure it is, as a window's side divided is, so
-    /// `floor` and `ceil` decide it and a bare fraction sizes nothing;
-    /// a measure on either side makes a measure.
+    /// `self op other`: whole numbers stay exact and fail on overflow; a
+    /// division with a remainder, or a measure on either side, gives a
+    /// measure.
     fn apply(self, op: DomainOp, other: Self) -> Result<Self, DomainError> {
         if other.exact() == 0.0 && op == DomainOp::Div {
             return Err(DomainError {
@@ -510,8 +479,6 @@ enum Size {
 
 impl Size {
     /// A value as a size: a number, or a vector of two or three numbers.
-    /// Nothing else is one: a boolean, a colour, a matrix or a struct
-    /// sizes nothing.
     fn of(value: &Value) -> Option<Self> {
         let whole = |v: i64| Number::Whole(v);
         let measure = |v: f64| Number::Measure(v);
@@ -639,8 +606,8 @@ impl fmt::Display for DomainExpr {
     }
 }
 
-/// A sub-expression, parenthesized when it is itself arithmetic so the
-/// printed form reads back as the same tree.
+/// A sub-expression, parenthesized when arithmetic, so it reads back as
+/// the same tree.
 struct Parenthesized<'a>(&'a DomainExpr);
 
 impl fmt::Display for Parenthesized<'_> {

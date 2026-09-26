@@ -1,6 +1,6 @@
 //! The optimizer is held to the interpreter: every feature under every
-//! mode computes the same words from the optimized IR as from the IR
-//! the lowering made, and the optimized IR is smaller.
+//! mode computes the same words from optimized and lowered IR, and the
+//! optimized IR is smaller.
 
 use orla_abi::{Capabilities, Capability, Host, Invocation, Scope};
 use orla_compiler::{compile, compile_unoptimized};
@@ -93,9 +93,8 @@ fn every_feature_under_every_mode_computes_the_same_words_optimized() {
     eprintln!("feature matrix: {before} instructions lowered, {after} optimized");
 }
 
-/// A loop whose count and initial value are known and whose body only
-/// computes is run once, when the Kernel is compiled, rather than for
-/// every element. A table built in a loop is what this is for.
+/// A loop with a known count and initial value whose body only computes
+/// runs once at compile time, as for a table built in a loop.
 #[test]
 fn a_loop_over_literals_is_run_when_the_kernel_is_compiled() {
     let loops = |body: &[Instruction]| {
@@ -116,17 +115,17 @@ fn a_loop_over_literals_is_run_when_the_kernel_is_compiled() {
     );
     let module = compile(table).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(loops(&module.entry.body), 0, "{module}");
-    // 0xAAAA + 0xCCCC * 2, the masks of two sides, added up here.
+    // 0xAAAA + 0xCCCC * 2, the masks of two sides, folded.
     let text = module.entry.to_string();
     assert!(text.contains("148546"), "{text}");
 
-    // A loop that reads a Field is not run here, and neither is one
-    // that would fail: the failure belongs to the element that has it.
+    // A loop reading a Field is not folded, nor one that would fail: the
+    // failure belongs to its element.
     let reads = "kernel test.reads@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; compute { return loop 8 with a = 0 { a + at(rows, index()) }; } }";
     assert_eq!(loops(&compile(reads).unwrap().entry.body), 1);
     let fails = "kernel test.fails@1 { requires { field.write; } output result: Rows<Int>; compute { return loop 4 with a = 1 { a + 100 / (index() - 2) } + element(); } }";
     assert_eq!(loops(&compile(fails).unwrap().entry.body), 1);
-    // A run-time count is not known here either.
+    // Nor a loop with a run-time count.
     let counted = "kernel test.counted@1 { requires { field.write; } param n: Int = 4; output result: Rows<Int>; compute { return loop n with a = 1 { a * 2 } + element(); } }";
     assert_eq!(loops(&compile(counted).unwrap().entry.body), 1);
 }
@@ -163,10 +162,8 @@ fn ops(instructions: &[Instruction]) -> Vec<&Op> {
     out
 }
 
-/// A field or an element taken out of a whole element of an input is a
-/// read of those words alone, and the whole read goes when nothing else
-/// wants it: a Kernel holding a record of arrays would otherwise copy
-/// every word of it to reach three.
+/// A field or element taken out of a whole input element reads only those
+/// words, and the whole read goes when nothing else wants it.
 #[test]
 fn a_part_of_an_element_is_read_without_the_rest_of_it() {
     let head = "kernel test.part@1 { requires { field.read; field.write; }
@@ -193,10 +190,8 @@ fn a_part_of_an_element_is_read_without_the_rest_of_it() {
         !entry.iter().any(|op| matches!(op, Op::At(..))),
         "nothing wants the whole element: {module}"
     );
-    // A name is not a want: the `let` the read was given goes with
-    // the read, since showing it would mean doing work the Kernel no
-    // longer does. A trace of a Kernel a document owns walks the
-    // source, where every `let` still is.
+    // The read's `let` name goes with the read; a trace of a document's
+    // Kernel walks the source, where every `let` stays.
     let named = format!("{head} let p = at(patches, element()); return p.points[0].y; }} }}");
     let module = compile(&named).unwrap_or_else(|error| panic!("{error}"));
     assert!(
@@ -210,8 +205,8 @@ fn a_part_of_an_element_is_read_without_the_rest_of_it() {
         "and the name goes with it: {:?}",
         module.entry.bindings
     );
-    // What wants the whole element keeps it: here one of two elements
-    // is chosen before anything is taken out of it.
+    // A whole element still wanted is kept: here one of two is chosen
+    // before anything is taken out.
     let whole = format!(
         "{head} let p = at(patches, element());
             let q = if element() > 2 {{ p }} else {{ at(patches, 0) }};
@@ -226,8 +221,8 @@ fn a_part_of_an_element_is_read_without_the_rest_of_it() {
     );
 }
 
-/// A memory the steps write keeps its whole read: a `put` between the
-/// read and the part would be seen by the part and not by the copy.
+/// A memory the steps write keeps its whole read: a part would see a
+/// `put` between read and part that the copy would not.
 #[test]
 fn a_memory_the_steps_write_is_read_whole() {
     let source = "kernel test.memory@1 { requires { field.read; field.write; }

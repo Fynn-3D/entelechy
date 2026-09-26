@@ -1,19 +1,12 @@
 //! Orla IR to Cranelift.
 //!
-//! Every IR value becomes its words, one Cranelift value each, `f32` or
-//! `i32` (a `Bool` is an `i32` of 0 or 1), in the layout the ABI gives
-//! elements, so a struct is its fields in order and a vector its
-//! components. `if` and `loop` become blocks with block parameters; a
-//! call passes the words; a map's entry takes the context, the element's
-//! coordinates and a pointer for its output words; a scan's entry takes
-//! the context, the step's index, a pointer to the carried words and a
-//! pointer for the next, and its `init` writes the first carried words;
-//! a reduction's `merge` takes its two values through pointers, so the
-//! host can call it whatever their words. Memories are written through
-//! a helper. Integer arithmetic is
-//! checked as the interpreter checks it, the first failure recorded in
-//! the context. Field reads and the transcendental functions call the
-//! helpers in the crate root, by symbol, so they round as the CPU does.
+//! Every IR value is its words in the ABI's element layout, one
+//! Cranelift value per lane (a `Bool` is an `i32` of 0 or 1). `if` and
+//! `loop` are blocks with block parameters; calls pass words. Integer
+//! arithmetic is checked as the interpreter checks it, the first
+//! failure recorded in the context. Memory writes, grid reads and
+//! transcendental functions call the crate root's helpers by symbol, so
+//! they round as the CPU does.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -76,7 +69,7 @@ enum Kind {
     /// A function: the context, its result's slot, its arguments' words.
     Function,
     /// A map's entry: the context, the run's first `x`, its `y` and
-    /// `z`, how many elements it holds, and where their words go.
+    /// `z`, its length, and where its words go.
     Map,
     /// A scan's entry: the context, the index, the carried words, the
     /// output slot.
@@ -88,8 +81,7 @@ enum Kind {
 
 /// Compiles the module.
 pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, String> {
-    // A port keeps every scalar one way, which is what a port type can
-    // say; the code is generated for that one encoding.
+    // A port keeps every scalar in one encoding, the one generated for.
     for port in module
         .manifest
         .inputs
@@ -182,12 +174,9 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         atan2: declare(&mut jit, "orla_jit_atan2", &binary64_sig)?,
         fmod: declare(&mut jit, "orla_jit_fmod", &binary64_sig)?,
     };
-    // Every function takes the context, a pointer for its result's words
-    // (a struct or a vector is more words than registers return), then
-    // its arguments' words; a map's entry takes the coordinates and the
-    // output pointer instead, a scan's the index, the carried words'
-    // pointer and the output pointer; a scan's `init` is a function
-    // without arguments.
+    // Every function takes the context, a pointer for its result's
+    // words, then its arguments' words. Entries take the signatures of
+    // `Kind`; a scan's `init` takes no arguments.
     let mut functions = Vec::with_capacity(module.functions.len());
     for (index, function) in module.functions.iter().enumerate() {
         let mut params = vec![ptr, ptr];
@@ -204,9 +193,6 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let entry_signature = if scan {
         sig(&[ptr, i, ptr, ptr], &[])
     } else {
-        // A map's entry walks a run of elements itself: the context, the
-        // first `x`, the `y` and `z` they share, how many there are, and
-        // where their words go.
         sig(&[ptr, i, i, i, i, ptr], &[])
     };
     let entry_id = jit
@@ -228,9 +214,8 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         ),
         _ => None,
     };
-    // The scratch slot holds what a `put` writes, an input's element, or
-    // what an `emit` gives, a pair: the target's element after an address
-    // of at most three words.
+    // The scratch slot holds a `put`'s value, an input's element, or an
+    // `emit`'s pair: an address of at most three words, then the element.
     let pair = match module.manifest.mode {
         orla_ir::Mode::Scatter { base, .. } => {
             module.manifest.inputs[base as usize]
@@ -334,24 +319,22 @@ impl layout::Width for types::Type {
     }
 }
 
-/// An input's view as the run sees it: the parts that do not change
-/// while the run walks its elements.
+/// An input's view as fixed for the length of a run.
 #[derive(Clone, Copy)]
 struct ViewOnce {
     /// The first word of the Field.
     words: Value,
     /// Bytes an element takes.
     element: Value,
-    /// The largest `x` the Field has.
+    /// The Field's largest `x`.
     last_x: Value,
     /// The first element of the row this run is on, clamped into the
     /// Field as `sample` clamps.
     row: Value,
-    /// The last element there is, for an address over rows.
+    /// The last element, for an address over rows.
     last: Value,
-    /// Where this element's words are, carried from element to element
-    /// rather than worked out again: `sample` walks the row one element
-    /// at a time and stops at its end, which is the clamp.
+    /// Where this element's words are, carried from element to element:
+    /// `sample` steps along the row and stops at its end, the clamp.
     at: Option<Value>,
     /// The last element of the row, as an address: where `at` stops.
     end: Value,
@@ -365,16 +348,15 @@ struct Fx<'a, 'b> {
     ptr: types::Type,
     /// The function's name, which names the tables it defines.
     name: String,
-    /// The words of every value known when the Kernel is compiled, by
-    /// id: literals, and vectors, structs and arrays built from them.
+    /// The words of every value known at compile time, by id: literals
+    /// and vectors, structs and arrays built from them.
     constants: HashMap<u32, Vec<u32>>,
-    /// Values that live in the module's read-only data, by id: the
-    /// address of their words. An array picked out of a constant table
-    /// is one, so a table of tables is indexed without a copy.
+    /// Values in the module's read-only data, by id: their address. An
+    /// array taken from a constant table is one, so nested tables index
+    /// in place.
     pointers: HashMap<u32, Value>,
-    /// Where an array's words were put down to be indexed, and the
-    /// block that put them there: a second index of the same array in
-    /// that block reads what is already stored.
+    /// Where an array's words were stored to be indexed, and the block
+    /// that stored them; later indexes in that block reuse the store.
     spilled: HashMap<u32, (Block, Value)>,
     /// The tables defined so far, by the id of the array they hold.
     tables: HashMap<u32, cranelift_codegen::ir::GlobalValue>,
@@ -386,7 +368,7 @@ struct Fx<'a, 'b> {
     /// Enclosing loops: the carried words and the index.
     loops: Vec<(Vec<Value>, Value)>,
     /// A scan entry's carried words and step index, read by `Carried`
-    /// and `Index` outside every loop.
+    /// and `Index` outside loops.
     scan: Option<(Vec<Value>, Value)>,
     ctx: Value,
     /// The entry's coordinates and output pointer.
@@ -409,27 +391,25 @@ struct Fx<'a, 'b> {
     pow: FuncRef,
     atan2: FuncRef,
     fmod: FuncRef,
-    /// What every input's view says, read once before a map's run
-    /// rather than at every element: the words, the bytes an element
-    /// takes, the last `x` there is, and where the run's own row
-    /// starts. A read is then one clamp, one multiply and one add.
+    /// Every input's view, read once before a map's run: words, element
+    /// bytes, last `x`, and the run's row start. A read is then a clamp,
+    /// a multiply and an add.
     settled_views: Vec<Option<ViewOnce>>,
     scratch: StackSlot,
     flags: MemFlags,
-    /// What the context and the views hold, which nothing writes while
-    /// an execution runs: marked read-only so the loads a loop repeats
-    /// are hoisted out of it rather than done again every element.
+    /// Memory flags for the context and views, which are read-only during
+    /// an execution, so loops hoist their loads.
     settled: MemFlags,
     /// The loop iterations an element may run, when the module counts
     /// them; see [`orla_ir::Module::counts_work`].
     budget: Option<u32>,
-    /// When the module counts: the element's iterations, held in a
-    /// register and written to the context only around a call; the next
-    /// count that needs a look, the budget passed or a block full; and
-    /// the count at the last look, up to which the blocks are the run's.
+    /// When the module counts: the element's iterations, in a register
+    /// and written to the context around calls; the next count that
+    /// needs a look (budget passed or block full); and the count at the
+    /// last look, up to which blocks are the run's.
     work: Option<(Variable, Variable, Variable)>,
-    /// The iterations whose body ran, of each loop finished, by the
-    /// loop's value: what the spend right after it adds.
+    /// Each finished loop's body iterations, by the loop's value, added
+    /// by the spend after it.
     ran: HashMap<u32, Value>,
 }
 
@@ -529,9 +509,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    /// Sets the count and the count at the last look, and so the next
-    /// count that needs a look: the end of the block looked in, or one
-    /// past the budget.
+    /// Sets the count and the count at the last look, and from them the
+    /// next look: the end of that block, or one past the budget.
     fn count_from(&mut self, work: Value, looked: Value) {
         let (Some(budget), Some((count, next, seen))) = (self.budget, self.work) else {
             return;
@@ -548,8 +527,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.def_var(next, at);
     }
 
-    /// Reads the count and the count at the last look from the context,
-    /// which a caller, a callee, a step or a merge left there.
+    /// Reads the count and the count at the last look from the context.
     fn load_count(&mut self) {
         if self.work.is_none() {
             return;
@@ -577,8 +555,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.load_count();
     }
 
-    /// [`Op::Spend`]: adds the iterations whose body ran, of the loop
-    /// just finished, to the count: one addition.
+    /// [`Op::Spend`]: adds the finished loop's body iterations to the
+    /// count.
     fn spend(&mut self, ran: Value) -> Value {
         if let Some((count, _, _)) = self.work {
             let before = self.b.use_var(count);
@@ -588,12 +566,12 @@ impl<'a, 'b> Fx<'a, 'b> {
         ran
     }
 
-    /// [`Op::Look`]: a compare, unless the count has reached the end of
-    /// the block last looked in or passed the budget. Past the budget,
-    /// the element fails; the blocks filled since the last look go to the
-    /// run's total, added in place, and past that the run fails and the
-    /// count is set past the budget, so every look after says so too.
-    /// Gives the `Bool` word of whether the element must stop.
+    /// [`Op::Look`]: a compare until the count reaches the end of the
+    /// last block looked in or passes the budget. Past the budget the
+    /// element fails; blocks filled since the last look are added to the
+    /// run's total, and past that total the run fails and the count is
+    /// set past the budget so later looks fail too. Gives the `Bool`
+    /// word of whether the element must stop.
     fn look(&mut self) -> Value {
         let (Some(budget), Some((count, next, seen))) = (self.budget, self.work) else {
             return self.i32c(0);
@@ -664,8 +642,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.block_params(after)[0]
     }
 
-    /// Writes the count and the count at the last look to the context,
-    /// for a callee or a caller.
+    /// Writes the count and the count at the last look to the context.
     fn store_count(&mut self) {
         if let Some((count, _, seen)) = self.work {
             let held = self.b.use_var(count);
@@ -679,8 +656,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    /// Translates a whole function: its arguments from the entry block's
-    /// parameters, its body, and its return.
+    /// Translates a whole function: arguments, body and return.
     fn function(mut self, function: &Function, kind: Kind) {
         let slots = function.slot_count();
         self.name = function.name.clone();
@@ -695,8 +671,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         let out = match kind {
             Kind::Map => unreachable!("a map's entry walks its run"),
             Kind::Scan => {
-                // The step's coordinates are its index, as the interpreter
-                // has them; the carried words are loaded once.
+                // The step's coordinates are its index, as in the
+                // interpreter; the carried words are loaded once.
                 let zero = self.i32c(0);
                 self.coords = Some((params[1], zero, zero, params[3]));
                 let carried_types = word_types(self.module, function.result_type());
@@ -714,7 +690,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                 params[1]
             }
             Kind::Merge => {
-                // Each argument's words are loaded from its pointer.
                 for (arg, pointer) in function.args.iter().zip([params[1], params[2]]) {
                     let tys = word_types(self.module, *arg);
                     let words = self.loads(&tys, self.flags, pointer, 0);
@@ -736,9 +711,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.finalize();
     }
 
-    /// A map's entry: the body under a loop over the run of elements it
-    /// was given, so the reads the body does not repeat are hoisted out
-    /// of it and a million elements is one call rather than a million.
+    /// A map's entry: the body in a loop over the given run of elements,
+    /// with loop-invariant reads hoisted.
     fn map_run(mut self, function: &Function, params: &[Value]) {
         let (x0, y, z, count, out0) = (params[1], params[2], params[3], params[4], params[5]);
         self.settle_views(y, z);
@@ -793,8 +767,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                 offset += self.b.func.dfg.value_type(word).bytes() as i32;
             }
         }
-        // What the element ran short of a block, once its last look has
-        // handed the run its blocks, is kept for the run.
+        // The element's partial block after its last look is held for the
+        // run.
         if let Some((count, _, _)) = self.work {
             let held = self.b.use_var(count);
             let short = self
@@ -811,18 +785,17 @@ impl<'a, 'b> Fx<'a, 'b> {
                 .ins()
                 .store(self.flags, left, self.ctx, offsets::LEFT);
         }
-        // A failure stops the run where it happened, so the element the
-        // caller names is the element that failed.
+        // A failure stops the run at the failing element, which the
+        // caller names.
         let error = self
             .b
             .ins()
             .load(types::I32, self.flags, self.ctx, offsets::ERROR);
         let stop = self.b.ins().icmp_imm(IntCC::NotEqual, error, 0);
         let next = self.b.ins().iadd_imm(taken, 1);
-        // What the stores just wrote is what one element takes.
         let step = self.b.ins().iadd_imm(out, i64::from(offset));
-        // Every input walks on one element, and stops at the end of its
-        // row, which is what clamping an `x` past the edge comes to.
+        // Every input steps one element and stops at its row's end, the
+        // clamp of an `x` past the edge.
         let views = self.settled_views.clone();
         let mut again: Vec<BlockArg> = vec![next.into(), step.into()];
         for view in views.iter().flatten() {
@@ -856,20 +829,20 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    /// Records a value's words when they are known at compile time: a
-    /// literal, or a construction or extraction of known words.
+    /// Records a value's words when known at compile time: a literal, or
+    /// a construction or extraction of known words.
     fn note_constant(&mut self, instruction: &Instruction) {
         let id = instruction.id.0;
-        // What a table keeps is words, and a 64-bit scalar's lane is not
-        // one: such a value is built in registers instead.
+        // Tables hold 32-bit words; a value with a 64-bit lane is built
+        // in registers.
         if holds_wide(self.module, instruction.ty) || instruction_reads_wide(self, &instruction.op)
         {
             return;
         }
         let words = match &instruction.op {
             Op::Const(value) => Some(value.words()),
-            // A float vector from Int literals widens them; the words
-            // are then not the parts' words, so only all-float parts count.
+            // A float vector from Int literals converts them, so only
+            // all-float parts give known words.
             Op::Construct(parts)
                 if instruction.ty.components().is_none()
                     || parts.iter().all(|part| self.ty(part) == Type::Float) =>
@@ -901,9 +874,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    /// The address of a constant array's words in the module's read-only
-    /// data, defined once per array here, named after the function and
-    /// the value.
+    /// The address of a constant array's words in read-only data,
+    /// defined once per array, named after the function and value.
     fn table(&mut self, id: u32) -> Value {
         let global = match self.tables.get(&id) {
             Some(global) => *global,
@@ -1009,17 +981,15 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().fcmp(FloatCC::Unordered, v, v)
     }
 
-    /// `min` by the rule every backend keeps (`orla_rules::min_f32`): the
-    /// other operand when one is NaN, and of two equal zeros the negative.
-    /// Cranelift's `fmin` orders the zeros so already (IEEE 754-2019
-    /// minimum) and carries a NaN through; the NaN gives way here.
+    /// `min` by `orla_rules::min_f32`: the other operand when one is NaN,
+    /// and of two equal zeros the negative (Cranelift's `fmin` orders the
+    /// zeros; the NaN is replaced here).
     fn fmin(&mut self, a: Value, b: Value) -> Value {
         let m = self.b.ins().fmin(a, b);
         self.nan_gives_way(a, b, m)
     }
 
-    /// `max` by the rule every backend keeps (`orla_rules::max_f32`): of
-    /// two equal zeros the positive.
+    /// `max` by `orla_rules::max_f32`: of two equal zeros the positive.
     fn fmax(&mut self, a: Value, b: Value) -> Value {
         let m = self.b.ins().fmax(a, b);
         self.nan_gives_way(a, b, m)
@@ -1112,8 +1082,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().iconst(t, v)
     }
 
-    /// The running element's index over the domain, `element()`: rows
-    /// of every layer one after another.
+    /// The running element's index over the domain, `element()`: rows of
+    /// every layer in turn.
     fn element_index(&mut self) -> Value {
         let (x, y, z, _) = self.coords.expect("entry point");
         let w = self
@@ -1134,11 +1104,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().stack_addr(self.ptr, self.scratch, 0)
     }
 
-    /// The view of an input: its address.
-    /// Reads what every input's view says before the run begins: the
-    /// words, the bytes an element takes, and the row this run is on.
-    /// A run stays on one row, so the row's first element is the same
-    /// for every element of it and is worked out here.
+    /// Reads every input's view before the run: words, element bytes,
+    /// and the run's row, whose first element is computed once.
     fn settle_views(&mut self, y: Value, z: Value) {
         let inputs = self.module.manifest.inputs.len();
         let mut settled = Vec::with_capacity(inputs);
@@ -1182,17 +1149,14 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.settled_views = settled;
     }
 
-    /// What the run read about an input before it began, if it did.
+    /// An input's view as read before the run, if it was.
     fn settled_view(&self, input: u32) -> Option<ViewOnce> {
         self.settled_views.get(input as usize).copied().flatten()
     }
 
-    /// The words of one element of an input, loaded where the helper
-    /// that copies them would have been called: the extent and the
-    /// stride come from the view, and the element is clamped into the
-    /// Field exactly as `orla_jit_sample` and `orla_jit_read_rows` do.
-    /// A read is a handful of loads, and the loop around it keeps the
-    /// view's own loads in registers.
+    /// One element of an input, loaded inline: extent and stride from the
+    /// view, the element clamped exactly as `orla_jit_sample` and
+    /// `orla_jit_read_rows` clamp.
     fn element_words(
         &mut self,
         input: u32,
@@ -1222,9 +1186,8 @@ impl<'a, 'b> Fx<'a, 'b> {
     }
 
     /// The Kernel's words of a read of `input` at `base`, one per scalar
-    /// of `ty`: whole-word loads when the input keeps its scalars wide,
-    /// and otherwise each scalar loaded at its size and widened by its
-    /// encoding's rule — the Host's, so the words are the interpreter's.
+    /// of `ty`: whole words when the input is wide, else each scalar at
+    /// its size, widened by the Host's rule for its encoding.
     fn field_loads(
         &mut self,
         input: u32,
@@ -1295,9 +1258,8 @@ impl<'a, 'b> Fx<'a, 'b> {
         }
     }
 
-    /// A run of words inside an element of an input: the element's own
-    /// words, `within` bytes in. What a field or an array element of a
-    /// read comes to, without the rest of the element.
+    /// A field or array element of an input's element: its words,
+    /// `within` bytes in.
     fn part_words(
         &mut self,
         input: u32,
@@ -1328,12 +1290,10 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.field_loads(input, at, ty, tys)
     }
 
-    /// Where a path through an element leads, in bytes from its start at
-    /// `unit` bytes a scalar: the words known when the Kernel compiled,
-    /// then each index clamped into what it indexes and taken as its own
-    /// width. The last word is held inside the element, whatever the
-    /// indices say. The unit is what the element is read from: the
-    /// input's own memory, or its widened words in the scratch slot.
+    /// A path's byte offset into an element at `unit` bytes a scalar: the
+    /// compile-time part, then each index clamped and scaled by its
+    /// width. The last word stays inside the element. `unit` is that of
+    /// the input's memory or of the widened words in the scratch slot.
     fn part_offset(
         &mut self,
         input: u32,
@@ -1365,11 +1325,9 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().imul_imm(inside, unit)
     }
 
-    /// This element's own place in an input, clamped into it: what
-    /// `sample` reads.
+    /// This element's place in an input, clamped: what `sample` reads.
     fn sample_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
-        // The row is the same for every element of a run, so what is
-        // left here is one clamp and one add.
+        // The run's row is fixed: one clamp and one add.
         if let Some(view) = self.settled_view(input) {
             let cx = self.b.ins().umin(x, view.last_x);
             return self.b.ins().iadd(view.row, cx);
@@ -1422,6 +1380,7 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.ins().smin(floored, last)
     }
 
+    /// The address of an input's view.
     fn view(&mut self, input: u32) -> Value {
         let views = self
             .b
@@ -1528,10 +1487,9 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Subscript(array, index) => {
                 // The element is loaded at the clamped index times its
-                // width from the array's words: in the module's read-only
-                // data when the array is known at compile time (a table),
-                // where a table's inner array already lives, or else in a
-                // slot of this function's own, stored first.
+                // width from the array's words: a read-only table, a
+                // table's inner array in place, or a stack slot stored
+                // first.
                 let count = match self.ty(array) {
                     Type::Struct(struct_index) => {
                         self.module.structs[struct_index as usize].fields.len()
@@ -1551,11 +1509,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                 } else if let Some((block, address)) = self.spilled.get(&array.0).copied()
                     && Some(block) == self.b.current_block()
                 {
-                    // The same array indexed again where it was put
-                    // down: one slot holds it, however many places are
-                    // read out of it. Only in the block that stored it,
-                    // which is the block every later read is in when it
-                    // can use what was stored.
+                    // The same array indexed again in the block that
+                    // stored it reuses the slot.
                     (address, self.flags)
                 } else {
                     let words = self.words(array);
@@ -1646,8 +1601,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 otherwise,
             } => {
                 // A dense table when the values are close, else a chain of
-                // compares; either way each arm is a block jumping to one
-                // join with the result's words.
+                // compares; each arm jumps to one join with its words.
                 let value = self.words(scrutinee)[0];
                 let join = self.b.create_block();
                 for t in &word_types(self.module, ty) {
@@ -1681,8 +1635,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                     let table = self
                         .b
                         .create_jump_table(JumpTableData::new(default_call, &calls));
-                    // The index is taken unsigned, so a value below the
-                    // lowest wraps past the table and lands on the default.
+                    // Unsigned, so a value below the lowest lands on the
+                    // default.
                     let index = if lo == 0 {
                         value
                     } else {
@@ -1745,8 +1699,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                     self.b.append_block_param(exit, *t);
                 }
                 self.b.append_block_param(header, types::I32);
-                // The exit also takes the iterations whose body ran, which
-                // the spend after the loop adds.
+                // The exit also takes the body iterations, for the spend
+                // after the loop.
                 let counting = self.work.is_some();
                 if counting {
                     self.b.append_block_param(exit, types::I32);
@@ -1764,8 +1718,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let carried_args_from_init = leave(&init_words, zero);
                 init_args.push(zero.into());
                 match bound {
-                    // A run-time count may be zero: then the loop yields
-                    // what it carries, as the interpreter's does.
+                    // A run-time count of zero yields the carried values,
+                    // as in the interpreter.
                     Some(_) => {
                         let runs = self.b.ins().icmp(IntCC::SignedGreaterThan, limit, zero);
                         self.b
@@ -1785,7 +1739,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                     self.block(&until.body);
                     let done_word = self.words(&until.result)[0];
                     let done = self.cond_of(done_word);
-                    // The iteration `until` stops is not one whose body ran.
+                    // The iteration `until` stops at does not count as run.
                     let args = leave(&carried, index);
                     self.b.ins().brif(done, exit, &args, body_block, &[]);
                 } else {
@@ -1877,8 +1831,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                     .load(types::F32, self.settled, self.ctx, offsets::POINTER + 4),
             ],
             Op::Stick(which) => {
-                // Three pairs in the context, the number held inside
-                // them: an eight-byte step from the first.
+                // Three pairs in the context, eight bytes apart; the number
+                // is clamped to them.
                 let which = self.words(which)[0];
                 let zero = self.i32c(0);
                 let last = self.i32c(2);
@@ -1975,8 +1929,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Sample(input) => {
                 let tys = word_types(self.module, ty);
-                // The run carries where this element is in every input,
-                // so a `sample` is the loads and nothing else.
+                // The run carries this element's place in every input, so
+                // a `sample` is the loads alone.
                 if let Some(at) = self.settled_view(*input).and_then(|view| view.at) {
                     return self.field_loads(*input, at, ty, &tys);
                 }
@@ -2012,16 +1966,15 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Part { input, at, path } => {
                 let tys = word_types(self.module, ty);
-                // Read from the input's own memory, a scalar is its
-                // encoding's size; read from the scratch slot, a word.
+                // A scalar is its encoding's size in the input's memory,
+                // a word in the scratch slot.
                 let unit = self.module.manifest.inputs[*input as usize]
                     .ty
                     .schema
                     .uniform_encoding()
                     .map_or(4, |encoding| encoding.bytes() as i64);
-                // This element's own, where there is no address: the
-                // run already carries where it is in every input, so
-                // the part is the loads at its offset and nothing else.
+                // With no address, the part is loaded at its offset from
+                // the place the run carries.
                 let Some(at) = at else {
                     let within = self.part_offset(*input, path, byte_size(&tys) as usize / 4, unit);
                     if let Some(base) = self.settled_view(*input).and_then(|view| view.at) {
@@ -2039,9 +1992,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                     let index = self.rows_index(*input, address[0]);
                     return self.part_words(*input, index, within, ty, &tys);
                 }
-                // Over a grid or a volume the element is read as it
-                // always was, and the part is taken out of what came
-                // back: the address is the Host's to work out.
+                // Over a grid or volume the helper reads the whole element
+                // (the Host resolves the address), then the part is taken.
                 let out = self.scratch_addr();
                 let index = self.i32c(*input as i64);
                 match self.ty(at) {
@@ -2089,15 +2041,14 @@ impl<'a, 'b> Fx<'a, 'b> {
             }
             Op::Look => vec![self.look()],
             Op::Emit(pair) => {
-                // The pair's words go to the scratch slot, and the helper
-                // keeps them after the element's index, which is how the
-                // caller puts them before the pair the element returns.
+                // The pair's words go to the scratch slot; the helper keeps
+                // them after the element's index, so the caller orders them
+                // before the element's returned pair.
                 let words = self.words(pair);
                 let slot = self.scratch_addr();
                 self.stores(&words, self.flags, slot);
                 let element = self.element_index();
-                // Counted in words, not values: a 64-bit value is one
-                // value and two words.
+                // Counted in words: a 64-bit value is two.
                 let bytes: u32 = words
                     .iter()
                     .map(|word| self.b.func.dfg.value_type(*word).bytes())
@@ -2109,8 +2060,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             Op::Put(input, address, value) => {
                 // The value's words go to the scratch slot; the helper
                 // resolves the address as the interpreter does and drops a
-                // write outside the memory. The instruction's value is the
-                // value written.
+                // write outside the memory. The result is the value written.
                 let words = self.words(value);
                 let slot = self.scratch_addr();
                 self.stores(&words, self.flags, slot);
@@ -2155,8 +2105,8 @@ impl<'a, 'b> Fx<'a, 'b> {
                 })
             }
             BinaryOp::Div | BinaryOp::Rem if int_like => {
-                // A zero divisor and MIN / -1 are the two failures; both
-                // would trap, so the division runs on a safe divisor instead.
+                // A zero divisor and MIN / -1 fail; the division runs on a
+                // safe divisor so it cannot trap.
                 self.zip2(&wa, &wb, |fx, x, y| {
                     let zero = fx.b.ins().icmp_imm(IntCC::Equal, y, 0);
                     fx.fail_if(zero, DIVISION_BY_ZERO);
@@ -2310,8 +2260,8 @@ impl<'a, 'b> Fx<'a, 'b> {
             Intrinsic::Udiv | Intrinsic::Urem => {
                 let zero = self.b.ins().icmp_imm(IntCC::Equal, w[1][0], 0);
                 self.fail_if(zero, DIVISION_BY_ZERO);
-                // A zero divisor is reported above; the division itself
-                // must not trap, so it divides by one then.
+                // A zero divisor is reported above and replaced by one so
+                // the division cannot trap.
                 let one = self.i32c(1);
                 let divisor = self.b.ins().select(zero, one, w[1][0]);
                 if intrinsic == Intrinsic::Udiv {
@@ -2413,10 +2363,7 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let t = fx.b.ins().fdiv(num, den);
                 let zero = fx.fconst(t, 0.0);
                 let one = fx.fconst(t, 1.0);
-                // The same clamp `clamp` is: a comparison lets a NaN
-                // through and these do not, and a Kernel that writes
-                // `clamp` and one that writes `smoothstep` must not
-                // disagree about that.
+                // The same NaN-handling clamp as `clamp`, so the two agree.
                 let t = fx.fmax(t, zero);
                 let t = fx.fmin(t, one);
                 let two = fx.fconst(t, 2.0);

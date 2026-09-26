@@ -18,9 +18,9 @@ pub(crate) struct Pipeline {
     /// Whether a scatter's entry emits pairs, combining them into the
     /// target as it runs: the target is then ready before the entry.
     pub(crate) emits: bool,
-    /// The inputs its passes read from one buffer, copied there before
-    /// they run, because binding each would be more than the device binds
-    /// at once; see [`wgsl::packed_inputs`].
+    /// The inputs its passes read from one buffer, copied there before they
+    /// run, where binding each would exceed the device's limit; see
+    /// [`wgsl::packed_inputs`].
     pub(crate) packed: Vec<usize>,
 }
 
@@ -62,10 +62,9 @@ pub(crate) enum Scatter {
         fold: Pass,
         whole: bool,
     },
-    /// An order-free rule: the parallel apply; the gather after `last`;
-    /// the key transform around `min` and `max` over floats and longs:
-    /// in place after, and before from the base into the target, which
-    /// spares the target a copy of the base.
+    /// An order-free rule: the parallel apply; the gather after `last`; for
+    /// `min` and `max` over floats and longs, the key transform in place
+    /// after, and before from the base into the target, sparing a base copy.
     Parallel {
         apply: Pass,
         gather: Option<Pass>,
@@ -169,13 +168,12 @@ impl GpuBackend {
         )
     }
 
-    /// Why `module`'s widest pass binds more buffers than this device
-    /// does at once, if it does: its uniforms (the context and the
-    /// parameters) and its storage (every input, every output it writes,
-    /// the failure record where its arithmetic can fail, and an emitting
-    /// scatter's target), against the device's limits on storage buffers,
-    /// on uniform buffers, and on all of them together. Such a module runs
-    /// on the ordered backend; nothing about it is wrong.
+    /// Why `module`'s widest pass binds more buffers than this device does at
+    /// once, if it does. Counted: its uniforms (context and parameters) and
+    /// storage (every input, every output it writes, the failure record where
+    /// it can fail, an emitting scatter's target), against the device's
+    /// storage, uniform and total buffer limits. Such a module runs on the
+    /// ordered backend.
     pub(crate) fn wider_than_device(&self, module: &Validated) -> Option<String> {
         let (uniforms, unpacked) = wgsl::bindings(module);
         let inputs = module.manifest.inputs.len();
@@ -222,8 +220,6 @@ impl GpuBackend {
         None
     }
 
-    /// The device buffer holding an input: the resident one, or an upload
-    /// of its words that then stays resident.
     /// Builds one compute pipeline from WGSL with the given bindings, or
     /// returns the validation error with the source.
     pub(crate) fn pass(
@@ -303,10 +299,10 @@ impl GpuBackend {
                 manifest.mode.name()
             ));
         }
-        // A Kernel's ports are buffers the device binds at once. Saying so
-        // here is the difference between a Kernel that is too wide for
-        // this device and a page of the driver's validation; a session
-        // asks `declines` first and runs such a Kernel elsewhere.
+        // A Kernel's ports are buffers the device binds at once, checked here
+        // so a Kernel too wide for this device gets this error instead of the
+        // driver's validation; a session asks `declines` first and runs it
+        // elsewhere.
         if let Some(why) = self.refusal(module) {
             return Err(format!(
                 "`{}`: {why}; the interpreter and the JIT have no such limit",

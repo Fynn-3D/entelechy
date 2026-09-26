@@ -1,9 +1,6 @@
-//! The flags every command that opens a session takes, read once: the
-//! scene, its library, the inputs and params the caller binds, the
-//! backend, fusion, what the Host may hold and spend, and what the
-//! person allows. A command reads its own flags beside these and opens
-//! the session they describe; the Player, which builds its runtime with
-//! a display, opens it over that runtime.
+//! The flags every session-opening command shares, read in one place:
+//! scene, library, inputs, params, backend, fusion, limits, allowances
+//! and grants. Commands read their own flags beside these.
 
 use std::path::{Path, PathBuf};
 
@@ -30,8 +27,8 @@ pub struct SessionOptions {
     pub limits: Limits,
     /// Directories the scene may read from and write into.
     pub allow: Vec<Allowance>,
-    /// The capabilities a Kernel may be given, when the command line
-    /// names them (`--grant`); every capability otherwise.
+    /// The capabilities a Kernel may be given (`--grant`); `None` grants
+    /// every capability.
     pub grants: Option<orla_kernel::Capabilities>,
 }
 
@@ -52,9 +49,9 @@ impl Default for SessionOptions {
 }
 
 impl SessionOptions {
-    /// Reads `arg` when it is one of these flags or the scene, taking a
-    /// flag's value from `next`; answers whether it was. A flag it does
-    /// not know is the caller's.
+    /// Reads `arg` if it is one of these flags or the scene, taking a
+    /// value from `next`; returns whether it was. Other flags are the
+    /// caller's.
     pub fn read(
         &mut self,
         arg: &str,
@@ -66,8 +63,8 @@ impl SessionOptions {
             "--backend" => self.backend = Some(value(arg)?),
             "--no-fusion" => self.fusion = false,
             "--allow" => self.allow.push(parse_allow(&value(arg)?)?),
-            // `--grant field.read,field.write`: what a Kernel may be
-            // given, and nothing else; repeated, the names add up.
+            // `--grant field.read,field.write`: the only capabilities a
+            // Kernel may be given; repeats accumulate.
             "--grant" => {
                 let grants = self.grants.get_or_insert_with(Default::default);
                 for name in value(arg)?.split(',').filter(|name| !name.is_empty()) {
@@ -115,16 +112,13 @@ impl SessionOptions {
             .ok_or_else(|| "a scene file is required".to_string())
     }
 
-    /// Opens the session these options describe on the backend they
-    /// name, else `default`.
+    /// Opens the described session on the named backend, else `default`.
     pub fn open(&self, default: &str) -> Result<Session, String> {
         let backend = self.backend.as_deref().unwrap_or(default);
         self.open_over(Session::runtime_for(backend, self.limits)?)
     }
 
-    /// Opens the session these options describe over `runtime`: the
-    /// inputs bound, the params set, fusion, and what is allowed.
-    /// Nothing is read until the caller syncs.
+    /// Opens the described session over `runtime`, unsynced.
     pub fn open_over(&self, runtime: Runtime) -> Result<Session, String> {
         let mut runtime = runtime;
         if let Some(grants) = &self.grants {

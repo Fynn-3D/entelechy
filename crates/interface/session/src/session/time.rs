@@ -1,9 +1,6 @@
-//! The session in time: where the world is, what changed it and where
-//! that came from, the world taken whole as a snapshot, and a snapshot's
-//! world restored. Everything here holds to one rule: a change is real
-//! only when the whole of it is, and a refused one leaves the world, its
-//! laws, its structure and its history as they were, but for the
-//! attempt it records.
+//! The session in time: position, history, snapshot and restore. A
+//! change lands whole or not at all; a refused one leaves world, laws,
+//! structure and history as they were, and records the attempt.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -15,29 +12,26 @@ use super::Session;
 use crate::Event;
 
 impl Session {
-    /// Says where what the session is asked to do from here comes from,
-    /// and answers where it came from before: a protocol request's
-    /// channel while it is answered. What it records carries it.
+    /// Sets the origin of what the session is asked next (a protocol
+    /// request's channel while it is answered), returning the previous
+    /// one. Records carry it.
     pub fn act_for(&mut self, origin: crate::Origin) -> crate::Origin {
         std::mem::replace(&mut self.origin, origin)
     }
 
-    /// Says that the next scene the session loads is the change the
-    /// request being answered made (a `compose`, a param that resizes the
-    /// graph), so it is recorded as the request's; a scene found changed
-    /// on disk is its document's.
+    /// Records the next scene loaded as the current request's change (a
+    /// `compose`, a param that resizes the graph).
     pub fn claim_scene(&mut self) {
         self.claim = super::Claim::Asked;
     }
 
-    /// The world's position: its revision, which moves when the world
-    /// changes other than by running, and the frames committed since.
+    /// The world's position: its revision (moved by every change but
+    /// running) and the frames committed since.
     pub fn position(&self) -> (u64, u64) {
         self.history.position()
     }
 
-    /// The changes that made revisions after `since`, oldest first, as
-    /// far back as the session remembers.
+    /// The remembered changes after revision `since`, oldest first.
     pub fn changes_since(&self, since: u64) -> Vec<crate::Record> {
         self.history.changes(since).cloned().collect()
     }
@@ -47,9 +41,8 @@ impl Session {
         self.history.attempts(since).cloned().collect()
     }
 
-    /// A Kernel's source at `generation`: the registry's when that is
-    /// the one running, else the remembered one, when a change the
-    /// session remembers published it.
+    /// A Kernel's source at `generation`, from the registry or the
+    /// history.
     pub fn source_at(&self, id: &KernelId, generation: orla_kernel::Generation) -> Option<String> {
         match self.runtime.kernel(id) {
             Some(version) if version.generation() == generation => {
@@ -64,12 +57,9 @@ impl Session {
         self.history.scene_text(digest).map(str::to_owned)
     }
 
-    /// The world as it stands, taken whole for its caller to keep: the
-    /// position, every published Kernel with its generation and source,
-    /// every port's committed state with its layout, extent and words,
-    /// and the scene document the running graph was built from. Only
-    /// committed state is taken, never an output an evaluation computed
-    /// and did not commit. A Field on a device comes home first.
+    /// The world as it stands, taken whole: position, published Kernels,
+    /// every port's committed state (uncommitted outputs excluded), and
+    /// the scene document. Device Fields are brought back first.
     pub fn snapshot(&mut self) -> Result<crate::Snapshot, String> {
         let (revision, frame) = self.history.position();
         let laws = self
@@ -111,15 +101,13 @@ impl Session {
         })
     }
 
-    /// Restores a snapshot's world as one change: with
-    /// [`crate::Structure::Snapshot`] its scene document written back
-    /// first, with [`crate::Laws::Snapshot`] its Kernels published back
-    /// all together, then its state installed and proved by one frame
-    /// evaluated under `context` and not committed
-    /// ([`orla_graph::Evaluator::restore`]). When anything of it fails,
-    /// the scene document, the laws (the very versions that ran, their
-    /// generations with them), the state and the history are what they
-    /// were, and the attempt is recorded.
+    /// Restores a snapshot as one change: its scene document written back
+    /// ([`crate::Structure::Snapshot`]), its Kernels published together
+    /// ([`crate::Laws::Snapshot`]), then its state installed and proved by
+    /// one uncommitted frame under `context`
+    /// ([`orla_graph::Evaluator::restore`]). On failure, the scene
+    /// document, the exact running versions, the state and the history
+    /// stay as they were, and the attempt is recorded.
     pub fn restore(
         &mut self,
         snapshot: &crate::Snapshot,
@@ -127,16 +115,13 @@ impl Session {
         structure: crate::Structure,
         context: &Context,
     ) -> Result<Report, String> {
-        // What stands, taken in first: an edit made on disk is part of
-        // the world a refused restore returns to.
+        // Disk edits are part of the world a refused restore returns to.
         self.sync_settled();
         let history = self.history.clone();
-        // The scene that runs and its ledger, to be put back from memory:
-        // the text on disk may be an edit that does not load.
+        // Kept in memory: the text on disk may not load.
         let scene_kept = self.scene.keep();
         let kernels_kept = self.kernels.keep();
-        // Every version that runs, to be put back exactly, generations
-        // and all, whatever the restore publishes or its scene writes.
+        // Every running version, to be put back exactly.
         let registry: Vec<(KernelId, Arc<KernelVersion>)> = self
             .runtime
             .kernels()
@@ -155,7 +140,7 @@ impl Session {
         );
         match restored {
             Ok(report) => {
-                // The laws the restore published, now that they stand.
+                // Record the laws the restore published.
                 for id in &published {
                     if let Some(version) = self.runtime.kernel(id) {
                         self.history.published(
@@ -176,10 +161,8 @@ impl Session {
                 Ok(report)
             }
             Err(why) => {
-                // The scene document's bytes back on disk as they were,
-                // written, not read; the scene that ran, its ledger and
-                // every version that ran, as they ran, put back from
-                // memory, whether or not that text would load.
+                // Write the document's bytes back; put the scene, ledger
+                // and running versions back from memory.
                 let mut why = why;
                 let root = self.scene.root().to_path_buf();
                 if let Some(before) = scene_before
@@ -217,7 +200,7 @@ impl Session {
         }
     }
 
-    /// The restore's steps, in order, each noting what it replaced for
+    /// The restore's steps, in order, noting what each replaced for
     /// [`Session::restore`] to put back.
     fn restore_steps(
         &mut self,
@@ -233,7 +216,7 @@ impl Session {
                 .scene
                 .as_deref()
                 .ok_or("the snapshot holds no scene to restore")?;
-            // The document as it is on disk, which is what goes back.
+            // The document on disk is what a failure writes back.
             let root = self.scene.root().to_path_buf();
             let before = self
                 .store()
@@ -307,10 +290,8 @@ impl Session {
             .map_err(|error| format!("the restored world does not run: {error}"))
     }
 
-    /// Syncs, and waits for what the sync set preparing to be published
-    /// or refused: the scene's own Kernels, prepared off the thread where
-    /// one ran before, and the scene waiting for them. What a caller
-    /// that changed the document answers from, whole.
+    /// Syncs and waits until the scene's Kernels being prepared, and the
+    /// scene waiting for them, are published or refused.
     pub fn sync_settled(&mut self) -> Vec<Event> {
         let mut events = self.sync();
         let mut landed = Vec::new();
@@ -321,16 +302,16 @@ impl Session {
         events
     }
 
-    /// Replaces the scene document whole and reads it again, the Kernels
-    /// it writes in place before it answers; refused, it says why.
+    /// Replaces the scene document whole and reads it, its Kernels
+    /// settled; the error is why it was refused.
     pub(super) fn replace_scene(&mut self, text: &str) -> Result<(), String> {
         let root = self.scene.root().to_path_buf();
         self.store()
             .write(&root, text.as_bytes())
             .map_err(|e| format!("{}: {e}", root.display()))?;
         let events = self.sync_settled();
-        // What the scene document itself was refused: its lowering, or a
-        // Kernel it writes. An input's file is another matter.
+        // Refusals of the scene document itself: its lowering or its own
+        // Kernels.
         let refused = events.iter().find(|event| match event {
             Event::SceneRejected(_) => true,
             Event::Rejected { path, .. } => *path == root,
@@ -342,23 +323,20 @@ impl Session {
         }
     }
 
-    /// Records what a sync's events say changed or was refused. What was
-    /// found on disk is its document's; the scene a request claimed
-    /// ([`Session::claim_scene`]) is the request's. One sync that reads
-    /// the scene twice (a library changed with it) is one change.
+    /// Records what a sync's events changed or refused. Disk changes are
+    /// their document's; a claimed scene ([`Session::claim_scene`]) is the
+    /// request's. One sync is at most one scene change.
     pub(super) fn remember(&mut self, events: &[Event]) {
         use super::Claim;
         let landing = events
             .iter()
             .any(|e| matches!(e, Event::SceneLoaded | Event::SceneRejected(_)));
-        // A claim is on the scene it made: one read in its place since, a
-        // document changed on disk, is that document's.
+        // A scene read in the claimed one's place is its document's.
         let superseded = self.scene.take_superseded();
         let (claimant, landed) = match std::mem::take(&mut self.claim) {
             Claim::Asked => (Some(self.origin.clone()), None),
             Claim::Waiting(origin) if !superseded => {
-                // Landing on a sync after the request's own, what that
-                // sync said is the request's to answer with.
+                // A later sync's events are the request's answer.
                 let landed = landing.then(|| events.to_vec());
                 (Some(origin), landed)
             }

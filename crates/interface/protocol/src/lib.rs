@@ -1,19 +1,16 @@
 //! The creation protocol: JSON lines over stdin and stdout.
 //!
-//! Any agent, in any language, drives a live session through the same
-//! operations the CLI and the Player use: discover Kernels and their
-//! signatures, inspect the graph, prepare source and receive positioned
-//! diagnostics, publish against an expected generation, compose the scene,
-//! set parameters, evaluate, and read results. Transport is a detail; the
-//! contract is these operations and the authority rules of the session.
+//! Any agent drives a live session through the operations the CLI and the
+//! Player use. The contract is these operations and the session's
+//! authority rules.
 //!
-//! Every request is one JSON object per line with an `op` and an optional
-//! `id` that is echoed back; every response is one line, `{"id", "ok": ...}`
-//! or `{"id", "error": {"message", "line"?, "column"?}}`. An error says what
-//! an agent can act on as data as well as in words: an unknown operation
-//! lists the `operations`, an unknown name in `help` the `similar` ones,
-//! and a failed evaluation the `node` it belongs to (and for a state
-//! migration, the `port` and the `migration`), with the `frame` of a run.
+//! A request is one JSON object per line with an `op` and an optional `id`,
+//! echoed back. A response is one line, `{"id", "ok": ...}` or
+//! `{"id", "error": {"message", "line"?, "column"?}}`. An error carries its
+//! actionable parts as data: an unknown operation lists the `operations`,
+//! an unknown `help` name the `similar` ones, a failed evaluation its
+//! `node` (for a state migration, also `port` and `migration`) and a run's
+//! `frame`.
 //!
 //! | op | request fields | ok |
 //! | --- | --- | --- |
@@ -43,11 +40,10 @@
 //! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
 //! | `quit` | | bye |
 //!
-//! Each operation is a function in the module for what it may do, and is
-//! given only that: [`inspect`] reads the session and cannot change it,
-//! [`create`] changes the scene and its Kernels, [`run`] runs them, and
-//! [`fields`] reads and writes a node's Fields. [`wire`] says how values
-//! and results look as JSON, and [`transport`] carries the lines.
+//! Each operation lives in the module for what it may do: [`inspect`]
+//! reads the session, [`create`] changes the scene and its Kernels, [`run`]
+//! runs them, [`fields`] reads and writes a node's Fields. [`wire`] is the
+//! JSON shape of values and results; [`transport`] carries the lines.
 
 #![warn(missing_docs)]
 
@@ -75,9 +71,8 @@ pub use wire::{
     words_text,
 };
 
-/// Answers one incoming request; returns whether the process should end
-/// (a `quit` on standard input). A `quit` on a socket answers, then
-/// closes that connection.
+/// Answers one incoming request; true when the process should end (a
+/// `quit` on standard input). A `quit` on a socket closes that connection.
 pub fn answer(session: &mut Session, incoming: Incoming) -> bool {
     let (response, quit) = respond_from(session, &incoming);
     incoming.reply.send(response);
@@ -87,8 +82,8 @@ pub fn answer(session: &mut Session, incoming: Incoming) -> bool {
     quit && incoming.local
 }
 
-/// Answers one incoming request as [`respond_line`] does, what it
-/// changes recorded as coming from its channel.
+/// Answers as [`respond_line`] does, recording changes as from the
+/// request's channel.
 pub fn respond_from(session: &mut Session, incoming: &Incoming) -> (String, bool) {
     let before = session.act_for(orla_session::Origin::Protocol(incoming.from.clone()));
     let answered = respond_line(session, &incoming.line);
@@ -96,8 +91,8 @@ pub fn respond_from(session: &mut Session, incoming: &Incoming) -> (String, bool
     answered
 }
 
-/// Parses one request line and returns the request and its echoed id, or
-/// an error envelope's payload.
+/// Parses one request line into its echoed id and the request, or an
+/// error envelope's payload.
 pub fn parse_request(line: &str) -> Result<(Json, Json), Json> {
     let request = serde_json::from_str::<Json>(line)
         .map_err(|error| failure(format!("request is not JSON: {error}")))?;
@@ -124,17 +119,15 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
     }
 }
 
-/// Every operation the protocol answers, in the order the table above
-/// lists them. A request naming another is refused with this list, so an
-/// agent that guessed wrong learns what there is.
+/// Every operation the protocol answers, in the table's order. A request
+/// naming another is refused with this list.
 pub const OPERATIONS: [&str; 26] = [
     "status", "kernels", "kernel", "graph", "document", "history", "compose", "sync", "prepare",
     "publish", "retire", "param", "evaluate", "advance", "bench", "window", "read", "write",
     "snapshot", "restore", "reset", "help", "trace", "pin", "unpin", "quit",
 ];
 
-/// Handles one request: the operation it names, answered by the function
-/// that does it, with what that function may touch.
+/// Handles one request by the function for the operation it names.
 pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     let request = Request::new(request)?;
     match request.op() {
@@ -177,11 +170,8 @@ mod tests {
     use crate::wire::diagnostic_json;
     use orla_kernel::Value;
 
-    /// The table at the top of this module is the protocol's contract.
-    /// It names every operation the server answers, the server answers
-    /// every operation it names, and a name that is neither is told the
-    /// list: an operation cannot be added, dropped or renamed without the
-    /// contract saying so.
+    /// The module table names exactly the operations the server answers,
+    /// and an unknown name is told the list.
     #[test]
     fn the_table_is_every_operation_and_every_operation_is_answered() {
         let documented: Vec<&str> = include_str!("lib.rs")
@@ -199,8 +189,7 @@ mod tests {
         let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
         session.sync();
         for op in OPERATIONS {
-            // Asked with nothing else, an operation may refuse for want of
-            // a field; what it may not do is not know its own name.
+            // A bare request may lack a field; its name is still known.
             if let Err(error) = handle(&mut session, &json!({ "op": op })) {
                 assert!(
                     error.get("operations").is_none(),
@@ -274,7 +263,7 @@ mod tests {
         assert_eq!(json["line"], 4);
         assert_eq!(json["column"], 20);
         assert_eq!(json["message"], "`oops` is not defined");
-        // A message that happens to start with numbers is not a place.
+        // A message starting with numbers carries no place.
         let plain = diagnostic_json(&orla_session::Diagnostic::new("3:4 is a ratio"));
         assert!(plain["line"].is_null());
         assert_eq!(plain["message"], "3:4 is a ratio");

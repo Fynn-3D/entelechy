@@ -1,9 +1,7 @@
-//! The bridges are clients outside the workspace, each with a runner of
-//! its own: a page driven headless through Chrome's DevTools protocol,
-//! and a Godot project run with `-s`. Both are run from here when the
-//! tools they need are on this machine, and skipped with a word when
-//! they are not, so a change to the protocol that breaks a bridge
-//! breaks this rather than waiting for someone to open one.
+//! The bridges are clients outside the workspace, each with its own
+//! runner: a page driven headless through Chrome's DevTools protocol, and
+//! a Godot project run with `-s`. Each runs when its tools are on this
+//! machine and is skipped with a note otherwise.
 
 mod common;
 
@@ -18,7 +16,7 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
-/// A tool this machine has, by the paths it is usually at, or nothing.
+/// A tool at one of its usual paths, if this machine has it.
 fn tool(paths: &[&str]) -> Option<PathBuf> {
     paths
         .iter()
@@ -33,11 +31,9 @@ fn tool(paths: &[&str]) -> Option<PathBuf> {
         })
 }
 
-/// Orla built for a page (`wasm32-unknown-unknown`), from the source as
-/// it stands, into a target directory of its own so the build does not
-/// wait on the one running this test, and the glue `wasm-bindgen` writes
-/// for it: the glue's path. `Err` says why there is none: this machine's
-/// Rust has no such target, or there is no `wasm-bindgen`.
+/// Orla built for a page (`wasm32-unknown-unknown`) in its own target
+/// directory, with `wasm-bindgen`'s glue: the glue's path, or why there is
+/// none (no such target, or no `wasm-bindgen`).
 fn page_module() -> Result<PathBuf, String> {
     let sysroot = Command::new("rustc")
         .args(["--print", "sysroot"])
@@ -83,8 +79,8 @@ fn page_module() -> Result<PathBuf, String> {
     Ok(page.join("orla_ffi.js"))
 }
 
-/// Runs a bridge's own runner and says what it said. The runners print
-/// a line for every thing they checked and end with `RESULT: ok`.
+/// Runs a bridge's runner and reports its output. Runners print a line per
+/// check and end with `RESULT: ok`.
 fn passed(mut command: Command, what: &str, marker: &str) {
     let output = command
         .output()
@@ -98,8 +94,7 @@ fn passed(mut command: Command, what: &str, marker: &str) {
         output.status.success() && said.contains("RESULT: ok"),
         "{what} did not pass:\n{said}"
     );
-    // One of the things it checked, so a runner that said `ok` without
-    // running is not taken for a pass.
+    // One of its checks, so an `ok` without running is no pass.
     assert!(
         said.contains(marker),
         "{what} did not check `{marker}`:\n{said}"
@@ -165,10 +160,8 @@ fn the_godot_bridge_passes_its_own_test() {
     );
 }
 
-/// The bridge talks to a running session: it pushes files, pulls rows
-/// and a picture back, watches a node, and sets a parameter. Run from
-/// here so a change to the protocol, or to the names a scene's nodes
-/// have, breaks this rather than waiting for someone to open Blender.
+/// The bridge talks to a running session: it pushes files, pulls rows and
+/// a picture, watches a node, and sets a parameter.
 #[test]
 fn the_blender_bridge_passes_its_own_test() {
     let Some(blender) = tool(&[
@@ -218,12 +211,10 @@ fn the_blender_bridge_passes_its_own_test() {
     }
 }
 
-/// The two ways a rig comes in — the Blender bridge writing the rows
-/// itself, and `orla import` reading the glTF the same rig exports —
-/// must pose the mesh the same way. Both are built from one rig in one
-/// headless Blender, then posed at the same moment and compared as
-/// pictures, which is the only comparison that does not care that the
-/// two write their vertices in different orders.
+/// Both ways a rig comes in, the Blender bridge writing rows and `orla
+/// import` reading the same rig's glTF, pose the mesh alike. Both come
+/// from one rig in one headless Blender and are compared as pictures,
+/// which ignore vertex order.
 #[test]
 fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
     let Some(blender) = tool(&[
@@ -259,8 +250,8 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
         "Live pushes the pose it stands on: {live:?}"
     );
 
-    // The converter is another crate's binary; `cargo test --workspace`
-    // builds it beside this one.
+    // The importer is another crate's binary, built beside this one by
+    // `cargo test --workspace`.
     let importer = Path::new(env!("CARGO_BIN_EXE_orla"))
         .parent()
         .unwrap()
@@ -331,10 +322,8 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
     let read = picture(&imported, "arm", "imported.png");
 
     assert_eq!((pushed.width, pushed.height), (read.width, read.height));
-    // Where the arm is, and how much of the picture it covers: two
-    // pictures of one pose agree about both, whatever order their
-    // vertices were written in, and a rest pose against a bent one does
-    // not.
+    // Where the arm is and how much it covers: two pictures of one pose
+    // agree on both, a rest pose and a bent one do not.
     let arm = |picture: &png::Decoded| -> (usize, f32, f32) {
         let mut count = 0usize;
         let (mut x, mut y) = (0.0f32, 0.0f32);
@@ -363,8 +352,8 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
         (ax - bx).abs() < 1.0 && (ay - by).abs() < 1.0,
         "the arm is at ({ax:.2}, {ay:.2}) pushed and ({bx:.2}, {by:.2}) imported"
     );
-    // The shading agrees too, away from the silhouette, where a pixel
-    // is either arm or sky and half a pixel of difference flips it.
+    // The shading agrees away from the silhouette, where half a pixel
+    // flips arm and sky.
     let differ = pushed
         .samples
         .iter()
@@ -379,10 +368,8 @@ fn a_rig_pushed_from_blender_poses_as_its_gltf_does() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The way back out: a rig's rows become a GLB, and Blender opens it
-/// with its bones, its weights and its clips. Between this and the two
-/// ways in, the loop someone actually works in is closed — rig in
-/// Blender, run in Orla, open what Orla writes.
+/// The way out: a rig's rows become a GLB that Blender opens with its
+/// bones, weights and clips.
 #[test]
 fn a_rig_orla_wrote_opens_in_blender() {
     let Some(blender) = tool(&[

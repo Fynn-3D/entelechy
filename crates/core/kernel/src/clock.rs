@@ -1,6 +1,5 @@
-//! The machine's clocks, where it has them. A page's WebAssembly has
-//! none of its own (`wasm32-unknown-unknown`, where asking for the time
-//! stops the program): there, nothing is timed and nothing is dated.
+//! The machine's clocks. `wasm32-unknown-unknown` has none: there,
+//! nothing is timed or dated.
 
 use std::time::{Duration, Instant};
 

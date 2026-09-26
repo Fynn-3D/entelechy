@@ -1,23 +1,20 @@
 //! WebSocket framing for the protocol's socket, so a browser can be a
-//! client: the handshake of RFC 6455 and its text, close, ping, and pong
-//! frames, nothing more. A connection that opens with an HTTP request is
-//! served this way; one that opens with a JSON line is served as lines.
-//! The messages inside are the same JSON lines either way.
+//! client: the RFC 6455 handshake and text, close, ping and pong frames.
+//! The messages carry the same JSON lines as a plain socket.
 
 use std::io::{self, BufRead, Read, Write};
 
-/// The longest request a socket takes, in bytes: a line, or a
-/// WebSocket message whole. What a peer says it will send is weighed
-/// against this before anything is held for it, so no peer can make the
-/// server take more than this for one request.
+/// The longest request a socket takes, in bytes: a line or a whole
+/// WebSocket message. A peer's announced length is checked against it
+/// before anything is held.
 pub const MAX_MESSAGE: usize = 256 << 20;
 
 /// The longest line of a handshake's header.
 const MAX_HEADER_LINE: usize = 8 << 10;
 
-/// Reads one line into `line`, the newline included, of at most `limit`
-/// bytes; the bytes read, 0 at the end of the stream. A longer line is
-/// refused before more than `limit` bytes of it are held.
+/// Reads one line, newline included, into `line`; returns the bytes read,
+/// 0 at end of stream. A line over `limit` bytes is refused holding at
+/// most `limit + 1` bytes.
 pub(crate) fn read_line_within(
     reader: &mut impl BufRead,
     limit: usize,
@@ -52,22 +49,19 @@ pub enum Message {
     Close,
 }
 
-/// The web pages whose scripts a socket answers. A browser says which
-/// page opened a WebSocket in its `Origin`, and any page on the web can
-/// open one to this machine: without a check, a site the person happens
-/// to visit could compose their scene and read what it holds. Admitted
-/// are a client that is not a browser (no `Origin`), a page opened from a
-/// file (`null`, which is how `bridges/web` runs), a page served from
-/// this machine (`localhost`, `127.0.0.1`, `[::1]`, any port), and the
-/// origins the person running the server named (`--allow-origin`).
+/// The web pages whose scripts a socket answers, judged by `Origin`, so a
+/// visited site cannot drive the session. Admitted: a non-browser client
+/// (no `Origin`), a page opened from a file (`null`, as `bridges/web`
+/// runs), a page served from this machine (`localhost`, `127.0.0.1`,
+/// `[::1]`, any port), and origins named with `--allow-origin`.
 #[derive(Clone, Debug, Default)]
 pub struct Origins {
     named: Vec<String>,
 }
 
 impl Origins {
-    /// The local origins and these, each written as a browser sends it:
-    /// `https://example.com`, `http://host:8080`.
+    /// The local origins and `named`, each as a browser sends it
+    /// (`https://example.com`, `http://host:8080`).
     pub fn with(named: Vec<String>) -> Self {
         let named = named
             .into_iter()
@@ -91,8 +85,8 @@ impl Origins {
         else {
             return false;
         };
-        // `host` or `host:port`, the port all digits: nothing may follow
-        // the host that would make it another one.
+        // Exactly `host` or `host:port` with a numeric port, so no suffix
+        // turns the host into another.
         let (host, port) = match rest.find(']') {
             Some(end) if rest.starts_with('[') => (&rest[..=end], &rest[end + 1..]),
             _ => rest.split_at(rest.find(':').unwrap_or(rest.len())),
@@ -105,10 +99,9 @@ impl Origins {
     }
 }
 
-/// Reads the HTTP request the peer opened with. When it asks to upgrade to
-/// a WebSocket from an origin `origins` admits, answers with the switch
-/// and returns `true`; a page it does not admit is refused, and a request
-/// that is no upgrade is told one is required, both returning `false`.
+/// Reads the opening HTTP request. An upgrade from an admitted origin is
+/// answered with 101 and returns `true`; an unadmitted origin gets 403 and
+/// a non-upgrade 426, both returning `false`.
 pub fn handshake(
     reader: &mut impl BufRead,
     writer: &mut impl Write,
@@ -208,8 +201,8 @@ pub fn read_message(reader: &mut impl Read) -> io::Result<Option<Message>> {
         if masked {
             reader.read_exact(&mut mask)?;
         }
-        // The length is the peer's word: weighed first, and what is held
-        // grows with the bytes that do arrive.
+        // The announced length is checked first; the buffer grows only
+        // with bytes that arrive.
         if length > (MAX_MESSAGE - text.len()) as u64 {
             return Err(too_long());
         }
@@ -274,12 +267,12 @@ pub fn write_pong(writer: &mut impl Write, payload: &[u8]) -> io::Result<()> {
     write_frame(writer, 0xA, payload)
 }
 
-/// Says goodbye: a close frame with the normal status.
+/// Writes a close frame with the normal status.
 pub fn write_close(writer: &mut impl Write) -> io::Result<()> {
     write_frame(writer, 0x8, &1000u16.to_be_bytes())
 }
 
-/// SHA-1, needed for the handshake alone.
+/// SHA-1, for the handshake.
 fn sha1(data: &[u8]) -> [u8; 20] {
     let mut h: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
     let mut message = data.to_vec();
@@ -352,8 +345,7 @@ mod tests {
         );
     }
 
-    /// A peer's word for a length is weighed before anything is held:
-    /// a frame that says it carries 2^63 bytes is refused, not allocated.
+    /// A frame announcing 2^63 bytes is refused before allocation.
     #[test]
     fn a_frame_longer_than_a_request_may_be_is_refused_before_it_is_held() {
         let mut frame = vec![0x81u8, 0x80 | 127];
@@ -455,9 +447,8 @@ mod tests {
         );
     }
 
-    /// A page on the web may not open the socket; a page of this machine,
-    /// one opened from a file, a client that is no browser, and an origin
-    /// the person named may.
+    /// Remote pages are refused; local pages, file pages, non-browser
+    /// clients and named origins are admitted.
     #[test]
     fn a_page_elsewhere_is_refused_and_a_local_one_admitted() {
         let origins = Origins::with(vec!["https://studio.example".into()]);

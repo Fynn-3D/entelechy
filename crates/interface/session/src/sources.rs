@@ -1,9 +1,7 @@
 //! Source resolution: what a `use` reaches (a file, a directory of
-//! `.orla`, a package found beside the document or by name in
-//! `ORLA_PACKAGES`), the declarations a document inherits through its
-//! `use`s, and where a name a diagnostic could not find is declared.
-//! It reads files through the store it is handed and holds nothing; the
-//! session and the command line both ask it.
+//! `.orla`, or a package beside the document or in `ORLA_PACKAGES`),
+//! inherited declarations, and where a missing name is declared.
+//! Stateless; reads through the given store.
 
 use std::path::{Path, PathBuf};
 
@@ -15,22 +13,19 @@ use crate::store::Store;
 /// The format of an `.orlapkg` archive and of a package's manifest.
 pub const PACKAGE_VERSION: u32 = 1;
 
-/// A `use` target: a file; every `.orla` directly inside a directory; or
-/// a package, a directory with a `package.osn` (found beside the
-/// document, or by name in the directories `ORLA_PACKAGES` lists),
-/// whose manifest's own `use`s are followed once its versions fit.
+/// A `use` target's files: a file; each `.orla` directly in a
+/// directory; or a package (a directory with `package.osn`, beside the
+/// document or in `ORLA_PACKAGES`), whose manifest `use`s are followed
+/// once its versions fit.
 pub(crate) fn expand_use(
     store: &dyn Store,
     path: &Path,
     trailing_slash: bool,
 ) -> Result<Vec<PathBuf>, String> {
-    // One file, one path: a Kernel reached by two spellings (a scene's
-    // `use` of a package and its preset's `use "../kernels/"`, say) is
-    // owned by one document, not published twice.
+    // Canonical paths: a file reached by two spellings is one document.
     let canonical = |file: PathBuf| store.canonical(&file).unwrap_or(file);
     let path = resolve_package(store, path);
-    // A `use` written inside a package, reached by the package's name:
-    // the way through it is the same, wherever the package itself is.
+    // A path through a package's name resolves inside that package.
     let path = match store.exists(&path) {
         true => path,
         false => in_package(store, &path).unwrap_or(path),
@@ -52,10 +47,8 @@ pub(crate) fn expand_use(
     }
 }
 
-/// A document a scene reaches: the file at that path, or, where there
-/// is none and the path runs through a package's name, the file inside
-/// the package `ORLA_PACKAGES` finds. A preset is reached the way the
-/// package that holds it is.
+/// A document's text: the file at `path`, else, for a path through a
+/// package's name, the file inside that package.
 pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
     match store.read_text(path) {
         Ok(text) => Ok(text),
@@ -66,9 +59,8 @@ pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
     }
 }
 
-/// Whether `path` is inside a package: a directory above it that ends
-/// in `.orlapkg` and holds a `package.osn`. What a package ships, its
-/// font or its meshes, is there to be read by whatever uses it.
+/// Whether `path` is inside a package (an ancestor `*.orlapkg` holding
+/// `package.osn`). Package contents are readable by any user.
 pub(crate) fn in_a_package(store: &dyn Store, path: &Path) -> bool {
     path.ancestors().skip(1).any(|dir| {
         dir.extension().is_some_and(|ext| ext == "orlapkg")
@@ -76,14 +68,12 @@ pub(crate) fn in_a_package(store: &dyn Store, path: &Path) -> bool {
     })
 }
 
-/// A path whose first part names a package: `picture.orlapkg/graphs/x.osn`
-/// where the package is one `ORLA_PACKAGES` lists. `None` when no part of
-/// it names a package that is there.
+/// Resolves a path through a package name
+/// (`picture.orlapkg/graphs/x.osn`) to the existing file inside it.
 fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     let mut parts = path.components();
     let mut rest = PathBuf::new();
-    // The package's name is the last part that ends in `.orlapkg`; what
-    // follows it is the way to the file inside.
+    // The last `.orlapkg` part names the package; the rest is inside.
     let mut name: Option<PathBuf> = None;
     for part in parts.by_ref() {
         let piece = Path::new(part.as_os_str());
@@ -100,8 +90,8 @@ fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     store.exists(&inside).then_some(inside)
 }
 
-/// A `use` that names nothing beside the document is looked for by its
-/// name in each directory of `ORLA_PACKAGES`, `:`-separated.
+/// A missing path, looked up by name as a package in each
+/// `:`-separated `ORLA_PACKAGES` directory.
 fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
     if store.exists(path) {
         return path.to_path_buf();
@@ -121,8 +111,7 @@ fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// The Kernel files a package brings in: what its manifest uses, once
-/// the manifest's versions fit this Orla.
+/// The Kernel files a package's manifest uses, once its versions fit.
 fn package_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> {
     let manifest = dir.join("package.osn");
     let declared = package_manifest(store, &manifest)?;
@@ -147,8 +136,8 @@ fn package_files(store: &dyn Store, dir: &Path) -> Result<Vec<PathBuf>, String> 
     Ok(files)
 }
 
-/// A package's manifest, checked: it declares a package, and needs no
-/// newer language or IR than this Orla has.
+/// A checked package manifest: it declares a package whose language and
+/// IR versions this Orla supports.
 pub fn package_manifest(
     store: &dyn Store,
     manifest: &Path,
@@ -183,16 +172,15 @@ pub fn package_manifest(
     Ok(declared)
 }
 
-/// What a document shares with the Kernels that use it: structs, type
-/// aliases, and functions.
+/// Declarations a document shares: structs, type aliases, functions.
 pub type Declarations = (
     Vec<orla_language::StructDecl>,
     Vec<orla_language::TypeAlias>,
     Vec<orla_language::FnDecl>,
 );
 
-/// Every document a `use` list reaches, recursively, each once, in the
-/// order reached: what a check compiles beyond the file it was given.
+/// Every document a `use` list reaches, recursively, each once,
+/// dependencies first.
 pub fn used_documents(
     store: &dyn Store,
     base: &Path,
@@ -238,10 +226,9 @@ pub fn used_documents(
     Ok(out)
 }
 
-/// The structs and type aliases a document's `use` items bring in, from
-/// the used files and directories and, recursively, what they use. The
-/// same declaration reached twice is one; two different declarations of
-/// one name are refused.
+/// The declarations a document's `use` items bring in, recursively. An
+/// identical declaration reached twice is one; conflicting ones are
+/// refused.
 pub fn declarations_for(
     store: &dyn Store,
     base: &Path,
@@ -250,9 +237,8 @@ pub fn declarations_for(
     declarations_within(store, None, base, uses)
 }
 
-/// The declarations a document at `origin` inherits from what it uses.
-/// Naming the origin is what lets a `use` that comes back to it be
-/// reported as the cycle it is rather than as a name declared twice.
+/// As [`declarations_for`], for a document at `origin`, so a `use`
+/// back to it reports as a cycle.
 pub fn declarations_within(
     store: &dyn Store,
     origin: Option<&Path>,
@@ -319,7 +305,7 @@ pub fn declarations_within(
                 stack.pop();
                 nested?;
                 for decl in &document.functions {
-                    // A function has no layout to compare; one name, one file.
+                    // A function name is declared in one file only.
                     if let Some((_, other)) = functions
                         .iter()
                         .find(|(f, _)| f.name.value == decl.name.value)
@@ -338,8 +324,7 @@ pub fn declarations_within(
                         .iter()
                         .find(|(s, _)| s.name.value == decl.name.value)
                     {
-                        // The same fields in the same order are the same
-                        // declaration, wherever each file wrote them.
+                        // Same fields in the same order: one declaration.
                         Some((same, _))
                             if same
                                 .fields
@@ -400,9 +385,8 @@ pub fn declarations_within(
     ))
 }
 
-/// The name a diagnostic says it could not find: the first backticked
-/// word of a message that says something is not a function, a struct or
-/// a type.
+/// The backticked name a diagnostic reports as not a builtin, struct
+/// or type.
 fn missing_name(message: &str) -> Option<String> {
     let rest = message.rsplit(": ").next().unwrap_or(message);
     let name = rest.strip_prefix('`')?.split('`').next()?;
@@ -413,8 +397,7 @@ fn missing_name(message: &str) -> Option<String> {
     (says && !name.is_empty()).then(|| name.to_owned())
 }
 
-/// Where a name is declared, among the documents `search` names: the
-/// file, and whether it declares it as a function, a struct or a type.
+/// The first file in `search` declaring `name`, and its kind.
 fn declared_in(
     store: &dyn Store,
     name: &str,
@@ -495,10 +478,9 @@ pub(crate) fn is_library(document: &Document) -> bool {
         && document.params.is_empty()
 }
 
-/// A diagnostic with the file that declares the name it could not find,
-/// when one is known: a `use` away is the usual reason, and saying which
-/// file says what to write. `known` are the documents the caller reads
-/// already, and `root` the scene they belong to.
+/// `error` extended with the `use` that would bring in its missing name,
+/// when a file declaring it is found. `known` are the caller's
+/// documents; `root` is their scene.
 pub(crate) fn located(
     store: &dyn Store,
     error: crate::Diagnostic,
@@ -509,9 +491,8 @@ pub(crate) fn located(
     let Some(name) = missing_name(&error.message) else {
         return error;
     };
-    // What this document already uses is not the answer; every other
-    // document the caller knows, and every `.orla` beside this one and
-    // beside the scene, is where to look.
+    // Search known documents and `.orla` files beside this document,
+    // the scene and each known one, excluding what this already uses.
     let used: Vec<PathBuf> = store
         .read_text(document)
         .ok()
@@ -541,8 +522,6 @@ pub(crate) fn located(
         &mut search,
     );
     siblings(root.parent().unwrap_or_else(|| Path::new(".")), &mut search);
-    // The libraries the caller knows, and what sits beside them: a
-    // shared directory usually holds more than one.
     for path in known {
         siblings(path.parent().unwrap_or_else(|| Path::new(".")), &mut search);
     }

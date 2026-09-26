@@ -1,7 +1,6 @@
-//! The GPU held to the interpreter where a Kernel comes out of a scene:
-//! the examples' own Kernels, and graphs that keep their state on the
-//! device. They need the scene language and the runtime together, which
-//! only the session's layer holds.
+//! The GPU held to the interpreter on Kernels from scenes: the examples'
+//! Kernels, and graphs keeping state on the device. These need the scene
+//! language and the runtime together, held by the session layer.
 
 use std::path::Path;
 
@@ -11,7 +10,7 @@ use orla_cpu::CpuBackend;
 use orla_gpu::GpuBackend;
 use orla_rules::Backend;
 
-/// Downloads a resident GPU output into Host memory and returns its pixels.
+/// Downloads a resident GPU output into Host memory as pixels.
 fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::Handle) -> Vec<[f32; 4]> {
     let byte_len = host
         .schema(handle)
@@ -45,7 +44,7 @@ fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
 }
 
-/// Runs a kernel on both backends and returns (cpu, gpu) pixels.
+/// Runs a Kernel on both backends and returns (cpu, gpu) pixels.
 fn both(
     gpu: &GpuBackend,
     source: &str,
@@ -129,8 +128,8 @@ fn mismatch(cpu: &[[f32; 4]], gpu: &[[f32; 4]], tolerance: f32) -> f32 {
     bad as f32 / cpu.len() as f32
 }
 
-/// Compiles and publishes a Kernel as a session does: the runtime takes
-/// validated IR, and compiling is the caller's step.
+/// Compiles and publishes a Kernel as a session does: compiling is the
+/// caller's step, the runtime takes validated IR.
 fn load(
     runtime: &mut orla_kernel::Runtime,
     source: &str,
@@ -226,7 +225,7 @@ fn chains_and_state_stay_resident_until_observed() {
             assert_eq!(runtime.host().resident_count(), runtime.host().live() - 1);
         }
     }
-    // The observed image is usable as an input again: it is re-uploaded once.
+    // The observed image is an input again, re-uploaded once.
     let report = evaluator
         .evaluate(
             &graph,
@@ -273,7 +272,8 @@ fn fields_flow_through_the_gpu_exactly() {
         .unwrap();
     assert_eq!(runtime.host().resident_count(), runtime.host().live());
     let image = runtime.image(report.output).unwrap();
-    // Element 2 after one step: position (2,1)+(3,1.5), life 6-1+8, alive flipped.
+    // Element 2 after one step: position (2,1)+(3,1.5), life 6-1+8,
+    // alive flipped.
     assert_eq!(image.pixels()[2], [5.0, 2.5, 13.0, 0.0]);
     // Element 7 reads its clamped neighbour (itself).
     assert_eq!(image.pixels()[7], [14.0, 7.0, 28.0, 1.0]);

@@ -1,18 +1,15 @@
-//! Orla IR to WebAssembly, instruction for instruction what the
-//! Cranelift translation (`codegen`, on native targets) does,
-//! so the words are the interpreter's: every IR value is its words, one
-//! local each (`i32`, `f32`, `i64` or `f64`); `if`, `match` and `loop`
-//! are WebAssembly's own blocks; integer arithmetic is checked, the
-//! first failure recorded in the context; Field reads that need the
-//! Host, and the functions whose rounding is Rust's, call the crate's
-//! helpers through Orla's function table, by the index a pointer to
-//! each is.
+//! Orla IR to WebAssembly, instruction for instruction as `codegen`
+//! does, so the words are the interpreter's: every IR value is its
+//! words, one local each; `if`, `match` and `loop` are WebAssembly
+//! blocks; integer arithmetic is checked, the first failure recorded in
+//! the context. Host reads and Rust-rounded math call the crate's
+//! helpers through Orla's function table.
 //!
-//! What Cranelift keeps on the stack (the scratch a helper writes to,
-//! a callee's result, an array indexed at run time) is kept in memory
-//! the prepared Kernel owns, a slot for each, at an address the module's
-//! one global holds: WebAssembly runs on one thread and a Kernel's
-//! functions do not recurse, so no slot is ever in use twice at once.
+//! Stack data in `codegen` (the scratch, a callee's result, an array
+//! indexed at run time) is here a slot in memory the prepared Kernel
+//! owns, based at the module's one global. WebAssembly runs on one
+//! thread and Kernel functions never recurse, so each slot has one user
+//! at a time.
 
 use std::collections::HashMap;
 
@@ -33,15 +30,15 @@ const OVERRUN: i32 = failure::OVERRUN as i32;
 /// A word: the local that holds it, and its type.
 pub type W = (u32, Val);
 
-/// What every function of a module shares: the function types, the
-/// memory its slots take, and what the constant tables hold.
+/// What a module's functions share: function types, slot memory, and
+/// constant-table contents.
 #[derive(Default)]
 pub struct Shared {
     pub types: Vec<Signature>,
     /// Bytes of slots so far.
     pub frame: u32,
-    /// Words written into the slots before the code runs: the constant
-    /// tables, at their offsets.
+    /// The constant tables' words, written into their slots before the
+    /// code runs.
     pub tables: Vec<(u32, Vec<u32>)>,
 }
 
@@ -68,7 +65,7 @@ pub enum Kind {
     /// The context, its result's slot, its arguments' words.
     Function,
     /// A map's entry: the context, the run's first `x`, its `y` and
-    /// `z`, how many elements, and where their words go.
+    /// `z`, its length, and where its words go.
     Map,
     /// A scan's entry: the context, the index, the carried words, the
     /// output slot.
@@ -116,7 +113,7 @@ pub fn signature(module: &Module, function: &Function, kind: Kind) -> Signature 
     }
 }
 
-/// An input's view as the run sees it before it begins.
+/// An input's view as read before the run.
 #[derive(Clone, Copy)]
 struct Settled {
     words: W,
@@ -265,7 +262,7 @@ impl<'a> Fx<'a> {
         self.uleb(w.0);
     }
 
-    /// What is on the stack, into a new local of `ty`.
+    /// Pops the stack into a new local of `ty`.
     fn take(&mut self, ty: Val) -> W {
         let w = self.local(ty);
         self.set(w);
@@ -400,7 +397,7 @@ impl<'a> Fx<'a> {
         self.slot(at)
     }
 
-    /// Calls a helper through the table, by the index a pointer to it is.
+    /// Calls a helper through the table at its pointer's index.
     fn helper(&mut self, name: &'static str, args: &[W], result: Option<Val>) -> Option<W> {
         let index = *self.helpers.get(name).expect("a helper the crate defines");
         let ty = self.shared.type_index(Signature {
@@ -549,7 +546,7 @@ impl<'a> Fx<'a> {
                 let filled = self.bin(now, before, I32_SUB, Val::I32);
                 let blocks = self.ctx_load(Val::I32, offsets::RUN_BLOCKS);
                 let limit = self.ctx_load(Val::I32, offsets::RUN_LIMIT);
-                // One thread: the run's total is added to in place.
+                // One thread: the run's total is updated in place.
                 let handed = self.load(Val::I32, blocks, 0);
                 let total = self.bin(handed, filled, I32_ADD, Val::I32);
                 self.store(blocks, 0, total);
@@ -771,8 +768,8 @@ impl<'a> Fx<'a> {
         }
     }
 
-    /// The address of a constant array's words: written into a slot of
-    /// its own before the code runs, once per array.
+    /// The address of a constant array's words, in its own slot written
+    /// once before the code runs.
     fn table(&mut self, id: u32) -> W {
         let offset = match self.tables.get(&id) {
             Some(offset) => *offset,
@@ -1131,7 +1128,7 @@ impl<'a> Fx<'a> {
                 {
                     (self.table(array.0), true)
                 } else {
-                    // Put down in a slot of its own, and indexed there.
+                    // Stored in its own slot and indexed there.
                     let words = self.words(array);
                     let array_types = word_types(self.module, self.ty(array));
                     let offset = self.shared.reserve(byte_size(&array_types));
@@ -1454,8 +1451,8 @@ impl<'a> Fx<'a> {
         self.field_loads(input, at, ty, tys)
     }
 
-    /// `targets` take `sources`' words, all at once: a loop's next words
-    /// may be its carried ones in another order.
+    /// `targets` take `sources`' words at once, since a loop's next words
+    /// may permute its carried ones.
     fn assign(&mut self, targets: &[W], sources: &[W]) {
         for source in sources {
             self.get(*source);
@@ -1585,8 +1582,7 @@ impl<'a> Fx<'a> {
         self.byte(BLOCK);
         self.byte(0x40);
         if bound.is_some() {
-            // A run-time count may be zero: the loop yields what it
-            // carries.
+            // A run-time count of zero yields the carried values.
             self.get(limit);
             self.push_i32(0);
             self.byte(0x4c); // i32.le_s
@@ -1628,13 +1624,13 @@ impl<'a> Fx<'a> {
         carried
     }
 
-    /// Checked `x op y` on integers: the result wraps, and overflow is
+    /// Checked `x op y` on integers: the result wraps; overflow is
     /// recorded.
     fn checked(&mut self, x: W, y: W, op: BinaryOp) -> W {
         match x.1 {
             Val::I32 => {
-                // Worked in 64 bits: it overflowed when the 32-bit result,
-                // widened again, is not the 64-bit one.
+                // In 64 bits: overflow when the 32-bit result, widened,
+                // differs from the 64-bit one.
                 let a = self.un(x, I64_EXTEND_I32_S, Val::I64);
                 let b = self.un(y, I64_EXTEND_I32_S, Val::I64);
                 let wide = match op {
@@ -1673,9 +1669,8 @@ impl<'a> Fx<'a> {
                     r
                 }
                 _ => {
-                    // No wider type: the product divided back by `x` is
-                    // `y` unless it wrapped; MIN * -1 is the one case the
-                    // division cannot tell.
+                    // No wider type: the product divided by `x` is `y`
+                    // unless it wrapped; MIN * -1 is checked apart.
                     let r = self.bin(x, y, I64_MUL, Val::I64);
                     let zero = self.compare_imm(x, 0, [0, 0x51, 0, 0]);
                     let minus_one = self.compare_imm(x, -1, [0, 0x51, 0, 0]);
@@ -1865,8 +1860,8 @@ impl<'a> Fx<'a> {
                 self.zip2(&wa, &wb, |fx, x, y| fx.arith(x, y, [I32_XOR, 0x85, 0, 0]))
             }
             BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => self.zip2(&wa, &wb, |fx, x, y| {
-                // The count modulo the width, which WebAssembly's shifts
-                // take already; a long's count is widened to its type.
+                // WebAssembly shifts take the count modulo the width; the
+                // count is converted to the value's type.
                 let y = if x.1 == Val::I64 && y.1 == Val::I32 {
                     fx.un(y, I64_EXTEND_I32_U, Val::I64)
                 } else if x.1 == Val::I32 && y.1 == Val::I64 {
@@ -1955,7 +1950,7 @@ impl<'a> Fx<'a> {
                 vec![self.un(v, by_type(v.1, [0x68, 0x7a, 0, 0]), v.1)]
             }
             Intrinsic::Rotl | Intrinsic::Rotr => {
-                // The count masked to five bits, as Cranelift is asked.
+                // The count masked to five bits, as in `codegen`.
                 let (v, count) = (w[0][0], w[1][0]);
                 let count = if count.1 == Val::I64 {
                     self.un(count, I32_WRAP_I64, Val::I32)

@@ -1,22 +1,17 @@
 //! Execution off the frame: a version run on its own thread over copies
 //! of its inputs, redeemed by a poll.
 //!
-//! [`Runtime::execute_later`] brings the invocation's inputs into Host
-//! memory, copies them into a Host of the thread's own, and starts the
-//! backend's execute there; the frame goes on. [`Runtime::poll_run`]
-//! takes what landed, as Fields of the runtime's Host; [`Runtime::wait_run`]
-//! blocks for one run. The copies cost a pass over the inputs, and on a
-//! backend that keeps Fields resident a download before and an upload
-//! after, the same price the ordered-scan path pays, so a run off the
-//! frame is for work that takes longer than its inputs take to copy.
+//! [`Runtime::execute_later`] brings the inputs into Host memory, copies
+//! them into the thread's own Host and starts the backend there.
+//! [`Runtime::poll_run`] takes what landed as Fields of the runtime's
+//! Host; [`Runtime::wait_run`] blocks for one run. The copies cost a pass
+//! over the inputs, plus a download and upload on a resident backend.
 //!
-//! What a run may hold is set aside when it is started, on the caller's
-//! thread and in the caller's order: its copies of the inputs, and its
-//! outputs twice over (a backend may hold two buffers of one, taking
-//! turns). The Host counts that room against its budget until the run is
-//! redeemed or discarded, and the run's own Host holds no more than it:
-//! whether a run fits is decided by what it was given, never by when
-//! either side allocates.
+//! A run's room is set aside when it starts, on the caller's thread and
+//! in the caller's order: its input copies and its outputs twice over (a
+//! backend may alternate two buffers). The Host counts that room until
+//! the run is redeemed or discarded, and the run's Host holds no more, so
+//! whether a run fits depends only on what it was given.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -56,8 +51,7 @@ pub(crate) struct Runs {
     in_flight: BTreeSet<Run>,
     ready: BTreeMap<Run, Outcome>,
     discarded: BTreeSet<Run>,
-    /// The room each run not yet redeemed or discarded was given, in
-    /// words of the Host's budget.
+    /// Budget words set aside for each run not yet redeemed or discarded.
     reserved: BTreeMap<Run, usize>,
 }
 
@@ -97,11 +91,10 @@ impl Runs {
 }
 
 impl Runtime {
-    /// Starts executing a pinned version on a thread of its own and
-    /// returns at once. The inputs are copied first, so the caller may
-    /// release or overwrite them while the run goes on. A native
-    /// operation is device work and runs now; its run is redeemed like
-    /// any other.
+    /// Starts executing a pinned version on its own thread and returns at
+    /// once. Inputs are copied first, so the caller may release or overwrite
+    /// them. A native operation is device work and runs now; its run is
+    /// redeemed like any other.
     pub fn execute_later(
         &mut self,
         version: &Arc<KernelVersion>,
@@ -149,9 +142,9 @@ impl Runtime {
                 &mut scratch,
             )
         };
-        // The work is shared with the thread so that, where no thread can
-        // be started (WebAssembly), it is taken back and done here: the
-        // run lands before this returns, as one that finished at once.
+        // The work is shared with the thread; where no thread can start
+        // (WebAssembly) it is taken back and done here, landing before
+        // this returns.
         let shared = std::sync::Arc::new(std::sync::Mutex::new(Some(work)));
         let theirs = std::sync::Arc::clone(&shared);
         let landed = self.runs.landed.clone();
@@ -211,8 +204,7 @@ impl Runtime {
         }
     }
 
-    /// Forgets a run whose outputs are no longer wanted; what it lands is
-    /// dropped.
+    /// Forgets a run whose outputs are unwanted; what it lands is dropped.
     pub fn discard_run(&mut self, run: Run) {
         self.give_back(run);
         self.runs.collect();
@@ -309,7 +301,7 @@ impl Runtime {
 }
 
 /// On the run's thread: executes over the scratch Host and brings every
-/// output to words, downloading what the backend left resident.
+/// output to words, downloading resident ones.
 fn run_on(
     backend: &dyn Backend,
     version: &KernelVersion,

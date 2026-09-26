@@ -1,6 +1,5 @@
-//! A gamepad as another keyboard. Buttons and the left stick land in the
-//! same key codes the keyboard uses, so a scene written for arrows, Z, X,
-//! and Enter plays on a pad without knowing one exists:
+//! A gamepad as a keyboard: buttons and the left stick press the
+//! keyboard's key codes.
 //!
 //! ```text
 //! D-pad, left stick   arrows 37 38 39 40 (left, up, right, down)
@@ -10,68 +9,64 @@
 //! Select              Escape (27)
 //! ```
 //!
-//! The analog values are in the context beside the pointer: `stick(0)` is
-//! the left stick, `stick(1)` the right, `stick(2)` the two triggers, and
-//! the pad's buttons are `button(8)` upwards (south, east, west, north,
-//! the shoulders, the thumbs, start, select). A scene written for arrows
-//! still plays, since the stick presses them too. What a pad is called
-//! on each machine (gilrs's names, a browser's standard mapping) is the
-//! device's to say; what it means is here.
+//! Analog values are in the context: `stick(0)` left, `stick(1)` right,
+//! `stick(2)` the triggers; pad buttons are `button(8)` upwards (south,
+//! east, west, north, shoulders, thumbs, start, select). The device
+//! names the pad's controls; this module gives them meaning.
 
 use orla_kernel::{InputState, pad};
 
-/// A pad's button, by where it is.
+/// A pad's button, by position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PadButton {
-    /// The lowest of the four face buttons (A, Cross).
+    /// Bottom face button (A, Cross).
     South,
-    /// The right one (B, Circle).
+    /// Right face button (B, Circle).
     East,
-    /// The left one (X, Square).
+    /// Left face button (X, Square).
     West,
-    /// The top one (Y, Triangle).
+    /// Top face button (Y, Triangle).
     North,
-    /// The shoulder button on the left.
+    /// Left shoulder.
     LeftShoulder,
-    /// The shoulder button on the right.
+    /// Right shoulder.
     RightShoulder,
-    /// The left stick, pressed.
+    /// Left stick pressed.
     LeftThumb,
-    /// The right stick, pressed.
+    /// Right stick pressed.
     RightThumb,
     /// Start.
     Start,
     /// Select.
     Select,
-    /// The D-pad's left.
+    /// D-pad left.
     Left,
-    /// The D-pad's up.
+    /// D-pad up.
     Up,
-    /// The D-pad's right.
+    /// D-pad right.
     Right,
-    /// The D-pad's down.
+    /// D-pad down.
     Down,
 }
 
-/// A pad's analog axis. A stick's up is positive, as a stick's axes
-/// are read on every machine that says which way is up.
+/// A pad's analog axis; a stick's up and right are positive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PadAxis {
-    /// The left stick across, right positive.
+    /// Left stick, horizontal.
     LeftX,
-    /// The left stick up and down, up positive.
+    /// Left stick, vertical.
     LeftY,
-    /// The right stick across.
+    /// Right stick, horizontal.
     RightX,
-    /// The right stick up and down.
+    /// Right stick, vertical.
     RightY,
-    /// The left trigger, 0 released to 1 pulled.
+    /// Left trigger, 0 released to 1 pulled.
     LeftTrigger,
-    /// The right trigger.
+    /// Right trigger.
     RightTrigger,
 }
 
-/// The button number a pad button holds, if any: `orla_abi::pad`.
+/// The `pad` button number a pad button sets, if any.
 fn button_for(button: PadButton) -> Option<i32> {
     Some(match button {
         PadButton::South => pad::SOUTH,
@@ -103,7 +98,7 @@ fn key_for(button: PadButton) -> Option<i32> {
     })
 }
 
-/// A stick's rest is never quite zero, so a little of it is nothing.
+/// Removes the stick's dead zone and rescales the rest to 0..1.
 fn deadened(value: f32) -> f32 {
     let dead = 0.12;
     if value.abs() <= dead {
@@ -113,8 +108,7 @@ fn deadened(value: f32) -> f32 {
     }
 }
 
-/// The pads' state beyond what the input holds: which arrows the left
-/// stick holds down, so a stick that drifts back releases them.
+/// Pad state beyond the input: which arrows the left stick holds.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Pad {
     stick_keys: [bool; 4],
@@ -133,7 +127,6 @@ impl Pad {
 
     /// An axis moved to `value`.
     pub fn axis(&mut self, input: &mut InputState, axis: PadAxis, value: f32) {
-        // The analog value as it is, less its dead middle.
         let held = deadened(value);
         match axis {
             PadAxis::LeftX => input.sticks[0][0] = held,
@@ -143,8 +136,7 @@ impl Pad {
             PadAxis::LeftTrigger => input.sticks[2][0] = held.abs(),
             PadAxis::RightTrigger => input.sticks[2][1] = held.abs(),
         }
-        // The stick presses an arrow past a threshold and releases it
-        // well inside, so it never chatters.
+        // Hysteresis: an arrow presses past 0.5 and releases below 0.35.
         let (negative, positive) = match axis {
             PadAxis::LeftX => (0, 2),
             PadAxis::LeftY => (3, 1),
@@ -165,9 +157,8 @@ impl Pad {
 mod tests {
     use super::*;
 
-    /// The stick presses the arrow it leans toward past a half, holds it
-    /// down to a third, and the D-pad and the face buttons press keys and
-    /// buttons both.
+    /// The stick presses arrows with hysteresis; D-pad and face buttons
+    /// press keys and buttons both.
     #[test]
     fn a_pad_is_another_keyboard() {
         let mut input = InputState::default();

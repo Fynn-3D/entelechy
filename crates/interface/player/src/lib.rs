@@ -1,8 +1,6 @@
 #![warn(missing_docs)]
-//! The Player's devices, kept free of windowing so they can be tested
-//! headlessly: the sound card and the pads. What the Player does with
-//! them is the session's play (`orla_session::play`), which every
-//! interface that plays a scene shares.
+//! The Player's devices, the sound card and the pads, free of windowing
+//! for headless tests. Their use is `orla_session::play`'s.
 
 pub mod audio;
 pub mod gamepad;

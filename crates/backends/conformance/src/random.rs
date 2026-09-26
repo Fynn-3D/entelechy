@@ -1,18 +1,16 @@
 //! Random Kernels for differential testing: typed expressions over the
-//! matrix's environment, wrapped in every execution mode, so a backend is
-//! held to the interpreter on programs nobody wrote by hand. The same seed
-//! gives the same programs, so a difference found is a difference kept.
+//! matrix's environment, wrapped in every execution mode. The same seed
+//! gives the same programs.
 //!
-//! What the expressions reach is the language as the matrix's features
-//! use it: float, integer, boolean and vector arithmetic, comparisons,
-//! the math builtins, conversions, `if`, `loop` with a carried value, and
-//! `let`s. Integer arithmetic may overflow or divide by zero: a program
-//! that fails must fail alike, at the same element, on every backend.
+//! Expressions cover float, integer, boolean and vector arithmetic,
+//! comparisons, math builtins, conversions, `if`, `loop` with a carried
+//! value, and `let`s. A program that overflows or divides by zero fails
+//! alike, at the same element, on every backend.
 
 use crate::{Case, case_in, modes};
 
-/// A small deterministic generator (SplitMix64): no dependency, and the
-/// same numbers on every machine.
+/// A deterministic generator (SplitMix64): the same numbers on every
+/// machine.
 pub struct Rng(u64);
 
 impl Rng {
@@ -53,8 +51,8 @@ enum Ty {
 /// be made from floats.
 struct Scope {
     names: Vec<(String, Ty)>,
-    /// Integers and booleans from integers and booleans alone: what a
-    /// device promises exactly, however its floats round.
+    /// Integers and booleans only from integers and booleans, which a
+    /// device computes exactly.
     exact: bool,
 }
 
@@ -279,9 +277,8 @@ fn leaf(rng: &mut Rng, scope: &Scope, ty: Ty) -> String {
                 "0.0", "1.0", "0.5", "2.5", "-1.25", "0.001", "1000.0", "3.14159", "-0.0", "0.1",
             ])
             .to_string(),
-        // A written number meets its type where it is used, and two meeting
-        // alone are exact, a Long past an Int's range: meeting `i` makes
-        // it an Int.
+        // A literal takes its type from use; `0 * i` makes it an Int, so
+        // two literals together stay out of `Long`.
         Ty::I => format!(
             "({} + 0 * i)",
             rng.pick(&[
@@ -308,16 +305,15 @@ fn leaf(rng: &mut Rng, scope: &Scope, ty: Ty) -> String {
     }
 }
 
-/// `count` random programs from `seed`, each under a mode it picks: a
-/// few `let`s and the `Out` they give, wrapped as the matrix wraps its
-/// features, with the inputs, params and context that mode runs with.
+/// `count` random programs from `seed`: a few `let`s and their `Out`,
+/// wrapped in a picked mode as the matrix wraps its features.
 pub fn cases(seed: u64, count: usize) -> Vec<Case> {
     generate(seed, count, false)
 }
 
-/// Programs whose integers and booleans are made from integers and
-/// booleans alone, so their `i` and `b` must match exactly on a device
-/// whose floats only match to rounding.
+/// Programs whose integers and booleans come only from integers and
+/// booleans, so `i` and `b` match exactly on a device whose floats
+/// match to rounding.
 pub fn exact_cases(seed: u64, count: usize) -> Vec<Case> {
     generate(seed, count, true)
 }

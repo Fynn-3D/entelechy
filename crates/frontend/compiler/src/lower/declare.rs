@@ -1,7 +1,6 @@
-//! What a Kernel declares, checked and turned into its manifest: the
-//! structs, the type aliases, the ports and their layouts, the
-//! parameters and their literal defaults, the execution mode; and the
-//! names a function may not take.
+//! A Kernel's declarations, checked into its manifest: structs, aliases,
+//! ports and layouts, parameters and defaults, the execution mode; and
+//! the names reserved from functions.
 
 use std::cell::RefCell;
 use std::str::FromStr;
@@ -64,21 +63,18 @@ pub(super) fn struct_table(decls: &[orla_language::StructDecl]) -> Result<Struct
     Ok(structs)
 }
 
-/// Evaluates a literal without a declared type: integers stay `Int`.
-/// Struct literals are refused, as nothing here declares a struct.
+/// Evaluates an untyped literal: integers stay `Int`; a struct literal
+/// is refused, with no struct declared.
 pub(crate) fn literal(expr: &Expr) -> Result<Value, CompileError> {
     literal_in(expr, &|_| None)
 }
 
-/// Evaluates a literal of any value a Kernel can hold, before it has a
-/// type: numbers (integers stay `Int`, and those too big for one are a
-/// `Long`; `d` and `l` say `Double` and `Long`), booleans, `vec2`..`vec4`,
-/// `ivec2` and `ivec3`, `mat2`..`mat4` from their columns or one value
-/// down the diagonal, their `d` and `l` kin (`dvec3`, `lvec2`, `dmat4`),
-/// `[a, b]` and `[v; N]`, and `Name { field: .. }`, whose fields
-/// `fields_of` lists in declaration order. An array or a struct is a
-/// record of its members in order; a type shapes it after
-/// ([`orla_ir::value_as`]).
+/// Evaluates an untyped literal of any Kernel value: numbers (`Int`, or
+/// `Long` when too big; suffixes `d` and `l` say `Double` and `Long`),
+/// booleans, vector and matrix constructors and their `d`/`l` kin,
+/// `[a, b]`, `[v; N]`, and `Name { field: .. }` with fields in the order
+/// `fields_of` gives. An array or struct is a record of its members;
+/// [`orla_ir::value_as`] shapes it into a type.
 pub(crate) fn literal_in(
     expr: &Expr,
     fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
@@ -86,9 +82,9 @@ pub(crate) fn literal_in(
     literal_with(expr, fields_of, false)
 }
 
-/// Evaluates a literal that a type will shape, keeping every written
-/// float exact (a `Double`) until the type says what width it is: `0.1`
-/// given to a `Double` is the double nearest a tenth, not the float's.
+/// Evaluates a literal a type will shape, keeping written floats exact
+/// (as `Double`) until the type sets their width: `0.1` for a `Double`
+/// is the double nearest a tenth.
 pub(crate) fn literal_exact(
     expr: &Expr,
     fields_of: &dyn Fn(&str) -> Option<Vec<String>>,
@@ -199,7 +195,7 @@ fn literal_with(
     }
 }
 
-/// A literal negated component by component; a boolean is not.
+/// A numeric literal negated component by component.
 fn negated(value: &Value) -> Option<Value> {
     fn floats<T: std::ops::Neg<Output = T> + Copy, const N: usize>(v: &[T; N]) -> [T; N] {
         v.map(|x| -x)
@@ -239,7 +235,7 @@ fn negated(value: &Value) -> Option<Value> {
     })
 }
 
-/// Integers that negate without overflowing, or say they would.
+/// Integer negation checked for overflow.
 mod num {
     pub(super) trait CheckedNeg: Sized {
         fn checked_neg(self) -> Option<Self>;
@@ -256,10 +252,9 @@ mod num {
     }
 }
 
-/// A constructor applied to literal arguments: `vec3(1, 0, 0)` with its
-/// integers widened, `ivec2(3, 4)`, `mat3(c0, c1, c2)` from columns and
-/// `mat3(1.0)` down the diagonal, and the same of doubles (`dvec3`,
-/// `dmat4`) and longs (`lvec2`).
+/// A constructor of literals: `vec3(1, 0, 0)` with integers widened,
+/// `ivec2(3, 4)`, `mat3(c0, c1, c2)` from columns, `mat3(1.0)` down the
+/// diagonal, and their double and long kin.
 fn constructed(name: &str, args: &[Value]) -> Option<Value> {
     use orla_ir::{Number, Scalar};
     let (scalar, n, matrix) = match name {
@@ -287,7 +282,7 @@ fn constructed(name: &str, args: &[Value]) -> Option<Value> {
         Scalar::Double => Type::Double,
         _ => Type::Long,
     };
-    // A float given for an integer is not a literal of one.
+    // An integer constructor takes integers only.
     let number = |value: &Value| -> Option<Number> {
         let [number] = value.numbers()[..] else {
             return None;
@@ -341,9 +336,8 @@ fn column_matrix(kind: Type, n: usize) -> Option<Type> {
 }
 
 /// The builtins a function cannot be named after: the Field, memory,
-/// context and construction ones, whose forms the language owns. The
-/// math builtins are ordinary calls, and a function of one's name
-/// stands for it in its document.
+/// context and construction ones, whose forms the language owns. A
+/// function named after a math builtin stands for it in its document.
 pub(super) const RESERVED_BUILTINS: [&str; 45] = [
     "put",
     "emit",
@@ -418,8 +412,8 @@ pub(super) fn numeric(ty: &Type, structs: &[StructDef]) -> bool {
     }
 }
 
-/// Whether a type holds a float anywhere: what decides that a `sum`
-/// depends on the order it is folded in.
+/// Whether a type holds a float anywhere, making a `sum` depend on its
+/// fold order.
 pub(super) fn holds_float(ty: &Type, structs: &[StructDef]) -> bool {
     match ty {
         Type::Struct(index) => structs[*index as usize]
@@ -430,9 +424,8 @@ pub(super) fn holds_float(ty: &Type, structs: &[StructDef]) -> bool {
     }
 }
 
-/// The port type a written name stands for. `Image` and the declared
-/// aliases are spellings of a shape and an element; the structure is what
-/// gets checked.
+/// The port type a written name stands for. `Image` and aliases spell a
+/// shape and an element; checks compare the structure.
 pub(super) fn port_type(
     text: &Spanned<String>,
     structs: &Structs,
@@ -474,7 +467,7 @@ pub(super) fn port_type(
         }
     };
     // `Element as encoding`: the element a Kernel sees, and how the Field
-    // keeps its scalars.
+    // stores its scalars.
     let (element, kept) = match element.split_once(" as ") {
         Some((element, kept)) => (element, Some(kept)),
         None => (element, None),
@@ -608,8 +601,8 @@ pub(super) fn manifest(
             .collect::<Result<Vec<_>, CompileError>>()
     };
     let mut inputs = ports(&kernel.inputs)?;
-    // A reduction yields one element, so its output may be written as the
-    // element's type: `output result: Loss;` is `Rows<Loss>`.
+    // A reduction's output may be written as its element type:
+    // `output result: Loss;` is `Rows<Loss>`.
     let mut outputs = kernel
         .outputs
         .iter()
@@ -632,7 +625,7 @@ pub(super) fn manifest(
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
     // A memory is bound like an input and read like an output: it joins
-    // both lists, last, and its name says so.
+    // both lists, last.
     let memory_ports = ports(&kernel.memories)?;
     let memories: Vec<String> = memory_ports.iter().map(|p| p.name.clone()).collect();
     if let Some(first) = kernel.memories.first() {
@@ -749,8 +742,8 @@ pub(super) fn manifest(
                 ),
             ));
         }
-        // What lets every backend group the fold its own way and still
-        // answer with the reference's words.
+        // A prefix's fold is order-free: every backend groups it its own
+        // way and matches the reference's words.
         if combine == Combine::Sum && holds_float(&element, &structs) {
             return Err(semantic(
                 prefix.combine.span,
@@ -799,8 +792,8 @@ pub(super) fn manifest(
             "writing an output needs `field.write`; add it to `requires`",
         ));
     }
-    // A narrow output is written an element at a time, by a map or the
-    // steps of a scan; the other modes fold into theirs in place.
+    // Only a map or a scan writes a narrow output, an element at a time;
+    // the other modes fold in place.
     if !matches!(mode, Mode::Map | Mode::Scan)
         && let Some((decl, _)) = kernel
             .outputs
@@ -817,9 +810,8 @@ pub(super) fn manifest(
             ),
         ));
     }
-    // Several outputs are what a map writes per element, each to a Field
-    // of its own over the one domain. The other modes fold, carry or
-    // place one element; several results there are one struct.
+    // Only a map has several outputs, each its own Field over one domain;
+    // other modes give several results as one struct.
     if let Some(second) = kernel.outputs.get(1) {
         if mode != Mode::Map {
             let (what, form) = match mode {
@@ -855,8 +847,7 @@ pub(super) fn manifest(
         .params
         .iter()
         .map(|decl| {
-            // Any value type a Kernel can hold crosses as its words: a
-            // matrix, an integer vector, a struct, an array.
+            // Any Kernel value type crosses as its words.
             let ty = resolve_type(&decl.ty, structs)?;
             let default = constant(&decl.default, ty, &structs.borrow())?;
             Ok::<_, CompileError>(Param {
@@ -908,9 +899,8 @@ pub(super) fn manifest(
     })
 }
 
-/// A literal given for a value of the type `ty` names, over the structs
-/// `decls` declare: read exact and shaped into the type, so a double
-/// anywhere in it keeps every digit written.
+/// A literal read exact and shaped into the type `ty` names, over the
+/// structs `decls` declare; a double keeps every digit written.
 pub(crate) fn literal_of_type(
     expr: &Expr,
     ty: &Spanned<String>,
@@ -922,9 +912,8 @@ pub(crate) fn literal_of_type(
     constant(expr, ty, &structs)
 }
 
-/// Evaluates a parameter default at compile time, as a value of `ty`:
-/// the literal, shaped into the type's layout, an integer standing in for
-/// a float. A struct literal names a struct of the Kernel's table.
+/// Evaluates a parameter default at compile time as a value of `ty`,
+/// shaped into its layout; an integer may stand for a float.
 pub(super) fn constant(
     expr: &Expr,
     ty: Type,

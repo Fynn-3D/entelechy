@@ -1,10 +1,9 @@
-//! How a port kept narrower than its words is read and written: the
-//! encodings, and the loads and stores that widen and narrow a scalar.
+//! Port storage in shaders: scalar encodings, and the loads and stores
+//! that widen and narrow them.
 
 use super::*;
 
-/// How input `index` keeps its scalars: the one encoding of its port, or
-/// whole words.
+/// Input `index`'s scalar encoding: its port's uniform one, else words.
 pub fn input_encoding(module: &Module, index: usize) -> Encoding {
     module.manifest.inputs[index]
         .ty
@@ -13,7 +12,7 @@ pub fn input_encoding(module: &Module, index: usize) -> Encoding {
         .unwrap_or(Encoding::Word)
 }
 
-/// How output `k` keeps its scalars.
+/// Output `k`'s scalar encoding.
 pub fn output_encoding(module: &Module, k: usize) -> Encoding {
     module.manifest.outputs[k]
         .ty
@@ -22,8 +21,7 @@ pub fn output_encoding(module: &Module, k: usize) -> Encoding {
         .unwrap_or(Encoding::Word)
 }
 
-/// Whether any port keeps its scalars narrow, so the shader needs the
-/// widening and narrowing helpers.
+/// Whether any port is narrow, so the shader needs encoding helpers.
 pub(crate) fn any_narrow(module: &Module) -> bool {
     let manifest = &module.manifest;
     manifest
@@ -33,23 +31,21 @@ pub(crate) fn any_narrow(module: &Module) -> bool {
         .any(|port| !port.ty.schema.is_wide())
 }
 
-/// Whether a narrow output shares words between elements, so its
-/// elements are stored by atomic or into a buffer cleared first; one
-/// whose elements fill whole words is stored a word at a time.
+/// Whether a narrow output shares words between elements, so elements
+/// are stored by atomic or into a cleared buffer, not a word at a time.
 pub fn output_shares_words(module: &Module, k: usize) -> bool {
     let schema = &module.manifest.outputs[k].ty.schema;
     !schema.is_wide() && !schema.element_bytes().is_multiple_of(4)
 }
 
-/// A `f32` constant by its bits, so the shader multiplies by exactly the
-/// Host's own value.
+/// A `f32` constant written as its bits, exactly the Host's value.
 pub(crate) fn f32_bits(value: f32) -> String {
     format!("bitcast<f32>({:#010x}u)", value.to_bits())
 }
 
-/// The widening and narrowing rules of `orla_abi::encoding`, as integer
-/// arithmetic the shader compiler has no license to rewrite: a half
-/// float both ways, and a normalized float narrowed.
+/// The `orla_abi::encoding` rules for half floats (both ways) and
+/// normalized narrowing, in integer arithmetic the shader compiler keeps
+/// exact.
 pub(crate) fn emit_encodings(out: &mut String) {
     let _ = writeln!(
         out,
@@ -99,9 +95,8 @@ fn encode_unit(x: f32, low: f32, scale: f32) -> u32 {{
     );
 }
 
-/// An expression for scalar `k` (of kind `kind`) of a read at `base`:
-/// a whole word at word `base + k`, or, for a narrow encoding, the
-/// scalar's bytes at byte `base + k * size` widened by the Host's rule.
+/// Scalar `k` of a read at `base`: word `base + k`, or for a narrow
+/// encoding the bytes at `base + k * size`, widened by the Host's rule.
 pub(crate) fn scalar_load(
     encoding: Encoding,
     kind: Scalar,
@@ -141,8 +136,7 @@ pub(crate) fn scalar_load(
     }
 }
 
-/// An expression for the bits `value` (a scalar of kind `kind`) is kept
-/// as in a narrow encoding, in the low bytes.
+/// The narrow-encoded bits of scalar `value`, in the low bytes.
 pub(crate) fn scalar_encode(encoding: Encoding, kind: Scalar, value: &str) -> String {
     if kind == Scalar::Bool {
         return format!("select(0u, 1u, {value})");
@@ -158,8 +152,8 @@ pub(crate) fn scalar_encode(encoding: Encoding, kind: Scalar, value: &str) -> St
     }
 }
 
-/// The scalars of a value of type `ty` at `path`, in layout order: an
-/// expression for each and its kind.
+/// `(expression, kind)` of each scalar of a `ty` at `path`, in layout
+/// order.
 pub(crate) fn scalar_paths(module: &Module, ty: Type, path: &str, out: &mut Vec<(String, Scalar)>) {
     match ty {
         Type::Struct(index) => {
@@ -177,9 +171,8 @@ pub(crate) fn scalar_paths(module: &Module, ty: Type, path: &str, out: &mut Vec<
     }
 }
 
-/// The scalars of a value that is not a struct, at `path`, in layout
-/// order: itself, a vector's components, a matrix's entries column by
-/// column; each an expression and its kind.
+/// `(expression, kind)` of each scalar of a non-struct at `path`, in
+/// layout order; a matrix is column-major.
 pub(crate) fn scalar_parts(ty: Type, path: &str) -> Vec<(String, Scalar)> {
     const LETTERS: [&str; 4] = ["x", "y", "z", "w"];
     match ty {
@@ -196,7 +189,7 @@ pub(crate) fn scalar_parts(ty: Type, path: &str) -> Vec<(String, Scalar)> {
     }
 }
 
-/// The words a scalar is stored as: a whole word, or two for a long.
+/// The words a scalar is stored as: one, or two for a long.
 pub(crate) fn stored_words(kind: Scalar, expr: &str) -> Vec<String> {
     match kind {
         Scalar::Bool => vec![format!("select(0u, 1u, {expr})")],
@@ -205,10 +198,9 @@ pub(crate) fn stored_words(kind: Scalar, expr: &str) -> Vec<String> {
     }
 }
 
-/// The body of a store of `v` (a value of type `ty`) as element `index`
-/// of output `k`, kept in a narrow encoding: whole words when elements
-/// fill whole words, an atomic or into a cleared buffer when they share
-/// them.
+/// The body storing `v: ty` as element `index` of narrow output `k`:
+/// whole words when elements fill them, else an atomic or into a
+/// cleared buffer.
 pub(crate) fn narrow_store_body(module: &Module, k: usize, ty: Type) -> String {
     let schema = &module.manifest.outputs[k].ty.schema;
     let encoding = output_encoding(module, k);
@@ -242,9 +234,9 @@ pub(crate) fn narrow_store_body(module: &Module, k: usize, ty: Type) -> String {
     lines.join("\n")
 }
 
-/// An expression loading a value of type `ty` from `buffer` at `base`,
-/// `offset` scalars in, and the scalars it consumes. `base` counts words
-/// when the buffer keeps whole words and bytes when it keeps `encoding`.
+/// An expression loading a `ty` from `buffer` at `base`, `offset`
+/// scalars in, and the scalars it consumes. `base` counts words, or
+/// bytes for a narrow `encoding`.
 pub(crate) fn load_expr(
     module: &Module,
     ty: Type,
@@ -258,16 +250,15 @@ pub(crate) fn load_expr(
     })
 }
 
-/// A value of type `ty` built from its scalars, `offset` in, each an
-/// expression `scalar` gives for its kind and index; and the scalars it
-/// takes.
+/// A `ty` built from `scalar(kind, index)` expressions from `offset`,
+/// and the words it takes.
 pub(crate) fn compose(
     module: &Module,
     ty: Type,
     offset: usize,
     scalar: &dyn Fn(Scalar, usize) -> String,
 ) -> (String, usize) {
-    // Each scalar from its words, `offset` in: one, or two for a long.
+    // A long takes two words.
     let parts = |kind: Scalar, count: usize| -> (String, usize) {
         let width = kind.words();
         let parts = (0..count)
@@ -300,9 +291,9 @@ pub(crate) fn compose(
     }
 }
 
-/// Where each parameter begins in the params uniform, in `vec4<u32>`
-/// slots, and how many slots there are: a parameter is its words, from a
-/// slot of its own, as many slots as its words fill.
+/// Each parameter's first `vec4<u32>` slot in the params uniform, and the
+/// slot count. A parameter starts a slot and fills as many as its words
+/// need.
 pub fn param_slots(module: &Module) -> (Vec<usize>, usize) {
     let mut starts = Vec::with_capacity(module.manifest.params.len());
     let mut slots = 0;

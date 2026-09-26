@@ -1,11 +1,9 @@
-//! Kernel fusion: inlining a producer's per-pixel computation into a
+//! Kernel fusion: inlining a producer's per-element computation into a
 //! consumer that only samples it at the current coordinate.
 //!
-//! `Y = C(P(X))` evaluated pixel by pixel never needs `P`'s image when `C`
-//! reads it only through `sample`. The fused module computes `P`'s result
-//! first and uses it where `C` sampled, so the intermediate image is never
-//! written or read. The result is an ordinary module: it validates, caches,
-//! and runs on any backend like a hand-written Kernel.
+//! For `Y = C(P(X))`, the fused module computes `P`'s result first and uses
+//! it where `C` sampled, so the intermediate Field is never stored. The
+//! result is an ordinary module that validates and runs on any backend.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -20,12 +18,10 @@ use crate::{
 pub struct FuseError {
     /// What went wrong.
     pub message: String,
-    /// Whether the two are simply not to be fused, and a planner runs
-    /// each on its own: the producer writes a Field the consumer's port
-    /// cannot take (the scene's mistake, which the binding check says far
-    /// better), or a Kernel's work is counted and held to its own budget.
-    /// Everything else a fusion refuses is this crate's own fault and is
-    /// reported.
+    /// Whether the planner runs the two separately without reporting: the
+    /// consumer's port cannot take the producer's Field (the binding check
+    /// reports it), or a Kernel's work is counted. Any other refusal is a
+    /// fault of this crate and is reported.
     pub declines: bool,
 }
 
@@ -99,8 +95,8 @@ pub fn input_use(module: &Module, input: u32) -> InputUse {
     use_
 }
 
-/// Whether `module` reads `input` only by `sample`, so a producer of that
-/// input can be fused into it.
+/// Whether `module` reads `input` only by `sample`, so its producer can
+/// fuse into it.
 pub fn samples_only(module: &Module, input: u32) -> bool {
     let use_ = input_use(module, input);
     use_.sampled && !use_.addressed
@@ -117,14 +113,11 @@ pub fn fuse(
     fuse_outputs(consumer, &[(input, 0)], producer, prefix)
 }
 
-/// Fuses `producer` into `consumer` where the consumer reads it: each link
-/// is `(input, output)`, a consumer input bound to one of the producer's
-/// outputs, and every sample of that input becomes the producer's value
-/// for that output. A map of several outputs whose every reader is this
-/// consumer fuses whole, its outputs never written; one nobody reads is
-/// computed and dropped. The fused manifest keeps the consumer's other
-/// inputs and params, then the producer's, renamed with `prefix` and a
-/// slash (`prefix/name`).
+/// Fuses `producer` into `consumer`. Each link `(input, output)` binds a
+/// consumer input to a producer output; every sample of that input becomes
+/// the producer's value for it. Unread producer outputs are computed and
+/// dropped. The fused manifest keeps the consumer's other inputs and params,
+/// then the producer's, renamed `prefix/name`.
 pub fn fuse_outputs(
     consumer: &Module,
     links: &[(u32, u32)],
@@ -153,10 +146,8 @@ pub fn fuse_outputs(
             )));
         }
     }
-    // A Kernel whose work is counted is held to its own budget, and its
-    // node to its own run: fused, the two would share one, and whether a
-    // scene fits would turn on fusion, which pinning a node to look at it
-    // turns off. Such Kernels run on their own.
+    // A Kernel whose work is counted keeps its own budget and run, so it
+    // runs alone.
     if producer.counts_work() || consumer.counts_work() {
         return Err(FuseError::declined(
             "a Kernel whose work is counted runs on its own, held to its own budget".into(),
@@ -167,8 +158,7 @@ pub fn fuse_outputs(
             "only map Kernels fuse; reductions and scans run on their own".into(),
         ));
     }
-    // A narrow output rounds what passes through it: fused, the consumer
-    // would read the value before the rounding, which is not the scene.
+    // A narrow output rounds its values, which the consumer must read.
     if let Some((_, output)) = links.iter().find(|(_, output)| {
         !producer_manifest.outputs[*output as usize]
             .ty
@@ -180,8 +170,7 @@ pub fn fuse_outputs(
             producer_manifest.outputs[*output as usize].name
         )));
     }
-    // Ports match by structure: shape and layout. Element types are
-    // struct indices local to each module and mean nothing across them.
+    // Ports match by shape and layout; struct indices are module-local.
     for (input, output) in links {
         let (written, read) = (
             &producer_manifest.outputs[*output as usize].ty,
@@ -194,22 +183,16 @@ pub fn fuse_outputs(
             });
         }
     }
-    // The linked inputs leave the consumer; every input after one moves
-    // down by as many as leave before it.
+    // Linked inputs leave the consumer; later inputs move down to close up.
     let removed: Vec<u32> = links.iter().map(|(input, _)| *input).collect();
     let kept_inputs = (consumer_manifest.inputs.len() - removed.len()) as u32;
     let consumer_params = consumer_manifest.params.len() as u32;
     let consumer_functions = consumer.functions.len() as u32;
     let rename = |name: &str| format!("{prefix}/{name}");
 
-    // The producer's structs join the consumer's table, and one the
-    // consumer already has is not added twice. The dedup is what makes
-    // the splice type: the consumer's sample of the fused input becomes
-    // the producer's result, so a whole element the consumer passes
-    // around — returned from one arm of an `if` beside one it builds
-    // itself — must carry the same struct as the consumer's own. Struct
-    // `i` may only contain structs before it, so one pass in order is
-    // enough to map every producer struct into the fused table.
+    // The producer's structs join the consumer's table once each, so a
+    // spliced element carries the consumer's own struct and types match.
+    // Structs refer only to earlier ones, so one ordered pass maps them.
     let mut structs = consumer.structs.clone();
     let mut moved: Vec<u32> = Vec::with_capacity(producer.structs.len());
     for def in &producer.structs {
@@ -305,7 +288,7 @@ pub fn fuse_outputs(
             other => other.clone(),
         }
     };
-    // Producer ops: inputs, params, functions, and structs move after the
+    // Producer ops: inputs, params, functions and structs follow the
     // consumer's.
     let producer_ops = move |op: &Op| -> Op {
         let index = |i: u32| i + kept_inputs;
@@ -337,9 +320,7 @@ pub fn fuse_outputs(
         .collect();
     functions.extend(producer.functions.iter().map(|function| {
         let mut renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
-        // `function` already shifted the argument types along with the
-        // instruction types; shifting them again would point past the
-        // struct table.
+        // `function` has already shifted the argument types.
         let mut fused = renumber.function(function);
         fused.name = rename(&function.name);
         fused
@@ -349,9 +330,8 @@ pub fn fuse_outputs(
     // sample of the fused input replaced by the producer's result.
     let mut entry_renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
     let mut body = entry_renumber.block(&producer.entry.body);
-    // Each linked input reads the producer's value for its output. A
-    // path into it is walked against that output's element, in the
-    // fused table's numbering.
+    // Each linked input reads the producer's value for its output; a path
+    // into it is walked against that output's element in the fused table.
     let replace = links
         .iter()
         .map(|(input, output)| {
@@ -404,8 +384,7 @@ pub fn fuse_outputs(
         init: None,
     })
     .map_err(|error| FuseError::new(format!("fused module is invalid: {error}")))?;
-    // Two that each run uncounted may together not: then the fused one
-    // would be counted where neither is, and each is left its own.
+    // A fusion that would be counted where neither part is stays unfused.
     if fused.counts_work() {
         return Err(FuseError::declined(
             "together the two would run long enough to be counted, which neither is on its own"
@@ -416,18 +395,17 @@ pub fn fuse_outputs(
 }
 
 /// Rewrites a function body with fresh pre-order ids, applying `ops` to
-/// every operation and `types` to every type, optionally replacing samples
-/// of one input by an existing value.
+/// every operation and `types` to every type, and replacing samples of
+/// linked inputs by values in hand.
 struct Renumber<'a> {
     next: u32,
     ids: BTreeMap<u32, u32>,
     ops: &'a dyn Fn(&Op) -> Op,
     types: &'a dyn Fn(Type) -> Type,
-    /// Inputs whose samples become values in hand, and each value's
-    /// element type, which a path into it is walked against.
+    /// Inputs whose samples become values in hand, with each value's
+    /// element type for walking paths.
     replace: BTreeMap<u32, (ValueId, Type)>,
-    /// The structs to read such a path against: a part of a sample
-    /// becomes the extracts and subscripts it stands for.
+    /// The structs such a path is read against.
     structs: Option<&'a [StructDef]>,
 }
 
@@ -483,9 +461,8 @@ impl<'a> Renumber<'a> {
                 self.ids.insert(instruction.id.0, replacement.0);
                 continue;
             }
-            // A part of that sample: the producer's result is a value
-            // here, so the way to the part is the extracts and
-            // subscripts it stands for, and nothing is read.
+            // A part of that sample becomes extracts and subscripts of the
+            // producer's value.
             if let Op::Part {
                 input: i,
                 at: None,

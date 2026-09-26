@@ -1,5 +1,5 @@
-//! The JIT against the CPU interpreter: the same words out, the same
-//! integer failures, on the whole vocabulary a map Kernel has.
+//! The JIT against the CPU interpreter: the same words and the same
+//! integer failures over a map Kernel's whole vocabulary.
 
 use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
 use orla_compiler::compile;
@@ -160,7 +160,7 @@ fn integer_failures_are_reported_at_their_element() {
         let outcome = jit.execute(prepared.as_ref(), &module, &invocation, &mut scope);
         (outcome.map(|_| ()), host.live())
     };
-    // d = 3: element 3 divides by zero, before element 5 overflows.
+    // d = 3: element 3 divides by zero before element 5 overflows.
     let (error, live) = run(3);
     assert_eq!(
         error.unwrap_err(),
@@ -231,9 +231,9 @@ fn both_all(
 
 #[test]
 fn scans_and_their_memories_match_the_interpreter() {
-    // A machine that walks a grid memory and tallies into a rows memory,
-    // reading its carried value and the step index outside any loop, with
-    // a loop inside a step and writes outside both memories dropped.
+    // A machine walks a grid memory and tallies into a rows memory, reading
+    // its carried value and step index, with a loop inside a step; writes
+    // outside both memories are dropped.
     let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; }
         fn flip(s: Grid<Int>, p: Vec2, seen: Int) -> Int { return put(s, p, (1 - seen) >>> 0); }
         scan with at_ = vec2(3.0, 2.0) {
@@ -308,8 +308,8 @@ fn a_scan_step_that_fails_names_its_element() {
 
 #[test]
 fn reductions_fold_in_the_interpreters_tree() {
-    // Ints exactly and floats bit for bit, since both backends fold the
-    // same pairs in the same order; an odd count runs the tail path.
+    // Ints exactly and floats bit for bit: both fold the same pairs in the
+    // same order; an odd count runs the tail path.
     let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
     let (width, height) = (37u32, 23u32);
     let pixels: Vec<u32> = (0..width * height)
@@ -334,8 +334,8 @@ fn reductions_fold_in_the_interpreters_tree() {
 
 #[test]
 fn scatters_apply_in_element_order_with_the_same_rule() {
-    // Many drops into a small grid, several per cell, so the order of the
-    // float sums matters; an address outside is dropped.
+    // Several drops per cell of a small grid, so float order matters; an
+    // address outside is dropped.
     let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
     let count = 2000u32;
     let drops: Vec<u32> = (0..count)
@@ -421,8 +421,8 @@ fn a_merge_or_a_combine_that_overflows_is_reported() {
             error: ArithmeticError::Overflow
         }
     );
-    // An integer sum into one slot whose whole total does not fit: the
-    // slot is named, whatever source took it past the end.
+    // An integer sum into one slot whose whole total does not fit names
+    // the slot.
     let source = "kernel test.pile@1 { requires { field.read; field.write; } input rows: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>; struct Pair { at: Int; value: Int; } scatter into slots with sum { return Pair { at: 0, value: sample(rows) }; } }";
     let module = compile(source).unwrap();
     let mut host = Host::new(1 << 16);
@@ -497,11 +497,8 @@ fn a_merge_may_read_inputs_params_and_the_context() {
     assert!((f32::from_bits(cpu[0]) - (plain + 36.0 * 3.5)).abs() < 1e-2);
 }
 
-/// Where a failure is blamed does not move when the compiler writes a
-/// short function out where it was called or lifts a loop's unchanging
-/// work out of it: the same element, on both backends. And what a loop
-/// that never runs would have failed at does not fail, since work that
-/// can fail is never lifted out of one.
+/// Inlining and hoisting keep the failing element on both backends; a
+/// loop that never runs fails at nothing, since failing work never hoists.
 #[test]
 fn a_failure_names_its_element_through_a_call_and_a_loop() {
     let source = "kernel test.deep@1 { requires { field.write; } param d: Int = 1; output result: Rows<Int>; fn risky(a: Int, b: Int) -> Int { return a / b; } compute { let i = element(); let times = if i % 2 == 0 { 3 } else { 0 }; return loop times with acc = 0 { acc + risky(100, d - i) }; } }";
@@ -520,8 +517,8 @@ fn a_failure_names_its_element_through_a_call_and_a_loop() {
         let outcome = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope);
         outcome.map(|outputs| scope.storage(outputs[0]).unwrap().to_vec())
     };
-    // Element 4 divides by zero, three times over, inside a function
-    // that is written out inside a loop: both backends blame element 4.
+    // Element 4 divides by zero in an inlined function inside a loop: both
+    // backends blame element 4.
     let expected = ExecutionError::Arithmetic {
         x: 4,
         y: 0,
@@ -529,8 +526,8 @@ fn a_failure_names_its_element_through_a_call_and_a_loop() {
     };
     assert_eq!(run(&CpuBackend, 4).unwrap_err(), expected);
     assert_eq!(run(&jit, 4).unwrap_err(), expected);
-    // Element 5 would divide by zero too, but its loop runs no times:
-    // the division cannot be lifted out of it, so nothing fails.
+    // Element 5's division sits in a loop that runs no times: nothing
+    // fails.
     let cpu = run(&CpuBackend, 5).unwrap();
     let jitted = run(&jit, 5).unwrap();
     assert_eq!(cpu, jitted);
@@ -541,8 +538,8 @@ fn a_failure_names_its_element_through_a_call_and_a_loop() {
 #[test]
 fn emitted_pairs_land_as_the_interpreters_do() {
     // Each element emits as many pairs as its key says, into slots its key
-    // picks, over enough elements that both backends split them among
-    // threads; the pair each returns lands too.
+    // picks, across worker threads on both backends; the returned pair
+    // lands too.
     let count = 50_000u32;
     for rule in ["sum", "max", "min"] {
         let source = format!(
@@ -571,10 +568,8 @@ fn emitted_pairs_land_as_the_interpreters_do() {
     }
 }
 
-/// A pair wider than every input's element is emitted through the
-/// scratch slot, which was sized by the inputs alone: the store ran past
-/// it and over the run's own state, and pairs went missing. Long keys of
-/// a depth's bits and a row, emitted from nested loops under a branch.
+/// A pair wider than every input's element goes through a scratch slot
+/// sized for it: long keys from nested loops under a branch all land.
 #[test]
 fn keys_emitted_from_nested_loops_land_as_the_interpreters_do() {
     let count = 20_000u32;
@@ -627,11 +622,9 @@ fn keys_emitted_from_nested_loops_land_as_the_interpreters_do() {
     assert_eq!(differ, 0, "{differ} pixels differ");
 }
 
-/// A scatter over enough pairs that the target is cut into parts, each
-/// applied by its own worker, lands as the interpreter's one pass does:
-/// a float sum, whose rounding is its order, and `last`, which is its
-/// order, as much as the rules that ignore it; and an overflow names the
-/// element the sequential order fails at.
+/// Parts applied by separate workers land as the interpreter's single
+/// pass, for order-dependent rules (float sum, `last`) too; an overflow
+/// names the element the sequential order fails at.
 #[test]
 fn a_target_cut_into_parts_sees_its_pairs_in_order() {
     let count = 200_000u32;
@@ -661,8 +654,8 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
         );
         assert_eq!(cpu, jit, "{rule}");
     }
-    // An integer sum that overflows at several places: the failure named
-    // is the earliest element's, as one pass in order meets it.
+    // An integer sum overflowing at several places names the earliest
+    // element.
     let module = compile(
         "kernel test.over@1 { requires { field.read; field.write; }
          input keys: Rows<Int>; input slots: Rows<Int>; output result: Rows<Int>;
@@ -703,10 +696,7 @@ fn a_target_cut_into_parts_sees_its_pairs_in_order() {
     assert_eq!(cpu.to_string(), got.to_string());
 }
 
-/// A scatter's pairs are held in Host memory while the run applies them,
-/// and the Host's budget bounds them as it bounds a Field: past the room
-/// the Host has, the interpreter and the JIT both refuse the run and say
-/// so; with room, both run it alike.
+/// A scatter's pairs held in Host memory count against the budget.
 #[test]
 fn pairs_past_the_hosts_room_fail_the_run_on_both() {
     let module = compile(
@@ -755,7 +745,7 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
             .map(|out| host.data(out[0]).unwrap().storage().to_vec())
     };
     let jit = JitBackend::new().unwrap();
-    // Two hundred elements of a thousand pairs, three words each held.
+    // Two hundred elements of a thousand pairs, three words each.
     for backend in [&CpuBackend as &dyn Backend, &jit] {
         let error = run(100_000, backend).unwrap_err();
         assert!(
@@ -772,8 +762,8 @@ fn pairs_past_the_hosts_room_fail_the_run_on_both() {
     assert_eq!(cpu.iter().sum::<u32>(), 200_000);
 }
 
-/// A module on both backends over one input of rows: each one's words,
-/// or its failure.
+/// A module on both backends over one rows input: each one's words, or
+/// its failure.
 fn outcomes(
     source: &str,
     schema: orla_abi::Schema,
@@ -813,10 +803,8 @@ fn outcomes(
     [run(false), run(true)]
 }
 
-/// Folds long enough to be split across workers give the walk's words
-/// and its failures: a prefix of one `Int` (its own path) and of a
-/// record (the rule's), one whose run totals overflow where the walk
-/// does not, one that overflows late, and a reduction and its overflow.
+/// A prefix of one `Int` and of a record, one whose partial totals
+/// overflow where the walk does not, a late overflow, and a reduction.
 #[test]
 fn folds_split_across_workers_are_the_walks() {
     let n = 400_000usize;
@@ -852,9 +840,8 @@ fn folds_split_across_workers_are_the_walks() {
     assert!(cpu.is_ok(), "{cpu:?}");
     assert_eq!(cpu, jit, "a record's prefix");
     let sum = "kernel test.running@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>; prefix with sum { return sample(rows); } }";
-    // The first ten rows owe two billion, which the last two, three
-    // billion together, pay back: their run's own total overflows, the
-    // walk never does.
+    // The first ten rows owe two billion, the last two repay three: a
+    // worker's partial total overflows, the walk never does.
     let mut paid = vec![0u32; n];
     for row in paid.iter_mut().take(10) {
         *row = (-200_000_000i32) as u32;
@@ -891,9 +878,6 @@ fn folds_split_across_workers_are_the_walks() {
     assert_eq!(cpu, jit, "a reduction that overflows");
 }
 
-/// `at_linear` blends an element as wide as the language lets a struct
-/// be: past 64 words it blends every one of them, as the interpreter
-/// does, rather than taking the process down.
 #[test]
 fn at_linear_blends_an_element_wider_than_64_words() {
     let source = "kernel test.wide@1 { requires { field.read; field.write; } input rows: Rows<Wide>; output result: Rows<Float>;
@@ -917,10 +901,7 @@ fn at_linear_blends_an_element_wider_than_64_words() {
     assert_eq!(cpu, jit);
 }
 
-/// Whoever calls a backend, not only the Graph, an input bound to a
-/// Field of another shape or layout than its port's is refused before a
-/// word is read: the JIT's code reads an input by its port's layout, so
-/// this check is what keeps a wrong binding from reading past a Field.
+/// The check runs before a word is read.
 #[test]
 fn an_input_of_the_wrong_layout_is_refused_by_every_backend() {
     let module = compile(

@@ -1,9 +1,7 @@
-//! Hostile input: what an agent or a file could send, mutated from the
-//! documents the examples ship and from the protocol's own requests, fed
-//! to the parser, the compiler, the scene's lowering, a live session and
-//! the protocol's handler. Whatever arrives, the answer is a value or an
-//! error: never a panic, never a process gone, never a wait without end.
-//! The mutations come from a seed, so a case found is a case kept.
+//! Hostile input: mutations of the examples' documents and the protocol's
+//! requests, fed to the parser, the compiler, the scene lowering, a live
+//! session and the protocol handler. Every answer is a value or an error,
+//! in bounded time, without a panic. Mutations come from a seed;
 //! `ORLA_FUZZ=<n>` runs more.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -45,8 +43,8 @@ fn documents() -> Vec<(PathBuf, String)> {
     found
 }
 
-/// Pieces of the language a mutation inserts: what makes a parser, a
-/// checker or a lowering take a path it rarely takes.
+/// Language pieces a mutation inserts, to reach rare parser, checker and
+/// lowering paths.
 const TOKENS: &[&str] = &[
     "{",
     "}",
@@ -112,7 +110,7 @@ const TOKENS: &[&str] = &[
 ];
 
 /// One mutation of `text`: a range cut or doubled, a token inserted, a
-/// region nested deep, or bytes swapped; the result may be anything.
+/// region nested deep, or bytes swapped.
 fn mutate(rng: &mut Rng, text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len().max(1);
@@ -167,8 +165,7 @@ fn mutate(rng: &mut Rng, text: &str) -> String {
     s
 }
 
-/// Runs `work`, and says how it went wrong if it panicked or took too
-/// long.
+/// Runs `work`, reporting a panic or an overlong run.
 fn guarded(what: &str, work: impl FnOnce()) -> Option<String> {
     let started = Instant::now();
     let outcome = catch_unwind(AssertUnwindSafe(work));
@@ -176,8 +173,7 @@ fn guarded(what: &str, work: impl FnOnce()) -> Option<String> {
     if outcome.is_err() {
         return Some(format!("{what}: panicked"));
     }
-    // Generous: a debug build, a loaded machine. What it catches is a
-    // blow-up, not a slow path.
+    // Generous for a loaded debug build: it catches blow-ups.
     (took > Duration::from_secs(20)).then(|| format!("{what}: took {took:?}"))
 }
 
@@ -234,13 +230,13 @@ fn mutated_documents_are_refused_or_taken_never_crash_the_front_end() {
     );
 }
 
-/// A live session given mutated scenes the way an agent gives one, by
-/// `compose`, and evaluated after each: a scene is taken or refused, an
-/// evaluation succeeds or fails, and the session answers the next.
+/// A live session given mutated scenes by `compose`, evaluated after each:
+/// every scene is taken or refused, every evaluation succeeds or fails,
+/// and the session answers the next request.
 #[test]
 fn a_live_session_survives_mutated_scenes_and_requests() {
-    // Examples whose scene reads nothing past its own directory, copied
-    // whole so its `use "kernels/"` resolves; each a session of its own.
+    // Examples reading nothing outside their directory, copied whole so
+    // `use "kernels/"` resolves; one session each.
     let chosen: Vec<PathBuf> = std::fs::read_dir(examples())
         .unwrap()
         .flatten()
@@ -282,8 +278,7 @@ fn a_live_session_survives_mutated_scenes_and_requests() {
         "status", "kernels", "graph", "document", "evaluate", "read", "advance", "trace", "help",
         "compose", "publish", "prepare", "retire", "param", "write", "reset", "sync", "nonsense",
     ];
-    // `bench` is left out: it measures five runs of thirty frames, which
-    // on a large scene in a debug build is long by design, not a blow-up.
+    // `bench` is excluded: its runs are long by design in a debug build.
     for case in 0..count() / 3 {
         let which = rng.below(scenes.len() as u64) as usize;
         let base = &scenes[which];

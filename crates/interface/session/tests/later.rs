@@ -54,7 +54,7 @@ fn a_discarded_run_keeps_nothing_and_a_failed_run_says_why() {
         live,
         "a discarded run adopts nothing"
     );
-    // A run over the wrong domain fails as a run on the frame would.
+    // A run over the wrong domain fails as on the frame.
     let wrong = Invocation {
         domain: Domain::Rows(3),
         ..invocation(input)
@@ -68,11 +68,10 @@ fn a_discarded_run_keeps_nothing_and_a_failed_run_says_why() {
     assert_eq!(runtime.host().live(), live);
 }
 
-/// What a run off the frame may hold is set aside when it starts, in the
-/// caller's order: its copy of the input and its output twice over. It
-/// counts against the budget until the run is redeemed, so the Host and
-/// the run together hold no more than the budget, and whether either
-/// fits is decided by that, never by which thread allocates first.
+/// An off-frame run reserves its room when it starts, in the caller's
+/// order: its input copy and its output twice. The reservation counts
+/// against the budget until redeemed, so Host and run together stay
+/// within it.
 #[test]
 fn a_run_off_the_frame_is_given_its_room_when_it_starts() {
     let mut runtime = cpu(64);
@@ -82,15 +81,14 @@ fn a_run_off_the_frame_is_given_its_room_when_it_starts() {
     // copy, 8 for its output twice).
     let held = runtime.host_mut().create_image(12, 1).unwrap();
     let run = runtime.execute_later(&version, &invocation(input)).unwrap();
-    // The room is the run's until it is redeemed: the Host has none left,
-    // however far the run has got.
+    // The room is the run's until redeemed: the Host has none left.
     assert!(runtime.host_mut().create_image(1, 1).is_err());
     let outputs = runtime.wait_run(run).unwrap();
     assert_eq!(outputs.len(), 1);
-    // Redeemed, the room went back and the output is held as a Field.
+    // Redeemed, the room returns and the output is held as a Field.
     assert!(runtime.host_mut().create_image(1, 2).is_ok());
 
-    // A run that does not fit is refused when it is started.
+    // A run that does not fit is refused at start.
     runtime.host_mut().release(held).unwrap();
     // 4 + 4 + 8 + 40: 8 words left, fewer than the run takes.
     let _full = runtime.host_mut().create_image(10, 1).unwrap();
@@ -99,11 +97,11 @@ fn a_run_off_the_frame_is_given_its_room_when_it_starts() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("budget"), "{error}");
-    // Nothing of it is kept aside.
+    // Nothing of it stays reserved.
     assert!(runtime.host_mut().create_image(1, 1).is_ok());
 }
 
-/// A discarded run gives its room back at once.
+/// A discarded run returns its room at once.
 #[test]
 fn a_discarded_run_gives_its_room_back() {
     let mut runtime = cpu(64);
@@ -121,8 +119,8 @@ fn cpu(budget_words: usize) -> orla_kernel::Runtime {
     orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
 }
 
-/// Compiles and publishes a Kernel as a session does: the runtime takes
-/// validated IR, and compiling is the caller's step.
+/// Compiles and publishes a Kernel as a session does: compiling is the
+/// caller's step, the runtime takes validated IR.
 fn load(
     runtime: &mut orla_kernel::Runtime,
     source: &str,

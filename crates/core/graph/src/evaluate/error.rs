@@ -1,11 +1,9 @@
-//! Why an evaluation stopped, as data an interface hands on: the node,
-//! the port and the Kernel where it belongs to one.
+//! Why an evaluation stopped, as data naming the node, port and Kernel.
 
 use super::*;
 
-/// Why evaluation stopped. Nodes evaluated before the failure keep their new
-/// results; the failing node keeps its last successful result, if any; no
-/// state is committed.
+/// Why evaluation stopped. Nodes evaluated before the failure keep their
+/// new results, the failing node its last one; no state is committed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvaluateError {
     /// The graph is malformed.
@@ -39,8 +37,7 @@ pub enum EvaluateError {
         node: NodeId,
         /// The port or parameter.
         port: String,
-        /// The port or parameter it was probably meant to be; see
-        /// [`orla_abi::names::nearest`].
+        /// The port or parameter it was probably meant to be.
         near: Option<String>,
     },
     /// A parameter override has the wrong type.
@@ -72,10 +69,8 @@ pub enum EvaluateError {
         /// The failure.
         error: ExecutionError,
     },
-    /// A reduction node was given a `domain`; a reduction produces one
-    /// element and maps over its first input.
+    /// A reduction node was given a `domain`.
     ReduceDomain(NodeId),
-    /// A scatter node wrote a `domain`; it takes the extent of its target.
     /// A node's `domain` expression could not be resolved.
     Domain {
         /// The node.
@@ -83,16 +78,14 @@ pub enum EvaluateError {
         /// What is wrong.
         message: String,
     },
-    /// A write or a reset named an output no `<~` binding reads, so it
-    /// holds no state.
+    /// A write or a reset named an output no `<~` binding reads.
     NotState {
         /// The producer.
         node: NodeId,
         /// The port.
         port: String,
     },
-    /// A write supplied the wrong number of words for the port's layout
-    /// and extent.
+    /// A write supplied the wrong number of words for the port.
     WordCount {
         /// The producer.
         node: NodeId,
@@ -113,8 +106,7 @@ pub enum EvaluateError {
         /// What is wrong.
         message: String,
     },
-    /// A `<~` port's committed state no longer has the port's layout and
-    /// the binding's migration Kernel could not carry it over.
+    /// A `<~` port's migration Kernel could not carry its state over.
     Migration {
         /// The node reading the state.
         node: NodeId,
@@ -137,8 +129,7 @@ pub enum EvaluateError {
 }
 
 impl EvaluateError {
-    /// The node the failure belongs to, where it belongs to one, so a
-    /// caller that has the graph can say where that node was written.
+    /// The node the failure belongs to, if any.
     pub fn node(&self) -> Option<&NodeId> {
         match self {
             Self::UnknownKernel { node, .. }

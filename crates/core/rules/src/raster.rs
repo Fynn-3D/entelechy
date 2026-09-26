@@ -1,17 +1,13 @@
-//! The native `rasterize` operation's contract, which every backend
-//! keeps, and the rasterizer a backend with no rasterizer of its own
-//! runs: the interpreter and the JIT alike, neither through the other.
-//! The `raster` package writes the same rule as Kernels, and this is
-//! its fast path: it sets triangles up and draws bands of rows in
-//! parallel, and gives the surface the rule gives bit for bit, which a
-//! test holds against the rule written plainly. It is device emulation, not a product algorithm; shading,
-//! projection, and geometry live in Kernels on either side of it.
+//! The native `rasterize` operation's contract, and the CPU rasterizer
+//! the interpreter and the JIT each run. It is the fast path of the
+//! `raster` package's rule and gives its surface bit for bit. It is
+//! device emulation; shading, projection and geometry live in Kernels.
 //!
 //! Contract:
 //! - input 0, `vertices`: rows laid out as `clip: Vec4, normal: Vec3,
-//!   uv: Vec2` (nine floats). `clip` is a clip-space position as a vertex
-//!   shader would emit it: after the divide by `w`, `x` and `y` span
-//!   `[-1, 1]` (y up) and `z` spans `[0, 1]` (near to far).
+//!   uv: Vec2` (nine floats). `clip` is a clip-space position: after the
+//!   divide by `w`, `x` and `y` span `[-1, 1]` (y up) and `z` spans
+//!   `[0, 1]` (near to far).
 //! - input 1, `triangles`: rows of three `Int` vertex indices, clamped
 //!   into range.
 //! - output, `surface`: a grid laid out as `depth: Float, normal: Vec3,
@@ -20,26 +16,20 @@
 //!   Pixels nothing covers hold depth `1.0`, zeros, and id `-1`.
 //!
 //! No culling and no clipping: a triangle with any vertex at `w <= 0`,
-//! or any clip component that is not finite, is skipped whole — not
-//! clipped at the near plane and drawn in part. A triangle of no area is
-//! skipped too, so a Kernel says "not this one" by putting its three
-//! corners on one vertex, which is how a fixed-length row of triangles
-//! draws a varying number of them. Triangles are drawn in row order; a
+//! or any clip component that is not finite, is skipped whole. A
+//! triangle of no area is skipped too, so a Kernel drops one by putting
+//! its three corners on one vertex. Triangles are drawn in row order; a
 //! nearer fragment replaces a farther one, and an equal depth keeps the
 //! earlier triangle.
 //!
 //! A pixel is covered where its centre, at `x + 0.5, y + 0.5`, is inside
 //! the triangle's box and on or inside all three of its edges, the edge
-//! functions taken in floats. The box is part of the rule: where a
-//! corner is far off screen the edge functions lose precision, and a
-//! centre outside the box is outside the triangle whatever they say.
+//! functions taken in floats. The box test is part of the rule.
 //!
 //! The cutout form takes one more input and one parameter:
-//! - input 2, `mask`: an `Image` whose alpha says what the surface
-//!   covers. A fragment whose alpha, read at its own `uv` as
-//!   `at_linear(mask, uv * size(mask))` reads it, is below `cutout` is
-//!   not drawn at all: it neither writes the surface nor settles depth,
-//!   which is what a leaf's edge needs.
+//! - input 2, `mask`: an `Image`. A fragment whose alpha, read as
+//!   `at_linear(mask, uv * size(mask))`, is below `cutout` writes no
+//!   surface and settles no depth.
 //! - param 0, `cutout`: the alpha a fragment must have, `0.5` by
 //!   default.
 
@@ -70,9 +60,8 @@ pub fn mask_schema() -> Schema {
 }
 
 /// The alpha of a mask at a position in its own texels, as `at_linear`
-/// reads it: the four around it, blended, and clamped at the edges.
-/// Every backend samples it this way, so a cutout's edge is the same
-/// pixel on all of them.
+/// reads it: the four around it, blended, clamped at the edges. Every
+/// backend samples it this way.
 pub fn mask_alpha(words: &[u32], width: u32, height: u32, uv: [f32; 2]) -> f32 {
     if width == 0 || height == 0 || words.is_empty() {
         return 1.0;
@@ -107,7 +96,7 @@ pub fn surface_schema() -> Schema {
 }
 
 /// Checks the invocation against the contract, returning the vertex and
-/// triangle handles and the output grid. Every backend applies this.
+/// triangle handles and the output grid. Every backend applies it.
 pub fn check_rasterize(
     invocation: &Invocation,
     scope: &Scope<'_>,
@@ -116,9 +105,8 @@ pub fn check_rasterize(
     Ok((vertices, triangles))
 }
 
-/// The same, for the form that takes a mask and a cutout: the third
-/// input and the parameter are checked too, and what comes back is the
-/// mask with the alpha a fragment must reach.
+/// The same for the cutout form, also returning the mask and the alpha
+/// a fragment must reach.
 pub fn check_rasterize_cutout(
     invocation: &Invocation,
     scope: &Scope<'_>,
@@ -180,15 +168,13 @@ fn check_rasterize_with(
             return Err(contract("`mask` must be a grid".into()));
         }
     }
-    // The surface is charged before any backend draws it anywhere: a
-    // domain however large is refused for what it would cost, not by
-    // running out of memory drawing it.
+    // The surface is charged before any backend draws it, so an
+    // oversized domain is refused by its cost.
     scope.can_hold(&[(&surface_schema(), invocation.domain)])?;
     Ok((vertices, triangles, mask))
 }
 
-/// What a cutout tests a fragment against: the mask's words, its extent,
-/// and the alpha a fragment must reach to be drawn.
+/// What a cutout tests a fragment against.
 pub struct Cutout<'m> {
     /// The mask's words, four per pixel.
     pub words: &'m [u32],
@@ -207,7 +193,7 @@ pub fn rasterize(
 ) -> Result<Vec<Handle>, ExecutionError> {
     let (vertices, triangles) = check_rasterize(invocation, scope)?;
     let domain = invocation.domain;
-    // The rows are read where the Host keeps them, not copied.
+    // The rows are read in place.
     let words = rasterize_words(
         &scope.values(vertices)?,
         &scope.values(triangles)?,
@@ -222,8 +208,8 @@ pub fn rasterize(
     Ok(vec![output])
 }
 
-/// Rasterizes with a cutout: a fragment whose alpha in the mask is
-/// below the parameter is not drawn at all.
+/// Rasterizes with a cutout: a fragment whose mask alpha is below the
+/// parameter is dropped.
 pub fn rasterize_cutout(
     invocation: &Invocation,
     scope: &mut Scope<'_>,
@@ -275,10 +261,9 @@ pub fn rasterize_masked(
         set_up(vertices, triangles, width, height)
     };
     let many: usize = drawn.iter().map(Vec::len).sum();
-    // Bands of rows, one to a thread. Every pixel is drawn by one thread
-    // taking the triangles in row order, as one thread taking them all
-    // would, so the surface is the same bit for bit however many there
-    // are.
+    // Bands of rows, one to a thread. Each pixel is drawn by one thread
+    // taking the triangles in row order, so the surface is the same bit
+    // for bit for any thread count.
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
@@ -289,7 +274,6 @@ pub fn rasterize_masked(
     let row = width as usize;
     let cutout = cutout.as_ref();
     let draw = |first: usize, out: &mut [u32], depth: &mut [f32]| {
-        // Nothing covers a pixel until something does.
         for pixel in out.chunks_exact_mut(SURFACE_WORDS) {
             pixel[0] = 1.0f32.to_bits();
             pixel[SURFACE_WORDS - 1] = (-1i32) as u32;
@@ -316,8 +300,8 @@ pub fn rasterize_masked(
     out
 }
 
-/// Triangles a thread of a band takes at the least: below this, one
-/// thread draws them all.
+/// The fewest triangles per band thread; below this, one thread draws
+/// them all.
 const BAND_TRIANGLES: usize = 256;
 
 /// A corner in pixels: `x` and `y` from the top left, `z` after the
@@ -330,10 +314,10 @@ struct Point {
     inv_w: f32,
 }
 
-/// A triangle ready to draw: its corners in pixels and the rows they
-/// came from, wound so the edge functions are positive inside, its area,
-/// its row, and the pixels whose centres its box holds. The corners'
-/// normals and uvs stay in the vertex rows, read when a fragment is kept.
+/// A triangle ready to draw: corners in pixels, wound so the edge
+/// functions are positive inside, with their vertex rows, its area, its
+/// row, and the pixel centres its box holds. Normals and uvs are read
+/// from the vertex rows when a fragment is kept.
 struct Drawn {
     a: Point,
     b: Point,
@@ -353,10 +337,8 @@ fn edge(a: &Point, b: &Point, px: f32, py: f32) -> f32 {
     (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)
 }
 
-/// Every triangle that may cover a pixel's centre, in row order, as the
-/// runs the setup threads made. One with a corner at `w <= 0` or not
-/// finite, with no area, or whose box holds no pixel centre is left out:
-/// it would draw nothing.
+/// Every triangle that may cover a pixel centre, in row order, as runs
+/// of the setup threads. Triangles that draw nothing are left out.
 fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<Vec<Drawn>> {
     let vertex_count = vertices.len() / VERTEX_WORDS;
     let float = |w: u32| f32::from_bits(w);
@@ -391,7 +373,7 @@ fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<V
             return None;
         }
         // The first and last pixel whose centre, at `x + 0.5`, is in the
-        // box: no other is covered.
+        // box.
         let x0 = (a.x.min(b.x).min(c.x) - 0.5).ceil().max(0.0);
         let y0 = (a.y.min(b.y).min(c.y) - 0.5).ceil().max(0.0);
         let x1 = (a.x.max(b.x).max(c.x) - 0.5)
@@ -434,7 +416,7 @@ fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<V
     if threads == 1 {
         return vec![set_up_run(0, words)];
     }
-    // Runs set up in parallel and kept in order: row order is theirs.
+    // Runs set up in parallel, kept in row order.
     std::thread::scope(|s| {
         let handles: Vec<_> = words
             .chunks(per_thread * TRIANGLE_WORDS)
@@ -451,7 +433,7 @@ fn set_up(vertices: &[u32], triangles: &[u32], width: u32, height: u32) -> Vec<V
     })
 }
 
-/// Triangles a setup thread takes at the least.
+/// The fewest triangles per setup thread.
 const SETUP_TRIANGLES: usize = 16_384;
 
 /// Draws `drawn` into the rows `rows` of the surface: `out` and `depth`
@@ -500,8 +482,7 @@ fn draw_band(
                         + l2 * attribute(2, k) * c.inv_w)
                         / inv_w
                 };
-                // A fragment the mask does not cover is not drawn: it
-                // settles no depth either, so what is behind it is seen.
+                // A fragment the mask drops settles no depth either.
                 if let Some(cutout) = cutout {
                     let uv = [lerp(7), lerp(8)];
                     if mask_alpha(cutout.words, cutout.width, cutout.height, uv) < cutout.alpha {
@@ -527,9 +508,8 @@ fn draw_band(
 mod tests {
     use super::*;
 
-    /// A surface larger than the Host may hold is refused before a word
-    /// of it is allocated or a pixel drawn: 65535 by 65535 would be over
-    /// a hundred gigabytes.
+    /// A surface larger than the Host may hold is refused before any
+    /// allocation or drawing.
     #[test]
     fn a_surface_past_the_budget_is_refused_before_it_is_drawn() {
         use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope};
@@ -567,10 +547,9 @@ mod tests {
         uv: [f32; 2],
     }
 
-    /// The rule as it reads, and nothing done to make it fast: every
-    /// triangle in turn, every pixel of a box larger than it needs, on one
-    /// thread, each pixel tested against the triangle's box and its three
-    /// edges. The one the backends run must give its surface bit for bit.
+    /// The rule written plainly, on one thread: every triangle in turn,
+    /// each pixel of a generous box tested against the triangle's box and
+    /// its three edges. The fast rasterizer matches it bit for bit.
     fn definition(
         vertices: &[u32],
         triangles: &[u32],
@@ -639,8 +618,7 @@ mod tests {
                 for x in min_x..=max_x as u32 {
                     let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
                     // A centre outside the triangle's box is outside the
-                    // triangle, whatever the edge functions say where the
-                    // corners are too far apart for a float.
+                    // triangle.
                     if px < a.x.min(b.x).min(c.x)
                         || px > a.x.max(b.x).max(c.x)
                         || py < a.y.min(b.y).min(c.y)
@@ -664,8 +642,7 @@ mod tests {
                     let lerp = |va: f32, vb: f32, vc: f32| {
                         (l0 * va * a.inv_w + l1 * vb * b.inv_w + l2 * vc * c.inv_w) / inv_w
                     };
-                    // A fragment the mask does not cover is not drawn: it
-                    // settles no depth either, so what is behind it is seen.
+                    // A fragment the mask drops settles no depth either.
                     if let Some(cutout) = &cutout {
                         let uv = [
                             lerp(a.uv[0], b.uv[0], c.uv[0]),
@@ -692,7 +669,7 @@ mod tests {
         out
     }
 
-    /// A small generator, so the soups are the same on every run.
+    /// A small deterministic generator.
     struct Soup(u64);
 
     impl Soup {
@@ -705,7 +682,7 @@ mod tests {
         fn float(&mut self, low: f32, high: f32) -> f32 {
             low + (high - low) * (self.next() % 1_000_000) as f32 / 1_000_000.0
         }
-        /// A clip position, now and then one a rasterizer must skip.
+        /// A clip position, sometimes one a rasterizer must skip.
         fn clip(&mut self) -> [f32; 4] {
             let w = match self.next() % 40 {
                 0 => -0.5,

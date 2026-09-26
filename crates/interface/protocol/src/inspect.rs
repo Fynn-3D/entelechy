@@ -1,6 +1,5 @@
-//! Operations that look and change nothing: what the session is, what is
-//! published, what the scene is, and what the language offers. Each is
-//! given the session to read and nothing to write with.
+//! Read-only operations: the session, published Kernels, the scene and the
+//! language's builtins. Each takes the session by shared reference.
 
 use serde_json::{Value as Json, json};
 
@@ -25,8 +24,8 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
     }))
 }
 
-/// A published version's manifest, its structs named: a Kernel's from
-/// its module, a native operation's from its own table.
+/// A published version's manifest with its structs, from a Kernel's
+/// module or a native operation's table.
 fn version_json(version: &orla_kernel::KernelVersion) -> Json {
     let native = version.native().map(|op| op.structs());
     let structs = match (version.module(), &native) {
@@ -51,8 +50,8 @@ pub(crate) fn kernels(session: &Session) -> Result<Json, Json> {
 /// One Kernel's manifest and the source `publish` takes.
 pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json> {
     let id = request.kernel()?;
-    // A generation the registry has let go, from what the session
-    // remembers of the change that published it.
+    // A generation the registry released comes from the session's
+    // record of the change that published it.
     if let Some(generation) = request.get("generation").and_then(Json::as_u64) {
         let source = session
             .source_at(&id, orla_kernel::Generation(generation))
@@ -72,9 +71,8 @@ pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json>
     Ok(json)
 }
 
-/// How the world came to be as it is: the changes that made revisions
-/// after `since`, and the attempts refused since, each with where it came
-/// from, as far back as the session remembers.
+/// The changes that made revisions after `since` and the attempts refused
+/// since, each with its origin, as far back as the session remembers.
 pub(crate) fn history(session: &Session, request: &Request) -> Result<Json, Json> {
     let since = request.get("since").and_then(Json::as_u64).unwrap_or(0);
     let (revision, frame) = session.position();
@@ -145,8 +143,8 @@ pub(crate) fn graph(session: &Session) -> Result<Json, Json> {
     Ok(graph_json(graph, session.params(), &session.placements()))
 }
 
-/// The scene document as it is on disk, or, with `version`, a version
-/// the session remembers from a change that loaded it.
+/// The scene document on disk, or with `version`, a version the session
+/// remembers from a change that loaded it.
 pub(crate) fn document(session: &Session, request: &Request) -> Result<Json, Json> {
     if let Some(version) = request.get("version").and_then(Json::as_str) {
         let text = u64::from_str_radix(version, 16)

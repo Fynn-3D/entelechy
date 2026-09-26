@@ -1,25 +1,18 @@
 #![warn(missing_docs)]
 //! Kernel Runtime (L4).
 //!
-//! The runtime owns the Host, the backend it is given, and the registry of
-//! published Kernel versions. It takes validated IR, never source: what
-//! compiled a Kernel is the caller's business, and which backend runs it is
-//! the caller's choice — every backend implements the same
-//! [`Backend`] contract from `orla-rules`, none is built in. A version is
-//! immutable once published. Replacing a Kernel is a two-step act:
-//! [`Runtime::prepare_module`] lets the backend build whatever it needs (a shader pipeline, say) into a
-//! [`Candidate`] without touching the registry; [`Runtime::publish`] swaps it
-//! in atomically, and only if the caller's expectation about the current
-//! generation still holds. A failed preparation leaves the running Kernel
-//! untouched. Callers that hold an `Arc<KernelVersion>` keep executing the
-//! version they pinned, whatever the registry does afterwards.
+//! The runtime owns the Host, the backend it is given, and the registry
+//! of published Kernel versions. It takes validated IR; every backend
+//! implements the [`Backend`] contract from `orla-rules`. A published
+//! version is immutable. [`Runtime::prepare_module`] builds a
+//! [`Candidate`] outside the registry; [`Runtime::publish`] swaps it in
+//! atomically when the caller's expected generation still holds. A failed
+//! preparation leaves the running Kernel untouched, and holders of an
+//! `Arc<KernelVersion>` keep executing the version they pinned.
 //!
-//! Preparation is the only slow step (a device compiles a pipeline), so it
-//! can leave the calling thread: [`Runtime::prepare_later`] hands a module
-//! to a worker and returns a [`Ticket`]; [`Runtime::poll`] collects the
-//! [`Candidate`] when it is done. Whatever was running keeps running in the
-//! meantime. Without a worker the same calls prepare inline, so tools that
-//! want determinism get it by never enabling one.
+//! [`Runtime::prepare_later`] hands preparation to a worker and returns a
+//! [`Ticket`]; [`Runtime::poll`] collects the [`Candidate`]. Without a
+//! worker the same calls prepare inline, deterministically.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -39,8 +32,8 @@ mod later;
 mod prepare;
 pub use later::Run;
 
-/// Monotonic counter identifying one published version. Generations are
-/// unique across all Kernels in a runtime.
+/// Monotonic counter identifying one published version, unique across
+/// all Kernels in a runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Generation(pub u64);
 
@@ -54,10 +47,10 @@ impl fmt::Display for Generation {
 /// the backend's native operations.
 enum Body {
     Kernel {
-        /// The Kernel as it was compiled, which fusion and inspection read.
+        /// The Kernel as compiled, read by fusion and inspection.
         module: Box<Validated>,
-        /// The module the backend runs: the Kernel with its work
-        /// accounted ([`orla_ir::account`]).
+        /// The module the backend runs: the Kernel with its work accounted
+        /// ([`orla_ir::account`]).
         run: Box<Validated>,
         prepared: Box<dyn Prepared>,
     },
@@ -117,12 +110,10 @@ impl KernelVersion {
     }
 }
 
-/// A compiled, validated, and backend-prepared Kernel that has not been
-/// published.
+/// A compiled, validated, backend-prepared Kernel not yet published.
 pub struct Candidate {
     module: Validated,
-    /// The module the backend prepared and runs: `module` with its work
-    /// accounted.
+    /// The module the backend prepared: `module` with its work accounted.
     run: Validated,
     source: String,
     prepared: Box<dyn Prepared>,
@@ -154,19 +145,19 @@ impl Candidate {
 /// Why a candidate could not be prepared.
 #[derive(Debug)]
 pub enum PrepareError {
-    /// The backend rejected the module; the message is backend specific.
+    /// The backend rejected the module; the message is backend-specific.
     Backend(String),
-    /// Accounting the module's work made it invalid: a fault of the
-    /// runtime, reported rather than taken down with.
+    /// Accounting the module's work made it invalid: a runtime fault,
+    /// reported.
     Accounting(String),
-    /// The backend panicked preparing the module: a fault of the
-    /// backend, caught so the Kernel running and the worker live on.
+    /// The backend panicked preparing the module; caught, so the running
+    /// Kernel and the worker live on.
     Panicked(String),
     /// The Kernel requires capabilities the runtime does not grant.
     NotGranted {
         /// The Kernel.
         id: KernelId,
-        /// What it requires and is not granted.
+        /// Required capabilities that are not granted.
         missing: Capabilities,
     },
 }
@@ -279,13 +270,10 @@ fn prepare_on(
     module: Validated,
     source: String,
 ) -> Result<Candidate, PrepareError> {
-    // A backend runs the Kernel with its work accounted in its IR, so
-    // where work is counted is one rule, not one a backend.
+    // Work accounting is one rule in the IR, shared by every backend.
     let run = orla_ir::account(&module).map_err(|e| PrepareError::Accounting(e.to_string()))?;
-    // A backend that panics on a module is a bug; a live session
-    // reports it as a rejection, as it would any other, and keeps
-    // running what it ran. Preparing touches nothing shared: the
-    // candidate is dropped and the registry never saw it.
+    // A backend panic is reported as a rejection; the candidate is
+    // dropped unseen by the registry.
     let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.prepare(&run)))
         .map_err(|panic| {
             let said = panic
@@ -304,19 +292,17 @@ fn prepare_on(
     })
 }
 
-/// What executions answered besides their outputs, kept until taken:
-/// the bytes carried between Host memory and a device, what the device
-/// took over the last execution, and the checks of runs on a device that
-/// is not waited for.
+/// What executions answer besides their outputs, kept until taken: bytes
+/// moved between Host and device, the device's time for the last
+/// execution, and checks of unwaited device runs.
 #[derive(Default)]
 struct Telemetry {
-    /// What the device took over the last execution, when the backend
-    /// measured it; see [`Runtime::last_measured`].
+    /// The device's time for the last execution, when measured; see
+    /// [`Runtime::last_measured`].
     last_measured: Option<std::time::Duration>,
     /// Bytes carried since last taken; see [`Runtime::take_moved`].
     moved: Moved,
-    /// Whether a run on a device not waited for failed after all; see
-    /// [`Runtime::take_checks`].
+    /// Whether an unwaited device run failed; see [`Runtime::take_checks`].
     checks: Vec<Box<dyn Check>>,
 }
 
@@ -336,10 +322,9 @@ impl Telemetry {
 pub struct Runtime {
     host: Host,
     backend: Arc<dyn Backend>,
-    /// The backend ordered work (a scan) runs on when it is not the
-    /// main one: a GPU walks a scan on one thread, so a GPU runtime
-    /// hands scans to the JIT. Its inputs are brought into Host memory
-    /// first; its outputs are Host Fields the main backend uploads.
+    /// The backend for ordered work (a scan) when the main one hands it off,
+    /// as a GPU runtime does to the JIT. Its inputs are brought into Host
+    /// memory; its outputs are Host Fields the main backend uploads.
     ordered: Option<Arc<dyn Backend>>,
     kernels: BTreeMap<KernelId, Arc<KernelVersion>>,
     next_generation: u64,
@@ -348,10 +333,9 @@ pub struct Runtime {
     /// What executions answered besides their outputs.
     telemetry: Telemetry,
     runs: later::Runs,
-    /// The capabilities a Kernel may be given: what it requires must be
-    /// among them to be prepared, and what it runs with is what it
-    /// requires of them. Every capability, unless whoever made the
-    /// runtime says less ([`Runtime::set_grants`]).
+    /// The capabilities a Kernel may be given; all of them unless set by
+    /// [`Runtime::set_grants`]. A Kernel is prepared only when its
+    /// requirements are granted, and runs with exactly those.
     grants: Capabilities,
 }
 
@@ -379,8 +363,8 @@ impl Runtime {
             runs: later::Runs::new(),
             grants: Capability::ALL.into_iter().collect(),
         };
-        // Native operations are published from the start, at generation
-        // zero, so graphs bind to them like any Kernel.
+        // Native operations are published at generation zero, so graphs
+        // bind to them like any Kernel.
         for op in NativeOp::ALL {
             runtime.kernels.insert(
                 op.id(),
@@ -397,10 +381,9 @@ impl Runtime {
     }
 
     /// Starts or stops the preparation worker. With a worker,
-    /// [`Runtime::prepare_later`] returns before the backend has built
-    /// anything; without one (or where no thread can be started) it
-    /// prepares inline. Stopping waits for the
-    /// jobs in flight and keeps their results for [`Runtime::poll`].
+    /// [`Runtime::prepare_later`] returns before the backend builds; without
+    /// one (or where no thread can start) it prepares inline. Stopping waits
+    /// for jobs in flight and keeps their results for [`Runtime::poll`].
     pub fn set_background(&mut self, enabled: bool) {
         if enabled == self.preparer.running() {
             return;
@@ -433,29 +416,26 @@ impl Runtime {
         ticket
     }
 
-    /// Takes a finished preparation, or `None` while it is still running.
-    /// A ticket is redeemed once.
+    /// Takes a finished preparation, or `None` while it runs. A ticket is
+    /// redeemed once.
     pub fn poll(&mut self, ticket: Ticket) -> Option<Result<Candidate, PrepareError>> {
         self.preparer.poll(ticket)
     }
 
-    /// Preparations the worker has finished or been told to forget that
-    /// nothing has collected. A session that publishes and evaluates in
-    /// step leaves none; a growing number is work started and never
-    /// asked for, which would hold a module and a backend's prepared
-    /// state with it.
+    /// Uncollected preparations, finished or forgotten. Each holds a module
+    /// and its prepared backend state; a session that publishes and evaluates
+    /// in step leaves none.
     pub fn uncollected(&self) -> usize {
         self.preparer.uncollected()
     }
 
-    /// Forgets a preparation whose result is no longer wanted.
+    /// Forgets a preparation whose result is unwanted.
     pub fn discard(&mut self, ticket: Ticket) {
         self.preparer.discard(ticket);
     }
 
-    /// Turns a candidate into a version that is never registered, under
-    /// the given id: it executes like any pinned version but does not
-    /// appear in the registry.
+    /// Turns a candidate into an unregistered version under the given id,
+    /// executable like any pinned version.
     pub fn detach(&mut self, candidate: Candidate, id: KernelId) -> Arc<KernelVersion> {
         let generation = Generation(self.next_generation);
         self.next_generation += 1;
@@ -483,9 +463,8 @@ impl Runtime {
         self.backend().settle_device();
     }
 
-    /// Whether the backend finishes its work on a device, so that what
-    /// a frame gave it is done when [`Runtime::settle_device`] returns
-    /// and not when `execute` did.
+    /// Whether the backend's device work is done only when
+    /// [`Runtime::settle_device`] returns, not when `execute` does.
     pub fn has_device(&self) -> bool {
         self.backend().has_device()
     }
@@ -500,14 +479,14 @@ impl Runtime {
         &self.host
     }
 
-    /// Brings a resident Field back into Host memory through the backend
-    /// that owns it; a no-op for Fields already in memory.
+    /// Brings a resident Field back into Host memory through its owning
+    /// backend; a Field in memory stays as it is.
     pub fn materialize(&mut self, handle: Handle) -> Result<(), ExecutionError> {
         self.bring_home(handle).map(|_| ())
     }
 
-    /// Brings a resident Field's words into Host memory, answering how
-    /// many bytes came back.
+    /// Brings a resident Field's words into Host memory and answers the
+    /// bytes moved.
     fn bring_home(&mut self, handle: Handle) -> Result<u64, ExecutionError> {
         let Some(device) = self
             .host
@@ -520,7 +499,7 @@ impl Runtime {
             .host
             .domain(handle)
             .map_err(|e| ExecutionError::Abi(e.into()))?;
-        // The memory as kept: packed when the Field keeps scalars narrow.
+        // The memory as kept: packed when narrow.
         let byte_len = self
             .host
             .schema(handle)
@@ -541,9 +520,8 @@ impl Runtime {
         Ok(byte_len as u64)
     }
 
-    /// The image view of a Field of pixels, materialized if it was
-    /// resident. This is an observation boundary: it is where device work
-    /// is waited for.
+    /// The image view of a Field of pixels, materialized if resident: an
+    /// observation boundary, where device work is waited for.
     pub fn image(&mut self, handle: Handle) -> Result<Image, ExecutionError> {
         self.materialize(handle)?;
         self.host
@@ -556,9 +534,8 @@ impl Runtime {
         &mut self.host
     }
 
-    /// Backend-prepares a module already compiled and validated; `source`
-    /// is kept for inspection. The runtime takes IR: what compiled it is
-    /// the caller's business.
+    /// Backend-prepares a compiled, validated module; `source` is kept for
+    /// inspection.
     pub fn prepare_module(
         &self,
         module: Validated,
@@ -568,10 +545,9 @@ impl Runtime {
         prepare_on(self.backend_for(&module), module, source.to_owned())
     }
 
-    /// Sets the capabilities a Kernel may be given. Set by whoever runs
-    /// the session, never by what it runs: a Kernel that requires more is
-    /// refused when it is prepared, before anything is swapped, and one
-    /// already published runs with only what is granted of what it
+    /// Sets the capabilities a Kernel may be given, by whoever runs the
+    /// session. A Kernel requiring more is refused at preparation, before any
+    /// swap; a published one runs with only what is granted of what it
     /// requires.
     pub fn set_grants(&mut self, grants: Capabilities) {
         self.grants = grants;
@@ -582,10 +558,8 @@ impl Runtime {
         &self.grants
     }
 
-    /// Whether everything `module` requires is granted.
-    /// Whether this runtime grants every capability `module` requires:
-    /// what preparing it checks first, and what a caller asks before it
-    /// commits to a module it would have refused.
+    /// Whether every capability `module` requires is granted: checked first
+    /// by preparation, and asked by callers before committing to a module.
     pub fn granted(&self, module: &Validated) -> Result<(), PrepareError> {
         let missing: Capabilities = module
             .manifest
@@ -612,9 +586,8 @@ impl Runtime {
             .collect()
     }
 
-    /// The backend a module is prepared on and executes on: the ordered
-    /// one, when there is one, for a scan and for what the main one does
-    /// not take; else the main one.
+    /// The backend a module is prepared and executed on: the ordered one for
+    /// a scan or what the main one does not take, else the main one.
     fn backend_for(&self, module: &Validated) -> &dyn Backend {
         match &self.ordered {
             Some(ordered) if goes_ordered(self.backend.as_ref(), module) => ordered.as_ref(),
@@ -622,15 +595,14 @@ impl Runtime {
         }
     }
 
-    /// Whether a module runs on the ordered backend: there is one, and
-    /// the module is a scan or one the main backend does not take.
+    /// Whether a module runs on the ordered backend: one exists and the
+    /// module is a scan or declined by the main backend.
     fn routed(&self, module: &Validated) -> bool {
         self.ordered.is_some() && goes_ordered(self.backend.as_ref(), module)
     }
 
-    /// What the device took over the last execution, by its own clock,
-    /// when the backend measured it (a GPU under a profile); `None`
-    /// otherwise, and the caller's own timing is the answer.
+    /// The device's own time for the last execution, when the backend
+    /// measured it (a GPU under a profile); else `None`.
     pub fn last_measured(&self) -> Option<std::time::Duration> {
         self.telemetry.last_measured
     }
@@ -646,9 +618,8 @@ impl Runtime {
         self.placement(version).backend
     }
 
-    /// Where a version executes, and why when it is not the main
-    /// backend: what a report shows beside each node, so a node that
-    /// leaves the device, and pays for the trip, says so.
+    /// Where a version executes and, off the main backend, why: shown beside
+    /// each node in a report.
     pub fn placement(&self, version: &KernelVersion) -> Placement {
         let Some(module) = version.module() else {
             return Placement {
@@ -673,30 +644,27 @@ impl Runtime {
         }
     }
 
-    /// The checks executions since the last call answered with, in the
-    /// order they ran: a device's run is not waited for, so whether it
-    /// failed is known when a check is waited on. A caller that commits
-    /// nothing before waiting on every check it took is held to the
-    /// reference's failures exactly.
+    /// The checks executions answered since the last call, in run order.
+    /// Device runs are not waited for; a check reports failure when waited
+    /// on. A caller that commits only after waiting on every check matches
+    /// the reference's failures exactly.
     pub fn take_checks(&mut self) -> Vec<Box<dyn Check>> {
         std::mem::take(&mut self.telemetry.checks)
     }
 
-    /// The bytes executions carried between Host memory and a device
-    /// since the last call, and none after it: what one node's run cost
-    /// in traffic, when the caller takes it around the run.
+    /// The bytes moved between Host memory and a device since the last call;
+    /// taken around one node's run, its traffic.
     pub fn take_moved(&mut self) -> Moved {
         std::mem::take(&mut self.telemetry.moved)
     }
 
-    /// The name of the backend ordered work runs on, when it is not the
-    /// main one.
+    /// The ordered backend's name, when it is not the main one.
     pub fn ordered_backend_name(&self) -> Option<&'static str> {
         self.ordered.as_ref().map(|backend| backend.name())
     }
 
-    /// Prepares a module the runtime did not compile from source (a fused
-    /// group, say) inline, as a detached version; see [`Runtime::detach`].
+    /// Prepares a module not compiled from source (a fused group, say)
+    /// inline, as a detached version; see [`Runtime::detach`].
     pub fn prepare_detached(
         &mut self,
         module: Validated,
@@ -719,10 +687,8 @@ impl Runtime {
     }
 
     /// Publishes several candidates as one change: every expectation is
-    /// checked before any is swapped in, so either all are published or
-    /// none is and the registry is as it was. For Kernels that change
-    /// together, an interface between them say, which must never run one
-    /// new beside the other old.
+    /// checked before any swap, so all are published or none. For Kernels
+    /// that must change together, such as two sides of one interface.
     pub fn publish_all(
         &mut self,
         candidates: Vec<(Candidate, Expect)>,
@@ -730,8 +696,7 @@ impl Runtime {
         let mut seen = std::collections::BTreeSet::new();
         for (candidate, expect) in &candidates {
             self.expected(candidate.id(), *expect)?;
-            // One change publishes an id once; a second would be checked
-            // against the registry the first already changed.
+            // One change publishes an id once.
             if !seen.insert(candidate.id().clone()) {
                 return Err(StaleCandidate {
                     id: candidate.id().clone(),
@@ -746,11 +711,9 @@ impl Runtime {
             .collect())
     }
 
-    /// Puts back exactly these versions, with the generations they had,
-    /// or no version where an id had none: the undo of a
-    /// [`Runtime::publish_all`] whose change was refused before anything
-    /// but its own trial ran under it. What was running is running again,
-    /// as it was, and an agent's expectation of it still holds.
+    /// Restores exactly these versions and generations, or no version where
+    /// an id had none: the undo of a [`Runtime::publish_all`] whose change
+    /// was refused. An agent's expectation of what runs holds again.
     pub fn reinstate(&mut self, versions: Vec<(KernelId, Option<Arc<KernelVersion>>)>) {
         for (id, version) in versions {
             match version {
@@ -764,8 +727,8 @@ impl Runtime {
         }
     }
 
-    /// Whether `expect` holds for `id` now, and it is not a native
-    /// operation's.
+    /// Whether `expect` holds for `id` now and `id` is not a native
+    /// operation.
     fn expected(&self, id: &KernelId, expect: Expect) -> Result<(), StaleCandidate> {
         let actual = self.kernels.get(id).map(|version| version.generation);
         let native = self.kernels.get(id).is_some_and(|v| v.native().is_some());
@@ -805,7 +768,7 @@ impl Runtime {
     }
 
     /// Prepares and publishes in one step, replacing any current version.
-    /// `source` is kept for inspection, as [`Runtime::prepare_module`] keeps it.
+    /// `source` is kept for inspection.
     pub fn load(
         &mut self,
         module: Validated,
@@ -828,12 +791,10 @@ impl Runtime {
         self.kernels.values()
     }
 
-    /// Removes a Kernel from the registry. Pinned versions stay executable.
-    /// A native operation is not removed: it answers `None`.
+    /// Removes a Kernel from the registry; pinned versions stay executable.
+    /// A native operation stays and answers `None`.
     pub fn retire(&mut self, id: &KernelId) -> Option<Arc<KernelVersion>> {
-        // A native operation is the Host's own, published from the start
-        // and never replaced; retiring it would leave its id for any
-        // Kernel to take.
+        // A native operation is the Host's own and is never replaced.
         if self
             .kernels
             .get(id)
@@ -844,12 +805,10 @@ impl Runtime {
         self.kernels.remove(id)
     }
 
-    /// Executes the same Kernel `repeat` times, each time reading input
-    /// `input` from the output `output` the time before gave: what a
-    /// node placed several times over its own output is. The Fields
-    /// between the runs are made and released here and nothing else
-    /// ever sees them, which is the point of asking for the whole run
-    /// at once.
+    /// Executes one Kernel `repeat` times, each time reading input `input`
+    /// from the previous time's output `output`: a node placed several times
+    /// over its own output. The Fields between runs are made and released
+    /// here, visible to nothing else.
     pub fn execute_repeated(
         &mut self,
         version: &KernelVersion,
@@ -857,8 +816,7 @@ impl Runtime {
         repeat: u32,
         chain: (usize, usize),
     ) -> Result<Vec<Handle>, ExecutionError> {
-        // A backend that runs the whole thing itself keeps every Field
-        // between the times to itself, which is the point of asking.
+        // A backend that runs every time itself keeps the Fields between.
         if let Body::Kernel {
             module,
             run,
@@ -900,8 +858,7 @@ impl Runtime {
                 }
             };
             invocation.inputs[input] = outputs[output];
-            // What the time before gave is read by this one and by
-            // nothing else, so it goes now that it has been read.
+            // The previous output has one reader, so it goes once read.
             if let Some(gone) = held.replace(outputs) {
                 for handle in gone {
                     let _ = self.host.release(handle);
@@ -911,7 +868,7 @@ impl Runtime {
         Ok(held.expect("a run of at least one"))
     }
 
-    /// Executes a pinned version. The Host is scoped to exactly the
+    /// Executes a pinned version, with the Host scoped to exactly the
     /// capabilities the manifest declares.
     pub fn execute(
         &mut self,
@@ -919,10 +876,8 @@ impl Runtime {
         invocation: &Invocation,
     ) -> Result<Vec<Handle>, ExecutionError> {
         let granted = self.scope_grants(version);
-        // Nothing carries over: a backend that does not measure this
-        // execution must answer `None` here, not the previous node's
-        // number. A native operation used to leave it standing, and its
-        // neighbour's time was printed as its own.
+        // Cleared per execution: a backend that does not measure this one
+        // answers `None`.
         self.telemetry.last_measured = None;
         match &version.body {
             Body::Kernel {
@@ -932,9 +887,8 @@ impl Runtime {
             } => {
                 let ordered = self.routed(module);
                 if ordered {
-                    // The ordered backend reads through Host memory:
-                    // whatever the main one left resident comes back
-                    // first.
+                    // The ordered backend reads Host memory, so resident
+                    // Fields come back first.
                     for handle in &invocation.inputs {
                         let brought = self.bring_home(*handle)?;
                         self.telemetry.moved.downloaded += brought;
@@ -974,9 +928,8 @@ impl Runtime {
 }
 
 /// What a backend handed back, held to the manifest: one Field per
-/// declared output, in order. A backend that answers with another count
-/// has broken its contract; what it made is released and the execution
-/// fails, rather than a reader indexing past what exists.
+/// declared output, in order. Another count is a broken contract: what
+/// it made is released and the execution fails.
 pub(crate) fn held_to(
     manifest: &Manifest,
     host: &mut Host,
@@ -997,8 +950,7 @@ pub(crate) fn held_to(
     )))
 }
 
-/// Whether a module belongs on the ordered backend rather than `main`:
-/// one `main` leaves to another, by its own answer.
+/// Whether a module belongs on the ordered backend: `main` declines it.
 fn goes_ordered(main: &dyn Backend, module: &Validated) -> bool {
     main.declines(module).is_some()
 }
@@ -1009,7 +961,7 @@ fn goes_ordered(main: &dyn Backend, module: &Validated) -> bool {
 pub struct Placement {
     /// The backend that runs it.
     pub backend: &'static str,
-    /// Why the main backend does not, when it does not.
+    /// Why the main backend does not run it, when it does not.
     pub routed: Option<String>,
 }
 
@@ -1018,7 +970,7 @@ pub struct Placement {
 pub struct Moved {
     /// Brought to a device from Host memory.
     pub uploaded: u64,
-    /// Brought back to Host memory from a device, for a backend that
-    /// reads there.
+    /// Brought back to Host memory from a device, for a backend that reads
+    /// there.
     pub downloaded: u64,
 }

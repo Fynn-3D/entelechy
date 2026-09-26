@@ -1,8 +1,6 @@
-//! WAV files as rows: a sound decodes to `Rows<Float>` (mono) or
-//! `Rows<Vec2>` (stereo), samples in `-1..=1`, and rows of one or two
-//! floats encode as 16-bit PCM. The sample rate is a fact about the file,
-//! not the Field: the reader reports it, and a Kernel that plays the
-//! rows at the device's `rate()` resamples with `at_linear`.
+//! WAV as rows: decodes to `Rows<Float>` (mono) or `Rows<Vec2>`
+//! (stereo), samples in `-1..=1`; encodes as 16-bit PCM. The sample rate
+//! belongs to the file and is returned beside the Field.
 
 use std::fmt;
 
@@ -11,7 +9,7 @@ use orla_host::{Domain, FieldData, HostError, Scalar, Schema};
 /// Why bytes are not a WAV the Host can take.
 #[derive(Debug)]
 pub enum WavError {
-    /// The file is malformed or uses a format not supported.
+    /// The file is malformed or uses an unsupported format.
     Format(String),
     /// The Host refused the Field.
     Host(HostError),
@@ -32,7 +30,7 @@ impl std::error::Error for WavError {}
 pub struct Decoded {
     /// The Field: `Rows` of one float per frame or two.
     pub field: FieldData,
-    /// Frames per second as the file says.
+    /// The file's frames per second.
     pub rate: u32,
     /// Channels kept: 1 or 2.
     pub channels: usize,

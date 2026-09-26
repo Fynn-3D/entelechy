@@ -1,7 +1,6 @@
-//! `orla-export`: writes the Host's files as formats other software
-//! opens. A mesh's vertex and triangle rows (and a PNG) become a GLB;
-//! rows of one or two floats become a WAV; a grid of pixels or floats
-//! becomes a PNG.
+//! `orla-export`: the Host's files as other software's formats. Mesh
+//! rows (and a PNG) become a GLB, rows of one or two floats a WAV, a
+//! grid a PNG.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -100,8 +99,7 @@ fn export(args: &[String]) -> Result<String, String> {
                     "png" => texture = Some(input.clone()),
                     "field" => {
                         let data = read_field(input)?;
-                        // A rig's rows say which they are by their
-                        // layout, as `docs/RIGS.md` has them.
+                        // A rig's rows are told apart by layout.
                         let part = (data.domain().shape() == Shape::Rows)
                             .then(|| Part::of(data.schema()))
                             .flatten();
@@ -138,8 +136,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 texture.as_deref(),
                 &rig_paths,
                 &clip_paths,
-                // A clip's own rate, 30 a second unless said, as
-                // `orla import` samples them.
+                // 30 frames a second unless given, as `orla import`.
                 rate.unwrap_or(30) as f32,
                 &out,
             )?;
@@ -160,7 +157,7 @@ fn export(args: &[String]) -> Result<String, String> {
             };
             let data = read_field(input)?;
             let rate = match format {
-                // A WAV brings its rate; a .field is given one.
+                // A WAV input brings its rate; a .field takes the given one.
                 "wav" => rate.or_else(|| {
                     let bytes = std::fs::read(input).ok()?;
                     orla_formats::wav::decode(&bytes)

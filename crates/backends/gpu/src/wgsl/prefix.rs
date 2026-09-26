@@ -1,39 +1,37 @@
-//! A scan run as a prefix over its elements: the per-block sums, their
-//! prefix, and the pass that applies it.
+//! A prefix fold in three passes: per-block walks, a scan of the block
+//! totals, and the pass applying each block's offset.
 
 use super::*;
 
-/// The prefix passes' bindings: the plan, the output being folded in
-/// place, and one element a block.
+/// Binding index of the prefix plan uniform.
 pub const PREFIX_PLAN_BINDING: u32 = 0;
-/// The output buffer the fold walks in place.
+/// Binding index of the output, folded in place.
 pub const PREFIX_OUT_BINDING: u32 = 1;
-/// One element a block: each block's total, then those scanned.
+/// Binding index of the block totals, one element per block, then scanned.
 pub const PREFIX_SUMS_BINDING: u32 = 2;
 /// Binding index of a whole sum's high words beside the output.
 pub const PREFIX_OUT_HIGHS_BINDING: u32 = 3;
 /// Binding index of a whole sum's high words beside the blocks' totals.
 pub const PREFIX_SUMS_HIGHS_BINDING: u32 = 4;
-/// Invocations a workgroup in the prefix passes.
+/// Invocations per workgroup in the prefix passes.
 pub const PREFIX_WORKGROUP: u32 = 64;
 /// Threads a row of prefix workgroups covers; see [`folded`].
 pub const PREFIX_SPAN: u32 = MAX_GROUPS * PREFIX_WORKGROUP;
 
-/// One of the three passes a prefix fold takes on a device.
+/// One of a prefix fold's three passes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrefixPass {
-    /// One invocation a block: walk the block in place, leave its total.
+    /// One invocation per block: walk it in place, store its total.
     Blocks,
-    /// One invocation: scan the blocks' totals.
+    /// One invocation: scan the block totals.
     Tops,
-    /// One invocation an element: take the block's offset.
+    /// One invocation per element: apply its block's offset.
     Offsets,
 }
 
-/// How two words meet under `combine`, by the word's scalar — the same
-/// rule as `orla_rules::combine_words`, which is what holds the device
-/// to the reference's words. An integer `sum` is never folded here: it
-/// is kept whole ([`sums_whole`]).
+/// Two words combined under `combine` by their scalar, the rule of
+/// `orla_rules::combine_words`. An integer `sum` is kept whole instead
+/// ([`sums_whole`]).
 pub(crate) fn prefix_word(combine: Combine, scalar: orla_abi::Scalar, a: &str, b: &str) -> String {
     let float = matches!(scalar, orla_abi::Scalar::Float);
     match (combine, float) {
@@ -43,8 +41,8 @@ pub(crate) fn prefix_word(combine: Combine, scalar: orla_abi::Scalar, a: &str, b
         (Combine::Sum, true) => {
             format!("bitcast<u32>(bitcast<f32>({a}) + bitcast<f32>({b}))")
         }
-        // Floats meet by their bits' total order, as they do in a
-        // scatter, so a not-a-number lands where the reference puts it.
+        // Floats compare by their bits' total order, placing NaN as the
+        // reference does.
         (Combine::Min, true) => {
             format!("select({a}, {b}, key_of(bitcast<i32>({b})) < key_of(bitcast<i32>({a})))")
         }
@@ -61,11 +59,8 @@ pub(crate) fn prefix_word(combine: Combine, scalar: orla_abi::Scalar, a: &str, b
     }
 }
 
-/// Emits one of a prefix fold's three passes. The output is walked in
-/// place as words, so the element may be anything the layout holds, and
-/// nothing here needs shared memory or a barrier: a block is one
-/// invocation's walk, the blocks' totals are another's, and the third
-/// hands every element its block's offset.
+/// Emits one of a prefix fold's passes. The output is walked in place as
+/// words, so any element layout works, without shared memory or barriers.
 pub fn emit_prefix(module: &Module, pass: PrefixPass) -> String {
     let Mode::Prefix { combine } = module.manifest.mode else {
         return String::new();
@@ -198,11 +193,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     out
 }
 
-/// A prefix `sum` of integers, each running total whole: a word and a
-/// high word beside it, 64 bits, walked and offset as any prefix is, and
-/// every element's total checked once it is final. An element whose
-/// total is no `Int` is recorded, the least one kept: the first prefix
-/// that does not fit, which is where the reference's walk fails.
+/// A prefix integer `sum` with 64-bit running totals (word plus high
+/// word), each checked once final. The least element whose total
+/// overflows an `Int` is recorded, where the reference's walk fails.
 fn emit_prefix_whole(module: &Module, pass: PrefixPass) -> String {
     let stride = module.manifest.outputs[0].ty.schema.value_words().max(1);
     let mut out = format!(

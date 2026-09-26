@@ -1,7 +1,6 @@
-//! The rows a mesh and its rig are ([RIGS](../../../../docs/RIGS.md)):
-//! the layout of each part, which importing writes and exporting reads a
-//! part back by, and the matrix product both take a skeleton's joints
-//! through.
+//! The row layouts of a mesh and its rig
+//! ([RIGS](../../../../docs/RIGS.md)), shared by import and export, and
+//! their matrix product.
 
 use orla_host::{Scalar, Schema};
 
@@ -12,7 +11,7 @@ pub enum Part {
     Vertices,
     /// Three vertex indices (`i×3`).
     Triangles,
-    /// A vertex's four joints, then how much of each (`i×4, f×4`).
+    /// A vertex's four joints, then their weights (`i×4, f×4`).
     Weights,
     /// A joint's parent, then its inverse bind matrix (`i, f×16`).
     Skeleton,
@@ -43,9 +42,8 @@ impl Part {
         Schema::new([vec![Scalar::Int; ints], vec![Scalar::Float; floats]].concat())
     }
 
-    /// The part rows of `schema` are, when they are one: by the scalars
-    /// a Kernel sees, however each is kept (triangles as `u16`, joints as
-    /// `u8`), since what is read of them is read widened.
+    /// The part `schema`'s rows are, matched by scalars and ignoring
+    /// storage encodings (`u16` triangles, `u8` joints).
     pub fn of(schema: &Schema) -> Option<Part> {
         Part::ALL
             .into_iter()
@@ -71,9 +69,7 @@ pub fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
 mod tests {
     use super::*;
 
-    /// A part is known by its scalars, not by how they are kept: narrow
-    /// triangles and joints are the parts they are. (Compared whole,
-    /// encodings and all, a mesh with `u16` triangles was no mesh.)
+    /// Narrow triangles and joints are still their parts.
     #[test]
     fn a_part_kept_narrow_is_the_part_it_is() {
         let narrow = |part: Part, encoding: &str| {

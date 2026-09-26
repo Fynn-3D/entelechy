@@ -1,7 +1,7 @@
-//! Random programs on the JIT against the interpreter: the same words
-//! out, bit for bit, or the same failure at the same element. The
-//! programs come from `orla_conformance::random` by seed, so a difference
-//! found here is reproduced by its name. `ORLA_FUZZ=<n>` runs more.
+//! Random programs on the JIT against the interpreter: the same words bit
+//! for bit, or the same failure at the same element. Programs come from
+//! `orla_conformance::random` by seed, so a difference reproduces by its
+//! name. `ORLA_FUZZ=<n>` runs more.
 
 use orla_abi::{Capabilities, Capability, Host, Invocation, Scope};
 use orla_compiler::compile;
@@ -108,8 +108,7 @@ fn random_programs_run_on_the_jit_as_on_the_interpreter() {
         cases.len(),
         said.join("\n")
     );
-    // The generator must mostly write programs that run, or it tests the
-    // failure path alone.
+    // Most generated programs run, so more than the failure path is tested.
     assert!(
         failed_alike * 2 < cases.len(),
         "{failed_alike} of {} failed",

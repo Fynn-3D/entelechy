@@ -1,28 +1,21 @@
-//! One rule, one owner. A rule that once had a second owner (two
-//! parsers of one syntax, a second path to the disk) is held here to the
-//! one it has now: the act it names is done in the owner's file and in no
-//! other crate source.
-//!
-//! A rule is written here only after it has had a second owner, and names
-//! the commit that took it away. The act is what a copy must do (the cut,
-//! the write), not a name a copy could avoid, and a rule is kept only if
-//! it finds that commit's second owner in the source before it. What the
-//! compiler already holds (a private constant, a crate's own module) is
-//! not repeated here. See `docs/DECISIONS.md`, *A rule that had two
-//! owners is held to one*.
+//! One rule, one owner: each rule's act (the cut, the write) is done in
+//! its owner's files and in no other crate source. Each rule names the
+//! commit that gave it one owner, and is kept only while it finds that
+//! commit's second owner in the source before it. See `docs/DECISIONS.md`,
+//! *A rule that had two owners is held to one*.
 
 use std::path::{Path, PathBuf};
 
 struct Rule {
     /// The rule, as a sentence.
     rule: &'static str,
-    /// Where the rule is followed instead, for the failure to point to.
+    /// Where the rule is followed, for the failure to point to.
     owner: &'static str,
     /// The commit that gave the rule its one owner.
     since: &'static str,
-    /// The directories, from the repository's root, whose sources are read.
+    /// The directories, from the repository root, whose sources are read.
     within: &'static [&'static str],
-    /// The files, from the repository's root, that may do the act.
+    /// The files, from the repository root, that may do the act.
     owners: &'static [&'static str],
     /// The act, as written in code or in a string.
     acts: &'static [&'static str],
@@ -51,9 +44,8 @@ const RULES: &[Rule] = &[
         acts: &["outputs.first()"],
     },
     Rule {
-        // The store is the session's own (`Session::store` is the crate's),
-        // so a write through it outside the session does not compile; what
-        // is held here is a write that goes around it.
+        // `Session::store` is private to the crate; this rule holds a write
+        // that goes around it.
         rule: "a session writes only through its store, where its allowance is asked, \
                and the codecs it writes with make bytes, not files",
         owner: "`Session::write_file`, `Session::write_scene`, `Session::save`, \
@@ -83,7 +75,7 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
-/// Every Rust source under `dir`, a crate's `tests` directories left out.
+/// Every Rust source under `dir`, except a crate's `tests` directories.
 fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -100,13 +92,10 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// What of a source runs outside its tests: its comments gone and every
-/// item under `#[cfg(test)]` with them. Strings and characters are kept,
-/// read as such, so a `//` or a brace inside one is neither a comment nor
-/// a block.
+/// A source's non-test code: comments and `#[cfg(test)]` items removed.
+/// String and character literals are kept and read as such.
 fn code(text: &str) -> String {
-    // Each character kept, and whether it is code (not in a string or a
-    // character literal).
+    // Each character, and whether it is code (outside a literal).
     let mut kept: Vec<(char, bool)> = Vec::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -205,8 +194,8 @@ fn code(text: &str) -> String {
         kept.push((c, true));
         i += 1;
     }
-    // Leave out each item under `#[cfg(test)]`: to the end of its block,
-    // or of its statement when it has none.
+    // Drop each `#[cfg(test)]` item: to the end of its block, or of its
+    // statement when it has none.
     let text: String = kept.iter().map(|(c, _)| *c).collect();
     let marker = "#[cfg(test)]";
     let mut out = String::with_capacity(text.len());

@@ -1,16 +1,9 @@
-//! Measuring a scene the same way twice. `run --profile` says where one
-//! frame went; this steps a scene for a count of frames, several times,
-//! on one backend or on all of them, and reports the least of the runs,
-//! which is the measurement least disturbed by everything else on the
-//! machine.
+//! Repeatable scene measurement: steps a scene for a frame count,
+//! several runs, on each named backend, and reports the best run.
 //!
-//! The clock is the frame count over the rate, as `render`'s is, so the
-//! work measured is the same work every time. A run's first frame is
-//! thrown away: it compiles the Kernels, allocates the Fields, and warms
-//! the caches, and measuring it would measure the machine's morning.
-//!
-//! A measurement written with `--json` can be read back with `--compare`
-//! on a later build, which is how a change is shown to cost nothing.
+//! The clock is frame count over rate, as `render`'s is, so each run
+//! does the same work. A warm-up frame (compiling, allocating) precedes
+//! the runs. `--json` output reads back with `--compare`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -23,9 +16,7 @@ use crate::Session;
 /// How to measure.
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// The session each backend opens: the scene, its library, inputs,
-    /// params, fusion and limits. Its backend is not read; `backends`
-    /// says which.
+    /// The session each backend opens; `backends` overrides its backend.
     pub session: crate::SessionOptions,
     /// Backends to measure, in order.
     pub backends: Vec<String>,
@@ -35,7 +26,7 @@ pub struct Options {
     pub repeat: u32,
     /// Frames per second the clock advances by.
     pub rate: f32,
-    /// The window a scene sized by `window()` fills, and its scale.
+    /// Window size and scale for `window()`.
     pub window: Option<([f32; 2], f32)>,
     /// Whether to measure each node as well as the frame.
     pub nodes: bool,
@@ -68,24 +59,18 @@ pub struct Measured {
     pub backend: String,
     /// Milliseconds a frame in the best run.
     pub best: f64,
-    /// Milliseconds a frame in the middle run, which says how much the
-    /// machine wandered while measuring.
+    /// Milliseconds a frame in the median run.
     pub median: f64,
-    /// What each node took a frame, when asked for; a node that did not
-    /// run in a frame is counted over the frames all the same, as the
-    /// frame's cost is what is being divided.
+    /// Each node's milliseconds a frame, when asked for, averaged over
+    /// all frames.
     pub nodes: Vec<NodeTime>,
-    /// Whether any node ran at all after the warm-up frame. A scene
-    /// that does not change with the clock reuses everything, and what
-    /// is measured is the check that nothing changed.
+    /// Whether any node ran after the warm-up frame.
     pub ran: bool,
-    /// Whether the node numbers are what the device's own clock said
-    /// about the work. Where a driver takes the timestamps and resolves
-    /// nothing, they are the call and its wait instead, less the floor
-    /// below, and a reader has to be told which.
+    /// Whether node times come from the device's clock; otherwise they
+    /// are the call and its wait, less `floor`.
     pub device_clock: bool,
-    /// What measuring one node cost before the node did anything, in
-    /// milliseconds, already taken off every number above.
+    /// Milliseconds one empty node measurement costs, already subtracted
+    /// from every node time.
     pub floor: f64,
 }
 
@@ -98,7 +83,7 @@ pub fn bench(options: &Options) -> Result<Vec<Measured>, String> {
     Ok(measured)
 }
 
-/// Measures one backend: a session of its own, then the measurement.
+/// Measures one backend in its own session.
 fn one(options: &Options, backend: &str) -> Result<Measured, String> {
     let mut session = open(options, backend)?;
     let (size, scale) = options.window.unwrap_or(([0.0, 0.0], 1.0));
@@ -118,11 +103,10 @@ fn one(options: &Options, backend: &str) -> Result<Measured, String> {
     )
 }
 
-/// Measures the session as it stands: a warm-up frame, then `repeat`
-/// runs of `frames` frames, and, when asked, one more run that times
-/// every node. The clock advances by the frame count over `rate` from
-/// the context given, as `advance` advances it, so what the session is
-/// left holding is the last frame's.
+/// Measures the session: a warm-up frame, `repeat` runs of `frames`
+/// frames, and, with `nodes`, one run timing every node. Time advances
+/// from `base` by frame count over `rate`, as `advance` does; the
+/// session is left at the last frame.
 pub fn measure(
     session: &mut Session,
     backend: &str,
@@ -144,8 +128,7 @@ pub fn measure(
         time: base.time + frame as f32 / rate,
         ..base
     };
-    // The warm-up frame compiles and allocates; its time is the
-    // machine's morning, not the scene's.
+    // The warm-up frame compiles and allocates, unmeasured.
     session
         .evaluate(&context(0))
         .map_err(|e| format!("{backend}: {e}"))?;
@@ -160,10 +143,8 @@ pub fn measure(
                 .map_err(|e| format!("{backend}: {e}"))?;
             ran |= !report.executed.is_empty();
             frame += 1;
-            // The device is asked to run dry inside the measurement, as
-            // a Player's frame ends by presenting: a dispatch is
-            // submitted and not waited for, so without this a GPU's
-            // frame would be the time it took to ask for one.
+            // Settle the device inside the measurement, as a Player's
+            // present does, so a GPU frame counts its work.
             session.runtime().settle_device();
         }
         let took = started.elapsed().as_secs_f64() * 1000.0;
@@ -190,19 +171,15 @@ pub fn measure(
     })
 }
 
-/// What one measured run of the nodes came to: each node's
-/// milliseconds a frame, whether those are the device's own clock or
-/// the call and its wait, and what measuring one node cost before it
-/// did anything.
+/// A node-timing run's result; fields as in [`Measured`].
 struct NodeRun {
     nodes: Vec<NodeTime>,
     device_clock: bool,
     floor: f64,
 }
 
-/// One more run with the device waited for after every node, which is
-/// what makes a GPU's numbers the work rather than the submission, and
-/// which is why it is not the run the frame time comes from.
+/// A separate run that waits for the device after every node, so GPU
+/// node times are the work.
 fn node_times(
     session: &mut Session,
     options: &Options,
@@ -211,7 +188,7 @@ fn node_times(
     backend: &str,
 ) -> Result<NodeRun, String> {
     session.set_measured(true);
-    // A node's time, where it ran, and its traffic, over every frame.
+    // A node's time, placement and traffic over all frames.
     #[derive(Default)]
     struct Total {
         ms: f64,
@@ -237,15 +214,11 @@ fn node_times(
         }
     }
     session.set_measured(false);
-    // What measuring a node costs before the node does anything comes
-    // off every node: one submission and one wait, the same for all of
-    // them, which is a tenth of a millisecond on a device and nothing
-    // at all where the caller's clock is the whole measurement. Asked
-    // after the run, because a backend only knows once it has tried.
+    // The per-node measurement floor comes off every node; the backend
+    // knows it only after the run.
     let floor = session.measurement_floor().as_secs_f64() * 1000.0;
-    // A node placed several times, or a graph placed several times, is
-    // one line: `steps/*.spread/*` and how many there were. Sixty-four
-    // lines of a tenth of a millisecond say less than their sum does.
+    // Repeated placements group into one line: `steps/*.spread/*` and
+    // their count.
     let mut grouped: BTreeMap<String, (NodeTime, usize)> = BTreeMap::new();
     let per_frame = u64::from(frames);
     for (node, total) in totals {
@@ -286,8 +259,8 @@ fn node_times(
     })
 }
 
-/// What a node's name is without its repetitions: `steps/3.spread/6`
-/// is one of the `steps/*.spread/*`.
+/// A node name with repetition indices as `*`: `steps/3.spread/6` is
+/// `steps/*.spread/*`.
 fn pattern(node: &str) -> String {
     node.split('.')
         .map(|part| match part.split_once('/') {
@@ -317,9 +290,8 @@ fn open(options: &Options, backend: &str) -> Result<Session, String> {
     Ok(session)
 }
 
-/// The measurement as a table: a line a backend, the fastest first
-/// backend as the one the others are compared against, and, when nodes
-/// were measured, what each cost.
+/// The measurement as a table: a line per backend, compared against the
+/// first, then node costs when measured.
 pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured]>) -> String {
     let mut out = String::new();
     let window = match options.window {
@@ -394,11 +366,8 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
                 time.placement_text()
             ));
         }
-        // What the parts come to against the whole. A node measured
-        // alone waits for its own work, so the setting up of the next
-        // one no longer hides behind it: the difference is what a frame
-        // overlaps, and naming it is the difference between a profile
-        // that can be read and one that quietly does not add up.
+        // The node sum against the frame; the gap is what a frame
+        // overlaps and isolated node timing does not.
         let sum: f64 = entry.nodes.iter().map(|time| time.ms).sum();
         out.push_str(&format!(
             "  {:<28} {sum:8.3} against a frame of {:.3}; a node runs alone here, and what a frame overlaps it does not\n",
@@ -408,27 +377,25 @@ pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured
     out
 }
 
-/// What one node, or the nodes one pattern names, took a frame, and
-/// where it ran.
+/// A node's (or node pattern's) time a frame and placement.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeTime {
-    /// The node, or its pattern and how many it stands for.
+    /// The node, or its pattern and count.
     pub node: String,
     /// Milliseconds a frame.
     pub ms: f64,
     /// The backend that ran it.
     pub backend: String,
-    /// Why the main backend did not, when it did not.
+    /// Why it was routed off the main backend, if it was.
     pub routed: Option<String>,
-    /// Bytes a frame its runs brought to a device from Host memory.
+    /// Bytes a frame uploaded from Host memory to a device.
     pub uploaded: u64,
-    /// Bytes a frame its runs brought back to Host memory.
+    /// Bytes a frame downloaded back to Host memory.
     pub downloaded: u64,
 }
 
 impl NodeTime {
-    /// Where it ran and what that carried, as a profile line ends: the
-    /// backend, why it is not the main one, and the traffic.
+    /// A profile line's tail: backend, routing reason, traffic.
     pub fn placement_text(&self) -> String {
         let mut out = self.backend.clone();
         if let Some(why) = &self.routed {
@@ -444,7 +411,7 @@ impl NodeTime {
     }
 }
 
-/// A count of bytes as a person reads it: `512 B`, `1.5 KiB`, `3.2 MiB`.
+/// Bytes for reading: `512 B`, `1.5 KiB`, `3.2 MiB`.
 pub fn bytes_text(bytes: u64) -> String {
     let b = bytes as f64;
     if bytes < 1024 {
@@ -495,9 +462,8 @@ pub fn json(options: &Options, measured: &[Measured]) -> String {
     )
 }
 
-/// Reads back what `--json` wrote. Only the numbers a comparison needs
-/// are read, and a file that is not one is a failure rather than a
-/// silent zero.
+/// Reads back the numbers a comparison needs from `--json` output; a
+/// malformed file is an error.
 pub fn read(path: &Path) -> Result<Vec<Measured>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut measured = Vec::new();

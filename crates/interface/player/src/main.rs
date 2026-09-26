@@ -1,8 +1,6 @@
-//! The `orla-player` command: a window over a live session. The frame
-//! itself, what the keys mean and what the line of frame data says are
-//! the session's play (`orla_session::play`), which every interface that
-//! plays a scene shares; this is the window, the sound card and the pads
-//! it hands its person's hands from, and shows the picture on.
+//! The `orla-player` command: a window, sound card and pads over a live
+//! session. Frames, key meanings and the frame line are
+//! `orla_session::play`'s.
 
 use std::num::NonZeroU32;
 use std::process::ExitCode;
@@ -74,8 +72,8 @@ struct Options {
     origins: Vec<String>,
     /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
-    /// A replay the window plays: its inputs drive the scene, frame by
-    /// frame at its own times, until it ends and the person takes over.
+    /// A replay driving the scene frame by frame at its own times; the
+    /// person takes over when it ends.
     replay: Option<orla_session::replay::Replay>,
 }
 
@@ -127,8 +125,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
             other => return Err(format!("unknown flag {other}")),
         }
     }
-    // A replay names its scene, its library and its window; what the
-    // command line says first stands.
+    // A replay supplies scene, library and window the command line
+    // leaves unset.
     if let Some(replay) = &options.replay {
         options
             .session
@@ -165,18 +163,17 @@ struct Player {
     requested: Option<(u32, u32)>,
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
-    /// The device the backend computes on, when it has one to show: a
-    /// window presents what it left resident there without a readback.
+    /// The backend's device, when it has one to present from.
     display: Option<Display>,
-    /// The GPU presenter, when the backend is the GPU and the surface could
-    /// be configured; then frames are shown without any readback.
+    /// The GPU presenter, when the backend is the GPU and the surface is
+    /// configured; it shows frames without readback.
     presenter: Option<Presenter>,
     last_frame: Vec<[f32; 4]>,
     last_size: (u32, u32),
     /// Protocol requests arriving from stdin or a socket, when serving.
     requests: Option<Receiver<orla_protocol::Incoming>>,
-    /// The answers owed, a `compose` or a `publish` among them waiting
-    /// for what it changed to stand while the frames go on.
+    /// The answers owed, including a `compose` or `publish` waiting for
+    /// its change to stand while frames continue.
     answers: orla_protocol::Answers,
     /// The sound card, opened when a scene has a sound-shaped output.
     audio: Option<Audio>,
@@ -206,10 +203,8 @@ impl orla_protocol::Served for Player {
 }
 
 impl Player {
-    /// What the window says about itself: its physical size and scale
-    /// factor; before it opens, the requested size at scale one, or a
-    /// plain default, so a scene sized by the window has something to
-    /// fill on its first evaluation. And the sound card's rate.
+    /// The window's physical size and scale factor (before it opens, the
+    /// requested size at scale one, or the default), and the sound rate.
     fn view(&self) -> View {
         let (window, scale) = match &self.window {
             Some(window) => {
@@ -231,8 +226,8 @@ impl Player {
         }
     }
 
-    /// Whether the sound device is still playing the last block: then the
-    /// device sets the pace and the next evaluation waits for it.
+    /// Whether the sound device is still playing the last block; it then
+    /// paces the next evaluation.
     fn device_is_ahead(&self) -> bool {
         self.audio.as_ref().is_some_and(|audio| !audio.has_room())
     }
@@ -274,17 +269,16 @@ impl Player {
         }
     }
 
-    /// Answers protocol requests that arrived since the last frame. An
-    /// `evaluate` runs one window frame under the person's input and
-    /// reports it; everything else goes through the shared handler.
+    /// Answers protocol requests arrived since the last frame; `evaluate`
+    /// runs a window frame, the rest go to the shared handler.
     fn serve_pending(&mut self, event_loop: &ActiveEventLoop) {
         let Some(requests) = &self.requests else {
             return;
         };
         let pending: Vec<orla_protocol::Incoming> =
             std::iter::from_fn(|| requests.try_recv().ok()).collect();
-        // What waited for its change to stand first, then what came: a
-        // quit on standard input closes the window.
+        // Waiting answers first, then new requests; a quit on standard
+        // input closes the window.
         let mut answers = std::mem::take(&mut self.answers);
         let mut quit = answers.poll(self);
         for incoming in pending {
@@ -296,13 +290,13 @@ impl Player {
         }
     }
 
-    /// Shows a picture: directly from the device when it is resident
-    /// and a presenter exists, otherwise by downloading it and blitting.
-    /// Answers where it landed, how, and whether that took a download.
+    /// Shows a picture from the device when resident and presentable,
+    /// else by download and blit. Returns placement, path, and whether it
+    /// downloaded.
     fn show(&mut self, output: orla_kernel::Handle) -> (Option<Placement>, &'static str, bool) {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
             // What the device cannot show as it lies downloads (widened)
-            // and is drawn or refused below with a clear message.
+            // and is drawn or refused below.
             if let Some((device, width, height)) = self.session.on_device(output) {
                 let size = window.inner_size();
                 if let Some(display) = &self.display {
@@ -346,7 +340,7 @@ impl Player {
     }
 
     /// Hands the frame's sound output to the sound card, opening it on
-    /// first need.
+    /// first use.
     fn sound(&mut self, sound: Option<orla_kernel::Handle>) {
         if !self.audio_allowed || self.audio_failed {
             return;
@@ -375,9 +369,8 @@ impl Player {
                 }
             }
         }
-        // Materializing is the observation boundary: on the GPU this is
-        // one small download per frame, on the frame thread, never in the
-        // device callback.
+        // Materializing is the observation boundary: on the frame thread,
+        // never in the device callback.
         let words: Vec<u32> = match self.session.field(handle) {
             Ok(data) => data.values().to_vec(),
             Err(_) => return,
@@ -398,8 +391,8 @@ impl Player {
         }
     }
 
-    /// Draws the last downloaded picture, and the line of frame data
-    /// over it, into the window: where it landed, when it was drawn.
+    /// Draws the last downloaded picture and the frame line over it;
+    /// returns where it landed.
     fn blit(&mut self) -> Option<Placement> {
         if self.presenter.is_some() && self.last_frame.is_empty() {
             return None;
@@ -532,9 +525,8 @@ impl ApplicationHandler for Player {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // With sound, the device paces evaluation: a block is
-                // produced when the ring can take it, not when the window
-                // redraws, so nothing is dropped and nothing races ahead.
+                // With sound, a block is produced when the ring can take
+                // it: the device paces evaluation.
                 if self.device_is_ahead() {
                     std::thread::sleep(Duration::from_millis(1));
                 } else {
@@ -591,9 +583,8 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // An agent composes a served scene and reads back what it holds:
-    // what it reads is held to its documents' directories and what the
-    // person allowed, decided before the scene is first read.
+    // A served scene's reads are held to its documents' directories and
+    // the person's allowances, fixed before the scene is first read.
     if options.serve
         && let Err(error) = session.restrict_reads()
     {
@@ -646,9 +637,8 @@ fn main() -> ExitCode {
         player.requests = Some(receiver);
         eprintln!("serving the creation protocol on stdin/stdout");
     }
-    // Evaluate once before opening the window so it can take the output
-    // size. Not under a replay: its window is the replay's, and a frame
-    // the replay did not ask for would move the world it starts from.
+    // Evaluate once so the window opens at the output size; a replay
+    // owns its window and every frame, so it skips this.
     let context = player.play.context(player.view());
     let probed = (!player.play.replaying()).then(|| player.session.evaluate(&context));
     match probed {

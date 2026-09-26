@@ -1,7 +1,5 @@
-//! What a run leaves in its context when an element fails, and the
-//! failure each code names. The native code and the WebAssembly the JIT
-//! writes store the same codes, and the helpers they call store one too,
-//! so one list names them and one reading turns them into errors.
+//! The failure codes a run stores in its context, shared by native
+//! code, WebAssembly and the helpers, and their reading as errors.
 
 use orla_rules::{ArithmeticError, ExecutionError};
 
@@ -13,7 +11,7 @@ pub(crate) const DIVISION_BY_ZERO: u32 = 1;
 pub(crate) const OVERFLOW: u32 = 2;
 /// More loop iterations than the Kernel's budget.
 pub(crate) const EXHAUSTED: u32 = 3;
-/// The run past its total.
+/// The run went past its total.
 pub(crate) const OVERRUN: u32 = 4;
 /// An element that emitted past the room held for it.
 pub(crate) const HELD_OVER: u32 = 5;

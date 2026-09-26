@@ -1,9 +1,7 @@
-//! The builtins that are formulas over the arithmetic, written into the
-//! IR as that arithmetic: products of matrices, `dot`, `cross`,
-//! `length`, `normalize`, `reflect`, `transpose`, `determinant` and
-//! `inverse`. The IR then holds only operations every backend has, and
-//! each of these is one formula, in one order of operations, wherever
-//! it runs.
+//! Builtins lowered as arithmetic formulas: matrix products, `dot`,
+//! `cross`, `length`, `normalize`, `reflect`, `transpose`, `determinant`
+//! and `inverse`. Each is one formula in one order of operations on
+//! every backend.
 
 use orla_ir::{BinaryOp, Block as IrBlock, Intrinsic, Op, Type, ValueId};
 
@@ -49,7 +47,7 @@ impl Builder<'_> {
     }
 
     /// `m * v`: each column scaled by its component of `v`, added first
-    /// to last, which is every row's sum of products in that order.
+    /// to last.
     fn matrix_vector(&mut self, m: ValueId, v: ValueId) -> ValueId {
         let n = self.ty(m).order().expect("a matrix");
         let mut sum = None;
@@ -65,9 +63,8 @@ impl Builder<'_> {
         sum.expect("a matrix has an order of at least two")
     }
 
-    /// The product of two operands when one is a matrix and it is a
-    /// product of matrices: `m * m`, `m * v` (a column) or `v * m` (a
-    /// row). `None` for any other pair, a scale by a scalar included.
+    /// A matrix product: `m * m`, `m * v` (a column) or `v * m` (a row);
+    /// `None` for any other pair, scalar scaling included.
     pub(super) fn matrix_product(&mut self, a: ValueId, b: ValueId) -> Option<ValueId> {
         let (ta, tb) = (self.ty(a), self.ty(b));
         match (ta.order(), tb.order()) {
@@ -94,9 +91,8 @@ impl Builder<'_> {
         }
     }
 
-    /// A builtin that is a formula, written as one; `None` when `name` is
-    /// not one of them or the arguments do not fit it, which the caller
-    /// reports.
+    /// A formula builtin, written out; `None`, for the caller to report,
+    /// when `name` or the arguments do not fit.
     pub(super) fn formula(&mut self, name: &str, ids: &[ValueId]) -> Option<ValueId> {
         let types: Vec<Type> = ids.iter().map(|id| self.ty(*id)).collect();
         // A vector of a float kind, of either width.

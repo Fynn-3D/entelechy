@@ -1,5 +1,5 @@
-//! GPU results must match the CPU interpreter within floating-point
-//! tolerance. Tests skip when no adapter is available.
+//! GPU results match the CPU interpreter within floating-point tolerance.
+//! Tests skip when no adapter is available.
 
 use orla_abi::{Capabilities, Capability, Context, Domain, Host, Invocation, Scope, Value};
 use orla_compiler::compile;
@@ -7,7 +7,7 @@ use orla_cpu::CpuBackend;
 use orla_gpu::GpuBackend;
 use orla_rules::Backend;
 
-/// Downloads a resident GPU output into Host memory and returns its pixels.
+/// Downloads a resident GPU output into Host memory as pixels.
 fn materialized(gpu: &GpuBackend, host: &mut Host, handle: orla_abi::Handle) -> Vec<[f32; 4]> {
     let byte_len = host
         .schema(handle)
@@ -41,7 +41,7 @@ fn all() -> Capabilities {
     Capability::ALL.into_iter().collect()
 }
 
-/// Runs a kernel on both backends and returns (cpu, gpu) pixels.
+/// Runs a Kernel on both backends and returns (cpu, gpu) pixels.
 fn both(
     gpu: &GpuBackend,
     source: &str,
@@ -272,8 +272,7 @@ fn input_context_matches_between_backends() {
 #[test]
 fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
     let Some(gpu) = gpu() else { return };
-    // The device is taken before the backend goes to the runtime, which
-    // knows only a `Backend` from then on.
+    // The device is taken before the backend goes to the runtime.
     let device = gpu.device().clone();
     let mut runtime = orla_kernel::Runtime::with_backend(1 << 22, Box::new(gpu));
     runtime.set_background(true);
@@ -289,8 +288,8 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
         domain: Domain::Grid(64, 64),
         context: orla_abi::Context::default(),
     };
-    // A source the device has not compiled before, long enough that the
-    // worker's job overlaps everything below.
+    // A source new to the device, long enough that the worker's compile
+    // overlaps everything below.
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -307,10 +306,8 @@ fn preparing_on_the_worker_never_disturbs_the_executing_thread() {
         "kernel test.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ {body} return vec4({value}, 0.5, 0.25, 1.0 + 0.0 * v399); }} }}"
     );
     let module = compile(&long).unwrap();
-    // This thread opens an error scope, frames push and pop their own
-    // while the worker's scope is open, and the outer scope closes before
-    // the worker's does. wgpu keeps scope stacks per thread only with its
-    // `std` feature; on one shared stack this pop would be out of order.
+    // This thread's error scopes nest around the worker's, the outer one
+    // closing first: wgpu keeps scope stacks per thread.
     let outer = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let ticket = runtime.prepare_later(module, String::new());
     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -344,9 +341,9 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
     use orla_rules::raster::{SURFACE_WORDS, rasterize_words, triangle_schema, vertex_schema};
     let Some(gpu) = gpu() else { return };
     let mut runtime = orla_kernel::Runtime::with_backend(1 << 24, Box::new(gpu));
-    // Two triangles: a large one at depth 0.6 and a nearer one at 0.3
-    // covering the lower-left, with distinct normals and uvs, at w = 2 so
-    // perspective correction is exercised.
+    // Two triangles at w = 2, for perspective correction: a large one at
+    // depth 0.6 and a nearer one at 0.3 over the lower-left, with distinct
+    // normals and uvs.
     let vertex = |clip: [f32; 4], normal: [f32; 3], uv: [f32; 2]| -> Vec<u32> {
         clip.iter()
             .chain(normal.iter())
@@ -398,8 +395,8 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
         "f,f,f,f,f,f,i"
     );
     let reference = rasterize_words(&vertices, &triangles, width, height);
-    // Compare every pixel whose eight neighbours carry the same triangle
-    // on the CPU: away from edges, where coverage rules may differ.
+    // Only pixels whose eight neighbours carry the same triangle on the
+    // CPU are compared: coverage rules at edges may differ.
     let id_at =
         |words: &[u32], x: u32, y: u32| words[(y * width + x) as usize * SURFACE_WORDS + 6] as i32;
     let mut compared = 0;
@@ -438,7 +435,7 @@ fn the_rasterizer_matches_the_reference_on_interior_pixels() {
 fn reductions_match_between_backends() {
     let Some(gpu) = gpu() else { return };
     // Ints exactly, floats within the tree's rounding, over an odd count
-    // so the tail path runs, and over an image so the map is a grid.
+    // (the tail path) and an image (a grid map).
     let source = "kernel test.stats@1 { requires { field.read; field.write; } input source: Image; output result: Rows<Stats>; struct Stats { bright: Int; sum: Vec4; max: Float; } compute { let c = sample(source); let l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722; return Stats { bright: if l > 0.5 { 1 } else { 0 }, sum: c, max: l }; } merge(a, b) { return Stats { bright: a.bright + b.bright, sum: a.sum + b.sum, max: max(a.max, b.max) }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let (width, height) = (37, 23);
@@ -504,10 +501,8 @@ fn reductions_match_between_backends() {
     );
 }
 
-/// A prefix's blocked fold on the device must give the reference's words
-/// exactly — the whole promise the mode rests on. Sums of integers, and
-/// `max` over a struct carrying a float, a not-a-number and both zeros,
-/// at counts that straddle a block's edge.
+/// Integer sums, and `max` over a struct carrying a float, a NaN and both
+/// zeros, at counts straddling a block's edge: the reference's words.
 #[test]
 fn prefixes_match_between_backends() {
     let Some(gpu) = gpu() else { return };
@@ -519,8 +514,8 @@ fn prefixes_match_between_backends() {
         "kernel test.prefix_max@1 { requires { field.read; field.write; } input rows: Rows<Run>; output result: Rows<Run>; struct Run { i: Int; f: Float; } prefix with max { return sample(rows); } }",
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    // 1 and 10 are one block; 5000 is seventy-one of them with a ragged
-    // last; 70000 is past what one invocation would walk in a frame.
+    // 1 and 10 are one block; 5000 is seventy-one with a ragged last;
+    // 70000 exceeds one invocation's walk in a frame.
     for count in [1u32, 10, 5000, 70000] {
         let ints: Vec<u32> = (0..count).map(|i| ((i as i32 % 11) - 5) as u32).collect();
         let schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int]);
@@ -536,9 +531,8 @@ fn prefixes_match_between_backends() {
             assert_eq!(a, b, "sum at {index} of {count}");
         }
 
-        // A float that is not a number, a negative zero beside a
-        // positive one, and an infinity: `max` orders them by their bits
-        // on both backends or it orders them differently.
+        // A NaN, both zeros and an infinity: `max` orders them by their
+        // bits on both backends.
         let odd = [
             f32::NAN,
             -0.0,
@@ -566,7 +560,7 @@ fn prefixes_match_between_backends() {
     }
 }
 
-/// Runs a module over one input on both backends and gives back the two
+/// Runs a module over one input on both backends and returns both
 /// outputs' words.
 fn on_both(
     gpu: &GpuBackend,
@@ -607,8 +601,7 @@ fn on_both(
 #[test]
 fn scans_match_between_backends() {
     let Some(gpu) = gpu() else { return };
-    // A prefix sum of ints (exact) and a one-pole filter (rounding only),
-    // over a block long enough to matter.
+    // A prefix sum of ints (exact) and a one-pole filter (rounding only).
     let source = "kernel test.scan@1 { requires { field.read; field.write; } input rows: Rows<Item>; param k: Float = 0.1; output result: Rows<Run>; struct Item { value: Int; x: Float; } struct Run { total: Int; y: Float; } scan with run = Run { total: 0, y: 0.0 } { let it = sample(rows); return Run { total: run.total + it.value, y: run.y + (it.x - run.y) * k }; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let count = 801u32;
@@ -671,7 +664,7 @@ fn linear_interpolation_matches_between_backends() {
     let Some(gpu) = gpu() else { return };
     // Every pixel of a larger grid reads the small image at a fractional
     // position, so both bilinear paths run at every weight; a struct of
-    // floats over rows exercises the fieldwise mixer.
+    // floats over rows runs the fieldwise mixer.
     let source = "kernel test.zoom@1 { requires { field.read; field.write; } input small: Image; output result: Image; compute { let p = (coord() + vec2(0.5, 0.5)) / domain() * size(small); return at_linear(small, p); } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let small: Vec<[f32; 4]> = (0..12)
@@ -749,8 +742,8 @@ fn remainder_widening_and_vector_equality_match_between_backends() {
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let (cpu, device) = both_module(&gpu, &module, &[], (1, 1), vec![], Domain::Grid(16, 8));
     assert!(mismatch(&cpu, &device, 1e-6) <= 1e-6);
-    // The bit operators, the shift count modulo 32, and an arithmetic shift
-    // of a negative number, exact on both.
+    // Bit operators, shift counts modulo 32, and an arithmetic shift of a
+    // negative number, exact on both.
     let bits = compile("kernel test.bits@1 { requires { field.write; } output result: Image; compute { let c = coord(); let x = int(c.x); let y = int(c.y) - 4; return vec4(float((x & 5) | (y ^ 3)), float((x << 33) + (y << (x % 4))), float(y >> 1), float((x * 37) ^ (y * 11) & 255)); } }").unwrap_or_else(|error| panic!("{error}"));
     let (bits_cpu, bits_gpu) = both_module(&gpu, &bits, &[], (1, 1), vec![], Domain::Grid(16, 8));
     assert_eq!(mismatch(&bits_cpu, &bits_gpu, 0.0), 0.0);
@@ -770,9 +763,9 @@ fn remainder_widening_and_vector_equality_match_between_backends() {
 #[test]
 fn scatters_match_between_backends() {
     let Some(gpu) = gpu() else { return };
-    // Many drops into a small grid, several per cell, so the order of the
-    // float sums matters and both backends must follow the same one; a
-    // struct target combined by `max` with ints; `last` over rows.
+    // Several drops per cell of a small grid, so both backends follow one
+    // float summation order; a struct target under `max` with ints; `last`
+    // over rows.
     let source = "kernel test.splat@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input canvas: Grid<Cell>; output result: Grid<Cell>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Cell { mass: Float; top: Int; } struct Splat { cell: Vec2; value: Cell; } scatter into canvas with sum { let d = sample(drops); return Splat { cell: d.at, value: Cell { mass: d.weight, top: d.id } }; } }";
     let count = 2000u32;
     let drop_words: Vec<u32> = (0..count)
@@ -855,9 +848,8 @@ fn scatters_match_between_backends() {
             assert!(total > 10.0, "drops landed: {total}");
         }
     }
-    // Ints alone sum with atomics, in parallel; and floats with NaN and
-    // both zeros meet `min` and `max` in the one total order both
-    // backends use, whichever order the pairs arrive in.
+    // Ints sum with atomics in parallel; floats with NaN and both zeros
+    // meet `min` and `max` in one total order, in any arrival order.
     let counting = "kernel test.count@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Tally>; output result: Grid<Tally>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Tally { hits: Int; ids: Int; } struct Splat { cell: Vec2; value: Tally; } scatter into grid with sum { let d = sample(drops); return Splat { cell: d.at, value: Tally { hits: 1, ids: d.id } }; } }";
     let module = compile(counting).unwrap_or_else(|error| panic!("{error}"));
     let tally_schema = orla_abi::Schema::new(vec![orla_abi::Scalar::Int, orla_abi::Scalar::Int]);
@@ -935,8 +927,8 @@ fn scatters_match_between_backends() {
             assert!(hits > 100, "{label}: {hits} drops landed");
         }
     }
-    // A hundred thousand drops summed into a small grid: long runs per
-    // cell, folded in source order on both sides, bit for bit.
+    // A hundred thousand drops into a small grid, folded in source order
+    // on both sides, bit for bit.
     let many = 100_000u32;
     let many_words: Vec<u32> = (0..many)
         .flat_map(|i| {
@@ -996,7 +988,7 @@ fn scatters_match_between_backends() {
     let landed: u32 = cpu_words.chunks_exact(2).map(|c| c[1]).sum();
     assert!(landed > 100_000, "ids summed: {landed}");
 
-    // Floats with NaN and both zeros under `min` and `max`, on a Float target.
+    // Floats with NaN and both zeros under `min` and `max`, Float target.
     let source = "kernel test.low@1 { requires { field.read; field.write; } input drops: Rows<Drop>; input grid: Grid<Float>; output result: Grid<Float>; struct Drop { at: Vec2; weight: Float; id: Int; } struct Splat { cell: Vec2; value: Float; } scatter into grid with min { let d = sample(drops); return Splat { cell: d.at, value: d.weight }; } }";
     for combine in ["min", "max"] {
         let module = compile(&source.replace("with min", &format!("with {combine}"))).unwrap();
@@ -1056,9 +1048,8 @@ fn scatters_match_between_backends() {
 #[test]
 fn memories_match_between_backends() {
     let Some(gpu) = gpu() else { return };
-    // A machine that walks a grid memory: each step toggles the cell it is
-    // on and steps by what it read there, and tallies ints in a rows
-    // memory; both memories come out the same on both backends.
+    // A machine toggles grid-memory cells and steps by what it reads, and
+    // tallies ints in a rows memory; both memories match on both backends.
     let source = "kernel test.walk@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory screen: Grid<Int>; memory tally: Rows<Cell>; output result: Rows<Vec2>; struct Cell { hits: Int; last: Float; } fn flip(s: Grid<Int>, p: Vec2, seen: Int) -> Int { return put(s, p, (1 - seen) >>> 0); } scan with at_ = vec2(3.0, 2.0) { let seen = at(screen, at_); flip(screen, at_, seen); let t = at(tally, seen); put(tally, seen, Cell { hits: t.hits + 1, last: float(index()) }); put(screen, vec2(-1.0, 0.0), 9); let next = vec2(float((int(at_.x) + 3 + seen * 5) % 16), float((int(at_.y) + 1 + seen) % 8)); return next; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
     let steps = 300u32;
@@ -1131,8 +1122,7 @@ fn memories_match_between_backends() {
 
 #[test]
 fn integer_arithmetic_matches_between_backends() {
-    // Bits, shifts and the wrapping arithmetic over the whole range of
-    // signs: both backends give the same words.
+    // Bits, shifts and wrapping arithmetic over all sign combinations.
     let Some(gpu) = gpu() else { return };
     let source = "kernel test.ints@1 { requires { field.write; } output result: Rows<Bits>; struct Bits { and: Int; or: Int; xor: Int; shl: Int; shr: Int; ushr: Int; wadd: Int; wsub: Int; wmul: Int; }
         compute {
@@ -1173,9 +1163,8 @@ fn integer_arithmetic_matches_between_backends() {
 
 #[test]
 fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
-    // A step whose first act is to read a memory element the previous step
-    // wrote: without a barrier between steps the Metal compiler hoisted
-    // that load out of the walk, and every step read the starting value.
+    // Each step first reads the memory element the previous step wrote;
+    // a barrier between steps keeps that load in the walk.
     let Some(gpu) = gpu() else { return };
     let source = "kernel test.pc@1 { requires { field.read; field.write; } input ticks: Rows<Int>; memory regs: Rows<Int>; output result: Rows<Int>; scan with n = 0 { let pc = at(regs, 15); put(regs, 15, pc + 2); return pc; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
@@ -1213,8 +1202,8 @@ fn a_step_reads_what_the_step_before_wrote_even_when_it_reads_first() {
 
 #[test]
 fn long_rows_are_dispatched_as_a_grid() {
-    // More elements than 65,535 workgroups of eight cover in one
-    // dimension: the dispatch folds them and every element is computed.
+    // More elements than 65,535 workgroups of eight: the dispatch folds
+    // them and every element is computed.
     let Some(gpu) = gpu() else { return };
     let source = "kernel test.long@1 { requires { field.write; } output result: Rows<Int>; compute { return element() * 3 + 1; } }";
     let module = compile(source).unwrap_or_else(|error| panic!("{error}"));
@@ -1348,7 +1337,8 @@ fn a_merge_may_read_inputs_params_and_the_context() {
         (cpu_value - gpu_value).abs() <= cpu_value.abs() * 1e-5,
         "{cpu_value} vs {gpu_value}"
     );
-    // 36 merges each add at(weights, 1) * k + first(weights) + time = 2 * 0.25 + 1 + 2.
+    // 36 merges each add at(weights, 1) * k + first(weights) + time
+    // = 2 * 0.25 + 1 + 2.
     let plain: f32 = (0..count)
         .map(|i| i as f32 * 0.5 * (1.0 + (i % 3) as f32))
         .sum();
@@ -1358,12 +1348,8 @@ fn a_merge_may_read_inputs_params_and_the_context() {
     );
 }
 
-/// Nothing the emitter names may spell a WGSL type. A loop's counter
-/// was `i` and the loop's own value number, which at 32 reads as the
-/// type `i32`, and every `i32(...)` in that loop's body then parsed as
-/// a call of a variable: the shader was rejected, and only a Kernel
-/// whose loop happened to land on that number showed it. The Kernel
-/// here is written at every length, so one of them lands there.
+/// A loop counter `i` numbered 32 would read `i32`; the Kernel is written
+/// at every length so one loop lands there.
 #[test]
 fn nothing_the_shader_declares_spells_a_type() {
     for length in 0..48 {
@@ -1394,11 +1380,8 @@ fn nothing_the_shader_declares_spells_a_type() {
     }
 }
 
-/// A cutout: the same two triangles under a mask whose alpha is a
-/// checkerboard. A fragment the mask does not cover is not drawn at all
-/// — it settles no depth either, so the farther triangle shows through
-/// the nearer one's holes — and the device agrees with the reference on
-/// which pixels those are.
+/// An uncovered fragment draws nothing and settles no depth, so the far
+/// triangle shows through the near one's holes, as on the reference.
 #[test]
 fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
     use orla_rules::raster::{
@@ -1413,11 +1396,10 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
             .map(|v| v.to_bits())
             .collect()
     };
-    // A far quad and a near one over it, both with uv across the whole
-    // of the mask.
+    // A far quad and a near one over it, uv spanning the mask.
     let mut vertices = Vec::new();
-    // The far quad sits on one texel the mask covers, so it is drawn
-    // whole; the near one is stretched across the whole checkerboard.
+    // The far quad sits on one covered texel, so it is drawn whole; the
+    // near one spans the checkerboard.
     let solid = [0.0625f32, 0.0625];
     vertices.extend(vertex([-1.0, -1.0, 0.8, 1.0], [0.0, 0.0, 1.0], solid));
     vertices.extend(vertex([1.0, -1.0, 0.8, 1.0], [0.0, 0.0, 1.0], solid));
@@ -1499,8 +1481,8 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
     let depth_at = |words: &[u32], x: u32, y: u32| {
         f32::from_bits(words[(y * width + x) as usize * SURFACE_WORDS])
     };
-    // The reference drew both quads: the near one where the mask covers,
-    // the far one through its holes.
+    // The reference drew the near quad where covered, the far one through
+    // its holes.
     let ids: std::collections::BTreeSet<i32> = (0..height)
         .flat_map(|y| (0..width).map(move |x| (x, y)))
         .map(|(x, y)| id_at(&reference, x, y))
@@ -1534,8 +1516,8 @@ fn a_cutout_drops_the_fragments_its_mask_does_not_cover() {
     assert!(compared > 1500, "only {compared} pixels compared");
 }
 
-/// Compiles and publishes a Kernel as a session does: the runtime takes
-/// validated IR, and compiling is the caller's step.
+/// Compiles and publishes a Kernel as a session does: compiling is the
+/// caller's step, the runtime takes validated IR.
 fn load(
     runtime: &mut orla_kernel::Runtime,
     source: &str,
@@ -1587,7 +1569,7 @@ fn a_node_off_the_device_says_what_its_trip_carried() {
     assert!(runtime.placement(&scan).routed.is_some());
     let (sums, moved) = run(&mut runtime, &scan, vec![rows]);
     assert_eq!(moved.downloaded, 20);
-    // And the map after it takes the scan's rows up again.
+    // The map after it uploads the scan's rows again.
     let (_, moved) = run(&mut runtime, &back, vec![sums]);
     assert_eq!(moved.uploaded, 20);
     assert_eq!(moved.downloaded, 0);
@@ -1643,7 +1625,7 @@ fn a_failure_on_the_device_is_the_reference_failure() {
         (map("return ivec2(element(), 1) * 1073741824;", "Rows<IVec2>"), Domain::Rows(8)),
         (map("return 3000000000000000000l * long(element());", "Rows<Long>"), Domain::Rows(8)),
         (map("return 9223372036854775807l / (long(element()) - 6) + 1;", "Rows<Long>"), Domain::Rows(8)),
-        // What is not taken fails nowhere.
+        // A guarded division fails nowhere.
         (map("let i = element(); return if i != 0 { 100 / i } else { 0 };", "Rows<Int>"), Domain::Rows(8)),
         (
             "kernel t.r@1 { requires { field.read; field.write; } input rows: Rows<Int>; output result: Rows<Int>;
@@ -1678,11 +1660,7 @@ fn a_failure_on_the_device_is_the_reference_failure() {
     assert_eq!(failing, cases.len() - 1);
 }
 
-/// Every name the shader gives what the source did not name is its own:
-/// the 17th, 33rd and 65th helper and field of a struct would once have
-/// been `f16`, `f32` and `f64`, which WGSL spells its own types with, and
-/// a Kernel with that many helpers did not compile on the device. How
-/// many a source may write is the language's business, not the shader's.
+/// Invented names never spell a WGSL type (`f16`, `f32`, `f64`).
 #[test]
 fn a_kernel_of_many_helpers_and_fields_runs_on_the_device() {
     let Some(gpu) = gpu() else { return };
@@ -1713,8 +1691,8 @@ fn a_kernel_of_many_helpers_and_fields_runs_on_the_device() {
     assert_eq!(mismatch(&cpu, &gpu_pixels, 1e-4), 0.0);
 }
 
-/// Runs `module` over `inputs` on both backends and returns each one's
-/// output words.
+/// Runs `module` over `inputs` on both backends and returns each output's
+/// words.
 fn on_both_inputs(
     gpu: &GpuBackend,
     host: &mut Host,
@@ -1751,11 +1729,8 @@ fn on_both_inputs(
     (cpu_words, gpu_words)
 }
 
-/// A scatter, a prefix and a reduction over more elements than one
-/// dimension of workgroups reaches (65,535 of 64 is 4,194,240) were
-/// dispatched in that one dimension, and the device refused them. The
-/// dispatch folds into rows now, as a map's does, and every element is
-/// the reference's.
+/// Past 65,535 workgroups of 64 in one dimension, a scatter, a prefix and
+/// a reduction fold their dispatch into rows.
 #[test]
 fn passes_over_more_rows_than_one_dimension_holds_match() {
     let Some(gpu) = gpu() else { return };
@@ -1811,7 +1786,7 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
         assert_eq!(cpu, gpu_words, "scatter with {rule}");
     }
 
-    // A float sum, which the device sorts by target and source first.
+    // A float sum, sorted on the device by target and source.
     let summed = compile(
         "kernel test.pile@1 { requires { field.read; field.write; }
          input flags: Rows<Int>; input sums: Rows<Float>; output result: Rows<Float>;
@@ -1829,9 +1804,8 @@ fn passes_over_more_rows_than_one_dimension_holds_match() {
     assert_eq!(cpu, gpu_words, "scatter with a float sum");
 }
 
-/// Longs under `min` and `max` land on the device whole, by 64-bit
-/// atomics on keys that order them as signed: negatives, values past
-/// 32 bits, and a pair of longs as one element, returned and emitted.
+/// By 64-bit atomics on signed order keys: negatives, values past 32 bits,
+/// and a pair of longs as one element.
 #[test]
 fn long_extremes_land_as_the_references_do() {
     let Some(gpu) = gpu() else { return };
@@ -1892,10 +1866,8 @@ fn long_extremes_land_as_the_references_do() {
     }
 }
 
-/// Pairs an entry emits land on the device as the reference lands them:
-/// the device combines them into the target as the entry runs, which an
-/// order-free rule answers the same for. Ints under every such rule;
-/// floats, as ordered keys, under `min` and `max` on a grid.
+/// Ints under every order-free rule; floats, as ordered keys, under `min`
+/// and `max` on a grid.
 #[test]
 fn emitted_pairs_land_as_the_references_do() {
     let Some(gpu) = gpu() else { return };
@@ -1975,11 +1947,8 @@ fn emitted_pairs_land_as_the_references_do() {
     }
 }
 
-/// The base reaches a keyed target in one pass, turned into keys as it
-/// is written there rather than copied first: a record of a float and
-/// an int, its base every sign and both zeros, lands every word as the
-/// reference keeps it, those no pair reaches included. (Longs, which the
-/// device keys only in records of longs, are `long_extremes_land_as_the_references_do`'s.)
+/// A record of a float and an int, its base every sign and both zeros,
+/// lands every word as the reference keeps it, unreached cells included.
 #[test]
 fn a_keyed_target_starts_from_every_word_of_its_base() {
     let Some(gpu) = gpu() else { return };
@@ -2044,20 +2013,14 @@ fn a_keyed_target_starts_from_every_word_of_its_base() {
     }
 }
 
-/// A Kernel wider than the device binds at once runs there all the
-/// same: the backend packs the inputs past the device's limit into one
-/// buffer, each at its own offset, and reads them from it. Twenty-five,
-/// forty and eighty inputs, every one read — plain ones, narrow ones kept
-/// a byte a row, records read a field at a time — with a division, so
-/// the failure record is bound too; a reduction of forty, whose fold pass
-/// binds the pack as its map pass does. All the interpreter's words. What
-/// cannot be packed, a scan's memories, which its steps write, still
-/// declines with what it binds.
+/// Twenty-five, forty and eighty inputs (plain, narrow, records) past the
+/// device's bindings are packed into one buffer, with a division so the
+/// failure record binds, and a fold of forty: the interpreter's words. A
+/// scan's memories are never packed: past the limit it declines.
 #[test]
 fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
     let Some(gpu) = gpu() else { return };
-    // Every input a term, summed as a balanced tree: a long chain of
-    // additions is deeper than a test thread's stack in a debug build.
+    // Terms summed as a balanced tree, within a debug test thread's stack.
     fn tree(terms: &[String]) -> String {
         match terms {
             [one] => one.clone(),
@@ -2067,7 +2030,7 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
             }
         }
     }
-    // Every fifteenth input is plain whatever else its index says.
+    // Every fifteenth input is plain.
     let plain = |k: usize| k.is_multiple_of(15);
     let narrow = |k: usize| !plain(k) && k % 3 == 1;
     let record = |k: usize| !narrow(k) && k % 5 == 2;
@@ -2151,8 +2114,8 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
         assert_eq!(cpu, device, "{inputs} inputs, reduce {reduce}");
     }
 
-    // A scan's memories are its own to write, so none is packed: past the
-    // device's storage buffers, the scan declines and says why.
+    // A scan's memories are never packed: past the device's storage
+    // buffers, the scan declines and says why.
     let memories = 40;
     let ports: String = (0..memories)
         .map(|k| format!("memory m{k}: Rows<Int>; "))
@@ -2174,13 +2137,9 @@ fn inputs_past_the_devices_bindings_are_packed_and_read_where_they_are() {
     assert!(error.contains(&why), "{error}");
 }
 
-/// A shader nests its braces at most as deep as WGSL lets it, and the
-/// backend knows before it emits one how deep a module's would go: never
-/// less than the emitted shader's, at most one more, for branches,
-/// ladders, loops and matches. A module past the limit is declined with
-/// why, and a session runs it on the ordered backend: a hundred and fifty
-/// nested branches and a ladder of as many, the interpreter's words
-/// either way, rather than a scene that stops evaluating.
+/// The backend predicts a module's brace depth before emitting it (never
+/// less than the shader's, at most one more); past WGSL's limit it
+/// declines, and a session runs the module on the ordered backend.
 #[test]
 fn branches_nested_past_what_a_shader_holds_run_off_the_device() {
     let Some(gpu) = gpu() else { return };
@@ -2282,10 +2241,9 @@ fn branches_nested_past_what_a_shader_holds_run_off_the_device() {
     }
 }
 
-/// `smoothstep` is the interpreter's rule on the device too, where the
-/// device's own is its driver's to choose: at `low == high` a step
-/// (0 below, 1 at and above, as the division gives), at `low > high` a
-/// ramp that falls, scalar and vector alike.
+/// `smoothstep` follows the interpreter's rule on the device: at
+/// `low == high` a step (0 below, 1 at and above), at `low > high` a
+/// falling ramp, scalar and vector alike.
 #[test]
 fn smoothstep_is_the_interpreters_at_its_edges() {
     let Some(gpu) = gpu() else { return };

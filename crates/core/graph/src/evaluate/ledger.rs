@@ -1,13 +1,11 @@
-//! What the evaluator holds and how long: the cache of node outputs and
-//! the committed state, each with a count per handle, so a Field is
-//! released only when nothing refers to it any more.
+//! The evaluator's holdings: cached node outputs and committed state, each
+//! counted per handle, so a Field is released when nothing refers to it.
 
 use super::*;
 
 impl Evaluator {
-    /// Every port's committed state, by producing node and port: the
-    /// world as the last successful evaluation left it, never a cached
-    /// output a failed evaluation computed after it.
+    /// Every port's committed state, by producing node and port, as the
+    /// last successful evaluation left it.
     pub fn committed_states(&self) -> Vec<(NodeId, String, Handle)> {
         self.ledger
             .committed_ports()
@@ -15,11 +13,9 @@ impl Evaluator {
             .collect()
     }
 
-    /// Waits on every check the nodes' runs answered with, in the order
-    /// they ran: the first failure fails the evaluation as a failure on
-    /// the frame does, naming its node, and nothing commits. What that
-    /// node and every node after it left in the cache was computed from
-    /// a failed run, and goes, so the next evaluation runs them again.
+    /// Waits on the runs' checks in run order. The first failure fails the
+    /// evaluation, naming its node; that node and every later one leave
+    /// the cache, so the next evaluation reruns them.
     pub(super) fn wait_for_checks(
         &mut self,
         checks: Vec<(NodeId, Vec<Box<dyn orla_kernel::Check>>)>,
@@ -56,7 +52,7 @@ impl Evaluator {
     }
 
     /// Whether `handle` is state: committed, or replaced by an evaluation
-    /// that may yet put it back. What is kept is never released.
+    /// that may put it back. State is never released.
     pub(super) fn is_kept(&self, handle: Handle) -> bool {
         self.ledger.is_committed(handle) || self.replaced.iter().any(|r| r.previous == Some(handle))
     }
@@ -73,8 +69,7 @@ impl Evaluator {
 
     /// Releases cache entries and state of nodes that left the graph.
     pub(super) fn prune(&mut self, graph: &Graph, runtime: &mut Runtime) {
-        // One index for the three sweeps below; each used to walk the
-        // whole node list once a cached entry.
+        // One index for the three sweeps below.
         let index = graph.index();
         let gone_from = |id: &NodeId| !index.contains_key(id);
         let stale: Vec<NodeId> = self
@@ -116,20 +111,15 @@ impl Evaluator {
 }
 
 /// Every node's cached outputs and every port's committed state, each
-/// with a count per handle. The counts are kept by the only methods that
-/// change the maps, and nothing outside this module reaches the maps, so
-/// a Field is released only when neither the cache nor the state refers
-/// to it any more, and never twice.
+/// counted per handle. Only this module's methods change the maps, so a
+/// Field is released once, when neither refers to it.
 #[derive(Default)]
 pub(super) struct Ledger {
     cache: BTreeMap<NodeId, Cached>,
-    /// How many cached entries hold each handle: asking whether a handle
-    /// is still cached would otherwise walk every entry's outputs, once a
-    /// binding a frame.
+    /// How many cached entries hold each handle.
     cached_handles: BTreeMap<Handle, usize>,
     /// State as of the last successful evaluation, by producing node and
-    /// port. A committed handle may also be a node's current cached
-    /// output.
+    /// port; a handle may also be a cached output.
     committed: BTreeMap<(NodeId, String), Handle>,
     /// How many committed ports hold each handle.
     committed_handles: BTreeMap<Handle, usize>,
@@ -161,8 +151,7 @@ impl Ledger {
         (self.cache.len(), self.committed.len())
     }
 
-    /// Everything held, taken out: the cache and the committed state,
-    /// their counts cleared with them.
+    /// Takes out the cache and the committed state, clearing the counts.
     pub(super) fn take_all(
         &mut self,
     ) -> (BTreeMap<NodeId, Cached>, BTreeMap<(NodeId, String), Handle>) {
@@ -174,8 +163,8 @@ impl Ledger {
         )
     }
 
-    /// Puts a node's outputs in the cache, keeping the count of what
-    /// the cache holds; answers what was there.
+    /// Puts a node's outputs in the cache, keeping the count; answers what
+    /// was there.
     pub(super) fn cache_put(&mut self, id: NodeId, fresh: Cached) -> Option<Cached> {
         for output in &fresh.outputs {
             *self.cached_handles.entry(*output).or_default() += 1;
@@ -217,9 +206,7 @@ impl Ledger {
 
     pub(super) fn is_cached(&self, handle: Handle) -> bool {
         let held = self.cached_handles.contains_key(&handle);
-        // The count is the answer; the walk is what it stands for. A
-        // count that drifted would leak a Field or release one twice,
-        // so every test run checks the two agree.
+        // Debug builds check the count against the cache.
         debug_assert_eq!(
             held,
             self.cache
@@ -243,8 +230,7 @@ impl Ledger {
     }
 }
 
-/// Drops a count for every handle given, and the entry when it
-/// reaches nothing.
+/// Decrements each handle's count, removing it at zero.
 fn forget(counts: &mut BTreeMap<Handle, usize>, handles: impl Iterator<Item = Handle>) {
     for handle in handles {
         if let std::collections::btree_map::Entry::Occupied(mut at) = counts.entry(handle) {

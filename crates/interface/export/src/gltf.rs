@@ -1,12 +1,9 @@
-//! A mesh as GLB: the vertex rows `{position, normal, uv}` and the
-//! triangle rows the runtime uses, and a PNG for the base colour when
-//! there is one, become one glTF 2.0 binary with one mesh, one node and
-//! one scene, which Blender, three.js and the rest open as they are.
+//! A mesh as GLB: vertex rows `{position, normal, uv}`, triangle rows
+//! and an optional base colour PNG become one glTF 2.0 binary with one
+//! mesh, node and scene.
 //!
-//! With the rest of [a rig's rows](../../../docs/RIGS.md) — what every
-//! vertex hangs off, the joints, and a clip or several — it writes a
-//! skin and an animation apiece instead, so a rig that came in through
-//! `orla import` or the Blender bridge goes back out the way it came.
+//! With the rest of [a rig's rows](../../../docs/RIGS.md) it also writes
+//! a skin and one animation per clip.
 
 use std::path::Path;
 
@@ -14,24 +11,23 @@ use orla_formats::rig::multiply;
 use orla_host::{FieldData, Scalar};
 use serde_json::{Value as Json, json};
 
-/// What makes a mesh a rig: the rows beside it.
+/// A rig's rows beside the mesh.
 pub struct Rig<'a> {
-    /// One row a vertex: four joints, then how much of each.
+    /// Per vertex: four joints, then their weights.
     pub weights: &'a FieldData,
-    /// One row a joint: its parent, then its inverse bind matrix.
+    /// Per joint: its parent, then its inverse bind matrix.
     pub skeleton: &'a FieldData,
-    /// Each clip by name, its rows, and the rate it was sampled at.
+    /// Each clip: name, rows, sample rate.
     pub clips: Vec<(String, &'a FieldData, f32)>,
 }
 
-/// The inverse of an affine matrix, by columns as the ABI lays one out.
+/// The inverse of an affine column-major matrix.
 fn affine_inverse(m: &[f32; 16]) -> [f32; 16] {
     let a = [[m[0], m[4], m[8]], [m[1], m[5], m[9]], [m[2], m[6], m[10]]];
     let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
         - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
         + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
     let scale = if det.abs() > 0.0 { 1.0 / det } else { 0.0 };
-    // The adjugate over the determinant, by rows.
     let inverse = [
         [
             (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * scale,
@@ -75,13 +71,12 @@ fn affine_inverse(m: &[f32; 16]) -> [f32; 16] {
     ]
 }
 
-/// An affine matrix as the translation, rotation and scale a glTF node
-/// carries.
+/// An affine matrix as a glTF node's translation, rotation and scale.
 fn decompose(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
     let column = |c: usize| [m[c * 4], m[c * 4 + 1], m[c * 4 + 2]];
     let length = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     let mut scale = [length(column(0)), length(column(1)), length(column(2))];
-    // A mirrored matrix has a negative determinant; one axis carries it.
+    // A negative determinant flips one scale axis.
     let det = {
         let (x, y, z) = (column(0), column(1), column(2));
         x[0] * (y[1] * z[2] - y[2] * z[1]) - x[1] * (y[0] * z[2] - y[2] * z[0])
@@ -96,8 +91,7 @@ fn decompose(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
         [v[0] / s, v[1] / s, v[2] / s]
     };
     let (x, y, z) = (axis(0), axis(1), axis(2));
-    // The rotation as a quaternion, by the largest of the four terms so
-    // no square root is taken of something near zero.
+    // Quaternion from the largest term, for numerical stability.
     let trace = x[0] + y[1] + z[2];
     let turn = if trace > 0.0 {
         let r = (1.0 + trace).sqrt();
@@ -139,8 +133,8 @@ fn decompose(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
     ([m[12], m[13], m[14]], turn, scale)
 }
 
-/// Writes `vertices` (rows of eight floats) and `triangles` (rows of
-/// three ints) as a GLB, with `texture` as the base colour when given.
+/// Writes `vertices` (eight floats a row) and `triangles` (three ints a
+/// row) as a GLB, with `texture` as the base colour when given.
 pub fn write_glb(
     vertices: &FieldData,
     triangles: &FieldData,
@@ -150,8 +144,7 @@ pub fn write_glb(
     write_rig(vertices, triangles, texture, None, name)
 }
 
-/// The same, with the rest of a rig's rows: a skin and one animation a
-/// clip beside the mesh.
+/// The same, with a skin and one animation per clip.
 pub fn write_rig(
     vertices: &FieldData,
     triangles: &FieldData,
@@ -214,8 +207,6 @@ pub fn write_rig(
     let uv_view = view(&mut bin, &uvs, Some(34962));
     let index_view = view(&mut bin, &indices, Some(34963));
     let texture_view = texture.map(|png| view(&mut bin, png, None));
-    // The rig: what every vertex hangs off, the joints as nodes, and a
-    // clip apiece as an animation.
     let mut accessors = Vec::new();
     let mut skin_attributes = json!({});
     let mut joints: Vec<Json> = Vec::new();
@@ -255,8 +246,7 @@ pub fn write_rig(
                 joint_weights.extend(f32::from_bits(*word).to_le_bytes());
             }
         }
-        // The bind matrices as they are, and the rest pose they imply:
-        // a joint's place in its parent is what the binds say, undone.
+        // The rest pose is the inverse binds, made relative to parents.
         let mut binds = Vec::with_capacity(joint_count * 64);
         let parents: Vec<i32> = rig
             .skeleton
@@ -316,8 +306,7 @@ pub fn write_rig(
             "joints": (1..=joint_count).collect::<Vec<usize>>(),
             "inverseBindMatrices": 6,
         }));
-        // One animation a clip: a time apiece, and a joint's
-        // translation, rotation and scale as they were sampled.
+        // One animation per clip, a key per sampled frame.
         for (clip_name, clip, rate) in &rig.clips {
             if clip.schema().value_words() != 10 {
                 return Err(format!("clip `{clip_name}` is not rows of ten floats"));
@@ -402,8 +391,7 @@ pub fn write_rig(
         ]
     });
     if !joints.is_empty() {
-        // The skinned mesh node is placed by its joints, so it stands
-        // beside them in the scene rather than under them.
+        // The skinned mesh node is a scene root beside its joints.
         document["nodes"][0]["skin"] = json!(0);
         let roots: Vec<usize> = joints
             .iter()
@@ -468,8 +456,8 @@ pub fn write_rig(
     Ok(out)
 }
 
-/// Reads the vertex and triangle Field files, and the texture when
-/// given, and writes the GLB at `out`.
+/// Reads the vertex and triangle Field files and optional texture, and
+/// writes the GLB at `out`.
 pub fn export(
     vertices: &Path,
     triangles: &Path,
@@ -479,8 +467,8 @@ pub fn export(
     export_rig(vertices, triangles, texture, &[], &[], 30.0, out)
 }
 
-/// The same, with a rig: `weights` and `skeleton` beside the mesh, and
-/// a clip file apiece, each named by what stands before `.clip.field`.
+/// The same, with `weights`, `skeleton` and clip files, each clip named
+/// by its file name before `.clip.field`.
 pub fn export_rig(
     vertices: &Path,
     triangles: &Path,
@@ -552,7 +540,7 @@ pub fn export_rig(
     std::fs::write(out, glb).map_err(|e| format!("{}: {e}", out.display()))
 }
 
-/// A clip's name: what stands before `.clip.field`, or the stem.
+/// A clip's name: its file name before `.clip.field`, or the stem.
 fn clip_name(path: &Path) -> String {
     let stem = path.file_name().and_then(|s| s.to_str()).unwrap_or("clip");
     let stem = stem.strip_suffix(".clip.field").unwrap_or(stem);

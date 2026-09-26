@@ -1,7 +1,6 @@
-//! A rig is five kinds of row, and three things write them: `orla
-//! import` out of glTF, the Blender bridge out of an armature, and
-//! whatever anyone else writes. This holds the ones in this repository
-//! to [the contract](../../../docs/RIGS.md) — the layouts, and that the
+//! A rig is five kinds of row, written by `orla import` from glTF, by the
+//! Blender bridge from an armature, or by anyone. The rigs here are held
+//! to [the contract](../../../docs/RIGS.md): the layouts, and that the
 //! `skin` package reads what the importer writes.
 
 mod common;
@@ -15,9 +14,8 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
-/// The rows the example ships were written by the importer and are read
-/// by the package every time its replay runs; their layouts are the
-/// contract's.
+/// The example's shipped rows, written by the importer and read by the
+/// package in its replay, have the contract's layouts.
 #[test]
 fn the_shipped_rig_keeps_the_contract() {
     let assets = root().join("examples/skin/assets");
@@ -39,9 +37,8 @@ fn the_shipped_rig_keeps_the_contract() {
     );
 }
 
-/// What `orla import` writes today, against the same table, and then
-/// against the package that reads it: a scene that binds the fresh rows
-/// to the `skin` Kernels evaluates, or the layouts have drifted apart.
+/// Fresh `orla import` output keeps the contract's layouts, and a scene
+/// binding it to the `skin` Kernels evaluates.
 #[test]
 fn the_importer_writes_what_the_package_reads() {
     let importer = Path::new(env!("CARGO_BIN_EXE_orla"))
@@ -70,9 +67,8 @@ fn the_importer_writes_what_the_package_reads() {
     let found = rows_keep_the_contract(&dir);
     assert_eq!(found.len(), 6, "five kinds, two of them clips: {found:?}");
 
-    // The reader's side: the package's Kernels take these layouts, so a
-    // scene that binds them runs. A drift on either side is refused by
-    // the binding check, which names both.
+    // The package's Kernels take these layouts; the binding check refuses
+    // a mismatch on either side, naming both.
     let root = root().canonicalize().unwrap();
     let scene = dir.join("pose.osn");
     std::fs::write(
@@ -110,7 +106,7 @@ fn the_importer_writes_what_the_package_reads() {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
-    // And what came out is a mesh of the same shape as what went in.
+    // The output mesh has the input's shape.
     assert_eq!(
         schema_of(&dir.join("posed.field")),
         "f,f,f,f,f,f,f,f",

@@ -39,13 +39,12 @@ fn parse_type(name: &Spanned<String>) -> Result<Type, CompileError> {
     })
 }
 
-/// The struct table while a Kernel lowers: the declared structs first,
-/// then every array type met, `[T; N]` interned once by element and
-/// count so two spellings of it are one type.
+/// The struct table while a Kernel lowers: declared structs, then every
+/// array type met, `[T; N]` interned once by element and count.
 type Structs = RefCell<Vec<StructDef>>;
 
-/// Resolves a type name against the plain types, the struct table and
-/// the array spelling `[Type; N]`, whose type is interned.
+/// Resolves a type name: a plain type, a struct, or `[Type; N]`
+/// (interned).
 fn resolve_type(name: &Spanned<String>, structs: &Structs) -> Result<Type, CompileError> {
     if let Some(inner) = name.value.strip_prefix('[') {
         let Some((element, count)) = inner
@@ -88,9 +87,8 @@ fn resolve_type(name: &Spanned<String>, structs: &Structs) -> Result<Type, Compi
     parse_type(name)
 }
 
-/// The most values a function's `[each ...]` builders may write out
-/// before one is refused: a copy of the body per element, and builders
-/// nested in builders multiply.
+/// The most values a function's `[each ...]` builders may unroll: one
+/// body copy per element, multiplied through nested builders.
 pub(crate) const MAX_UNROLLED_VALUES: usize = 1 << 18;
 
 /// Whether an array may have `count` elements.
@@ -125,8 +123,8 @@ fn array_type(
     Ok(Type::Struct((table.len() - 1) as u32))
 }
 
-/// What `[index]` takes from a type, and how many there are: an array's
-/// element, a matrix's column, a vector's component.
+/// What `[index]` takes from a type, and how many: an array's element, a
+/// matrix's column, a vector's component.
 fn subscript_element(ty: Type, structs: &[StructDef]) -> Option<(Type, usize)> {
     match ty {
         Type::Struct(index) => {
@@ -145,10 +143,9 @@ fn describe(ty: Type, structs: &[StructDef]) -> String {
     orla_ir::type_name(ty, structs)
 }
 
-/// Registers the record of a map's outputs when there are several: a
-/// struct named after them, `{ color, depth }`, whose fields are their
-/// elements in declaration order. Its layout is theirs one after another,
-/// which is the words every backend writes an element as.
+/// Registers the record of a map's several outputs: a struct named
+/// `{ color, depth }` whose fields are their elements in declaration
+/// order, laid out as every backend writes an element.
 fn outputs_record(manifest: &Manifest, structs: &Structs) -> Option<u32> {
     if manifest.outputs.len() < 2 || manifest.mode != Mode::Map {
         return None;
@@ -179,9 +176,9 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     let aliases = aliases(kernel, &structs)?;
     let manifest = manifest(kernel, id, &structs, &aliases)?;
     let record = outputs_record(&manifest, &structs);
-    // Functions: one with a Field parameter is a template, instantiated
-    // per port it is called with; the others lower in order, so a
-    // function calls only what is defined above it.
+    // A function with a Field parameter is a template, instantiated per
+    // port binding; the others lower in order, so a function calls only
+    // what is defined above it.
     let shared = Shared {
         manifest: &manifest,
         structs: &structs,
@@ -379,31 +376,27 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
     })
 }
 
-/// What every block of a Kernel resolves names against: its manifest,
-/// structs, aliases, the functions lowered so far (a call's index), the
-/// templates with Field parameters, and their instances by binding.
+/// What every block of a Kernel resolves names against.
 struct Shared<'a> {
     manifest: &'a Manifest,
     structs: &'a Structs,
     aliases: &'a [(String, PortType)],
     functions: RefCell<Vec<(String, Function)>>,
     templates: Vec<&'a FnDecl>,
-    /// Instantiated templates by what they were bound with, to function
-    /// index.
+    /// Instantiated templates by binding, to function index.
     instances: RefCell<BTreeMap<Instance, u32>>,
-    /// Templates being instantiated, to refuse a template calling itself.
+    /// Templates being instantiated; a template calling itself is refused.
     instantiating: RefCell<Vec<String>>,
-    /// Every function name the Kernel declares, in order, so a call to
-    /// one that is not lowered yet can say why.
+    /// Every declared function name, in order, for diagnostics on a call
+    /// to one below the caller.
     declared: Vec<String>,
-    /// The record of a map's outputs, when it declares several: a struct
-    /// whose fields are the outputs' elements in declaration order, which
-    /// `{ name: .., ... }` builds and `compute` gives.
+    /// The record of a map's several outputs, which `{ name: .., ... }`
+    /// builds and `compute` gives.
     record: Option<u32>,
 }
 
-/// Lowers a function body. `fields` binds its Field parameters to input
-/// ports, for an instance of a template; `name` names the result.
+/// Lowers a function body. `fields` binds a template's Field parameters
+/// to input ports; `name` names the result.
 fn lower_function(
     shared: &Shared<'_>,
     declaration: &FnDecl,
@@ -475,9 +468,8 @@ fn lower_function(
     Ok(builder.finish(vec![result]))
 }
 
-/// What a template was instantiated with: its name, the input ports
-/// bound to its Field parameters, and the types bound to its type
-/// parameters, each written as the IR spells it.
+/// A template instance: its name, the input ports bound to its Field
+/// parameters, and its type parameters as the IR spells them.
 type Instance = (String, Vec<u32>, Vec<String>);
 
 /// What a name resolves to inside a block.
@@ -488,9 +480,8 @@ enum Local {
     Carried {
         depth: usize,
         ty: Type,
-        /// When the loop's body may `break`, what it carries is that
-        /// value and whether it stopped; the name is the first field
-        /// of this struct.
+        /// For a loop that may `break`: the struct of the value and
+        /// whether it stopped; the name is its first field.
         pair: Option<Type>,
     },
 }
@@ -507,10 +498,8 @@ struct Builder<'a> {
     locals: Vec<(String, Local)>,
     /// Index into `locals` where each open block scope starts.
     scopes: Vec<usize>,
-    /// The names bound in each open block scope. A binding may not
-    /// repeat a name of its own block, and asking that by walking the
-    /// block's bindings is a walk once a binding: a Kernel of a few
-    /// thousand `let`s spent most of its lowering on it.
+    /// The names bound in each open block scope, so a repeated name in
+    /// one block is found in logarithmic time.
     bound: Vec<BTreeSet<String>>,
     /// Instruction buffers, one per open block; the last is current.
     buffers: Vec<Vec<Instruction>>,
@@ -518,21 +507,20 @@ struct Builder<'a> {
     types: Vec<Type>,
     /// Carried types of enclosing loops, innermost last.
     loops: Vec<Type>,
-    /// The `[each ...]` builders being lowered: each element's position,
-    /// and how many loops were open when the builder began, so `index()`
-    /// inside it is this position unless a loop opened since.
+    /// Open `[each ...]` builders: the element's position and the loop
+    /// depth at the builder, so `index()` is that position unless a loop
+    /// opened since.
     each: Vec<(u32, usize)>,
     /// Every `let`, in source order, with its value: what a trace shows.
     bindings: Vec<(ValueId, String)>,
-    /// The numbers written without a width that nothing has named yet,
-    /// exact as written (a float as a `Double`, an integer as a `Long`):
-    /// each becomes a `Double` or a `Long` where it meets one.
+    /// Unnamed numbers written without a width, exact (a float as a
+    /// `Double`, an integer as a `Long`) until they meet a width.
     literals: std::collections::HashMap<u32, orla_ir::Number>,
-    /// The vectors, matrices and arrays built of written numbers alone
-    /// that nothing has named yet: each takes the kind it meets as whole.
+    /// Unnamed vectors, matrices and arrays of written numbers alone;
+    /// each takes the kind it meets as a whole.
     aggregates: BTreeSet<u32>,
-    /// Written integers a division left a remainder of (`1 / 2`): whole,
-    /// but not what was written, so no float or double takes them.
+    /// Written integers a division truncated (`1 / 2`); a float or
+    /// double refuses them.
     truncated: BTreeSet<u32>,
 }
 
@@ -559,8 +547,8 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// A scalar converted to `kind`, when it is another kind: what a
-    /// constructor makes of a component.
+    /// A scalar converted to `kind` when it differs, as a constructor
+    /// converts a component.
     fn converted(&mut self, id: ValueId, kind: Type) -> ValueId {
         let from = self.ty(id);
         if from == kind {
@@ -586,7 +574,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Reserves the next value id without emitting anything yet.
+    /// Reserves the next value id; `place` emits into it.
     fn reserve(&mut self, ty: Type) -> ValueId {
         self.types.push(ty);
         ValueId((self.types.len() - 1) as u32)
@@ -616,10 +604,9 @@ impl<'a> Builder<'a> {
         self.types[id.0 as usize]
     }
 
-    /// A scatter's pair, as the body returns it or `emit` gives it: a
-    /// struct of an address into the target and a value of its element.
-    /// An integer address is the float one converted, exact as every
-    /// coordinate a Field can have is.
+    /// A scatter's pair, from the body or `emit`: a struct of an address
+    /// into the target and a value of its element. An integer address is
+    /// converted to float, exact for every Field coordinate.
     fn scatter_pair(&mut self, pair: ValueId, span: Span) -> Result<ValueId, CompileError> {
         let Mode::Scatter { base, .. } = self.manifest.mode else {
             return Ok(pair);
@@ -627,8 +614,6 @@ impl<'a> Builder<'a> {
         let expected = self.manifest.outputs[0].element();
         let actual = self.ty(pair);
         let mut pair = pair;
-        // The body yields a pair: an address into the target and a
-        // value of its element type, as a struct of two fields.
         let target = &self.manifest.inputs[base as usize];
         let address = target.ty.index_type();
         let table = self.shared.structs.borrow();
@@ -641,8 +626,7 @@ impl<'a> Builder<'a> {
         let well_formed = fields.is_some_and(|fields| {
             fields.len() == 2 && fields[0].ty == address && fields[1].ty == expected
         });
-        // An integer address (`IVec2` into a grid) is the float one
-        // converted: exact, as every coordinate a Field can have is.
+        // An integer address, such as `IVec2` into a grid.
         let integer_address = fields.is_some_and(|fields| {
             fields.len() == 2
                 && fields[0].ty.other_kind() == Some(address)
@@ -700,8 +684,8 @@ impl<'a> Builder<'a> {
         describe(ty, &self.structs())
     }
 
-    /// Reads the carried value of the loop being lowered: the value
-    /// itself, or the first field of what a loop with a `break` carries.
+    /// Reads the current loop's carried value, or its first field when
+    /// the loop may `break`.
     pub(super) fn read_carried(&mut self, ty: Type, pair: Option<Type>) -> ValueId {
         match pair {
             None => self.emit(ty, Op::Carried),
@@ -712,8 +696,8 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The struct type a loop with a `break` carries: the value and
-    /// whether the loop has stopped, made once per element type.
+    /// The struct a loop with a `break` carries, `(value, stopped)`,
+    /// made once per value type.
     pub(super) fn pair_type(&self, value: Type) -> Type {
         let name = format!("({}, stopped)", self.describe(value));
         if let Some(index) = self.structs().iter().position(|def| def.name == name) {
@@ -736,8 +720,8 @@ impl<'a> Builder<'a> {
         Type::Struct((table.len() - 1) as u32)
     }
 
-    /// The struct table as it stands; a borrow tied to the Kernel, not
-    /// to the builder, so a value read through it may be emitted at once.
+    /// The struct table, borrowed for the Kernel's lifetime so a value
+    /// read through it may be emitted at once.
     fn structs(&self) -> std::cell::Ref<'a, Vec<StructDef>> {
         self.shared.structs.borrow()
     }
@@ -773,8 +757,8 @@ impl<'a> Builder<'a> {
         self.scoped(block, |builder, result| builder.value(result))
     }
 
-    /// Lowers a block's bindings in their own scope and then its result,
-    /// which the caller lowers: a loop body's result may `break`.
+    /// Lowers a block's bindings in their own scope, then its result
+    /// through `result`, since a loop body's result may `break`.
     pub(super) fn scoped<F>(&mut self, block: &Block, result: F) -> Result<ValueId, CompileError>
     where
         F: FnOnce(&mut Self, &Expr) -> Result<ValueId, CompileError>,
@@ -868,8 +852,7 @@ impl<'a> Builder<'a> {
                 format!("`{name}` is the output; produce it with `return`"),
             ));
         }
-        // Everything a name here could have been, so a near miss is
-        // named rather than left to be found.
+        // Every name in reach, for a near-miss suggestion.
         let known: Vec<&str> = self
             .locals
             .iter()
@@ -887,11 +870,9 @@ impl<'a> Builder<'a> {
         ))
     }
 
-    /// Resolves an input port by name.
     /// Calls a template: its Field parameters bind to the input ports the
-    /// arguments name, checked by shape and layout; the instance for that
-    /// binding is lowered once and called by value with the other
-    /// arguments.
+    /// arguments name, checked by shape and layout; each binding's
+    /// instance lowers once and takes the other arguments by value.
     fn instantiate(
         &mut self,
         template: &FnDecl,
@@ -905,9 +886,8 @@ impl<'a> Builder<'a> {
         let mut values = Vec::new();
         let mut generics: Vec<(String, Type)> = Vec::new();
         for ((param, ty), arg) in template.args.iter().zip(args) {
-            // A type parameter takes the type of the argument written
-            // here, and every later argument of that parameter must
-            // agree with it.
+            // A type parameter binds to its first argument's type; later
+            // arguments of it must agree.
             if template.generics.iter().any(|g| g.value == ty.value) {
                 let id = self.value(arg)?;
                 let actual = self.ty(id);
@@ -1003,9 +983,7 @@ impl<'a> Builder<'a> {
                     &format!("{name}<{bound}>"),
                 )
                 .map_err(|error| match (error, generics.is_empty()) {
-                    // A body that does not hold for the types this call
-                    // gives it is reported where it is written, and says
-                    // which instance was being lowered.
+                    // An error in a generic body names the instance.
                     (CompileError::Semantic { span, message }, false) => {
                         let bound = generics
                             .iter()
@@ -1115,8 +1093,7 @@ impl<'a> Builder<'a> {
     }
 
     /// An integer vector address converted to the float one a Field
-    /// takes: exact for every coordinate a Field can have, so `at` and
-    /// `put` need no integer path of their own. Any other value passes.
+    /// takes, exact for every Field coordinate; other values pass.
     fn float_address(&mut self, address: ValueId, expected: Type) -> ValueId {
         if self.ty(address).other_kind() == Some(expected) {
             self.emit(expected, Op::Intrinsic(Intrinsic::ToFloat, vec![address]))

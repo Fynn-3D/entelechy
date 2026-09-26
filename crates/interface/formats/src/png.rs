@@ -1,7 +1,6 @@
-//! PNG files as Fields: a picture decodes to a grid of pixels or, when a
-//! `Grid<Float>` is wanted, to a grid of samples; a grid of pixels
-//! encodes to a PNG anyone can open. Bit depths 1 to 16, every colour
-//! type, palettes; interlaced files are refused with a message.
+//! PNG as Fields: decodes to a pixel grid or a `Grid<Float>` of samples
+//! (bit depths 1 to 16, every colour type, palettes; interlaced files are
+//! refused); encodes a pixel grid.
 
 use std::fmt;
 
@@ -12,7 +11,7 @@ use crate::inflate::{InflateError, unzlib, zlib_stored};
 /// Why bytes are not a PNG the Host can take.
 #[derive(Debug)]
 pub enum PngError {
-    /// The file is malformed or uses a feature not supported.
+    /// The file is malformed or uses an unsupported feature.
     Format(String),
     /// The compressed data is broken.
     Inflate(InflateError),
@@ -32,8 +31,8 @@ impl fmt::Display for PngError {
 
 impl std::error::Error for PngError {}
 
-/// What a decoded PNG holds: samples in `0..=1`, `channels` per pixel,
-/// 1 gray, 2 gray+alpha, 3 RGB, 4 RGBA.
+/// A decoded PNG: samples in `0..=1`, `channels` per pixel (1 gray,
+/// 2 gray+alpha, 3 RGB, 4 RGBA).
 pub struct Decoded {
     /// Width in pixels.
     pub width: u32,
@@ -128,7 +127,6 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, PngError> {
     if raw.len() != (stride + 1) * height as usize {
         return Err(format("image data length"));
     }
-    // Unfilter row by row.
     let mut rows = vec![0u8; stride * height as usize];
     for y in 0..height as usize {
         let filter = raw[y * (stride + 1)];
@@ -247,8 +245,7 @@ pub fn decode_field(bytes: &[u8], gray: bool) -> Result<FieldData, PngError> {
     }
 }
 
-/// Encodes RGBA pixels (`0..=1`) as an 8-bit PNG, stored rather than
-/// compressed, so no encoder tables are needed and every reader takes it.
+/// Encodes RGBA pixels (`0..=1`) as an uncompressed 8-bit PNG.
 pub fn encode(width: u32, height: u32, pixels: &[[f32; 4]]) -> Vec<u8> {
     let mut raw = Vec::with_capacity((width as usize * 4 + 1) * height as usize);
     for row in pixels.chunks(width as usize) {

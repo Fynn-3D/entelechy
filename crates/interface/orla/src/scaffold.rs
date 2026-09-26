@@ -1,12 +1,6 @@
-//! A scene to start from. `orla new` writes a directory that runs: a
-//! Kernel, the scene that places it, a replay that checks what it
-//! draws, and a README saying what to change first.
-//!
-//! Three of them, because the three things people start with want
-//! different shapes: a picture over the window, a sound with its
-//! waveform, and a grid of state the keys move. Each is small enough to
-//! read in a minute and each passes its own replay on every backend,
-//! which the session tests check by making one and running it.
+//! `orla new`: a directory that runs: a Kernel, the scene placing it, a
+//! replay checking what it draws, and a README. Each kind passes its own
+//! replay on every backend.
 
 use std::path::Path;
 
@@ -36,8 +30,8 @@ impl Kind {
     pub const NAMES: [&'static str; 3] = ["picture", "sound", "game"];
 }
 
-/// Writes a scene of this kind into `dir`, which must not already hold
-/// one, and returns the files written in the order they were made.
+/// Writes a scene of this kind into `dir`, which must not hold one, and
+/// returns the files written in order.
 pub fn new_scene(dir: &Path, kind: Kind, name: &str) -> Result<Vec<String>, String> {
     if dir.join("scene.osn").exists() {
         return Err(format!(

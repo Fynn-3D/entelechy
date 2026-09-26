@@ -1,9 +1,8 @@
 //! Structural and capability validation of a [`Module`].
 //!
-//! Validation proves the properties backends rely on: pre-order value ids,
-//! block scoping, type consistency, bounded calls and loops, and that every
-//! Host operation is covered by a declared capability. A [`Validated`]
-//! module is the only thing a backend will execute.
+//! Proves what backends rely on: pre-order value ids, block scoping, type
+//! consistency, bounded calls and loops, and a declared capability for
+//! every Host operation. Backends execute only a [`Validated`] module.
 
 use std::fmt;
 use std::ops::Deref;
@@ -168,9 +167,7 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
                 ));
             }
             let element = output.element();
-            // The whole of what makes a prefix safe to group: the rule
-            // gives the same words in any grouping, so a backend may
-            // block the fold and the reference may walk it.
+            // A prefix's rule gives the same words in any grouping.
             let floats = output
                 .ty
                 .schema
@@ -230,8 +227,7 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
                 return Err(error(&init.name, "`init` takes no arguments"));
             }
             let init_types = validate_function(&module, init, module.functions.len() + 1, false)?;
-            // The steps write; the carried value's start is before them,
-            // so `init` may not call a function that writes.
+            // `init` runs before the steps, so it calls no writer.
             let writers = writers(&module.functions);
             if let Some(callee) = first_writing_call(&init.body, &writers) {
                 return Err(error(
@@ -311,9 +307,8 @@ pub fn validate(module: Module) -> Result<Validated, ValidationError> {
             ));
         }
     }
-    // A narrow output is written one element at a time, by a map or by
-    // the steps of a scan. The other modes fold into their output in
-    // place and keep it at full width, as a scatter's target is.
+    // Only a map or a scan writes a narrow output (one element at a time);
+    // the other modes fold in place at full width.
     if !matches!(module.manifest.mode, Mode::Map | Mode::Scan) {
         let narrow = outputs
             .iter()
@@ -581,8 +576,8 @@ impl<'a> Checker<'a> {
             .ok_or_else(|| self.fail(format!("{position} reads unknown input {input}")))
     }
 
-    /// The shape the entry point maps over: the output's, or the first
-    /// input's for a reduction or a scan.
+    /// The shape the entry maps over: the output's, or the first input's
+    /// for a reduction or a scan.
     fn output_shape(&self) -> Shape {
         let manifest = &self.module.manifest;
         match manifest.mode {
@@ -610,8 +605,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Checks a block and returns the type of its result. Values defined
-    /// inside go out of scope afterwards.
+    /// Checks a block and returns its result type; its values leave scope
+    /// after it.
     fn block(&mut self, block: &Block) -> Result<Type, ValidationError> {
         let first = self.next;
         self.instructions(&block.body)?;
@@ -1227,8 +1222,8 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// The address type of a linear interpolation: a fractional position, so
-/// `Float` over rows where `at` takes an `Int`.
+/// The address type of a linear interpolation: a fractional position
+/// (`Float` over rows).
 pub fn linear_index_type(shape: Shape) -> Type {
     match shape {
         Shape::Rows => Type::Float,
@@ -1237,9 +1232,8 @@ pub fn linear_index_type(shape: Shape) -> Type {
     }
 }
 
-/// Checks one function and returns the type of every slot.
-/// Which functions write a memory, themselves or through a call: a
-/// fixed point over the call graph (recursion is refused elsewhere).
+/// Which functions write a memory, themselves or through a call: a fixed
+/// point over the (acyclic) call graph.
 pub(crate) fn writers(functions: &[Function]) -> Vec<bool> {
     let mut writers = vec![false; functions.len()];
     loop {
@@ -1283,6 +1277,7 @@ fn first_writing_call(instructions: &[Instruction], writers: &[bool]) -> Option<
         })
 }
 
+/// Checks one function and returns the type of every slot.
 fn validate_function(
     module: &Module,
     function: &Function,

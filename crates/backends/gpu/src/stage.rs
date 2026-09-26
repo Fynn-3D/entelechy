@@ -37,8 +37,8 @@ pub(crate) struct Staged {
     pub(crate) further_outputs: Vec<wgpu::Buffer>,
     pub(crate) output_words: usize,
     pub(crate) element_count: usize,
-    /// The word the passes record their first failure in, when the
-    /// module can fail, and the buffer it is read back through.
+    /// The word the passes record their first failure in, when the module can
+    /// fail, and its readback buffer.
     pub(crate) failure: Option<(wgpu::Buffer, wgpu::Buffer)>,
     /// A scatter's target, ready before the entry when the entry emits.
     pub(crate) target: Option<wgpu::Buffer>,
@@ -65,9 +65,8 @@ pub(crate) fn execution_domain(
     })
 }
 
-/// Whether the Host has room for every output over `domain`, asked
-/// before a buffer is made for one: the device is not where a domain
-/// too large for the budget is found out.
+/// Whether the Host budget has room for every output over `domain`, asked
+/// before a buffer is made for one.
 pub(crate) fn outputs_fit(
     module: &Validated,
     domain: orla_abi::Domain,
@@ -178,9 +177,8 @@ impl GpuBackend {
         Ok(buffer)
     }
 
-    /// The context and parameter buffers for the execution being
-    /// staged: kept from the last one where they are big enough, and
-    /// written rather than made. A bigger one takes their place.
+    /// The context and parameter buffers for the execution being staged: the
+    /// last ones, written again, while big enough; else new ones.
     pub(crate) fn uniform_buffers(
         &self,
         context: &[u8],
@@ -302,9 +300,9 @@ impl GpuBackend {
                 input_buffers.push(bound);
             }
         }
-        // What the pass binds for its inputs: each its own, but for those
-        // it packs, which are copied into one buffer before it runs, each
-        // at the offset in words the parameters carry after their own.
+        // What the pass binds for its inputs: each its own, except packed ones,
+        // copied into one buffer before it runs, each at the word offset the
+        // parameters carry after their own.
         let mut bound_inputs: Vec<(u32, wgpu::Buffer)> = Vec::new();
         let mut packs: Vec<(wgpu::Buffer, u64, u64)> = Vec::new();
         let mut offsets: Vec<u32> = Vec::new();
@@ -390,10 +388,9 @@ impl GpuBackend {
                 resource: buffer.as_entire_binding(),
             });
         }
-        // The failure word and its way back, from the pile; cleared below,
-        // before the pass, which is no failure.
-        // A whole sum records its first total that does not fit there too,
-        // though nothing the entry does can fail.
+        // The failure word and its readback, from the pile, cleared below
+        // before the pass. A whole sum records its first total that does not
+        // fit there too.
         let failure = (pipeline.fails || wgsl::sums_whole(module)).then(|| self.failure_pair());
         if let (Some((failure, _)), true) = (&failure, pipeline.fails) {
             entries.push(wgpu::BindGroupEntry {

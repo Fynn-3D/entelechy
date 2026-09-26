@@ -1,9 +1,6 @@
-//! `include/orla.h` is the C ABI's contract, and what a C caller
-//! compiles against; the Rust is what it links to. They are held to
-//! each other here: the same functions, the same version, and every
-//! struct the header lays out laid out the same, field by field. A change
-//! to either side that the other does not make fails, so the ABI changes
-//! only on purpose.
+//! `include/orla.h` is the C ABI's contract; the Rust is what it links
+//! to. Both hold the same functions, the same version, and every header
+//! struct laid out the same, field by field.
 
 const HEADER: &str = include_str!("../include/orla.h");
 const SOURCE: &str = concat!(
@@ -53,7 +50,7 @@ fn functions(text: &str, before: &str) -> Vec<String> {
     names
 }
 
-/// A C field type as the Rust spells it.
+/// A C field type as Rust spells it.
 fn rust_of(c: &str) -> String {
     match c {
         "float" => "f32",

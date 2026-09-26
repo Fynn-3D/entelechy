@@ -1,11 +1,10 @@
 #![warn(missing_docs)]
 //! Capability ABI (L2).
 //!
-//! This crate defines the world visible to a Kernel: value types, opaque
-//! handles, named capabilities, and a [`Scope`] that gates every Host call on
-//! an explicit grant. A Kernel never touches the Host directly; backends call
-//! the Host on its behalf through a `Scope` built from the capabilities the
-//! Kernel declared. No capability means no access.
+//! The world visible to a Kernel: value types, opaque handles, named
+//! capabilities, and a [`Scope`] that gates every Host call on an explicit
+//! grant. Backends call the Host for a Kernel only through a `Scope` built
+//! from its declared capabilities. No capability means no access.
 
 pub mod names;
 
@@ -27,8 +26,7 @@ pub enum Capability {
     FieldWrite,
     /// Read the session clock.
     TimeRead,
-    /// Read pointer and key state, and the window they arrive through:
-    /// its size in pixels and its scale factor.
+    /// Read pointer and key state, and the window's pixel size and scale.
     InputRead,
 }
 
@@ -133,28 +131,23 @@ impl fmt::Display for Capabilities {
 }
 
 /// The version of the Capability ABI: what a Kernel may ask of the Host
-/// and how values cross. Bumped when a Kernel built against the old one
-/// would no longer bind.
+/// and how values cross.
 pub const ABI_VERSION: u32 = 1;
 
-/// Types that cross the Kernel boundary, by structure: a scalar of one
-/// kind, a vector of two to four of them, a square matrix of a float
-/// kind, or a Kernel's own struct. The kinds are the Host's
-/// ([`Scalar`]): a `Float`, an `Int`, a `Bool`, a `Double` or a `Long`.
-/// Every type a name spells has a constant of that name (`Type::Vec3`,
-/// `Type::DMat4`), which matches as a pattern too.
+/// Types that cross the Kernel boundary, by structure: a [`Scalar`], a
+/// vector of two to four, a square float-kind matrix, or a Kernel's own
+/// struct. Each named type has a same-named constant (`Type::Vec3`),
+/// usable as a pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     /// One scalar.
     Scalar(Scalar),
-    /// Two to four components of one kind; see [`Type::vector`] for the
-    /// ones that exist.
+    /// Two to four components of one kind (see [`Type::vector`]).
     Vector(Scalar, u8),
-    /// A square matrix of a float kind, its order columns of as many
-    /// components, stored column by column.
+    /// A square float-kind matrix of the given order, column-major.
     Matrix(Scalar, u8),
     /// A Kernel-defined record, by index into the module's struct table.
-    /// Structs are internal to a Kernel: they never cross the ABI as
+    /// Structs stay inside a Kernel: they never cross the ABI as
     /// parameters or ports.
     Struct(u32),
 }
@@ -204,8 +197,7 @@ impl Type {
     /// Four columns of four doubles.
     pub const DMat4: Type = Type::Matrix(Scalar::Double, 4);
 
-    /// Every type a name spells, with its name: what a source writes and
-    /// a diagnostic suggests.
+    /// Every named type with its spelling.
     pub const NAMED: [(Self, &'static str); 21] = [
         (Self::Float, "Float"),
         (Self::Int, "Int"),
@@ -240,9 +232,7 @@ impl Type {
             .map_or("struct", |(_, name)| name)
     }
 
-    /// What a value of this type is made of, and how many: the scalar
-    /// type of a vector's components or a matrix's entries, or a scalar
-    /// itself once. `None` for a struct.
+    /// The scalar type and count a value is made of; `None` for a struct.
     pub fn shape(self) -> Option<(Type, u8)> {
         Some(match self {
             Self::Scalar(kind) => (Self::Scalar(kind), 1),
@@ -252,8 +242,7 @@ impl Type {
         })
     }
 
-    /// The scalar type a value of this type is made of: itself for a
-    /// scalar, the components' for a vector or a matrix.
+    /// The scalar type a value of this type is made of.
     pub fn scalar(self) -> Option<Type> {
         self.kind().map(Self::Scalar)
     }
@@ -271,8 +260,7 @@ impl Type {
         matches!(self.kind(), Some(Scalar::Double | Scalar::Long))
     }
 
-    /// Whether this is a float of either width, or a vector or matrix of
-    /// them.
+    /// Whether this is made of floats of either width.
     pub fn is_float_kind(self) -> bool {
         matches!(self.kind(), Some(Scalar::Float | Scalar::Double))
     }
@@ -282,16 +270,14 @@ impl Type {
         matches!(self.kind(), Some(Scalar::Int | Scalar::Long))
     }
 
-    /// Words a value of this type takes: two per 64-bit scalar. `None`
-    /// for a struct, whose words its table knows.
+    /// Words a value takes, two per 64-bit scalar; `None` for a struct.
     pub fn words(self) -> Option<usize> {
         let (_, n) = self.shape()?;
         Some(usize::from(n) * self.kind()?.words())
     }
 
-    /// The type of this shape made of `scalar` instead: `Vec3` of
-    /// `Double` is `DVec3`, `Double` of `Int` is `Int`. `None` when there
-    /// is no such type (`Vec4` of `Int`).
+    /// This shape made of `scalar` (`Vec3` of `Double` is `DVec3`), if
+    /// such a type exists.
     pub fn with_scalar(self, scalar: Type) -> Option<Type> {
         let Self::Scalar(kind) = scalar else {
             return None;
@@ -304,10 +290,9 @@ impl Type {
         }
     }
 
-    /// The vector of `n` components of `scalar`, or the scalar itself
-    /// when `n` is one; `None` for one that does not exist. Floats and
-    /// doubles come in twos to fours, integers and longs in twos and
-    /// threes, and booleans alone.
+    /// The vector of `n` components of `scalar` (the scalar when `n` is
+    /// one). Floats and doubles come in 2 to 4, integers and longs in 2
+    /// or 3, booleans alone.
     pub fn vector(scalar: Type, n: u8) -> Option<Type> {
         let Self::Scalar(kind) = scalar else {
             return None;
@@ -327,8 +312,7 @@ impl Type {
             .then_some(Self::Matrix(kind, n))
     }
 
-    /// The order of a square matrix type: its columns, each a vector of
-    /// as many floats or doubles.
+    /// The order of a square matrix type.
     pub fn order(self) -> Option<u8> {
         match self {
             Self::Matrix(_, n) => Some(n),
@@ -376,8 +360,7 @@ impl Type {
         }
     }
 
-    /// The float vector with as many components as this integer vector,
-    /// and the other way round: what `float` and `int` convert between.
+    /// The same-width vector of the other 32-bit kind (float and int).
     pub fn other_kind(self) -> Option<Type> {
         match self {
             Self::Vector(Scalar::Float, n) => Self::vector(Self::Int, n),
@@ -386,8 +369,7 @@ impl Type {
         }
     }
 
-    /// Whether values of this type are plain data that can cross the ABI
-    /// (not Kernel-internal structs).
+    /// Whether values of this type can cross the ABI (every non-struct).
     pub fn is_value(self) -> bool {
         !matches!(self, Self::Struct(_))
     }
@@ -426,9 +408,8 @@ impl FromStr for Type {
     }
 }
 
-/// A value crossing the Kernel boundary: a parameter, a constant. Any
-/// value a Kernel can hold, a struct's fields and an array's elements as
-/// a [`Value::Record`] in order.
+/// A value crossing the Kernel boundary: a parameter, a constant; structs
+/// and arrays as a [`Value::Record`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// A float.
@@ -473,14 +454,12 @@ pub enum Value {
     DMat3([f64; 9]),
     /// A 4x4 matrix of doubles, column by column.
     DMat4([f64; 16]),
-    /// A struct's fields, or an array's elements, in order. Its type is
-    /// the struct or array a Kernel declares; what it must match is the
-    /// layout, never a name.
+    /// A struct's fields or an array's elements in order, matched by
+    /// layout, never by name.
     Record(Vec<Value>),
 }
 
-/// One scalar of a value, whatever its kind: what a value is taken
-/// apart into to be laid out, converted, or rebuilt.
+/// One scalar of a value, of any kind.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Number {
     /// An `f32`.
@@ -518,18 +497,14 @@ impl Number {
         }
     }
 
-    /// This scalar as one of `kind`, when it converts: an integer to a
-    /// float of either width or to a wider integer, a float to the other
-    /// width, a long to an integer that holds it. A written number has no
-    /// width of its own; the place it is given to decides. This is how a
-    /// value given is taken, never how a Kernel computes: `double(x)` in
-    /// a Kernel is the float's own value.
+    /// This given value as one of `kind`, when it converts: an integer to
+    /// either float or a wider integer, a float to the other width, a
+    /// long to an `Int` that holds it. Kernel arithmetic is separate.
     pub fn as_kind(self, kind: Scalar) -> Option<Number> {
         Some(match (self, kind) {
             (Self::Float(v), Scalar::Float) => Self::Float(v),
-            // A float given where a double is wanted is the decimal it
-            // reads as: `0.001` written where no width was said is the
-            // double nearest a thousandth, not the float's nearest.
+            // A float becomes the double of its decimal spelling: `0.001`
+            // is the double nearest a thousandth.
             (Self::Float(v), Scalar::Double) => {
                 Self::Double(v.to_string().parse().unwrap_or(f64::from(v)))
             }
@@ -555,8 +530,7 @@ fn split(bits: u64, out: &mut Vec<u32>) {
 }
 
 impl Value {
-    /// The type of a value that is not a record; a record's type is a
-    /// struct of the Kernel that takes it.
+    /// The type of a non-record value.
     pub fn ty(&self) -> Option<Type> {
         Some(match self {
             Self::Float(_) => Type::Float,
@@ -649,11 +623,9 @@ impl Value {
         out
     }
 
-    /// This value in `template`'s shape, when its scalars are the
-    /// template's in order, each converting to the template's kind
-    /// ([`Number::as_kind`]). What a value must match is a layout, never
-    /// a spelling: `[[1, 0], [0, 1]]` is a `Mat2`, and `[vec3(0.0, 1.0,
-    /// 0.0), 2]` a struct of a `Vec3` and a `Float`.
+    /// This value in `template`'s shape, when its scalars convert in
+    /// order to the template's ([`Number::as_kind`]). Layout decides:
+    /// `[[1, 0], [0, 1]]` is a `Mat2`.
     pub fn shaped_like(&self, template: &Value) -> Option<Value> {
         let words = widened(self, &template.scalars())?;
         let mut words = words.into_iter();
@@ -710,9 +682,8 @@ impl Value {
     }
 }
 
-/// `value`'s words as a layout of `wanted` scalars: as many scalars, in
-/// the same order, each converting to the kind wanted
-/// ([`Number::as_kind`]); `None` when they are another layout.
+/// `value`'s words laid out as `wanted`, each scalar converted in order
+/// ([`Number::as_kind`]); `None` for another layout.
 pub fn widened(value: &Value, wanted: &[Scalar]) -> Option<Vec<u32>> {
     let mut kinds = Vec::with_capacity(wanted.len());
     let mut k = 0;
@@ -732,9 +703,8 @@ pub fn widened(value: &Value, wanted: &[Scalar]) -> Option<Vec<u32>> {
 }
 
 impl fmt::Display for Value {
-    /// The literal that reads back as this value, in a scene or a replay.
-    /// A double outside a constructor that says so carries a `d`, and a
-    /// long an `l`.
+    /// The literal that reads back as this value; a bare double carries
+    /// `d`, a long `l`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let list = |f: &mut fmt::Formatter<'_>, name: &str, parts: Vec<String>| {
             write!(f, "{name}({})", parts.join(", "))
@@ -783,7 +753,7 @@ impl fmt::Display for Value {
 }
 
 /// What a port carries: a Field of `element`s in one [`Shape`]. An image
-/// is the grid of `Vec4`; it has no representation of its own.
+/// is the grid of `Vec4`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PortType {
     /// The element type as the Kernel sees it (`Type::Struct` indexes the
@@ -845,10 +815,10 @@ impl ShapeIndex for Shape {
     }
 }
 
-/// Pointer and key state observed for one evaluation. Key codes follow the
-/// common browser key codes: letters and digits by their ASCII uppercase
-/// value, space 32, enter 13, escape 27, arrows 37 to 40; 256 codes fit.
-/// Pointer buttons are numbered 0 left, 1 right, 2 middle.
+/// Pointer and key state for one evaluation. Key codes are browser key
+/// codes (ASCII uppercase letters and digits, space 32, enter 13, escape
+/// 27, arrows 37 to 40), 0 to 255. Pointer buttons: 0 left, 1 right,
+/// 2 middle.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InputState {
     /// Pointer position in output pixels.
@@ -859,20 +829,19 @@ pub struct InputState {
     pub pointer_right: bool,
     /// Whether the middle pointer button is held.
     pub pointer_middle: bool,
-    /// What the wheel scrolled since the last evaluation, in lines: `x`
-    /// sideways, `y` positive away from the person.
+    /// Wheel scroll since the last evaluation, in lines: `x` sideways,
+    /// `y` positive away from the person.
     pub wheel: [f32; 2],
-    /// A pad's analog axes, each in `-1..1`: the left stick, the right
-    /// stick, and the two triggers as one pair (`x` left, `y` right,
-    /// both in `0..1`). Zero without a pad.
+    /// A pad's axes in `-1..1`: left stick, right stick, and the triggers
+    /// as one pair (`x` left, `y` right, in `0..1`). Zero without a pad.
     pub sticks: [[f32; 2]; 3],
     /// A pad's buttons as bits, the lowest being [`pad::SOUTH`].
     pad_buttons: u32,
     keys: [u32; 8],
 }
 
-/// How many buttons `InputState::button` knows: three of a pointer's,
-/// then a pad's from 8.
+/// Button numbers `InputState::button` knows: a pointer's 0 to 2, a pad's
+/// from 8.
 pub const BUTTONS: i32 = 24;
 
 /// A pad's buttons, by the number `button()` takes.
@@ -900,9 +869,8 @@ pub mod pad {
 }
 
 impl InputState {
-    /// Whether the button numbered `code` is held: 0 left, 1 right, 2
-    /// middle of a pointer, then a pad's from 8 (see [`pad`]); any other
-    /// number is never held.
+    /// Whether the button numbered `code` is held: a pointer's 0 to 2, a
+    /// pad's from 8 (see [`pad`]); other numbers are never held.
     pub fn button(&self, code: i32) -> bool {
         if !(0..BUTTONS).contains(&code) {
             return false;
@@ -937,9 +905,7 @@ impl InputState {
             | (self.pad_buttons & 0xFFFF) << 8
     }
 
-    /// One of the pad's axis pairs, by the number `stick()` takes: 0 the
-    /// left stick, 1 the right, 2 the triggers. Any other number is a
-    /// pair of zeros.
+    /// A pad axis pair: 0 left stick, 1 right, 2 triggers; zeros otherwise.
     pub fn stick(&self, which: i32) -> [f32; 2] {
         match which {
             0..=2 => self.sticks[which as usize],
@@ -999,26 +965,20 @@ impl InputState {
     }
 }
 
-/// `C` in `Y = K(X, P, C)`: what the world looks like for one evaluation.
-/// Context is not a resource; Kernels read it through builtins behind
-/// `time.read` and `input.read`.
+/// `C` in `Y = K(X, P, C)`: the world for one evaluation, read by Kernels
+/// through builtins behind `time.read` and `input.read`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Context {
     /// Session time in seconds.
     pub time: f32,
-    /// The sound device's clock in samples per second, or zero when no
-    /// device is driving the evaluation. A device fact, like time.
+    /// The driving sound device's samples per second; zero without one.
     pub rate: f32,
     /// Pointer and key state.
     pub input: InputState,
-    /// The window's size in physical pixels, or zero by zero when no
-    /// window is open. A device fact, like the sound card's rate: a
-    /// node's `domain` may take it, so a picture fills the window at the
-    /// window's resolution.
+    /// The window's size in physical pixels; zero by zero without one.
+    /// A node's `domain` may take it.
     pub window: [f32; 2],
-    /// The window's scale factor: physical pixels per logical pixel, so a
-    /// Kernel can lay out a bar at a constant physical size. One without
-    /// a window.
+    /// Physical pixels per logical pixel; one without a window.
     pub scale: f32,
 }
 
@@ -1040,8 +1000,7 @@ impl Context {
         self.window[0] > 0.0 && self.window[1] > 0.0
     }
 
-    /// A hash of what `input.read` observes besides time: the input state,
-    /// the window's size, and its scale.
+    /// A hash of what `input.read` observes: input, window size, scale.
     pub fn input_fingerprint(&self) -> u64 {
         let mut hash = self.input.fingerprint();
         for word in [
@@ -1124,25 +1083,22 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// The loop iterations this run may take, all its elements together
-    /// ([`Host::work`]). A bound, not an access: it needs no capability.
+    /// The loop iterations this run may take over all its elements
+    /// ([`Host::work`]). A bound; it needs no capability.
     pub fn work(&self) -> u64 {
         self.host.work()
     }
 
-    /// The words the Host may still allocate under its budget: the room a
-    /// run has for what it holds beyond its Fields. A bound, not an
-    /// access: it needs no capability.
+    /// The words the Host may still allocate under its budget. A bound;
+    /// it needs no capability.
     pub fn room(&self) -> usize {
         self.host
             .budget_words()
             .saturating_sub(self.host.used_words())
     }
 
-    /// What a handle a caller bound to a port is: its shape and element
-    /// layout, for checking the binding against the port before a run
-    /// reads anything. A check, not an access: it needs no capability
-    /// and reads no word.
+    /// A bound handle's shape and element layout, to check a binding
+    /// before a run. A check; it needs no capability and reads no word.
     pub fn bound(&self, field: Handle) -> Result<(Shape, Schema), AbiError> {
         Ok((
             self.host.domain(field)?.shape(),
@@ -1162,9 +1118,8 @@ impl<'a> Scope<'a> {
         Ok(self.host.schema(field)?.clone())
     }
 
-    /// One element of an input as the Kernel's words, widened if it is
-    /// kept narrow, by linear index. Requires `field.read`. Fails while
-    /// the Field is resident on a device.
+    /// One element of an input by linear index, as widened words.
+    /// Requires `field.read`. Fails while the Field is device-resident.
     pub fn element(
         &self,
         field: Handle,
@@ -1174,8 +1129,7 @@ impl<'a> Scope<'a> {
         Ok(self.host.element(field, index)?)
     }
 
-    /// Every element of an input as the Kernel's words, widened where it
-    /// is kept narrow. Requires `field.read`.
+    /// Every element of an input as widened words. Requires `field.read`.
     pub fn values(&self, field: Handle) -> Result<std::borrow::Cow<'_, [u32]>, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.data(field)?.values())
@@ -1199,7 +1153,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Moves an input's words onto the device, replacing the Host copy.
-    /// Residency is a storage detail, so reading authority suffices.
+    /// Requires `field.read`.
     pub fn make_resident(
         &mut self,
         field: Handle,
@@ -1215,34 +1169,30 @@ impl<'a> Scope<'a> {
         Ok(self.host.create(schema, domain)?)
     }
 
-    /// Whether Fields of these schemas over these domains would fit
-    /// under the Host's budget now ([`Host::can_hold`]): asked by a
-    /// backend before it allocates their words on a device. Requires
-    /// `field.write`, as creating them does.
+    /// Whether these Fields would fit under the Host's budget now
+    /// ([`Host::can_hold`]), asked before device allocation. Requires
+    /// `field.write`.
     pub fn can_hold(&self, fields: &[(&Schema, Domain)]) -> Result<(), AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.can_hold(fields)?)
     }
 
-    /// A new Field whose words are whatever buffer it was given: for a
-    /// backend that writes every one of them before anything reads it.
-    /// Requires `field.write`.
+    /// A new Field with unspecified words, for a backend that writes every
+    /// word before any read. Requires `field.write`.
     pub fn create_for_fill(&mut self, schema: Schema, domain: Domain) -> Result<Handle, AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.create_for_fill(schema, domain)?)
     }
 
     /// The memory of a Field this scope created, as kept, to fill in
-    /// place: what a backend writes into when it would otherwise fill a
-    /// buffer of its own and copy it in. Requires `field.write`.
+    /// place. Requires `field.write`.
     pub fn storage_mut(&mut self, field: Handle) -> Result<&mut [u32], AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.storage_mut(field)?)
     }
 
-    /// Replaces every element of a Field this scope created with the
-    /// Kernel's words, narrowed where the Field keeps them narrow.
-    /// Requires `field.write`.
+    /// Replaces every element of a Field this scope created with wide
+    /// words, narrowed as the Field keeps them. Requires `field.write`.
     pub fn write_values(&mut self, field: Handle, values: &[u32]) -> Result<(), AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.write_values(field, values)?)

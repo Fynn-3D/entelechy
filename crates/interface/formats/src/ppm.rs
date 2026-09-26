@@ -104,8 +104,8 @@ pub fn decode(bytes: &[u8]) -> Result<Image, PpmError> {
     Image::from_pixels(width, height, pixels).map_err(PpmError::Host)
 }
 
-/// Decodes P6 bytes as a grid of pixels or P5 bytes as a `Grid<Float>` of
-/// samples in `0..=1`: a picture or a height map, mask, or glyph sheet.
+/// Decodes P6 bytes as a pixel grid or P5 bytes as a `Grid<Float>` of
+/// samples in `0..=1`.
 pub fn decode_field(bytes: &[u8]) -> Result<FieldData, PpmError> {
     let (magic, width, height, _, cursor) = header(bytes)?;
     let count = width as usize * height as usize;

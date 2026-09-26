@@ -1,10 +1,8 @@
-//! Waiting for the device. On a machine of its own the thread blocks
-//! until the device answers. In a page it cannot: the browser answers
-//! only when the page's script gets a turn, so there waiting is parking
-//! Orla ([`Wait::parks`]) until the answer wakes it: the host suspends
-//! Orla (JavaScript Promise Integration) and the answer's callback, or a
-//! future's waker, calls the host's wake. Nothing spins while it waits.
-//! Everything that waits here waits the same way either way.
+//! Waiting for the device. On a machine the thread blocks. In a page the
+//! browser answers only when the page's script has a turn, so waiting
+//! parks Orla ([`Wait::parks`]): the host suspends it (JavaScript Promise
+//! Integration) until the answer's callback, or a future's waker, calls
+//! the host's wake. Neither way spins.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -68,8 +66,8 @@ impl Wait {
         }
     }
 
-    /// Maps `slice` for reading and waits until it is: after whatever
-    /// the queue was given before.
+    /// Maps `slice` for reading and waits until it is, after everything the
+    /// queue was given before.
     pub fn map_read(
         self,
         device: &wgpu::Device,
@@ -82,11 +80,9 @@ impl Wait {
             let _ = sender.send(result);
             wake();
         });
-        // A browser may answer a mapping only when it next looks at the
-        // device: Firefox does on a submission, and otherwise a tenth of
-        // a second later, which Orla, parked for the answer and
-        // submitting nothing meanwhile, would wait out at every read. An
-        // empty submission has it look now.
+        // A browser may answer a mapping only when it next looks at the device
+        // (Firefox: on a submission, else a tenth of a second later); an empty
+        // submission makes it look now.
         if self.parks_with_host() {
             queue.submit(std::iter::empty());
         }

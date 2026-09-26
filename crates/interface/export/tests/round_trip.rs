@@ -84,9 +84,8 @@ fn a_tone_leaves_as_wav_and_decodes_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A rig goes out and comes back: the mesh, what every vertex hangs
-/// off and the joints bit for bit, and the clips to the rounding a
-/// quaternion takes when it is sampled again.
+/// A rig round-trips: mesh, weights and joints bit for bit, clips within
+/// a quaternion's resampling rounding.
 #[test]
 fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     let dir = scratch("rig");
@@ -112,7 +111,7 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
     );
     assert!(imported.notes.is_empty(), "{:?}", imported.notes);
 
-    // The rows that pass through untouched do so exactly.
+    // Rows passed through untouched are exact.
     for name in ["vertices", "triangles", "weights", "skeleton"] {
         assert_eq!(
             std::fs::read(path(name)).unwrap(),
@@ -120,8 +119,7 @@ fn a_rig_leaves_as_glb_and_comes_back_posing_the_same() {
             "{name} survived the round trip bit for bit"
         );
     }
-    // The clips are sampled again on the way back, so they come within
-    // a rounding of where they were.
+    // The clips are resampled, so they come within a rounding.
     for name in ["swing", "curl"] {
         let before =
             orla_formats::file::decode(&std::fs::read(path(&format!("{name}.clip"))).unwrap())

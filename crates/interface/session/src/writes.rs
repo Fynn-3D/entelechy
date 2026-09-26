@@ -1,9 +1,6 @@
-//! The files a scene writes: `output name <- source to "file";`. A
-//! Kernel never writes a file. It computes a Field, and once an
-//! evaluation that changed the output has committed, the session writes
-//! it, into a directory the person running the session allowed and
-//! nowhere else. An evaluation that fails writes nothing, and a file is
-//! replaced whole or not at all.
+//! A scene's file outputs (`output name <- source to "file";`). The
+//! session writes each after a committed evaluation that changed it,
+//! whole, into an allowed directory.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -20,21 +17,19 @@ use crate::store::Store;
 pub(crate) struct Writes {
     /// Allowed directories, resolved.
     allowed: Vec<PathBuf>,
-    /// Allowed files, resolved: each named by the person running the
-    /// session, as a command line's `--save` or `--out` names one, for
-    /// that command's own write alone ([`Writes::place`]); a scene's
-    /// `to` writes only where a directory is allowed.
+    /// Allowed single files, resolved (`--save`, `--out`), for the
+    /// caller's own writes ([`Writes::place`]); a scene's `to` needs an
+    /// allowed directory.
     files: Vec<PathBuf>,
     /// Per file: the Field last written, and a digest of its bytes.
     written: BTreeMap<PathBuf, (Handle, u64)>,
-    /// Refusals already said, so each is said once until it changes.
+    /// Refusals reported, each once until it changes.
     said: BTreeSet<(PathBuf, String)>,
     events: Vec<Event>,
 }
 
 impl Writes {
-    /// Allows writes into `dir` and anything under it. The directory
-    /// must exist: an allowance names a place, it does not make one.
+    /// Allows writes into the existing directory `dir` and under it.
     pub(crate) fn allow(&mut self, store: &dyn Store, dir: &Path) -> Result<(), String> {
         let resolved = store
             .canonical(dir)
@@ -56,8 +51,8 @@ impl Writes {
         Ok(())
     }
 
-    /// Writes every output of `graph` the evaluation behind `report`
-    /// changed. Called once the evaluation has committed.
+    /// Writes every output the committed evaluation behind `report`
+    /// changed.
     pub(crate) fn after(
         &mut self,
         store: &dyn Store,
@@ -74,7 +69,7 @@ impl Writes {
             else {
                 continue;
             };
-            // The same Field as last time: nothing it holds has changed.
+            // The same Field as last written is unchanged.
             if self
                 .written
                 .get(&write.path)
@@ -93,8 +88,8 @@ impl Writes {
                 }
             };
             let digest = digest(&bytes);
-            // What is there already, this session's own last write or,
-            // before it has written, the file as it was found.
+            // The digest of what is there: this session's last write, or
+            // the file as found.
             let there = match self.written.get(&write.path) {
                 Some((_, last)) => Some(*last),
                 None => store.read(&target).ok().map(|found| self::digest(&found)),
@@ -126,10 +121,9 @@ impl Writes {
         std::mem::take(&mut self.events)
     }
 
-    /// Where a write the session's caller makes to `path` (a `save`, an
-    /// export) lands, once it is known to be an allowed file or inside an
-    /// allowed directory: `..` and links are followed before the test,
-    /// so no spelling reaches past one.
+    /// Where a caller's write to `path` (`save`, export) lands, if it is
+    /// an allowed file or inside an allowed directory. `..` and links are
+    /// resolved before the test.
     pub(crate) fn place(&self, store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
         self.place_in(store, path, true)
     }
@@ -167,8 +161,8 @@ impl Writes {
     }
 }
 
-/// The Field's bytes as the file takes them: its bytes, one to an
-/// element of a `Rows<Int>`, or the format the extension names.
+/// The Field encoded for its file: raw bytes (one per `Rows<Int>`
+/// element) when `bytes`, else the format the extension names.
 fn encode(
     runtime: &mut Runtime,
     handle: Handle,
@@ -188,8 +182,8 @@ fn encode(
     })
 }
 
-/// `path` made whole with `.` and `..` taken away, and the longest
-/// part of it that exists resolved through its links.
+/// `path` made whole and folded, its longest existing prefix resolved
+/// through links.
 pub(crate) fn resolve(store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
     let plain = store.whole(path);
     let mut existing = plain.as_path();

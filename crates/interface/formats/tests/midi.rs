@@ -1,6 +1,5 @@
-//! A MIDI file read as notes, and the same notes written back: the
-//! file here is built byte by byte from the format's own definition, so
-//! what is tested is the reader, not the writer.
+//! A MIDI file read as notes and written back. The file is built byte by
+//! byte from the format's definition, so the reader is what is tested.
 
 use orla_formats::midi::{self as read, Note, encode};
 
@@ -45,8 +44,8 @@ fn file(division: u16, tracks: &[Vec<u8>]) -> Vec<u8> {
 fn a_file_reads_as_notes_in_seconds() {
     let division = 480u16;
     let tempo = track(&[(0, vec![0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20])]); // 500000: 120 a minute
-    // A quarter note, then a rest, then two notes at once; the second
-    // uses running status, which a file may leave the status byte out of.
+    // A quarter note, a rest, then two notes at once, the second in
+    // running status.
     let notes = track(&[
         (0, vec![0x90, 60, 100]),
         (480, vec![0x80, 60, 0]),
@@ -64,7 +63,7 @@ fn a_file_reads_as_notes_in_seconds() {
     assert!((first.duration - 0.5).abs() < 1e-6, "{first:?}");
     assert!((first.velocity - 100.0 / 127.0).abs() < 1e-6, "{first:?}");
     assert_eq!(first.channel, 0);
-    // The two that sound together start a beat after the first ended.
+    // The two together start a beat after the first ends.
     for note in &song.notes[1..] {
         assert!((note.start - 1.0).abs() < 1e-6, "{note:?}");
         assert!((note.duration - 1.0).abs() < 1e-6, "{note:?}");
@@ -132,8 +131,7 @@ fn what_is_written_reads_back_the_same() {
     let bytes = encode(&notes, 120.0);
     let song = read::read(&bytes).unwrap();
     assert_eq!(song.notes.len(), notes.len());
-    // A score reads back in its own order: by when a note starts, then
-    // by its key.
+    // A score reads back ordered by start, then key.
     let mut expected = notes.clone();
     expected.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
     for (read, written) in song.notes.iter().zip(&expected) {
@@ -166,13 +164,13 @@ fn what_is_not_a_midi_file_says_so() {
 
 #[test]
 fn a_score_read_live_is_the_score_imported() {
-    // `examples/score` holds the file and what `orla-import` wrote of it:
-    // a scene naming the `.mid` itself reads the same rows.
+    // `examples/score` holds the file and its imported rows: a scene
+    // naming the `.mid` reads the same rows.
     let score = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/score");
     let (live, detail) = orla_formats::read(&score.join("song.mid"), None).unwrap();
     let (imported, _) = orla_formats::read(&score.join("assets/song.notes.field"), None).unwrap();
     assert_eq!(live, imported, "{detail}");
-    // And written out again, it reads back as the same rows.
+    // Written out again, it reads back as the same rows.
     let written = orla_formats::encode(&live, "mid", None).unwrap();
     let again = orla_formats::midi::field(&read::read(&written).unwrap()).unwrap();
     assert_eq!(again.domain(), live.domain());

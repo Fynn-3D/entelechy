@@ -1,22 +1,11 @@
-//! How Orla answers a name it does not know: with the known name it was
-//! most likely meant to be. Every layer that reports an unknown name —
-//! the compiler, the scene lowering, the Graph Runtime, the protocol's
-//! `near` field — keeps this one rule, so a near miss reads the same
-//! wherever it is made.
+//! Near-miss suggestions for unknown names: the one rule every layer that
+//! reports an unknown name uses.
 
-/// The name among `known` that `wanted` was most likely meant to be,
-/// when one is close enough to say so.
+/// The name among `known` that `wanted` was most likely meant to be.
 ///
-/// A diagnostic that says a name is not known and stops there costs
-/// whoever reads it a search; one that names the near miss is the fix.
-/// Close enough is an edit distance of at most a third of the name's
-/// length, and at least one, and a name shorter than three characters
-/// is never near anything, so `sorce` finds `source` and `x` does not
-/// find `y`. Case is ignored in the comparison, since a name that
-/// differs only in case is the same mistake.
+/// Near means an edit distance of at most a third of the length (at least
+/// one), ignoring case; a name under three characters is near nothing.
 pub fn nearest<'a>(wanted: &str, known: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
-    // Below three characters one edit is most of the name, and every
-    // short name is near every other one.
     let length = wanted.chars().count();
     if length < 3 {
         return None;
@@ -32,14 +21,12 @@ pub fn nearest<'a>(wanted: &str, known: impl IntoIterator<Item = &'a str>) -> Op
         .map(|(_, name)| name)
 }
 
-/// `; did you mean `x`?` where there is one, and nothing where there is
-/// not, so a message can end with it either way.
+/// `; did you mean `x`?` for the nearest name, or empty.
 pub fn did_you_mean<'a>(wanted: &str, known: impl IntoIterator<Item = &'a str>) -> String {
     suggestion(nearest(wanted, known))
 }
 
-/// `; did you mean `name`?` for a near miss already found, and nothing
-/// without one: how every message ends that names one.
+/// `; did you mean `name`?` for a near miss already found, or empty.
 pub fn suggestion(near: Option<&str>) -> String {
     match near {
         Some(name) => format!("; did you mean `{name}`?"),
@@ -48,11 +35,8 @@ pub fn suggestion(near: Option<&str>) -> String {
 }
 
 /// How many single-character insertions, deletions, replacements and
-/// swaps of two neighbours turn one string into the other.
-///
-/// The swap counts as one and not two, because two letters the wrong
-/// way round is the commonest typing there is: `resutl` for `result`,
-/// `Flaot` for `Float`.
+/// swaps of two neighbours turn one string into the other; a swap
+/// (`resutl` for `result`) counts as one.
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();

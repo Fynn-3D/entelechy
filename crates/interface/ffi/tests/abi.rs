@@ -58,7 +58,7 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
     let report = unsafe { str_of(orla_ffi::orla_report(session)) };
     assert!(report.contains("\"outputs\""), "{report}");
     // The picture as the replay pins it: 192 by 88, the title's O at (8, 6)
-    // twice the size, read straight from the Host's words.
+    // at double size, read from the Host's words.
     let mut field = OrlaField {
         words: std::ptr::null(),
         width: 0,
@@ -95,8 +95,8 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
         "{:?}",
         pixel(&field, 12, 12)
     );
-    // The protocol through the same door: the background's source, a
-    // recoloured copy published over it, and the picture changes.
+    // The protocol through the same entry: a recoloured copy of the
+    // background published over it changes the picture.
     let response = unsafe {
         str_of(orla_ffi::orla_request(
             session,
@@ -132,7 +132,8 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
         pixel(&field, 12, 12)
     );
     assert!(near(pixel(&field, 10, 6), [1.0, 0.85, 0.45]));
-    // A node's rows: the specimen's character codes, pinned and read as ints.
+    // A node's rows: the specimen's character codes, pinned and read as
+    // ints.
     assert_eq!(
         unsafe { orla_ffi::orla_node(session, c("codes").as_ptr(), std::ptr::null(), &mut field) },
         -1
@@ -152,7 +153,7 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
     assert_eq!(words[0], 32);
     assert_eq!(words[94], 126);
     assert_eq!(unsafe { str_of(orla_ffi::orla_error(session)) }, "");
-    // The wrong output is an error, not a crash; so is a bad request line.
+    // A wrong output and a bad request line are errors.
     assert_eq!(
         unsafe { orla_ffi::orla_output(session, c("nope").as_ptr(), &mut field) },
         -1
@@ -256,7 +257,7 @@ fn the_input_reaches_the_kernels() {
     unsafe { orla_ffi::orla_close(session) };
 }
 
-/// A JSON string literal of `text`, by hand.
+/// A JSON string literal of `text`.
 fn serde_json_string(text: &str) -> String {
     let mut out = String::from("\"");
     for ch in text.chars() {
@@ -274,11 +275,9 @@ fn serde_json_string(text: &str) -> String {
     out
 }
 
-/// A scene opened on files handed in reads no disk: its document and
-/// the file a `use` reaches come from what was put, by the paths they
-/// were put at. A file put again after
-/// the session opened is read by the next evaluate, as a file changed on
-/// disk is.
+/// A scene opened on files handed in reads no disk: its document and the
+/// files a `use` reaches come from what was put, at their paths. A file
+/// put again after opening is read by the next evaluate.
 #[test]
 fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
     let put = |files: *mut orla_ffi::OrlaFiles, path: &str, bytes: &[u8]| {
@@ -298,7 +297,7 @@ fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
         )
     };
     let files = orla_ffi::orla_files();
-    // Paths no disk has: nothing here may be read from one.
+    // Paths no disk has.
     put(files, "nowhere/scene.osn", back("first").as_bytes());
     put(
         files,
@@ -337,7 +336,7 @@ fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
     };
     assert!(near(picture(session), [0.2, 0.4, 0.6]));
     // The caller's hold goes; the session keeps its own, and a Kernel's
-    // file put again before that is read by the next evaluate.
+    // file put again is read by the next evaluate.
     put(
         files,
         "nowhere/kernels/fill.orla",
@@ -346,14 +345,14 @@ fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
     unsafe { orla_ffi::orla_files_free(files) };
     assert!(near(picture(session), [0.7, 0.1, 0.3]));
     unsafe { orla_ffi::orla_close(session) };
-    // Room in Orla's memory, as a page asks for it, and given back.
+    // Memory allocated in Orla, as a page asks for it, and freed.
     let room = orla_ffi::orla_alloc(64);
     assert!(!room.is_null());
     unsafe { orla_ffi::orla_free(room, 64) };
 }
 
-/// A picture is presented on a page's canvas; a program reads it in
-/// place instead, and asking to present says so.
+/// A picture is presented on a page's canvas; a program reads it in place,
+/// and asking to present says so.
 #[test]
 fn presenting_is_for_a_page() {
     let scene = example("text/scene.osn");
@@ -372,10 +371,9 @@ fn presenting_is_for_a_page() {
     unsafe { orla_ffi::orla_close(session) };
 }
 
-/// The play through the C ABI, as a host with no GPU of its own plays a
-/// scene: a replay handed in as files plays to its end and says so, and
-/// each frame draws on the CPU with the line of frame data over it once
-/// F10 asks.
+/// Play through the C ABI on a host without a GPU: a replay handed in as
+/// files plays to its end and says so, and each frame draws on the CPU,
+/// with the frame-data line once F10 asks.
 #[test]
 fn a_host_plays_a_replay_through_the_play() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/ant");
@@ -410,7 +408,7 @@ fn a_host_plays_a_replay_through_the_play() {
         frames += 1;
     }
     assert!(said.contains("replay: ok (2 frames, 14 checks)"), "{said}");
-    // The person's now: F10, and a frame drawn on the CPU with its line.
+    // F10, and a CPU frame drawn with its line.
     assert_eq!(
         unsafe { orla_ffi::orla_play_key(session, c("F10").as_ptr(), 1) },
         0
@@ -441,8 +439,7 @@ fn a_host_plays_a_replay_through_the_play() {
     unsafe { orla_ffi::orla_close(session) };
 }
 
-/// What a request through `orla_request` changes is recorded as the
-/// protocol's, as a served session records its channel's.
+/// A change through `orla_request` is recorded as the protocol's.
 #[test]
 fn a_request_through_the_abi_is_recorded_as_the_protocols() {
     let scene = example("text/scene.osn");
@@ -462,9 +459,8 @@ fn a_request_through_the_abi_is_recorded_as_the_protocols() {
     unsafe { orla_ffi::orla_close(session) };
 }
 
-/// Requests through `orla_request` are an agent's, as `serve`'s are: what
-/// the scene they compose reads is held to its documents' directories,
-/// and to the ones the program embedding Orla allows with `orla_allow`.
+/// `orla_request` requests are an agent's: a composed scene reads only its
+/// documents' directories and those allowed by `orla_allow`.
 #[test]
 fn a_request_reads_beside_the_scene_or_where_the_program_allowed() {
     let base = std::env::temp_dir().join(format!("orla-ffi-reads-{}", std::process::id()));
@@ -519,10 +515,8 @@ fn a_request_reads_beside_the_scene_or_where_the_program_allowed() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// A session the C ABI opens prepares a replacement off the caller's
-/// thread, as a window's does: a program's frames go on while an edited
-/// Kernel is prepared, and the next sync publishes it. (It used to
-/// prepare every replacement in the caller's call.)
+/// A C ABI session prepares replacements off the caller's thread: frames
+/// go on while an edited Kernel prepares, and the next sync publishes it.
 #[test]
 fn a_replacement_is_prepared_off_the_callers_thread() {
     let base = std::env::temp_dir().join(format!("orla-ffi-background-{}", std::process::id()));

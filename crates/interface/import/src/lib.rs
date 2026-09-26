@@ -1,6 +1,5 @@
-//! The importer's readers, as a library so the exporter can read back
-//! what it wrote: a model as glTF or GLB, a sound in any format
-//! symphonia decodes, a score as a standard MIDI file.
+//! The importer's readers (glTF/GLB, symphonia audio, standard MIDI),
+//! a library so the exporter's tests can read back what it wrote.
 
 pub mod audio;
 pub mod gltf;

@@ -15,9 +15,8 @@ pub(super) struct InputView<'s> {
     pub(crate) domain: Domain,
     /// The Kernel's words per element.
     pub(super) stride: usize,
-    /// The layout, when it keeps scalars narrower than a word: then a
-    /// read widens each scalar through it and a write narrows it. `None`
-    /// is memory that already holds the Kernel's words.
+    /// The layout when it keeps scalars narrower than a word: reads widen
+    /// through it and writes narrow. `None` holds the Kernel's words.
     pub(super) narrow: Option<orla_abi::Schema>,
 }
 
@@ -60,7 +59,7 @@ impl InputView<'_> {
 /// A module compiled for one invocation, shared by every thread that
 /// runs it.
 pub(crate) struct Program<'s> {
-    /// The word code, which belongs to the module and is made once.
+    /// The module's word code.
     pub(super) code: std::sync::Arc<Compiled>,
     pub(super) inputs: Vec<InputView<'s>>,
     /// Which inputs are memories, written by the steps of a scan.
@@ -71,25 +70,22 @@ pub(crate) struct Program<'s> {
     pub(crate) domain: Domain,
     pub(super) context: orla_abi::Context,
     /// The loop iterations an element may run, when the module's worst
-    /// case can pass it; `None` runs uncounted.
+    /// case can exceed it; `None` runs uncounted.
     pub(super) budget: Option<u32>,
-    /// The run's total, which every thread's elements hand their blocks
-    /// to, when the module counts.
+    /// The run's total that every thread hands its blocks to, when the
+    /// module counts.
     pub(super) run: Option<orla_rules::Run>,
 }
 
 impl Program<'_> {
-    /// The run's answer once every element has handed in what it ran:
-    /// the failure when its elements together passed the Host's bound.
+    /// The run's verdict once every element has handed in its work: the
+    /// failure when the elements together exceeded the Host's bound.
     pub(crate) fn outcome(&self) -> Result<(), ExecutionError> {
         self.run.as_ref().map_or(Ok(()), orla_rules::Run::outcome)
     }
 }
 
-/// A module compiled to word code: what does not change from one
-/// execution to the next. Compiling a Kernel of a hundred statements
-/// takes about eighty microseconds, which a frame should not pay for
-/// every node it runs.
+/// A module compiled to word code: the part constant across executions.
 pub struct Compiled {
     pub(super) functions: Vec<Code>,
     pub(super) entry: Code,
@@ -104,8 +100,7 @@ pub(super) struct Shared {
     pub(super) structs: Vec<StructLayout>,
     pub(super) functions: Vec<Code>,
     pub(super) param_at: Vec<usize>,
-    /// The module's own struct table, which a path through an element
-    /// is read against.
+    /// The module's struct table, which element paths resolve against.
     pub(super) records: Vec<orla_ir::StructDef>,
     /// What one element of each input is.
     pub(super) elements: Vec<Type>,
@@ -121,11 +116,7 @@ impl Shared {
 }
 
 impl<'s> Program<'s> {
-    /// Compiles `module` for `invocation`, borrowing its inputs from
-    /// `scope`. Every Host access of the run happens here, through the
-    /// scope's gate.
-    /// Compiles `module` to word code, which is the module's own and
-    /// keeps from one execution to the next.
+    /// Compiles `module` to word code, kept across executions.
     pub fn compile(module: &Validated) -> Compiled {
         let mut param_at = Vec::with_capacity(module.manifest.params.len());
         let mut at = 0;
@@ -204,8 +195,8 @@ impl<'s> Program<'s> {
     }
 
     /// Binds `invocation` to code already compiled, borrowing its
-    /// inputs from `scope`. Every Host access of the run happens here,
-    /// through the scope's gate.
+    /// inputs from `scope`: the run's only Host access, through the
+    /// scope's gate.
     pub(crate) fn with(
         code: std::sync::Arc<Compiled>,
         module: &Validated,
@@ -248,9 +239,8 @@ impl<'s> Program<'s> {
     }
 }
 
-/// The words of a constant, and how many are meaningful: a constant of
-/// the IR is a scalar or a vector, at most four words (a matrix or a
-/// struct is built by `Construct`).
+/// The words of a constant and how many are meaningful: an IR constant
+/// is a scalar or a vector, at most four words.
 pub(super) fn value_words(value: &Value) -> ([u32; 4], usize) {
     let words = value.words();
     let mut out = [0; 4];
@@ -308,11 +298,11 @@ pub(super) struct FunctionCompiler<'c> {
     pub(super) carry: Option<Loc>,
     /// How many instructions read each value.
     pub(super) uses: Vec<u32>,
-    /// The words of every value known when the function is compiled:
-    /// literals and the structs, arrays and matrices built from them.
+    /// The words of every compile-time value: literals and the structs,
+    /// arrays and matrices built from them.
     pub(super) constants: std::collections::HashMap<u32, Vec<u32>>,
-    /// The float operation the instruction being compiled emitted, which
-    /// the next one may fold into itself.
+    /// The float operation the current instruction emitted, which the
+    /// next may fold in.
     pub(super) pending_float: Option<(u32, FloatParts)>,
     /// The open blocks, innermost last: where each value's instruction
     /// sits in the block's code, and which of them a fold made dead.
@@ -324,10 +314,9 @@ pub(super) struct FunctionCompiler<'c> {
 pub(super) struct BlockState {
     pub(super) positions: std::collections::HashMap<u32, usize>,
     pub(super) dead: Vec<usize>,
-    /// The float operation this block emitted last, if the last
-    /// instruction was one: the value it gives, its position, and its
-    /// parts. Only the one just emitted folds into the next, since
-    /// anything in between may write the slots it reads.
+    /// The block's last instruction when it is a float operation: its
+    /// value, position and parts. Only this one folds into the next, as
+    /// any instruction between may write the slots it reads.
     pub(super) last_float: Option<(u32, usize, FloatParts)>,
 }
 
@@ -607,9 +596,8 @@ impl FunctionCompiler<'_> {
                                 _ => |a, b| a % b,
                             };
                             let (sa, sb) = (self.stride(a, dst.n), self.stride(b, dst.n));
-                            // An operand this block computed and nothing
-                            // else reads folds in: two operations, one
-                            // instruction, and no word through the frame.
+                            // An operand this block computed and only this
+                            // reads folds in as one instruction.
                             let folded =
                                 [(a, false), (b, true)]
                                     .into_iter()
@@ -720,9 +708,8 @@ impl FunctionCompiler<'_> {
                         .iter()
                         .all(|part| self.constants.contains_key(&part.0)) =>
             {
-                // A table, known when the function compiles: its words in
-                // one instruction, and the literals it was built from
-                // dropped where nothing else reads them.
+                // A compile-time table: its words in one instruction; its
+                // literals are dropped where nothing else reads them.
                 let dst = define(self);
                 let words: Vec<u32> = parts
                     .iter()
@@ -770,8 +757,7 @@ impl FunctionCompiler<'_> {
                     Type::Struct(index) => {
                         self.shared.structs[index as usize].field_offsets[*component as usize]
                     }
-                    // A component or a column: that many of the part's
-                    // words in.
+                    // A component or a column: offset by that many parts.
                     _ => *component as usize * self.shared.words_of(ty),
                 };
                 self.locs[slot] = Loc {
@@ -1194,10 +1180,8 @@ impl FunctionCompiler<'_> {
             Intrinsic::Pow => map2(f32::powf),
             Intrinsic::Step => map2(|edge, x| if x >= edge { 1.0 } else { 0.0 }),
             Intrinsic::Smoothstep => map3(|low, high, x| {
-                // The same clamp `clamp` is, the rule's `max` then `min`:
-                // a NaN gives way, a zero keeps the rule's sign, and a
-                // Kernel that writes `clamp` and one that writes
-                // `smoothstep` must not disagree about that.
+                // The same clamp as `clamp` (the rule's `max` then `min`),
+                // so NaN and signed zeros agree between the two.
                 let t =
                     orla_rules::min_f32(orla_rules::max_f32((x - low) / (high - low), 0.0), 1.0);
                 t * t * (3.0 - 2.0 * t)
@@ -1246,7 +1230,7 @@ impl FunctionCompiler<'_> {
             },
             Intrinsic::Mulhi => imap2(|a, b| ((a as i64 * b as i64) >> 32) as i32),
             Intrinsic::Umulhi => imap2(|a, b| ((a as u32 as u64 * b as u32 as u64) >> 32) as i32),
-            // A word is a word: the bits go across as they are.
+            // The bits pass unchanged.
             Intrinsic::Bits | Intrinsic::FromBits => imap1(|x| x),
         }
     }

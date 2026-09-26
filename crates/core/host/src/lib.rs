@@ -1,18 +1,14 @@
 #![warn(missing_docs)]
 //! Host Core (L1).
 //!
-//! The Host owns primitive resources and hands out opaque handles. It knows
-//! nothing about Kernels, Graphs, or products. Every resource has one owner
-//! (the Host), an explicit budget, and a handle that becomes invalid after
-//! release. Nothing here should ever grow product logic; if a feature can be
-//! a Kernel, it does not belong in this crate.
+//! The Host owns primitive resources and hands out opaque handles; it
+//! holds no product logic. Every resource has one owner, an explicit
+//! budget, and a handle that is invalid after release.
 //!
-//! There is one kind of resource: a Field, which is a [`Domain`] of elements
-//! laid out by a [`Schema`]: a Kernel sees one 32-bit word per scalar (two
-//! for a 64-bit one), and a Field may keep a scalar narrower
-//! ([`Encoding`]). An image is the Field whose domain is a grid and whose
-//! elements are four floats; the pixel helpers here are views of that
-//! case, not a second store.
+//! The one resource is a Field: a [`Domain`] of elements laid out by a
+//! [`Schema`]. A Kernel sees one 32-bit word per scalar (two for a 64-bit
+//! one); memory may keep a scalar narrower ([`Encoding`]). An image is a
+//! grid of four-float elements; the pixel helpers are views of it.
 
 pub mod encoding;
 
@@ -21,12 +17,8 @@ pub use encoding::Encoding;
 use std::any::Any;
 use std::fmt;
 
-/// Opaque handle to a resource owned by the Host: any Field, an image
-/// included. The architecture documents list handle kinds (image, buffer,
-/// texture); the Typed Field decision converged them into this one.
-///
-/// The handle carries a generation so that a released slot cannot be reached
-/// through a stale copy of the handle.
+/// Opaque handle to a Host-owned Field, images included. Its generation
+/// keeps a released slot out of reach of stale copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Handle {
     index: u32,
@@ -42,11 +34,9 @@ impl fmt::Display for Handle {
 /// One RGBA pixel with linear float components.
 pub type Pixel = [f32; 4];
 
-/// What one word of an element is to a Kernel: a float, an integer or a
-/// boolean, each computed in one 32-bit word, or a word of a 64-bit
-/// float or integer, which is two words, the low one first. How a word
-/// is kept in memory is its [`Encoding`], which may be narrower for the
-/// 32-bit kinds and is always a whole word for the 64-bit ones.
+/// What one word of an element is to a Kernel. `Double` and `Long` words
+/// come in pairs, low first, and are kept whole; the 32-bit kinds may be
+/// kept narrower ([`Encoding`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scalar {
     /// An `f32`.
@@ -55,9 +45,9 @@ pub enum Scalar {
     Int,
     /// A `0` or `1`.
     Bool,
-    /// One of the two words of an `f64`; they come in pairs, low first.
+    /// One word of an `f64`, low first.
     Double,
-    /// One of the two words of an `i64`; they come in pairs, low first.
+    /// One word of an `i64`, low first.
     Long,
 }
 
@@ -72,7 +62,7 @@ impl Scalar {
         }
     }
 
-    /// Words a scalar of this kind takes: two for the 64-bit kinds.
+    /// Words a scalar of this kind takes.
     pub fn words(self) -> usize {
         match self {
             Self::Double | Self::Long => 2,
@@ -91,14 +81,12 @@ impl Scalar {
     }
 }
 
-/// The flattened element layout of a Field: vectors and structs become
-/// their scalars in declaration order, each with the encoding it is kept
-/// in. This is the complete schema the Host and backends need; names live
-/// in the Kernel that declared it.
+/// The flattened element layout of a Field: scalars in declaration order,
+/// each with its encoding. Names live in the declaring Kernel.
 ///
-/// An element is its scalars' bytes one after another, and elements one
-/// after another with nothing between, little-endian. Every scalar sits
-/// at a multiple of its own size, so none crosses a 32-bit word.
+/// Elements are packed little-endian, scalar after scalar and element
+/// after element. Every scalar sits at a multiple of its own size, so
+/// none crosses a 32-bit word.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Schema {
     scalars: Vec<Scalar>,
@@ -117,8 +105,7 @@ impl Schema {
     }
 
     /// Builds a schema whose scalars are kept as `encodings`. Refused when
-    /// an encoding does not fit its scalar, or a scalar would not sit at
-    /// a multiple of its size in every element.
+    /// an encoding does not fit its scalar or a scalar would be misaligned.
     pub fn encoded(scalars: Vec<Scalar>, encodings: Vec<Encoding>) -> Result<Self, String> {
         if scalars.len() != encodings.len() {
             return Err(format!(
@@ -202,7 +189,7 @@ impl Schema {
         self.encodings.iter().all(|e| *e == first).then_some(first)
     }
 
-    /// Words a Kernel sees per element: one per scalar, however it is kept.
+    /// Words a Kernel sees per element: one per scalar.
     pub fn value_words(&self) -> usize {
         self.scalars.len()
     }
@@ -212,23 +199,19 @@ impl Schema {
         self.bytes
     }
 
-    /// Whether every scalar is a whole word, so memory holds the Kernel's
-    /// own words and nothing is widened or narrowed.
+    /// Whether every scalar is kept as a whole word.
     pub fn is_wide(&self) -> bool {
         self.encodings.iter().all(|e| *e == Encoding::Word)
     }
 
-    /// Words of memory `count` elements take: their bytes, rounded up to
-    /// a whole word.
+    /// Words of memory `count` elements take, rounded up to a whole word.
     pub fn storage_words(&self, count: usize) -> usize {
-        // The bytes counted in 64 bits: where `usize` is 32, a count's
-        // bytes pass it before its words do.
+        // Counted in 64 bits, so a 32-bit `usize` cannot overflow.
         let words = (count as u64).saturating_mul(self.bytes as u64).div_ceil(4);
         usize::try_from(words).unwrap_or(usize::MAX)
     }
 
-    /// The Kernel's word for scalar `scalar` of element `element`, read
-    /// from `storage` and widened.
+    /// The Kernel's word for scalar `scalar` of element `element`, widened.
     #[inline]
     pub fn load(&self, storage: &[u32], element: usize, scalar: usize) -> u32 {
         let encoding = self.encodings[scalar];
@@ -245,8 +228,7 @@ impl Schema {
         encoding::store(storage, byte, encoding.bytes(), encoding.encode(word));
     }
 
-    /// The memory `count` elements of the Kernel's words take, narrowed.
-    /// A wide schema's memory is its words.
+    /// The memory `count` elements of Kernel words take, narrowed.
     pub fn pack(&self, values: &[u32]) -> Vec<u32> {
         if self.is_wide() {
             return values.to_vec();
@@ -281,10 +263,8 @@ impl Schema {
         self.scalars.len() == 4 && self.scalars.iter().all(|s| *s == Scalar::Float)
     }
 
-    /// The layout, for a message a person reads: "four floats (a pixel)",
-    /// "two floats and an integer", "four floats kept as unorm8". The
-    /// spelling `Display` writes is what a file and a wire carry; this is
-    /// what a diagnostic says.
+    /// The layout for a diagnostic ("four floats kept as unorm8"); `Display`
+    /// writes the spelling files and the wire carry.
     pub fn describe(&self) -> String {
         let kept = match self.uniform_encoding() {
             Some(Encoding::Word) | None if self.is_wide() => String::new(),
@@ -338,10 +318,9 @@ impl Schema {
 impl std::str::FromStr for Schema {
     type Err = String;
 
-    /// Parses the spelling `Display` writes: scalars as `f`, `i`, `b`, `d`,
-    /// `l`, separated by commas, each followed by `:` and its encoding when
-    /// it is narrower than a word (`f:unorm8`). A `d` or an `l` is one
-    /// 64-bit scalar, which is two words.
+    /// Parses the spelling `Display` writes: `f`, `i`, `b`, `d`, `l`, comma
+    /// separated, each with `:encoding` when narrower than a word
+    /// (`f:unorm8`). `d` and `l` are 64-bit scalars of two words.
     fn from_str(text: &str) -> Result<Self, String> {
         let mut scalars = Vec::new();
         let mut encodings = Vec::new();
@@ -391,8 +370,8 @@ impl fmt::Display for Schema {
     }
 }
 
-/// How a Field's elements are addressed. The shapes are the dense lattices
-/// a Kernel can be mapped over; anything irregular is rows plus indices.
+/// How a Field's elements are addressed: a dense lattice a Kernel maps
+/// over. Irregular data is rows plus indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Shape {
     /// One dimension, addressed by an index.
@@ -429,8 +408,7 @@ impl fmt::Display for Shape {
     }
 }
 
-/// The extent of a Field: how many elements, in which shape. Every side is
-/// at least one.
+/// The extent of a Field. Every side is at least one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Domain {
     /// `count` elements in a row.
@@ -475,8 +453,8 @@ impl Domain {
         }
     }
 
-    /// Total number of elements; a count past what a `usize` holds is
-    /// `usize::MAX`, which no Field is allowed ([`MAX_ELEMENTS`]).
+    /// Total number of elements, saturating at `usize::MAX` (past
+    /// [`MAX_ELEMENTS`]).
     pub fn count(self) -> usize {
         (self.width() as usize)
             .saturating_mul(self.height() as usize)
@@ -499,20 +477,17 @@ impl fmt::Display for Domain {
     }
 }
 
-/// The most elements one Field holds: past the Host an element is found
-/// by a 32-bit index, in a Kernel, a backend and a file alike.
+/// The most elements one Field holds: elements are found by a 32-bit
+/// index everywhere past the Host.
 pub const MAX_ELEMENTS: usize = u32::MAX as usize;
 
-/// The words of memory `schema` over `domain` takes, once the domain is
-/// one a Field may have: not empty, no more than [`MAX_ELEMENTS`].
-/// Asked before anything is allocated, so a domain however large costs
-/// nothing to refuse.
+/// The words of memory `schema` over `domain` takes, when the domain is
+/// allowed: not empty, at most [`MAX_ELEMENTS`]. Allocates nothing.
 fn words_for(schema: &Schema, domain: Domain) -> Result<usize, HostError> {
     if domain.is_empty() || schema.value_words() == 0 {
         return Err(HostError::ZeroSize);
     }
-    // Counted in 64 bits: where `usize` is 32 (WebAssembly), the count
-    // it saturates at is the most there may be, and would pass.
+    // Counted in 64 bits, so a saturated 32-bit count is refused.
     let exact = u64::from(domain.width())
         .saturating_mul(u64::from(domain.height()))
         .saturating_mul(u64::from(domain.depth()));
@@ -523,8 +498,8 @@ fn words_for(schema: &Schema, domain: Domain) -> Result<usize, HostError> {
 }
 
 /// Elements laid out by a [`Schema`] over a [`Domain`], first axis
-/// fastest. What it holds is its storage: the Kernel's words for a wide
-/// schema, narrower scalars packed for a narrow one.
+/// fastest. Storage holds Kernel words for a wide schema, packed scalars
+/// for a narrow one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldData {
     schema: Schema,
@@ -543,8 +518,7 @@ impl FieldData {
         })
     }
 
-    /// Wraps existing storage; the length must be what the schema lays
-    /// the domain out in ([`Schema::storage_words`]).
+    /// Wraps existing storage of [`Schema::storage_words`] length.
     pub fn from_storage(
         schema: Schema,
         domain: Domain,
@@ -564,8 +538,8 @@ impl FieldData {
         })
     }
 
-    /// A Field of the Kernel's words, one per scalar per element, kept as
-    /// the schema says: narrowed where it is narrow.
+    /// A Field from the Kernel's words, one per scalar per element, narrowed
+    /// as the schema says.
     pub fn from_values(schema: Schema, domain: Domain, values: &[u32]) -> Result<Self, HostError> {
         words_for(&schema, domain)?;
         let expected = domain.count() * schema.value_words();
@@ -612,14 +586,12 @@ impl FieldData {
         self.domain.count() as u32
     }
 
-    /// The memory as kept: the Kernel's words when the schema is wide,
-    /// packed scalars when it is narrow. What a file or a device holds.
+    /// The memory as kept, as a file or a device holds it.
     pub fn storage(&self) -> &[u32] {
         &self.storage
     }
 
-    /// The Kernel's words, element after element: the storage itself
-    /// when it is wide, widened otherwise.
+    /// The Kernel's words, element after element, widened when narrow.
     pub fn values(&self) -> std::borrow::Cow<'_, [u32]> {
         if self.schema.is_wide() {
             std::borrow::Cow::Borrowed(&self.storage)
@@ -652,7 +624,7 @@ impl FieldData {
     }
 
     /// The pixels of a Field of pixels, as an image of `width` by
-    /// `height * depth` rows, widened when they are kept narrow.
+    /// `height * depth` rows, widened.
     pub fn to_image(&self) -> Result<Image, HostError> {
         if !self.schema.is_pixel() {
             return Err(HostError::NotPixels);
@@ -677,7 +649,7 @@ impl FieldData {
     }
 }
 
-/// A dense row-major RGBA float grid: the pixel view of a Field, used at
+/// A dense row-major RGBA float grid: the pixel view of a Field at
 /// observation boundaries (files, windows, tests).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Image {
@@ -700,7 +672,7 @@ impl Image {
         })
     }
 
-    /// Wraps existing pixel data; the length must match the dimensions.
+    /// Wraps existing pixel data of the image's length.
     pub fn from_pixels(width: u32, height: u32, pixels: Vec<Pixel>) -> Result<Self, HostError> {
         if width == 0 || height == 0 {
             return Err(HostError::ZeroSize);
@@ -735,8 +707,8 @@ impl Image {
     }
 }
 
-/// Errors reported by the Host. They are always explicit; the Host never
-/// silently clamps, recovers, or reallocates.
+/// Errors reported by the Host. The Host never silently clamps, recovers,
+/// or reallocates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostError {
     /// The handle does not refer to a live resource.
@@ -768,8 +740,7 @@ pub enum HostError {
     },
     /// Fields must have at least one element and one word per element.
     ZeroSize,
-    /// The domain holds more elements than one Field may
-    /// ([`MAX_ELEMENTS`]).
+    /// The domain holds more than [`MAX_ELEMENTS`].
     TooManyElements(Domain),
     /// Pixel data length does not match the dimensions.
     PixelCount {
@@ -785,8 +756,7 @@ pub enum HostError {
         /// Words supplied.
         actual: usize,
     },
-    /// The Field's words live on a device; materialize it before reading or
-    /// writing them from the CPU.
+    /// The Field's words are on a device; materialize it first.
     Resident(Handle),
     /// The Field's elements are not pixels, so it has no image view.
     NotPixels,
@@ -840,7 +810,7 @@ enum Storage {
     Free,
     /// Words in Host memory.
     Data(FieldData),
-    /// Words on a device, held by an object only that backend understands.
+    /// Words on a device, held by an object its backend understands.
     Resident {
         schema: Schema,
         domain: Domain,
@@ -851,7 +821,7 @@ enum Storage {
 struct Slot {
     generation: u32,
     storage: Storage,
-    /// Budget charged when the resource was adopted, returned on release.
+    /// Budget charged on adoption, returned on release.
     charge: usize,
 }
 
@@ -869,13 +839,11 @@ impl Slot {
     }
 }
 
-/// What a buffer holds when it is handed to a caller that says it will
-/// write every word: nothing any Field ever had, so leaving some of
-/// them shows.
+/// What a buffer holds when handed to a caller that writes every word,
+/// so a word left unwritten shows.
 const POISON: u32 = 0xDEAD_BEEF;
 
-/// The loop iterations one run of a Kernel may take, all its elements
-/// together, when nothing says otherwise: four thousand million.
+/// The default loop iterations of one Kernel run, all elements together.
 pub const DEFAULT_WORK: u64 = 4_000_000_000;
 
 /// The most loop iterations a Host may let one run take.
@@ -888,21 +856,18 @@ pub struct Host {
     free: Vec<u32>,
     budget_words: usize,
     used_words: usize,
-    /// Words of the budget set aside for work that holds them in a Host
-    /// of its own ([`Host::reserve`]).
+    /// Budget words set aside for another Host ([`Host::reserve`]).
     reserved_words: usize,
     /// The loop iterations one run of a Kernel may take.
     work: u64,
-    /// Word buffers a released Field gave back, largest last. A scene
-    /// makes and drops the same Fields every frame, and asking the
-    /// system for a megabyte and touching it again costs more than the
-    /// work that fills it; these are handed out again by `create`.
+    /// Word buffers released Fields gave back, largest last, reused by
+    /// `create`.
     spare: Vec<Vec<u32>>,
 }
 
 impl Host {
-    /// Creates a Host that will never hold more than `budget_words` live
-    /// words; a pixel is four words.
+    /// Creates a Host holding at most `budget_words` live words; a pixel is
+    /// four words.
     pub fn new(budget_words: usize) -> Self {
         Self {
             slots: Vec::new(),
@@ -915,9 +880,8 @@ impl Host {
         }
     }
 
-    /// The loop iterations one run of a Kernel may take, all its
-    /// elements together: what keeps a run that asks for more than a
-    /// frame has from holding a device until a driver resets it.
+    /// The loop iterations one Kernel run may take, all elements together;
+    /// it keeps a run from holding a device until a driver resets it.
     pub fn work(&self) -> u64 {
         self.work
     }
@@ -962,18 +926,13 @@ impl Host {
         self.adopt(data)
     }
 
-    /// A Field whose words are whatever the buffer it was given holds:
-    /// for a backend that writes every one of them before anything
-    /// reads it, which is what a map over a domain does. Anything else
-    /// wants [`Host::create`].
+    /// A Field whose words are whatever its buffer holds, for a backend that
+    /// writes every word before any is read, as a map over a domain does.
     pub fn create_for_fill(&mut self, schema: Schema, domain: Domain) -> Result<Handle, HostError> {
         let data = match self.take_spare(&schema, domain)? {
             Some(mut words) => {
-                // The caller says it writes every word. Where that is
-                // checked, the words it was given are nothing any Field
-                // ever held, so a caller that leaves some of them is a
-                // test that fails rather than one that passes on what
-                // another Field happened to leave there.
+                // Poisoned where checked, so a word left unwritten fails
+                // a test.
                 if cfg!(debug_assertions) {
                     words.fill(POISON);
                 }
@@ -984,16 +943,14 @@ impl Host {
         self.adopt(data)
     }
 
-    /// A buffer of exactly the words this Field needs, from the ones
-    /// released Fields gave back.
+    /// A buffer of exactly this Field's words, reused when one is spare.
     fn take_spare(
         &mut self,
         schema: &Schema,
         domain: Domain,
     ) -> Result<Option<Vec<u32>>, HostError> {
         let wanted = words_for(schema, domain)?;
-        // Charged before a word is allocated: a domain however large is
-        // refused for what it would cost, not by running out of memory.
+        // Charged before anything is allocated.
         self.within_budget(wanted)?;
         let at = self.spare.iter().position(|buffer| buffer.len() == wanted);
         Ok(at.map(|at| self.spare.swap_remove(at)))
@@ -1005,8 +962,8 @@ impl Host {
         self.place(requested, Storage::Data(data))
     }
 
-    /// Takes ownership of a Field whose words live on a device. `device`
-    /// is whatever the owning backend needs to find them again.
+    /// Takes ownership of a Field whose words are on a device; `device` is
+    /// what the owning backend needs to find them.
     pub fn adopt_resident(
         &mut self,
         schema: Schema,
@@ -1034,10 +991,8 @@ impl Host {
         self.adopt(FieldData::from_image(image))
     }
 
-    /// Whether Fields of these schemas over these domains would fit
-    /// under the budget now: what a backend that allocates somewhere
-    /// else first, a device, asks before it does, so a domain however
-    /// large is refused before it costs anything anywhere.
+    /// Whether Fields of these schemas over these domains fit the budget now;
+    /// a backend allocating elsewhere asks this first.
     pub fn can_hold(&self, fields: &[(&Schema, Domain)]) -> Result<(), HostError> {
         let mut requested = 0usize;
         for (schema, domain) in fields {
@@ -1046,12 +1001,10 @@ impl Host {
         self.within_budget(requested)
     }
 
-    /// Sets aside room for Fields of these schemas over these domains,
-    /// held somewhere else (a Host of a run's own, on another thread),
-    /// and answers the words set aside: from here until they are given
-    /// back ([`Host::unreserve`]) the budget counts them with this Host's
-    /// Fields, so the two together hold no more than it. What is set
-    /// aside is decided here, once, not by when the other side allocates.
+    /// Sets aside room for Fields of these schemas over these domains held
+    /// elsewhere (another Host, on another thread) and answers the words set
+    /// aside. The budget counts them with this Host's Fields until
+    /// [`Host::unreserve`].
     pub fn reserve(&mut self, fields: &[(&Schema, Domain)]) -> Result<usize, HostError> {
         let mut requested = 0usize;
         for (schema, domain) in fields {
@@ -1118,8 +1071,7 @@ impl Host {
         Ok(self.slot(handle)?.describe().expect("live slot").1)
     }
 
-    /// Width and height, resident or not; a volume reports its first two
-    /// axes.
+    /// Width and height, resident or not; a volume reports its first two.
     pub fn image_size(&self, handle: Handle) -> Result<(u32, u32), HostError> {
         let domain = self.domain(handle)?;
         Ok((domain.width(), domain.height()))
@@ -1143,8 +1095,7 @@ impl Host {
         }
     }
 
-    /// The Kernel's words of one element by linear index, widened when the
-    /// Field keeps them narrow.
+    /// The Kernel's words of one element by linear index, widened.
     pub fn element(
         &self,
         handle: Handle,
@@ -1153,11 +1104,8 @@ impl Host {
         self.data(handle)?.element(index)
     }
 
-    /// A Field's storage, to write in place. A backend that fills a Field
-    /// it just created writes here rather than into a buffer of its own
-    /// that it then copies in: for a million elements that is two copies
-    /// of every word that nobody needs. It is the Field's memory as kept,
-    /// packed when the schema is narrow.
+    /// A Field's storage as kept, to write in place: a backend fills a new
+    /// Field here.
     pub fn storage_mut(&mut self, handle: Handle) -> Result<&mut [u32], HostError> {
         Ok(&mut self.data_mut(handle)?.storage)
     }
@@ -1175,8 +1123,8 @@ impl Host {
         Ok(())
     }
 
-    /// Replaces every element with the Kernel's words, narrowed as the
-    /// schema keeps them; one word per scalar per element.
+    /// Replaces every element with the Kernel's words, one per scalar per
+    /// element, narrowed as kept.
     pub fn write_values(&mut self, handle: Handle, values: &[u32]) -> Result<(), HostError> {
         let data = self.data_mut(handle)?;
         let expected = data.domain.count() * data.schema.value_words();
@@ -1194,8 +1142,7 @@ impl Host {
         Ok(())
     }
 
-    /// Replaces one element with the Kernel's words, narrowed as the
-    /// schema keeps them.
+    /// Replaces one element with the Kernel's words, narrowed as kept.
     pub fn write_element(
         &mut self,
         handle: Handle,
@@ -1224,8 +1171,7 @@ impl Host {
         Ok(())
     }
 
-    /// The device object of a resident Field, or `None` when its words are
-    /// in Host memory.
+    /// The device object of a resident Field; `None` in Host memory.
     pub fn resident(&self, handle: Handle) -> Result<Option<&(dyn Any + Send + Sync)>, HostError> {
         Ok(match &self.slot(handle)?.storage {
             Storage::Resident { device, .. } => Some(device.as_ref()),
@@ -1233,9 +1179,8 @@ impl Host {
         })
     }
 
-    /// Moves a Field's words onto a device: the Host drops its copy and
-    /// keeps `device` in its place. Layout, extent, and identity are
-    /// unchanged.
+    /// Moves a Field's words onto a device: the Host drops its copy and keeps
+    /// `device`. Layout, extent and identity stay.
     pub fn make_resident(
         &mut self,
         handle: Handle,
@@ -1252,9 +1197,8 @@ impl Host {
         Ok(())
     }
 
-    /// Brings a resident Field back into Host memory with the words the
-    /// backend downloaded; the device object is dropped. A no-op for a
-    /// Field already in memory.
+    /// Brings a resident Field back into Host memory with the downloaded
+    /// words, dropping the device object. A Field in memory stays as it is.
     pub fn materialize(&mut self, handle: Handle, words: Vec<u32>) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         let (schema, domain) = match &slot.storage {
@@ -1273,18 +1217,15 @@ impl Host {
         let charge = std::mem::take(&mut slot.charge);
         self.used_words -= charge;
         self.free.push(handle.index);
-        // The words go into the spare pile for the next Field of that
-        // size, which is almost always the same node a frame later.
+        // The words go to the spare pile for the next Field of that size.
         if let Storage::Data(data) = storage {
             self.keep_spare(data.storage);
         }
         Ok(())
     }
 
-    /// Keeps a released buffer for the next Field of its size. The pile
-    /// holds a handful of them and no more words than an eighth of the
-    /// budget, so a scene of large Fields does not leave the system
-    /// holding what it is no longer using; the rest goes back.
+    /// Keeps a released buffer for reuse. The pile holds a handful of
+    /// buffers and at most an eighth of the budget; the rest is freed.
     fn keep_spare(&mut self, words: Vec<u32>) {
         const KEPT: usize = 8;
         let room = self.budget_words / 8;
@@ -1309,9 +1250,9 @@ impl Host {
         }
     }
 
-    /// The image view of a Field of pixels: a copy, since the Host stores
-    /// words. Fails with [`HostError::Resident`] when the words are on a
-    /// device and [`HostError::NotPixels`] for other layouts.
+    /// A copy of a Field of pixels as an image. Fails with
+    /// [`HostError::Resident`] on a device, [`HostError::NotPixels`] for
+    /// other layouts.
     pub fn image(&self, handle: Handle) -> Result<Image, HostError> {
         self.data(handle)?.to_image()
     }
@@ -1334,7 +1275,7 @@ impl Host {
         Ok(y as usize * width as usize + x as usize)
     }
 
-    /// Reads one pixel of a Field of pixels, widened if it is kept narrow.
+    /// Reads one pixel, widened.
     pub fn read_pixel(&self, handle: Handle, x: u32, y: u32) -> Result<Pixel, HostError> {
         let data = self.data(handle)?;
         let index = Self::pixel_index(data, x, y)?;
@@ -1342,7 +1283,7 @@ impl Host {
         Ok([channel(0), channel(1), channel(2), channel(3)])
     }
 
-    /// Writes one pixel of a Field of pixels, narrowed if it is kept so.
+    /// Writes one pixel, narrowed as kept.
     pub fn write_pixel(
         &mut self,
         handle: Handle,
@@ -1397,10 +1338,8 @@ impl Host {
 mod tests {
     use super::*;
 
-    /// The words a released Field gave back are handed out again, and
-    /// what the pile holds is bounded: a handful of buffers and an
-    /// eighth of the budget, so a scene of large Fields does not leave
-    /// the system holding what nothing is using.
+    /// Released words are reused, and the pile is bounded to a handful of
+    /// buffers and an eighth of the budget.
     #[test]
     fn released_words_come_back_and_the_pile_is_bounded() {
         let mut host = Host::new(4096);
@@ -1413,8 +1352,7 @@ mod tests {
         assert!(host.data(again).unwrap().storage().iter().all(|w| *w == 0));
         host.release(again).unwrap();
 
-        // Nothing live, and the pile holds no more than an eighth of
-        // the budget however much is released.
+        // The pile holds at most an eighth of the budget.
         for _ in 0..32 {
             let big = host.create(schema.clone(), Domain::Rows(400)).unwrap();
             host.release(big).unwrap();
@@ -1423,7 +1361,7 @@ mod tests {
         assert!(held <= 4096 / 8, "the pile holds {held} words");
         assert_eq!(host.live(), 0);
 
-        // A buffer larger than the pile takes is not kept at all.
+        // A buffer larger than the pile allows is freed.
         let huge = host.create(schema, Domain::Rows(2048)).unwrap();
         host.release(huge).unwrap();
         assert!(host.spare.iter().all(|buffer| buffer.len() <= 4096 / 8));
@@ -1465,8 +1403,8 @@ mod tests {
         assert!(host.create_image(2, 4).is_ok());
     }
 
-    /// Room set aside counts against the budget with the Host's Fields
-    /// until it is given back, and more than there is is refused whole.
+    /// Reserved room counts against the budget until given back; a reserve
+    /// past it is refused whole.
     #[test]
     fn reserved_room_counts_against_the_budget_until_given_back() {
         let mut host = Host::new(32);
@@ -1589,14 +1527,13 @@ mod tests {
         );
     }
 
-    /// A domain an agent wrote is refused for what it would cost before
-    /// a word of it is allocated, however large: past the budget, past
-    /// what 32-bit indices reach, past what a `usize` multiplies to.
+    /// A domain is refused for its cost before allocation: past the budget,
+    /// past 32-bit indices, past `usize` overflow.
     #[test]
     fn a_domain_is_refused_before_it_is_allocated() {
         let mut host = Host::new(1 << 20);
         let int = Schema::new(vec![Scalar::Int]);
-        // Four billion words would not fit anywhere; asked, not tried.
+        // Four billion words: refused, not tried.
         assert_eq!(
             host.create(int.clone(), Domain::Rows(u32::MAX)),
             Err(HostError::BudgetExceeded {
@@ -1623,7 +1560,7 @@ mod tests {
             );
             assert!(FieldData::from_values(int.clone(), huge, &[]).is_err());
         }
-        // Together, what several would hold is charged as one.
+        // Several are charged as one.
         let half = Domain::Rows(1 << 19);
         assert!(host.can_hold(&[(&int, half)]).is_ok());
         assert!(
@@ -1635,8 +1572,8 @@ mod tests {
 
     #[test]
     fn a_narrow_field_is_charged_and_kept_as_its_bytes_and_read_as_values() {
-        // A 3 by 2 picture of bytes: six pixels of four bytes, six words,
-        // where the same picture of floats is twenty-four.
+        // A 3 by 2 picture of bytes takes six words; of floats,
+        // twenty-four.
         let mut host = Host::new(64);
         let bytes = Schema::pixel().with_encoding(Encoding::Unorm8).unwrap();
         assert!(bytes.is_pixel() && !bytes.is_wide());
@@ -1656,8 +1593,7 @@ mod tests {
         let image = host.image(picture).unwrap();
         assert_eq!(image.pixels()[5], pixel);
 
-        // Rows of bytes: five of them fill two words, and the last
-        // three bytes of the second stay zero.
+        // Five byte rows fill two words; the last three bytes stay zero.
         let row = Schema::new(vec![Scalar::Int])
             .with_encoding(Encoding::I8)
             .unwrap();
@@ -1703,8 +1639,7 @@ mod tests {
         assert_eq!(schema.element_bytes(), 20);
         assert_eq!(schema.to_string(), "d,l,f");
         assert_eq!(schema.describe(), "one double, one long and one float");
-        // A word without its partner is no scalar, and a 64-bit scalar
-        // is kept whole.
+        // A lone word of a pair is refused; a 64-bit scalar is kept whole.
         assert!(Schema::encoded(vec![Scalar::Double], vec![Encoding::Word]).is_err());
         assert!(
             Schema::encoded(vec![Scalar::Double, Scalar::Long], vec![Encoding::Word; 2]).is_err()

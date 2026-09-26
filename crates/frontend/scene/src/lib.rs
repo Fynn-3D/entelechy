@@ -2,12 +2,10 @@
 //! Scene documents: a parsed `.osn` lowered into the Graph model, with
 //! sub-graphs flattened in place.
 //!
-//! This is the frontend half of composition. The Graph Runtime
-//! (`orla-graph`) evaluates a [`Graph`] and never sees source; this crate
-//! reads what was written — nodes, wiring, domains, `times`, placed
-//! sub-graphs, inline Kernels — checks it where it was written, and
-//! hands the loader the inline Kernels to publish. Where the files come
-//! from is the caller's: every function takes a [`Loader`] or refuses.
+//! The frontend half of composition: this crate reads and checks what
+//! was written (nodes, wiring, domains, `times`, placed sub-graphs,
+//! inline Kernels) and hands the loader the inline Kernels to publish.
+//! The caller supplies files through a [`Loader`].
 
 mod domain;
 pub mod edit;
@@ -31,8 +29,7 @@ use orla_graph::{
     Binding, DomainExpr, DomainSpec, Graph, GraphParam, Node, NodeId, ParamValue, Source,
 };
 
-/// The port type an alias stands for, following aliases as far as they
-/// go; a name that is not one is itself.
+/// The port type an alias stands for, following aliases to the end.
 fn resolved(ty: &str, aliases: &[orla_language::TypeAlias]) -> String {
     let mut ty = ty.to_owned();
     for _ in 0..8 {
@@ -44,9 +41,8 @@ fn resolved(ty: &str, aliases: &[orla_language::TypeAlias]) -> String {
     ty
 }
 
-/// The value a Field of this port type is filled with when the node names
-/// none: the zero of its element. A struct or an integer vector is not a
-/// parameter's type, so a Field of one is a Kernel's work, not a fill.
+/// The default fill of a Field of this port type: the zero of its
+/// element, for element types a parameter can hold.
 fn zero_of(ty: &str) -> Option<Value> {
     if ty == "Image" {
         return Some(Value::Vec4([0.0; 4]));
@@ -54,7 +50,6 @@ fn zero_of(ty: &str) -> Option<Value> {
     let element = ty
         .split_once('<')
         .and_then(|(_, rest)| rest.strip_suffix('>'))?;
-    // The value is the element's, however the Field keeps it.
     let element = element.split(" as ").next().unwrap_or(element);
     match element {
         "Float" => Some(Value::Float(0.0)),
@@ -101,9 +96,9 @@ impl From<ParseError> for DocumentError {
 /// Reads the text of a document at a resolved path.
 pub type Loader<'a> = dyn FnMut(&Path) -> Result<String, String> + 'a;
 
-/// Resolves a document's `use` items to the structs and type aliases they
-/// declare, given the document's directory, so every Kernel the document
-/// holds sees them. The caller reads the files; the graph only asks.
+/// Resolves a document's `use` items, given its directory, to the
+/// structs and type aliases every Kernel of the document sees. The
+/// caller reads the files.
 pub type Declare<'a> = dyn FnMut(
         &Path,
         &[orla_language::Use],
@@ -116,8 +111,7 @@ pub type Declare<'a> = dyn FnMut(
         String,
     > + 'a;
 
-/// A Kernel written inside a node, for the loader to publish before the
-/// graph runs.
+/// A Kernel written inside a node, for the loader to publish.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InlineKernel {
     /// The flattened node that carries it.
@@ -139,41 +133,37 @@ pub struct Asset {
     pub name: String,
     /// The file, resolved against the document's directory.
     pub path: PathBuf,
-    /// The type, aliases resolved: it tells a picture file whether to come
-    /// in as pixels or as a `Grid<Float>`, and how the Field keeps what
-    /// came in (`Grid<Vec4 as unorm8>`).
+    /// The type, aliases resolved: it decides how a picture file comes in
+    /// and how the Field keeps it (`Grid<Vec4 as unorm8>`).
     pub ty: String,
-    /// Whether the file comes in as its bytes, one to an element of a
-    /// `Rows<Int>`, rather than as a Field of its own format.
+    /// Whether the file comes in as its bytes, one per element of a
+    /// `Rows<Int>`.
     pub bytes: bool,
 }
 
-/// An output the Host writes to a file: `output name <- source to
-/// "file";`.
+/// A file output: `output name <- source to "file";`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Write {
     /// The output's name.
     pub output: String,
     /// The file, resolved against the document's directory.
     pub path: PathBuf,
-    /// Whether the Field goes out as its bytes, one to an element of a
-    /// `Rows<Int>`, rather than in the format the extension names.
+    /// Whether the Field goes out as its bytes, one per element of a
+    /// `Rows<Int>`, instead of in the extension's format.
     pub bytes: bool,
 }
 
-/// What a scene document says of files: the inputs it reads from them,
-/// the directories it reads frames from, and the outputs it writes. The
-/// session reads and writes them; nothing below the interface does.
+/// A scene's file contract: inputs read from files, directories read as
+/// frames, and outputs written. The session carries them out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Files {
-    /// Externals read from files; the session loads and watches them.
+    /// Externals read from files, loaded and watched by the session.
     pub assets: Vec<Asset>,
-    /// Externals read frame by frame from a directory: the name, the
-    /// directory resolved against the document, the type as written, and
-    /// the frames a second of the session's time.
+    /// Externals read frame by frame from a directory: name, resolved
+    /// directory, type as written, and frames per second of session time.
     pub sequences: Vec<(String, PathBuf, String, u32)>,
-    /// Outputs written to files once an evaluation that changed them
-    /// commits; only the root document's.
+    /// The root document's file outputs, written after a committed
+    /// evaluation that changed them.
     pub writes: Vec<Write>,
 }
 
@@ -183,8 +173,7 @@ pub struct Files {
 pub struct Lowered {
     /// The graph.
     pub graph: Graph,
-    /// What the document reads from and writes to files, which the
-    /// session carries out: the Graph composes, and knows no file.
+    /// The document's file contract, carried out by the session.
     pub files: Files,
     /// Inline Kernels from every level, in document order.
     pub inline: Vec<InlineKernel>,
@@ -195,13 +184,10 @@ pub struct Lowered {
     pub documents: Vec<PathBuf>,
 }
 
-/// An inline Kernel's text as `publish` takes it: the node's Kernel as
-/// written, with what only a node may write taken out (its `domain`
-/// statement and the wiring on its inputs), a default that named a graph
-/// param replaced by the param's value (`edits`, as byte ranges of the
-/// document and the text to put there), and the id the node gave it
-/// written in when it had none of its own. What `kernel` returns over
-/// the protocol republishes as is.
+/// An inline Kernel's text as `publish` takes it: the node's Kernel with
+/// its `domain` statement and input wiring removed, graph-param defaults
+/// replaced by `edits` (document byte ranges and their text), and the
+/// node's id written in when it has none.
 pub fn publishable_text(
     document: &str,
     kernel: &Kernel,
@@ -214,7 +200,7 @@ pub fn publishable_text(
     let base = kernel.range.start;
     if let Some(range) = &kernel.domain_range {
         let (a, b) = (range.start - base, range.end - base);
-        // Take the whole line when the statement stands alone on it.
+        // A statement alone on its line takes the line.
         let line_start = text[..a].rfind('\n').map_or(0, |i| i + 1);
         let line_end = text[b..].find('\n').map_or(text.len(), |i| b + i + 1);
         let alone = text[line_start..a].trim().is_empty() && text[b..line_end].trim().is_empty();
@@ -231,7 +217,7 @@ pub fn publishable_text(
             edits.push((start..range.end, String::new()));
         }
     }
-    // Later ranges first, so earlier offsets stay right.
+    // Later ranges first, so earlier offsets stay valid.
     edits.sort_by(|a, b| b.0.start.cmp(&a.0.start));
     for (range, replacement) in edits {
         text.replace_range(range.start - base..range.end - base, &replacement);
@@ -242,8 +228,8 @@ pub fn publishable_text(
     text
 }
 
-/// The id of an anonymous inline Kernel: the document name and the node
-/// name, lowercased with unsupported characters replaced, at version 1.
+/// An anonymous inline Kernel's id: document and node names, lowercased
+/// with unsupported characters replaced, at version 1.
 pub fn anonymous_id(document: &str, node: &str) -> KernelId {
     let segment = |text: &str| {
         let mut out: String = text
@@ -269,8 +255,8 @@ fn error(span: Span, message: impl Into<String>) -> DocumentError {
     }
 }
 
-/// A node's `domain` as written: a literal resolves now, an expression
-/// over the node's inputs and parameters resolves when the node binds.
+/// A node's `domain`: a literal resolves now, an expression when the
+/// node binds.
 fn domain_spec(expr: &orla_language::Expr) -> Result<DomainSpec, DocumentError> {
     spec_of(domain_expr(expr)?, expr.span)
 }
@@ -286,8 +272,8 @@ fn number(value: &Value) -> Option<DomainExpr> {
     }
 }
 
-/// A domain expression as a node keeps it: an extent when nothing in it
-/// is left to resolve, the expression otherwise.
+/// A domain expression as a node keeps it: an extent when constant, the
+/// expression otherwise.
 fn spec_of(domain: DomainExpr, span: Span) -> Result<DomainSpec, DocumentError> {
     if domain.is_constant() {
         let literal = domain
@@ -309,8 +295,8 @@ type Expanded = (
 struct Placement {
     /// Node-name prefix, e.g. `fx.`.
     prefix: String,
-    /// Parent bindings for the sub-graph's inputs, already rewritten into
-    /// the parent's flattened space.
+    /// Parent bindings for the sub-graph's inputs, in the parent's
+    /// flattened names.
     inputs: BTreeMap<String, Binding>,
     /// Parent values for the sub-graph's params, already resolved.
     params: BTreeMap<String, ParamValue>,
@@ -325,10 +311,8 @@ struct Lowering<'a, 'b> {
     out: Lowered,
     /// Documents on the current placement path, to refuse recursion.
     stack: Vec<PathBuf>,
-    /// The declarations of the document being lowered, its own and the
-    /// ones it inherits: a filled Field's element is resolved through the
-    /// aliases, and a synthesized Kernel inherits all of them as the
-    /// document's own Kernels do.
+    /// The declarations of the document being lowered, own and
+    /// inherited, which fills and synthesized Kernels resolve through.
     aliases: Vec<orla_language::TypeAlias>,
     structs: Vec<orla_language::StructDecl>,
     functions: Vec<orla_language::FnDecl>,
@@ -336,14 +320,12 @@ struct Lowering<'a, 'b> {
     placed: usize,
 }
 
-/// The most nodes `times` places in one scene, every level together: a
-/// placed graph placed many times places its own nodes many times over,
-/// and a document an agent composed must not spend the loader's memory
-/// without end.
+/// The most nodes `times` places in one scene, every level together,
+/// bounding the loader's memory.
 pub const MAX_PLACED: usize = 1 << 16;
 
-/// Where something in a document was written, in the `file:line:column`
-/// a Kernel's diagnostics use.
+/// A place in a document, as the `file:line:column` of Kernel
+/// diagnostics.
 fn written_at(path: &Path, span: orla_language::Span) -> String {
     format!("{}:{}:{}", path.display(), span.line, span.column)
 }
@@ -419,8 +401,8 @@ struct Level {
     writes: Vec<Write>,
 }
 
-/// Whether a placed graph and what places it agree: every input wired,
-/// no input or param given that the graph does not declare.
+/// Whether a placed graph and its placer agree: every input wired, and
+/// every input or param given is declared.
 fn check_placement(
     placement: &Placement,
     externals: &[String],
@@ -466,15 +448,13 @@ struct Inputs {
     sequences: Vec<(String, PathBuf, String, u32)>,
 }
 
-/// Where a document is lowered: its place in the flattened graph (the
-/// prefix on every node it names, and the bindings and values its placing
-/// graph gives it) and the params it declares. How a name written in the
-/// document becomes one of the flattened graph is decided here, once, for
-/// its values, domains, and the sources its nodes read.
+/// Where a document is lowered: its node prefix, what its placing graph
+/// gives it, and its params. The one place a written name becomes a
+/// flattened one, for values, domains and sources.
 struct Place<'a> {
-    /// What every node the document names is prefixed with: its place.
+    /// The prefix of every node the document names.
     prefix: &'a str,
-    /// What the placing graph gives, or none at the root.
+    /// What the placing graph gives; `None` at the root.
     placement: Option<&'a Placement>,
     /// The params the document declares.
     params: &'a [GraphParam],
@@ -483,9 +463,9 @@ struct Place<'a> {
 }
 
 impl Place<'_> {
-    /// A value written in the document: a literal, or a graph param of
-    /// the document, which in a placed sub-graph becomes what the parent
-    /// passed (or the default).
+    /// A value written in the document: a literal, or a graph param,
+    /// which in a placed sub-graph is what the parent passed or the
+    /// default.
     fn value(&self, expr: &Expr) -> Result<ParamValue, DocumentError> {
         if let ExprKind::Name(param) = &expr.kind {
             let declared = self.params.iter().find(|p| &p.name == param).ok_or_else(|| {
@@ -504,7 +484,7 @@ impl Place<'_> {
         Ok(ParamValue::Literal(value))
     }
 
-    /// What a value is before anything overrides it.
+    /// A value before any override.
     fn default_of(&self, value: &ParamValue) -> Value {
         match value {
             ParamValue::Literal(v) => v.clone(),
@@ -517,10 +497,9 @@ impl Place<'_> {
         }
     }
 
-    /// A domain written in a placed graph may name that graph's params,
-    /// which do not exist once it is flattened: each becomes what the
-    /// parent passed, a number or the root's param, as a value does. A
-    /// name the node sets itself stays the node's.
+    /// A domain in the flattened graph: each name of the placed graph's
+    /// params becomes what the parent passed, as a value does; a name
+    /// the node sets itself stays the node's.
     fn domain(
         &self,
         domain: Option<DomainSpec>,
@@ -543,9 +522,8 @@ impl Place<'_> {
         spec_of(expr.with_names(&given), Span::default()).map(Some)
     }
 
-    /// A source written in the document, in the flattened graph: a node's
-    /// name prefixed, and one of the document's inputs replaced with what
-    /// the parent binds to it (as a source when it is `Now`).
+    /// A source in the flattened graph: a node's name prefixed, a
+    /// document input replaced by the parent's binding.
     fn now(&self, reference: &SourceRef) -> Result<Binding, DocumentError> {
         let prefix = self.prefix;
         match &reference.node {
@@ -615,8 +593,8 @@ impl Place<'_> {
 }
 
 impl Lowering<'_, '_> {
-    /// The structs a literal of this document may name, and their fields
-    /// in order: the document's own and those it uses.
+    /// The structs, own and used, a literal of this document may name,
+    /// with their fields in order.
     fn known_structs(&self) -> Vec<(String, Vec<String>)> {
         self.structs
             .iter()
@@ -631,16 +609,15 @@ impl Lowering<'_, '_> {
             .collect()
     }
 
-    /// A node with `times = N;` stands for `N` nodes `name/1` to `name/N`,
-    /// each wired as written, except that a `carry port <- output;` feeds
+    /// A node with `times = N;` stands for nodes `name/1` to `name/N`,
+    /// each wired as written, except that `carry port <- output;` feeds
     /// the port from the previous time's output from the second time on;
-    /// `name.port` anywhere means the last time's. At `times = 0` there is
-    /// no node, and a carried output is what its port is first bound to:
-    /// no steps of a relaxation leave its start, no subdivision leaves the
-    /// mesh. An output no carry names has no value then. `N` is a literal or a
-    /// param of this document, resolved from the placing graph, the
-    /// caller's overrides, or the default; a root param that sizes the
-    /// graph is remembered so a change to it lowers the document again.
+    /// `name.port` means the last time's. At `times = 0` there is no node
+    /// and a carried output is what its port is first bound to; an output
+    /// no carry names has no value. `N` is a literal or a param, resolved
+    /// from the placing graph, the caller's overrides, or the default; a
+    /// root param that sizes the graph is recorded so changing it lowers
+    /// the document again.
     fn expand_times(
         &mut self,
         document: &Document,
@@ -650,8 +627,8 @@ impl Lowering<'_, '_> {
     ) -> Result<Expanded, DocumentError> {
         let mut nodes: Vec<NodeDecl> = Vec::new();
         let mut renames: BTreeMap<String, String> = BTreeMap::new();
-        // Nodes placed no times: each carried output, by the node, and
-        // what it passes through.
+        // Nodes placed no times: each carried output and what it passes
+        // through.
         let mut passed: BTreeMap<String, BTreeMap<String, SourceRef>> = BTreeMap::new();
         for decl in &document.nodes {
             let times = decl.members.iter().find_map(|member| match member {
@@ -821,9 +798,8 @@ impl Lowering<'_, '_> {
                 nodes.push(copy);
             }
         }
-        // `name.port` written anywhere now means the last time's, and a
-        // carried output of a node placed no times what it passes through,
-        // which may itself be one (at most as many steps as such nodes).
+        // `name.port` means the last time's; a carried output of a node
+        // placed no times resolves, through chains, to what it passes.
         let rename = |reference: &mut SourceRef| -> Result<(), DocumentError> {
             for _ in 0..=passed.len() {
                 let Some(through) = reference.node.as_ref().and_then(|node| passed.get(node))
@@ -892,10 +868,9 @@ impl Lowering<'_, '_> {
         Ok((nodes, outputs))
     }
 
-    /// The inputs the document declares: every one's name, and those the
+    /// The inputs the document declares: every name, and those the
     /// caller supplies from a file, as text, or as frames. A placed
-    /// graph's inputs are wired by the graph placing it, never from a
-    /// file.
+    /// graph's inputs are wired by its placer only.
     fn inputs(
         &self,
         document: &Document,
@@ -907,10 +882,7 @@ impl Lowering<'_, '_> {
         let mut texts = Vec::new();
         let mut sequences = Vec::new();
         for input in &document.inputs {
-            // The type is documentation for the reader and the placing
-            // graph; what arrives is checked by shape and layout where it
-            // binds. A caller can supply images from files; a parent graph
-            // wires anything.
+            // What arrives is checked by shape and layout where it binds.
             if input.binding.is_some() {
                 return Err(error(
                     input.name.span,
@@ -988,8 +960,8 @@ impl Lowering<'_, '_> {
     fn params(&self, document: &Document) -> Result<Vec<GraphParam>, DocumentError> {
         let mut params = Vec::new();
         for decl in &document.params {
-            // Read in the type the param declares: exact, and shaped by
-            // the structs the document declares or uses.
+            // Read in the param's declared type, with the document's
+            // structs.
             let ty = orla_language::Spanned {
                 value: resolved(&decl.ty.value, &self.aliases),
                 span: decl.ty.span,
@@ -1014,11 +986,9 @@ impl Lowering<'_, '_> {
         Ok(params)
     }
 
-    /// Lowers the document a `graph` node places, as the node `id` names
-    /// it, with the inputs and params the node gives it, and answers the
-    /// outputs it declares, by which the placing graph reads it. The
-    /// declarations in scope are the placed document's while it is lowered,
-    /// and the placing one's again after.
+    /// Lowers the document a `graph` node `id` places, with the inputs
+    /// and params the node gives, and returns its declared outputs. The
+    /// placed document's declarations are in scope while it is lowered.
     fn place(
         &mut self,
         sub_path: &Spanned<String>,
@@ -1125,12 +1095,8 @@ impl Lowering<'_, '_> {
             sequences,
         } = self.inputs(document, base, placement)?;
         let params = self.params(document)?;
-        // The root's params, before anything placed under it is walked. A
-        // sub-graph's `times` names one of them through its placement and
-        // is structural, so it is resolved here rather than at run time;
-        // without this the lookup found an empty list and fell back to the
-        // sub-graph's own default, which is a scene's parameter silently
-        // doing nothing.
+        // The root's params, read before any sub-graph: a sub-graph's
+        // `times` may name one through its placement.
         if placement.is_none() {
             self.out.graph.params = params.clone();
         }
@@ -1145,8 +1111,8 @@ impl Lowering<'_, '_> {
         };
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
-        // What an input read from a file reads while the file is absent,
-        // renamed with the nodes it may name.
+        // Each file input's fallback while the file is absent, renamed
+        // with the nodes it may name.
         let mut fallback_refs: Vec<SourceRef> = document
             .inputs
             .iter()
@@ -1299,9 +1265,8 @@ impl Lowering<'_, '_> {
                         ));
                     }
                     let kernel_id = anonymous_id(name, &decl.name.value);
-                    // The fill is the node's `value` parameter: its
-                    // literal is the Kernel's default, so the node with
-                    // no `value` is the zero of the element.
+                    // The fill is the node's `value` parameter, defaulting
+                    // to the element's zero.
                     let spelled = resolved(&ty.value, &self.aliases);
                     let zero = zero_of(&spelled).ok_or_else(|| {
                         error(
@@ -1312,9 +1277,7 @@ impl Lowering<'_, '_> {
                             ),
                         )
                     })?;
-                    // A written number has no width until it meets one,
-                    // and here the Field's element is the width: `1.0`
-                    // fills a `Grid<Float>` as a Float.
+                    // A written number takes the Field element's width.
                     let value = match node_params.get("value") {
                         Some(given) => {
                             let given = place.default_of(given);
@@ -1342,8 +1305,8 @@ impl Lowering<'_, '_> {
                     let mut kernel = orla_language::parse(&text).map_err(|e| {
                         error(ty.span, format!("a filled Field of `{}`: {e}", ty.value))
                     })?;
-                    // It inherits what the document's own Kernels do, so
-                    // its port type may be an alias from a used document.
+                    // It inherits the document's declarations, aliases
+                    // included.
                     kernel.structs = self.structs.clone();
                     kernel.types = self.aliases.clone();
                     kernel.functions = self.functions.clone();
@@ -1488,10 +1451,9 @@ impl Lowering<'_, '_> {
     }
 }
 
-/// A literal as a scene writes it: any value a Kernel can hold, a struct
-/// literal naming one of `known` (a struct the document declares or uses).
-/// A number is kept exact (a written float as a `Double`), since the
-/// width is the Kernel's param's to say when the value reaches it.
+/// A literal as a scene writes it: any value a Kernel can hold, or a
+/// struct literal of one of `known`. A number is kept exact (a written
+/// float as a `Double`); the Kernel's param gives its width.
 fn literal(expr: &Expr, known: &[(String, Vec<String>)]) -> Result<Value, DocumentError> {
     let fields_of = |name: &str| {
         known
@@ -1502,8 +1464,7 @@ fn literal(expr: &Expr, known: &[(String, Vec<String>)]) -> Result<Value, Docume
     orla_compiler::literal_exact(expr, &fields_of).map_err(|e| error(expr.span, e.to_string()))
 }
 
-/// A literal expression carrying a value, for rewriting param defaults:
-/// the value's own literal, read back.
+/// A value's own literal as an expression, for rewriting param defaults.
 fn literal_expr(value: Value, span: Span) -> Expr {
     let mut expr =
         orla_language::parse_literal(&value.to_string()).expect("a value's literal reads back");
@@ -1512,8 +1473,7 @@ fn literal_expr(value: Value, span: Span) -> Expr {
 }
 
 /// Parses a `.osn` document that references published Kernels only.
-/// Loaders that also publish inline Kernels or place sub-graphs use
-/// [`load`].
+/// Inline Kernels and sub-graphs take [`load`].
 pub fn parse(text: &str) -> Result<Graph, DocumentError> {
     let document = orla_language::parse_document(text).map_err(DocumentError::from)?;
     let mut loader = |path: &std::path::Path| -> Result<String, String> {
@@ -1574,11 +1534,10 @@ pub fn from_document(
     )
 }
 
-/// Lowers a parsed document into a Graph, loading the sub-graphs it
-/// places through `loader` (paths are resolved against `base`) and
-/// flattening them in place: their nodes are prefixed with the placing
-/// node's name, their inputs rewired to the parent's bindings, their
-/// params set from the parent's values.
+/// Lowers a parsed document into a Graph, loading its sub-graphs
+/// through `loader` (paths resolved against `base`) and flattening them
+/// in place: nodes prefixed with the placing node's name, inputs and
+/// params taken from the parent.
 pub fn load(
     document: &orla_language::Document,
     text: &str,
@@ -1598,9 +1557,8 @@ pub fn load(
     )
 }
 
-/// Loads like [`load`] and also resolves every document's `use`
-/// items to shared struct and type declarations through `declare`,
-/// which every Kernel of that document then sees.
+/// Loads like [`load`], also resolving every document's `use` items
+/// through `declare` for all its Kernels.
 pub fn load_with(
     document: &orla_language::Document,
     text: &str,
@@ -1620,8 +1578,7 @@ pub fn load_with(
     )
 }
 
-/// As [`load_with`], with parameter overrides that a node's
-/// `times` may read, so the caller's values size the graph.
+/// As [`load_with`], with parameter overrides a node's `times` may read.
 pub fn load_with_params(
     document: &orla_language::Document,
     text: &str,
@@ -1684,8 +1641,8 @@ output result <- a.result;
             &Value::Record(vec![Value::Double(0.1), Value::Double(0.2)])
         );
         assert_eq!(defaults[3], &Value::Float(0.1));
-        // A node's value has no width until the Kernel's param says it,
-        // and it reads back as written.
+        // A node's value takes its width from the Kernel's param and
+        // reads back as written.
         let value = &graph.nodes[0].params["x"];
         assert_eq!(value, &ParamValue::Literal(Value::Double(0.001)));
         assert!(print(&graph).contains("x = 0.001;"), "{}", print(&graph));
@@ -1739,8 +1696,8 @@ output result <- a.result;
         let document = orla_language::parse_document(source).unwrap();
         let mut none = |path: &Path| -> Result<String, String> { Err(path.display().to_string()) };
         let lowered = load(&document, source, "My-Scene", Path::new("."), &mut none).unwrap();
-        // The text is publishable as it is: the node's id written in, the
-        // node's domain left out, and it parses on its own.
+        // The text publishes as is: the node's id written in, its domain
+        // removed.
         assert!(
             !lowered.inline[0].text.contains("domain"),
             "{}",
@@ -1945,9 +1902,9 @@ output result <- show.result;
         assert_eq!(ids(&lowered.graph), ["seed", "step", "show"]);
     }
 
-    /// No times is no node: a carried output is what its port is first
-    /// bound to, through a chain of such nodes too, and an output no carry
-    /// names, or a carry started by `<~`, has nothing to pass.
+    /// `times = 0` places no node: a carried output is what its port is
+    /// first bound to, through chains too; an uncarried output, or a
+    /// carry started by `<~`, has nothing to pass.
     #[test]
     fn times_zero_passes_carried_outputs_through() {
         let graph =
@@ -1998,10 +1955,9 @@ output result <- a.result;",
         assert!(stateful.message.contains("bound with `<~`"), "{stateful}");
     }
 
-    /// An output written `to` a file, and an input that falls back on a
-    /// node while its file is absent: the fallback follows the node's
-    /// times to its last, orders before what reads the input, and never
-    /// names the input itself; only the scene itself writes.
+    /// A file output, and a file input's node fallback: the fallback
+    /// follows the node's times to the last, orders before the input's
+    /// readers and names a node, and only the root scene writes.
     #[test]
     fn writes_and_fallbacks_lower_into_the_graph() {
         let text = "input saved: Rows<Int> = \"saved.field\" else seed.result;
@@ -2093,8 +2049,8 @@ output raw <- first.result to bytes \"raw.bin\";";
         assert!(orphan.message.contains("needs `times"), "{orphan}");
         let unknown = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = n; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
         assert!(unknown.message.contains("not a param"), "{unknown}");
-        // A count past what a scene may place is refused before a copy
-        // is made, and so are counts that pass it together.
+        // Counts past the scene's bound, alone or together, are refused
+        // before any copy.
         let huge = parse("node s: t.z@1 { domain = 1; }\nnode r: t.i@1 { times = 2000000000; previous <- s.result; }\noutput result <- r.result;").unwrap_err();
         assert!(
             huge.message.contains("places more than 65536 nodes"),
@@ -2104,10 +2060,9 @@ output raw <- first.result to bytes \"raw.bin\";";
         assert!(together.message.contains("places more than"), "{together}");
     }
 
-    /// The Graph computes structure and never values: a value a node is
-    /// given is written, never worked out, and so is how many times a
-    /// node runs. Arithmetic belongs in a Kernel, where it is typed,
-    /// traced and checked like the rest.
+    /// The Graph computes structure, never values: a node's values and
+    /// `times` are written literals or params. Arithmetic belongs in a
+    /// Kernel.
     #[test]
     fn a_scene_writes_values_and_never_computes_them() {
         let graph = "param n: Int = 2;\nnode s: t.z@1 { domain = 1; }\n";
@@ -2131,15 +2086,13 @@ output raw <- first.result to bytes \"raw.bin\";";
     }
 }
 
-/// A graph written as a scene document: every node with its bindings,
-/// values and domain, the params and inputs it declares, its outputs. A
-/// scene read back from it lowers to the same graph; an input read from a
-/// file is written as the image the caller supplies.
+/// A graph written as a scene document that lowers back to the same
+/// graph; a file input is written as a caller-supplied image.
 pub fn print(graph: &Graph) -> String {
     Printed(graph).to_string()
 }
 
-/// A graph as [`print`] writes it.
+/// A graph as [`print()`] writes it.
 struct Printed<'a>(&'a Graph);
 
 impl std::fmt::Display for Printed<'_> {
@@ -2192,8 +2145,7 @@ impl std::fmt::Display for Printed<'_> {
 
 /// Renders a value in the literal grammar shared with `.orla`.
 pub fn literal_text(value: &Value) -> String {
-    // A number a scene wrote is exact and has no width until a Kernel's
-    // param gives it one, so it reads back as written, without `d`.
+    // A scene number reads back as written, without `d`.
     match value {
         Value::Double(v) => format!("{v:?}"),
         Value::Long(v) => v.to_string(),

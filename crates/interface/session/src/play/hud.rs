@@ -1,8 +1,6 @@
-//! One line of frame data over the picture, toggled by F10: rendered on
-//! the CPU with a five-by-seven font into `0x00RRGGBB` pixels, which the
-//! GPU presenter samples as an overlay and the CPU path stamps into its
-//! frame. Nothing here knows about windows, or keeps its own time: the
-//! seconds are the host's clock's.
+//! The F10 frame-data line, rendered on the CPU with a 5x7 font into
+//! `0x00RRGGBB` pixels for a presenter to overlay. Times come from the
+//! host's clock.
 
 use std::time::Duration;
 
@@ -60,8 +58,7 @@ const GLYPHS: &[(char, Glyph)] = &[
     ('~', [0x00, 0x00, 0x08, 0x15, 0x02, 0x00, 0x00]),
 ];
 
-/// A cell is the glyph and a column of space; a line is a cell tall plus a
-/// row of space above and below.
+/// A glyph plus one column of space; a glyph plus a row above and below.
 const CELL: (u32, u32) = (6, 9);
 const INK: u32 = 0x00E0_E0E0;
 const PAPER: u32 = 0x0000_0000;
@@ -77,8 +74,8 @@ pub struct Panel {
     pub pixels: Vec<u32>,
 }
 
-/// Renders `text` at `scale` device pixels per font pixel. Uppercase is
-/// drawn as lowercase; a character the font lacks is a gap.
+/// Renders `text` at `scale` device pixels per font pixel, uppercase as
+/// lowercase; a character outside the font is a gap.
 pub fn panel(text: &str, scale: u32) -> Panel {
     let scale = scale.max(1);
     let chars: Vec<char> = text.chars().map(|c| c.to_ascii_lowercase()).collect();
@@ -120,14 +117,12 @@ pub fn stamp(panel: &Panel, frame: &mut [u32], frame_width: u32, frame_height: u
     }
 }
 
-/// What a frame took, smoothed, and what the last one did.
+/// Smoothed frame times.
 #[derive(Debug)]
 pub struct Stats {
     last_start: Option<f64>,
-    /// Smoothed milliseconds: between frames, evaluating, waiting for
-    /// the device to finish what evaluating gave it, and presenting
-    /// (which includes waiting for the display's refresh). The device's
-    /// own time is `None` for a backend that has no device.
+    /// Smoothed milliseconds: frame interval, evaluating, settling the
+    /// device (`None` without one), and presenting (including vsync).
     interval: f64,
     evaluate: f64,
     device: Option<f64>,
@@ -146,7 +141,7 @@ impl Default for Stats {
     }
 }
 
-/// An exponential average: the last few frames count, one frame does not.
+/// An exponential moving average, weight 0.1 per sample.
 fn smooth(average: &mut f64, sample: Duration) {
     let millis = sample.as_secs_f64() * 1000.0;
     *average = if *average == 0.0 {
@@ -167,8 +162,7 @@ impl Stats {
         }
     }
 
-    /// Records how long evaluating, waiting for the device and
-    /// presenting took this frame.
+    /// Records this frame's evaluating and device times.
     pub fn record(&mut self, evaluate: Duration, device: Option<Duration>) {
         smooth(&mut self.evaluate, evaluate);
         if let Some(device) = device {
@@ -176,20 +170,19 @@ impl Stats {
         }
     }
 
-    /// What presenting the frame took, once the device has presented it.
+    /// Records this frame's presenting time.
     pub fn presented(&mut self, present: Duration) {
         smooth(&mut self.present, present);
     }
 
-    /// The line: the smoothed times, then what the caller adds.
+    /// The smoothed times, then `rest`.
     pub fn line(&self, rest: &str) -> String {
         let fps = if self.interval > 0.0 {
             1000.0 / self.interval
         } else {
             0.0
         };
-        // `device`, not `gpu`: the backend's own name follows, and one
-        // line cannot say `gpu` twice and mean two things.
+        // Labelled `device`: the backend's name follows in `rest`.
         let device = match self.device {
             Some(device) => format!("device {device:.2} ms | "),
             None => String::new(),
@@ -235,9 +228,7 @@ mod tests {
             "a backend with no device has no time of its own: {}",
             stats.line("x")
         );
-        // A backend with a device says what the device took, which is
-        // then not part of presenting, and is not called `gpu`: the
-        // backend's own name is already that.
+        // A backend with a device reports its time apart from presenting.
         let mut stats = Stats::default();
         stats.begin(0.0);
         stats.record(Duration::from_millis(2), Some(Duration::from_micros(1450)));

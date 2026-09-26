@@ -1,27 +1,20 @@
-//! The optimizer: what a Kernel computes, in fewer instructions, with
-//! every word the same. Four rewrites, each exact by construction:
+//! The optimizer: a Kernel's computation in fewer instructions, every
+//! word the same. Each rewrite is exact by construction:
 //!
-//! - a component, field, column or element taken straight out of what
-//!   built it is that part; a vector rebuilt from all of its own
-//!   components in order is the vector;
-//! - an operation on literals alone is its literal, where the backends'
-//!   own arithmetic gives one value and no failure: integers that
-//!   overflow or divide by zero stay for the run to report;
-//! - a pure operation computed twice on the same operands, in one block
-//!   or an enclosing one, is computed once (a Field read is pure unless
-//!   the Field is a memory the steps write; a call is pure unless the
-//!   function writes);
-//! - a value nothing reads is not computed, unless it is a `put`, a
-//!   call that writes, a block holding one, or a name a trace shows;
-//! - a call to a short function is what the function does, written out
-//!   where it was called, which costs the interpreter no frame and the
-//!   JIT no call;
-//! - work inside a loop that does not change while the loop runs is
-//!   done once, before it, when it cannot fail (so a run that fails
-//!   still reports the failure it did, of the element it did).
+//! - a part taken straight out of its construction is that part; a
+//!   vector rebuilt from its own components in order is the vector;
+//! - an operation on literals folds where the backends' arithmetic gives
+//!   one value and no failure;
+//! - a pure operation repeated on the same operands in one block or an
+//!   enclosing one is computed once (a memory read and a writing call are
+//!   impure);
+//! - an unread value is dropped, except a `put`, a writing call, a block
+//!   holding one, or a name a trace shows;
+//! - a call to a short function is written out in place;
+//! - loop-invariant work that cannot fail moves before the loop.
 //!
-//! Values are then numbered again in pre-order, as the IR requires.
-//! Nothing here reorders floats or changes which failure a run reports.
+//! Values are then renumbered in pre-order. Floats keep their order and
+//! a run reports the same failure.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -31,27 +24,19 @@ use crate::{
 };
 
 /// A function of at most this many instructions, nested blocks counted,
-/// is written out where it is called instead: a call costs a frame on
-/// the interpreter and a real call on the JIT, and a short function is
-/// cheaper spelled out. Beyond it the code would grow faster than the
-/// calls it saves.
+/// is written out where it is called.
 const INLINE_LIMIT: usize = 96;
 
-/// A function taking a record or an array of at least this many words
-/// is written out where it is called even when it is longer: the
-/// argument is copied at every element, which costs more than the
-/// instructions do, and written out its reads narrow too. Beyond
-/// [`INLINE_BIG_LIMIT`] instructions the code would grow too far for
-/// what one copy is worth. Giving one back was tried and measured as
-/// nothing: a function that builds a wide value pays for building it,
-/// not for handing it over.
+/// A function taking a record or array of at least this many words is
+/// written out where it is called up to [`INLINE_BIG_LIMIT`] instructions,
+/// so its argument is not copied per element and its reads narrow.
 const BIG_ARG_WORDS: usize = 32;
-/// How long a function taking a wide argument may be and still be
-/// written out where it is called.
+/// The most instructions of a function taking a wide argument that is
+/// still written out where it is called.
 const INLINE_BIG_LIMIT: usize = 1024;
 
-/// Optimizes every function of a module. The result computes what the
-/// input did, word for word, and validates whenever the input does.
+/// Optimizes every function of a module. The result computes the same
+/// words and validates whenever the input does.
 pub fn optimize(module: Module) -> Module {
     let writers = crate::validate::writers(&module.functions);
     let memories: Vec<bool> = module
@@ -65,9 +50,8 @@ pub fn optimize(module: Module) -> Module {
         writers: &writers,
         memories: &memories,
     };
-    // Functions are defined before they are called, so taking them in
-    // order means a call is always to one already optimized: what is
-    // written out is its short form, and depth costs nothing.
+    // Functions precede their callers, so a written-out call is already
+    // optimized.
     let mut functions: Vec<Function> = Vec::with_capacity(module.functions.len());
     for function in &module.functions {
         let flattened = inline_calls(function, &functions, &module.structs);
@@ -92,11 +76,9 @@ pub fn optimize(module: Module) -> Module {
     })
 }
 
-/// The module without the functions nothing it runs calls: a document's
-/// helpers are every Kernel's in it, and one a Kernel never calls must
-/// not decide what it is — a device refusing it for a `Long` it never
-/// computes — nor be emitted for it. The rest keep their order, so a
-/// call is still to one defined before.
+/// The module without the functions its entry points never reach, so an
+/// unused document helper neither decides what devices take it nor is
+/// emitted. The rest keep their order.
 fn prune(mut module: Module) -> Module {
     fn calls(body: &[Instruction], found: &mut Vec<bool>) {
         for instruction in body {
@@ -128,8 +110,7 @@ fn prune(mut module: Module) -> Module {
     for function in module.merge.iter().chain(module.init.iter()) {
         calls(&function.body, &mut used);
     }
-    // A function calls only those before it, so going back from the last
-    // finds everything a used one calls.
+    // Callees precede callers, so one backward pass finds every use.
     for index in (0..count).rev() {
         if used[index] {
             let body = module.functions[index].body.clone();
@@ -195,9 +176,9 @@ fn highest(body: &[Instruction]) -> u32 {
         .unwrap_or(0)
 }
 
-/// `function` with its calls to short functions written out. The callee's
-/// values take fresh ids above the caller's, its `Arg(i)` reads become
-/// the call's own operands, and what it returns takes the call's place.
+/// `function` with its calls to short functions written out: callee
+/// values take fresh ids, `Arg(i)` reads become the call's operands, and
+/// the return value takes the call's place.
 fn inline_calls(function: &Function, functions: &[Function], structs: &[StructDef]) -> Function {
     let inlinable: Vec<bool> = functions
         .iter()
@@ -242,8 +223,8 @@ fn inline_calls(function: &Function, functions: &[Function], structs: &[StructDe
 struct Inline<'a> {
     functions: &'a [Function],
     inlinable: &'a [bool],
-    /// A value that stands for another: a call's value is what the
-    /// written-out body returned, and an argument read is the operand.
+    /// Values standing for others: a call's value for what the body
+    /// returned, an argument read for its operand.
     alias: HashMap<u32, ValueId>,
     /// The next free value id; the numbering is made dense again later.
     next: u32,
@@ -339,8 +320,8 @@ impl Inline<'_> {
         out
     }
 
-    /// A value of the callee as the caller names it: an argument read is
-    /// the operand it was called with, anything else its fresh id.
+    /// A callee value as the caller names it: an argument read is its
+    /// operand, anything else its fresh id.
     fn renamed(
         id: ValueId,
         ids: &HashMap<u32, ValueId>,
@@ -459,9 +440,8 @@ struct Ctx<'a> {
     memories: &'a [bool],
 }
 
-/// Where a value came from when it is part of one element of an input:
-/// which input, the address, the element's own type and the way from
-/// the whole to this part.
+/// Where a part of one input element comes from: the input, the address,
+/// the element's type and the path from the whole.
 #[derive(Clone)]
 struct Read {
     input: u32,
@@ -474,17 +454,12 @@ struct Read {
 
 impl Ctx<'_> {
     fn function(&self, function: &Function) -> Function {
-        // The short-circuits whose other side is free come first, so
-        // what they compute is one instruction again and a loop may
-        // lift it out.
+        // Short-circuits fold first, so a loop may lift what they compute.
         let body = self.folded(&function.body);
         let body = self.hoisted(&body);
         let (body, narrowed) = self.narrowed(&body);
-        // A read every part of which is now read on its own is not a
-        // read any more, so the name it was given goes with it: showing
-        // it would mean doing work the Kernel no longer does. A trace
-        // of a Kernel a document owns walks the source instead, where
-        // every `let` still is.
+        // A narrowed-away read loses its binding name, so a trace shows
+        // only work the Kernel does.
         let bindings: Vec<(ValueId, String)> = function
             .bindings
             .iter()
@@ -535,19 +510,11 @@ impl Ctx<'_> {
         }
     }
 
-    /// A body that reads only the words it uses: a field, a column or an
-    /// element taken out of a whole element of an input becomes a read
-    /// of that part alone. A Kernel whose input holds a `struct` of
-    /// arrays would otherwise copy every word of an element into every
-    /// element of its own domain to reach three of them, which is the
-    /// whole of such a frame.
-    ///
-    /// The whole read stays where anything still wants the whole; the
-    /// sweep takes it when nothing does. Memories are left alone: a
-    /// `put` between the read and the part would be seen by the part
-    /// and not by the copy that was there before.
-    /// The body, and the whole reads the parts taken out of them left
-    /// with nothing to do.
+    /// The body reading only the words it uses: a part taken out of a
+    /// whole input element becomes a read of that part alone. The whole
+    /// read stays while anything wants it; the sweep drops it otherwise.
+    /// Memories are left alone, since a `put` would split part from copy.
+    /// Returns the body and the whole reads left unused.
     fn narrowed(&self, body: &[Instruction]) -> (Vec<Instruction>, HashSet<u32>) {
         let mut reads: HashMap<u32, Read> = HashMap::new();
         let mut narrowed: HashSet<u32> = HashSet::new();
@@ -576,8 +543,7 @@ impl Ctx<'_> {
             if let Some((read, step)) = step {
                 let mut path = read.path;
                 path.push(step);
-                // The path names this very value, or the rewrite is
-                // not the one the parts made and is left alone.
+                // Only a path naming this very value is rewritten.
                 let leads = crate::part_layout(self.structs, read.element, &path)
                     .is_some_and(|layout| layout.ty == instruction.ty);
                 if leads {
@@ -692,18 +658,15 @@ impl Ctx<'_> {
         }
     }
 
-    /// Whether a read of this input is worth narrowing: an element that
-    /// is a record or an array, which is where the words add up, and
-    /// not a memory the steps write.
+    /// Whether a read of this input is worth narrowing: a record or array
+    /// element outside the memories.
     fn narrowable(&self, input: u32, element: Type) -> bool {
         matches!(element, Type::Struct(_))
             && !self.memories.get(input as usize).copied().unwrap_or(true)
     }
 
-    /// A body with every short-circuit whose other side is free written
-    /// as one operation: `a && b` asks `b` either way when asking costs
-    /// nothing and cannot fail, which leaves a value a loop can lift
-    /// out and a backend need not branch for.
+    /// The body with every short-circuit whose other side is free and
+    /// cannot fail written as one operation (`a && b` evaluates `b` always).
     fn folded(&self, body: &[Instruction]) -> Vec<Instruction> {
         let settled = |block: &Block| match (block.body.len(), block.body.first()) {
             (1, Some(instruction)) if instruction.id == block.result => match instruction.op {
@@ -794,11 +757,9 @@ impl Ctx<'_> {
         }
     }
 
-    /// A body with every loop's unchanging work lifted out of it: an
-    /// instruction whose operands all come from outside the loop gives
-    /// the same value every iteration, so the loop computes it once.
-    /// Only operations that cannot fail move, so a run that fails still
-    /// reports the failure it did, of the element it did.
+    /// The body with each loop's invariant instructions (all operands from
+    /// outside the loop) lifted before it. Only operations that cannot fail
+    /// move, so a failing run reports the same failure.
     fn hoisted(&self, body: &[Instruction]) -> Vec<Instruction> {
         let mut out: Vec<Instruction> = Vec::with_capacity(body.len());
         for instruction in body {
@@ -831,12 +792,10 @@ impl Ctx<'_> {
                     until,
                     body,
                 } => {
-                    // Innermost first, so what an inner loop lifts can
-                    // leave the outer one too.
+                    // Innermost first, so lifted work can leave outer loops.
                     let inner = self.hoisted_block(body);
                     let mut kept = Vec::with_capacity(inner.body.len());
-                    // Everything the loop defines is inside it, until an
-                    // instruction leaves: then its value is outside.
+                    // The loop's values are inside it until lifted out.
                     let mut within: HashSet<u32> = defined(&inner.body);
                     if let Some(until) = until {
                         within.extend(defined(&until.body));
@@ -904,9 +863,8 @@ impl Ctx<'_> {
         block.body.iter().any(|i| self.has_effects(&i.op))
     }
 
-    /// Whether two instances of an operation on the same operands give
-    /// the same value: not a write, not a loop's own carried value or
-    /// index, not a read of a memory the steps change, not a block.
+    /// Whether two instances of an operation on the same operands give the
+    /// same value: pure operations outside blocks, loop state and memories.
     fn cse_safe(&self, op: &Op) -> bool {
         match op {
             Op::Put(..) | Op::Emit(_) | Op::Spend(_) | Op::Look | Op::Carried | Op::Index => false,
@@ -922,9 +880,8 @@ impl Ctx<'_> {
         }
     }
 
-    /// Drops the instructions of a block nothing needs, marking what the
-    /// kept ones need; instructions are visited last to first, so a use
-    /// is seen before its definition.
+    /// Drops unneeded instructions of a block, marking what the kept ones
+    /// need; visited last to first, so a use precedes its definition.
     fn sweep(&self, body: Vec<Instruction>, used: &mut HashMap<u32, ()>) -> Vec<Instruction> {
         let mut kept: Vec<Instruction> = Vec::with_capacity(body.len());
         for instruction in body.into_iter().rev() {
@@ -1004,7 +961,6 @@ impl Ctx<'_> {
     }
 }
 
-/// The values an operation reads, blocks aside.
 /// Every value id a body defines, nested blocks counted.
 fn defined(body: &[Instruction]) -> HashSet<u32> {
     let mut ids = HashSet::new();
@@ -1020,18 +976,17 @@ fn defined(body: &[Instruction]) -> HashSet<u32> {
     ids
 }
 
-/// Whether an operation can fail where it stands: integer arithmetic
-/// overflows and divides by zero, and a run says so of the element it
-/// happened in. Floats have no failures; a Field read is clamped.
 /// How many operations one compile may run while folding a function's
-/// loops. A table built in a loop is a hundred or so; this stops a
-/// Kernel whose loops are large from making a compile long.
+/// loops.
 const LOOP_BUDGET: u32 = 20_000;
 
+/// Whether an operation can fail: integer arithmetic overflows and
+/// divides by zero. Floats never fail; a Field read is clamped.
 fn can_fail(ty: Type, op: &Op) -> bool {
     ty.is_int_kind() && matches!(op, Op::Binary(..) | Op::Intrinsic(..))
 }
 
+/// The values an operation reads, blocks aside.
 fn operands(op: &Op) -> Vec<ValueId> {
     match op {
         Op::Unary(_, a) => vec![*a],
@@ -1074,10 +1029,9 @@ impl Simplify<'_> {
         ValueId(*self.alias.get(&id.0).unwrap_or(&id.0))
     }
 
-    /// An `if`, simplified, and as one `and` or `or` where it is a
-    /// short-circuit whose other side is cheap: that side's
-    /// instructions are emitted before it, so they must be pure and
-    /// unable to fail. `a && b` asks `b` either way when asking is free.
+    /// An `if`, simplified, and written as one `and` or `or` when it is a
+    /// short-circuit whose other side is pure and cannot fail: that side
+    /// is emitted before it.
     fn folded_if(
         &mut self,
         condition: ValueId,
@@ -1175,9 +1129,8 @@ impl Simplify<'_> {
                         until: until.as_ref().map(|block| self.nested(block)),
                         body: self.nested(body),
                     };
-                    // A loop that only computes, over a count and an
-                    // initial value known here, is run here: a Kernel
-                    // would run it again for every element.
+                    // A pure loop over a known count and initial value
+                    // runs here, once.
                     match self.run_loop(&loop_op) {
                         Some(value) => Op::Const(value),
                         None => loop_op,
@@ -1246,7 +1199,7 @@ impl Simplify<'_> {
     }
 
     /// The vector, matrix, array or struct these parts are all of, in
-    /// order, when they are.
+    /// order, if any.
     fn rebuilt(&self, parts: &[ValueId], ty: Type) -> Option<u32> {
         let (Op::Extract(first, 0), _) = (&self.defs.get(&parts[0].0)?.1, ()) else {
             return None;
@@ -1272,10 +1225,9 @@ impl Simplify<'_> {
         all.then_some(whole)
     }
 
-    /// A loop with a known count and a literal initial value whose body
-    /// only computes: run here, so what it gives is a literal. Nothing
-    /// that reads a Field, writes a memory, calls a function or can
-    /// fail is run, and the budget bounds what a compile spends on it.
+    /// A loop with a known count, a literal initial value and a pure,
+    /// infallible body without Field reads or calls, run to a literal
+    /// within [`LOOP_BUDGET`].
     fn run_loop(&self, op: &Op) -> Option<Value> {
         let Op::Loop {
             count,
@@ -1302,8 +1254,7 @@ impl Simplify<'_> {
         Some(carried)
     }
 
-    /// A block of the loop being run: every instruction in order, then
-    /// what it yields.
+    /// Runs a block of the loop: every instruction in order, then its yield.
     fn run_block(
         &self,
         block: &Block,
@@ -1369,8 +1320,7 @@ impl Simplify<'_> {
                     .unwrap_or(otherwise);
                 self.run_block(taken, carried, index, env, budget)
             }
-            // A loop inside carries its own value and counts its own
-            // iterations.
+            // An inner loop has its own carried value and index.
             Op::Loop {
                 count,
                 bound: None,
@@ -1394,8 +1344,7 @@ impl Simplify<'_> {
         }
     }
 
-    /// What a value is where the loop is being run: one the run has
-    /// computed, or a literal from outside it.
+    /// A value during the run: computed by it, or a literal from outside.
     fn known(&self, id: ValueId, env: &HashMap<u32, Value>) -> Option<Value> {
         if let Some(value) = env.get(&id.0) {
             return Some(value.clone());
@@ -1406,8 +1355,7 @@ impl Simplify<'_> {
         }
     }
 
-    /// The literal an operation on literals is, when one and never a
-    /// failure.
+    /// The literal an operation on literals gives, when it cannot fail.
     fn fold(&self, op: &Op, ty: Type) -> Option<Value> {
         if !matches!(
             ty,

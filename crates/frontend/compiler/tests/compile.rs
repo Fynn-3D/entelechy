@@ -35,15 +35,15 @@ fn grayscale_compiles_to_validated_ir() {
     assert_eq!(manifest.inputs[0].name, "source");
     assert_eq!(manifest.params[0].name, "amount");
     assert_eq!(manifest.outputs[0].ty, orla_ir::PortType::image());
-    // The lowering keeps the helper; the optimizer writes it out where it
-    // is called, and a function nothing calls then is not in the module.
+    // The lowering keeps the helper; the optimizer inlines it and drops
+    // the uncalled function.
     let lowered = orla_compiler::compile_unoptimized(GRAYSCALE).unwrap();
     assert_eq!(lowered.functions.len(), 1);
     assert_eq!(lowered.functions[0].args, vec![Type::Vec4]);
     assert!(module.functions.is_empty());
     assert!(module.entry.body.iter().any(|i| i.op == Op::Sample(0)));
-    // The optimizer writes a short function out where it was called, so
-    // the call is in the lowering and the arithmetic is in the entry.
+    // The optimizer inlines a short function: the call is in the lowering,
+    // the arithmetic in the entry.
     let written = orla_compiler::compile_unoptimized(GRAYSCALE).unwrap();
     assert!(
         written
@@ -179,8 +179,7 @@ fn control_flow_is_scoped_and_typed() {
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { let a = if true { let z = 1.0; z } else { 2.0 }; return vec4(z, 0.0, 0.0, 1.0); } }",
     );
     assert_eq!(message, "`z` is not defined");
-    // A name one letter out is named rather than searched for, in every
-    // diagnostic that says a name is not known.
+    // Every unknown-name diagnostic suggests a name one letter out.
     for (source, expected) in [
         (
             "kernel t.k@1 { requires { field.write; } output r: Image; compute { let value = 1.0; return vec4(valeu, 0.0, 0.0, 1.0); } }",
@@ -206,7 +205,7 @@ fn control_flow_is_scoped_and_typed() {
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(lenght(vec2(1.0, 2.0)), 0.0, 0.0, 1.0); } }",
     );
     assert!(message.ends_with("did you mean `length`?"), "{message}");
-    // And a name that is not near anything is left alone.
+    // A name near nothing gets no suggestion.
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output r: Image; compute { return vec4(nope, 0.0, 0.0, 1.0); } }",
     );
@@ -268,7 +267,7 @@ fn structs_are_checked_by_name_and_field() {
         message.contains("`Hit.t` expects Float, found Int"),
         "{message}"
     );
-    // A written integer has no width, and a float field takes it.
+    // A written integer has no width; a float field takes it.
     compile(&format!(
         "{prefix} compute {{ let h = Hit {{ t: 1, id: 2 }}; return vec4(h.t, 0.0, 0.0, 1.0); }} }}"
     ))
@@ -380,8 +379,7 @@ fn rate_is_context_under_time_read() {
 
 #[test]
 fn functions_with_field_parameters_are_instantiated_per_port() {
-    // The lowering is what is looked at; the optimizer writes short
-    // functions out where they are called, and drops what is then unused.
+    // The lowering is inspected; the optimizer inlines short functions.
     let module = orla_compiler::compile_unoptimized(
         "kernel test.peek@1 { requires { field.read; field.write; } input a: Grid<Float>; input b: Grid<Float>; output result: Grid<Float>;
             fn half(x: Float) -> Float { return x * 0.5; }
@@ -499,8 +497,7 @@ fn a_prefix_names_a_rule_that_folds_in_any_order() {
     let text = module.to_string();
     assert!(text.contains("mode prefix with sum"), "{text}");
 
-    // The refusals are the point of declaring the rule: each says what
-    // to write instead.
+    // Each refusal says what to write instead.
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix with sum { return sample(rows); } }",
     );
@@ -517,8 +514,8 @@ fn a_prefix_names_a_rule_that_folds_in_any_order() {
         "kernel t.k@1 { requires { field.read; field.write; } input cells: Grid<Int>; output result: Grid<Int>; prefix with sum { return sample(cells); } }",
     );
     assert!(message.contains("`Rows<T>` input"), "{message}");
-    // A float that only `min` or `max` touches is fine: those order
-    // floats the same way everywhere.
+    // A float touched only by `min` or `max` is accepted: they order
+    // floats the same everywhere.
     compile(
         "kernel t.k@1 { requires { field.read; field.write; } input rows: Rows<Float>; output result: Rows<Float>; prefix with max { return sample(rows); } }",
     )
@@ -700,7 +697,7 @@ fn a_match_is_checked_for_its_values_types_and_last_arm() {
 
 #[test]
 fn a_nested_loop_reads_the_enclosing_loops_carried_value() {
-    // The inner loop reads `outer`, carried by the loop around it, and a
+    // The inner loop reads `outer`, carried by the loop around it; a
     // scan's step reads its own carried value inside a loop.
     compile("kernel t.k@1 { requires { field.write; } output r: Rows<Int>; compute { return loop 3 with outer = 1 { loop 2 with inner = outer { inner + outer } }; } }")
         .unwrap_or_else(|error| panic!("{error}"));
@@ -801,8 +798,7 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
     ))
     .unwrap();
     assert_eq!(ok.manifest.outputs[0].element(), Type::Float);
-    // A matrix builtin is its formula in the IR, which has no such
-    // operation.
+    // A matrix builtin lowers to its formula.
     assert!(!ok.to_string().contains("transpose("), "{ok}");
     assert!(ok.to_string().contains("subscript"), "{ok}");
 
@@ -843,8 +839,7 @@ fn matrices_are_built_from_columns_multiplied_and_checked() {
 
 #[test]
 fn integer_vectors_address_fields_without_conversions_in_the_source() {
-    // The lowering is what is looked at; the optimizer writes short
-    // functions out where they are called, and drops what is then unused.
+    // The lowering is inspected; the optimizer inlines short functions.
     let module = orla_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.read; field.write; }
             struct Site { cell: IVec2; weight: Int; }
@@ -867,8 +862,8 @@ fn integer_vectors_address_fields_without_conversions_in_the_source() {
     assert!(!text.contains("icoord"), "{text}");
     assert_eq!(module.functions[0].args, vec![Type::IVec2, Type::IVec2]);
 
-    // A scatter's address may be an integer vector: the pair is converted
-    // into a synthesized struct whose address is the float one.
+    // A scatter's integer-vector address converts into a synthesized
+    // struct with a float address.
     let scatter = compile(
         "kernel t.s@1 { requires { field.read; field.write; }
             input seeds: Rows<Int>; input canvas: Grid<Int>;
@@ -935,9 +930,8 @@ fn vectors_build_from_vectors_swizzle_and_functions_may_take_a_math_builtins_nam
             } }";
     let module = compile(SHADOWING).unwrap();
     let text = module.to_string();
-    // The document's `step` and `mix` are what the calls named; the
-    // builtins are not. The optimizer writes both functions out where
-    // they were called, so the lowering is where the calls are.
+    // The calls name the document's `step` and `mix`, not the builtins;
+    // the lowering is inspected, before inlining.
     let written = orla_compiler::compile_unoptimized(SHADOWING)
         .unwrap()
         .to_string();
@@ -996,11 +990,10 @@ fn a_manifest_says_what_its_ports_hold_by_name() {
     assert!(named.contains("input song: Rows<Note>"), "{named}");
     assert!(named.contains("output result: Rows<Note>"), "{named}");
     assert!(named.contains("memory desk: Rows<Note>"), "{named}");
-    // Without the table there are no names to print: a manifest that
-    // crossed the ABI on its own is structural, and says so.
+    // Without the name table, a manifest prints structurally and says so.
     let bare = module.manifest.to_string();
     assert!(bare.contains("input song: Rows<S0>"), "{bare}");
-    // A module prints its own manifest with its own names.
+    // A module prints its manifest with its own names.
     assert!(
         module.to_string().contains("input song: Rows<Note>"),
         "{module}"
@@ -1028,8 +1021,7 @@ fn a_function_calls_only_what_is_defined_above_it() {
 
 #[test]
 fn a_type_parameter_is_bound_by_the_call() {
-    // The lowering is what is looked at; the optimizer writes short
-    // functions out where they are called, and drops what is then unused.
+    // The lowering is inspected; the optimizer inlines short functions.
     let module = orla_compiler::compile_unoptimized(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>;
             fn twice<T>(v: T) -> T { return v + v; }
@@ -1060,8 +1052,7 @@ fn a_type_parameter_is_bound_by_the_call() {
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn make<T>(n: Int) -> T { return n; } compute { return make(1); } }",
     );
     assert!(message.contains("which no argument binds"), "{message}");
-    // A body that does not hold for the types it was given says so, and
-    // says which instance it was lowering.
+    // A body that fails for its types says so, naming the instance.
     let (_, message) = semantic(
         "kernel t.k@1 { requires { field.write; } output result: Rows<Float>; fn twice<T>(v: T) -> T { return v + v; } compute { return float(twice(element() > 2)); } }",
     );
@@ -1079,7 +1070,7 @@ fn a_break_stops_its_own_loop_and_gives_its_value() {
     )
     .unwrap_or_else(|error| panic!("{error}"));
     // The loop carries the value and whether it stopped; the test reads
-    // the second, so no backend learns a new operation.
+    // the second with existing operations.
     let text = module.to_string();
     assert!(text.contains("(Int, stopped)"), "{text}");
 
@@ -1098,9 +1089,8 @@ fn a_break_stops_its_own_loop_and_gives_its_value() {
 
 #[test]
 fn a_map_writes_several_outputs_given_by_name() {
-    // Given out of order, through an `if` whose arms are records, one
-    // of them a guard's `return`: the entry gives one value per output,
-    // in declaration order.
+    // Given out of order, through an `if` of records with a guard's
+    // `return`: the entry gives one value per output, in declaration order.
     let module = compile(
         "kernel shade.split@1 {
             requires { field.write; }
@@ -1200,7 +1190,7 @@ fn a_port_keeps_its_scalars_as_the_type_says() {
     assert_eq!(manifest.inputs[1].ty.to_string(), "Rows<Int as u8>");
     assert_eq!(manifest.outputs[0].ty.to_string(), "Grid<Vec4 as unorm8>");
     assert_eq!(manifest.outputs[0].ty.schema.element_bytes(), 4);
-    // The Kernel sees a Vec4 and an Int however they are kept.
+    // The Kernel sees a Vec4 and an Int whatever their storage.
     assert_eq!(manifest.outputs[0].element(), Type::Vec4);
 
     let unknown = semantic(
@@ -1299,12 +1289,9 @@ fn a_parameter_is_any_value_a_kernel_can_hold() {
     assert!(wrong.contains("an IVec2 default must be"), "{wrong}");
 }
 
-/// Where work is counted is written into the IR, once: every loop is
-/// followed by a spend of the iterations whose body ran, every element
-/// looks when it finishes, and only a loop that can run more than
-/// `LOOK_WORK` by itself looks at each of its iterations. A module that
-/// cannot pass its budget or fill a block is left as it is, and
-/// accounting twice changes nothing.
+/// Every loop is followed by a spend of the iterations whose body ran,
+/// every element looks when it finishes, and only a loop able to exceed
+/// `LOOK_WORK` alone looks each iteration. Accounting is idempotent.
 #[test]
 fn work_is_accounted_in_the_ir() {
     fn ops(instructions: &[orla_ir::Instruction], out: &mut Vec<String>) {
@@ -1343,14 +1330,14 @@ fn work_is_accounted_in_the_ir() {
         .unwrap()
     };
 
-    // A loop read at run time can fill a block: it is counted, and the
+    // A runtime-bounded loop can fill a block: it is counted, and the
     // element looks when it finishes.
     let counted = account_ok(&kernel("return loop n with a = 0 { a + 1 };"));
     assert_eq!(shape(&counted), "loop end spend look");
     assert!(counted.accounted());
 
-    // A nest that can run more than LOOK_WORK looks at each outer
-    // iteration, before its own `until`; the inner loop only spends.
+    // A nest able to exceed LOOK_WORK looks each outer iteration, before
+    // its `until`; the inner loop only spends.
     let nested = account_ok(&kernel(
         "return loop 64 with a = 0 until a > n { loop n with b = a { b + 1 } };",
     ));
@@ -1359,25 +1346,24 @@ fn work_is_accounted_in_the_ir() {
         "loop until look loop end spend end spend look"
     );
 
-    // A nest that cannot run that much is looked at when it finishes.
+    // A smaller nest looks when it finishes.
     let small = account_ok(&kernel(
         "return loop 9 with a = 0 { loop n with b = a { b + 1 } };",
     ));
     assert_eq!(shape(&small), "loop loop end spend end spend look");
 
-    // Loops bounded where they are written, within a block: nothing.
+    // Literal-bounded loops within a block: unchanged.
     let literal = kernel("return loop 30 with a = 0 { loop 30 with b = a { b + 1 } };");
     let unchanged = account_ok(&literal);
     assert!(!unchanged.accounted());
     assert_eq!(unchanged.to_string(), literal.to_string());
 
-    // Accounting an accounted module gives it back.
+    // Accounting is idempotent.
     assert_eq!(account_ok(&counted).to_string(), counted.to_string());
 }
 
-/// A spend counts the loop right before it and nothing else: the
-/// validator refuses one anywhere else, so a backend can take the loop's
-/// own counter for it.
+/// A spend counts the loop right before it: the validator refuses it
+/// anywhere else, so a backend may use the loop's own counter.
 #[test]
 fn a_spend_follows_its_loop() {
     let module = account_ok(
@@ -1435,10 +1421,8 @@ fn emit_belongs_to_a_scatter_whose_rule_ignores_order() {
     assert!(error.contains("two fields"), "{error}");
 }
 
-/// A document's helpers are every Kernel's in it, and one a Kernel never
-/// calls is not the Kernel's: optimized, its module keeps only what its
-/// entry reaches, so a `Long` a helper beside it returns does not make a
-/// device refuse it, and the helper is not emitted for it.
+/// Optimized, a module keeps only what its entry reaches, even beside a
+/// helper returning a `Long`.
 #[test]
 fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
     let module = compile(
@@ -1456,7 +1440,7 @@ fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
         "{} functions",
         module.functions.len()
     );
-    // What it does call, it keeps, and what that calls.
+    // What it calls, and what that calls, it keeps.
     let unoptimized = orla_compiler::compile_unoptimized(
         "kernel t.rank@1 { requires { field.read; field.write; }
          fn keyed(z: Float, t: Int) -> Long { return (long(bits(z)) << 32) | long(t); }
@@ -1470,11 +1454,8 @@ fn a_helper_the_kernel_never_calls_is_not_in_its_module() {
     );
 }
 
-/// `[each ...]` writes its body out once an element, and builders nested
-/// in builders multiply: three of 4096 would be 6.9e10 copies. The count
-/// is checked before the first copy, and the copies as they add up, so a
-/// Kernel an agent sent is refused in moments rather than taking the
-/// compiler's memory. A builder of reasonable size still compiles.
+/// `[each ...]` copies multiply when nested: the count is checked before
+/// the first copy and as copies add up. A reasonable builder compiles.
 #[test]
 fn nested_builders_are_refused_before_they_run_away() {
     let kernel = |body: &str| {
@@ -1504,10 +1485,8 @@ fn account_ok(module: &orla_ir::Validated) -> orla_ir::Validated {
     orla_ir::account(module).unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// A division of written whole numbers that leaves a remainder is whole,
-/// not a fraction: beside a float it is refused, loudly, rather than
-/// taken as the float it truncated to (`x * (1 / 2)` was `x * 0.0`). One
-/// that divides exactly is a written number like any other.
+/// A written division with a remainder is an integer, refused beside a
+/// float; an exact one is a written number like any other.
 #[test]
 fn a_written_division_with_a_remainder_is_no_float() {
     let kernel = |body: &str| {
@@ -1530,7 +1509,7 @@ fn a_written_division_with_a_remainder_is_no_float() {
     }
     let (_, message) = semantic(&kernel("let x = 3.0; return x * (1 / 2);"));
     assert!(message.contains("write `1.0 / 2`"), "{message}");
-    // Exact, or named first as the integer it is: taken as written.
+    // Exact, or named as the integer it is: taken as written.
     for body in [
         "let x = 3.0; return x * (4 / 2);",
         "return 1.0 / 2;",

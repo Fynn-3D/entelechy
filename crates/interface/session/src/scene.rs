@@ -1,8 +1,7 @@
-//! The scene as its documents say it: the root `.osn`, the sub-graphs
-//! it places, the libraries it uses, the declarations they share, the
-//! Graph lowered from them, and the parameters the caller set. Reading
-//! the documents is the scene's; publishing the Kernels they define is
-//! the ledger's, which the scene hands them to.
+//! The scene from its documents: the root `.osn`, its sub-graphs and
+//! libraries, their shared declarations, the lowered Graph, and caller
+//! params. The scene reads documents; the ledger ([`Kernels`])
+//! publishes their Kernels.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,41 +20,39 @@ use crate::{Diagnostic, Event};
 
 /// A scene document and what was built from it.
 pub(crate) struct Scene {
-    /// Where the documents are.
     store: Arc<dyn Store>,
     root: PathBuf,
-    /// Libraries the caller adds to what the document uses.
+    /// Libraries the caller adds to the document's uses.
     extra_uses: Vec<PathBuf>,
-    /// The root's stamp when it was last lowered; `None` lowers it again.
+    /// The root's stamp at its last lowering; `None` lowers it again.
     stamp: Option<Stamp>,
-    /// `use` targets from the last good parse of the root and its
-    /// sub-graphs, resolved.
+    /// Resolved `use` targets of the root and its sub-graphs.
     uses: Vec<(PathBuf, bool)>,
-    /// Sub-graph documents placed by the root, with the stamps they were
-    /// loaded at; a change to any of them rebuilds the graph.
+    /// Placed sub-graph documents and their loaded stamps; a change to
+    /// any rebuilds the graph.
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
-    /// The scene's shared declarations, from its `use`s and its own top
-    /// level, which a Kernel published through the protocol inherits.
+    /// Shared declarations from `use`s and the root's top level; a
+    /// Kernel published through the protocol inherits them.
     structs: Vec<orla_language::StructDecl>,
     types: Vec<orla_language::TypeAlias>,
     functions: Vec<orla_language::FnDecl>,
     graph: Option<Graph>,
-    /// What the lowered document reads from and writes to files.
+    /// The lowered document's file inputs and outputs.
     files: orla_scene::Files,
     /// The root's text as last lowered: the structure that runs.
     text: Option<String>,
     /// Caller overrides of graph parameters.
     params: BTreeMap<String, Value>,
-    /// A change read and lowered whose Kernels are still being prepared:
-    /// it replaces the scene running when they publish, and is dropped
-    /// when one is refused.
+    /// A lowered change whose Kernels are being prepared: it replaces
+    /// the running scene when they publish, and is dropped if one is
+    /// refused.
     staged: Option<Staged>,
-    /// Whether a sync read a newer scene in place of one that waited for
-    /// its Kernels, since this was last asked ([`Scene::take_superseded`]).
+    /// Whether a newer read superseded a staged scene
+    /// ([`Scene::take_superseded`]).
     superseded: bool,
 }
 
-/// The scene running, kept to be put back whole ([`Scene::put_back`]).
+/// The running scene, kept to be put back whole ([`Scene::put_back`]).
 pub(crate) struct Kept {
     stamp: Option<Stamp>,
     uses: Vec<(PathBuf, bool)>,
@@ -67,19 +64,17 @@ pub(crate) struct Kept {
     params: BTreeMap<String, Value>,
 }
 
-/// A scene lowered and waiting for its own Kernels, and what it replaces
-/// when they stand.
+/// A lowered scene waiting for its Kernels.
 struct Staged {
     graph: Graph,
     text: String,
     files: orla_scene::Files,
     uses: Vec<(PathBuf, bool)>,
     sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
-    /// Graph documents the running scene places and this one does not,
-    /// whose Kernels are retired once it runs.
+    /// Graph documents only the running scene places; their Kernels
+    /// retire once this one runs.
     gone: Vec<PathBuf>,
-    /// The declarations the running scene shares, put back when this
-    /// change is refused.
+    /// The running scene's declarations, restored if this is refused.
     declared: Declared,
 }
 
@@ -110,9 +105,8 @@ impl Scene {
         }
     }
 
-    /// The directories the scene reads from by what it says: the root's
-    /// and those of the graphs it places, and what it `use`s, a
-    /// library's or a package's directory as it is, a file's beside it.
+    /// The directories the scene reads: the root's, its placed graphs',
+    /// each used directory, and each used file's parent.
     pub(crate) fn read_from(&self) -> Vec<PathBuf> {
         let beside = |path: &Path| {
             path.parent()
@@ -146,13 +140,12 @@ impl Scene {
         &self.root
     }
 
-    /// The root document's text as last lowered: the structure the
-    /// graph that runs was built from.
+    /// The root's text the running graph was lowered from.
     pub(crate) fn text(&self) -> Option<&str> {
         self.text.as_deref()
     }
 
-    /// What the scene reads from and writes to files.
+    /// The scene's file inputs and outputs.
     pub(crate) fn files(&self) -> &orla_scene::Files {
         &self.files
     }
@@ -167,9 +160,8 @@ impl Scene {
 
     /// Overrides a graph parameter; see [`crate::Session::set_param`].
     pub(crate) fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
-        // Judged by the newest document the session has read: a scene
-        // waiting for its Kernels, else the one running. Which of them
-        // runs at this moment is the worker's timing, not the scene's.
+        // Judged by the newest document read (staged, else running), so
+        // the answer is independent of worker timing.
         let newest = self
             .staged
             .as_ref()
@@ -180,16 +172,14 @@ impl Scene {
             (Some(param), _) => value
                 .shaped_like(&param.default)
                 .ok_or_else(|| format!("param `{name}` is a {}; `{value}` is not one", param.ty))?,
-            // A loaded scene takes from outside only the params it
-            // declares: a node's own value is the document's, and changes
-            // with it. Before a scene is loaded (a command line's params)
-            // the value is held for the scene that will declare it.
+            // A loaded scene accepts only declared params. Before one
+            // loads, the value is held for the scene to declare.
             (None, Some(graph)) => return Err(undeclared(graph, name)),
             (None, None) => value,
         };
         let previous = self.params.insert(name.to_owned(), value.clone());
-        // A parameter that sizes the graph (a node's `times`) changes its
-        // structure: the document is lowered again on the next sync.
+        // A param that sizes the graph (a node's `times`) relowers the
+        // document on the next sync.
         if previous != Some(value)
             && newest.is_some_and(|graph| graph.times_params.iter().any(|p| p == name))
         {
@@ -198,10 +188,9 @@ impl Scene {
         Ok(())
     }
 
-    /// Reads the root and every document it reaches that changed,
-    /// handing their Kernels to `kernels` to publish. A library that
-    /// changed may have changed a declaration the root's Kernels
-    /// inherit, so the root is read again after the libraries.
+    /// Reads every changed document the root reaches and hands their
+    /// Kernels to `kernels`. A changed library rereads the root, whose
+    /// Kernels inherit its declarations.
     pub(crate) fn sync(
         &mut self,
         kernels: &mut Kernels,
@@ -209,8 +198,7 @@ impl Scene {
         events: &mut Vec<Event>,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
-        // What the worker finished publishes first, the scene's change
-        // with its graph.
+        // The worker's finished changes publish first.
         let outcome = kernels.collect(runtime, events);
         self.land(outcome, kernels, runtime, events);
         self.sync_root(kernels, runtime, events, readable);
@@ -235,17 +223,16 @@ impl Scene {
             .to_path_buf()
     }
 
-    /// The root's text read and lowered, the documents it places
-    /// loaded: what a sync publishes from, nothing published yet.
+    /// Parses and lowers the root's text with its placed documents;
+    /// publishes nothing.
     fn lower(
         &self,
         text: &str,
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) -> Result<(orla_language::Document, orla_scene::Lowered), Diagnostic> {
         let document = orla_language::parse_document(text).map_err(|e| Diagnostic::from(&e))?;
-        // What the root reads beyond itself, the documents it uses and the
-        // graphs it places, is asked of the session before any is read:
-        // where reads are held, a document names no file outside them.
+        // Every used or placed document passes `readable` before any is
+        // read.
         let base = self.base();
         let placed = document.nodes.iter().filter_map(|node| match &node.kind {
             orla_language::NodeKind::SubGraph(path) => Some(path),
@@ -269,16 +256,13 @@ impl Scene {
             &self.params,
         )
         .map_err(|e| Diagnostic::from(&e))?;
-        // A graph whose nodes read what is not there, or read each other
-        // round, runs no frame: it is refused here, where the scene it
-        // would replace is still running, not found at the next frame.
+        // A graph with a missing source or a cycle is refused here,
+        // while the running scene stays.
         lowered
             .graph
             .order()
             .map_err(|e| Diagnostic::new(e.to_string()))?;
-        // Params set before any scene was loaded (a command line's) were
-        // held for the scene to declare; one it does not declare would
-        // reach nothing, and is refused rather than left unsaid.
+        // A held param the first scene does not declare is refused.
         if self.graph.is_none()
             && let Some(name) = self
                 .params
@@ -290,10 +274,9 @@ impl Scene {
         Ok((document, lowered))
     }
 
-    /// Whether `text`, as the root, would be taken whole: it lowers to a
-    /// graph whose every source is there, and every Kernel it defines
-    /// itself compiles. Nothing is written,
-    /// published or run; see [`crate::Session::check_scene`].
+    /// Whether `text` as the root lowers to a complete graph and all its
+    /// own Kernels compile and are granted. Writes, publishes and runs
+    /// nothing; see [`crate::Session::check_scene`].
     pub(crate) fn check(
         &self,
         text: &str,
@@ -332,8 +315,7 @@ impl Scene {
         readable: &dyn Fn(&Path) -> Result<(), String>,
     ) {
         let current = self.store.stamp(&self.root);
-        // The newest the scene has read: the change still being prepared,
-        // or the scene running.
+        // The newest read: staged, else running.
         let read = self
             .staged
             .as_ref()
@@ -346,8 +328,7 @@ impl Scene {
             return;
         }
         self.stamp = current;
-        // A newer change supersedes one still being prepared, which then
-        // replaces nothing.
+        // A newer change supersedes a staged one.
         if let Some(staged) = self.staged.take() {
             (self.structs, self.types, self.functions) = staged.declared;
             kernels.supersede_scene(runtime, events);
@@ -367,8 +348,7 @@ impl Scene {
                 return;
             }
         };
-        // What this update says of its own documents, from here: any of
-        // them refused, and the update does not replace the scene running.
+        // Events from here on judge this update's own documents.
         let said_from = events.len();
         let declared = (
             self.structs.clone(),
@@ -377,13 +357,11 @@ impl Scene {
         );
         let name = self.document_name();
         let base = self.base();
-        // Kernels defined by the root: its top-level ones and the inline
-        // ones of its own nodes. Inline Kernels of sub-graphs belong to
-        // their documents.
+        // Kernels by owning document: the root owns its top-level and
+        // node-inline Kernels; a sub-graph owns its inline ones.
         let mut by_document: BTreeMap<PathBuf, Vec<Defined>> = BTreeMap::new();
         let root = self.root.clone();
         let root_key = PathBuf::from(&name);
-        // The root's own top-level Kernels see the shared declarations too.
         let mut document = document;
         let mut declarations = String::new();
         match declarations_for(self.store.as_ref(), &base, &document.uses) {
@@ -434,8 +412,7 @@ impl Scene {
             by_document.entry(path.clone()).or_default();
         }
         by_document.entry(root.clone()).or_default();
-        // Documents that were graph documents before and are not any more
-        // release their kernels.
+        // Graph documents the new scene drops.
         let gone: Vec<PathBuf> = self
             .sub_graphs
             .keys()
@@ -452,8 +429,8 @@ impl Scene {
             let key = if path == root {
                 declarations.clone()
             } else {
-                // A sub-graph document's inline Kernels inherit through
-                // its own `use` items, resolved during lowering.
+                // A sub-graph's inline Kernels inherit through its own
+                // `use` items.
                 let dir = path
                     .parent()
                     .unwrap_or_else(|| Path::new("."))
@@ -478,10 +455,8 @@ impl Scene {
             );
             batches.extend(staged.map(|batch| (path, batch)));
         }
-        // The scene's own documents, the root and the graphs it places,
-        // publish whole or not at all; one refused leaves every Kernel of
-        // it as it was, and the scene running stays the one that runs, as
-        // a Kernel's failed update leaves the running version.
+        // The root and its placed graphs publish whole or not at all; a
+        // refusal leaves every Kernel and the running scene in place.
         let refused = events[said_from..].iter().any(|event| {
             matches!(event, Event::Rejected { path, .. }
                 if *path == root || sub_graphs.contains_key(path))
@@ -498,8 +473,8 @@ impl Scene {
             )));
             return;
         }
-        // The graph waits for its Kernels: it replaces the scene running
-        // when every one of them is ready and published with the others.
+        // The graph replaces the running scene once all its Kernels
+        // publish together.
         self.staged = Some(Staged {
             graph: lowered.graph,
             text,
@@ -517,10 +492,8 @@ impl Scene {
         self.land(outcome, kernels, runtime, events);
     }
 
-    /// Puts the scene waiting for its Kernels in place of the one running
-    /// once its change published, or drops it when the change was
-    /// refused; while it is prepared the scene running goes on. `outcome`
-    /// is what the ledger said of the scene's change, if anything.
+    /// Applies the ledger's `outcome` for the staged scene: published
+    /// replaces the running scene, refused drops it, `None` waits.
     fn land(
         &mut self,
         outcome: Option<bool>,
@@ -542,16 +515,14 @@ impl Scene {
             }
             Some(true) => {
                 let staged = self.staged.take().expect("a scene is staged");
-                // Only now do the documents it no longer places let go of
-                // their Kernels: until it replaced the scene running, that
-                // scene could still run them.
+                // Dropped documents retire their Kernels only now, when
+                // the scene that ran them is replaced.
                 for path in staged.gone {
                     kernels.retire_document(&path, runtime, events);
                 }
                 self.sub_graphs = staged.sub_graphs;
                 self.uses = staged.uses;
-                // A value held for a param the document no longer declares
-                // reaches nothing now, and is let go with the declaration.
+                // Values of params the document does not declare drop.
                 let graph = staged.graph;
                 self.params
                     .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
@@ -563,8 +534,8 @@ impl Scene {
         }
     }
 
-    /// The scene running, as it is: what a change that may be refused
-    /// puts back, from memory, whatever its documents now say.
+    /// A copy of the running scene, for a refused change to restore
+    /// from memory.
     pub(crate) fn keep(&self) -> Kept {
         Kept {
             stamp: self.stamp,
@@ -582,9 +553,8 @@ impl Scene {
         }
     }
 
-    /// Puts back the scene [`Scene::keep`] kept, the root read at `stamp`:
-    /// the graph that ran runs again, whether or not the text on disk
-    /// would load, and a scene waiting for its Kernels is dropped.
+    /// Restores the scene [`Scene::keep`] kept, the root read at
+    /// `stamp`, regardless of the text on disk; drops any staged scene.
     pub(crate) fn put_back(&mut self, kept: Kept, stamp: Option<Stamp>) {
         self.staged = None;
         self.stamp = stamp.or(kept.stamp);
@@ -597,20 +567,17 @@ impl Scene {
         self.params = kept.params;
     }
 
-    /// Whether a scene that waited for its Kernels was superseded by a
-    /// newer one read since this was last asked.
+    /// Whether a staged scene was superseded since the last call.
     pub(crate) fn take_superseded(&mut self) -> bool {
         std::mem::take(&mut self.superseded)
     }
 
-    /// Whether a scene read is waiting for its Kernels to replace the one
-    /// running.
+    /// Whether a staged scene waits for its Kernels.
     pub(crate) fn waiting(&self) -> bool {
         self.staged.is_some()
     }
 
-    /// Whether `path` is a graph document the scene places, running or
-    /// waiting for its Kernels: the scene's own, not a library.
+    /// Whether the running or staged scene places `path` as a graph.
     fn places(&self, path: &Path) -> bool {
         self.sub_graphs.contains_key(path)
             || self
@@ -619,9 +586,8 @@ impl Scene {
                 .is_some_and(|staged| staged.sub_graphs.contains_key(path))
     }
 
-    /// Waits until every change being prepared has published or been
-    /// refused, the scene's with its graph: what must stand before a
-    /// caller that replaced the document answers.
+    /// Waits until every prepared change, the scene's included, has
+    /// published or been refused.
     pub(crate) fn wait(
         &mut self,
         kernels: &mut Kernels,
@@ -698,7 +664,6 @@ impl Scene {
                 kernels.mark_read(path, current);
                 continue;
             }
-            // A library's own `use` items bring in shared declarations.
             let dir = path
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
@@ -749,8 +714,8 @@ impl Scene {
         changed
     }
 
-    /// Prepares `source`, a document holding one Kernel, without
-    /// publishing it; see [`crate::Session::prepare_source`].
+    /// Prepares a one-Kernel document unpublished; see
+    /// [`crate::Session::prepare_source`].
     pub(crate) fn prepare_source(
         &self,
         source: &str,
@@ -763,8 +728,7 @@ impl Scene {
             .map_err(|e| Diagnostic::new(e.to_string()))
     }
 
-    /// Compiles `source`, a document holding one Kernel, as
-    /// [`Scene::prepare_source`] does, and no further.
+    /// Compiles a one-Kernel document as [`Scene::prepare_source`] does.
     pub(crate) fn compile_source(
         &self,
         source: &str,
@@ -784,10 +748,9 @@ impl Scene {
         } else {
             declarations_for(self.store.as_ref(), base, &document.uses).map_err(Diagnostic::new)?
         };
-        // The scene's shared declarations come after the source's own,
-        // and a name the source declares, at its top or inside its
-        // Kernel, is the source's: a Kernel may redefine a shared struct,
-        // which is how a state's layout changes while it runs.
+        // Shared declarations fill in names the source does not declare;
+        // the source's own win, so a Kernel may redefine a shared struct
+        // and change a state's layout while it runs.
         for shared in &self.structs {
             let declared = |d: &orla_language::StructDecl| d.name.value == shared.name.value;
             if !document.structs.iter().any(declared)
@@ -827,9 +790,8 @@ impl Scene {
     }
 }
 
-/// Why `name` is refused as a param of `graph`, which does not declare
-/// it: a declared param named nearly so, or the nodes that set a value of
-/// that name themselves, which change as the document does.
+/// Why the undeclared `name` is refused: the nearest declared param, or
+/// the nodes that set it themselves.
 fn undeclared(graph: &Graph, name: &str) -> String {
     let mut why = format!("`{name}` is not a param the scene declares");
     let near = orla_language::nearest(name, graph.params.iter().map(|p| p.name.as_str()));

@@ -1,10 +1,8 @@
-//! The play every interface shares (`orla_session::play`), through the
-//! C ABI: a host that shows a scene hands its person's keys, pointer,
-//! wheel and pads here, asks for a frame, shows the picture on its own
-//! device and plays the sound on its own. A page is such a host: its
-//! canvas, its events, WebAudio and the Gamepad API. What the keys mean,
-//! how a pad is a keyboard, what the line of frame data says and how a
-//! replay drives the scene are the play's, never the host's.
+//! The shared play (`orla_session::play`) through the C ABI. A host (a
+//! page, say) hands in keys, pointer, wheel and pads, asks for a frame,
+//! and shows the picture and plays the sound on its own devices. Key
+//! meanings, pad mapping, the frame data line and replays belong to the
+//! play.
 
 use std::ffi::{CString, c_char, c_int};
 use std::path::Path;
@@ -50,9 +48,9 @@ fn pad_axis(name: &str) -> Option<PadAxis> {
     })
 }
 
-/// Opens the scene a replay names, `replay` a path among `files`, with
-/// the library it names, and plays it: its inputs drive the frames until
-/// it ends.
+/// Opens the scene and library the replay at `replay` (a path among
+/// `files`) names, and plays it: its inputs drive the frames until it
+/// ends.
 ///
 /// # Safety
 /// `files` is a pointer `orla_files` returned, not freed yet; `replay`
@@ -74,7 +72,8 @@ pub unsafe extern "C" fn orla_open_replay(
     opened(Some(store), Opening::Replay(Path::new(replay)), backend)
 }
 
-/// A key, by its name (`a`, `ArrowLeft`, `F5`), pressed or released.
+/// A key by name (`a`, `ArrowLeft`, `F5`), pressed or released; 1 when
+/// the play asks to stop.
 ///
 /// # Safety
 /// `session` is a live session; `name` a NUL-terminated string.
@@ -118,7 +117,7 @@ pub unsafe extern "C" fn orla_play_button(session: *mut OrlaSession, which: c_in
     }
 }
 
-/// The wheel turned by `(x, y)` lines, y positive away from the person.
+/// The wheel turned by `(x, y)` lines, y positive away from the user.
 ///
 /// # Safety
 /// `session` is a live session.
@@ -129,8 +128,7 @@ pub unsafe extern "C" fn orla_play_wheel(session: *mut OrlaSession, x: f32, y: f
     }
 }
 
-/// A pad's button, by its name, pressed or released; -1 for a name that
-/// is none.
+/// A pad button by name, pressed or released; -1 for an unknown name.
 ///
 /// # Safety
 /// `session` is a live session; `name` a NUL-terminated string.
@@ -150,8 +148,8 @@ pub unsafe extern "C" fn orla_play_pad(
     0
 }
 
-/// A pad's axis, by its name, at `value`; a stick's up is positive; -1
-/// for a name that is none.
+/// A pad axis by name at `value`, a stick's up positive; -1 for an
+/// unknown name.
 ///
 /// # Safety
 /// `session` is a live session; `name` a NUL-terminated string.
@@ -171,8 +169,9 @@ pub unsafe extern "C" fn orla_play_axis(
     0
 }
 
-/// One frame of the scene played on a window of `width` by `height`
-/// pixels at `scale`, the sound device at `rate` (zero without one).
+/// One frame played on a `width` by `height` pixel window at `scale`, the
+/// sound device at `rate` (zero without one). 0 shown, 1 waiting, -1
+/// failed.
 ///
 /// # Safety
 /// `session` is a live session.
@@ -210,9 +209,8 @@ pub unsafe extern "C" fn orla_play_frame(
     })
 }
 
-/// Draws the frame's picture, with the line of frame data over it when
-/// F10 shows it, on the page's canvas whose element id is `canvas`, from
-/// where the GPU holds it.
+/// Draws the frame's picture from the GPU on the page's canvas with
+/// element id `canvas`, the frame data line over it when F10 shows it.
 ///
 /// # Safety
 /// `session` is a live session; `canvas` a NUL-terminated string.
@@ -254,10 +252,10 @@ pub unsafe extern "C" fn orla_play_present(
     })
 }
 
-/// The frame's picture drawn on the CPU into a window of `width` by
-/// `height` pixels, letterboxed, with the line of frame data over it:
-/// `0x00RRGGBB`, row after row, valid until the next call on the
-/// session. NULL with `orla_error()` set on failure.
+/// The frame's picture drawn on the CPU into a `width` by `height` window,
+/// letterboxed, with the frame data line: `0x00RRGGBB`, row after row,
+/// valid until the next call on the session. NULL with `orla_error()` set
+/// on failure.
 ///
 /// # Safety
 /// `session` is a live session.
@@ -273,7 +271,7 @@ pub unsafe extern "C" fn orla_play_pixels(
     let drawn = guarded(&mut s, |s| {
         s.clear();
         let started = clock();
-        // The picture brought home; one that cannot come shows the last.
+        // The picture read back; when it cannot be, the last is shown.
         let mut downloaded = false;
         if let Some((picture, _)) = s.shown
             && let Ok(image) = s.session.picture(picture)
@@ -312,9 +310,9 @@ pub unsafe extern "C" fn orla_play_pixels(
     }
 }
 
-/// The frame's sound: its block of one or two floats a frame, read in
-/// place. Returns 0 and fills `field` when the frame has one, 1 when it
-/// has none, -1 with `orla_error()` set on failure.
+/// The frame's sound block (one or two floats per sample frame), read in
+/// place. 0 and `field` filled when there is one, 1 when none, -1 with
+/// `orla_error()` set on failure.
 ///
 /// # Safety
 /// `session` is a live session; `field` points to an `OrlaField` to fill.
@@ -338,8 +336,8 @@ pub unsafe extern "C" fn orla_play_sound(
     })
 }
 
-/// Says the sound device is open, as the host describes it, for the line
-/// of frame data.
+/// Reports the sound device open, as the host describes it, for the frame
+/// data line.
 ///
 /// # Safety
 /// `session` is a live session; `description` a NUL-terminated string.
@@ -355,8 +353,8 @@ pub unsafe extern "C" fn orla_play_sound_opened(
     }
 }
 
-/// What the play has said since the last call, a line each: events,
-/// failures, the preview, a replay's outcome. "" when nothing.
+/// The play's messages since the last call, one per line (events,
+/// failures, the preview, a replay's outcome); "" when none.
 ///
 /// # Safety
 /// `session` is a live session.

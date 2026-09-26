@@ -1,26 +1,25 @@
-//! How an element's failure comes back from the device: the word a
-//! run writes when an element fails, read once the run is waited for.
+//! An element's failure from the device: the word a run writes, read once
+//! the run is waited for.
 
 use super::*;
 
-/// A device run's failure word, to be read once the device is waited
-/// for: the first failing element, in row-major order, and why.
+/// A device run's failure word: the first failing element, in row-major
+/// order, and why. Read once the device is waited for.
 pub(crate) struct FailureCheck {
     /// How the device is waited for.
     pub(crate) wait: Wait,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
-    /// The failure word and the buffer it was copied to, which go back
-    /// to the pile once read.
+    /// The failure word and its readback buffer, back to the pile once read.
     pub(crate) pair: Option<(wgpu::Buffer, wgpu::Buffer)>,
     pub(crate) pile: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
-    /// The width of the domain the run mapped over, which turns the
-    /// element's number into the reference's column and row.
+    /// The mapped domain's width, which turns an element's number into the
+    /// reference's column and row.
     pub(crate) width: u32,
-    /// The width of what a whole sum totals over (a scatter's target, a
-    /// prefix's rows), which names the element whose total does not fit.
+    /// The width a whole sum totals over (a scatter's target, a prefix's
+    /// rows), naming the element whose total does not fit.
     pub(crate) totals_width: u32,
-    /// The budget the run had, for naming a failure past it.
+    /// The run's budget, for naming a failure past it.
     pub(crate) budget: u32,
     /// The run's total, for naming a run past it.
     pub(crate) run: orla_rules::Run,
@@ -46,10 +45,9 @@ impl Check for FailureCheck {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push((word_buffer, back));
-        // An element's own failure names that element; then, with every
-        // element's value in, the first whose whole sum does not fit, as
-        // the reference totals them after the entry; past the run's
-        // total and with nothing failing, the run is what failed.
+        // Named in order: an element's own failure; then the first element
+        // whose whole sum does not fit, as the reference totals them; then,
+        // past the run's total with no element failing, the run itself.
         if word == 0 && total != 0 {
             let element = u32::MAX - total;
             let width = self.totals_width.max(1);
@@ -87,8 +85,8 @@ impl Check for FailureCheck {
 }
 
 /// What the device said, in full. A validation error's `to_string` is
-/// "Validation Error" and nothing else; what failed, and against which
-/// limit, is in its description.
+/// "Validation Error"; its description holds what failed and against which
+/// limit.
 pub(crate) fn device_error(error: &wgpu::Error) -> String {
     match error {
         wgpu::Error::Validation { description, .. } | wgpu::Error::Internal { description, .. } => {
@@ -99,9 +97,9 @@ pub(crate) fn device_error(error: &wgpu::Error) -> String {
 }
 
 impl GpuBackend {
-    /// A failure record and its way back to the Host, from the pile or
-    /// new: the first failure's word, the blocks of work the run has
-    /// taken, and the most it may take ([`wgsl::FAILURE_BYTES`]).
+    /// A failure record and its readback buffer, from the pile or new: the
+    /// first failure's word, the blocks of work taken, and the most the run
+    /// may take ([`wgsl::FAILURE_BYTES`]).
     pub(crate) fn failure_pair(&self) -> (wgpu::Buffer, wgpu::Buffer) {
         if let Some(pair) = self
             .failures

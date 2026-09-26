@@ -1,27 +1,22 @@
-//! What changed the world, and where it came from. A session's position
-//! is two coordinates: the revision, which moves when the world changes
-//! other than by running (a Kernel published or retired, the scene read
-//! again, a param set, state written or reset), and the frame, how many
-//! evaluations have committed since. The changes are remembered with
-//! their origin, and so are the attempts that were refused, which move
-//! nothing. Kernel sources are kept once each by their digest, so a
-//! generation the registry has let go can still be read.
-//!
-//! The session remembers what changed, never whole worlds: a snapshot is
-//! taken when asked and kept by whoever asked. What is remembered here is
-//! bounded, and a session running for days holds the latest of it.
+//! What changed the world, and where it came from. A position is the
+//! revision, moved by every change but running (publish, retire, scene
+//! read, param, state written or reset), and the frames committed since.
+//! Changes and refused attempts are remembered with their origin, within
+//! fixed bounds, newest kept. Kernel sources are kept once by digest, so
+//! a generation the registry released stays readable. Whole worlds are
+//! snapshots, kept by whoever took them.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 
 use orla_kernel::{Generation, KernelId};
 
-/// Changes remembered, and attempts: the oldest are let go past these.
+/// How many changes and attempts are remembered; the oldest go first.
 const CHANGES: usize = 512;
 const ATTEMPTS: usize = 256;
 
-/// A digest of a text: FNV-1a, the same in every build and on every
-/// platform. It names a document's version and a Kernel's source.
+/// A text's FNV-1a digest, stable across builds and platforms. It names a
+/// document's version and a Kernel's source.
 pub fn digest(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.bytes() {
@@ -31,31 +26,27 @@ pub fn digest(text: &str) -> u64 {
     hash
 }
 
-/// Where a change came from: a fact about how it arrived, not who sent
-/// it. The session knows no one's identity.
+/// How a change arrived. The session holds no identities.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
     /// A document the session reads, changed on disk.
     Document(PathBuf),
-    /// A protocol request, and the channel it came on: `stdin`,
-    /// `socket 3`, `websocket 4`.
+    /// A protocol request's channel: `stdin`, `socket 3`, `websocket 4`.
     Protocol(String),
-    /// The program running the session itself: a command line, a
-    /// window's keys.
+    /// The program running the session: a command line, a window's keys.
     Local,
 }
 
 /// What changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
-    /// A Kernel was published: its generation before (none when new) and
-    /// now, and its source's digest.
+    /// A Kernel was published.
     Published {
         /// The Kernel.
         id: KernelId,
-        /// The generation it replaced.
+        /// The generation it replaced; `None` when new.
         from: Option<Generation>,
-        /// Its generation now.
+        /// Its new generation.
         to: Generation,
         /// Its source, by digest ([`History::source`]).
         source: u64,
@@ -67,8 +58,8 @@ pub enum Change {
         /// The generation that left.
         from: Option<Generation>,
     },
-    /// The scene was read again and its graph rebuilt from a version of
-    /// its document, kept by digest ([`History::source`]).
+    /// The scene graph was rebuilt from a document version
+    /// ([`History::source`]).
     Scene {
         /// The document's text, by digest.
         document: u64,
@@ -87,7 +78,7 @@ pub enum Change {
     },
     /// Committed state was forgotten.
     Reset,
-    /// One port's committed state was forgotten; the rest kept theirs.
+    /// One port's committed state was forgotten.
     ResetPort {
         /// The node.
         node: String,
@@ -98,8 +89,7 @@ pub enum Change {
     Restored {
         /// The revision the snapshot was taken at.
         revision: u64,
-        /// Whether its laws came with it, or its state alone went under
-        /// the laws that ran.
+        /// Whether its laws were restored with its state.
         laws: bool,
     },
 }
@@ -111,7 +101,7 @@ pub struct Record {
     pub revision: u64,
     /// How many frames the revision before it ran.
     pub after_frames: u64,
-    /// Seconds since the Unix epoch, when it happened.
+    /// Seconds since the Unix epoch.
     pub wall: u64,
     /// Where it came from.
     pub origin: Origin,
@@ -119,7 +109,7 @@ pub struct Record {
     pub change: Change,
 }
 
-/// An attempt refused: it moved nothing, and why is kept.
+/// A refused attempt, which changed nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attempt {
     /// The revision it was refused at.
@@ -130,7 +120,7 @@ pub struct Attempt {
     pub wall: u64,
     /// Where it came from.
     pub origin: Origin,
-    /// The document or the Kernel it was about, as the refusal names it.
+    /// The document or Kernel it was about.
     pub subject: String,
     /// Why.
     pub why: String,
@@ -252,9 +242,8 @@ impl History {
         self.sources.get(&hash).map(|(text, _)| text.as_str())
     }
 
-    /// A scene document a remembered change loaded, by its digest: only
-    /// what was loaded as the scene, never a Kernel's source that shares
-    /// the store.
+    /// A scene document a remembered change loaded, by digest; Kernel
+    /// sources are excluded.
     pub(crate) fn scene_text(&self, digest: u64) -> Option<&str> {
         self.changes
             .iter()
@@ -326,8 +315,7 @@ impl History {
 mod tests {
     use super::*;
 
-    /// A source is kept once however often it is published, and let go
-    /// when no remembered change names it any more.
+    /// A source is kept once, and released with the last record naming it.
     #[test]
     fn sources_are_kept_once_and_let_go_with_the_last_record_that_names_them() {
         let mut history = History::default();
@@ -348,7 +336,7 @@ mod tests {
         assert!(history.sources.is_empty(), "{:?}", history.sources.keys());
         assert_eq!(history.source_of(&id, Generation(2)), None);
         assert_eq!(history.changes(0).count(), CHANGES);
-        // What the first reset recorded: the frames the revision before ran.
+        // The first reset records the frames of the revision before it.
         let first = history.changes(0).next().unwrap();
         assert_eq!(first.revision, 4);
         assert_eq!(first.after_frames, 2);

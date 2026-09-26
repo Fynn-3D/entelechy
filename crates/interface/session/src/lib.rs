@@ -1,28 +1,22 @@
 //! A live session over one `.osn` document and the libraries it uses.
 //!
-//! The document is the graph: the session parses it, publishes its inline
-//! Kernels, follows its `use` items to `.orla` libraries, and builds the
-//! Graph. On every [`Session::sync`] it re-reads what changed on disk and
-//! republishes only the Kernels whose text changed, keeping a running
-//! version whenever a replacement is rejected. Source resolution lives here,
-//! not in the runtimes.
+//! The session parses the document, publishes its inline Kernels, follows
+//! its `use` items to `.orla` libraries, and builds the Graph. Each
+//! [`Session::sync`] republishes only Kernels whose text changed; a
+//! rejected replacement leaves the running version. Source resolution
+//! lives here.
 //!
-//! A session is four parts, each owning its own state and reaching the
-//! others only through what it is handed: the [scene](scene) reads the
-//! documents and lowers the Graph; the [ledger](kernels) knows which
-//! document published which Kernel and publishes through the runtime it
-//! is given; the [inputs](inputs) own the Fields a scene's inputs hold in
-//! the Host; and [source resolution](sources) holds nothing at all. The
-//! [session](session) keeps the runtime and the evaluator and says in
-//! what order the parts sync; its fields are private to its own module,
-//! so no part reaches them. What a caller [observes](observe) is read
-//! from the parts it is handed, never from a session.
+//! Four parts each own their state and reach the others only through what
+//! they are handed: the [scene](scene) reads documents and lowers the
+//! Graph; the [ledger](kernels) knows which document published which
+//! Kernel; the [inputs](inputs) own the Fields a scene's inputs hold; and
+//! [source resolution](sources) is stateless. The [session](session) keeps
+//! the runtime and evaluator and orders the sync. What a caller
+//! [observes](observe) is read from the parts it is handed.
 //!
-//! This crate is what every interface drives: the command line, the
-//! Player, the C ABI, the importer and the exporter each open a
-//! [`Session`], and none of them depends on another. The wire an agent
-//! speaks to it is `orla-protocol`, and the file formats it reads and
-//! writes are `orla-formats`; neither is the session's own.
+//! Every interface (command line, Player, C ABI, importer, exporter) opens
+//! a [`Session`]. The wire is `orla-protocol`; file formats are
+//! `orla-formats`.
 
 #![warn(missing_docs)]
 
@@ -61,13 +55,12 @@ pub struct Snapshot {
     pub revision: u64,
     /// The frames the revision had run.
     pub frame: u64,
-    /// Every published Kernel: its id, generation and source, so the
-    /// snapshot needs no memory of the session's to be read.
+    /// Every published Kernel: id, generation and source, readable
+    /// without the session.
     pub laws: Vec<(KernelId, Generation, String)>,
     /// Every port's committed state.
     pub states: Vec<StateCopy>,
-    /// The scene document the running graph was built from, when one
-    /// was: the structure, which a restore may bring back too.
+    /// The scene document the running graph was built from, if any.
     pub scene: Option<String>,
 }
 
@@ -84,10 +77,9 @@ pub enum Structure {
 /// What laws a restored snapshot runs under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Laws {
-    /// The laws that run now: the snapshot's state goes under them,
-    /// migrated where a layout changed.
+    /// The running laws; state migrates where a layout changed.
     Current,
-    /// The snapshot's own: its Kernels are published back with it.
+    /// The snapshot's own Kernels, published back.
     Snapshot,
 }
 
@@ -114,12 +106,11 @@ pub use sources::{
 };
 
 /// What `trace` returns: the reference interpreter's record of one
-/// element, which only the interpreter keeps, so an interface reads it
-/// here rather than reaching for that backend itself.
+/// element, re-exported so interfaces read it here.
 pub use orla_cpu::{CALL_RECORDS, Trace, TraceValue};
 
 /// What the person running a session allows its scene beyond its own
-/// directory: given on a command line, never by what the session runs.
+/// directory. Only a command line grants it; the scene never does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Allowance {
     /// Inputs may be read from files in this directory and under it.
@@ -130,9 +121,7 @@ pub enum Allowance {
 
 pub use check::{Checked, check_document};
 
-/// A runtime built for a session ([`Session::build`]): the runtime, the
-/// display a device shows what stays on it through, and the backends
-/// `best` passed over for it, each with why.
+/// A runtime built for a session ([`Session::build`]).
 pub struct Built {
     /// The runtime.
     pub runtime: orla_kernel::Runtime,
@@ -150,9 +139,7 @@ pub struct Publishing {
     source: String,
 }
 
-/// A session opened and its scene read ([`Session::open_loaded`]): the
-/// session, its device's display, what its first read said, and the
-/// backends `best` passed over, each with why.
+/// A session opened and its scene read ([`Session::open_loaded`]).
 pub struct Loaded {
     /// The session, its scene loaded.
     pub session: Session,
@@ -205,12 +192,9 @@ pub fn parse_window(text: &str) -> Result<([f32; 2], f32), String> {
     Ok(([side(w)?, side(h)?], scale))
 }
 
-/// How many words a session's Host may hold at once unless it is told
-/// otherwise: two gibibytes of them. A budget is a net and not a
-/// policy — it stops a scene that has run away before the machine
-/// starts swapping — so the default is generous enough for a scene
-/// with millions of triangles in it and `--memory` states the policy
-/// where a scene wants more.
+/// The default word budget of a session's Host: two gibibytes. It is a
+/// net that stops a runaway scene before the machine swaps; `--memory`
+/// raises it.
 pub const DEFAULT_BUDGET_WORDS: usize = 512 * 1024 * 1024;
 
 /// The words in a number of mebibytes, which is how `--memory` asks.
@@ -218,10 +202,9 @@ pub fn budget_of_megabytes(megabytes: usize) -> usize {
     megabytes.saturating_mul(1024 * 1024 / 4)
 }
 
-/// What a session's Host may hold and spend: the words of Fields it
-/// holds at once (`--memory`), and the loop iterations one run of a
-/// Kernel may take, all its elements together (`--work`). Both are nets
-/// and not policies, and a scene that wants more says so.
+/// What a session's Host may hold and spend: Field words held at once
+/// (`--memory`), and loop iterations one Kernel run may take across all
+/// its elements (`--work`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// Words the Host may hold at once.
@@ -271,10 +254,8 @@ impl Limits {
     }
 }
 
-/// What is wrong with a document, and where in it when that is known:
-/// the line and column from 1. Carried as it was found, so an interface
-/// hands an agent the position as data rather than reading it back out
-/// of a sentence.
+/// What is wrong with a document, and where when known. The position is
+/// data an interface hands an agent as is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     /// What is wrong.
@@ -343,8 +324,8 @@ impl From<String> for Diagnostic {
 /// Something the session observed while synchronizing with the filesystem.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// A changed Kernel compiled and went to the preparation worker; the
-    /// running version stays until a later sync publishes the replacement.
+    /// A changed Kernel compiled and is being prepared; the running
+    /// version stays until a later sync publishes the replacement.
     Preparing {
         /// Document that defines it.
         path: PathBuf,
@@ -360,7 +341,7 @@ pub enum Event {
         /// New generation.
         generation: Generation,
     },
-    /// A Kernel changed but was not accepted; the previous version stays.
+    /// A changed Kernel was refused; the previous version stays.
     Rejected {
         /// Document that defines it.
         path: PathBuf,
@@ -376,15 +357,15 @@ pub enum Event {
     },
     /// The scene document was re-read and its graph rebuilt.
     SceneLoaded,
-    /// An input's text was written into the Host as rows of its
-    /// characters' codes, at first or after it changed.
+    /// An input's text was written into the Host as rows of character
+    /// codes.
     Text {
         /// The input.
         name: String,
         /// How many characters.
         chars: usize,
     },
-    /// An input's file was read into the Host, at first or after it changed.
+    /// An input's file was read into the Host.
     Loaded {
         /// The input.
         name: String,
@@ -394,18 +375,16 @@ pub enum Event {
         /// (a sound's rate).
         detail: String,
     },
-    /// The scene document changed but does not parse; the previous graph stays.
+    /// The changed scene document was refused; the previous graph stays.
     SceneRejected(Diagnostic),
-    /// An input's file is not there, and the input reads its fallback
-    /// until it is.
+    /// An input's file is absent; the input reads its fallback.
     Absent {
         /// The input.
         name: String,
         /// The file.
         path: PathBuf,
     },
-    /// An output was written to its file, after an evaluation that
-    /// changed it committed.
+    /// An output was written to its file after a committed evaluation.
     Wrote {
         /// The output.
         output: String,
@@ -414,8 +393,8 @@ pub enum Event {
         /// How many bytes.
         bytes: usize,
     },
-    /// An output was not written to its file, and why; said once until
-    /// the reason changes or a write succeeds.
+    /// An output's write was refused; said once until the reason changes
+    /// or a write succeeds.
     WriteRefused {
         /// The output.
         output: String,
@@ -424,16 +403,14 @@ pub enum Event {
         /// Why.
         why: String,
     },
-    /// A node will run off the session's main backend, and why: what it
-    /// costs a frame to take its inputs there and its outputs back is
-    /// the scene's to know before it measures anything. Said once, when
-    /// the node's placement changes.
+    /// A node runs off the session's main backend, and why. Said once
+    /// per placement change.
     Routed {
         /// The node.
         node: String,
         /// The backend that runs it.
         backend: &'static str,
-        /// Why the main backend does not.
+        /// Why it leaves the main backend.
         why: String,
     },
 }
@@ -491,8 +468,7 @@ pub enum SessionError {
     Host(orla_kernel::HostError),
     /// A resident image could not be brought back for observation.
     Observe(String),
-    /// A Field could not be written to this file: what the file's
-    /// extension names does not take it, or names nothing.
+    /// The file's extension names no format that takes the Field.
     Unwritable(PathBuf, String),
 }
 

@@ -1,5 +1,5 @@
-//! Expressions to instructions: every form of the language, typed as
-//! it is lowered, with the diagnostics a mistake in one gets.
+//! Expressions to instructions: every form of the language, typed and
+//! diagnosed as it lowers.
 
 use orla_ir::{BinaryOp, Block as IrBlock, MAX_LOOP_COUNT, Op, Type, UnaryOp, Value, ValueId};
 use orla_language::{Block, Expr, ExprKind, Span};
@@ -23,10 +23,9 @@ impl Builder<'_> {
             ExprKind::Name(name) => self.name(name, expr.span),
             ExprKind::Neg(inner) => self.unary(UnaryOp::Neg, "-", inner, expr.span),
             ExprKind::Not(inner) => self.unary(UnaryOp::Not, "!", inner, expr.span),
-            // `&&` and `||` answer without asking the other side when
-            // the first settles it, so a guard guards: `n != 0 && x / n
-            // > 1` does not divide when `n` is zero. They are an `if`,
-            // which every backend runs one arm of.
+            // `&&` and `||` short-circuit, lowered as an `if` whose one
+            // arm runs: `n != 0 && x / n > 1` divides only when `n` is
+            // not zero.
             ExprKind::Binary(
                 op @ (orla_language::BinaryOp::And | orla_language::BinaryOp::Or),
                 left,
@@ -44,9 +43,8 @@ impl Builder<'_> {
                         ),
                     ));
                 }
-                // The value is numbered before the blocks it holds, and
-                // the blocks in the order they are written, as the IR's
-                // order asks.
+                // The IR numbers the value before its blocks, and the
+                // blocks in written order.
                 let id = self.reserve(Type::Bool);
                 let (then, otherwise) = if and {
                     let other = self.nested_expr(right)?;
@@ -181,9 +179,8 @@ impl Builder<'_> {
                         ),
                     )
                 })?;
-                // One letter is a component; two to four are a swizzle,
-                // a vector of those components in that order, from one
-                // alphabet (xyzw or rgba).
+                // One letter is a component; two to four are a swizzle
+                // from one alphabet (xyzw or rgba).
                 let letters: Vec<(u8, bool)> = member
                     .chars()
                     .map(component_index)
@@ -260,11 +257,9 @@ impl Builder<'_> {
                 Ok(self.emit(ty, Op::Construct(vec![id; count.value as usize])))
             }
             ExprKind::Each(count, body) => {
-                // The count is checked before the body is written out even
-                // once, and what the copies add up to as they are written:
-                // builders nested in builders multiply, and a Kernel an
-                // agent sent must not spend the compiler's time and memory
-                // without end.
+                // The count is checked before the first copy, and the
+                // running total of copies as they are written, since
+                // nested builders multiply.
                 super::check_array_count(count.value, count.span)?;
                 // Unrolled: the body once per element, `index()` a literal.
                 let mut ids = Vec::with_capacity(count.value as usize);
@@ -298,7 +293,7 @@ impl Builder<'_> {
                         ),
                     ));
                 };
-                // A literal index is a field: checked here, free to run.
+                // A literal index is a field, checked here.
                 let literal = match &index.kind {
                     ExprKind::Int(value) => Some(*value),
                     ExprKind::Neg(inner) => match &inner.kind {
@@ -627,8 +622,7 @@ impl Builder<'_> {
                 body,
             } => {
                 // A literal count is the bound; any other `Int` is read
-                // once and the loop runs that many times, at most the
-                // largest bound.
+                // once, capped at the largest bound.
                 let (bound, run_time) = match &count.kind {
                     ExprKind::Int(literal) => {
                         let literal = *literal as u32;
@@ -656,9 +650,9 @@ impl Builder<'_> {
                 };
                 let init_id = self.value(init)?;
                 let carried = self.ty(init_id);
-                // A body that breaks carries two things: the value, and
-                // whether the loop has stopped. The `until` test reads
-                // the second, so nothing below the compiler knows.
+                // A body that breaks carries the value and whether the
+                // loop stopped; the `until` test reads the second, so a
+                // `break` exists only in the compiler.
                 let pair = breaks(body).then(|| self.pair_type(carried));
                 let init_id = match pair {
                     None => init_id,
@@ -668,10 +662,9 @@ impl Builder<'_> {
                     }
                 };
                 let held = pair.unwrap_or(carried);
-                // The values the enclosing loop (or the scan) carries are
-                // read here, before this loop begins, and stand under their
-                // names inside it: they do not change while it runs, and
-                // `Carried` inside would mean this loop's own value.
+                // The enclosing loop's (or scan's) carried values are read
+                // before this loop and stand under their names inside it;
+                // `Carried` inside means this loop's own value.
                 let outer: Vec<(String, Type, Option<Type>)> = {
                     let mut seen = std::collections::BTreeSet::new();
                     self.locals
@@ -768,8 +761,8 @@ impl Builder<'_> {
         }
     }
 
-    /// The exit test of a loop whose body breaks: stopped already, or
-    /// else what the written `until` says.
+    /// The exit test of a loop whose body breaks: stopped, or the written
+    /// `until`.
     fn until_or_stopped(
         &mut self,
         until: Option<&Expr>,
@@ -808,8 +801,8 @@ impl Builder<'_> {
         })
     }
 
-    /// A loop body that may `break`, lowered into its own block: what it
-    /// gives is the next carried value and whether the loop stopped.
+    /// A loop body that may `break`, lowered into its own block giving the
+    /// next carried value and whether the loop stopped.
     fn nested_with_break(
         &mut self,
         block: &Block,
@@ -828,8 +821,7 @@ impl Builder<'_> {
     }
 
     /// The result of a loop body that may `break`: every path gives the
-    /// carried value and whether it stopped, so the paths still agree on
-    /// one type and only the one taken runs.
+    /// carried value and whether it stopped, one type across paths.
     fn result_with_break(
         &mut self,
         expr: &Expr,
@@ -941,8 +933,7 @@ impl Builder<'_> {
         }
     }
 
-    /// A block that is one truth value, for the side of `&&` or `||`
-    /// that a settled condition answers with.
+    /// A constant truth-value block: the settled arm of `&&` or `||`.
     fn constant_block(&mut self, value: bool) -> IrBlock {
         self.buffers.push(Vec::new());
         let result = self.emit(Type::Bool, Op::Const(orla_ir::Value::Bool(value)));
@@ -971,7 +962,7 @@ impl Builder<'_> {
         span: Span,
     ) -> Result<ValueId, CompileError> {
         let inner = self.value(inner)?;
-        // A written number negated is a written number: `-0.1` beside a
+        // A negated written number stays written: `-0.1` beside a
         // `Double` is the double nearest minus a tenth.
         if op == UnaryOp::Neg
             && let Some(negated) = self.negate_written(inner)
@@ -986,9 +977,8 @@ impl Builder<'_> {
     }
 }
 
-/// Whether a block's result may `break`: the block's own result and the
-/// arms of the `if`s and `match`es it ends in. A nested `loop` holds its
-/// own breaks.
+/// Whether a block's result, or an arm of the `if`s and `match`es it
+/// ends in, may `break`. A nested `loop` holds its own breaks.
 fn breaks(block: &Block) -> bool {
     fn of(expr: &Expr) -> bool {
         match &expr.kind {

@@ -1,11 +1,8 @@
-//! The determinant and the inverse, as scalar formulas over an
-//! [`Arith`]: the lowering writes them into the IR one operation at a
-//! time, so every backend computes them in one order of operations.
-//! Matrices are column-major: entry (row `r`, column `c`) of an order
-//! `n` matrix is entry `c * n + r`.
+//! The determinant and the inverse as scalar formulas over an
+//! [`Arith`], written into the IR one operation at a time. Matrices are
+//! column-major: entry (row `r`, column `c`) of order `n` is `c * n + r`.
 
-/// The operations the formulas need, over some representation of a
-/// scalar.
+/// The scalar operations the formulas need.
 pub(super) trait Arith {
     /// A scalar, as the formulas are written over it.
     type V: Clone;

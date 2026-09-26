@@ -1,19 +1,16 @@
-//! How a scalar is kept in memory. A Kernel computes in 32-bit words —
-//! `Float`, `Int`, `Bool` — and a Field may keep a scalar narrower than
-//! that: widened when it is read, narrowed when it is written. What a
-//! Kernel sees is a value; an encoding is only storage.
+//! How a scalar is kept in memory. A Kernel computes in 32-bit words; a
+//! Field may keep a scalar narrower, widened on read and narrowed on
+//! write. An encoding is storage only.
 //!
-//! The rules here are the rules: the interpreter calls them, the JIT
-//! calls them or emits the same operations, and the GPU emits the same
-//! integer arithmetic, so a narrowed value is the same bits everywhere.
+//! These functions are the rules: the interpreter calls them, and the JIT
+//! and GPU emit the same integer operations, so a narrowed value has the
+//! same bits everywhere.
 //!
-//! - An integer keeps its low bits and reads back sign- or zero-extended,
-//!   as a machine's byte store does. A boolean reads back as whether any
-//!   bit is set.
-//! - A normalized float (`unorm8`, `snorm8`, `unorm16`) is clamped into
-//!   its range, NaN taken as zero, scaled, and rounded to nearest with
-//!   ties to even; it reads back as the integer times the reciprocal of
-//!   the scale, a multiplication every device rounds alike.
+//! - An integer keeps its low bits and reads back sign- or zero-extended.
+//!   A boolean reads back as whether any bit is set.
+//! - A normalized float (`unorm8`, `snorm8`, `unorm16`) is clamped, NaN
+//!   taken as zero, scaled, and rounded to nearest, ties to even; it reads
+//!   back as the integer times the reciprocal of the scale.
 //! - A half float rounds to nearest, ties to even, overflows to infinity
 //!   and keeps NaN a NaN; it reads back exactly.
 
@@ -96,9 +93,9 @@ impl Encoding {
         )
     }
 
-    /// Whether a scalar of this kind may be kept this way: floats by
-    /// the float encodings, integers and booleans by the integer ones. A
-    /// 64-bit scalar is kept whole.
+    /// Whether a scalar of this kind may be kept this way: floats by float
+    /// encodings, integers and booleans by integer ones, 64-bit scalars only
+    /// whole.
     pub fn fits(self, scalar: Scalar) -> bool {
         match self {
             Self::Word => true,
@@ -107,8 +104,8 @@ impl Encoding {
         }
     }
 
-    /// The Kernel's word for the stored bits (in the low `bytes()`),
-    /// read as a scalar of `kind`.
+    /// The Kernel's word of `kind` for the stored bits (in the low
+    /// `bytes()`).
     pub fn decode(self, kind: Scalar, bits: u32) -> u32 {
         let word = match self {
             Self::Word => bits,
@@ -153,8 +150,8 @@ impl fmt::Display for Encoding {
     }
 }
 
-/// The `bytes` stored at byte `byte` of `storage`, in the low bits. A
-/// scalar sits at a multiple of its size, so it is within one word.
+/// The `bytes` stored at byte `byte` of `storage`, in the low bits; they
+/// lie within one word.
 pub fn load(storage: &[u32], byte: usize, bytes: usize) -> u32 {
     let word = storage[byte / 4];
     if bytes == 4 {
@@ -163,8 +160,8 @@ pub fn load(storage: &[u32], byte: usize, bytes: usize) -> u32 {
     (word >> ((byte % 4) * 8)) & ((1u32 << (bytes * 8)) - 1)
 }
 
-/// Stores the low `bytes` of `bits` at byte `byte` of `storage`, leaving
-/// the other bytes of its word as they were.
+/// Stores the low `bytes` of `bits` at byte `byte` of `storage`, keeping
+/// the other bytes of its word.
 pub fn store(storage: &mut [u32], byte: usize, bytes: usize, bits: u32) {
     let word = &mut storage[byte / 4];
     if bytes == 4 {
@@ -202,8 +199,8 @@ pub fn f16_to_f32(h: u32) -> u32 {
     }
 }
 
-/// A float's bits to a half float's: to nearest, ties to even; too large
-/// is infinity, too small a signed zero, NaN stays NaN (quiet).
+/// A float's bits to a half float's: to nearest, ties to even; overflow
+/// is infinity, underflow a signed zero, NaN a quiet NaN.
 pub fn f32_to_f16(x: u32) -> u32 {
     let sign = (x >> 16) & 0x8000;
     let exponent = ((x >> 23) & 0xFF) as i32;
@@ -224,8 +221,8 @@ pub fn f32_to_f16(x: u32) -> u32 {
         if e < -10 {
             return sign;
         }
-        // Subnormal: the implicit one joins the mantissa and the whole
-        // shifts right by what the exponent lacks.
+        // Subnormal: the implicit one joins the mantissa, shifted right by
+        // the missing exponent.
         let full = mantissa | 0x80_0000;
         let shift = (14 - e) as u32;
         (full >> shift, full & ((1 << shift) - 1), shift)
@@ -234,8 +231,8 @@ pub fn f32_to_f16(x: u32) -> u32 {
     };
     let half = 1u32 << (shift - 1);
     let up = dropped > half || (dropped == half && value & 1 == 1);
-    // A carry out of the mantissa is the next exponent, and out of the
-    // largest exponent infinity: both are what the bits add up to.
+    // A mantissa carry rolls into the exponent, and past the largest
+    // exponent into infinity.
     sign | (value + u32::from(up))
 }
 

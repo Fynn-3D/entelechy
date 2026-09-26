@@ -4,8 +4,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value as Json, json};
 
-/// A copy of the Life example in a directory of its own: tests in this
-/// binary run in parallel, so each takes a different `name`.
+/// A copy of the Life example in its own directory, one per `name`.
 fn scratch_in(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("orla-protocol{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -39,8 +38,7 @@ fn talk_with(scene: &Path, flags: &[&str], requests: &[Json]) -> Vec<Json> {
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let stdout = BufReader::new(child.stdout.take().unwrap());
-    // What the child says on stderr, drained as it comes so a talkative
-    // child never blocks on a full pipe, kept for a diagnosis.
+    // The child's stderr, drained as it comes and kept for a diagnosis.
     let mut stderr = child.stderr.take().unwrap();
     let said = std::thread::spawn(move || {
         let mut said = String::new();
@@ -52,8 +50,7 @@ fn talk_with(scene: &Path, flags: &[&str], requests: &[Json]) -> Vec<Json> {
     for request in requests {
         writeln!(stdin, "{request}").unwrap();
         stdin.flush().unwrap();
-        // A missing answer is the served child gone: say how, with what
-        // it said, rather than just where.
+        // A missing answer is the child gone: report how, with its stderr.
         let Some(line) = lines.next() else {
             drop(stdin);
             let status = child.wait().unwrap();
@@ -73,11 +70,7 @@ fn talk_with(scene: &Path, flags: &[&str], requests: &[Json]) -> Vec<Json> {
 
 const BRIGHT_SHOW: &str = "kernel life.show@1 { requires { field.read; field.write; } input cells: Image; output result: Image; compute { let c = sample(cells); return if c.r > 0.5 { vec4(1.0, 1.0, 1.0, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) }; } }";
 
-/// A failed update leaves the running system alive, whatever the
-/// Kernel: one chained or nested past what a document may hold is
-/// refused with where, by a live session, which then goes on evaluating
-/// — rather than taking the process down with a stack its compiler ran
-/// out of. An `if` in an arm of an `if` two hundred deep is read once.
+/// An `if` two hundred deep in an arm of an `if` is read once.
 #[test]
 fn a_kernel_too_deep_to_compile_is_refused_and_the_session_lives_on() {
     let dir = scratch_in("-deep");
@@ -165,8 +158,6 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
     let kernels = ok(1)["kernels"].as_array().unwrap();
     let step = kernels.iter().find(|k| k["id"] == "life.step@1").unwrap();
     assert_eq!(step["inputs"][0]["name"], "previous");
-    // A port says what it holds by the name the Kernel gave it, not by
-    // the struct's number in the module.
     assert_eq!(step["inputs"][0]["type"], "Grid<Cell>");
     assert_eq!(step["outputs"][0]["type"], "Grid<Cell>");
     assert_eq!(step["params"][0]["name"], "brush");
@@ -223,7 +214,6 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
     let data = read["data"].as_str().unwrap();
     assert_eq!(data.len(), (160 * 120 * 16usize).div_ceil(3) * 4);
 
-    // A param the scene does not declare reaches nothing, and is refused.
     assert!(
         responses[8]["error"]["message"]
             .as_str()
@@ -262,7 +252,7 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
 
 #[test]
 fn fields_come_in_through_write_and_buttons_reach_kernels() {
-    // Its own directory: `scratch` is shared by the tests of this binary.
+    // Its own directory, apart from `scratch`.
     let dir = std::env::temp_dir().join(format!("orla-protocol-write-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -307,11 +297,10 @@ output stirred <- stir.result;
             json!({ "id": 7, "op": "write", "node": "count", "data": words(&[1.0]) }),
             json!({ "id": 8, "op": "evaluate", "time": 0.2, "buttons": [1], "wheel": [0.0, -1.0] }),
             json!({ "id": 9, "op": "read", "output": "stirred" }),
-            // A Kernel published through the protocol sees the scene's declarations.
+            // A published Kernel sees the scene's declarations.
             json!({ "id": 10, "op": "publish", "source": "kernel t.pair@1 { requires { field.write; } output result: Rows<Pair>; compute { return Pair { a: twice(1.0), b: 2.0 }; } }" }),
             json!({ "id": 11, "op": "prepare", "source": "struct Own { x: Float; }\nkernel t.own@1 { requires { field.write; } output result: Rows<Own>; compute { return Own { x: 1.0 }; } }" }),
             json!({ "id": 12, "op": "prepare", "source": "kernel t.a@1 { requires { field.write; } output result: Rows<Float>; compute { return 1.0; } }\nkernel t.b@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }" }),
-            // A Field file goes out and comes back through the protocol.
             json!({ "id": 13, "op": "read", "node": "count", "format": "field" }),
             json!({ "id": 14, "op": "quit" }),
         ],
@@ -387,9 +376,7 @@ output stirred <- stir.result;
     assert!(message(11).contains("one kernel"), "{}", message(11));
 }
 
-/// A listening server a test started, killed when the test ends, however
-/// it ends: one that listens does not stop when its standard input
-/// closes, so a failing test would leave it running.
+/// A listening server, killed on drop; closing its stdin does not stop it.
 struct Server(std::process::Child);
 
 impl Drop for Server {
@@ -448,15 +435,13 @@ fn the_protocol_serves_sockets_and_a_quit_ends_only_its_connection() {
     assert_eq!(first[0]["ok"]["nodes"], 3, "{}", first[0]);
     assert_eq!(first[1]["ok"]["executed"].as_array().unwrap().len(), 3);
     assert_eq!(first[2]["ok"]["bye"], true);
-    // The server outlived that client's quit; a second client is served.
+    // The server outlives a client's quit; a second client is served.
     let second = talk(&[
         json!({ "id": 4, "op": "status" }),
         json!({ "id": 5, "op": "quit" }),
     ]);
-    // Three of the scene's own and the two the runtime publishes itself,
-    // the rasterizer and its cutout.
+    // The scene's three, plus the rasterizer and its cutout.
     assert_eq!(second[0]["ok"]["kernels"], 5, "{}", second[0]);
-    // A quit on standard input ends the process.
     let mut stdin = child.0.stdin.take().unwrap();
     writeln!(stdin, "{}", json!({ "id": 6, "op": "quit" })).unwrap();
     drop(stdin);
@@ -489,7 +474,7 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
                 .map(str::to_owned)
         })
         .expect("the server names its port");
-    // The handshake of RFC 6455, with its own example key.
+    // The RFC 6455 handshake, with its example key.
     let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     write!(
         stream,
@@ -511,8 +496,7 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
         head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
         "{head}"
     );
-    // A masked text frame per request, as a browser sends them; an
-    // unmasked one per answer.
+    // Requests go in masked text frames; answers come unmasked.
     let send = |stream: &mut TcpStream, text: &str| {
         let mask = [0x12u8, 0x34, 0x56, 0x78];
         let bytes = text.as_bytes();
@@ -566,20 +550,17 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
     let read: Json = serde_json::from_slice(&payload).unwrap();
     assert_eq!(read["ok"]["format"], "ppm", "{read}");
     assert!(read["ok"]["data"].as_str().unwrap().len() > 125);
-    // A ping is answered with a pong carrying the payload.
     stream
         .write_all(&[0x89, 0x82, 1, 2, 3, 4, b'h' ^ 1, b'i' ^ 2])
         .unwrap();
     let (opcode, payload) = receive(&mut reader);
     assert_eq!((opcode, payload.as_slice()), (0xA, &b"hi"[..]));
-    // A quit answers, then the server closes the connection.
     send(&mut stream, &json!({ "id": 4, "op": "quit" }).to_string());
     let (_, payload) = receive(&mut reader);
     let bye: Json = serde_json::from_slice(&payload).unwrap();
     assert_eq!(bye["ok"]["bye"], true);
     let (opcode, _) = receive(&mut reader);
     assert_eq!(opcode, 0x8, "a close frame follows the quit");
-    // A plain HTTP request is told what this is.
     let mut plain = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     write!(plain, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
     let mut answer = String::new();
@@ -593,8 +574,6 @@ fn a_browser_speaks_the_protocol_over_a_websocket() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A peer that says it will send more than a request may hold is told so
-/// and let go; the server, and every other connection, lives on.
 #[test]
 fn a_peer_claiming_an_endless_request_is_refused_and_the_server_lives() {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -643,7 +622,6 @@ fn a_peer_claiming_an_endless_request_is_refused_and_the_server_lives() {
     reader.read_to_end(&mut answer).unwrap();
     let answer = String::from_utf8_lossy(&answer);
     assert!(answer.contains("at most"), "{answer}");
-    // Another client is served, by the same process.
     let stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
     let mut writer = stream.try_clone().unwrap();
     let mut reader = BufReader::new(stream);
@@ -704,8 +682,8 @@ output result <- fill.result;
         (0.08, 2.0),
         "window() and scale() reach the Kernel"
     );
-    // A window on the request wins over the session's; none, and the
-    // scene cannot be sized again.
+    // A request's window wins over the session's; without one, the scene
+    // cannot be sized again.
     assert_eq!(responses[4]["ok"]["outputs"][0]["width"], 6);
     assert_eq!(responses[5]["ok"]["window"], Json::Null);
     assert!(
@@ -821,7 +799,6 @@ fn help_answers_the_builtins_and_the_forms_as_json() {
             .unwrap()
             .contains("mix")
     );
-    // The forms of the language answer the same way.
     let forms = responses[0]["ok"]["forms"].as_array().unwrap();
     assert!(forms.len() > 15);
     assert!(
@@ -840,13 +817,8 @@ fn help_answers_the_builtins_and_the_forms_as_json() {
     assert!(each["doc"].as_str().unwrap().contains("element by element"));
 }
 
-/// The scanline example's `agent.jsonl` is the record of an agent
-/// creating a capability while the scene runs: it looks around, proposes
-/// a Kernel with a mistake, reads the positioned diagnostic, repairs it,
-/// publishes, composes the Kernel into the scene, observes the picture
-/// change, turns the effect up, and fetches its own Kernel back. This
-/// runs that record against a copy of the example and holds every step
-/// to what the example's README says happens.
+/// Replays the scanline example's `agent.jsonl`, each step held to the
+/// example's README.
 #[test]
 fn an_agent_creates_a_capability_while_the_scene_runs() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/scanline");
@@ -876,7 +848,6 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
         );
         &responses[index]["ok"]
     };
-    // Looking around: the scene, the Kernels there, a builtin's contract.
     assert_eq!(ok(0)["nodes"], 1);
     assert!(
         ok(1)["kernels"]
@@ -886,20 +857,18 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
             .any(|k| k["id"] == "picture.draw@1")
     );
     assert_eq!(ok(2)["name"], "coord");
-    // The first proposal is refused where it is wrong: a Float `&` an Int
-    // on line 9, at the expression.
+    // The first proposal is refused at the expression: a Float `&` an Int
+    // on line 9.
     let error = &responses[5]["error"];
     assert_eq!(error["message"], "cannot apply `&` to Float and Int");
     assert_eq!(
         (error["line"].as_u64(), error["column"].as_u64()),
         (Some(9), Some(20))
     );
-    // The repair prepares, unpublished, then publishes as a new Kernel.
     assert_eq!(ok(7)["id"], "scanline.effect@1");
     assert_eq!(ok(7)["current"], Json::Null);
     assert_eq!(ok(8)["id"], "scanline.effect@1");
     assert!(ok(8)["generation"].as_u64().unwrap() >= 1);
-    // The scene composed with the new Kernel loads, twice.
     for index in [10, 13] {
         let events = ok(index)["events"].as_array().unwrap();
         assert!(
@@ -909,8 +878,7 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
             responses[index]
         );
     }
-    // The picture: even rows as they were, odd rows darkened by the
-    // strength, 0.5 then 0.8.
+    // Even rows unchanged; odd rows darkened by 0.5, then 0.8.
     let pixels = |index: usize| -> (usize, usize, Vec<f32>) {
         let image = ok(index);
         let bytes = orla_formats::base64::unbase64(image["data"].as_str().unwrap()).unwrap();
@@ -945,7 +913,6 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
             }
         }
     }
-    // The Kernel comes back as it was published, the repaired line in it.
     assert!(
         ok(16)["source"]
             .as_str()
@@ -955,10 +922,8 @@ fn an_agent_creates_a_capability_while_the_scene_runs() {
     assert_eq!(ok(17)["bye"], true);
 }
 
-/// The migrate example's `agent.jsonl`: an agent changes what a running
-/// tally carries, publishing the new Kernel and a migration, and the
-/// count goes on; then it drops the migration and the old layout comes
-/// back, and the tally restarts from its seed, reported.
+/// The migrate example's `agent.jsonl`: with a migration the tally goes
+/// on; without one, the old layout returns and the tally restarts.
 #[test]
 fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/migrate");
@@ -997,7 +962,6 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     assert_eq!(state(4), vec![3], "three evaluations counted");
     assert_eq!(ok(5)["id"], "tally.upgrade@1");
     assert_eq!(ok(6)["id"], "tally.step@1");
-    // Composed with `migrate`, the next evaluation carries the state over.
     assert_eq!(
         ok(9)["migrated"],
         json!([{ "node": "count", "port": "previous", "kernel": "tally.upgrade@1" }])
@@ -1010,7 +974,6 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     );
     assert_eq!(ok(11)["migrated"], json!([]));
     assert_eq!(state(12), vec![5, 10]);
-    // Without a migration, the old layout back: the state restarts.
     assert_eq!(ok(15)["migrated"], json!([]));
     let reset = ok(15)["reset"].as_array().unwrap();
     assert_eq!(reset.len(), 1, "{}", responses[15]);
@@ -1024,10 +987,7 @@ fn an_agent_changes_a_running_states_layout_and_the_state_is_carried_over() {
     assert_eq!(ok(17)["bye"], true);
 }
 
-/// A run that spans many frames is one request: `advance` steps the
-/// scene, stops when a value says to, saves what the agent asked for,
-/// and reports what happened. An agent training a network asks once
-/// instead of once a frame.
+/// `advance` also saves what was asked, and reports.
 #[test]
 fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
     let dir = std::env::temp_dir().join(format!("orla-protocol-advance-{}", std::process::id()));
@@ -1075,18 +1035,15 @@ fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
     assert_eq!(run["value"], 42.0);
     assert_eq!(run["target"], "tally.result[0]");
     assert!(run["millis"].as_f64().unwrap() > 0.0);
-    // Only what the run watched had to be materialized: the picture was
-    // not asked for, so it did not run.
+    // Only what the run watched is materialized; the picture does not run.
     let executed = run["report"]["executed"].as_array().unwrap();
     assert!(executed.iter().any(|node| node == "tally"), "{run}");
     assert!(!executed.iter().any(|node| node == "view"), "{run}");
-    // What it saved is a Field of the Host's own format.
     let saved = run["saved"].as_array().unwrap();
     assert_eq!(saved.len(), 1);
     assert!(kept.exists(), "{saved:?}");
     assert!(std::fs::read(&kept).unwrap().len() > 8);
-    // Without an `until`, it runs the count it was given, and the whole
-    // scene runs because nothing was named.
+    // Without `until`, it runs the given count, and the whole scene runs.
     let plain = &responses[1]["ok"];
     assert_eq!(plain["stopped"], "frames");
     assert_eq!(plain["frames"], 3);
@@ -1098,7 +1055,6 @@ fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
             .iter()
             .any(|node| node == "view")
     );
-    // A count of zero and a test nobody wrote are refused by name.
     assert!(
         responses[2]["error"]["message"]
             .as_str()
@@ -1118,10 +1074,8 @@ fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An agent can measure what it changed: the same frames several times,
-/// the least of the runs, and what each node cost, as `orla bench`
-/// reports from a terminal. The clock advances while it measures, as
-/// `advance` advances it.
+/// `bench` reports the least of several runs and each node's cost; the
+/// clock advances as under `advance`.
 #[test]
 fn an_agent_can_measure_the_scene_it_is_holding() {
     let dir = scratch_in("-measure");
@@ -1131,7 +1085,7 @@ fn an_agent_can_measure_the_scene_it_is_holding() {
             json!({ "id": 1, "op": "bench", "frames": 4, "repeat": 2, "nodes": true }),
             json!({ "id": 2, "op": "bench", "frames": 0 }),
             json!({ "id": 3, "op": "bench", "frames": 100000, "repeat": 4 }),
-            // A product that passes the end of 64 bits is still too many.
+            // A product that overflows 64 bits is too many.
             json!({ "id": 4, "op": "bench", "frames": 1001u64, "repeat": 17_285_760_180_958_600_815u64 }),
             json!({ "id": 5, "op": "quit" }),
         ],
@@ -1142,7 +1096,6 @@ fn an_agent_can_measure_the_scene_it_is_holding() {
     assert_eq!(measured["ran"], true);
     assert!(measured["best_ms"].as_f64().unwrap() > 0.0);
     assert!(measured["median_ms"].as_f64().unwrap() >= measured["best_ms"].as_f64().unwrap());
-    // Life's two nodes, the costlier first.
     let nodes = measured["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), 2, "{measured}");
     assert!(nodes[0]["ms"].as_f64().unwrap() >= nodes[1]["ms"].as_f64().unwrap());
@@ -1174,10 +1127,7 @@ fn an_agent_can_measure_the_scene_it_is_holding() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A name that is not a node is refused where it is written, rather
-/// than accepted by `pin` and reported a request later as a read that
-/// says to pin it — which is what sent one reader looking for a fault
-/// in the materializing.
+/// `pin` refuses a name that is not a node.
 #[test]
 fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
     let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/mesh/scene.osn");
@@ -1205,7 +1155,6 @@ fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
         "{}",
         message(0)
     );
-    // A near miss says which node was meant.
     assert!(
         message(1).contains("did you mean `subdivided.vertices`?"),
         "{}",
@@ -1214,14 +1163,13 @@ fn a_name_that_is_not_a_node_is_refused_by_the_op_that_takes_it() {
     assert!(responses[2]["ok"].is_object(), "{:?}", responses[2]);
     assert!(message(3).contains("not a node"), "{}", message(3));
     assert!(message(5).contains("not a node"), "{}", message(5));
-    // The node that is one reads, having been pinned.
     assert!(responses[6]["ok"].is_object(), "{:?}", responses[6]);
 }
 
 #[test]
 fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
-    // JSON has arrays and no types: the parameter a value is given to
-    // takes it in its own shape, and says what it is when it cannot.
+    // A JSON value takes the shape of the parameter it is given to, or is
+    // refused with that shape.
     let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/cube/scene.osn");
     let replies = talk(
         &scene,
@@ -1252,9 +1200,7 @@ fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
     assert_eq!(style["value"][2], json!(2.0));
 }
 
-/// An agent saves by the allowance the person running the session gave,
-/// as a scene's outputs are written: with none, or outside it, nothing
-/// is written, and nothing runs either.
+/// Outside the allowance, nothing is written and nothing runs.
 #[test]
 fn advance_saves_only_where_writes_are_allowed() {
     let dir = scratch_in("-save-allowed");
@@ -1296,11 +1242,8 @@ fn advance_saves_only_where_writes_are_allowed() {
     assert!(inside.exists());
 }
 
-/// A composed scene is checked before it is written: a text that would
-/// be rejected, by its syntax or by a Kernel it defines, is answered as
-/// a sync answers it and never reaches the disk, so the document an
-/// agent reads back is the scene running. With `expect`, a writer that
-/// read an older version is refused.
+/// A text that would be rejected never reaches the disk; with `expect`, a
+/// writer holding an older version is refused.
 #[test]
 fn compose_checks_before_it_writes_and_against_the_version_read() {
     let dir = scratch_in("-compose");
@@ -1349,12 +1292,10 @@ fn compose_checks_before_it_writes_and_against_the_version_read() {
         "{stale}"
     );
     assert_eq!(stale["version"], version);
-    // Nothing that was refused reached the disk.
     assert_eq!(responses[4]["ok"]["text"], original);
     assert_eq!(std::fs::read_to_string(&scene).unwrap(), original);
     assert!(responses[5].get("error").is_none(), "{}", responses[5]);
 
-    // Against the version it read, the change is taken.
     let responses = talk(
         &scene,
         &[
@@ -1377,10 +1318,8 @@ fn compose_checks_before_it_writes_and_against_the_version_read() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A served scene is composed by an agent and read back through `read`,
-/// so what its inputs read is held to its documents' directories and the
-/// ones the person allowed: a file elsewhere is refused by name, and read
-/// once `--allow file.read` names its directory.
+/// A file elsewhere is refused by name, and read once `--allow file.read`
+/// names its directory.
 #[test]
 fn a_served_scene_reads_beside_its_documents_or_where_allowed() {
     let base = std::env::temp_dir().join(format!("orla-protocol-reads-{}", std::process::id()));
@@ -1453,9 +1392,7 @@ fn a_served_scene_reads_beside_its_documents_or_where_allowed() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// Whether a session's reads are held is decided when it is opened: once
-/// its scene has been read, holding them is refused, so what may be read
-/// never depends on when it was asked, or on who spoke first.
+/// Once the scene is read, holding its reads is refused.
 #[test]
 fn reads_are_held_from_the_start_or_not_at_all() {
     let dir = scratch_in("-held-late");
@@ -1472,11 +1409,8 @@ fn reads_are_held_from_the_start_or_not_at_all() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Any web page the person visits can reach a server on this machine. A
-/// page elsewhere is refused its WebSocket unless `--allow-origin` names
-/// it, and an HTTP request that is no upgrade, a form's or a fetch's, is
-/// answered and closed rather than read as request lines, so its body
-/// composes nothing.
+/// A foreign origin is refused unless `--allow-origin` names it; a
+/// non-upgrade HTTP request is answered and closed, its body unread.
 #[test]
 fn a_page_elsewhere_can_neither_open_a_socket_nor_post_requests() {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -1544,9 +1478,8 @@ fn a_page_elsewhere_can_neither_open_a_socket_nor_post_requests() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A server started with `--grant` gives Kernels those capabilities and
-/// no others: `status` says which, and a Kernel an agent publishes that
-/// requires another is refused with what it lacks, the one running kept.
+/// `status` lists the grants; a published Kernel requiring more is refused
+/// with what it lacks, the running one kept.
 #[test]
 fn a_served_kernel_gets_only_what_the_server_grants() {
     let dir = scratch_in("-grants");
@@ -1581,15 +1514,13 @@ fn a_served_kernel_gets_only_what_the_server_grants() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The world's history over the wire: a publish is a change with where it
-/// came from, a refused one is an attempt that moves nothing, an old
-/// generation's source can still be read, and frames count within a
-/// revision.
+/// A publish is a change with its origin, a refused one moves nothing, an
+/// old generation's source reads, and frames count within a revision.
 #[test]
 fn history_says_what_changed_the_world_and_what_was_refused() {
     let dir = scratch_in("-history");
-    // The example's own show, its dead cells a little lighter; `Cells`
-    // is the scene's, which a published Kernel inherits.
+    // The example's show with lighter dead cells; `Cells` is the scene's,
+    // inherited by the published Kernel.
     let lighter = "kernel life.show@1 { requires { field.read; field.write; } input cells: Cells; output result: Image; compute { let cell = sample(cells); let dead = vec3(0.2, 0.2, 0.25); let color = if cell.alive { vec3(1.0, 0.85, 0.45) } else { dead }; return vec4(color.x, color.y, color.z, 1.0); } }";
     let broken = lighter.replace("sample(cells)", "nope");
     let responses = talk(
@@ -1613,8 +1544,8 @@ fn history_says_what_changed_the_world_and_what_was_refused() {
     let before = ok(0)["revision"].as_u64().unwrap();
     ok(3);
     ok(4);
-    // The publish made one revision; the refused one made none; two
-    // frames ran in it.
+    // The publish makes one revision, the refused one none; two frames
+    // ran in it.
     assert_eq!(ok(5)["revision"], before + 1, "{}", ok(5));
     assert_eq!(ok(5)["frame"], 2);
     let history = ok(6);
@@ -1625,7 +1556,6 @@ fn history_says_what_changed_the_world_and_what_was_refused() {
     assert_eq!(published["from"], 3);
     assert_eq!(published["to"], 4);
     assert_eq!(published["origin"], json!({ "protocol": "stdin" }));
-    // What loaded the scene came from its documents.
     assert!(
         changes.iter().any(|c| c["kind"] == "published"
             && c["origin"]["document"]
@@ -1645,7 +1575,7 @@ fn history_says_what_changed_the_world_and_what_was_refused() {
         "{attempt}"
     );
     assert_eq!(attempt["revision"], before + 1);
-    // The document's own show, generation 3, which the publish replaced.
+    // The document's show, generation 3, which the publish replaced.
     let old = ok(7)["source"].as_str().unwrap();
     assert!(
         old.contains("kernel life.show@1") && old.contains("0.07"),
@@ -1659,10 +1589,10 @@ fn history_says_what_changed_the_world_and_what_was_refused() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A snapshot takes the world as committed: after an evaluation that
-/// failed, `read` shows the output it computed and did not commit, and
-/// the snapshot shows the state that stands. It carries every Kernel's
-/// source, and is written to a file only where writes are allowed.
+/// A snapshot takes the committed world: after a failed evaluation, `read`
+/// shows the uncommitted output and the snapshot the state that stands.
+/// It carries every Kernel's source, and is written only where writes are
+/// allowed.
 #[test]
 fn a_snapshot_takes_committed_state_and_the_laws_it_ran_under() {
     let dir = std::env::temp_dir().join(format!("orla-protocol-snapshot-{}", std::process::id()));
@@ -1713,7 +1643,7 @@ fn a_snapshot_takes_committed_state_and_the_laws_it_ran_under() {
         ],
     );
     assert!(responses[3].get("error").is_some(), "{}", responses[3]);
-    // The cache holds the count the failed evaluation computed...
+    // The cache holds the uncommitted count...
     assert_eq!(words(&responses[4]["ok"]), [3], "{}", responses[4]);
     // ...and the snapshot the count that stands.
     let snapshot = &responses[5]["ok"];
@@ -1740,8 +1670,8 @@ fn a_snapshot_takes_committed_state_and_the_laws_it_ran_under() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A tally in a library of its own, so a publish can replace it by id,
-/// and a check that fails when the count reaches `fail_at`.
+/// A tally in its own library, replaceable by id, with a check that fails
+/// when the count reaches `fail_at`.
 fn tally_world(name: &str, fail_at: i32) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("orla-protocol-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1782,15 +1712,12 @@ fn counted(snapshot: &Json) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
-/// A snapshot's world restored under the laws that run: the trial frame
-/// proves it and commits nothing, so the world is the snapshot's and the
-/// next frame counts on from it. A restore says which laws, or is
-/// refused.
+/// The trial frame commits nothing; the next frame counts on from the
+/// snapshot. A restore names its laws, or is refused.
 #[test]
 fn a_restored_world_is_the_snapshots_and_counts_on_from_it() {
     let scene = tally_world("restore", 1_000_000);
-    // The snapshot is taken in a first session and restored in a second:
-    // it is data its holder keeps, and needs nothing of the session.
+    // The snapshot is taken in one session and restored in another.
     let first = talk(
         &scene,
         &[
@@ -1817,9 +1744,9 @@ fn a_restored_world_is_the_snapshots_and_counts_on_from_it() {
     let why = responses[1]["error"]["message"].as_str().unwrap();
     assert!(why.contains("`laws`"), "{why}");
     assert!(responses[2].get("error").is_none(), "{}", responses[2]);
-    // The trial frame committed nothing: the world is the snapshot's...
+    // The trial frame commits nothing: the world is the snapshot's...
     assert_eq!(counted(&responses[3]["ok"]), 3);
-    // ...and the next frame is the one after it.
+    // ...and the next frame follows it.
     assert_eq!(counted(&responses[5]["ok"]), 4);
     let changes = responses[6]["ok"]["changes"].as_array().unwrap();
     let restored = changes.iter().find(|c| c["kind"] == "restored").unwrap();
@@ -1828,8 +1755,7 @@ fn a_restored_world_is_the_snapshots_and_counts_on_from_it() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// A world that cannot run is not restored: its trial frame fails, the
-/// state that stood stands, and the attempt is recorded with why.
+/// The attempt is recorded with its reason.
 #[test]
 fn a_world_that_cannot_run_is_refused_and_the_world_stands() {
     // The check divides by zero when the count reaches 3.
@@ -1874,8 +1800,8 @@ fn a_world_that_cannot_run_is_refused_and_the_world_stands() {
             .contains("snapshot")
     );
     let _ = revision;
-    // With its laws, the same: the law the snapshot would bring back is
-    // taken back with the state, and the law that ran runs.
+    // With its laws, the same: the snapshot's law is taken back with the
+    // state, and the running law stays.
     let faster = "kernel t.tally@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return at(previous, 0) + 10; } }";
     let responses = talk(
         &scene,
@@ -1894,9 +1820,6 @@ fn a_world_that_cannot_run_is_refused_and_the_world_stands() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// With its laws, a snapshot brings back the Kernels that ran when it was
-/// taken: a tally changed since goes back to what it was, all together
-/// with the state, and counts on as it counted then.
 #[test]
 fn a_world_restored_with_its_laws_runs_as_it_ran() {
     let scene = tally_world("laws", 1_000_000);
@@ -1936,9 +1859,8 @@ fn a_world_restored_with_its_laws_runs_as_it_ran() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// Structure has a past as the laws do: every scene the session loaded
-/// is kept by its version, `document` reads an old one, and composing it
-/// again, against the version that stands, rolls the structure back.
+/// Every scene the session loaded is kept by version: `document` reads an
+/// old one, and composing it against the standing version rolls back.
 #[test]
 fn a_scene_has_a_history_and_rolls_back_by_compose() {
     let scene = tally_world("structure", 1_000_000);
@@ -1967,7 +1889,6 @@ fn a_scene_has_a_history_and_rolls_back_by_compose() {
         scenes.last().unwrap()["origin"],
         json!({ "protocol": "stdin" })
     );
-    // The old structure read back and composed again: rolled back.
     let responses = talk(
         &scene,
         &[
@@ -1987,9 +1908,9 @@ fn a_scene_has_a_history_and_rolls_back_by_compose() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// With `structure: "snapshot"` the scene the snapshot ran in comes back
-/// before its state; when the world then cannot run, the scene that
-/// stood is put back with the state.
+/// With `structure: "snapshot"` the snapshot's scene returns before its
+/// state; if the world then cannot run, the standing scene is put back
+/// with the state.
 #[test]
 fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
     let scene = tally_world("restructure", 3);
@@ -2012,9 +1933,8 @@ fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
             .unwrap()
             .contains("1000000")
     );
-    // The scene on disk is strict again (the check fails at 3): restoring
-    // the relaxed structure with the state runs, and the scene is the
-    // snapshot's.
+    // The scene on disk is strict (the check fails at 3); restoring the
+    // relaxed structure runs, and the scene is the snapshot's.
     std::fs::write(&scene, &first).unwrap();
     let responses = talk(
         &scene,
@@ -2032,9 +1952,8 @@ fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
             .contains("1000000")
     );
     assert!(responses[2].get("error").is_none(), "{}", responses[2]);
-    // A snapshot of the strict scene at two, restored with its structure:
-    // its trial counts to three and divides by zero, so the relaxed scene
-    // that stood is put back, and the state with it.
+    // A strict snapshot at two, restored with its structure, divides by
+    // zero on its trial: the relaxed scene and its state are put back.
     std::fs::write(&scene, &first).unwrap();
     let strict = talk(
         &scene,
@@ -2067,11 +1986,8 @@ fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// A restore with its structure that is refused while the document on
-/// disk is an edit that does not load: the scene that ran is put back
-/// from memory, not read from that text, and the history says a restore
-/// was refused. (It used to leave the snapshot's scene running and the
-/// history saying nothing had moved.)
+/// The scene is put back from memory, not from a document on disk that
+/// does not load, and history records the refusal.
 #[test]
 fn a_refused_restore_puts_back_the_scene_that_ran_whatever_is_on_disk() {
     use orla_kernel::Context;
@@ -2083,14 +1999,13 @@ fn a_refused_restore_puts_back_the_scene_that_ran_whatever_is_on_disk() {
         time,
         ..Context::default()
     };
-    // A snapshot of the strict scene at two: restored, its trial counts
-    // to three and divides by zero.
+    // A strict snapshot at two: its trial divides by zero.
     let mut session = Session::open(&scene, None, 1 << 20);
     session.sync();
     session.evaluate(&context(0.0)).unwrap();
     session.evaluate(&context(0.1)).unwrap();
     let strict_at_two = session.snapshot().unwrap();
-    // The relaxed scene runs; then the person half-types an edit.
+    // The relaxed scene runs; then a half-typed edit lands on disk.
     std::fs::write(&scene, &relaxed).unwrap();
     session.sync();
     session.evaluate(&context(0.2)).unwrap();
@@ -2104,7 +2019,6 @@ fn a_refused_restore_puts_back_the_scene_that_ran_whatever_is_on_disk() {
         &context(0.3),
     );
     assert!(refused.is_err(), "{refused:?}");
-    // What runs is the relaxed scene that ran, as it ran.
     assert_eq!(
         session.snapshot().unwrap().scene.as_deref(),
         Some(relaxed.as_str()),
@@ -2130,9 +2044,8 @@ fn a_refused_restore_puts_back_the_scene_that_ran_whatever_is_on_disk() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// A refused restore moves nothing: not the revision, not a Kernel's
-/// generation, not the scene on disk, and not an edit a person made there
-/// that the session had not read yet. Only the attempt is recorded.
+/// A refused restore moves nothing: revision, generations, the scene on
+/// disk, and an unread edit there all stay. Only the attempt is recorded.
 #[test]
 fn a_refused_restore_moves_nothing() {
     let scene = tally_world("refused-whole", 1_000_000);
@@ -2149,8 +2062,7 @@ fn a_refused_restore_moves_nothing() {
         edit(&mut snapshot);
         snapshot
     };
-    // Its laws differ and its states name a port that is no state: the
-    // laws would be published, then the state refused.
+    // Its laws differ and its states name a non-state port.
     let not_state = with(&|s| {
         s["laws"][0]["source"] = json!(
             s["laws"][0]["source"]
@@ -2160,8 +2072,8 @@ fn a_refused_restore_moves_nothing() {
         );
         s["states"][0]["node"] = json!("zero");
     });
-    // Its scene defines the tally the library already publishes: the
-    // scene reads, and its Kernel is refused.
+    // Its scene defines the tally the library publishes: that Kernel is
+    // refused.
     let clash = with(&|s| {
         let text = s["scene"]["text"].as_str().unwrap().to_owned()
             + "kernel t.tally@1 { requires { field.read; field.write; } input previous: Rows<Int>; output result: Rows<Int>; compute { return at(previous, 0) + 5; } }\n";
@@ -2193,7 +2105,7 @@ fn a_refused_restore_moves_nothing() {
             .unwrap()
             .contains("+ 1;")
     );
-    // The person's edit waits on disk while a structure restore is refused.
+    // An edit waits on disk while a structure restore is refused.
     std::fs::write(&scene, &edited).unwrap();
     let responses = talk(
         &scene,
@@ -2228,9 +2140,9 @@ fn a_refused_restore_moves_nothing() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// Where a change came from is where it came from: a scene edited on disk
-/// and found by a request's sync is its document's, the scene a compose
-/// wrote is the request's; and `document` by version reads scenes only.
+/// A scene edited on disk and found by a request's sync is its document's
+/// change; a composed scene is the request's. `document` by version reads
+/// scenes only.
 #[test]
 fn a_change_found_on_disk_is_its_documents_and_versions_name_scenes() {
     let scene = tally_world("provenance", 1_000_000);
@@ -2273,8 +2185,7 @@ fn a_change_found_on_disk_is_its_documents_and_versions_name_scenes() {
         scenes.last().unwrap()["origin"],
         json!({ "protocol": "stdin" })
     );
-    // Edited on disk while the session runs, and found by a sync a
-    // protocol request made: still its document's.
+    // Edited on disk and found by a protocol sync: its document's.
     let runtime = orla_session::Session::runtime_for("cpu", Default::default()).unwrap();
     let mut session = orla_session::Session::open_with(&scene, None, runtime);
     session.sync();
@@ -2296,8 +2207,7 @@ fn a_change_found_on_disk_is_its_documents_and_versions_name_scenes() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
-/// `reset` with a `node` starts that one port again from its initial
-/// source and leaves the rest of the world's state; history says which.
+/// `reset` with a `node` restarts that port; history names it.
 #[test]
 fn a_reset_can_start_one_port_again_and_leave_the_rest() {
     let dir = std::env::temp_dir().join(format!("orla-protocol-reset-{}", std::process::id()));
@@ -2366,9 +2276,8 @@ output b <- b.result;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `compose` with `edits` changes what they name and keeps the rest of
-/// the text as written; an edit that cannot be made, or a result that
-/// does not load, leaves the document as it was.
+/// An impossible edit, or a result that does not load, leaves the
+/// document as it was.
 #[test]
 fn compose_edits_the_document_where_it_changes() {
     let dir = scratch_in("-compose-edits");
@@ -2386,9 +2295,9 @@ fn compose_edits_the_document_where_it_changes() {
             ] }),
             json!({ "id": 3, "op": "document" }),
             json!({ "id": 4, "op": "evaluate", "time": 0.0 }),
-            // Removing what another node reads loads nothing.
+            // Removing a node another reads does not load.
             json!({ "id": 5, "op": "compose", "edits": [ { "node": "life", "text": null } ] }),
-            // An edit that cannot be made writes nothing, the others with it.
+            // An impossible edit writes nothing, the others with it.
             json!({ "id": 6, "op": "compose", "edits": [
                 { "node": "life", "member": "brush", "text": "brush = 9.0;" },
                 { "node": "nowhere", "text": null },
@@ -2424,7 +2333,7 @@ fn compose_edits_the_document_where_it_changes() {
         "{}",
         ok(1)
     );
-    // Written as the edits say, the comment at the top as it was.
+    // Written as the edits say, the top comment kept.
     assert_eq!(ok(2)["text"], edited);
     assert_eq!(ok(2)["version"], ok(1)["version"]);
     ok(3);
@@ -2450,10 +2359,8 @@ fn compose_edits_the_document_where_it_changes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A node's own value is the document's: `param` reaches a node only
-/// through a `param` the document declares, a value a node sets itself
-/// changes by an edit of the document, and the document is where it
-/// stays.
+/// `param` reaches only a declared `param`; a node's own value changes by
+/// editing the document.
 #[test]
 fn a_nodes_own_value_is_the_documents() {
     let dir = scratch_in("-node-values");
@@ -2470,18 +2377,18 @@ fn a_nodes_own_value_is_the_documents() {
     let responses = talk(
         &scene,
         &[
-            // `brush` is life's own value, not a param of the scene.
+            // `brush` is life's own value, not a scene param.
             json!({ "id": 1, "op": "param", "name": "brush", "value": 5.0 }),
             json!({ "id": 2, "op": "graph" }),
-            // An edit of the node changes it, in the document.
+            // An edit of the node changes it in the document.
             json!({ "id": 3, "op": "compose", "edits": [
                 { "node": "life", "member": "brush", "text": "brush = 5.0;" },
             ] }),
             json!({ "id": 4, "op": "graph" }),
             json!({ "id": 5, "op": "sync" }),
             json!({ "id": 6, "op": "graph" }),
-            // Declared, a param reaches the node that names it, and the
-            // document stays as written.
+            // A declared param reaches the node naming it; the document
+            // stays as written.
             json!({ "id": 7, "op": "compose", "edits": [
                 { "param": "size", "text": "param size: Float = 2.0;" },
                 { "node": "life", "member": "brush", "text": "brush = size;" },
@@ -2539,9 +2446,8 @@ fn a_nodes_own_value_is_the_documents() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A scene update that cannot run whole does not replace the scene
-/// running: a composed text whose own Kernel requires what the session
-/// does not grant is refused before it reaches the disk.
+/// A composed text whose Kernel needs an ungranted capability is refused
+/// before reaching the disk.
 #[test]
 fn a_scene_update_that_cannot_run_leaves_the_scene_running() {
     let dir = scratch_in("-atomic-scene");
@@ -2575,10 +2481,8 @@ fn a_scene_update_that_cannot_run_leaves_the_scene_running() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Where a served scene may read is the person's to say: the scene they
-/// opened and what they allowed. A document an agent composes cannot
-/// widen it by what it uses or places, and naming a file outside is
-/// refused before anything of it is read.
+/// A composed document cannot widen what a served scene may read; a file
+/// outside is refused before anything is read.
 #[test]
 fn a_composed_scene_cannot_widen_what_it_may_read() {
     let dir = scratch_in("-held-reads");
@@ -2622,8 +2526,6 @@ fn a_composed_scene_cannot_widen_what_it_may_read() {
     let _ = std::fs::remove_dir_all(&outside);
 }
 
-/// A native operation is the Host's own: no request retires it, and no
-/// Kernel takes its id.
 #[test]
 fn a_native_operation_is_neither_retired_nor_replaced() {
     let dir = scratch_in("-native-kept");
@@ -2648,9 +2550,8 @@ fn a_native_operation_is_neither_retired_nor_replaced() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The interpreter, slow to prepare, so a replacement prepared off the
-/// frame is still being prepared when the request that asked for it
-/// has been read.
+/// The interpreter with a slow prepare, so an off-frame replacement is
+/// still preparing after its request is read.
 struct Slow;
 
 impl orla_kernel::Backend for Slow {
@@ -2677,12 +2578,8 @@ impl orla_kernel::Backend for Slow {
     }
 }
 
-/// A `compose` or a `publish` whose change is prepared off the frame is
-/// answered once it stands, with what it came to, and nothing waits for
-/// it meanwhile: another connection is answered at once, and only what
-/// its own connection sent after it waits its turn. (A `compose` used to
-/// hold the whole session until its Kernels were prepared, a window's
-/// frames with it.)
+/// Meanwhile other connections are answered at once; only later requests
+/// on its own connection wait.
 #[test]
 fn a_change_is_answered_once_it_stands_and_nothing_waits_for_it() {
     use orla_protocol::{Answers, Incoming, Reply};
@@ -2784,7 +2681,6 @@ fn a_change_is_answered_once_it_stands_and_nothing_waits_for_it() {
         2
     );
 
-    // A publish, prepared off the frame, answers with its generation.
     let source = "kernel k.wave@1 { requires { field.write; } output result: Image; compute { return vec4(0.3, 0.5, 0.25, 1.0); } }";
     ask(
         &mut answers,

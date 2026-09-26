@@ -1,17 +1,13 @@
-//! Orla as a library in another program's process: the session the
-//! command line and the Player run, behind a C ABI declared in
-//! `include/orla.h`. A host opens a scene, evaluates it under its own
-//! input, and reads the Fields where they lie in the Host's memory, no
-//! socket and no encoding between; the JSON protocol is reachable too,
-//! one line at a time, for everything the fast path does not name.
+//! Orla as a library in another process: the session the CLI and the
+//! Player run, behind the C ABI in `include/orla.h`. A host opens a scene,
+//! evaluates it under its own input, and reads Fields in place in the
+//! Host's memory; the JSON protocol is reachable one line at a time.
 //!
-//! Every function takes one session from one thread at a time, and one
-//! call at a time: a call made while another is inside the session is
-//! refused ([`OrlaSession`]), never let in beside it. Strings
-//! and pointers returned belong to the session until the next call on
-//! it; a Field's words until the next evaluate, request or close. No
-//! panic crosses the boundary: each entry catches one and reports it as
-//! an error.
+//! A session is used from one thread and one call at a time: a call made
+//! while another is inside it is refused ([`OrlaSession`]). Returned
+//! strings and pointers belong to the session until the next call on it;
+//! a Field's words until the next evaluate, request or close. No panic
+//! crosses the boundary: each entry reports one as an error.
 
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ffi::{CStr, CString, c_char, c_int};
@@ -69,18 +65,17 @@ pub struct OrlaField {
     pub schema: *const c_char,
 }
 
-/// A session as a caller holds it: what it holds, and whether a call is
-/// inside it. A call made while another is inside it (a page reaching in
-/// while Orla waits for its device, the first call suspended) is refused
-/// and answers as a NULL session would: it is never let in beside the
-/// other, so what one call holds no other call touches.
+/// A session as a caller holds it, and whether a call is inside it. A
+/// call made while another is inside (a page reaching in while Orla waits
+/// for its device) is refused as a NULL session is, so no two calls
+/// touch what is held at once.
 pub struct OrlaSession {
     inside: Cell<bool>,
     held: UnsafeCell<Held>,
 }
 
-/// A session entered by one call: what it holds, the call's alone until
-/// it leaves.
+/// A session entered by one call; what it holds is that call's alone
+/// until it leaves.
 struct Entered<'a>(&'a OrlaSession);
 
 impl Deref for Entered<'_> {
@@ -125,29 +120,27 @@ struct Held {
     report: CString,
     response: CString,
     schema: CString,
-    /// A narrow Field's words widened, which a caller reads instead of
-    /// the packed memory: the header promises 32-bit words.
+    /// A narrow Field's words widened to the header's 32-bit words.
     widened: Vec<u32>,
-    /// The GPU's device as a canvas reaches it, when the backend is one.
+    /// The GPU device as a canvas reaches it, on a GPU backend.
     #[cfg_attr(
         not(all(target_arch = "wasm32", target_os = "unknown")),
         allow(dead_code)
     )]
     display: Option<orla_gpu::present::Display>,
-    /// The canvas a picture was last presented on, by its id, and its
-    /// surface.
+    /// The canvas id last presented on, and its surface.
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     presenter: Option<(String, orla_gpu::present::Presenter)>,
     /// The scene played: see `play.rs`.
     play: orla_session::play::Play,
-    /// The last frame's picture and sound, as the play named them.
+    /// The last frame's picture and sound, as the play names them.
     shown: Option<(Handle, Option<Handle>)>,
-    /// What the play said, for `orla_play_said`.
+    /// The play's messages, for `orla_play_said`.
     said: CString,
     /// A frame drawn on the CPU, `0x00RRGGBB`, for `orla_play_pixels`.
     pixels: Vec<u32>,
-    /// The last picture brought home, and its size: what a frame that
-    /// failed, or a picture that could not come home, shows again.
+    /// The last picture read back, and its size; shown again when a frame
+    /// fails or a picture cannot be read back.
     picture: (Vec<[f32; 4]>, (u32, u32)),
 }
 
@@ -187,18 +180,17 @@ impl Held {
         self.session.output(name)
     }
 
-    /// Presents an output on the canvas `canvas`: whether it was drawn.
-    /// A picture drawn is one the GPU holds as a grid of float pixels;
-    /// anything else is not, and its caller reads it instead.
+    /// Presents an output on the canvas `canvas`; true when drawn, which
+    /// needs a picture the GPU holds as float pixels.
     fn present(&mut self, canvas: &str, name: Option<&str>) -> Result<bool, String> {
         let handle = self.output(name)?;
         Ok(self.present_on(canvas, handle, None)?.is_some())
     }
 
-    /// Draws `handle` on the page's canvas `canvas`, with `overlay` over
-    /// its corner, from where the GPU holds it: where it landed (`None`
-    /// when the canvas could not take a frame) and its size, or `None`
-    /// when it is not a picture the device holds.
+    /// Draws `handle` from the GPU on the page's canvas `canvas`, with
+    /// `overlay` over its corner. `None` when it is no picture the device
+    /// holds; else where it landed (`None` when the canvas took no frame)
+    /// and its size.
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     fn present_on(
         &mut self,
@@ -238,7 +230,7 @@ impl Held {
         Ok(Some((placed, (width, height))))
     }
 
-    /// Only a page has a canvas.
+    /// Outside a page there is no canvas: an error.
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn present_on(
         &mut self,
@@ -268,9 +260,9 @@ impl Held {
             .map_err(|error| error.to_string())?;
         let domain = data.domain();
         let schema = data.schema();
-        // Whole words are read where they lie; a Field kept narrower is
-        // widened into the session's own buffer, so the header's promise
-        // (32-bit words, a layout of `f`, `i` and `b`) holds either way.
+        // Wide words are read in place; a narrower Field is widened into
+        // the session's buffer, so the header's contract (32-bit words, a
+        // layout of `f`, `i` and `b`) always holds.
         let words = if schema.is_wide() {
             data.storage().as_ptr()
         } else {
@@ -332,9 +324,8 @@ pub unsafe extern "C" fn orla_open(
     unsafe { open(None, scene, backend, library) }
 }
 
-// In a page, Orla waits for the device by parking: the page's
-// `orla.wait` suspends Orla (JavaScript Promise Integration) until the
-// device's answer calls `orla.wake`.
+// In a page, Orla waits for the device by parking: `orla.wait` suspends
+// Orla (JavaScript Promise Integration) until the device calls `orla.wake`.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[link(wasm_import_module = "orla")]
 unsafe extern "C" {
@@ -349,7 +340,7 @@ unsafe extern "C" {
     fn now() -> f64;
 }
 
-/// This process's clock, in seconds: the host's own.
+/// This process's clock, in seconds.
 fn clock() -> f64 {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     {
@@ -404,8 +395,8 @@ unsafe fn open(
     }
 }
 
-/// What a session opens on: a scene and a library, or a replay, which
-/// names its own and is played.
+/// What a session opens on: a scene and a library, or a replay that names
+/// both and is played.
 enum Opening<'a> {
     Scene(&'a Path, Option<&'a Path>),
     Replay(&'a Path),
@@ -437,9 +428,9 @@ fn opened(
                 (replay.scene.clone(), replay.kernels.clone(), Some(replay))
             }
         };
-        // Any session opened here answers `orla_request`, an agent's door:
-        // what its scene reads is held from the start to the directories
-        // of the scene as it first loads, and what `orla_allow` allows.
+        // Every session here answers `orla_request`, so its reads are held
+        // from the start to the directories of the scene as first loaded,
+        // plus what `orla_allow` allows.
         let loaded = Session::open_loaded(
             store,
             &scene,
@@ -451,9 +442,8 @@ fn opened(
         )?;
         let (mut session, display, passed_over) =
             (loaded.session, loaded.display, loaded.passed_over);
-        // The first read published inline; a replacement from here on is
-        // prepared off the caller's thread, so a program's frames go on
-        // while it is. A page has no thread for it, and prepares in place.
+        // The first load publishes inline; later replacements are prepared
+        // off the caller's thread so frames go on (in place in a page).
         session.set_background(true);
         let mut play = orla_session::play::Play::new(clock);
         for passed in passed_over {
@@ -489,9 +479,8 @@ fn opened(
     }
 }
 
-/// Files handed in: a store in memory that a session opened on it reads
-/// instead of a disk. The caller keeps it and may put files after the
-/// session opened; the session reads them on its next evaluate.
+/// An in-memory file store a session opened on it reads instead of a disk.
+/// Files put after opening are read on the session's next evaluate.
 pub struct OrlaFiles {
     files: std::sync::Arc<orla_session::Memory>,
 }
@@ -529,8 +518,8 @@ pub unsafe extern "C" fn orla_files_put(
     0
 }
 
-/// Lets go of the caller's hold on a set of files; a session opened on
-/// them keeps its own.
+/// Releases the caller's hold on a set of files; a session opened on them
+/// keeps its own.
 ///
 /// # Safety
 /// `files` is NULL or a pointer `orla_files` returned, not freed yet.
@@ -541,8 +530,8 @@ pub unsafe extern "C" fn orla_files_free(files: *mut OrlaFiles) {
     }
 }
 
-/// Opens a scene whose documents are `files`: as `orla_open`, with no
-/// disk read.
+/// Opens a scene whose documents are `files`, as `orla_open` without the
+/// disk.
 ///
 /// # Safety
 /// `files` is a pointer `orla_files` returned, not freed yet; `scene`
@@ -561,9 +550,8 @@ pub unsafe extern "C" fn orla_open_files(
     unsafe { open(Some(store), scene, backend, std::ptr::null()) }
 }
 
-/// Room for `size` bytes in Orla's memory, for a caller that shares no
-/// allocator with it (a page, where Orla is WebAssembly) to write a
-/// string or a file into; NULL when there is none.
+/// Allocates `size` bytes in Orla's memory for a caller with no shared
+/// allocator (a page, where Orla is WebAssembly); NULL on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn orla_alloc(size: usize) -> *mut u8 {
     let Ok(layout) = std::alloc::Layout::from_size_align(size.max(1), 8) else {
@@ -572,7 +560,7 @@ pub extern "C" fn orla_alloc(size: usize) -> *mut u8 {
     unsafe { std::alloc::alloc(layout) }
 }
 
-/// Gives back what `orla_alloc` gave, with the size it was asked for.
+/// Frees what `orla_alloc` gave, with the size it was asked for.
 ///
 /// # Safety
 /// `pointer` is NULL or what `orla_alloc(size)` returned, not freed yet.
@@ -707,9 +695,10 @@ pub unsafe extern "C" fn orla_output(
     })
 }
 
-/// Draws a graph output, `output` NULL for the first, on the page's
-/// canvas whose element id is `canvas`, from where the GPU holds it:
-/// nothing is read back.
+/// Draws a graph output (`output` NULL for the first) on the page's canvas
+/// with element id `canvas`, straight from the GPU. Returns 0 when drawn,
+/// 1 when there is no display or the output is no picture the device
+/// holds, -1 on error.
 ///
 /// # Safety
 /// `session` is a live session; `canvas` is a string, `output` NULL or one.
@@ -768,10 +757,9 @@ pub unsafe extern "C" fn orla_node(
     })
 }
 
-/// Allows the scene a directory beyond its own, as a command line's
-/// `--allow` does: `file.read=<dir>` or `file.write=<dir>`. What a
-/// protocol request reads or writes is held to the scene's directories
-/// and these.
+/// Allows the scene a directory beyond its own, as `--allow` does:
+/// `file.read=<dir>` or `file.write=<dir>`. Protocol reads and writes are
+/// held to the scene's directories and these.
 ///
 /// # Safety
 /// `session` is a live session; `allowance` is a NUL-terminated string.
@@ -805,9 +793,8 @@ pub unsafe extern "C" fn orla_request(
     let line = unsafe { text(line) }.unwrap_or("").to_owned();
     guarded(&mut session, |s| {
         s.clear();
-        // What it changes is recorded as the protocol's, arrived through
-        // this function: a fact about how it came, as `stdin` or
-        // `socket 3` are for a served session.
+        // Its changes are recorded with origin `orla_request`, as `stdin`
+        // or `socket 3` are for a served session.
         let before = s
             .session
             .act_for(orla_session::Origin::Protocol("orla_request".into()));
@@ -823,11 +810,8 @@ pub unsafe extern "C" fn orla_request(
 mod tests {
     use super::*;
 
-    /// A call made while another is inside the session is refused, as a
-    /// NULL session's is, and the session is whole again once the first
-    /// leaves: no call ever holds what another holds. (A page could reach
-    /// in while a request waited for the device, a second `&mut` of one
-    /// session.)
+    /// A call made while another is inside is refused as a NULL session's
+    /// is, and the session serves again once the first leaves.
     #[test]
     fn a_call_while_another_is_inside_is_refused() {
         let scene = CString::new(

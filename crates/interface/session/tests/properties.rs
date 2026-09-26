@@ -1,10 +1,10 @@
 //! A session under a random life: evaluations, Kernels republished with
-//! the state's layout changed and back, broken documents, a check that
-//! fails at a count, resets. Whatever the order, three things hold:
+//! the state's layout changed and back, broken documents, a check failing
+//! at a count, resets. In any order:
 //!
-//! - an evaluation that succeeds advances the state by exactly one;
-//! - one that fails leaves it as it was, a migration it ran included, so
-//!   the next success counts on from where the last one stopped;
+//! - a successful evaluation advances the state by exactly one;
+//! - a failed one leaves it, migration included, so the next success
+//!   counts on from the last;
 //! - what the Host holds does not grow with the number of steps.
 //!
 //! The steps come from a seed; `ORLA_FUZZ=<n>` takes more of them.
@@ -22,9 +22,8 @@ fn steps() -> usize {
         .unwrap_or(400)
 }
 
-/// The library: the step in one of two layouts of its state, the
-/// migrations between them, the zero, and a check that fails where the
-/// count is `fail_at`.
+/// The library: the step in one of two state layouts, the migrations
+/// between them, the zero, and a check failing at count `fail_at`.
 fn library(layout: u32, fail_at: i32, broken: bool) -> String {
     let tally = if layout == 1 {
         "struct Tally { count: Int; }"
@@ -52,10 +51,9 @@ kernel t.down@1 {{ requires {{ field.read; field.write; }} struct Wide {{ count:
     )
 }
 
-/// The scene: the count carried by `<~` and checked every frame. Into
-/// the wide layout the count migrates; into the narrow one nothing
-/// carries it and it starts again, so which layout the committed state
-/// is in shows in the count that follows.
+/// The scene: the count carried by `<~` and checked every frame. The
+/// wide layout migrates the count; the narrow one restarts it, so the
+/// following count shows the committed layout.
 fn scene(layout: u32) -> String {
     let migrate = if layout == 1 { "" } else { " migrate t.up@1" };
     format!(
@@ -90,12 +88,11 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
     let mut session = Session::open_with(&root, None, runtime);
     session.sync();
     let count_node = orla_graph::NodeId("count".into());
-    // What the model says the committed count is; `None` before the
-    // first evaluation, when the seed's zero is what the step reads.
+    // The model's committed count.
     let mut committed = 0i32;
-    // The layout the committed state is in; `None` while it is the seed.
+    // The committed state's layout; `None` while it is the seed.
     let mut kept_as: Option<u32> = None;
-    // A snapshot taken, and what the model said of the world then.
+    // A snapshot, with the model's world at that moment.
     let mut taken: Option<(orla_session::Snapshot, i32, Option<u32>)> = None;
     let mut restored = 0;
     let mut rng = Rng::new(0x57a7e);
@@ -117,7 +114,7 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                             .element_field(&count_node, "result", 0, &["count".into()])
                             .unwrap();
                         let now = words[0] as i32;
-                        // Into the narrow layout nothing carries the count.
+                        // The narrow layout restarts the count.
                         let from = match kept_as {
                             Some(kept) if kept != layout && layout == 1 => 0,
                             _ => committed,
@@ -150,8 +147,8 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                     if broken { ", broken" } else { "" }
                 ));
                 if broken {
-                    // A broken library publishes nothing: put it right,
-                    // and the layout it was meant to bring comes.
+                    // A broken library publishes nothing: mended, its
+                    // layout arrives.
                     write(&lib, &library(layout, fail_at, false));
                     session.sync();
                 }
@@ -167,7 +164,7 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                 session.sync();
                 log.push(format!("{step}: check fails at {fail_at}"));
             }
-            // A broken library alone: nothing of it is published.
+            // A broken library alone publishes nothing.
             8 => {
                 write(&lib, &library(layout, fail_at, true));
                 session.sync();
@@ -181,10 +178,8 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                 log.push(format!("{step}: snapshot at {committed}"));
                 taken = Some((snapshot, committed, kept_as));
             }
-            // A restore under the laws that run: it stands only if its
-            // trial frame runs, and then the world is the snapshot's, its
-            // state migrated or restarted as the current layout takes it;
-            // refused, the world is as it was.
+            // A restore stands only if its trial frame runs; the state is
+            // then migrated or restarted by the current layout.
             11 | 12 => {
                 let Some((snapshot, count, kept)) = &taken else {
                     continue;
@@ -198,7 +193,7 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                     Ok(_) => {
                         restored += 1;
                         (committed, kept_as) = match kept {
-                            // Into the narrow layout nothing carries it.
+                            // The narrow layout restarts the count.
                             Some(old) if *old != layout && layout == 1 => (0, None),
                             Some(_) => (*count, Some(layout)),
                             None => (0, None),
@@ -208,8 +203,8 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
                     Err(why) => log.push(format!("{step}: restore refused: {why}")),
                 }
             }
-            // A reset, of all the state or of the count's port, which is
-            // all of it here: the state starts again from the seed.
+            // A reset of all state, or of the count's port (the same
+            // here): the state restarts from the seed.
             _ => {
                 if rng.below(2) == 0 {
                     session.reset_state();
@@ -228,12 +223,12 @@ fn a_random_life_keeps_the_state_and_the_host_honest() {
             held_after_warmup = Some(most_held);
         }
     }
-    // The life went through each of what it is about.
+    // The life covered every kind of step.
     assert!(
         succeeded > steps() / 10 && failed > 0 && migrated > 0 && restored > 0,
         "{succeeded} succeeded, {failed} failed, {migrated} migrated, {restored} restored"
     );
-    // A leak grows with the steps; what the scene holds does not.
+    // What the scene holds does not grow with the steps.
     let warm = held_after_warmup.unwrap();
     assert!(
         most_held <= warm * 2 + 64,

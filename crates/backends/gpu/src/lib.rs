@@ -1,15 +1,13 @@
 #![warn(missing_docs)]
 //! GPU backend.
 //!
-//! Emits WGSL from validated IR at preparation time and runs one compute
-//! dispatch per execution through wgpu. The Host keeps owning images, but
-//! their pixels stay resident on the device: an input that is already
-//! resident is bound directly, an input in Host memory is uploaded once and
-//! made resident, and outputs are adopted by the Host as resident images.
-//! Pixels come back only at observation boundaries, through
-//! [`Backend::download`]. Semantics match the CPU backend except for
-//! floating-point rounding and the absence of per-pixel integer arithmetic
-//! errors, which WGSL defines instead of reporting.
+//! Emits WGSL from validated IR at preparation and runs each execution
+//! through wgpu. The Host owns images and their pixels stay resident on
+//! the device: a resident input binds directly, a Host input uploads once
+//! and stays resident, and outputs are adopted as resident images. Pixels
+//! return only through [`Backend::download`]. Semantics match the CPU
+//! backend up to floating-point rounding; integer failures are reported
+//! as the CPU reports them.
 
 mod failure;
 mod modes;
@@ -60,8 +58,7 @@ pub struct GpuBackend {
     device: wgpu::Device,
     queue: wgpu::Queue,
     adapter_name: String,
-    /// Serializes executions; wgpu is thread-safe but readback ordering is
-    /// simpler with one execution at a time.
+    /// Serializes executions, so readback is ordered.
     lock: Mutex<()>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
@@ -69,42 +66,31 @@ pub struct GpuBackend {
     spare: Spare,
     /// The rasterizer's own targets, kept by shape; see [`SpareTextures`].
     targets: SpareTextures,
-    /// The context and the parameters of the execution being staged.
-    /// One execution runs at a time and a queue's writes are ordered
-    /// with its submissions, so these are written again per node rather
-    /// than made again: creating two small buffers a node was a fifth
-    /// of what a node of a busy scene costs.
+    /// The context and parameter buffers of the execution being staged,
+    /// written again per node: one execution runs at a time, and a queue's
+    /// writes are ordered with its submissions.
     uniforms: Mutex<Option<(wgpu::Buffer, wgpu::Buffer)>>,
-    /// What those buffers were last given. A scene of many small nodes
-    /// runs them under the same context with the same parameters, and
-    /// writing a uniform costs about six microseconds however little
-    /// has changed; this is how the second node of a kind writes
-    /// nothing.
+    /// What those buffers were last given, so a node staged with the same
+    /// context and parameters writes nothing.
     written: Mutex<(Vec<u8>, Vec<u8>)>,
-    /// Whether an execution waits for the device before it returns, so
-    /// that what times it is the work and not the submission. Off: a
-    /// frame submits its nodes and only an observation waits.
+    /// Whether an execution waits for the device before it returns, so a
+    /// timing measures the work. Off, only an observation waits.
     measured: std::sync::atomic::AtomicBool,
-    /// Whether the adapter offers timestamp queries at a pass's edges,
-    /// which measure the work itself rather than the wait around it.
-    /// Offering them is not writing them: a driver that takes the
-    /// queries and resolves zeros leaves the wait as the measurement.
+    /// Whether the adapter offers timestamp queries at a pass's edges; see
+    /// [`GpuBackend::device_clock_answered`] for whether it writes them.
     timestamps: bool,
     /// Whether the device computes 64-bit integers.
     int64: bool,
-    /// Whether it takes the least and the greatest of them atomically,
-    /// which a scatter of `Long`s under `min` or `max` lands with.
+    /// Whether it takes 64-bit min and max atomically, as a scatter of `Long`s
+    /// under `min` or `max` needs.
     int64_atomics: bool,
-    /// Failure words and the buffers they are read back through, ready
-    /// to be used again: a checked node takes a pair each run.
+    /// Failure words and their readback buffers, for reuse: a checked node
+    /// takes a pair each run.
     failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
     /// Bytes uploaded from Host memory since the backend was made.
     uploaded: std::sync::atomic::AtomicU64,
-    /// What asking the device's own clock has been worth: `UNTRIED`
-    /// until a measured run asks, then `ANSWERED` or `SILENT`. A driver
-    /// that offers timestamps and resolves zeros is asked once and not
-    /// again — the asking is a buffer mapped and waited for per node,
-    /// which is most of what a profile's overhead was.
+    /// What asking the device's own clock has been worth: `UNTRIED` until a
+    /// measured run asks, then `ANSWERED` or `SILENT`, which asks no more.
     clock: std::sync::atomic::AtomicU8,
     /// The nanoseconds the last measured execution took on the device,
     /// or `u64::MAX` for none.
@@ -118,8 +104,8 @@ impl fmt::Debug for GpuBackend {
 }
 
 impl GpuBackend {
-    /// Opens the default adapter, blocking where the device is waited
-    /// for; a page, which cannot block, opens it with [`GpuBackend::with_wait`].
+    /// Opens the default adapter, blocking to wait for the device; a page
+    /// opens it with [`GpuBackend::with_wait`].
     pub fn new() -> Result<Self, GpuError> {
         if cfg!(target_arch = "wasm32") {
             return Err(GpuError(
@@ -137,33 +123,28 @@ impl GpuBackend {
             .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .map_err(|error| GpuError(error.to_string()))?;
         let adapter_limits = adapter.limits();
-        // What the device will bind at once is what a Kernel's ports
-        // come to: one buffer for the output and one for each input, so
-        // the default of eight refused a Kernel of eight inputs that the
-        // interpreter and the JIT run. The adapter offers what it offers
-        // — twenty-nine on this one — and there is no reason to ask for
-        // less.
+        // Every buffer binding the adapter offers: a Kernel binds one buffer
+        // for the output and one per input, so this limit bounds the widest
+        // Kernel the device runs.
         let required_limits = wgpu::Limits {
             max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
             max_buffer_size: adapter_limits.max_buffer_size,
             max_storage_buffers_per_shader_stage: adapter_limits
                 .max_storage_buffers_per_shader_stage,
-            // And every buffer together: the default is less than the
-            // storage buffers alone that the adapter offers.
+            // And every buffer together: the default total is below the
+            // adapter's storage-buffer limit.
             max_uniform_buffers_per_shader_stage: adapter_limits
                 .max_uniform_buffers_per_shader_stage,
             max_buffers_and_acceleration_structures_per_shader_stage: adapter_limits
                 .max_buffers_and_acceleration_structures_per_shader_stage,
             ..wgpu::Limits::default()
         };
-        // Timestamps at a pass's edges, when the adapter has them: what
-        // a profile reads. Writing one inside an encoder is a feature
-        // Metal does not offer, so every pass carries its own.
+        // Timestamps at a pass's edges, when offered: what a profile reads.
+        // Every pass carries its own; Metal writes none inside an encoder.
         let timing = wgpu::Features::TIMESTAMP_QUERY;
         let timestamps = adapter.features().contains(timing);
-        // 64-bit integers, when the adapter computes them: a `Long` then
-        // runs here; without them, and for a `Double` always, the module
-        // goes to the ordered backend.
+        // 64-bit integers, when offered: a `Long` then runs here. Otherwise,
+        // and for every `Double`, the module goes to the ordered backend.
         let int64 = adapter.features().contains(wgpu::Features::SHADER_INT64);
         let int64_atomics = int64
             && adapter
@@ -255,10 +236,9 @@ impl Backend for GpuBackend {
         self.device_clock_answered()
     }
 
-    /// Waits for the queue to run dry. A dispatch is submitted and not
-    /// waited for, so a frame a caller times is otherwise the asking; a
-    /// measurement wants this, a Player gets it from presenting, and an
-    /// ordinary evaluation needs neither.
+    /// Waits for the queue to run dry. Dispatches are submitted without a
+    /// wait, so a caller timing a frame calls this; a Player gets it from
+    /// presenting.
     fn settle_device(&self) {
         let _ = self.wait.drain(&self.device, &self.queue);
     }
@@ -289,8 +269,8 @@ impl Backend for GpuBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        // A caller that asks for the outputs alone is answered as the
-        // reference would: the run's failure, waited for, is its answer.
+        // A caller asking for the outputs alone gets the run's failure, waited
+        // for, as the reference answers.
         let (outputs, check) = self.execute_checked(prepared, module, invocation, scope)?;
         if let Some(check) = check
             && let Err(error) = check.wait()
@@ -330,9 +310,8 @@ impl Backend for GpuBackend {
             _ => domain,
         };
         outputs_fit(module, output_domain, scope)?;
-        // Under a profile, the device's own clock around every pass of
-        // this node: the set is made first so the opening timestamp is
-        // the encoder's first command.
+        // Under a profile, the device's clock around every pass; the set is
+        // made first so the opening timestamp is the encoder's first command.
         let timing_set = self.timing_set(2);
         let staged = self.stage(
             pipeline,
@@ -357,9 +336,8 @@ impl Backend for GpuBackend {
             target,
             highs,
         } = staged;
-        // What the map pass left is the output, unless the mode has more
-        // to do with it: a reduction folds it, a scatter combines it
-        // into its target.
+        // The map pass's output is the result, unless a reduction folds it or a
+        // scatter combines it into its target.
         let final_buffer = match (mode, pipeline.reduce.as_ref(), pipeline.scatter.as_ref()) {
             (Mode::Reduce, Some(reduce), _) => self.fold(
                 &mut encoder,
@@ -404,17 +382,16 @@ impl Backend for GpuBackend {
             ),
             _ => output_buffer,
         };
-        // The failure word, copied where it can be read once the device
-        // is waited for: at the caller's commit, not here.
+        // The failure word, copied for reading once the device is waited for,
+        // at the caller's commit.
         if let Some((word, back)) = &failure {
             encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
         }
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
         let submission = self.queue.submit(Some(encoder.finish()));
-        // Submissions on one queue run in order, so a later node reading
-        // this output needs no wait here; only observation does. Under
-        // `set_measured`, this call waits, so what times it is the work.
+        // One queue runs submissions in order, so only observation waits; under
+        // `set_measured` this call waits, so its time is the work.
         self.settle_measured(submission, timing);
         if let Some(error) = self.wait.block_on(scope_guard.pop()) {
             return Err(ExecutionError::Device(device_error(&error)));
@@ -444,12 +421,9 @@ impl Backend for GpuBackend {
         Ok((outputs, check))
     }
 
-    /// A map run several times over its own output, all of it in one
-    /// command buffer: the uniforms are written once, two buffers take
-    /// turns holding what a time gives to the next, and the times are
-    /// passes one after another, which the queue runs in order. What
-    /// this saves is a command buffer and a submission a time, which
-    /// for a small node is most of what it costs.
+    /// A map run several times over its own output in one command buffer: the
+    /// uniforms written once, two buffers taking turns between times, one pass
+    /// per time. It saves a command buffer and a submission per time.
     fn execute_repeated(
         &self,
         prepared: &dyn Prepared,
@@ -460,8 +434,8 @@ impl Backend for GpuBackend {
         chain: (usize, usize),
     ) -> Option<Result<Vec<Handle>, ExecutionError>> {
         let (input, output) = chain;
-        // A pack is copied before each run, and the times would read the
-        // chain through it: they go one by one instead.
+        // A pack is copied before each run and the times would read the chain
+        // through it, so they go one by one.
         if prepared
             .as_any()
             .downcast_ref::<Pipeline>()
@@ -469,25 +443,22 @@ impl Backend for GpuBackend {
         {
             return None;
         }
-        // Only the shape the planner makes: a map of one output whose
-        // own output comes back on one input. A measured run times each
-        // node, so it goes the ordinary way.
+        // Only the planner's shape: a map of one output that comes back on one
+        // input. A measured run times each node, so it goes one by one.
         if repeat < 2
             || output != 0
             || module.manifest.mode != Mode::Map
             || module.manifest.outputs.len() != 1
             || !module.manifest.memories.is_empty()
             || self.measured()
-            // A run that can fail is checked a time at a time, as the
-            // ordinary way does.
+            // A run that can fail is checked a time at a time.
             || wgsl::can_fail(module)
         {
             return None;
         }
-        // Every time after the first reads what the one before wrote, so
-        // what it reads has the extent of the output. The context says
-        // the extents once; where that would not hold, the times go one
-        // by one as they did before.
+        // Every time after the first reads the previous output, at the output's
+        // extent; the context states extents once, so where they differ the
+        // times go one by one.
         let domain = execution_domain(module, invocation, scope).ok()?;
         if scope.size(*invocation.inputs.get(input)?).ok()? != domain {
             return None;

@@ -1,7 +1,6 @@
-//! Calls by name: the Field, memory, context and construction builtins
-//! the lowering dispatches, the builtins composed from other operations
-//! so every backend has them, and, before the math intrinsics, the
-//! document's own functions.
+//! Calls by name: the dispatched Field, memory, context and construction
+//! builtins, builtins composed from other operations, and the
+//! document's own functions, which precede the math intrinsics.
 
 use orla_ir::{
     BinaryOp, Block as IrBlock, Capability, Intrinsic, Mode, Op, Shape, ShapeIndex, Type, Value,
@@ -13,8 +12,7 @@ use crate::CompileError;
 
 use super::{Builder, semantic};
 
-/// The builtins that are formulas over the arithmetic, written into the
-/// IR as it; see [`composite`](super::composite).
+/// The builtins lowered as formulas; see [`composite`](super::composite).
 pub(super) const FORMULAS: [&str; 8] = [
     "dot",
     "cross",
@@ -27,8 +25,7 @@ pub(super) const FORMULAS: [&str; 8] = [
 ];
 
 impl Builder<'_> {
-    /// The builtins that are spellings of other operations: lowered to
-    /// those operations, so every backend has them by construction.
+    /// The builtins lowered to the other operations they spell.
     pub(super) fn composed(
         &mut self,
         name: &str,
@@ -50,8 +47,8 @@ impl Builder<'_> {
             .collect::<Vec<_>>()
             .join(", ");
         let refused = semantic(span, format!("`{name}` cannot be applied to ({list})"));
-        // The scalar kind of the first argument, which the constants the
-        // composition needs are made in.
+        // The first argument's scalar kind, for the composition's
+        // constants.
         let kind = types
             .first()
             .and_then(|ty| ty.scalar())
@@ -80,9 +77,8 @@ impl Builder<'_> {
                 Ok(self.emit(*a, Op::Binary(BinaryOp::Div, one, root)))
             }
             ("mod", [a, b]) if float_like(*a) && (a == b || *b == kind) => {
-                // x - y * floor(x / y): the remainder that takes y's sign.
-                // At an exact multiple it is a knife-edge, 0 or nearly y,
-                // as floor is at an integer; backends may fall either way.
+                // x - y * floor(x / y), with y's sign. At an exact
+                // multiple a backend may give 0 or nearly y.
                 let quotient = self.emit(*a, Op::Binary(BinaryOp::Div, ids[0], ids[1]));
                 let floored = self.emit(*a, Op::Intrinsic(Intrinsic::Floor, vec![quotient]));
                 let product = self.emit(*a, Op::Binary(BinaryOp::Mul, floored, ids[1]));
@@ -156,9 +152,8 @@ impl Builder<'_> {
     ) -> Result<ValueId, CompileError> {
         match name {
             "put" => {
-                // A write belongs to a step: the entry, or a function the
-                // step calls with the memory as a Field parameter. The
-                // carried value's start is before every step.
+                // A write belongs to a step: the entry, or a function it
+                // calls with the memory as a Field parameter.
                 if self.name == "init" {
                     return Err(semantic(
                         span,
@@ -456,10 +451,8 @@ impl Builder<'_> {
                     _ => (Type::Long, 3),
                 };
                 let ty = Type::vector(kind, wanted).unwrap_or(kind);
-                // What a component may be made from, converted: an `Int`
-                // widens into a float vector, and a 64-bit vector takes
-                // its 32-bit kin's components too. Narrowing is written
-                // out, with `float()` or `int()`.
+                // Widening components convert: `Int` into a float vector,
+                // 32-bit kin into a 64-bit vector. Narrowing is explicit.
                 let takes = |from: Type| match kind {
                     Type::Float => matches!(from, Type::Float | Type::Int),
                     Type::Int => from == Type::Int,
@@ -468,10 +461,8 @@ impl Builder<'_> {
                     }
                     _ => matches!(from, Type::Long | Type::Int),
                 };
-                // Components from scalars and shorter vectors, in order,
-                // as many as the vector has: `vec4(v3, 1.0)`, `vec3(1.0,
-                // v2)`. An Int component widens; a cell address needs no
-                // `float()` at every use.
+                // Components from scalars and shorter vectors, in order:
+                // `vec4(v3, 1.0)`, `vec3(1.0, v2)`.
                 let wanted = usize::from(wanted);
                 let mut parts = Vec::with_capacity(wanted);
                 let mut given = Vec::with_capacity(args.len());
@@ -534,8 +525,8 @@ impl Builder<'_> {
                 Ok(self.emit(ty, Op::Construct(parts)))
             }
             "icoord" | "idomain" => {
-                // The float coordinate or extent, converted: every value
-                // either takes is a whole number.
+                // The float coordinate or extent converted; both are
+                // whole.
                 let inner = if name == "icoord" { "coord" } else { "domain" };
                 let float = self.call(inner, args, span)?;
                 let ty = self.ty(float);
@@ -613,8 +604,8 @@ impl Builder<'_> {
                 Ok(self.emit(ty, Op::Construct(columns)))
             }
             _ => {
-                // A function of the document first: one may take a math
-                // builtin's name and stand for it.
+                // The document's functions first: one may stand for a
+                // math builtin of its name.
                 let found = {
                     let functions = self.shared.functions.borrow();
                     functions.iter().position(|(f, _)| f == name).map(|index| {
@@ -695,10 +686,9 @@ impl Builder<'_> {
                     })?;
                     return Ok(self.emit(ty, Op::Intrinsic(intrinsic, ids)));
                 }
-                // A Kernel runs where there is no stack, so a function
-                // calls only the ones above it: a call to itself, or to
-                // one declared below, says that rather than that the
-                // name is unknown.
+                // A Kernel has no stack: a function calls only those
+                // above it. Self-calls and calls below get their own
+                // diagnostics.
                 if self.name.split('<').next() == Some(name) {
                     return Err(semantic(
                         span,
@@ -715,8 +705,7 @@ impl Builder<'_> {
                         ),
                     ));
                 }
-                // The functions this Kernel can see, and then every
-                // builtin there is; `help` already knows which are near.
+                // The Kernel's functions, then every builtin via `help`.
                 let declared: Vec<&str> = self.shared.declared.iter().map(String::as_str).collect();
                 let near = orla_language::nearest(name, declared)
                     .map(str::to_owned)

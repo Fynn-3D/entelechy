@@ -1,6 +1,6 @@
-//! Preparing Kernels while frames keep going: on a worker thread where
-//! one can be started, inline where none can, each preparation named by
-//! a ticket its result is collected by, once.
+//! Preparing Kernels while frames continue: on a worker thread, or inline
+//! where no thread can start. Each preparation's result is collected once
+//! by its ticket.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -32,9 +32,8 @@ struct Worker {
     handle: JoinHandle<()>,
 }
 
-/// The preparations under way and finished: the worker, if any, the
-/// results no one has collected yet, and the tickets whose results are
-/// no longer wanted.
+/// The worker, if any, uncollected results, and tickets whose results
+/// are unwanted.
 #[derive(Default)]
 pub(crate) struct Preparer {
     worker: Option<Worker>,
@@ -44,19 +43,16 @@ pub(crate) struct Preparer {
 }
 
 impl Preparer {
-    /// Starts the worker, which prepares on `backend`, or on `ordered`
-    /// what `backend` declines. Where no thread can be started
-    /// (WebAssembly), there is no worker, and every preparation is done
-    /// inline.
+    /// Starts the worker, which prepares on `backend`, or on `ordered` what
+    /// `backend` declines. Where no thread can start (WebAssembly), every
+    /// preparation is inline.
     pub(crate) fn start(&mut self, backend: Arc<dyn Backend>, ordered: Option<Arc<dyn Backend>>) {
         let (jobs, inbox) = channel::<Job>();
         let (outbox, done) = channel::<Done>();
         let Ok(handle) = std::thread::Builder::new()
             .name("orla-prepare".into())
-            // A backend walks a module's nested blocks by recursion; the
-            // language bounds how deep they nest, and this is room for
-            // that bound (orla_language::DEEP_STACK, which the runtime
-            // does not depend on).
+            // Room for the language's nesting bound
+            // (orla_language::DEEP_STACK), which backends recurse through.
             .stack_size(256 << 20)
             .spawn(move || {
                 for job in inbox {
@@ -87,8 +83,7 @@ impl Preparer {
         self.worker.is_some()
     }
 
-    /// Stops the worker, waiting for the jobs in flight and keeping their
-    /// results to be collected.
+    /// Stops the worker after the jobs in flight, keeping their results.
     pub(crate) fn stop(&mut self) {
         if let Some(Worker { jobs, done, handle }) = self.worker.take() {
             drop(jobs);
@@ -105,9 +100,8 @@ impl Preparer {
         Ticket(self.next_ticket)
     }
 
-    /// Hands a module to the worker; gives it back when there is none (or
-    /// it has gone), for the caller to prepare inline and
-    /// [`Preparer::finish`].
+    /// Hands a module to the worker, or gives it back when there is none,
+    /// for the caller to prepare inline and [`Preparer::finish`].
     pub(crate) fn send(
         &mut self,
         ticket: Ticket,
@@ -138,12 +132,12 @@ impl Preparer {
         self.ready.remove(&ticket)
     }
 
-    /// Preparations finished or forgotten that nothing has collected.
+    /// Uncollected finished or forgotten preparations.
     pub(crate) fn uncollected(&self) -> usize {
         self.ready.len() + self.discarded.len()
     }
 
-    /// Forgets a preparation whose result is no longer wanted.
+    /// Forgets a preparation whose result is unwanted.
     pub(crate) fn discard(&mut self, ticket: Ticket) {
         self.collect();
         if self.ready.remove(&ticket).is_none() {

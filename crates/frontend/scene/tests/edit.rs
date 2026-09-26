@@ -1,5 +1,5 @@
-//! Edits of a document by what it declares change only those bytes: the
-//! rest of the text, comments and layout, is as it was written.
+//! An edit by declaration changes only those bytes: the rest of the text,
+//! comments and layout included, stays as written.
 
 use orla_scene::edit::{Edit, StatementKind, Target, edit};
 
@@ -95,14 +95,14 @@ fn a_node_removed_takes_its_lines_and_the_comment_above_it() {
 
 #[test]
 fn members_are_replaced_added_and_removed_as_their_block_is_laid_out() {
-    // One line: the member added goes on it.
+    // One line: the added member goes on it.
     let edited = edit(SCENE, &[member("view", "zoom", Some("zoom = 0.5;"))]).unwrap();
     assert!(
         edited.contains("node view: voxel.draw@1 { voxels <- castle.result; zoom = 0.5; }\n"),
         "{edited}"
     );
-    // Lines of their own: the member added gets one, indented alike;
-    // one replaced keeps the comment after it.
+    // Own lines: an added member gets one, indented alike; a replaced one
+    // keeps its trailing comment.
     let edited = edit(
         SCENE,
         &[
@@ -117,7 +117,7 @@ fn members_are_replaced_added_and_removed_as_their_block_is_laid_out() {
         ),
         "{edited}"
     );
-    // Removed from a line of its own, the line and its comment go; from a
+    // Removed from its own line, the line and its comment go; from a
     // shared line, the member and the space before it.
     let edited = edit(
         SCENE,
@@ -145,7 +145,7 @@ fn members_are_replaced_added_and_removed_as_their_block_is_laid_out() {
 
 #[test]
 fn the_first_of_a_kind_goes_after_the_kinds_before_it() {
-    // An input comes before the params: after the `use`, a blank line.
+    // An input goes before the params: after the `use`, a blank line.
     let edited = edit(
         SCENE,
         &[statement(
@@ -159,7 +159,7 @@ fn the_first_of_a_kind_goes_after_the_kinds_before_it() {
         edited.contains("use \"kernels/\";\n\ninput font: Grid<Float>;\n\nparam size"),
         "{edited}"
     );
-    // Another param goes after the one there.
+    // Another param goes after the existing one.
     let edited = edit(
         SCENE,
         &[statement(
@@ -225,7 +225,7 @@ fn an_edit_that_does_not_say_what_it_names_is_refused() {
     );
     // A member that sets something else.
     assert!(refused(&[member("view", "zoom", Some("scale = 1;"))]).contains("sets `scale`"));
-    // Nothing to remove, no such node; the index says which edit.
+    // Nothing to remove, no such node; the index names the edit.
     let error = edit(
         SCENE,
         &[

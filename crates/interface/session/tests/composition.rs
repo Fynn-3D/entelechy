@@ -283,7 +283,7 @@ fn structural_errors_are_reported_before_execution() {
         dangling.order(),
         Err(GraphError::UnknownSource { .. })
     ));
-    // A name one letter out is named rather than searched for.
+    // A name one letter out is suggested.
     let near = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(1, 1); }\nnode a: image.invert@1 { source <- sorce.result; }\noutput r <- a.result;",
     )
@@ -782,7 +782,7 @@ fn fusion_absorbs_sole_pointwise_producers_and_changes_no_pixel() {
         .unwrap();
     assert!(again.executed.is_empty(), "the rebuilt group is cached");
 
-    // Pinning materializes the node again; unpinning absorbs it.
+    // Pinning materializes the node; unpinning absorbs it.
     fused.pin(NodeId("gray".into()));
     let report = fused
         .evaluate(
@@ -838,9 +838,9 @@ fn outputs_state_sources_and_shared_producers_stay_materialized() {
             &BTreeMap::new(),
         )
         .unwrap();
-    // count is a state source, so it is materialized; seed is its initial
-    // source and count's `previous` counts as a reader, so seed stays too.
-    // a is c's sole reader and pointwise: absorbed. b is an output: kept.
+    // count is a state source, so it is materialized; seed stays as its
+    // initial source. a is c's sole pointwise reader: absorbed. b is an
+    // output: kept.
     assert_eq!(report.fused, vec![(NodeId("c".into()), ids(&["a"]))]);
     assert_eq!(report.executed, ids(&["seed", "count", "b", "c"]));
     assert_eq!(
@@ -888,10 +888,8 @@ fn fusion_prepares_on_the_worker_and_never_changes_a_pixel() {
     let expected = pixels(&runtime, reference.output);
     plain.clear(&mut runtime);
 
-    // Every frame is right whether or not the fused versions have arrived.
-    // The chain grows as they do, in whichever order the worker finishes
-    // them: nothing, then gray with source or inv with gray, then
-    // everything under inv; it never comes apart.
+    // Every frame is right whatever fused versions have arrived. The chain
+    // grows as the worker finishes them, in any order, and never splits.
     let whole = vec![(NodeId("inv".into()), ids(&["gray", "source"]))];
     let tail = vec![(NodeId("gray".into()), ids(&["source"]))];
     let head = vec![(NodeId("inv".into()), ids(&["gray"]))];
@@ -959,7 +957,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
             &BTreeMap::new(),
         )
         .unwrap();
-    // gray absorbs source, but the reduction absorbs nothing and is not
+    // gray absorbs source; the reduction absorbs nothing and is not
     // absorbed by `show`, which reads it by address.
     assert_eq!(
         report.fused,
@@ -984,7 +982,7 @@ fn reductions_produce_one_element_and_stay_out_of_fusion() {
         );
     }
 
-    // A reduction with a domain is refused with the node named.
+    // A reduction with a domain is refused, the node named.
     let graph = orla_scene::parse(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node total: test.total@1 { source <- source.result; domain = 1; }
@@ -1104,7 +1102,7 @@ fn a_write_replaces_committed_state_and_is_checked() {
         "the next frame counts on from what was written"
     );
     assert_eq!(runtime.host().live(), 2, "the replaced state was released");
-    // Only state can be written, and only with the right number of words.
+    // Only state is writable, and only with the right word count.
     assert!(matches!(
         evaluator.write(
             &graph,
@@ -1143,7 +1141,7 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
     let count = NodeId("count".into());
     let view = NodeId("view".into());
     let demand: std::collections::BTreeSet<NodeId> = [count.clone()].into_iter().collect();
-    // The first frame produces the output once, since it never was.
+    // The first frame produces the output.
     let report = evaluator
         .evaluate_for(
             &graph,
@@ -1156,7 +1154,7 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
         .unwrap();
     assert!(report.executed.contains(&view), "{:?}", report.executed);
     assert_eq!(red(&runtime, report.output), 101.0);
-    // The next frames advance the state and leave the picture as it was.
+    // The next frames advance the state and keep the picture.
     for expected in 2..=3 {
         let report = evaluator
             .evaluate_for(
@@ -1196,11 +1194,8 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
     assert_eq!(runtime.host().live(), 0);
 }
 
-/// A side worked out from a port's size divides as one worked out from
-/// the window: a division that leaves a remainder is a fraction, which
-/// `ceil` and `floor` decide, and a bare one sizes nothing. (A port's size
-/// used to divide as integers do, so `ceil(size(source) / 2)` of 101 was
-/// 50 where `ceil(window() / 2)` was 51.)
+/// A remainder is a fraction that `ceil` and `floor` decide; a bare
+/// fraction sizes nothing.
 #[test]
 fn a_side_from_a_size_divides_as_one_from_the_window() {
     let mut runtime = cpu(1 << 20);
@@ -1275,8 +1270,8 @@ fn a_domain_may_take_the_window_and_follows_it() {
         (4, 3),
         "the window in logical pixels"
     );
-    // The same window: nothing runs again. A resized one: the node runs at
-    // the new extent, without the graph changing.
+    // The same window: nothing reruns. A resized one: the node runs at the
+    // new extent, the graph unchanged.
     let again = evaluator
         .evaluate(
             &graph,
@@ -1415,8 +1410,8 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     let report = evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
     assert_eq!(tally(&runtime, report.output), vec![4]);
 
-    // The Kernel grows a field: the committed state is carried over by
-    // the migration, and the count goes on.
+    // The Kernel grows a field: the migration carries the committed state
+    // over, and the count goes on.
     load(&mut runtime, TALLY_STEP_V2);
     let report = evaluate(&mut evaluator, &mut runtime, &graph).unwrap();
     assert_eq!(tally(&runtime, report.output), vec![5, 10]);
@@ -1433,9 +1428,8 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
     assert_eq!(tally(&runtime, report.output), vec![6, 12]);
     assert!(report.migrated.is_empty());
 
-    // Back to the old layout with a migration that gives the wrong one:
-    // the evaluation fails, the state stays, and the old Kernel reads it
-    // again once it is back.
+    // Back to the old layout with a wrong-layout migration: the evaluation
+    // fails, the state stays, and the old Kernel reads it again.
     let wrong =
         orla_scene::parse(&TALLY_SCENE.replace("tally.upgrade@1", "tally.wrong@1")).unwrap();
     load(&mut runtime, TALLY_STEP_V1);
@@ -1456,8 +1450,8 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
         "nothing was lost"
     );
 
-    // Without a migration named, a changed layout restarts the state
-    // from its initial source, and says so.
+    // Without a migration, a changed layout restarts the state from its
+    // initial source, reported.
     let plain = orla_scene::parse(&TALLY_SCENE.replace(" migrate tally.upgrade@1", "")).unwrap();
     load(&mut runtime, TALLY_STEP_V1);
     let report = evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
@@ -1481,11 +1475,8 @@ fn a_republished_kernels_new_state_layout_is_migrated_reset_or_refused() {
 
 const TALLY_FAILS_AT_5: &str = "kernel tally.check@1 { requires { field.read; field.write; } struct Tally { count: Int; doubled: Int; } input tally: Rows<Tally>; output result: Rows<Int>; compute { let t = sample(tally); return 100 / (t.count - 5); } }";
 
-/// A migration is part of the evaluation it runs in: when a node after
-/// it fails, the state it replaced is put back, not lost, so the Kernel
-/// that wrote that state reads it again once it is back. And when one
-/// port of several fails to migrate, the ones already carried are put
-/// back too.
+/// The replaced state is put back for the Kernel that wrote it; when one
+/// of several ports fails to migrate, the others are put back too.
 #[test]
 fn a_failed_evaluation_puts_back_the_state_a_migration_replaced() {
     let mut runtime = cpu(1024);
@@ -1511,20 +1502,18 @@ fn a_failed_evaluation_puts_back_the_state_a_migration_replaced() {
     for _ in 0..4 {
         evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
     }
-    // The count is 4. The new layout migrates it, the step makes it 5,
-    // and the check fails there: nothing of this evaluation stands.
+    // The count is 4; migrated, stepped to 5, the check fails: nothing of
+    // this evaluation stands.
     load(&mut runtime, TALLY_STEP_V2);
     let error = evaluate(&mut evaluator, &mut runtime, &checked).unwrap_err();
     assert!(error.to_string().contains("check"), "{error}");
-    // Back to the Kernel that wrote the state: it reads 4 and counts on,
-    // rather than finding a migrated layout and starting over.
+    // The Kernel that wrote the state reads 4 and counts on.
     load(&mut runtime, TALLY_STEP_V1);
     let report = evaluate(&mut evaluator, &mut runtime, &plain).unwrap();
     assert!(report.reset.is_empty(), "{:?}", report.reset);
     assert_eq!(tally(&runtime, report.output), vec![5]);
 
-    // Two ports: the first migrates, the second's migration gives the
-    // wrong layout. Both stay as they were.
+    // Two ports: the second's migration gives the wrong layout. Both stay.
     let two = orla_scene::parse(
         "node seed: tally.zero@1 { domain = 1; }
 node a: tally.step@1 { previous <~ a.result from seed.result migrate tally.upgrade@1; }
@@ -1584,8 +1573,8 @@ fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
         vec![(NodeId("count".into()), "result".into())]
     );
     assert_eq!(red(&runtime, first.output), 1.0 - 1.0);
-    // The state advanced, so the count runs again: off the frame now.
-    // Its reader keeps the last output, and the state stays as it was.
+    // The state advanced, so the count reruns off the frame; its reader
+    // keeps the last output, and the state stays.
     let second = evaluator
         .evaluate(&graph, &mut runtime, &none, &at(1.0), &defaults)
         .unwrap();
@@ -1595,8 +1584,8 @@ fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
     assert!(second.committed.is_empty());
     assert!(evaluator.has_running());
     assert_eq!(red(&runtime, second.output), 0.0);
-    // Settling waits for the run; the next evaluation reads it, re-runs
-    // the reader, and commits the state it feeds.
+    // Settling waits for the run; the next evaluation reads it, reruns the
+    // reader, and commits the state.
     assert_eq!(evaluator.settle(&mut runtime).unwrap(), ids(&["count"]));
     assert!(!evaluator.has_running());
     let third = evaluator
@@ -1609,7 +1598,6 @@ fn an_async_node_runs_off_the_frame_and_the_frame_carries_its_last_output() {
         vec![(NodeId("count".into()), "result".into())]
     );
     assert_eq!(red(&runtime, third.output), 1.0 - 2.0);
-    // A landed run is reported by the evaluation that took it in.
     let fourth = evaluator
         .evaluate(&graph, &mut runtime, &none, &at(3.0), &defaults)
         .unwrap();
@@ -1660,7 +1648,7 @@ fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
     let words = |handle| runtime.host().data(handle).unwrap().storage().to_vec();
     // Ten elements over a target of four: 3, 3, 2, 2.
     assert_eq!(words(report.output), vec![3, 3, 2, 2]);
-    // Without a domain, once per element of the first input, the target.
+    // Without a domain: once per element of the first input, the target.
     let plain = report
         .outputs
         .iter()
@@ -1672,14 +1660,13 @@ fn a_scatter_node_may_set_its_own_domain_and_still_writes_the_targets_extent() {
 
 #[test]
 fn a_filled_field_says_what_it_cannot_hold_and_what_it_needs() {
-    // A Field of something a parameter cannot hold is a Kernel's work.
+    // A Field of a type a parameter cannot hold is a Kernel's work.
     let error = orla_scene::parse(
         "node cells: Grid<Cell> { domain = vec2(2, 2); }\noutput result <- cells.result;\n",
     )
     .unwrap_err()
     .to_string();
     assert!(error.contains("a Kernel fills it"), "{error}");
-    // And one without an extent says so.
     let error = orla_scene::parse("node zeros: Rows<Float> { }\noutput result <- zeros.result;\n")
         .unwrap_err()
         .to_string();
@@ -1693,10 +1680,8 @@ fn a_filled_field_says_what_it_cannot_hold_and_what_it_needs() {
     assert!(error.contains("through a session"), "{error}");
 }
 
-/// A node placed several times over its own output runs as one
-/// execution that repeats: the last one keeps its name and its output,
-/// nothing between them is made, and the words are what the times gave
-/// one at a time.
+/// The last keeps its name and output, nothing between is made, and the
+/// words match the unfused run.
 #[test]
 fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
     let mut runtime = runtime();
@@ -1713,8 +1698,7 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
          output result <- step.result;";
     let graph = orla_scene::parse(source).unwrap();
 
-    // Without fusion every time is its own execution, which is the
-    // reference this is held to.
+    // Unfused, every time is its own execution: the reference.
     let mut plain = Evaluator::new();
     plain.set_fusion(false);
     let reference = plain
@@ -1769,13 +1753,12 @@ fn a_node_placed_over_its_own_output_runs_as_one_repeated_execution() {
         )],
         "the times before it are what it absorbed"
     );
-    // The first column started at zero and five times added two.
+    // The first column started at zero and added two five times.
     assert_eq!(words[0], 10.0);
     joined.clear(&mut runtime);
 
-    // The same run written out by hand joins in the same way, and a
-    // step something else reads is a step that has to be made, so the
-    // run stops there and starts again after it.
+    // The same run written by hand joins the same way; a step read
+    // elsewhere is materialized, splitting the run there.
     let watched = orla_scene::parse(
         "node seed: test.seed@1 { domain = vec2(4, 3); }
          node one: test.step@1 { previous <- seed.result; by = 2.0; }
@@ -1814,9 +1797,8 @@ output result <- rows.result;
 
 #[test]
 fn a_kernel_decides_how_many_elements_the_next_node_runs() {
-    // The one domain term that reads data: `rows` is as long as the
-    // number `live` put in a Field this frame, so the graph places less
-    // work when a Kernel says there is less to do.
+    // `rows` is as long as the number `live` wrote this frame: the one
+    // domain term that reads data.
     let graph = orla_scene::parse(DECIDED).unwrap();
     let mut runtime = cpu(1 << 16);
     for source in [TALLY, RUN] {
@@ -1839,7 +1821,7 @@ fn a_kernel_decides_how_many_elements_the_next_node_runs() {
     assert_eq!(count(&runtime, report.output), 2);
     assert_eq!(first(&runtime, report.output), 200.0);
 
-    // The count changes, so the Field's length changes with it.
+    // The count changes, so the Field's length follows.
     let later = evaluator
         .evaluate(
             &graph,
@@ -1853,8 +1835,8 @@ fn a_kernel_decides_how_many_elements_the_next_node_runs() {
     assert_eq!(count(&runtime, later.output), 7);
     assert_eq!(first(&runtime, later.output), 700.0);
 
-    // Nothing moved, so nothing runs: the count is part of what the
-    // cache is keyed on, through the domain it resolved to.
+    // Nothing moved, so nothing runs: the cache key includes the resolved
+    // domain.
     let again = evaluator
         .evaluate(
             &graph,
@@ -1896,8 +1878,8 @@ output result <- twice.result;
             &BTreeMap::new(),
         )
         .unwrap();
-    // `twice` has no domain of its own, so it runs over what `rows`
-    // made whatever that is, and absorbs it.
+    // `twice` has no domain of its own: it runs over what `rows` made, and
+    // absorbs it.
     assert_eq!(report.executed, ids(&["live", "twice"]));
     assert_eq!(report.fused, vec![(NodeId("twice".into()), ids(&["rows"]))]);
     assert_eq!(runtime.host().domain(report.output).unwrap().count(), 6);
@@ -1912,8 +1894,8 @@ fn cpu(budget_words: usize) -> orla_kernel::Runtime {
     orla_kernel::Runtime::with_backend(budget_words, Box::new(orla_cpu::CpuBackend))
 }
 
-/// Compiles and publishes a Kernel as a session does: the runtime takes
-/// validated IR, and compiling is the caller's step.
+/// Compiles and publishes a Kernel as a session does: compiling is the
+/// caller's step, the runtime takes validated IR.
 fn load(
     runtime: &mut orla_kernel::Runtime,
     source: &str,
@@ -1925,9 +1907,8 @@ fn load(
 const SPLIT: &str = "kernel shade.split@1 { requires { field.read; field.write; } input source: Image; output color: Image; output depth: Grid<Float>; output glow: Grid<Float>; compute { let c = sample(source); return { depth: c.r * 0.5, glow: c.g, color: vec4(c.b, c.g, c.r, 1.0) }; } }";
 const COMBINE: &str = "kernel shade.combine@1 { requires { field.read; field.write; } input d: Grid<Float>; input c: Image; output result: Image; compute { let v = sample(d); return sample(c) + vec4(v, v, v, 0.0); } }";
 
-/// Evaluates `document` with fusion on and off and gives the fused
-/// report with the pixels of both, so a test says what fused and holds
-/// it to the unfused picture.
+/// Evaluates `document` fused and unfused; returns the fused report and
+/// both pictures.
 fn fused_and_plain(document: &str) -> (orla_graph::Report, Vec<[f32; 4]>, Vec<[f32; 4]>) {
     let mut runtime = runtime();
     load(&mut runtime, SPLIT);
@@ -1963,9 +1944,8 @@ fn fused_and_plain(document: &str) -> (orla_graph::Report, Vec<[f32; 4]>, Vec<[f
 
 #[test]
 fn a_producer_of_several_outputs_fuses_whole_into_its_only_reader() {
-    // `combine` reads two of `split`'s three outputs and nothing else
-    // reads any of them: the three nodes run as one Kernel and no output
-    // of `split` is ever written.
+    // `combine` reads two of `split`'s three outputs, and nothing else
+    // reads them: the three run as one Kernel and `split` writes nothing.
     let (report, actual, expected) = fused_and_plain(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node split: shade.split@1 { source <- source.result; }
@@ -1982,8 +1962,8 @@ fn a_producer_of_several_outputs_fuses_whole_into_its_only_reader() {
 
 #[test]
 fn a_producer_of_several_outputs_with_another_reader_stays_whole() {
-    // `glow` is a graph output too: `split` must write its Fields, so it
-    // runs on its own, and the picture is the same either way.
+    // `glow` is also a graph output: `split` writes its Fields and runs
+    // alone; the picture is the same.
     let (report, actual, expected) = fused_and_plain(
         "node source: image.gradient@1 { domain = vec2(6, 4); }
          node split: shade.split@1 { source <- source.result; }
@@ -2056,8 +2036,8 @@ const SHOW: &str = "kernel image.show@1 { requires { field.read; field.write; } 
 
 #[test]
 fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
-    // The gradient kept as bytes and read back: every pixel is its byte
-    // widened, so fusion, which would skip the rounding, does not happen.
+    // The gradient stored as bytes: every pixel is its byte widened, so
+    // nothing fuses across the rounding.
     let mut runtime = runtime();
     load(&mut runtime, PACK);
     load(&mut runtime, SHOW);
@@ -2123,8 +2103,6 @@ fn int_at(runtime: &Runtime, handle: orla_kernel::Handle) -> i32 {
     runtime.host().element(handle, 0).unwrap()[0] as i32
 }
 
-/// What the restore work found (review of the time subsystem): each is
-/// held here against the evaluator directly.
 #[test]
 fn a_failed_restore_leaves_no_run_going_and_commits_are_whole() {
     let mut runtime = cpu(1 << 12);
@@ -2220,7 +2198,7 @@ output slow <- slow.result;
 }
 
 /// A commit is whole: a state port with no output fails the evaluation
-/// before any other port advances.
+/// before any port advances.
 #[test]
 fn a_commit_advances_every_port_or_none() {
     let mut runtime = cpu(1 << 12);
@@ -2247,8 +2225,8 @@ output result <- b.result;
     assert!(evaluator.committed_states().is_empty(), "nothing advanced");
 }
 
-/// Two ports' states swapped by a restore whose trial fails: each is put
-/// back, neither released while the other still needed it.
+/// Two ports' states swapped by a restore whose trial fails are each put
+/// back, neither released while the other needs it.
 #[test]
 fn a_restore_that_swaps_two_ports_and_fails_puts_both_back() {
     let mut runtime = cpu(1 << 12);
@@ -2346,8 +2324,8 @@ fn one_port_starts_again_and_the_others_keep_their_state() {
     assert_eq!(report.executed, ids(&["a", "b"]));
     assert_eq!(runtime.host().live(), 3, "the seed and the two states");
 
-    // Only state can start again: an output no `<~` reads holds none,
-    // and a refused reset moves nothing.
+    // Only state resets: an output no `<~` reads holds none, and a refused
+    // reset moves nothing.
     let seed = NodeId("seed".into());
     let error = evaluator
         .reset_port(&graph, &mut runtime, &seed, "result")
@@ -2402,27 +2380,25 @@ fn a_reset_lets_go_of_the_runs_that_began_from_the_state_it_forgot() {
             .collect();
         (report, values)
     };
-    // On the frame first, then both counts off it, from the state 1.
+    // On the frame first, then both counts off it, from state 1.
     let (_, values) = evaluate(&mut evaluator, &mut runtime);
     assert_eq!(values, vec![1.0 - 1.0, 1.0]);
     let (report, _) = evaluate(&mut evaluator, &mut runtime);
     assert_eq!(report.pending, ids(&["count", "other"]));
 
-    // One port starts again: the run that read it is let go, the other
-    // goes on and lands.
+    // One port resets: the run reading it is dropped; the other lands.
     let count = NodeId("count".into());
     evaluator
         .reset_port(&graph, &mut runtime, &count, "result")
         .unwrap();
     assert_eq!(evaluator.settle(&mut runtime).unwrap(), ids(&["other"]));
     // The count's first run read its initial source, so the frame after
-    // the reset finds it cached and commits it: the count is 1 again. A
-    // stale run landed here would have been carried instead, a 2.
+    // the reset commits that cached 1, not a stale 2.
     let (report, values) = evaluate(&mut evaluator, &mut runtime);
     assert!(report.reused.contains(&count), "{report:?}");
     assert!(report.committed.contains(&(count.clone(), "result".into())));
     assert_eq!(values, vec![1.0 - 1.0, 2.0]);
-    // And it counts on from there.
+    // It counts on from there.
     let (report, _) = evaluate(&mut evaluator, &mut runtime);
     assert!(report.pending.contains(&count), "{report:?}");
     evaluator.settle(&mut runtime).unwrap();
@@ -2432,7 +2408,7 @@ fn a_reset_lets_go_of_the_runs_that_began_from_the_state_it_forgot() {
     assert_eq!(values[0], 1.0 - 2.0, "{values:?}");
     assert!(values[1] > 2.0, "the other counted on: {values:?}");
 
-    // All state at once lets every run go: none lands the world forgotten.
+    // Resetting all state drops every run: none lands afterwards.
     let (report, _) = evaluate(&mut evaluator, &mut runtime);
     assert!(!report.pending.is_empty());
     evaluator.reset_state(&mut runtime);

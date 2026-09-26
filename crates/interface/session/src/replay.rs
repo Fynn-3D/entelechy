@@ -1,6 +1,5 @@
-//! Declarative replay: drive a scene through a scripted sequence of frames
-//! and inputs and check pixels, so an application's tests are data rather
-//! than Rust.
+//! Declarative replay: an application's tests as data. A replay drives a
+//! scene through scripted frames and inputs and checks what they produce.
 //!
 //! ```text
 //! scene ../scene.osn        # required; paths are relative to the replay file
@@ -9,9 +8,9 @@
 //! pointer 20 20 down        # move the pointer and press; `up` releases
 //! pointer up                # release without moving
 //! button right down         # a pointer button: left, right, middle; `up` releases
-//! wheel 0 -1                # what the wheel scrolls before the next frame only
+//! wheel 0 -1                # the scroll for the next frame only
 //! window 240 135            # the window's size in pixels, for `window()`,
-//! window 240 135 0.25       # and its scale factor (one when not given)
+//! window 240 135 0.25       # and its scale factor (default one)
 //! key 67 down               # press a key by code; `up` releases
 //! reset                     # forget committed state
 //! param exposure 1.5        # override a graph parameter (a literal)
@@ -20,28 +19,19 @@
 //! expect step.result[0].score = 1   # a field of an element of a node's output:
 //!                                   # ints and bools exact, floats and vectors
 //!                                   # with an optional trailing tolerance
-//! expect fall.result[0].speed > 2.5 # or on one side of a bound, every
-//!                                   # component: `<`, `<=`, `>`, `>=`, strict
-//!                                   # (no tolerance), numbers only
-//! expect count ground.result = 6889 # how many elements a node's output holds,
-//!                                   # which is what a `domain` came out as
+//! expect fall.result[0].speed > 2.5 # or a strict bound on every component:
+//!                                   # `<`, `<=`, `>`, `>=`, numbers only
+//! expect count ground.result = 6889 # how many elements a node's output holds
 //! expect placed ring main           # the node runs on the session's main
 //! expect placed filter ordered      # backend, or off it (a scan on a GPU
-//!                                   # session): the same line holds on every
-//!                                   # backend where nothing is routed
+//!                                   # session); `ordered` reads as `main`
+//!                                   # where there is no second backend
 //! ```
 //!
-//! An element expectation names the node's output as the Kernel declared
-//! it, so it reads as a statement about the application's state rather
-//! than about the picture. A count expectation names the output alone:
-//! it is how a node whose size a Kernel decided is written down. Nodes
-//! named either way are pinned before the first frame, so fusion never
-//! hides them.
-//!
-//! A frame evaluates only what its expectations need: the named nodes,
-//! the state, and the picture only when a pixel expectation follows the
-//! frame. A replay that asserts on state never renders, and costs what
-//! the state costs.
+//! Nodes named by element or count expectations are pinned before the
+//! first frame, so fusion keeps them. A frame evaluates only what its
+//! expectations need: the named nodes, the state, and the picture only
+//! when a pixel expectation follows it.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -56,8 +46,7 @@ use crate::Session;
 pub enum Step {
     /// Evaluate at a session time.
     Frame(f32),
-    /// Wait for every `async` node's run off the frame to land, so the
-    /// next frame reads it.
+    /// Wait for every `async` node's run to land.
     Settle,
     /// Move the pointer and set the button.
     Pointer {
@@ -82,8 +71,7 @@ pub enum Step {
     },
     /// What the wheel scrolls for the next frame.
     Wheel([f32; 2]),
-    /// Where a pad's axis pair stands: 0 the left stick, 1 the right, 2
-    /// the two triggers.
+    /// A pad's axis pair: 0 left stick, 1 right stick, 2 triggers.
     Stick {
         /// Which pair.
         which: i32,
@@ -99,7 +87,7 @@ pub enum Step {
     },
     /// Forget committed state.
     Reset,
-    /// Forget one port's committed state; the rest keeps its own.
+    /// Forget one port's committed state.
     ResetPort {
         /// The producer.
         node: String,
@@ -121,11 +109,9 @@ pub enum Step {
         port: String,
         /// Element index.
         index: u32,
-        /// Struct fields to follow, outermost first; empty for the element
-        /// itself.
+        /// Struct fields, outermost first; empty for the element itself.
         path: Vec<String>,
-        /// How the value is held to what is written: equal (within a
-        /// tolerance for floats), or on one side of it.
+        /// Equal (floats within a tolerance), or a bound.
         compare: Compare,
         /// Expected components as written.
         values: Vec<String>,
@@ -133,7 +119,7 @@ pub enum Step {
         line: u32,
     },
     /// Check how many elements a node's output holds after the last
-    /// frame: what a node whose `domain` a Kernel decided came out as.
+    /// frame.
     ExpectCount {
         /// The node.
         node: String,
@@ -144,11 +130,8 @@ pub enum Step {
         /// Line number, for messages.
         line: u32,
     },
-    /// Check where a node runs: on the session's main backend, or off
-    /// it on the ordered one. A session without an ordered backend runs
-    /// everything on the main one, so `ordered` holds only where a second
-    /// backend exists (a GPU session); a replay run on the CPU or the JIT
-    /// checks it as `main`.
+    /// Check where a node runs: the main backend, or the ordered one.
+    /// Without an ordered backend (CPU, JIT), `ordered` checks as `main`.
     ExpectPlaced {
         /// The node.
         node: String,
@@ -392,8 +375,8 @@ pub struct Outcome {
     pub failures: Vec<String>,
 }
 
-/// Runs a replay on a fresh session over `runtime`: every frame
-/// evaluates what its expectations need, and nothing else.
+/// Runs a replay on a fresh session over `runtime`, each frame
+/// evaluating only what its expectations need.
 pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     let mut session = Session::open_with(&replay.scene, replay.kernels.as_deref(), runtime);
     let mut rejected = Vec::new();
@@ -415,22 +398,18 @@ pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
     Ok(replayer.outcome)
 }
 
-/// A frame a replay asks for: the context it evaluates under, and what it
-/// must evaluate, the nodes its expectations name, and the picture when a
-/// pixel expectation follows it. A caller that shows the picture anyway
-/// (a window) evaluates everything.
+/// A frame a replay asks for: its context and what it must evaluate. A
+/// caller that shows the picture (a window) evaluates everything.
 pub struct Frame {
-    /// The time, the input and the window of this frame.
+    /// The time, input and window of this frame.
     pub context: Context,
-    /// What the expectations need.
+    /// The named nodes, and the picture when a pixel expectation follows.
     pub demand: std::collections::BTreeSet<orla_graph::NodeId>,
 }
 
-/// A replay played a frame at a time over a session its caller owns: the
-/// steps between two frames are applied (inputs, the window, params,
-/// expectations of the frame before), and the next frame is handed back
-/// for the caller to evaluate however it evaluates. `orla replay` runs one
-/// to the end at once; a window plays one a frame at a time, and shows it.
+/// A replay played a frame at a time over a caller's session: the steps
+/// between frames are applied, and the next frame is handed back for the
+/// caller to evaluate.
 pub struct Replayer {
     steps: Vec<Step>,
     next: usize,
@@ -444,8 +423,8 @@ pub struct Replayer {
 }
 
 impl Replayer {
-    /// Starts `replay` over `session`, which has read its scene: the nodes
-    /// the expectations name are pinned, so fusion never hides them.
+    /// Starts `replay` over a synced `session`, pinning the nodes the
+    /// expectations name.
     pub fn start(replay: &Replay, session: &mut Session) -> Self {
         let named: std::collections::BTreeSet<orla_graph::NodeId> = replay
             .steps
@@ -498,10 +477,9 @@ impl Replayer {
         self.next >= self.steps.len()
     }
 
-    /// Applies the steps up to the next frame and hands that frame back;
-    /// `None` once the replay is over, every step applied. Takes the last
-    /// frame's report first ([`Replayer::evaluated`]) for the
-    /// expectations that follow it.
+    /// Applies the steps up to the next frame and returns it; `None` once
+    /// every step is applied. Expectations read the report given to
+    /// [`Replayer::evaluated`].
     pub fn next_frame(&mut self, session: &mut Session) -> Result<Option<Frame>, String> {
         while self.next < self.steps.len() {
             let position = self.next;
@@ -514,10 +492,9 @@ impl Replayer {
                     window: self.window.0,
                     scale: self.window.1,
                 };
-                // The wheel is what scrolled before this frame only.
+                // The wheel scrolls for one frame.
                 self.input.wheel = [0.0, 0.0];
-                // The picture is demanded only when a pixel expectation
-                // follows this frame, before the next.
+                // Demand the picture when a pixel expectation follows.
                 let mut demand = self.named.clone();
                 let pixels_follow = self.steps[position + 1..]
                     .iter()
@@ -540,7 +517,7 @@ impl Replayer {
         self.last = Some(report);
     }
 
-    /// One step that is not a frame.
+    /// Applies one non-frame step.
     fn apply(&mut self, step: &Step, session: &mut Session) -> Result<(), String> {
         let input = &mut self.input;
         let outcome = &mut self.outcome;
@@ -630,8 +607,7 @@ impl Replayer {
                         "line {line}: no node `{node}` with a published Kernel"
                     ));
                 };
-                // Where there is no second backend, nothing can leave the
-                // main one: `ordered` is a claim about a session that has one.
+                // `ordered` expects routing only where a second backend exists.
                 let has_ordered = session.runtime().ordered_backend_name().is_some();
                 let expected = *routed && has_ordered;
                 if placement.routed.is_some() != expected {
@@ -728,9 +704,8 @@ impl Compare {
     }
 }
 
-/// Reads one element field of a node's output and compares it with the
-/// written values. `Ok(None)` means it matched; `Ok(Some(text))` says how
-/// it did not; `Err` means the expectation could not be read at all.
+/// Compares one element field of a node's output with the written values:
+/// `Ok(None)` matched, `Ok(Some(text))` the mismatch, `Err` unreadable.
 fn check_element(
     session: &mut Session,
     node: &str,
@@ -761,7 +736,7 @@ fn check_element(
     }
     let tolerance = match values.len() {
         n if n == components => 0.01,
-        // A bound is a bound: only `=` takes a tolerance.
+        // Only `=` takes a tolerance.
         n if n == components + 1 && !exact && compare == Compare::Equal => values[components]
             .parse::<f64>()
             .map_err(|_| format!("tolerance `{}` is not a number", values[components]))?,
@@ -792,7 +767,7 @@ fn check_element(
             other => other.holds(v, e),
         })
     };
-    // Integers compare exactly, as integers, whichever the comparison.
+    // Integers compare exactly under every comparison.
     let whole = |expected: &str, v: i64| {
         expected.parse::<i64>().is_ok_and(|e| match compare {
             Compare::Equal => v == e,
@@ -857,7 +832,7 @@ mod tests {
                 Compare::AtMost
             ]
         );
-        // Not a comparison it knows, and the line says so.
+        // An unknown comparison is refused.
         let error = parse("scene s.osn\nexpect a.result[0] ~ 1\n", Path::new(".")).unwrap_err();
         assert!(error.message.contains("cannot read"), "{error}");
         assert!(Compare::Below.holds(1.0, 2.0) && !Compare::Below.holds(2.0, 2.0));

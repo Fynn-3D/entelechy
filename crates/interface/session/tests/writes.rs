@@ -1,7 +1,6 @@
-//! What a scene writes: an output written `to` a file lands only in a
-//! directory the session was allowed, only after an evaluation that
-//! changed it commits, and whole; the scene reads it back through an
-//! input that falls back on a node while the file is not there.
+//! A scene output written `to` a file lands whole, only in an allowed
+//! directory, only after a changing evaluation commits; the scene reads
+//! it back through an input that falls back on a node while it is absent.
 
 use std::path::{Path, PathBuf};
 
@@ -67,12 +66,9 @@ output shown <- over.result;
 output kept <- next.result to \"saves/n.field\";
 ";
 
-/// A file the person running the session allowed on its own, as a
-/// command line's `--out` or `--save` names one, is for that command's
-/// own write: the scene's `to` still writes only where a directory is
-/// allowed, even into that very file, and says how to allow it. (A
-/// command line's output file used to let the scene write there too, and
-/// `orla run` always names one.)
+/// A single file the person allowed (`--out`, `--save`) is for that
+/// command's write: the scene's `to` writes only into allowed
+/// directories, even for that file, and says how to allow it.
 #[test]
 fn a_file_allowed_for_the_caller_is_not_the_scenes_to_write() {
     let dir = scratch("caller-file", SAVING);
@@ -101,7 +97,7 @@ fn an_output_is_written_where_allowed_once_it_changed_and_read_back() {
     let mut session = open(&dir);
     let context = Context::default();
 
-    // Nothing is allowed: nothing is written, and it is said why.
+    // Nothing allowed: nothing is written, and the reason is reported.
     session.evaluate(&context).unwrap();
     let events = session.sync();
     let why = refused(&events);
@@ -115,13 +111,13 @@ fn an_output_is_written_where_allowed_once_it_changed_and_read_back() {
     session.allow_writes(&dir.join("saves")).unwrap();
     session.evaluate(&context).unwrap();
     assert_eq!(saved(&file), [6]);
-    // What the file now holds is read back: the input has left its
-    // fallback, and the next evaluation writes one more.
+    // The file is read back: the input leaves its fallback, and the next
+    // evaluation writes one more.
     let events = session.sync();
     assert_eq!(wrote(&events), 1, "{events:?}");
     session.evaluate(&context).unwrap();
     assert_eq!(saved(&file), [7]);
-    // Nothing changed: nothing is written again.
+    // Nothing changed: nothing is written.
     session.evaluate(&context).unwrap();
     let events = session.sync();
     assert_eq!(wrote(&events), 1, "the write of 7 alone: {events:?}");
@@ -129,15 +125,14 @@ fn an_output_is_written_where_allowed_once_it_changed_and_read_back() {
     assert_eq!(wrote(&session.sync()), 1, "8, read back from 7");
     assert_eq!(saved(&file), [8]);
 
-    // An evaluation that fails commits nothing, and writes nothing: the
-    // file read back says 8, the next would be 9, and a division by
-    // zero after it fails the frame.
+    // A failed evaluation commits and writes nothing: the file says 8,
+    // the next would be 9, and a division by zero fails the frame.
     session.sync();
     session.set_param("by", Value::Int(0)).unwrap();
     assert!(session.evaluate(&context).is_err());
     assert_eq!(saved(&file), [8], "a failed evaluation wrote");
 
-    // A session that starts where one left off reads what it wrote.
+    // A new session reads what the last one wrote.
     let mut again = open(&dir);
     again.allow_writes(&dir.join("saves")).unwrap();
     let report = again.evaluate(&context).unwrap();
@@ -174,7 +169,7 @@ output kept <- start.result to \"saves/../outside.field\";
         "{events:?}"
     );
     assert!(!dir.join("outside.field").exists());
-    // An allowance names a directory that is there.
+    // An allowance names an existing directory.
     assert!(session.allow_writes(&dir.join("nowhere")).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -198,7 +193,7 @@ output read <- back;
         std::fs::read(dir.join("saves/b.bin")).unwrap(),
         [0, 7, 14, 255, 28]
     );
-    // What is not a byte is not written, and it is said which row.
+    // A value that is not a byte is not written, and its row is named.
     session.set_param("top", Value::Int(256)).unwrap();
     session.evaluate(&Context::default()).unwrap();
     let why = refused(&session.sync());

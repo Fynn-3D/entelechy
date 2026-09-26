@@ -1,5 +1,4 @@
-//! A map's entry point: one element a thread, its inputs read and its
-//! outputs written where the element is.
+//! A map's entry point: one element per thread, written in place.
 
 use super::*;
 
@@ -8,14 +7,13 @@ pub fn emit(module: &Module) -> String {
     emit_packed(module, &[])
 }
 
-/// Emits the module's shader with the inputs `packed` names read from
-/// one buffer; see [`packed_inputs`].
+/// Emits the module's shader with the `packed` inputs read from one
+/// buffer; see [`packed_inputs`].
 pub fn emit_packed(module: &Module, packed: &[usize]) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
     emit_preamble(&mut out, module, true, packed);
-    // One store per output the pass writes: a map's every output, into
-    // its own buffer; a scatter's map pass stores the entry's pairs.
+    // One store per written output; a scatter stores the entry's pairs.
     let scattering = matches!(manifest.mode, Mode::Scatter { .. });
     for (k, port) in manifest
         .outputs
@@ -94,10 +92,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         );
         return out;
     }
-    // A map of several outputs stores them from the entry itself.
-    // A scatter that emits lands the pair it returns as it lands the ones
-    // it emits, at once: its rule is order-free, so no list of pairs and
-    // no pass applying them is needed.
+    // A map of several outputs stores them from the entry. An emitting
+    // scatter combines its returned pair into the target at once, as its
+    // emitted ones: its rule is order-free.
     let landing = if emitted_pairs(module).is_empty() {
         None
     } else {
@@ -114,10 +111,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         "store_out0(element, entry(coord, element));"
     };
     if module.accounted() {
-        // A module that counts its work runs every invocation to one
-        // barrier: an element runs unless its run has already passed the
-        // Host's bound, keeps what it ran short of a block in the
-        // workgroup's sum, and one invocation hands the sum on.
+        // An accounted module runs every invocation to one barrier. An
+        // element runs while the run is within the Host's bound, adds its
+        // remainder short of a block to the workgroup's sum, and one
+        // invocation settles the sum.
         let _ = writeln!(
             out,
             "

@@ -3,16 +3,10 @@
 //!
 //! A Graph is a program: nodes bound to stable [`KernelId`]s, typed
 //! connections between their ports, and named outputs. The Graph owns
-//! composition; each Kernel owns its computation. The [`Evaluator`]
-//! executes a Graph against a [`Runtime`], caches every node's outputs,
-//! re-executes a node only when its Kernel generation, parameters, domain,
-//! context, or upstream results changed, and commits state between
-//! evaluations.
-//!
-//! Graphs are written in `.osn` documents, which `orla-scene` parses and
-//! lowers into this model; the Graph Runtime never sees source. Inline
-//! Kernels are reported back to the loader for publication; the Graph
-//! itself binds every node by id and never holds Kernel bodies.
+//! composition; each Kernel owns its computation. The [`Evaluator`] runs a
+//! Graph against a `Runtime`, caches node outputs, re-executes a node
+//! only when its inputs changed, and commits state between evaluations.
+//! The Graph binds nodes by id; it never sees source or Kernel bodies.
 
 mod domain;
 mod evaluate;
@@ -34,10 +28,8 @@ impl fmt::Display for NodeId {
     }
 }
 
-/// A node's port as text names it, `node.port`: the node and the port,
-/// or nothing when the text names no port. A node of a placed graph
-/// carries its place in its id (`fx.gray`), so the port is what follows
-/// the last dot, and the node everything before it.
+/// Splits `node.port` at the last dot (placed node ids contain dots:
+/// `fx.gray.out`); `None` when the text names no port.
 pub fn split_port(text: &str) -> Option<(NodeId, String)> {
     let (node, port) = text.rsplit_once('.')?;
     if node.is_empty() || port.is_empty() {
@@ -74,19 +66,17 @@ impl fmt::Display for Source {
 pub enum Binding {
     /// The source's value from this evaluation.
     Now(Source),
-    /// The source's value as committed by the previous successful
-    /// evaluation; `initial` feeds the port until a value has been
-    /// committed, and again after a state reset. This is how state lives in
-    /// the Graph while Kernels stay pure.
+    /// The source's value committed by the previous successful evaluation;
+    /// `initial` feeds the port before the first commit and after a state
+    /// reset. State lives in the Graph; Kernels stay pure.
     Previous {
         /// A node output; read from the last commit.
         source: Source,
         /// What to read before the first commit.
         initial: Source,
-        /// The Kernel that carries the committed state into the port's
-        /// layout when a republished Kernel changed it: a map over the
-        /// old elements to the new. Without one, the state restarts from
-        /// `initial` when the layouts disagree.
+        /// The Kernel that maps committed state into the port's layout
+        /// when a republished Kernel changed it; without one, state
+        /// restarts from `initial` when the layouts disagree.
         migration: Option<KernelId>,
     },
 }
@@ -125,8 +115,7 @@ pub enum ParamValue {
 pub struct GraphParam {
     /// Parameter name.
     pub name: String,
-    /// Its type as the document writes it, which a record needs to be
-    /// read back as what it is.
+    /// Its type as written; a record is read back by it.
     pub ty: String,
     /// Default value, of that type; a value given for it takes its shape.
     pub default: Value,
@@ -135,8 +124,7 @@ pub struct GraphParam {
 /// A node: a Kernel binding plus its connections and parameter overrides.
 #[derive(Clone, Debug)]
 pub struct Node {
-    /// Node name; nodes of a placed sub-graph carry its node name as a
-    /// dotted prefix.
+    /// Node name; a placed sub-graph's nodes carry a dotted prefix.
     pub id: NodeId,
     /// The Kernel this node executes.
     pub kernel: KernelId,
@@ -144,24 +132,18 @@ pub struct Node {
     pub inputs: BTreeMap<String, Binding>,
     /// Parameter overrides; unlisted parameters use manifest defaults.
     pub params: BTreeMap<String, ParamValue>,
-    /// Explicit output extent, literal or computed from the node's inputs
-    /// and parameters; defaults to the first input's extent.
+    /// Output extent; defaults to the first input's extent.
     pub domain: Option<DomainSpec>,
-    /// Written `async = true;`: the node runs off the frame. An
-    /// evaluation starts its execution on a thread and goes on; until
-    /// the run lands, the node's readers take its last output, and the
-    /// state it feeds stays as it was. Its first run is on the frame, so
-    /// its readers have something to read.
+    /// `async = true;`: the node runs on a thread off the frame. Until a
+    /// run lands, readers take its last output and the state it feeds
+    /// stays. Its first run is on the frame.
     pub is_async: bool,
-    /// Where the node was written, as `file:line:column`, when the
-    /// graph came from a document. A Kernel's diagnostics have always
-    /// said where; a scene's said only which node, and a scene of a
-    /// placed sub-graph has nodes whose names nobody wrote.
+    /// Where the node was written, `file:line:column`, for diagnostics.
     pub at: Option<String>,
 }
 
-/// Where a node was written is provenance and not identity: the same
-/// graph written twice, or printed and read back, is the same graph.
+/// Equality ignores `at`: where a node was written is provenance, not
+/// identity.
 impl PartialEq for Node {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -180,21 +162,20 @@ pub struct Graph {
     pub name: String,
     /// External Field names the caller must supply.
     pub externals: Vec<String>,
-    /// Externals the document writes as text: the name and the text,
-    /// which the session supplies as `Rows<Int>` of the characters' codes.
+    /// Text externals: name and text, supplied as `Rows<Int>` of the
+    /// characters' codes.
     pub texts: Vec<(String, String)>,
     /// Parameters the caller may override.
     pub params: Vec<GraphParam>,
-    /// Parameters that size the graph (a node's `times`): a change to one
-    /// of these means lowering the document again.
+    /// Parameters that size the graph (a node's `times`); changing one
+    /// lowers the document again.
     pub times_params: Vec<String>,
     /// Nodes in document order, sub-graphs flattened in place.
     pub nodes: Vec<Node>,
     /// Named results in document order; interfaces present the first.
     pub outputs: Vec<(String, Source)>,
-    /// What an external read from a file reads while the caller supplies
-    /// nothing for it (the file absent or unreadable): the external's
-    /// name and the source.
+    /// Fallbacks: an external's name and the source it reads while the
+    /// caller supplies nothing (its file absent or unreadable).
     pub fallbacks: Vec<(String, Source)>,
 }
 
@@ -220,8 +201,7 @@ pub enum GraphError {
     UnknownOutput(Source),
     /// The graph declares no output.
     NoOutput,
-    /// A `<~` binding reads an external image; only node outputs carry
-    /// state between evaluations.
+    /// A `<~` binding reads an external; only node outputs carry state.
     FeedbackNeedsNode {
         /// The node whose port is bound.
         node: NodeId,
@@ -277,11 +257,7 @@ impl Graph {
         self.nodes.iter().find(|node| &node.id == id)
     }
 
-    /// Where every node is, by name. Finding one by name is a walk of
-    /// the whole list, so anything that does it once a node is a walk
-    /// of the list squared: an evaluation builds this once and looks
-    /// nodes up in it. A graph of a thousand nodes spent most of a
-    /// frame on those walks.
+    /// Node index by name; an evaluation builds it once for lookups.
     pub fn index(&self) -> BTreeMap<&NodeId, usize> {
         self.nodes
             .iter()
@@ -335,8 +311,7 @@ impl Graph {
                         Source::Node { node, .. } => index_of(node).is_some(),
                     };
                     if !known {
-                        // Every node and external there is, so a name
-                        // one letter out is named.
+                        // Every name, for the closest-match suggestion.
                         let near = match source {
                             Source::Node { node, .. } => orla_abi::names::nearest(
                                 &node.0,
@@ -388,11 +363,8 @@ impl Graph {
             Active,
             Done,
         }
-        // What each node waits for, worked out once. It used to be
-        // gathered again on every step of the walk below, which for a
-        // graph of any size is most of what the sort cost.
-        // An external with a fallback waits for the node the fallback
-        // reads, whether or not the caller supplies it this time.
+        // What each node waits for, computed once. An external with a
+        // fallback waits for the node the fallback reads, supplied or not.
         let producer = |source: &Source| match source {
             Source::Node { node, .. } => index_of(node),
             Source::External(name) => match self.fallback(name) {

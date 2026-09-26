@@ -1,12 +1,8 @@
 //! The workspace's layers, held by its manifests: every crate sits in
 //! `crates/<layer>/<crate>`, depends only in the directions AGENTS.md
-//! allows, and takes a dependency from outside the workspace only where
-//! AGENTS.md names one. A crate's tests depend in the same directions,
-//! so a lower crate is tested without building a higher one; a test that
-//! needs a higher crate lives where that crate is below it. A backend's
-//! tests alone may also reach what a backend is held to: the compiler,
-//! to write its Kernels as source, the interpreter it answers to, and
-//! the conformance matrix.
+//! allows, and takes an external dependency only where AGENTS.md names
+//! one. Tests depend in the same directions; a backend's tests may also
+//! reach the compiler, the interpreter and the conformance matrix.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,8 +10,8 @@ use std::path::{Path, PathBuf};
 /// The layers, in the order a crate may look down them.
 const LAYERS: [&str; 4] = ["core", "frontend", "backends", "interface"];
 
-/// The external dependencies a crate outside the interface layer may
-/// take, by crate: a backend's machine and nothing else.
+/// The external dependencies a non-interface crate may take: a backend's
+/// machine.
 const MACHINES: [(&str, &[&str]); 2] = [
     ("orla-gpu", &["wgpu", "pollster"]),
     (
@@ -30,16 +26,14 @@ const MACHINES: [(&str, &[&str]); 2] = [
     ),
 ];
 
-/// What a backend's tests may reach beyond its layers: the compiler, the
-/// reference interpreter, and the conformance matrix.
+/// What a backend's tests may reach beyond its layers.
 const YARDSTICKS: [&str; 3] = ["orla-compiler", "orla-cpu", "orla-conformance"];
 
-/// Interface crates that take nothing from outside all the same.
+/// Interface crates that take no external dependency.
 const PLAIN_INTERFACES: [&str; 1] = ["orla-formats"];
 
-/// The crates allowed `unsafe`: the JIT calls the code it produces, the
-/// FFI reads what a C caller hands it. Every other crate takes the
-/// workspace's lints, which forbid it.
+/// The crates allowed `unsafe`: the JIT runs its code, the FFI reads a C
+/// caller's pointers. The workspace's lints forbid it elsewhere.
 const UNSAFE: [&str; 2] = ["orla-jit", "orla-ffi"];
 
 struct Crate {
@@ -61,21 +55,19 @@ fn root() -> PathBuf {
 /// What a manifest says of a crate.
 struct Manifest {
     name: String,
-    /// Dependencies of the crate itself, of any table (`[dependencies]`,
-    /// a target's, `[build-dependencies]`): workspace crates by package
-    /// name, and the rest.
+    /// Dependencies of the crate itself, from any table: workspace crates
+    /// by package name, and the rest.
     inside: Vec<String>,
     outside: Vec<String>,
-    /// Development dependencies (of any target) inside the workspace;
-    /// those from outside count as the crate's own.
+    /// Workspace development dependencies of any target; external ones
+    /// count as the crate's own.
     tests: Vec<String>,
     workspace_lints: bool,
 }
 
-/// A manifest read as lines: a key is what comes before `=`, a workspace
-/// crate is one given by `path`, and a dependency table is any table
-/// whose name ends in `dependencies]`, a target's and a build's included,
-/// or a dotted one that names a single dependency.
+/// A manifest read as lines: a key precedes `=`, a workspace crate has a
+/// `path`, and a dependency table's name ends in `dependencies]` or is a
+/// dotted one naming a single dependency.
 fn read(manifest: &Path) -> Manifest {
     let text = std::fs::read_to_string(manifest).unwrap();
     let mut name = None;
@@ -209,7 +201,7 @@ fn down(from: &str, to: &str) -> bool {
     match from {
         "core" => to == "core",
         "frontend" => matches!(to, "core" | "frontend"),
-        // A backend is a peer of the others: it reaches none of them.
+        // A backend reaches no other backend.
         "backends" => to == "core",
         _ => true,
     }
@@ -292,10 +284,9 @@ fn only_the_interface_and_two_machines_take_outside_dependencies() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// The session's scene, Kernel ledger, history, inputs and writes run on
-/// the runtime the session is given; which backend that is, and what
-/// only a backend has, belong to the session's opening, its trace and its
-/// re-exports.
+/// The session's scene, ledger, history, inputs and writes run on the
+/// runtime it is given; backend specifics belong to its opening, trace
+/// and re-exports.
 #[test]
 fn the_session_runs_on_the_runtime_it_is_given() {
     let src = root().join("crates/interface/session/src");
@@ -322,9 +313,8 @@ fn the_session_runs_on_the_runtime_it_is_given() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// `unsafe` is forbidden by the workspace's lints; a crate that does not
-/// take them could use it unseen. Only the two named crates set their
-/// own, and the workspace's still forbid it.
+/// Only the two named crates set their own lints, and the workspace's
+/// still forbid `unsafe`.
 #[test]
 fn only_the_jit_and_the_ffi_may_be_unsafe() {
     let workspace = std::fs::read_to_string(root().join("Cargo.toml")).unwrap();
@@ -349,10 +339,9 @@ fn only_the_jit_and_the_ffi_may_be_unsafe() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// The core composes and computes; files are the interface's. Nothing
-/// under `crates/core` names a path or the filesystem outside its tests:
-/// what a scene reads and writes travels beside the Graph
-/// (`orla_scene::Files`), carried out by the session.
+/// Nothing under `crates/core` names a path or the filesystem outside its
+/// tests: scene files travel beside the Graph (`orla_scene::Files`) and
+/// the session carries them out.
 #[test]
 fn the_core_knows_no_file() {
     fn walk(dir: &Path, found: &mut Vec<String>) {

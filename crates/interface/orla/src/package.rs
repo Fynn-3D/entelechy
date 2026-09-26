@@ -1,8 +1,7 @@
 //! Packages: a directory with a `package.osn` manifest, its Kernels,
-//! graph presets and assets, and the one-file `.orlapkg` archive it
-//! travels as. The archive is Orla's own, no compression, so nothing is
-//! depended on: a magic line, the format version, then every file as
-//! its path and its bytes.
+//! graph presets and assets, and its `.orlapkg` archive: a magic line,
+//! the format version, then every file as its path and bytes,
+//! uncompressed.
 
 use std::path::{Path, PathBuf};
 
@@ -40,8 +39,8 @@ fn files_of(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-/// Writes a package directory as one `.orlapkg` file; the manifest is
-/// checked first, so what travels is a package.
+/// Writes a package directory as one `.orlapkg` file after checking its
+/// manifest.
 pub fn pack(dir: &Path, out: &Path) -> Result<usize, String> {
     let declared = package_manifest(&orla_session::Disk, &dir.join("package.osn"))?;
     let files = files_of(dir)?;
@@ -63,8 +62,8 @@ pub fn pack(dir: &Path, out: &Path) -> Result<usize, String> {
     Ok(files.len())
 }
 
-/// Reads an `.orlapkg` file back into a directory, which must not exist
-/// yet, and checks the manifest it holds.
+/// Unpacks an `.orlapkg` file into a new directory and checks its
+/// manifest.
 pub fn unpack(file: &Path, dir: &Path) -> Result<usize, String> {
     let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut at = 0;
@@ -116,8 +115,8 @@ pub fn unpack(file: &Path, dir: &Path) -> Result<usize, String> {
     Ok(count)
 }
 
-/// What a package holds, for a person: its id and needs, and how many
-/// Kernel files, graph presets and other files it has.
+/// A package's id, needs, and counts of Kernel files, graph presets and
+/// other files.
 pub fn describe(dir: &Path) -> Result<String, String> {
     let declared = package_manifest(&orla_session::Disk, &dir.join("package.osn"))?;
     let files = files_of(dir)?;

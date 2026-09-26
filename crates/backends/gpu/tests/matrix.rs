@@ -47,8 +47,8 @@ fn every_long_feature_matches_the_interpreter_where_the_device_has_longs() {
     );
 }
 
-/// What each case's GPU run says against the interpreter's: integers
-/// and booleans exact, floats to rounding.
+/// Each case's GPU run against the interpreter's: integers and booleans
+/// exact, floats to rounding.
 fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String> {
     let mut failures = Vec::new();
     for case in cases {
@@ -113,8 +113,8 @@ fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String
             continue;
         }
         for (which, (a, b)) in cpu.iter().zip(&out).enumerate() {
-            // Compared as the Kernel's words: what a device kept narrow is
-            // downloaded as kept and widened by the Host's rule.
+            // Compared as the Kernel's words: narrow storage is downloaded
+            // as kept and widened by the Host's rule.
             let schema = host.schema(*a).unwrap().clone();
             let count = host.domain(*a).unwrap().count();
             let reference = host.data(*a).unwrap().values().into_owned();
@@ -127,8 +127,8 @@ fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String
                             .chunks_exact(4)
                             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                             .collect();
-                    // What a device kept narrow is the Host's rule applied
-                    // to the same words, so it is the same bits.
+                    // Narrow storage widened by the Host's rule gives the
+                    // same bits.
                     if !schema.is_wide() {
                         let kept = host.data(*a).unwrap().storage().to_vec();
                         if storage != kept {
@@ -152,10 +152,9 @@ fn differences(gpu: &GpuBackend, cases: &[orla_conformance::Case]) -> Vec<String
     failures
 }
 
-/// Every element shape a scatter's target may hold, on the device where
-/// it takes it. It declines only a target of Longs, and of those takes
-/// every one under `min` or `max` whose scalars are all Longs, where it
-/// has 64-bit atomics.
+/// Every scatter target element shape runs on the device except Longs; of
+/// those it takes all-Long targets under `min` or `max` where it has
+/// 64-bit atomics.
 #[test]
 fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
     let Some(gpu) = GpuBackend::new().ok() else {
@@ -187,8 +186,7 @@ fn every_element_shape_a_scatter_holds_matches_the_interpreter() {
     );
 }
 
-/// Whether the device lands Longs under `min` and `max`: whether it takes
-/// the smallest such scatter.
+/// Whether the device takes the smallest Long `min`/`max` scatter.
 fn gpu_takes_long_extremes(gpu: &GpuBackend) -> bool {
     let module = compile(
         "kernel probe.low@1 { requires { field.read; field.write; }
@@ -213,8 +211,8 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
         };
         assert!(error.contains("holds a Double"), "{}: {error}", case.name);
     }
-    // Everything else it takes, but a scan, which it leaves to an
-    // ordered backend where there is one and runs where there is none.
+    // It takes everything else except a scan, which goes to an ordered
+    // backend where there is one.
     for case in orla_conformance::cases() {
         let module = compile(&case.source).unwrap();
         match module.manifest.mode {
@@ -232,10 +230,9 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
     }
 }
 
-/// An integer sum is each element's whole total on gpu as on every
-/// backend: one that passes the end of the range and comes back fits,
-/// and one that does not fit fails at the first element whose total
-/// does not, whatever order the backend adds in.
+/// An integer sum is judged by each element's whole total on every
+/// backend: a total that fits passes though a partial sum overflows; one
+/// that does not fails at the first such element, in any addition order.
 #[test]
 fn integer_sums_are_whole_totals_on_gpu_as_everywhere() {
     let Some(backend) = orla_gpu::GpuBackend::new().ok() else {

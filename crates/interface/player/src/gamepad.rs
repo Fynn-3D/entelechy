@@ -1,8 +1,5 @@
-//! The system's gamepads, through gilrs: each button and axis it reports
-//! handed to the play by name. What a pad means (a keyboard of arrows,
-//! Z, X, Enter and Escape, and sticks and triggers beside the pointer) is
-//! the session's play (`orla_session::play::pad`), which a page's pads
-//! mean too.
+//! The system's gamepads through gilrs, each button and axis handed to
+//! the play by name. Their meaning is `orla_session::play::pad`'s.
 
 use gilrs::{Axis, Button, EventType, Gilrs};
 use orla_session::play::{PadAxis, PadButton, Play};
@@ -33,8 +30,7 @@ pub fn button(button: Button) -> Option<PadButton> {
     })
 }
 
-/// A gilrs axis by the play's name for it; gilrs's sticks read up as
-/// positive, as the play's do.
+/// A gilrs axis by the play's name for it; up is positive in both.
 pub fn axis(axis: Axis) -> Option<PadAxis> {
     Some(match axis {
         Axis::LeftStickX => PadAxis::LeftX,
@@ -48,8 +44,7 @@ pub fn axis(axis: Axis) -> Option<PadAxis> {
 }
 
 impl Gamepad {
-    /// Opens the gamepad system; `None` when it is unavailable, which is
-    /// not an error, only a keyboard.
+    /// Opens the gamepad system; `None` when it is unavailable.
     pub fn open() -> Option<Self> {
         let gilrs = Gilrs::new().ok()?;
         Some(Self { gilrs })

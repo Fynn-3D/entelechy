@@ -13,8 +13,8 @@ pub fn parse_document(source: &str) -> Result<Document, ParseError> {
     crate::on_a_deep_stack(|| read_document(source)).map(|(document, _)| document)
 }
 
-/// Where each statement of a document was written: parses it as
-/// [`parse_document`] does, and fails where that fails.
+/// Where each statement of a document was written; fails where
+/// [`parse_document`] fails.
 pub fn outline(source: &str) -> Result<Outline, ParseError> {
     crate::on_a_deep_stack(|| read_document(source)).map(|(_, outline)| outline)
 }
@@ -160,8 +160,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
             StatementKind::Output => document.outputs.last().map(|(name, _)| name.value.clone()),
             StatementKind::Node => document.nodes.last().map(|d| d.name.value.clone()),
         };
-        // A node's block is the one the node just read; any other
-        // statement leaves none.
+        // Only a node statement has a block.
         let block = parser.block.take().filter(|_| kind == StatementKind::Node);
         outline.statements.push(Statement {
             kind,
@@ -170,8 +169,7 @@ fn read_document(source: &str) -> Result<(Document, Outline), ParseError> {
             block,
         });
     }
-    // Document structs and aliases come first in every Kernel, so a
-    // Rows<Particle> declared once means the same layout in all of them.
+    // Document declarations come first in every Kernel: one layout each.
     if !document.structs.is_empty() || !document.types.is_empty() || !document.functions.is_empty()
     {
         let shared = document.structs.clone();
@@ -251,29 +249,23 @@ pub fn parse(source: &str) -> Result<Kernel, ParseError> {
 struct Parser {
     tokens: Vec<Lexeme>,
     position: usize,
-    /// How many values a `let { ... }` has had to name for itself.
+    /// Count of hidden names `let { ... }` has made.
     temporaries: usize,
-    /// How deep the expression being read nests, counting what encloses
-    /// it and the operators chained before it: at most
-    /// [`MAX_NESTING`](crate::MAX_NESTING).
+    /// Current nesting depth, at most [`MAX_NESTING`](crate::MAX_NESTING).
     depth: usize,
-    /// An `if` at a block's start whose arm was read before its `else`
-    /// said it is an expression: its condition, its arm, and where the
-    /// `else` is, by where the `if` is. The expression takes them from
-    /// here rather than reading the arm again, which, an `if` in an arm
-    /// of an `if`, would read the innermost twice a level.
+    /// By token position: an `if` whose first arm was read before its
+    /// `else` made it an expression (condition, arm, `else` position).
+    /// Reusing it keeps nested `if`s linear.
     read_ifs: std::collections::HashMap<usize, (Expr, Block, usize)>,
-    /// Where the last node block read was written, for the outline.
+    /// The last node block read, for the outline.
     block: Option<NodeBlock>,
 }
 
 impl Parser {
-    /// How many values one `match` range may hold: enough for a byte's
-    /// worth of opcodes, few enough that the arms stay a table.
+    /// How many values one `match` range may hold: a byte's worth.
     const RANGE_LIMIT: i64 = 256;
 
-    /// Runs one level of the reading, and leaves the depth as it found
-    /// it, however the level ends.
+    /// Runs one level of reading and restores the depth however it ends.
     fn nested<T>(
         &mut self,
         level: impl FnOnce(&mut Self) -> Result<T, ParseError>,
@@ -284,10 +276,8 @@ impl Parser {
         read
     }
 
-    /// One level deeper: past [`MAX_NESTING`](crate::MAX_NESTING) it is
-    /// an error, which is what keeps every pass after this one — each
-    /// walks the tree by recursion — inside the stack of any thread that
-    /// compiles, a live session's included.
+    /// One level deeper; past [`MAX_NESTING`](crate::MAX_NESTING) an
+    /// error, which bounds the stack of every later recursive pass.
     fn deeper(&mut self) -> Result<(), ParseError> {
         self.depth += 1;
         if self.depth > crate::MAX_NESTING {
@@ -383,8 +373,7 @@ impl Parser {
         }
     }
 
-    /// A name that may be a keyword, so long as the keyword does not
-    /// start an expression; those five would make a call ambiguous.
+    /// A name, a keyword included unless it starts an expression.
     fn name_not_starting_an_expression(
         &mut self,
         what: &str,
@@ -685,8 +674,8 @@ impl Parser {
         Ok(TypeAlias { name, target })
     }
 
-    /// A port type as written: `Name` or `Name<Element>`; or a value
-    /// type, which an array type `[T; N]` always is.
+    /// A port type as written (`Name`, `Name<Element>`) or a value type
+    /// (any array `[T; N]`).
     fn port_type(&mut self) -> Result<Spanned<String>, ParseError> {
         if self.is_punct("[") {
             return self.type_name();
@@ -695,8 +684,7 @@ impl Parser {
         if self.is_punct("<") {
             self.next();
             let element = self.type_name()?;
-            // How the Field keeps the element's scalars, when narrower
-            // than a word: `Grid<Vec4 as unorm8>`.
+            // A narrower scalar storage: `Grid<Vec4 as unorm8>`.
             let kept = if self.is_keyword("as") {
                 self.next();
                 let encoding = self.ident("an encoding after `as`")?;
@@ -710,8 +698,8 @@ impl Parser {
         Ok(ty)
     }
 
-    /// A value type as written: `Name`, or an array `[Type; N]`, spelled
-    /// canonically (`[Int; 16]`) for the compiler to read back.
+    /// A value type, `Name` or `[Type; N]`, spelled canonically
+    /// (`[Int; 16]`).
     fn type_name(&mut self) -> Result<Spanned<String>, ParseError> {
         if !self.is_punct("[") {
             return self.ident("a type");
@@ -794,8 +782,7 @@ impl Parser {
     /// `name: kernel [id] { ... }` or `name: id@version { members }` after
     /// the `node` keyword.
     fn node(&mut self) -> Result<NodeDecl, ParseError> {
-        // Any word names a node, a keyword too: the name follows `node`
-        // and precedes `:`, so `scan` or `input` is not mistaken there.
+        // Any word names a node, a keyword too.
         let name = self.raw_ident("a node name")?;
         self.expect_punct(":")?;
         if self.is_keyword("kernel") {
@@ -806,8 +793,7 @@ impl Parser {
                 members: Vec::new(),
             });
         }
-        // A Field of a type, filled: the type name is a capital word, and
-        // a kernel id is not.
+        // A capitalized word is a type to fill; a Kernel id is lowercase.
         if let Token::Ident(word) = self.peek()
             && word.starts_with(|c: char| c.is_ascii_uppercase())
             && matches!(
@@ -925,8 +911,8 @@ impl Parser {
         }
     }
 
-    /// `name@version { language = N; ir = N; }` after `package`: the
-    /// versions are the least the package needs, each named once.
+    /// `name@version { language = N; ir = N; }` after `package`, each
+    /// minimum version named once.
     fn package(&mut self) -> Result<PackageDecl, ParseError> {
         let mut id = self.dotted_name("a package name")?;
         self.expect_punct("@")?;
@@ -1002,8 +988,7 @@ impl Parser {
     }
 
     fn source_ref(&mut self) -> Result<SourceRef, ParseError> {
-        // A source follows `<-`, `<~` or `from`, so a node named by a
-        // keyword is read here as it was declared.
+        // A node named by a keyword is read here as declared.
         let first = self.raw_ident("a source")?;
         if self.eat_punct(".") {
             let port = self.raw_ident("an output port")?;
@@ -1104,7 +1089,7 @@ impl Parser {
                 file = Some(Spanned { value, span });
             }
         }
-        // A file that may be absent reads something else meanwhile.
+        // `else source`: read while the file is unreadable.
         let otherwise = if (file.is_some() || bytes.is_some()) && self.is_keyword("else") {
             self.next();
             Some(self.source_ref()?)
@@ -1143,12 +1128,10 @@ impl Parser {
     }
 
     fn function(&mut self) -> Result<FnDecl, ParseError> {
-        // Any word names a function, a keyword too, as long as it is not
-        // one that starts an expression: a call is a word and a `(`, so
-        // `scatter(n, seed)` reads as a call wherever it stands.
+        // Any word except one starting an expression names a function,
+        // so `scatter(n, seed)` reads as a call anywhere.
         let name = self.name_not_starting_an_expression("a function name")?;
-        // Type parameters: names that stand for whatever type a call
-        // gives them, one instance of the function lowered for each.
+        // Type parameters; each call's types lower their own instance.
         let mut generics = Vec::new();
         if self.eat_punct("<") {
             while !self.is_punct(">") {
@@ -1187,7 +1170,6 @@ impl Parser {
         })
     }
 
-    /// `{ let ...; return expr; }` or `{ let ...; expr }`.
     /// A `match` arm's body: a block, or a bare expression.
     fn arm_body(&mut self) -> Result<Block, ParseError> {
         if self.is_punct("{") {
@@ -1201,8 +1183,8 @@ impl Parser {
     }
 
     fn block(&mut self) -> Result<Block, ParseError> {
-        // A block that is a record of outputs, `{ color: c, depth: d }`,
-        // gives that record: a statement never begins with `name:`.
+        // `{ color: c, depth: d }` is a record of outputs; no statement
+        // begins with `name:`.
         if self.at_record() {
             let result = self.record_literal()?;
             return Ok(Block {
@@ -1242,13 +1224,9 @@ impl Parser {
         })
     }
 
-    /// A block's statements, to its closing brace. An `if` with no
-    /// `else` among them guards what follows: what it gives is the
-    /// block's value, and the statements after it are the other arm.
-    /// One `match` arm value, or a range of them: `3`, `-1`, `0..8`
-    /// (up to but not including the last), `0..=7` (including it). A
-    /// range is the values it holds, written out, so the arms stay a
-    /// table and a value listed twice is still caught.
+    /// One `match` arm value or range: `3`, `-1`, `0..8` (exclusive),
+    /// `0..=7` (inclusive). A range is spread into its values, so a value
+    /// listed twice is still caught.
     fn arm_values(&mut self, values: &mut Vec<Spanned<i32>>) -> Result<(), ParseError> {
         let (first, span) = self.arm_value()?;
         let inclusive = self.is_punct("..=");
@@ -1307,9 +1285,8 @@ impl Parser {
         }
     }
 
-    /// `let { x, y } = value;`, and `let { x: left, y: top } = value;`
-    /// where the binding is to have another name: the value read once,
-    /// then one binding a field, which is what one writes by hand.
+    /// `let { x, y } = value;` or `let { x: left, y: top } = value;`: the
+    /// value read once, then one binding per field.
     fn destructure(&mut self, lets: &mut Vec<(Spanned<String>, Expr)>) -> Result<(), ParseError> {
         let span = self.expect_punct("{")?;
         let mut fields: Vec<(Spanned<String>, Spanned<String>)> = Vec::new();
@@ -1335,8 +1312,7 @@ impl Parser {
         self.expect_punct("=")?;
         let value = self.expr()?;
         self.expect_punct(";")?;
-        // A name is already read once; anything else is bound first, so
-        // the fields come from one value.
+        // A non-name value is bound first, so it is read once.
         let source = match &value.kind {
             ExprKind::Name(name) => Spanned {
                 value: name.clone(),
@@ -1372,10 +1348,9 @@ impl Parser {
         self.block_body_with(false).map(|(block, _)| block)
     }
 
-    /// A block's body after its `{`, through its `}`. Where `effects`
-    /// allows, a body of statements alone — `{ emit(p); }` — is read too,
-    /// and the flag returned says it was one: it gives no value, and its
-    /// result is a placeholder nothing reads.
+    /// A block's body after its `{`, through its `}`. With `effects`, a
+    /// body of statements alone (`{ emit(p); }`) is read too; the flag
+    /// returned marks it, and its result is an unread placeholder.
     fn block_body_with(&mut self, effects: bool) -> Result<(Block, bool), ParseError> {
         self.nested(|parser| {
             parser.deeper()?;
@@ -1393,15 +1368,14 @@ impl Parser {
                 let condition = self.expr()?;
                 let (then, effect) = self.effects_block()?;
                 if effect {
-                    // An `if` of statements alone does them when it holds,
-                    // an `else` its own when not, and the block goes on.
+                    // An `if` of statements alone; the block goes on.
                     let otherwise = self.effects_else()?;
                     lets.push(Self::done(condition, then, otherwise, span));
                     continue;
                 }
                 if self.is_keyword("else") {
-                    // An `if` with both arms is an expression: it is read
-                    // as one from its start, with what is read so far.
+                    // An `if` with both arms is an expression, reusing
+                    // the arm read so far.
                     self.read_ifs
                         .insert(saved, (condition, then, self.position));
                     self.position = saved;
@@ -1441,8 +1415,8 @@ impl Parser {
                 self.expect_punct("}")?;
                 return Ok((Block { lets, result }, false));
             } else if self.is_keyword("break") {
-                // `break expr;` ends its block, as `return` does; the
-                // loop around it stops and gives that value.
+                // `break expr;` ends its block like `return` and stops
+                // the loop with that value.
                 let span = self.span();
                 self.next();
                 let value = self.expr()?;
@@ -1492,7 +1466,7 @@ impl Parser {
         }
     }
 
-    /// What a block of statements alone gives, which nothing reads.
+    /// The unread result of a block of statements alone.
     fn nothing(span: Span) -> Expr {
         Expr {
             kind: ExprKind::Int(0),
@@ -1527,8 +1501,8 @@ impl Parser {
         self.block_body_with(true)
     }
 
-    /// The `else` of an `if` of statements alone: none (nothing done), a
-    /// block of statements, or another such `if`.
+    /// The `else` of an `if` of statements alone: absent, a block of
+    /// statements, or another such `if`.
     fn effects_else(&mut self) -> Result<Block, ParseError> {
         let span = self.span();
         if !self.is_keyword("else") {
@@ -1922,8 +1896,7 @@ impl Parser {
                     span,
                 })
             }
-            // A keyword that does not start an expression names a
-            // function the document declared: `scatter(n, seed)`.
+            // A keyword may name a declared function: `scatter(n, seed)`.
             Token::Ident(name)
                 if RESERVED.contains(&name.as_str())
                     && !STARTS_AN_EXPRESSION.contains(&name.as_str())
@@ -2066,9 +2039,8 @@ impl Parser {
     }
 }
 
-/// Words that cannot name values.
-/// The keywords an expression may begin with: no other word may name a
-/// function, since a call would not be told from one of these.
+/// The keywords an expression may begin with; these alone cannot name a
+/// function.
 const STARTS_AN_EXPRESSION: [&str; 5] = ["let", "return", "if", "match", "loop"];
 
 const RESERVED: [&str; 25] = [
@@ -2229,8 +2201,7 @@ kernel image.grayscale@1 {
         let error = parse("kernel t.k@1 { compute { return match 1 { 0..1000 => 1, _ => 0 }; } }")
             .unwrap_err();
         assert!(error.message.contains("at most 256 values"), "{error}");
-        // The arms stay a table, so a value written twice is still one
-        // the compiler refuses; here the parser has already spread it.
+        // The parser spreads ranges; the compiler refuses duplicates.
         let kernel =
             parse("kernel t.k@1 { compute { return match 1 { 0..4 => 1, 3 => 2, _ => 0 }; } }")
                 .unwrap();
@@ -2247,8 +2218,7 @@ kernel image.grayscale@1 {
         )
         .unwrap();
         let lets = &kernel.compute.lets;
-        // The read is bound once, under a name no one can write, and
-        // each field comes off it; a name is read again as it stands.
+        // A value is bound once under a hidden name; a name is reused.
         assert_eq!(lets[0].0.value, "$0");
         assert!(matches!(lets[0].1.kind, ExprKind::Call(ref name, _) if name == "at"));
         let member = |index: usize| match &lets[index].1.kind {
@@ -2345,8 +2315,7 @@ kernel image.grayscale@1 {
         let error =
             parse("kernel t.k@1 { compute { return loop 0 with x = 1.0 { x }; } }").unwrap_err();
         assert!(error.message.contains("positive integer bound"), "{error}");
-        // An `if` with no `else` among a block's statements guards what
-        // follows it: what it gives is the block's value.
+        // An `if` without `else` guards the statements after it.
         let kernel = parse(
             "kernel t.k@1 { fn classify(x: Int) -> Int { if x < 0 { return -1; } let doubled = x * 2; if doubled > 9 { return 9; } return doubled; } compute { return classify(element()); } }",
         )
@@ -2366,8 +2335,7 @@ kernel image.grayscale@1 {
         )
         .unwrap();
         assert!(matches!(kernel.compute.lets[0].1.kind, ExprKind::If { .. }));
-        // A keyword names a function, as long as it does not begin an
-        // expression: a call is a word and a `(`.
+        // A keyword not starting an expression names a function.
         let kernel = parse(
             "kernel t.k@1 { fn scatter(a: Float) -> Float { return a * 2.0; } fn merge(a: Float) -> Float { return a + 1.0; } compute { return scatter(merge(1.0)); } }",
         )
@@ -2510,8 +2478,8 @@ mod document_tests {
                 "kernel t.k@1 {{ requires {{ field.write; }} output result: Rows<Int>; compute {{ {body} }} }}"
             ))
         };
-        // Statements alone, with no `else`, an `else`, and an `else if`
-        // chain; the block goes on after each, and an empty arm is one.
+        // Statements alone, bare, with `else` and `else if`; an empty
+        // arm counts.
         for body in [
             "let x = 1; if x > 0 { let y = 2; } return x;",
             "if element() > 0 { let a = 1; } else { let b = 2; } return 0;",
@@ -2519,11 +2487,11 @@ mod document_tests {
         ] {
             kernel(body).unwrap_or_else(|error| panic!("{body}: {error}"));
         }
-        // A guard is what it was: `return` in the arm, the rest the other.
+        // A guard: `return` in the arm, the rest the other arm.
         let guard = kernel("if element() == 0 { return 5; } return 6;").unwrap();
         assert!(matches!(guard.compute.result.kind, ExprKind::If { .. }));
-        // An arm that gives a value beside one that does not is refused,
-        // as is a block that ends with statements and gives nothing.
+        // Refused: arms of which one alone gives a value, and a block
+        // ending in statements.
         let error = kernel("if element() > 0 { let y = 2; } else { 5 }; return 0;").unwrap_err();
         assert!(error.message.contains("statements too"), "{error}");
         let error = kernel("if element() > 0 { let y = 2; }").unwrap_err();
@@ -2556,9 +2524,8 @@ mod document_tests {
             let error = kernel(body.clone()).unwrap_err();
             assert!(error.message.contains("deep"), "{error}");
         }
-        // Within it, a long chain reads, and an `if` in an arm of an `if`
-        // a hundred deep reads in linear time: its arm is read once, not
-        // twice a level.
+        // Within it, a long chain reads, and `if`s nested a hundred deep
+        // read in linear time.
         kernel(format!("return element(){};", " + 1".repeat(200))).unwrap();
         let ifs = 100;
         let started = std::time::Instant::now();

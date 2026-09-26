@@ -1,12 +1,9 @@
-//! Orla as WebAssembly, a machine whose `usize` is 32 bits and whose JIT
-//! writes WebAssembly: the tests of the core, the front end and the
-//! interpreter, and the JIT's own (the parity cases, the feature matrix,
-//! random programs, each held to the interpreter word for word), built
-//! for `wasm32-wasip1` and run in node, which hosts the JIT's code as a
-//! page does (`bridges/web/wasi.mjs`). Built for release, as Orla runs in
-//! a page: a debug build's frames are too large for the engine's own
-//! stack at the deepest nesting the language allows. Skipped with a word
-//! where this machine has no node or no such target.
+//! Orla as WebAssembly (32-bit `usize`, a JIT emitting WebAssembly): the
+//! tests of the core, the front end, the interpreter and the JIT, built
+//! for `wasm32-wasip1` in release and run in node, which hosts the JIT's
+//! code as a page does (`bridges/web/wasi.mjs`). Release keeps frames
+//! within the engine's stack at the deepest nesting. Skipped with a note
+//! without node or the target.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -68,8 +65,7 @@ fn thirty_two_bits_and_the_jit_s_webassembly_compute_what_the_interpreter_does()
         root().join("bridges/web/wasi.mjs").display()
     );
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    // A target directory of its own, so the build does not wait on the
-    // one running this test.
+    // Its own target directory, independent of the running build.
     let ran = Command::new(cargo)
         .current_dir(root())
         .env("CARGO_TARGET_WASM32_WASIP1_RUNNER", runner)
@@ -88,7 +84,7 @@ fn thirty_two_bits_and_the_jit_s_webassembly_compute_what_the_interpreter_does()
         ran.status.success(),
         "the JIT's tests on WebAssembly:\n{said}"
     );
-    // Every test file ran: one run a file at least, and none skipped.
+    // Every test file ran, none skipped.
     let results = said.matches("test result: ok").count();
     assert!(
         results >= PACKAGES.len() + 3,

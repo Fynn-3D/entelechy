@@ -19,8 +19,8 @@ pub(crate) struct CallRecord {
 /// How many calls a trace records before it stops recording.
 pub(crate) const CALL_RECORDS: usize = 256;
 
-/// How much a thread keeps short of blocks before handing it to the run:
-/// enough that the shared total is touched rarely.
+/// The partial-block work a thread gathers before handing it to the
+/// run's shared total.
 const LEFT_HANDED: u64 = 64 * orla_ir::WORK_BLOCK as u64;
 
 /// Interpreter state for one thread: a stack of words holding every
@@ -31,14 +31,14 @@ pub(crate) struct Machine<'p, 's> {
     pub(super) calls: Option<Vec<CallRecord>>,
     /// Whether more calls happened than were recorded.
     pub(super) calls_truncated: bool,
-    /// The memories' working copies, one per memory input: what the
-    /// steps have written so far, and the outputs at the end.
+    /// The memories' working copies, one per memory input; the outputs
+    /// at the end.
     pub(super) memories: Vec<Option<Vec<u32>>>,
-    /// The pairs the running elements have emitted, in order, a
-    /// scatter's to take after each element.
+    /// The pairs emitted, in order, taken by a scatter after each
+    /// element.
     pub(super) emitted: Vec<u32>,
-    /// What a scatter's run holds against the Host's room; every pair
-    /// emitted is held, with the word naming its element.
+    /// A scatter's charge against the Host's budget: every emitted pair
+    /// plus the word naming its element.
     pub(super) held: Option<&'p orla_rules::Held>,
     pub(super) stack: Vec<u32>,
     /// Top of the stack: where the next call's frame begins.
@@ -46,14 +46,12 @@ pub(crate) struct Machine<'p, 's> {
     pub(super) loops: Vec<i32>,
     /// Loop iterations the running element has run, when counted.
     pub(super) work: u32,
-    /// The running element's count when it last looked: the blocks up to
-    /// it are the run's already.
+    /// `work` at the last look; blocks up to it are already the run's.
     pub(super) looked: u32,
-    /// The iterations whose body ran, of the loop that finished last,
-    /// which a spend right after it adds.
+    /// The run iterations of the last finished loop, for the next spend.
     pub(super) ran: u32,
-    /// What this thread's finished elements ran short of their blocks,
-    /// summed, not yet handed to the run's total.
+    /// This thread's finished elements' partial-block work, not yet
+    /// handed to the run's total.
     pub(super) left: u64,
     pub(super) at: [u32; 3],
     pub(super) scratch: Vec<f32>,
@@ -112,12 +110,12 @@ impl<'p, 's> Machine<'p, 's> {
         }
     }
 
-    /// The pairs emitted since the last call, in order.
-    /// Holds what this machine emits against `held`.
+    /// Charges what this machine emits to `held`.
     pub(crate) fn hold(&mut self, held: &'p orla_rules::Held) {
         self.held = Some(held);
     }
 
+    /// The pairs emitted since the last call, in order.
     pub(crate) fn take_emitted(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.emitted)
     }
@@ -238,8 +236,7 @@ impl<'p, 's> Machine<'p, 's> {
         frame[loc.at..loc.at + loc.n].to_vec()
     }
 
-    /// Zeros the entry's frame, so a trace of one step shows nothing
-    /// left over from the steps before it.
+    /// Zeros the entry's frame, so a traced step shows only its own values.
     pub(crate) fn clear_entry_frame(&mut self) {
         let frame = self.program.code.entry.frame;
         if self.stack.len() < frame {
@@ -248,9 +245,9 @@ impl<'p, 's> Machine<'p, 's> {
         self.stack[..frame].fill(0);
     }
 
-    /// The words of the entry's value `id`, as the last run of the entry
-    /// left them in its frame (the frame begins at the stack's start):
-    /// the value's last assignment, or zeros if its block never ran.
+    /// The words of the entry's value `id` after the last run (the entry
+    /// frame starts the stack): its last assignment, or zeros if its
+    /// block never ran.
     pub(crate) fn entry_value(&self, id: orla_ir::ValueId) -> Vec<u32> {
         let loc = self.program.code.entry.locs[id.0 as usize];
         self.stack[loc.at..loc.at + loc.n].to_vec()
@@ -272,8 +269,8 @@ impl<'p, 's> Machine<'p, 's> {
     }
 
     /// Opens the outermost frame of `words` for a new element, keeping
-    /// what the last one ran short of a block: handed to the run's total
-    /// in bulk, which stops this thread once the run has passed it.
+    /// the last one's partial block for the run's total, which stops this
+    /// thread once the run has exceeded it.
     fn begin(&mut self, words: usize) -> Result<(), ExecutionError> {
         self.keep_left()?;
         if self.stack.len() < words {
@@ -283,8 +280,8 @@ impl<'p, 's> Machine<'p, 's> {
         Ok(())
     }
 
-    /// Keeps what the running element ran short of a block, and hands the
-    /// thread's sum on once it holds many blocks.
+    /// Keeps the running element's partial block; hands the thread's sum
+    /// on at `LEFT_HANDED`.
     fn keep_left(&mut self) -> Result<(), ExecutionError> {
         self.left += u64::from(self.work % orla_ir::WORK_BLOCK);
         self.work = 0;
@@ -303,17 +300,16 @@ impl<'p, 's> Machine<'p, 's> {
         }
     }
 
-    /// Hands the run everything this thread's elements ran: called once
-    /// the thread has run its last element.
+    /// Hands the run this thread's remaining work, after its last element.
     pub(crate) fn finish(&mut self) -> Result<(), ExecutionError> {
         self.keep_left()?;
         self.hand_left()
     }
 
-    /// Looks at the running element's work: past the budget, the element
-    /// fails; the blocks it has filled since it last looked go to the
-    /// run's total, and past that, the run fails. An element looks when
-    /// it finishes and at each iteration of a loop that starts others.
+    /// Checks the running element's work: past the budget the element
+    /// fails; blocks filled since the last look go to the run's total,
+    /// and past that the run fails. An element looks when it finishes and
+    /// at each iteration of a loop that contains loops.
     fn look(&mut self) -> Result<(), ExecutionError> {
         let (Some(budget), Some(run)) = (self.program.budget, &self.program.run) else {
             return Ok(());
@@ -595,9 +591,8 @@ impl<'p, 's> Machine<'p, 's> {
                 }
             }
             Instr::INeg { dst, src, n } => {
-                // The frame is read through `self` here: a failure is
-                // reported through `self` too, so the borrow of the stack
-                // cannot live across the iterations.
+                // Reads through `self`, since a failure reports through
+                // `self` too.
                 for i in 0..*n {
                     let v = (self.stack[fp + src + i] as i32)
                         .checked_neg()
@@ -1016,8 +1011,8 @@ impl<'p, 's> Machine<'p, 's> {
                 self.stack[fp + dst] = self.ran;
             }
             Instr::Look { dst } => {
-                // The interpreter stops at a failure, so an element that
-                // looks and goes on has not failed.
+                // A failing look returns; a continuing element has not
+                // failed.
                 self.look()?;
                 self.stack[fp + dst] = 0;
             }
@@ -1029,8 +1024,8 @@ impl<'p, 's> Machine<'p, 's> {
                 value,
                 n,
             } => {
-                // The value written is the instruction's own value; an
-                // address outside the memory is dropped, never clamped.
+                // The written value is also the instruction's value; a
+                // write outside the memory is dropped.
                 let view = &program.inputs[*input];
                 let written = fp + value;
                 s.copy_within(written..written + n, fp + dst);
@@ -1069,9 +1064,9 @@ impl<'p, 's> Machine<'p, 's> {
                 let view = &program.inputs[*input];
                 let address = read_address(s, fp + position, *kind, 0.5);
                 let domain = view.domain;
-                // Element centres sit at half-integers: the position is
-                // moved by a half, split into the lower neighbour and a
-                // weight, and each axis is clamped at the edges.
+                // Element centres sit at half-integers: the position less
+                // a half splits into the lower neighbour and a weight,
+                // each axis clamped at the edges.
                 let axis = |v: f32, limit: u32| -> (usize, usize, f32) {
                     let t = if v.is_nan() { 0.0 } else { v - 0.5 };
                     let lower = t.floor().clamp(0.0, (limit - 1) as f32);
@@ -1135,9 +1130,8 @@ pub(super) fn write_extent(stack: &mut [u32], at: usize, domain: Domain) {
     }
 }
 
-/// Reads an address of the given kind; missing axes take `rest`.
-/// This element's own place in an input, clamped into it: what a
-/// `sample` reads, and a part of one.
+/// This element's own place in an input, clamped into it: what `sample`
+/// and a part of it read.
 #[inline]
 pub(super) fn own_index([x, y, z]: [u32; 3], domain: Domain) -> usize {
     linear(
@@ -1150,9 +1144,8 @@ pub(super) fn own_index([x, y, z]: [u32; 3], domain: Domain) -> usize {
     )
 }
 
-/// The element an address names, clamped into an input: a row's
-/// address is one `Int` and one clamp, which is what most reads are;
-/// the rest go by axis through floats.
+/// The element an address names, clamped into an input: an `Int` row
+/// address in one clamp, the rest by axis through floats.
 #[inline]
 pub(super) fn address_index(stack: &[u32], at: usize, kind: Address, domain: Domain) -> usize {
     match kind {
@@ -1176,8 +1169,7 @@ pub(super) fn read_address(stack: &[u32], at: usize, kind: Address, rest: f32) -
     }
 }
 
-/// Each axis floored and clamped into range (NaN counts as zero), so no
-/// read is ever outside.
+/// Each axis floored and clamped into range (NaN counts as zero).
 pub(super) fn clamp_address(domain: Domain, address: [f32; 3]) -> [u32; 3] {
     let clamp = |value: f32, limit: u32| -> u32 {
         if value.is_nan() {

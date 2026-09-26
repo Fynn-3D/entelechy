@@ -1,14 +1,7 @@
-//! A MIDI file as rows the Host reads: every note with when it starts,
-//! how long it lasts, which key it is, how hard it was struck and on
-//! which channel. The file's ticks and its tempo map become seconds
-//! here, so a Kernel plays a score against `time()` and knows nothing
-//! about MIDI.
-//!
-//! A standard MIDI file is chunks: `MThd` with the format, the track
-//! count and the division, then a `MTrk` for each track, each a run of
-//! events prefixed by a delta time. The way back writes one track of
-//! strikes and releases at a tempo the caller names. Nothing outside is
-//! needed either way, so this takes no dependency.
+//! A standard MIDI file as rows of notes: start, duration, key,
+//! velocity, channel. Ticks and the tempo map become seconds here, so a
+//! Kernel plays a score against `time()`. Encoding writes one track of
+//! strikes and releases at the caller's tempo.
 
 use orla_host::{Domain, FieldData, Scalar, Schema};
 
@@ -61,8 +54,7 @@ pub fn note(words: &[u32]) -> Note {
     }
 }
 
-/// The notes of a song as the Field a scene reads: rows of [`schema`].
-/// A song of no note is refused, since a Field has no empty extent.
+/// A song's notes as rows of [`schema`]; a song needs at least one note.
 pub fn field(song: &Song) -> Result<FieldData, String> {
     if song.notes.is_empty() {
         return Err("the file holds no note; a Field has no empty extent".into());
@@ -72,19 +64,18 @@ pub fn field(song: &Song) -> Result<FieldData, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Ticks to the quarter note a written file uses: fine enough that a
-/// millisecond lands on one at any usual tempo, small enough to read.
+/// Ticks to the quarter note in a written file.
 pub const DIVISION: u16 = 480;
 
 /// A MIDI file of these notes at `beats` quarter notes a minute: one
-/// track, the tempo first, then every strike and release in time order.
+/// track, the tempo, then strikes and releases in time order.
 pub fn encode(notes: &[Note], beats: f32) -> Vec<u8> {
     let beats = if beats > 0.0 { beats } else { 120.0 };
     let micros_per_quarter = (60_000_000.0 / beats).round().clamp(1.0, 16_777_215.0) as u32;
     let seconds_per_tick = 60.0 / (beats * f32::from(DIVISION));
     let tick = |seconds: f32| (seconds.max(0.0) / seconds_per_tick).round() as u64;
-    // A release before a strike at the same tick, so a key struck again
-    // where it was released reads back as two notes.
+    // Releases precede strikes at a tick, so a re-struck key reads back
+    // as two notes.
     let mut events: Vec<(u64, u8, [u8; 3])> = Vec::new();
     for note in notes {
         let channel = note.channel.clamp(0, 15) as u8;
@@ -120,8 +111,8 @@ pub fn encode(notes: &[Note], beats: f32) -> Vec<u8> {
     out
 }
 
-/// A variable-length quantity as a file writes one: seven bits a byte,
-/// the high bit saying another follows.
+/// Writes a variable-length quantity: seven bits a byte, high bit set
+/// while another follows.
 fn quantity(mut value: u64) -> Vec<u8> {
     let mut out = vec![(value & 0x7F) as u8];
     value >>= 7;
@@ -139,19 +130,17 @@ pub struct Song {
     pub notes: Vec<Note>,
     /// How many tracks the file held.
     pub tracks: usize,
-    /// What was met and left out.
+    /// What was left out.
     pub left_out: Vec<String>,
 }
 
-/// A note while it is still sounding: the second it began, taken at the
-/// tempo then in force, and how hard it was struck.
+/// A sounding note: its start second and velocity.
 struct Sounding {
     start: f64,
     velocity: f32,
 }
 
-/// Reads a standard MIDI file: the header, then every track, with the
-/// tempo map applied so the notes come out in seconds.
+/// Reads a standard MIDI file, notes in seconds by the tempo map.
 pub fn read(bytes: &[u8]) -> Result<Song, String> {
     let mut at = 0usize;
     let (kind, length) = chunk(bytes, &mut at)?;
@@ -171,7 +160,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
     if format == 2 {
         left_out.push("format 2, whose tracks are separate songs: they are read as one".into());
     }
-    // Every track's events by tick, so one tempo map covers them all.
+    // All tracks' events merged by tick under one tempo map.
     let mut events: Vec<(u64, usize, Event)> = Vec::new();
     let mut read_tracks = 0usize;
     while at < bytes.len() {
@@ -197,8 +186,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
             "the header says {tracks} track(s) and the file holds {read_tracks}"
         ));
     }
-    // In tick order, and within a tick a note off before a note on, so a
-    // key struck again at the moment it is released pairs correctly.
+    // Tick order; within a tick, note off before note on.
     events.sort_by_key(|(tick, track, event)| (*tick, event.order(), *track));
     let mut seconds_at = 0.0f64;
     let mut tick_of_change = 0u64;
@@ -210,9 +198,8 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
         std::collections::HashMap::new();
     let mut notes: Vec<Note> = Vec::new();
     for (tick, _, event) in events {
-        // Where this tick falls, at the tempo in force since the last
-        // change: a note remembers its own second, since the tempo may
-        // change again while it sounds.
+        // The tick's second at the tempo in force; a note keeps its own
+        // start second across later tempo changes.
         let at = seconds(tick, tick_of_change, seconds_at, micros_per_quarter);
         match event {
             Event::Tempo(micros) => {
@@ -271,7 +258,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
             }
         }
     }
-    // In the order a score reads: by when they start, then by key.
+    // By start, then by key.
     notes.sort_by(|a, b| {
         a.start
             .total_cmp(&b.start)
@@ -285,7 +272,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
     })
 }
 
-/// What a track says that a score keeps.
+/// A track event a score keeps.
 enum Event {
     On {
         channel: i32,
@@ -326,8 +313,7 @@ fn chunk(bytes: &[u8], at: &mut usize) -> Result<([u8; 4], usize), String> {
     Ok((kind, length))
 }
 
-/// A variable-length quantity: seven bits a byte, the high bit saying
-/// another follows.
+/// Reads a variable-length quantity.
 fn varint(bytes: &[u8], at: &mut usize) -> Result<u64, String> {
     let mut value = 0u64;
     for _ in 0..4 {
@@ -369,7 +355,7 @@ fn track(
                 let (pitch, velocity) = (two(bytes, &mut at)?, two(bytes, &mut at)?);
                 let channel = i32::from(status & 0x0F);
                 let pitch = i32::from(pitch);
-                // A strike with no force is a release, as the format says.
+                // A note on of velocity zero is a release.
                 if status & 0xF0 == 0x90 && velocity > 0 {
                     events.push((
                         tick,

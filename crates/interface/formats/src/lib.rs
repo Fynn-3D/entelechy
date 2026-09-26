@@ -1,19 +1,12 @@
-//! The file formats Orla reads and writes outside its own: PNG, PPM, WAV
-//! and MIDI decoded into Host Fields and encoded out of them, the
-//! inflate PNG needs, and the base64 the protocol and glTF carry bytes
-//! in. [`read`] and [`encode`] choose among them by a file's extension.
+//! The codecs importer, exporter and session share: PNG, PPM, WAV and
+//! MIDI to and from Host Fields, the inflate PNG needs, and base64.
+//! [`read`] and [`encode`] choose by a file's extension. Each is pure
+//! bytes in, bytes or a Field out, depending on the Host alone.
 //!
-//! Each is pure bytes in and bytes or a Field out, with no session, no
-//! runtime and no dependency beyond the Host, so an importer, an
-//! exporter and a session share one decoder and none of them owns it.
-//!
-//! The set is closed on purpose. A format belongs here when it decodes
-//! to a numerical Field, needs nothing outside the workspace, and is
-//! worth reading live as a scene's input. A format whose meaning is the
-//! application's (a level, a ROM, a text) is read as bytes
-//! ([`read_bytes`]) and parsed by a Kernel; a format that needs a
-//! library or is a document rather than a Field (glTF, MP3, a PDF) is
-//! converted outside the runtime by `orla-import` or a bridge.
+//! A format belongs here when it decodes to a numerical Field, needs
+//! nothing outside the workspace, and is read live as a scene input.
+//! Application formats are read as bytes ([`read_bytes`]) and parsed by
+//! a Kernel; the rest are converted by `orla-import` or a bridge.
 
 #![warn(missing_docs)]
 
@@ -33,11 +26,10 @@ use orla_host::{Domain, FieldData, Scalar, Schema, Shape};
 /// The extensions [`read`] and [`encode`] know, as an error names them.
 const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, or .mid";
 
-/// The frames a second a WAV is written at when none is named.
+/// The frames a second a WAV is written at by default.
 pub const DEFAULT_RATE: u32 = 48_000;
 
-/// The quarter notes a minute a MIDI file is written at when none is
-/// named.
+/// The quarter notes a minute a MIDI file is written at by default.
 pub const DEFAULT_BEATS: f32 = 120.0;
 
 /// A file's extension, lowercased; empty when it has none.
@@ -48,9 +40,8 @@ pub fn extension(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Reads a file as its bytes: `Rows<Int>`, one element a byte, 0 to
-/// 255. What a Kernel does with them is the Kernel's business, which is
-/// how a scene reads a format nothing here knows.
+/// Reads a file as `Rows<Int>`, one byte (0 to 255) an element, for a
+/// Kernel to parse.
 pub fn read_bytes(path: &Path) -> Result<(FieldData, String), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     decode_bytes(&bytes)
@@ -72,18 +63,16 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(FieldData, String), String> {
     Ok((data, detail))
 }
 
-/// Reads a Field file: `.field` as the Host writes it; `.png`, `.ppm`,
-/// and `.pgm` as a grid of pixels, or as a `Grid<Float>` of luminance
-/// when `want` says so; `.wav` as rows of one or two floats; `.mid` as
-/// rows of [`midi::Note`]. Returns the Field and a line saying what
-/// came in.
+/// Reads a file: `.field` as the Host writes it; `.png`, `.ppm`, `.pgm`
+/// as a pixel grid, or a `Grid<Float>` of luminance when `want` says so;
+/// `.wav` as rows of one or two floats; `.mid` as rows of
+/// [`midi::Note`]. Returns the Field and a line describing it.
 pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     decode(&bytes, path, want)
 }
 
-/// A file's bytes already read, as [`read`] takes them; `path` names
-/// the format by its extension.
+/// [`read`] on bytes already read; `path`'s extension names the format.
 pub fn decode(
     bytes: &[u8],
     path: &Path,
@@ -145,8 +134,8 @@ pub fn decode(
     }
 }
 
-/// A `Rows<Int>` of bytes, one to an element, 0 to 255, as those bytes:
-/// what `read_bytes` reads, written back.
+/// A `Rows<Int>` of bytes (0 to 255) as those bytes: the inverse of
+/// [`read_bytes`].
 pub fn encode_bytes(data: &FieldData) -> Result<Vec<u8>, String> {
     if data.schema().scalars() != [Scalar::Int] || data.domain().shape() != Shape::Rows {
         return Err(format!(
@@ -169,9 +158,8 @@ pub fn encode_bytes(data: &FieldData) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// A Field's words as the file `extension` names: `rate` is the frames
-/// a second of a WAV and the quarter notes a minute of a MIDI file, and
-/// is ignored otherwise.
+/// A Field as the file `extension` names. `rate` is a WAV's frames a
+/// second or a MIDI file's quarter notes a minute.
 pub fn encode(
     data: &FieldData,
     extension: &str,
@@ -250,8 +238,7 @@ pub fn encode(
 pub enum EncodeError {
     /// The extension names no format here.
     Unknown,
-    /// The Field does not fit the format; the words say what it is not,
-    /// and follow "it is".
+    /// The Field does not fit the format; the words follow "it is".
     Unfit(&'static str),
 }
 

@@ -6,10 +6,8 @@ use crate::{
     Block, Function, Instruction, Manifest, Module, Op, Step, StructDef, Type, UnaryOp, ValueId,
 };
 
-/// What a type is called where a Kernel's structs are known: the name
-/// the source gave it, or `[T; N]` for an array. Without the table a
-/// struct can only be its number, which is what a bare `Manifest`
-/// prints and what no reader of a manifest wants to see.
+/// A type's name with a Kernel's structs known: the source's name, or
+/// `[T; N]` for an array.
 pub fn type_name(ty: Type, structs: &[StructDef]) -> String {
     match ty {
         Type::Struct(index) => structs
@@ -20,8 +18,7 @@ pub fn type_name(ty: Type, structs: &[StructDef]) -> String {
     }
 }
 
-/// A port type with a Kernel's struct names in it: `Rows<Note>` rather
-/// than `Rows<S0>`.
+/// A port type with a Kernel's struct names in it (`Rows<Note>`).
 pub fn port_type_name(ty: &orla_abi::PortType, structs: &[StructDef]) -> String {
     if ty.is_image() {
         return "Image".to_owned();
@@ -35,8 +32,7 @@ pub fn port_type_name(ty: &orla_abi::PortType, structs: &[StructDef]) -> String 
 }
 
 impl Manifest {
-    /// The manifest as it reads with a module's struct names, for
-    /// anything a person or an agent looks at.
+    /// The manifest printed with a module's struct names.
     pub fn named<'a>(&'a self, structs: &'a [StructDef]) -> NamedManifest<'a> {
         NamedManifest {
             manifest: self,
