@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use orla_formats::ppm;
 use orla_graph::{Evaluator, Graph, Node, NodeId};
 use orla_kernel::{Context, Handle, KernelVersion, Runtime, Validated, Value};
 
@@ -124,19 +123,60 @@ pub(crate) fn save(
     let Some(handle) = evaluator.cached(node, port) else {
         return Err(why_not_saved(graph, node, port));
     };
-    runtime.materialize(handle).map_err(|e| e.to_string())?;
-    let data = runtime.host().data(handle).map_err(|e| e.to_string())?;
+    write(store, runtime, handle, path).map_err(|why| match why {
+        Written::Unfit(what) => format!("`{node}.{port}` is {what}; save it as .field"),
+        other => other.to_string(),
+    })
+}
+
+/// Why a Field was not written to a file.
+pub(crate) enum Written {
+    /// The Field could not be brought back from the device.
+    Observe(String),
+    /// The file's extension names no format.
+    Unknown(orla_formats::EncodeError),
+    /// The Field does not fit the format the extension names.
+    Unfit(&'static str),
+    /// The store refused it.
+    Io(std::path::PathBuf, std::io::Error),
+}
+
+impl std::fmt::Display for Written {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Observe(why) => f.write_str(why),
+            Self::Unknown(why) => write!(f, "{why}"),
+            Self::Unfit(what) => write!(f, "it is {what}"),
+            Self::Io(path, e) => write!(f, "{}: {e}", path.display()),
+        }
+    }
+}
+
+/// Writes a Field to `path` as its extension says, through `store`,
+/// brought back from the device first: the one way a session turns a
+/// Field into a file, for `save` and `export` alike.
+pub(crate) fn write(
+    store: &dyn crate::Store,
+    runtime: &mut Runtime,
+    handle: Handle,
+    path: &Path,
+) -> Result<(), Written> {
+    runtime
+        .materialize(handle)
+        .map_err(|e| Written::Observe(e.to_string()))?;
+    let data = runtime
+        .host()
+        .data(handle)
+        .map_err(|e| Written::Observe(e.to_string()))?;
     let bytes = orla_formats::encode(data, &orla_formats::extension(path), None).map_err(
         |why| match why {
-            orla_formats::EncodeError::Unknown => why.to_string(),
-            orla_formats::EncodeError::Unfit(what) => {
-                format!("`{node}.{port}` is {what}; save it as .field")
-            }
+            orla_formats::EncodeError::Unfit(what) => Written::Unfit(what),
+            unknown => Written::Unknown(unknown),
         },
     )?;
     store
         .write(path, &bytes)
-        .map_err(|e| format!("{}: {e}", path.display()))
+        .map_err(|e| Written::Io(path.to_path_buf(), e))
 }
 
 /// How many elements a node's output holds; see
@@ -320,21 +360,6 @@ pub(crate) fn element_field(
         .element(handle, index)
         .map_err(|e| e.to_string())?;
     Ok((ty, element[offset..offset + words_of(ty)].to_vec()))
-}
-
-/// Writes a cached image to a PPM file; see [`crate::Session::export`].
-pub(crate) fn export(
-    store: &dyn crate::Store,
-    runtime: &mut Runtime,
-    image: Handle,
-    path: &Path,
-) -> Result<(), SessionError> {
-    let image = runtime
-        .image(image)
-        .map_err(|e| SessionError::Observe(e.to_string()))?;
-    store
-        .write(path, &ppm::encode(&image))
-        .map_err(|e| SessionError::Io(path.to_path_buf(), e))
 }
 
 /// One pixel of a cached image; see [`crate::Session::read_pixel`].

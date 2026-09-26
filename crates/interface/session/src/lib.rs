@@ -491,6 +491,9 @@ pub enum SessionError {
     Host(orla_kernel::HostError),
     /// A resident image could not be brought back for observation.
     Observe(String),
+    /// A Field could not be written to this file: what the file's
+    /// extension names does not take it, or names nothing.
+    Unwritable(PathBuf, String),
 }
 
 impl fmt::Display for SessionError {
@@ -501,6 +504,7 @@ impl fmt::Display for SessionError {
             Self::NoScene => f.write_str("no scene has been loaded"),
             Self::Host(error) => write!(f, "{error}"),
             Self::Observe(message) => write!(f, "cannot observe image: {message}"),
+            Self::Unwritable(path, why) => write!(f, "cannot write {}: {why}", path.display()),
         }
     }
 }

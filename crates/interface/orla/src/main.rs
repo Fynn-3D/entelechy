@@ -15,11 +15,12 @@ usage:
       counted (`work spend`) and looked at (`work look`) included.
   orla run <scene.osn> [--library <dir|file>] [--input <name>=<file.ppm>]...
                        [--save <node.port>=<file.field|.png|.ppm|.pgm|.wav>]...
-                       [--out <file.ppm>] [--watch] [--backend cpu|gpu|jit]
+                       [--out <file.png|.ppm|.field>] [--watch] [--backend cpu|gpu|jit]
                        [--param <name>=<literal>]... [--no-fusion]
                        [--window <w>x<h>[@<scale>]] [--profile] [--memory <MB>] [--work <M>]
                        [--allow file.read|file.write=<dir>]... [--grant <capability,...>]
-      Evaluate a scene and write its output. With --watch, keep running and
+      Evaluate a scene; write its picture to --out and each --save, in the
+      format each file's extension names, and nothing else. With --watch, keep running and
       republish Kernels as their files change; a rejected change keeps the
       running version. --window is the window a scene sized by `window()`
       would fill, in pixels, with its scale factor.
@@ -214,7 +215,8 @@ struct RunOptions {
     /// limits and allowances.
     session: orla_session::SessionOptions,
     saves: Vec<(String, String, PathBuf)>,
-    out: PathBuf,
+    /// Where the scene's picture goes, when a file is named.
+    out: Option<PathBuf>,
     watch: bool,
     /// The window's size in pixels and scale factor, for `window()`.
     window: Option<([f32; 2], f32)>,
@@ -346,7 +348,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
     let mut options = RunOptions {
         session: orla_session::SessionOptions::default(),
         saves: Vec::new(),
-        out: PathBuf::from("output.ppm"),
+        out: None,
         watch: false,
         window: None,
         profile: false,
@@ -359,7 +361,7 @@ fn parse_run(args: &[String]) -> Result<RunOptions, String> {
         let mut value = |flag: &str| iter.next().ok_or_else(|| format!("{flag} needs a value"));
         match arg.as_str() {
             "--window" => options.window = Some(orla_session::parse_window(&value("--window")?)?),
-            "--out" => options.out = PathBuf::from(value("--out")?),
+            "--out" => options.out = Some(PathBuf::from(value("--out")?)),
             "--watch" => options.watch = true,
             "--profile" => options.profile = true,
             "--save" => options.saves.push(parse_save(&value("--save")?)?),
@@ -381,7 +383,9 @@ fn run(args: &[String]) -> Result<(), String> {
         session.pin(orla_graph::NodeId(node.clone()));
         session.allow_write_to(path)?;
     }
-    session.allow_write_to(&options.out)?;
+    if let Some(out) = &options.out {
+        session.allow_write_to(out)?;
+    }
     let events = session.sync();
     report_events(&events);
     // Watching, a scene that does not load yet may be fixed and saved.
@@ -392,7 +396,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let window = options.window;
     let mut healthy = evaluate_and_export(
         &mut session,
-        &options.out,
+        options.out.as_deref(),
         &options.saves,
         0.0,
         window,
@@ -431,7 +435,7 @@ fn run(args: &[String]) -> Result<(), String> {
         if changed || !healthy {
             healthy = evaluate_and_export(
                 &mut session,
-                &options.out,
+                options.out.as_deref(),
                 &options.saves,
                 clock.elapsed().as_secs_f32(),
                 window,
@@ -981,7 +985,7 @@ fn loaded(session: &Session, events: &[Event]) -> Result<(), String> {
 
 fn evaluate_and_export(
     session: &mut Session,
-    out: &Path,
+    out: Option<&Path>,
     saves: &[(String, String, PathBuf)],
     time: f32,
     window: Option<([f32; 2], f32)>,
@@ -1087,29 +1091,37 @@ fn evaluate_and_export(
             if !report.pending.is_empty() {
                 eprintln!("still running off the frame: [{}]", names(&report.pending));
             }
-            // The scene's picture goes to `--out`; any other output (rows,
-            // a volume) is reached with `--save`.
-            let Some(picture) = session.picture_of(&report) else {
-                eprintln!(
-                    "evaluated in {:?}: executed [{executed}], reused {}; no output is a picture, so nothing went to {}",
-                    started.elapsed(),
-                    report.reused.len(),
-                    out.display()
-                );
+            // The scene's picture goes to `--out`, when one is named; any
+            // other output (rows, a volume) is reached with `--save`.
+            let evaluated = format!(
+                "evaluated in {:?}: executed [{executed}], reused {}",
+                started.elapsed(),
+                report.reused.len()
+            );
+            let picture = session.picture_of(&report);
+            let (Some(picture), Some(out)) = (picture, out) else {
+                let why = match (picture, out) {
+                    (None, Some(out)) => {
+                        format!(
+                            "; no output is a picture, so nothing went to {}",
+                            out.display()
+                        )
+                    }
+                    (Some(_), None) if saves.is_empty() => {
+                        "; nothing written: name a file with `--out <file.png>`".to_owned()
+                    }
+                    _ => String::new(),
+                };
+                eprintln!("{evaluated}{why}");
                 return true;
             };
             match session.export(picture, out) {
                 Ok(()) => {
-                    eprintln!(
-                        "evaluated in {:?}: executed [{executed}], reused {} -> {}",
-                        started.elapsed(),
-                        report.reused.len(),
-                        out.display()
-                    );
+                    eprintln!("{evaluated} -> {}", out.display());
                     true
                 }
                 Err(error) => {
-                    eprintln!("export failed: {error}");
+                    eprintln!("error: {error}");
                     false
                 }
             }

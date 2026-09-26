@@ -347,6 +347,75 @@ fn the_binary_checks_and_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `run` writes what it is asked to, each file in the format its name
+/// says, and nothing else: a picture saved with `--save` is not written
+/// again to a file nobody named, and `--out frame.png` is a PNG. (It
+/// used to write `output.ppm` every time, and PPM bytes to any name.)
+#[test]
+fn run_writes_only_the_files_named_each_as_its_name_says() {
+    let dir = scratch("run-writes");
+    let orla = env!("CARGO_BIN_EXE_orla");
+    let files = |dir: &Path| {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "kernels" && name != "scene.osn")
+            .collect();
+        names.sort();
+        names
+    };
+    let run = |args: &[&str]| {
+        let output = Command::new(orla)
+            .current_dir(&dir)
+            .arg("run")
+            .arg("scene.osn")
+            .args(args)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        (output.status.success(), stderr)
+    };
+
+    let (ok, stderr) = run(&[]);
+    assert!(ok, "{stderr}");
+    assert!(
+        stderr.contains("nothing written: name a file with `--out <file.png>`"),
+        "{stderr}"
+    );
+    assert!(files(&dir).is_empty(), "{:?}", files(&dir));
+
+    let (ok, stderr) = run(&["--save", "blocks.result=saved.png"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(files(&dir), ["saved.png"]);
+
+    let (ok, stderr) = run(&["--out", "frame.png"]);
+    assert!(ok, "{stderr}");
+    let png = std::fs::read(dir.join("frame.png")).unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"), "a PNG");
+    assert_eq!(
+        png,
+        std::fs::read(dir.join("saved.png")).unwrap(),
+        "one encoding for both"
+    );
+    let (ok, stderr) = run(&["--out", "frame.ppm"]);
+    assert!(ok, "{stderr}");
+    assert!(
+        std::fs::read(dir.join("frame.ppm"))
+            .unwrap()
+            .starts_with(b"P6\n128 128\n255\n")
+    );
+
+    let (ok, stderr) = run(&["--out", "frame.txt"]);
+    assert!(!ok);
+    assert!(
+        stderr.contains("cannot write") && stderr.contains("use .field, .png"),
+        "{stderr}"
+    );
+    assert_eq!(files(&dir), ["frame.png", "frame.ppm", "saved.png"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn every_example_replay_passes_and_failures_are_reported() {
     let orla = env!("CARGO_BIN_EXE_orla");

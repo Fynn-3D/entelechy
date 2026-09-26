@@ -902,12 +902,23 @@ impl Session {
         )
     }
 
-    /// Writes a cached image to a PPM file, materializing it if it was
-    /// resident on the device. The file must be one the session may
+    /// Writes a Field to a file as its extension says (`.png`, `.ppm`,
+    /// `.field`, ...), as [`Session::save`] writes a port, brought back
+    /// from the device first. The file must be one the session may
     /// write ([`Session::allowed_write`]), whoever asks.
-    pub fn export(&mut self, image: Handle, path: &Path) -> Result<(), SessionError> {
+    pub fn export(&mut self, handle: Handle, path: &Path) -> Result<(), SessionError> {
         let path = self.allowed_write(path).map_err(SessionError::Observe)?;
-        observe::export(self.scene.store().as_ref(), &mut self.runtime, image, &path)
+        observe::write(
+            self.scene.store().as_ref(),
+            &mut self.runtime,
+            handle,
+            &path,
+        )
+        .map_err(|why| match why {
+            observe::Written::Io(path, e) => SessionError::Io(path, e),
+            observe::Written::Observe(why) => SessionError::Observe(why),
+            other => SessionError::Unwritable(path.clone(), other.to_string()),
+        })
     }
 
     /// A Field's data as the Host holds it, brought back from the device

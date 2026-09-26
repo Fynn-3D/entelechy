@@ -79,7 +79,9 @@ node, a node of a placed graph (whose own name carries dots and slashes,
 `steps/8.spread/6.result`, so the port is what follows the last dot), or
 one of the scene's own outputs, which stands for what it is wired to. A Kernel that draws a
 sprite sheet or synthesizes a drum, and a `--save`, are how an asset is
-made; `--out` is written only when the output is a picture. `--profile`
+made; `--out <file>` writes the scene's picture, in the format its
+extension names as a `--save` does, when there is one. `run` writes the
+files named and no other. `--profile`
 prints how long each executed node's Kernel took, the backend that ran
 it (and why, when a GPU session sent it to the JIT), and the bytes it
 carried between Host memory and the device; `bench --nodes` prints the

@@ -90,3 +90,40 @@ fn only_a_wide_picture_the_device_holds_is_shown_as_it_lies() {
         );
     }
 }
+
+/// A Field goes to a file one way, as the file's extension says, whether
+/// saved by its port or exported by its handle: a picture kept narrow is a
+/// PNG or a PPM as a wide one is, and what a format cannot take is refused
+/// with the file named and nothing written.
+#[test]
+fn a_field_is_written_as_its_file_says() {
+    let dir = scratch("export");
+    let mut session = open(&dir, "cpu").unwrap();
+    session.allow_writes(&dir).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+    for (output, file) in [("picture", "wide.png"), ("kept", "narrow.png")] {
+        let handle = session.output(Some(output)).unwrap();
+        session.export(handle, &dir.join(file)).unwrap();
+        let bytes = std::fs::read(dir.join(file)).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "{file} is a PNG");
+    }
+    let kept = session.output(Some("kept")).unwrap();
+    session.export(kept, &dir.join("narrow.ppm")).unwrap();
+    assert!(
+        std::fs::read(dir.join("narrow.ppm"))
+            .unwrap()
+            .starts_with(b"P6\n4 2\n255\n")
+    );
+    let rows = session.output(Some("rows")).unwrap();
+    for file in ["rows.ppm", "rows.txt"] {
+        let why = session
+            .export(rows, &dir.join(file))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            why.starts_with("cannot write ") && why.contains(file),
+            "{why}"
+        );
+        assert!(!dir.join(file).exists());
+    }
+}
