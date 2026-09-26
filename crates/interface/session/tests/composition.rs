@@ -1196,6 +1196,47 @@ fn a_demanded_evaluation_runs_the_state_and_skips_the_rest() {
     assert_eq!(runtime.host().live(), 0);
 }
 
+/// A side worked out from a port's size divides as one worked out from
+/// the window: a division that leaves a remainder is a fraction, which
+/// `ceil` and `floor` decide, and a bare one sizes nothing. (A port's size
+/// used to divide as integers do, so `ceil(size(source) / 2)` of 101 was
+/// 50 where `ceil(window() / 2)` was 51.)
+#[test]
+fn a_side_from_a_size_divides_as_one_from_the_window() {
+    let mut runtime = cpu(1 << 20);
+    load(&mut runtime, GRADIENT);
+    load(&mut runtime, GRAYSCALE);
+    let context = Context {
+        window: [101.0, 101.0],
+        ..Context::default()
+    };
+    let side = |runtime: &mut orla_runtime::Runtime, domain: &str| {
+        let graph = orla_scene::parse(&format!(
+            "node source: image.gradient@1 {{ domain = window(); }}\nnode half: image.grayscale@1 {{ source <- source.result; amount = 1.0; domain = {domain}; }}\noutput r <- half.result;"
+        ))
+        .unwrap();
+        let mut evaluator = Evaluator::new();
+        let size = evaluator
+            .evaluate(
+                &graph,
+                runtime,
+                &BTreeMap::new(),
+                &context,
+                &BTreeMap::new(),
+            )
+            .map(|report| runtime.host().image_size(report.output).unwrap())
+            .map_err(|e| e.to_string());
+        evaluator.clear(runtime);
+        size
+    };
+    assert_eq!(side(&mut runtime, "ceil(size(source) / 2)"), Ok((51, 51)));
+    assert_eq!(side(&mut runtime, "ceil(window() / 2)"), Ok((51, 51)));
+    assert_eq!(side(&mut runtime, "floor(size(source) / 2)"), Ok((50, 50)));
+    assert_eq!(side(&mut runtime, "(size(source) + 1) / 2"), Ok((51, 51)));
+    let bare = side(&mut runtime, "size(source) / 2").unwrap_err();
+    assert!(bare.contains("floor"), "{bare}");
+}
+
 #[test]
 fn a_domain_may_take_the_window_and_follows_it() {
     let mut runtime = runtime();

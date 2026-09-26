@@ -445,9 +445,11 @@ impl Number {
         }
     }
 
-    /// `self op other`: whole numbers stay whole and exact (dividing as
-    /// integers do, as `Int` does in a Kernel), and fail rather than
-    /// wrap; a measure on either side makes a measure.
+    /// `self op other`: whole numbers stay whole and exact, and fail
+    /// rather than wrap; a division of whole numbers that leaves a
+    /// remainder is the measure it is, as a window's side divided is, so
+    /// `floor` and `ceil` decide it and a bare fraction sizes nothing;
+    /// a measure on either side makes a measure.
     fn apply(self, op: DomainOp, other: Self) -> Result<Self, DomainError> {
         if other.exact() == 0.0 && op == DomainOp::Div {
             return Err(DomainError {
@@ -455,6 +457,11 @@ impl Number {
             });
         }
         Ok(match (self, other) {
+            (Self::Whole(a), Self::Whole(b))
+                if op == DomainOp::Div && a.checked_rem(b).is_some_and(|r| r != 0) =>
+            {
+                Self::Measure(a as f64 / b as f64)
+            }
             (Self::Whole(a), Self::Whole(b)) => Self::Whole(
                 match op {
                     DomainOp::Add => a.checked_add(b),

@@ -670,10 +670,11 @@ output kept <- state.result to "saves/state.field";   // also written to a file
    `floor`, `ceil`, and the window as context: `window()` (its size in
    pixels) and `scale()` (its scale factor); it resolves when the node
    binds, and its sides must come out positive and whole. Counts and
-   sides are whole numbers, exact, dividing as an `Int` does, and a
-   count too large to hold is an error rather than a wrapped one; the
-   window, `scale()` and a `Float` parameter are measures, which may
-   carry a fraction until `floor` or `ceil` makes them whole. A `domain` computes an extent and
+   sides are whole numbers, exact, and a count too large to hold is an
+   error rather than a wrapped one; the window, `scale()`, a `Float`
+   parameter and a division that leaves a remainder are measures, which
+   may carry a fraction until `floor` or `ceil` makes them whole, so
+   `ceil(size(p) / 2)` and `ceil(window() / 2)` agree. A `domain` computes an extent and
    nothing else: a boolean, a colour or a struct sizes nothing. `domain =
    size(map) * tile;` draws a map at its tile size; `domain = 4 *
    count(faces);` sizes a subdivision; `domain = window();` fills the

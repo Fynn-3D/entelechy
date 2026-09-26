@@ -233,13 +233,24 @@ mod tests {
             .resolve(&port, &param, &context, &element)
             .unwrap_err();
         assert!(error.to_string().contains("not a bound input"), "{error}");
+        // A division that leaves a remainder is a fraction, as a
+        // window's is: `floor` and `ceil` decide it, bare it sizes nothing.
         assert_eq!(
-            parse("count(faces) / 7")
+            parse("floor(count(faces) / 7)")
                 .resolve(&port, &param, &context, &element)
                 .unwrap(),
             Domain::Rows(329),
-            "ints divide like ints"
         );
+        assert_eq!(
+            parse("ceil(count(faces) / 7)")
+                .resolve(&port, &param, &context, &element)
+                .unwrap(),
+            Domain::Rows(330),
+        );
+        let error = parse("count(faces) / 7")
+            .resolve(&port, &param, &context, &element)
+            .unwrap_err();
+        assert!(error.to_string().contains("floor"), "{error}");
         let error = parse("count(faces) / 7.0")
             .resolve(&port, &param, &context, &element)
             .unwrap_err();
@@ -268,11 +279,11 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("positive whole"), "{error}");
         assert_eq!(
-            parse("size(map) / 3")
+            parse("floor(size(map) / 3)")
                 .resolve(&port, &param, &context, &element)
                 .unwrap(),
             Domain::Grid(6, 5),
-            "a side divides like the count it is"
+            "a side divides like the window's"
         );
         let error = parse("window() / 0.0")
             .resolve(&port, &param, &context, &element)
