@@ -234,6 +234,11 @@ it allowed; nothing over the wire widens it.
 - A page opens the socket only from this machine, from a file, or from an
   origin `--allow-origin` names; an HTTP request that is not a WebSocket
   upgrade is answered and closed.
+- `search` shows the packages in the directories its opener gave (the
+  front's `ORLA_PACKAGES` and a release's `packages/`) and those beside a
+  package the scene uses: of a directory it names only the packages, and
+  it reads only inside them. A package is a published capability, read
+  by anyone as `use` reads it.
 - A Kernel's `requires` must be among the runtime's grants (all, unless
   `--grant` names fewer) for it to be prepared; it runs with what it
   requires of those.
