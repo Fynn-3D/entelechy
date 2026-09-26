@@ -17,6 +17,7 @@ orla-ir = { path = "../../core/ir" }
 orla-graph = { path = "../../core/graph" }
 orla-scene = { path = "../../frontend/scene" }
 orla-runtime = { path = "../../core/runtime" }
+orla-rules = { path = "../../core/rules" }
 orla-cpu = { path = "../../backends/cpu" }
 orla-gpu = { path = "../../backends/gpu" }
 orla-jit = { path = "../../backends/jit" }
@@ -25,7 +26,6 @@ orla-formats = { path = "../../interface/formats" }
 [dev-dependencies]
 orla-abi = { path = "../../core/abi" }
 orla-conformance = { path = "../../backends/conformance" }
-orla-rules = { path = "../../core/rules" }
 
 [lints]
 workspace = true

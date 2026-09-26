@@ -8,6 +8,7 @@
 //! implements. Nothing here executes a Kernel; the backends do, by these.
 
 pub mod backend;
+pub mod placement;
 pub mod raster;
 pub mod reduce;
 

@@ -292,6 +292,36 @@ fn only_the_interface_and_two_machines_take_outside_dependencies() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// The session's scene, Kernel ledger, history, inputs and writes run on
+/// the runtime the session is given; which backend that is, and what
+/// only a backend has, belong to the session's opening, its trace and its
+/// re-exports.
+#[test]
+fn the_session_runs_on_the_runtime_it_is_given() {
+    let src = root().join("crates/interface/session/src");
+    let parts = [
+        "scene.rs",
+        "kernels.rs",
+        "sources.rs",
+        "store.rs",
+        "history.rs",
+        "inputs.rs",
+        "writes.rs",
+        "check.rs",
+        "session/time.rs",
+    ];
+    let mut wrong = Vec::new();
+    for file in parts {
+        let text = std::fs::read_to_string(src.join(file)).unwrap();
+        for backend in ["orla_cpu", "orla_gpu", "orla_jit"] {
+            if text.contains(backend) {
+                wrong.push(format!("session/src/{file} names {backend}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// `unsafe` is forbidden by the workspace's lints; a crate that does not
 /// take them could use it unseen. Only the two named crates set their
 /// own, and the workspace's still forbid it.

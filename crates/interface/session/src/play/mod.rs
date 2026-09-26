@@ -14,7 +14,7 @@ pub mod pad;
 use orla_graph::{NodeId, Report};
 use orla_runtime::{Context, Handle, InputState};
 
-pub use orla_gpu::present::{Placement, placement};
+pub use orla_rules::placement::{Placement, placement};
 pub use pad::{Pad, PadAxis, PadButton};
 
 use crate::Session;
