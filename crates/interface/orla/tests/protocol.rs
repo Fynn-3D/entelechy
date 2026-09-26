@@ -836,7 +836,7 @@ fn help_answers_an_index_a_section_or_a_name() {
         .collect();
     assert_eq!(
         sections,
-        ["builtins", "kernel", "scene", "replay", "protocol"]
+        ["builtins", "types", "kernel", "scene", "replay", "protocol"]
     );
     assert!(index["sections"][0]["count"].as_u64().unwrap() > 50);
     assert!(index["versions"]["language"].is_u64());

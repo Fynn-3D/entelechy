@@ -642,10 +642,62 @@ builtin wheel requires input.read
   wheel() -> Vec2
 builtin window requires input.read
   window() -> Vec2
+form Bool
+  Bool
+form DMat2
+  DMat2   DMat3   DMat4
+form DMat3
+  DMat3
+form DMat4
+  DMat4
+form DVec2
+  DVec2   DVec3   DVec4
+form DVec3
+  DVec3
+form DVec4
+  DVec4
+form Double
+  Double
+form Float
+  Float
+form Grid
+  Grid<T>
+form IVec2
+  IVec2   IVec3
+form IVec3
+  IVec3
+form Image
+  Image
+form Int
+  Int
+form LVec2
+  LVec2   LVec3
+form LVec3
+  LVec3
+form Long
+  Long
+form Mat2
+  Mat2   Mat3   Mat4
+form Mat3
+  Mat3
+form Mat4
+  Mat4
+form Rows
+  Rows<T>
+form Vec2
+  Vec2   Vec3   Vec4
+form Vec3
+  Vec3
+form Vec4
+  Vec4
+form Volume
+  Volume<T>
 form and
   a && b   a || b   !a
 form array
   [a, b, c]   [value; n]   a[i]
+form as
+  input albedo: Grid<Vec4 as unorm8>;
 form async
   async = true;
 form break
@@ -682,12 +734,18 @@ form merge
   compute { ... } merge(a, b) { ... }
 form node
   node name: kernel.id@1 { port <- source.result; param = 2; domain = vec2(w, h); }
+form output
+  output result <- node.port;   output kept <- node.port to "saves/n.field";
 form package
   package name@1 { language = 1; ir = 1; }
+form param
+  param speed: Float = 1.0;   node n: k@1 { gain = speed; }
 form prefix
   prefix with sum { return value; }
 form previous
   port <~ node.output from initial [migrate id@v];
+form requires
+  requires { field.read; field.write; time.read; input.read; }
 form scan
   scan with y = init { return next; }
 form scatter
@@ -696,5 +754,7 @@ form struct
   Name { a: 1.0, b: 2 }   Name { ..base, a: 3.0 }
 form times
   times = 5;   carry port <- output;
+form type
+  type Cells = Grid<Int>;   struct Cell { alive: Int, age: Float }
 form use
   use "kernels/";   use "name.orlapkg";

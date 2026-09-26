@@ -339,8 +339,8 @@ and the forms from the compiler, the replay forms from the replayer, the
 operations from the table above. An agent asks in three steps, each
 answer small:
 
-- `{"op": "help"}`: the index. Its `sections` (`builtins`, `kernel`,
-  `scene`, `replay`, `protocol`), how many items each holds, and the
+- `{"op": "help"}`: the index. Its `sections` (`builtins`, `types`,
+  `kernel`, `scene`, `replay`, `protocol`), how many items each holds, and the
   `versions` the answer holds for.
 - `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.
 - `{"op": "help", "name": "window"}`: every item of that name in full, in

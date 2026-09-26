@@ -191,7 +191,8 @@ pub fn builtins() -> Vec<Builtin> {
 pub struct Form {
     /// The word to ask for: `loop`, `each`, `scatter`, `node`.
     pub name: &'static str,
-    /// Where it is written: "expression", "kernel", "graph" or "document".
+    /// Where it is written: "type", "expression", "kernel", "graph" or
+    /// "document".
     pub kind: &'static str,
     /// The shape, as one writes it.
     pub shape: &'static str,
@@ -216,6 +217,149 @@ const fn form(
 /// Every form, grouped by where it is written.
 pub fn forms() -> Vec<Form> {
     vec![
+        form(
+            "Rows",
+            "type",
+            "Rows<T>",
+            "A row of elements, element() the index of one; count(f) says how many, at(f, i) reads one.",
+        ),
+        form(
+            "Grid",
+            "type",
+            "Grid<T>",
+            "A grid of elements, coord() the column and row of one; size(f) and at(f, vec2) read it.",
+        ),
+        form(
+            "Volume",
+            "type",
+            "Volume<T>",
+            "A volume of elements, coord() the column, row and layer of one.",
+        ),
+        form(
+            "Image",
+            "type",
+            "Image",
+            "Grid<Vec4>: a picture, each channel a Float from 0 to 1, the first output that is one is what a scene shows.",
+        ),
+        form(
+            "Float",
+            "type",
+            "Float",
+            "A 32-bit float; written 1.0, never 1.",
+        ),
+        form(
+            "Int",
+            "type",
+            "Int",
+            "A 32-bit integer; an overflow fails the element, add_wrap and its kin wrap.",
+        ),
+        form("Bool", "type", "Bool", "true or false."),
+        form(
+            "Double",
+            "type",
+            "Double",
+            "A 64-bit float; a literal is taken exact.",
+        ),
+        form("Long", "type", "Long", "A 64-bit integer."),
+        form(
+            "Vec2",
+            "type",
+            "Vec2   Vec3   Vec4",
+            "Floats in two, three or four components: v.x, v.y, v.z, v.w, and v.rgb, v.xy and the like as swizzles.",
+        ),
+        form("Vec3", "type", "Vec3", "Three Floats; see Vec2."),
+        form(
+            "Vec4",
+            "type",
+            "Vec4",
+            "Four Floats, a pixel's r g b a; see Vec2.",
+        ),
+        form(
+            "IVec2",
+            "type",
+            "IVec2   IVec3",
+            "Integers in two or three components: a cell, an offset, an address for at and put.",
+        ),
+        form("IVec3", "type", "IVec3", "Three integers; see IVec2."),
+        form(
+            "Mat2",
+            "type",
+            "Mat2   Mat3   Mat4",
+            "Float matrices by columns: m[i] a column, m * v applies it.",
+        ),
+        form("Mat3", "type", "Mat3", "A 3 by 3 Float matrix; see Mat2."),
+        form("Mat4", "type", "Mat4", "A 4 by 4 Float matrix; see Mat2."),
+        form(
+            "DVec2",
+            "type",
+            "DVec2   DVec3   DVec4",
+            "Doubles in two, three or four components.",
+        ),
+        form("DVec3", "type", "DVec3", "Three Doubles."),
+        form("DVec4", "type", "DVec4", "Four Doubles."),
+        form(
+            "LVec2",
+            "type",
+            "LVec2   LVec3",
+            "Longs in two or three components.",
+        ),
+        form("LVec3", "type", "LVec3", "Three Longs."),
+        form(
+            "DMat2",
+            "type",
+            "DMat2   DMat3   DMat4",
+            "Double matrices by columns.",
+        ),
+        form("DMat3", "type", "DMat3", "A 3 by 3 Double matrix."),
+        form("DMat4", "type", "DMat4", "A 4 by 4 Double matrix."),
+        form(
+            "as",
+            "type",
+            "input albedo: Grid<Vec4 as unorm8>;",
+            "How a port's Field is stored: f16, unorm8, snorm8, unorm16, u8, i8, u16, i16, or word; a Kernel reads and writes the type, the storage is narrower.",
+        ),
+        form(
+            "requires",
+            "kernel",
+            "requires { field.read; field.write; time.read; input.read; }",
+            "The capabilities a Kernel uses, and no others: reading inputs, writing outputs, the clock, the pointer, keys and window.",
+        ),
+        form(
+            "input",
+            "kernel",
+            "input source: Image;   input counts: Rows<Int>;",
+            "A Field the Kernel reads, bound by the node that runs it (`source <- other.result;`).",
+        ),
+        form(
+            "param",
+            "kernel",
+            "param gain: Float = 1.0;",
+            "A value the node that runs the Kernel may set (`gain = 0.5;`), with its default.",
+        ),
+        form(
+            "output",
+            "kernel",
+            "output result: Grid<Vec4>;",
+            "A Field the Kernel writes, one element per element of its domain; a map may write several.",
+        ),
+        form(
+            "type",
+            "kernel",
+            "type Cells = Grid<Int>;   struct Cell { alive: Int, age: Float }",
+            "A name for a port type, or a struct of named fields, shared by the Kernels of a document.",
+        ),
+        form(
+            "output",
+            "graph",
+            "output result <- node.port;   output kept <- node.port to \"saves/n.field\";",
+            "A scene's named result; the first picture is what it shows, and one written `to` a file is saved after each evaluation that changed it, where allowed.",
+        ),
+        form(
+            "param",
+            "graph",
+            "param speed: Float = 1.0;   node n: k@1 { gain = speed; }",
+            "A scene's parameter, set by the caller (`--param`, the protocol's `param`) and read by its nodes.",
+        ),
         form(
             "let",
             "expression",

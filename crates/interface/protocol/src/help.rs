@@ -9,8 +9,9 @@ use orla_compiler::help::{Builtin, Form};
 use orla_session::replay;
 
 /// The sections, each with what it holds.
-const SECTIONS: [(&str, &str); 5] = [
+const SECTIONS: [(&str, &str); 6] = [
     ("builtins", "what a Kernel may call"),
+    ("types", "the types a port, a param or a value has"),
     (
         "kernel",
         "how a Kernel is written: its declarations and expressions",
@@ -38,6 +39,7 @@ fn builtin_json(builtin: &Builtin) -> Json {
 /// The section a form is written in.
 fn form_section(form: &Form) -> &'static str {
     match form.kind {
+        "type" => "types",
         "graph" | "document" => "scene",
         _ => "kernel",
     }

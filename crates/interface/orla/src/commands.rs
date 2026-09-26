@@ -326,7 +326,7 @@ which `orla` does not check.",
             args: "[<section> | <name>]",
             summary: "What Orla answers: the index, a section, or one item in full.",
             doc: "\
-With nothing, the sections (builtins, kernel, scene, replay, protocol,
+With nothing, the sections (builtins, types, kernel, scene, replay, protocol,
 commands) and how many items each holds; with a section, each item's one
 line; with a name, every item of that name in full: a builtin's
 signatures and capability, a form's shape, a replay step, a protocol
