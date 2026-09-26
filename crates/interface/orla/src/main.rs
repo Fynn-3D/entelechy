@@ -704,14 +704,25 @@ fn serve(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     // A `compose` or `publish` is answered once its change stands; other
-    // requests are answered meanwhile.
+    // requests are answered meanwhile. With every input closed, what is
+    // owed is still answered before the process ends.
     let mut answers = orla_protocol::Answers::new();
+    let mut open = true;
     loop {
-        let incoming = if answers.waiting() {
+        let incoming = if !open {
+            if !answers.waiting() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            None
+        } else if answers.waiting() {
             match requests.recv_timeout(std::time::Duration::from_millis(1)) {
                 Ok(incoming) => Some(incoming),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    open = false;
+                    None
+                }
             }
         } else {
             match requests.recv() {

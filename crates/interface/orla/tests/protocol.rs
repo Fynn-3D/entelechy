@@ -70,6 +70,49 @@ fn talk_with(scene: &Path, flags: &[&str], requests: &[Json]) -> Vec<Json> {
 
 const BRIGHT_SHOW: &str = "kernel life.show@1 { requires { field.read; field.write; } input cells: Image; output result: Image; compute { let c = sample(cells); return if c.r > 0.5 { vec4(1.0, 1.0, 1.0, 1.0) } else { vec4(0.0, 0.0, 0.0, 1.0) }; } }";
 
+/// Requests sent all at once and then the end of input are all answered,
+/// in order: a `publish` still being prepared when input ends, and what
+/// was queued behind it, a `quit` included.
+#[test]
+fn requests_piped_at_once_are_all_answered_before_the_end() {
+    let dir = scratch_in("-piped");
+    let scene = dir.join("scene.osn");
+    let batch = |requests: &[Json]| -> Vec<Json> {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
+            .arg("serve")
+            .arg(&scene)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        for request in requests {
+            writeln!(stdin, "{request}").unwrap();
+        }
+        drop(stdin);
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    };
+    let publish = json!({ "id": 1, "op": "publish", "source": BRIGHT_SHOW, "expect": "any" });
+    let answers = batch(&[
+        publish.clone(),
+        json!({ "id": 2, "op": "status" }),
+        json!({ "id": 3, "op": "quit" }),
+    ]);
+    let ids: Vec<&Json> = answers.iter().map(|answer| &answer["id"]).collect();
+    assert_eq!(ids, [&json!(1), &json!(2), &json!(3)], "{answers:?}");
+    assert_eq!(answers[0]["ok"]["id"], "life.show@1", "{answers:?}");
+    let answers = batch(&[publish]);
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0]["ok"]["id"], "life.show@1", "{answers:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An `if` two hundred deep in an arm of an `if` is read once.
 #[test]
 fn a_kernel_too_deep_to_compile_is_refused_and_the_session_lives_on() {
