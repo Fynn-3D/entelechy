@@ -184,24 +184,7 @@ unsafe fn text<'a>(pointer: *const c_char) -> Option<&'a str> {
 impl Held {
     /// A graph output's Field, `name` `None` for the first.
     fn output(&self, name: Option<&str>) -> Result<Handle, String> {
-        let graph = self.session.graph().ok_or("no scene is loaded")?;
-        let found = match name {
-            Some(name) => graph.outputs.iter().find(|(output, _)| output == name),
-            None => graph.outputs.first(),
-        };
-        let Some((name, source)) = found else {
-            return Err(match name {
-                Some(name) => format!("no output named `{name}`"),
-                None => "the graph has no output".to_owned(),
-            });
-        };
-        let handle = match source {
-            orla_graph::Source::Node { node, port } => self.session.cached(node, port),
-            orla_graph::Source::External(_) => {
-                return Err(format!("output `{name}` is an external image"));
-            }
-        };
-        handle.ok_or_else(|| "evaluate before reading an output".to_owned())
+        self.session.output(name)
     }
 
     /// Presents an output on the canvas `canvas`: whether it was drawn.
@@ -227,16 +210,7 @@ impl Held {
         let Some(display) = &self.display else {
             return Ok(None);
         };
-        let host = self.session.runtime().host();
-        let pixels = host
-            .schema(handle)
-            .is_ok_and(|schema| schema.is_pixel() && schema.is_wide())
-            && host.domain(handle).is_ok_and(|domain| domain.depth() == 1);
-        let (Some(device), Ok((width, height)), true) = (
-            host.resident(handle).ok().flatten(),
-            host.image_size(handle),
-            pixels,
-        ) else {
+        let Some((device, width, height)) = self.session.on_device(handle) else {
             return Ok(None);
         };
         let element: web_sys::HtmlCanvasElement = web_sys::window()

@@ -937,6 +937,55 @@ impl Session {
             })
     }
 
+    /// The Field of the scene output named `name`, or of its first when
+    /// `None`, as the last evaluation left it. Every interface that reads
+    /// an output by name reads this one.
+    pub fn output(&self, name: Option<&str>) -> Result<Handle, String> {
+        let graph = self.graph().ok_or("no scene is loaded")?;
+        let (name, source) = match name {
+            Some(name) => graph
+                .outputs
+                .iter()
+                .find(|(output, _)| output == name)
+                .ok_or_else(|| {
+                    let known = graph.outputs.iter().map(|(output, _)| output.as_str());
+                    format!(
+                        "no output named `{name}`{}",
+                        orla_language::did_you_mean(name, known)
+                    )
+                })?,
+            None => graph.primary_output().ok_or("the graph has no output")?,
+        };
+        match source {
+            orla_graph::Source::Node { node, port } => self
+                .cached(node, port)
+                .ok_or_else(|| "evaluate before reading an output".to_owned()),
+            orla_graph::Source::External(_) => Err(format!("output `{name}` is an external image")),
+        }
+    }
+
+    /// Where the device holds `handle` and its size, when it is a picture
+    /// the device can show as it lies: a grid of float pixels one deep.
+    /// Anything else, a picture kept narrow included, is brought back
+    /// ([`Session::picture`]) to be shown. Every interface that presents
+    /// from the device asks this.
+    pub fn on_device(
+        &self,
+        handle: Handle,
+    ) -> Option<(&(dyn std::any::Any + Send + Sync), u32, u32)> {
+        let host = self.runtime.host();
+        let as_it_lies = host
+            .schema(handle)
+            .is_ok_and(|s| s.is_pixel() && s.is_wide())
+            && host.domain(handle).is_ok_and(|d| d.depth() == 1);
+        if !as_it_lies {
+            return None;
+        }
+        let device = host.resident(handle).ok().flatten()?;
+        let (width, height) = host.image_size(handle).ok()?;
+        Some((device, width, height))
+    }
+
     /// The output of `report` a scene sounds, and its channels: the first
     /// that is rows of one float (mono) or two (stereo). Every interface
     /// that plays a scene's sound plays this one.

@@ -2,7 +2,6 @@
 //! state, trace one element through its Kernel, and keep it materialized
 //! for reading.
 
-use orla_graph::Source;
 use orla_kernel::Shape;
 use serde_json::{Value as Json, json};
 
@@ -146,23 +145,8 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 ))
             })?
     } else {
-        let name = request
-            .get("output")
-            .and_then(Json::as_str)
-            .map(str::to_owned)
-            .or_else(|| graph.outputs.first().map(|(name, _)| name.clone()))
-            .ok_or_else(|| failure("the graph has no output"))?;
-        let (_, source) = graph
-            .outputs
-            .iter()
-            .find(|(output, _)| *output == name)
-            .ok_or_else(|| failure(format!("no output named `{name}`")))?;
-        match source {
-            Source::Node { node, port } => session
-                .cached(node, port)
-                .ok_or_else(|| failure("evaluate before reading"))?,
-            Source::External(_) => return Err(failure("output is an external image")),
-        }
+        let name = request.get("output").and_then(Json::as_str);
+        session.output(name).map_err(failure)?
     };
     // A Field of pixels reads as an image; anything else reads as
     // words with its shape and layout.

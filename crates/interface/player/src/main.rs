@@ -301,18 +301,9 @@ impl Player {
     /// Answers where it landed, how, and whether that took a download.
     fn show(&mut self, output: orla_kernel::Handle) -> (Option<Placement>, &'static str, bool) {
         if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
-            let host = self.session.runtime().host();
-            let resident = host.resident(output).ok().flatten();
-            // Only a grid of float pixels is drawn by the device as it lies;
-            // a picture kept narrow, or anything else, downloads (widened)
+            // What the device cannot show as it lies downloads (widened)
             // and is drawn or refused below with a clear message.
-            let presentable = host
-                .schema(output)
-                .is_ok_and(|s| s.is_pixel() && s.is_wide())
-                && host.domain(output).is_ok_and(|d| d.depth() == 1);
-            if let (true, Some(device), Ok((width, height))) =
-                (presentable, resident, host.image_size(output))
-            {
+            if let Some((device, width, height)) = self.session.on_device(output) {
                 let size = window.inner_size();
                 if let Some(display) = &self.display {
                     let overlay = self.play.panel().map(|panel| Overlay {
