@@ -808,25 +808,41 @@ fn a_trace_shows_one_element_of_a_node_and_reports_carry_timings() {
     assert!(responses[5]["error"].is_object(), "{}", responses[5]);
 }
 
+/// `help` answers an index, a section's one line an item, or every item
+/// of a name in full; its sections hold every builtin, form, replay step
+/// and operation.
 #[test]
-fn help_answers_the_builtins_and_the_forms_as_json() {
+fn help_answers_an_index_a_section_or_a_name() {
     let dir = scratch_in("-help");
     let responses = talk(
         &dir.join("scene.osn"),
         &[
             json!({ "id": 1, "op": "help" }),
-            json!({ "id": 2, "op": "help", "name": "mix" }),
-            json!({ "id": 3, "op": "help", "name": "mixx" }),
-            json!({ "id": 4, "op": "help", "name": "each" }),
+            json!({ "id": 2, "op": "help", "section": "builtins" }),
+            json!({ "id": 3, "op": "help", "name": "mix" }),
+            json!({ "id": 4, "op": "help", "name": "mixx" }),
+            json!({ "id": 5, "op": "help", "name": "each" }),
+            json!({ "id": 6, "op": "help", "section": "scene" }),
+            json!({ "id": 7, "op": "help", "name": "window" }),
+            json!({ "id": 8, "op": "help", "name": "publish" }),
         ],
     );
-    let all = responses[0]["ok"]["builtins"].as_array().unwrap();
-    assert!(all.len() > 50);
-    assert!(
-        all.iter()
-            .any(|b| b["name"] == "put" && b["requires"] == "field.write")
+    let index = &responses[0]["ok"];
+    let sections: Vec<&str> = index["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|section| section["section"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        sections,
+        ["builtins", "kernel", "scene", "replay", "protocol"]
     );
-    let mix = &responses[1]["ok"];
+    assert!(index["sections"][0]["count"].as_u64().unwrap() > 50);
+    assert!(index["versions"]["language"].is_u64());
+    let builtins = responses[1]["ok"]["items"].as_array().unwrap();
+    assert!(builtins.iter().any(|item| item["name"] == "put"));
+    let mix = &responses[2]["ok"]["found"][0];
     assert_eq!(mix["kind"], "math");
     assert!(
         mix["signatures"]
@@ -835,29 +851,26 @@ fn help_answers_the_builtins_and_the_forms_as_json() {
             .iter()
             .any(|s| s == "mix(a: Vec3, b: Vec3, t: Float) -> Vec3")
     );
-    assert!(mix["requires"].is_null());
-    assert!(
-        responses[2]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("mix")
+    assert_eq!(
+        responses[3]["error"]["similar"][0], "mix",
+        "{}",
+        responses[3]
     );
-    let forms = responses[0]["ok"]["forms"].as_array().unwrap();
-    assert!(forms.len() > 15);
-    assert!(
-        forms
-            .iter()
-            .any(|f| f["name"] == "scatter" && f["kind"] == "kernel")
-    );
-    assert!(
-        forms
-            .iter()
-            .any(|f| f["name"] == "fill" && f["kind"] == "graph")
-    );
-    let each = &responses[3]["ok"];
-    assert_eq!(each["kind"], "expression");
+    let each = &responses[4]["ok"]["found"][0];
+    assert_eq!(each["section"], "kernel");
     assert_eq!(each["shape"], "[each n { body }]");
-    assert!(each["doc"].as_str().unwrap().contains("element by element"));
+    let scene = responses[5]["ok"]["items"].as_array().unwrap();
+    assert!(scene.iter().any(|item| item["name"] == "fill"));
+    let window: Vec<&str> = responses[6]["ok"]["found"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["section"].as_str().unwrap())
+        .collect();
+    assert_eq!(window, ["builtins", "replay", "protocol"]);
+    let publish = &responses[7]["ok"]["found"][0];
+    assert_eq!(publish["fields"][0]["name"], "source");
+    assert_eq!(publish["fields"][0]["required"], true);
 }
 
 /// Replays the scanline example's `agent.jsonl`, each step held to the

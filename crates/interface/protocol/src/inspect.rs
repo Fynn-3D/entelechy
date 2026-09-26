@@ -11,7 +11,7 @@ use crate::wire::{failure, graph_json, manifest_json};
 /// The session at a glance, and the versions it speaks.
 pub(crate) fn status(session: &Session) -> Result<Json, Json> {
     Ok(json!({
-        "versions": { "orla": env!("CARGO_PKG_VERSION"), "api": orla_kernel::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": orla_session::PACKAGE_VERSION },
+        "versions": versions(),
         "backend": session.runtime().backend_name(),
         "scene": session.root().display().to_string(),
         "watched": session.watched().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
@@ -166,43 +166,25 @@ pub(crate) fn document(session: &Session, request: &Request) -> Result<Json, Jso
     Ok(json!({ "path": session.root().display().to_string(), "text": text, "version": version }))
 }
 
-/// Every builtin and form, or the one named.
+/// The versions an answer about Orla holds for.
+pub(crate) fn versions() -> Json {
+    json!({
+        "orla": env!("CARGO_PKG_VERSION"),
+        "api": orla_kernel::ABI_VERSION,
+        "language": orla_language::LANGUAGE_VERSION,
+        "ir": orla_ir::IR_VERSION,
+        "package": orla_session::PACKAGE_VERSION,
+    })
+}
+
+/// The index, a section, or the items named; see [`crate::help`].
 pub(crate) fn help(request: &Request) -> Result<Json, Json> {
-    let entry = |builtin: &orla_compiler::help::Builtin| {
-        json!({
-            "name": builtin.name,
-            "kind": builtin.kind,
-            "signatures": builtin.signatures,
-            "doc": builtin.doc,
-            "requires": builtin.requires,
-            "entry_only": builtin.entry_only,
-        })
-    };
-    let shape = |form: &orla_compiler::help::Form| {
-        json!({
-            "name": form.name,
-            "kind": form.kind,
-            "shape": form.shape,
-            "doc": form.doc,
-        })
-    };
-    match request.get("name").and_then(Json::as_str) {
-        Some(name) => match orla_compiler::help::builtin(name) {
-            Some(builtin) => Ok(entry(&builtin)),
-            None => match orla_compiler::help::form_named(name) {
-                Some(form) => Ok(shape(&form)),
-                None => {
-                    let similar = orla_compiler::help::similar(name);
-                    Err(json!({
-                        "message": format!("nothing named `{name}`; similar: {}", similar.join(", ")),
-                        "similar": similar,
-                    }))
-                }
-            },
-        },
-        None => Ok(json!({
-            "builtins": orla_compiler::help::builtins().iter().map(entry).collect::<Vec<_>>(),
-            "forms": orla_compiler::help::forms().iter().map(shape).collect::<Vec<_>>(),
-        })),
+    match (
+        request.get("section").and_then(Json::as_str),
+        request.get("name").and_then(Json::as_str),
+    ) {
+        (_, Some(name)) => crate::help::named(name),
+        (Some(section), None) => crate::help::section(section),
+        (None, None) => Ok(crate::help::index()),
     }
 }

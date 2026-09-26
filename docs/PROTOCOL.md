@@ -333,12 +333,22 @@ History is bounded and holds changes, never whole worlds.
 
 ## Help
 
-`help` answers every builtin a Kernel may call (`builtins`, each `{name,
-kind, signatures, doc, requires, entry_only}`) and every language and
-document form (`forms`, each `{name, kind, shape, doc}`: `loop`, `each`,
-`scatter`, `node`, `fill`, `previous`, `async` and the rest), or with
-`name`, that one; an unknown name is an error listing similar ones in
-`similar`. It is generated from the compiler's tables.
+Orla describes itself, from the tables its parts enforce: the builtins
+and the forms from the compiler, the replay forms from the replayer, the
+operations from the table above. An agent asks in three steps, each
+answer small:
+
+- `{"op": "help"}`: the index. Its `sections` (`builtins`, `kernel`,
+  `scene`, `replay`, `protocol`), how many items each holds, and the
+  `versions` the answer holds for.
+- `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.
+- `{"op": "help", "name": "window"}`: every item of that name in full, in
+  `found`, each with its `section`: a builtin's signatures, `requires` and
+  whether only an entry may call it; a form's shape; a replay step's
+  shape and examples; an operation's fields with their types and whether
+  each is needed.
+
+An unknown section or name is an error naming the near one in `similar`.
 
 ## Timing of changes
 

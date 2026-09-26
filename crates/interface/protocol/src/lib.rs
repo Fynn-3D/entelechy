@@ -18,6 +18,7 @@
 mod answers;
 mod create;
 mod fields;
+pub mod help;
 mod inspect;
 pub mod ops;
 mod request;
