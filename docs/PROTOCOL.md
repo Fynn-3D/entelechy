@@ -44,7 +44,7 @@ marked `?` may be left out.
 
 | op | fields | answer |
 | --- | --- | --- |
-| `status` |  | backend, scene, watched, kernels (native operations included), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
+| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
 | `graph` |  | inputs, params, nodes, outputs |
@@ -120,8 +120,12 @@ marked `?` may be left out.
 `prepare` and `publish` take a document holding one Kernel. The Kernel
 sees the declarations the source makes or `use`s, then the scene's
 shared ones, so a Kernel copied from a library file republishes as it
-is. Kernels published through the protocol belong to no document; a
-document that later defines the same id republishes it from the file.
+is. `publish` changes the running world, not a file: a Kernel published
+through the protocol belongs to no document, the document it came from
+is left as it is on disk, and when that document next changes, its
+Kernel is published from the file again. A Kernel is kept by writing it
+into a document the scene uses (`compose` a document that holds it), or
+with the whole world by `snapshot`.
 
 `kernels` lists the backend's native operations alongside published
 Kernels, at generation 0. A manifest's `memories` names ports that are

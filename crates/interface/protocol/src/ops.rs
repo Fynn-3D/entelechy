@@ -122,7 +122,7 @@ pub fn operations() -> Vec<Operation> {
             "status",
             "The session at a glance.",
             vec![],
-            "backend, scene, watched, kernels (native operations included), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`)",
+            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`)",
         ),
         op(
             "kernels",
@@ -209,7 +209,7 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "publish",
-            "Compiles, validates and prepares a Kernel, then swaps it in whole; answered once it stands.",
+            "Compiles, validates and prepares a Kernel, then swaps it in whole; answered once it stands. The running world changes, not a file: the document it came from is left as it is.",
             vec![
                 needs("source", "string", "a document with one Kernel"),
                 may(

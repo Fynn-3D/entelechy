@@ -140,7 +140,7 @@ own colour from where it is and what time it is.
 
 ```sh
 orla player {name}/scene.osn     # a window
-orla run {name}/scene.osn --window 640x400 --out frame.ppm
+orla run {name}/scene.osn --window 640x400 --out frame.png
 orla replay {name}/tests/{name}.replay
 ```
 
