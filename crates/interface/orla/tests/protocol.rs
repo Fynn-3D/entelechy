@@ -1154,7 +1154,7 @@ fn advance_runs_many_frames_and_stops_when_a_value_says_to() {
         responses[3]["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("`below`, `above` or `equals`"),
+            .contains("`over` is none of its fields"),
         "{:?}",
         responses[3]
     );
@@ -2348,7 +2348,11 @@ output b <- b.result;
     assert_eq!((value(3), value(4)), (1.0, 4.0), "a again, b on");
     assert!(failed(5).contains("is not state"), "{}", failed(5));
     assert!(failed(6).contains("name the node"), "{}", failed(6));
-    assert!(failed(7).contains("must be a string"), "{}", failed(7));
+    assert!(
+        failed(7).contains("`port` is string, not 3"),
+        "{}",
+        failed(7)
+    );
     assert_eq!(ok(8), &json!({ "reset": true }));
     let changes = ok(9)["changes"].as_array().unwrap();
     let resets: Vec<&Json> = changes.iter().filter(|c| c["kind"] == "reset").collect();
@@ -2430,11 +2434,7 @@ fn compose_edits_the_document_where_it_changes() {
         "{}",
         failed(5)
     );
-    assert!(
-        failed(6).contains("`text` is what stands there"),
-        "{}",
-        failed(6)
-    );
+    assert!(failed(6).contains("needs `text`"), "{}", failed(6));
     assert!(
         failed(7).contains("only a node has members"),
         "{}",

@@ -40,7 +40,12 @@ echoed back. An answer is one line, `{"id", "ok": ...}` or `{"id",
 on it as data: an unknown operation the `operations`, an unknown `help`
 name the `similar` ones, a failed evaluation its `node` (a state
 migration's also `port` and `migration`) and a run's `frame`. A field
-marked `?` may be left out.
+marked `?` may be left out. Every field is held to its type before its
+operation reads it: a request with a field of the wrong type, one its
+operation does not take, or without one it needs, is refused with the
+fields it takes, the `field` at fault and the type `expected`.
+`{"op": "help", "name": <op>}` answers an operation's request as JSON
+Schema in `schema`.
 
 | op | fields | answer |
 | --- | --- | --- |
@@ -50,14 +55,14 @@ marked `?` may be left out.
 | `graph` |  | inputs, params, nodes, outputs |
 | `document` | `version`?: string | path, text, and version, which `compose`'s `expect` names |
 | `history` | `since`?: integer | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
-| `compose` | `text`?: string, `edits`?: [{statement \| member, text}], `expect`?: string | events, version |
+| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version |
 | `sync` |  | events |
 | `prepare` | `source`: string | id, manifest; or an error at a line and column |
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation |
 | `retire` | `kernel`?: string | retired |
 | `param` | `name`: string, `value`: value | name, value, events; a node's own value is refused, and changes by `compose` |
 | `evaluate` | `nodes`?: [string], `settle`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | executed, reused, committed, outputs |
-| `advance` | `frames`: integer, `fps`?: number, `until`?: {target, below \| above \| equals}, `save`?: {node.port: path}, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | frames, stopped, target, value, saved, millis, report |
+| `advance` | `frames`: integer, `fps`?: number, `until`?: {target: string, below?: number, above?: number, equals?: number}, `save`?: {node.port: string}, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | frames, stopped, target, value, saved, millis, report |
 | `bench` | `frames`?: integer, `fps`?: number, `repeat`?: integer, `nodes`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | backend, frames, repeat, best_ms, median_ms, nodes, ran |
 | `window` | `size`?: [w, h] \| null, `scale`?: number | the window |
 | `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "rgba32f" \| "ppm" \| "field" | width, height, format, data (base64); words for a Field that is not pixels |
@@ -67,7 +72,7 @@ marked `?` may be left out.
 | `reset` | `node`?: string, `port`?: string | what was reset |
 | `help` | `section`?: string, `name`?: string | the index; a section's items; or one item in full. An unknown name is an error with `similar` |
 | `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (what a scene writes to reach it), inputs, params, outputs (name, type, doc), requires, granted, published; and count, how many matched |
-| `trace` | `node`: string, `at`?: [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
+| `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
 | `pin` | `node`: string | pinned |
 | `unpin` | `node`: string | unpinned |
 | `quit` |  | bye |

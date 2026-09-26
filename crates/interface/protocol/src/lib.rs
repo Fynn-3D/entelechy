@@ -218,6 +218,81 @@ mod tests {
         assert_eq!(error["similar"][0], "clamp", "{error}");
     }
 
+    /// A field of the wrong type is refused before its operation reads it,
+    /// naming the type it is; nested values are named by where they are.
+    #[test]
+    fn a_field_is_held_to_its_type() {
+        let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/grayscale/scene.osn");
+        let mut session = Session::open(&scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+        session.sync();
+        let mut refused = |request: Json| {
+            let error = handle(&mut session, &request).unwrap_err();
+            error["message"].as_str().unwrap().to_owned()
+        };
+        assert!(
+            refused(json!({ "op": "evaluate", "time": "0" }))
+                .contains("`time` is number, not \"0\"")
+        );
+        assert!(
+            refused(json!({ "op": "publish", "source": "x", "expect": "anyy" }))
+                .contains("`expect` is \"absent\" | \"any\" | integer")
+        );
+        assert!(
+            refused(json!({ "op": "read", "format": "png" }))
+                .contains("\"rgba32f\" | \"ppm\" | \"field\"")
+        );
+        assert!(
+            refused(json!({ "op": "evaluate", "pointer": [1] })).contains("`pointer` is [x, y]")
+        );
+        assert!(
+            refused(json!({ "op": "evaluate", "keys": [65, "B"] }))
+                .contains("`keys[1]` is integer")
+        );
+        assert!(
+            refused(json!({ "op": "advance", "frames": 2, "until": { "target": 3 } }))
+                .contains("`until.target` is string")
+        );
+        // The type is the operation's to take further: a wrong one never
+        // reaches it.
+        assert!(
+            handle(
+                &mut session,
+                &json!({ "op": "evaluate", "time": 0.5, "pointer": [1, 2] })
+            )
+            .is_ok()
+        );
+    }
+
+    /// Every operation's request is an object of its fields and no others,
+    /// as JSON Schema, the needed ones required.
+    #[test]
+    fn every_operation_has_a_schema_of_its_fields() {
+        for op in ops::operations() {
+            let schema = op.schema();
+            assert_eq!(schema["type"], "object", "{}", op.name);
+            assert_eq!(schema["additionalProperties"], false, "{}", op.name);
+            let properties = schema["properties"].as_object().unwrap();
+            assert_eq!(properties.len(), op.fields.len(), "{}", op.name);
+            for field in &op.fields {
+                assert!(
+                    properties[field.name]["description"].is_string(),
+                    "{}.{}",
+                    op.name,
+                    field.name
+                );
+            }
+        }
+        let publish = ops::operation("publish").unwrap().schema();
+        assert_eq!(publish["required"], json!(["source"]));
+        assert_eq!(
+            publish["properties"]["expect"]["anyOf"][0]["enum"],
+            json!(["absent", "any"])
+        );
+        let evaluate = ops::operation("evaluate").unwrap().schema();
+        assert_eq!(evaluate["properties"]["pointer"]["maxItems"], 2);
+    }
+
     /// A float answers as the decimal written for it.
     #[test]
     fn a_float_is_its_shortest_decimal() {
