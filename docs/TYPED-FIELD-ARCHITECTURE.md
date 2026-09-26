@@ -2,126 +2,116 @@
 
 **Answers:** why there is one resource, and what that binds.
 
-## Decision and authority
-
-Orla adopts the previous implementation's typed Field model for numerical
-resource data: an element schema, a logical domain, and backend-owned storage.
-This is the implementation decision for resource convergence, authorized by the
-user. Read it before changing types, ports, storage, execution, or GPU residency.
-
-The two original architecture documents remain unchanged and authoritative for
-layer boundaries. This document records how to implement those boundaries; it is
-not a feature inventory. Change this decision explicitly, not by accumulating
-domain-specific exceptions in code. HANDOFF.md identifies the next executable
-step; code and tests establish what is implemented.
+Numerical resource data is a typed Field: an element schema, a logical
+domain, and backend-owned storage. This document binds types, ports,
+storage, execution and GPU residency inside the boundaries the two
+architecture documents set. It changes by an explicit decision, never by
+domain-specific exceptions in code. Code and tests establish what is
+implemented; HANDOFF.md holds the next step.
 
 ## One numerical resource model
 
-A numerical Field has a complete element schema and an explicit Rows/Grid domain.
-Records and fixed arrays compose schemas; they do not create new port transports,
-resource managers, or execution engines. Layout is prepared from the schema and
-remains private to the backend. CPU columns and GPU buffers may differ physically.
+A numerical Field has a complete element schema and an explicit domain.
+Records and fixed arrays compose schemas; they create no new port
+transport, resource manager or execution engine. Layout is prepared from
+the schema and is private to the backend; CPU columns and GPU buffers
+may differ physically.
 
-Image is a typed image-facing view of grid data. Its compatibility spelling,
-sampling authority, and presentation semantics remain explicit. Image and Field
-share numerical resource ownership, residency, budgets, transfer, and retirement.
-Future texture representations may implement image sampling efficiently without
-changing logical resource identity or leaking texture objects into IR.
+Image is an image-facing view of grid data, with explicit compatibility
+spelling, sampling authority and presentation semantics. Image and Field
+share resource ownership, residency, budgets, transfer and retirement. A
+texture representation may implement image sampling without changing
+logical resource identity or entering the IR.
 
-Audio sample blocks and geometry attributes use this numerical data foundation.
-Sample rate, channels, formats, vertex/index roles, and other semantic constraints
-remain typed metadata or capability contracts. Do not introduce AudioRuntime,
-MeshRuntime, or another complete resource subsystem to carry numerical data.
+Audio sample blocks and geometry attributes are numerical Fields. Sample
+rate, channels, formats, vertex and index roles, and other semantic
+constraints are typed metadata or capability contracts. There is no
+AudioRuntime, MeshRuntime, or other resource subsystem for numerical
+data.
 
-Ordinary owned values remain values. Text, List, Option, and tagged payloads keep
-their ownership and complete schemas; do not force them into numerical GPU
-buffers or disguise them as single-element Fields. A new atomic operation may
-require backend support. A new composition of supported numerical members must
-reuse existing layout and execution mechanisms.
+Owned values stay values: Text, List, Option and tagged payloads keep
+their ownership and complete schemas, and are neither numerical GPU
+buffers nor single-element Fields. A new atomic operation may need
+backend support; a new composition of supported numerical members reuses
+existing layout and execution.
 
 ## Ownership and authority
 
-Keep resource identity, complete schema, representation validity, and lifetime
-separate from native allocation addresses. The issuing owner resolves handles and
-rejects stale, foreign, or incompatible bindings. Graph sees typed values and
-opaque handles, never wgpu objects or global device state.
-
-A resource may have a CPU representation, a GPU representation, or both. Reuse
-an unchanged GPU representation across nodes and frames. Materialize explicitly
-at a CPU consumer or external observation boundary. Never hide allocation or a GPU
-wait in an immutable read. A successful CPU write invalidates the corresponding
-GPU representation; failed writes preserve logical contents.
-
-The same GPU service owns byte admission, submission serialization, completion
-validation, and quarantine for every numerical resource. Pending work retains
-allocation leases and their reservations. A timeout is not cancellation.
-Completed arithmetic failure discards output; device failure must not silently
-rerun the program on CPU. Avoid a global cache that adopts foreign Host handles.
+- Resource identity, schema, representation validity and lifetime are
+  separate from native allocation addresses. The issuing owner resolves
+  handles and rejects stale, foreign or incompatible bindings. The Graph
+  sees typed values and opaque handles, never wgpu objects or global
+  device state.
+- A resource has a CPU representation, a GPU representation, or both. An
+  unchanged GPU representation is reused across nodes and frames.
+  Materialization is explicit, at a CPU consumer or an external
+  observation. An immutable read hides no allocation and no GPU wait. A
+  successful CPU write invalidates the GPU representation; a failed write
+  preserves logical contents.
+- One GPU service owns byte admission, submission serialization,
+  completion validation and quarantine for every numerical resource.
+  Pending work retains its allocation leases and reservations. A timeout
+  is not cancellation. A completed arithmetic failure discards output; a
+  device failure never silently reruns the program on the CPU. No global
+  cache adopts foreign Host handles.
 
 ## Computation and effects
 
-One validated IR describes computation independently of storage and devices.
-Within a backend, share instruction lowering; bindings supply resource access and
-layout. Image and Field wrappers must not grow separate arithmetic languages.
-
-Execution mode is distinct from element type: once-per-invocation computation,
-domain maps, and ordered transactions have different semantics. Preserve eager
-errors, explicit mutation, and per-node completion during convergence. Do not
-parallelize a transaction merely because its data is stored in a Field.
-
-One invocation owns provisional outputs. Validate complete output signatures,
-domains, and execution status before publication. A failed prepare or execution
-must preserve the previously valid program and caller-owned inputs.
-Prepared plans must retain schema identity and their immutable Kernel version.
-
-GPU-required preparation rejects unsupported IR. CPU fallback is a distinct
-policy, never evidence of native GPU support. Performance evidence separates
-preparation, upload, dispatch/completion, and materialization.
+- One validated IR describes computation independently of storage and
+  devices. Within a backend, instruction lowering is shared; bindings
+  supply resource access and layout. Image and Field wrappers have no
+  arithmetic languages of their own.
+- Execution mode is distinct from element type: once-per-invocation
+  computation, domain maps and ordered transactions have different
+  semantics. Errors are eager, mutation explicit, completion per node. A
+  transaction is not parallelized because its data is in a Field.
+- One invocation owns its provisional outputs. Output signatures,
+  domains and execution status are validated before publication. A
+  failed prepare or execution preserves the previous valid program and
+  caller-owned inputs. A prepared plan retains its schema identity and
+  immutable Kernel version.
+- GPU-required preparation rejects unsupported IR. CPU fallback is a
+  distinct policy, never evidence of GPU support. Performance evidence
+  separates preparation, upload, dispatch and completion, and
+  materialization.
 
 ## Domain capabilities
 
-Image sampling, rasterization, audio device IO, and presentation may have
-specialized implementations. They reuse resource lifetimes and authority rules.
-Audio scheduling must respect device deadlines; a real-time callback must not
-inherit synchronous GPU waiting or unbounded allocation. No audio or 3D subsystem
-is implied to exist merely because its data can be represented.
+Image sampling, rasterization, audio device IO and presentation may have
+specialized implementations; they reuse resource lifetimes and authority
+rules. Audio scheduling respects device deadlines: a real-time callback
+inherits no synchronous GPU wait and no unbounded allocation. Data being
+representable implies no audio or 3D subsystem.
 
-Higher-level synthesis, mixing, geometry processing, and application rules belong
-in Kernels wherever primitives can express them. Native adapters provide device
-access, not product algorithms.
+Synthesis, mixing, geometry processing and application rules are Kernels
+wherever primitives express them. Native adapters provide device access,
+not product algorithms.
 
-## Convergence order and acceptance
+## Acceptance
 
-1. Reuse the existing GPU resident lifecycle for typed numerical Fields and the
-   Image compatibility view. Remove duplicate transfer/submission machinery as
-   it is superseded. Retain shared budgets, error scopes, and terminal retirement.
-2. Prove a chain of numerical struct maps with one initial upload, no intermediate
-   payload readback, explicit final materialization, and exact integer transport.
-   Preserve existing Image residency tests, foreign-handle rejection, failed
-   output cleanup, and immutable input reuse.
-3. Converge backend instruction emission and invocation plumbing without changing
-   authored source or wire labels. Shared lifecycle helpers alone do not establish
-   this acceptance criterion.
-4. Extend device capabilities only after their resource foundations reuse this
-   model. New schema combinations must not require another runtime or resident
-   store. Add executable evidence at each boundary.
+1. Typed numerical Fields and the Image view share one GPU resident
+   lifecycle, with shared budgets, error scopes and terminal retirement,
+   and one transfer and submission path.
+2. A chain of numerical struct maps runs with one initial upload, no
+   intermediate readback, explicit final materialization, and exact
+   integer transport; Image residency, foreign-handle rejection, failed
+   output cleanup and immutable input reuse hold.
+3. Backends share instruction emission and invocation plumbing without
+   changing authored source or wire labels; shared lifecycle helpers alone
+   do not meet this.
+4. A device capability extends only on this resource model: a new schema
+   combination needs no other runtime or resident store, and each
+   boundary has executable evidence.
 
-These are acceptance obligations, not a statement that all steps are complete.
-Keep unfinished boundaries in HANDOFF.md instead of inventing completion scores.
-Keep infrastructure verification in Rust and authored computation/predicates in
-.orla with .osn composition and declarative replay.
+Unmet obligations are HANDOFF.md's. Infrastructure is verified in Rust;
+authored computation and predicates are `.orla`, composed in `.osn`,
+with declarative replay.
 
-## Reference evidence
+## Where
 
-The old implementation is a read-only reference at
-the previous implementation: `crates/orla-kernel/src/field.rs` defines schema,
-domain, typed CPU columns, and GPU storage; `gpu.rs` reuses resident Fields and
-explicit readback. Its native device exposure and process-wide context are not
-part of this decision. Its audio tone adapter is not a general Kernel DSP model.
-
-In this repository, start with the [resource ABI](../crates/core/abi/src/lib.rs),
-the [Host that owns every Field](../crates/core/host/src/lib.rs), the
+The [resource ABI](../crates/core/abi/src/lib.rs), the
+[Host that owns every Field](../crates/core/host/src/lib.rs), the
 [GPU backend](../crates/backends/gpu/src/lib.rs), and the
-[residency and parity tests](../crates/backends/gpu/tests/parity.rs). The failure and
-authority contracts are kept in
+[residency and parity tests](../crates/backends/gpu/tests/parity.rs). The
+failure and authority contracts are in
 [IMPLEMENTATION](../IMPLEMENTATION.md) under *Resource and residency*.

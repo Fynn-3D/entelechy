@@ -1,15 +1,11 @@
 # Ray march
 
-A signed-distance scene (sphere, torus, rounded box, checker floor) rendered
-by ray marching with soft shadows. The march, the shadow, and the material
-selection are ordinary `loop` and `if` expressions in `kernels/march.orla`;
-the loops carry `struct` values so distance, material, and step travel
-together. The camera orbits because the Kernel declares `time.read`.
+A signed-distance scene (sphere, torus, rounded box, checker floor) ray
+marched with soft shadows. The march, the shadow and the material choice
+are `loop` and `if` expressions in `kernels/march.orla`, carrying
+`struct` values. The Kernel declares `time.read`, so the camera orbits.
+Edit the `scene` function or `steps` in `scene.osn` while it runs.
 
 ```sh
 cargo run --release -p orla-player -- examples/raymarch/scene.osn
 ```
-
-Edit the `scene` function to add or move shapes, change `steps` in
-`scene.osn`, or lower the loop bounds to trade quality for speed. A Kernel
-that fails to compile leaves the previous version rendering.

@@ -2,10 +2,8 @@
 
 **Answers:** which command does what, with a line you can run.
 
-Orla is a Rust workspace whose runtime crates have no external
-dependencies; the GPU and JIT backends take the one their machine needs
-(wgpu, Cranelift), and otherwise only the interface layer takes them
-(`orla-protocol` for its JSON, the Player, `orla-import`). Build and verify:
+`orla` prints every command and flag with no arguments; this page is the
+commands with a line to run and what their flags mean. Build and verify:
 
 ```sh
 cargo build --workspace
@@ -21,89 +19,88 @@ cargo run --release -p orla-player -- hello/scene.osn
 
 `orla new <dir>` writes a directory that runs: a Kernel, the scene that
 places it, a replay that checks what it draws, and a README saying what
-to change first. Edit the Kernel while the Player is open and the
-picture changes as the file is saved; a Kernel that does not compile
-leaves the running one alone and says why.
+to change first. `--kind` picks the start: `picture` (the default, one
+Kernel over the window), `sound` (a voice with a drawing of it) or
+`game` (a grid of state the arrow keys move). Edit the Kernel while the
+Player is open; a Kernel that does not compile leaves the running one
+alone and says why.
 
-`--kind` picks what to start from: `picture` (the default) is one
-Kernel over the window, `sound` is a voice with a drawing of it, and
-`game` is a grid of state the arrow keys move, two feedback bindings
-and a fading trail. Each one passes its own replay on all three
-backends, which the workspace's tests check by making one.
-
-## What a Kernel may call
+## What a Kernel may call and write
 
 ```sh
-cargo run -- help              # every builtin, one line each
-cargo run -- help smoothstep   # its signatures, what it does, what it needs
+cargo run -- help              # every builtin and form, one line each
+cargo run -- help smoothstep   # a builtin's signatures, meaning, capability
+cargo run -- help each         # a form's shape and meaning
 ```
 
-The list comes from the compiler's own tables, so it is what compiles: the
-math intrinsics with every accepted signature, the Field reads, `put`,
-the context functions with the capability each needs, and the vector
-constructors. Over the protocol, `help` answers the same as JSON; the
-language itself is in [DOCUMENTS](DOCUMENTS.md).
+The listing comes from the compiler's own tables, so it is what
+compiles. The protocol's `help` answers the same as JSON; the language is
+in [DOCUMENTS](DOCUMENTS.md).
 
 ## Check a Kernel
-
-Compile `.orla` files and print their manifests. Diagnostics carry
-`file:line:column`. Add `--ir` to print the validated Orla IR as a
-backend runs it, where the Kernel's work is counted (`work spend` after
-a loop) and looked at (`work look`) included.
 
 ```sh
 cargo run -- check --ir examples/grayscale/kernels/grayscale.orla
 ```
 
-## Run a scene
+Compiles `.orla` or `.osn` files and prints their manifests, or
+diagnostics at `file:line:column`. `--ir` prints the validated IR as a
+backend runs it, with where work is counted (`work spend`) and looked at
+(`work look`).
 
-Evaluate a `.osn` graph and write the output image as a binary PPM. The
-document names its Kernel sources with `use`; `--library <dir|file>` adds
-more. External Fields declared with `input <name>: Image;` in the scene are
-bound with `--input <name>=<file.ppm>`, or read from the file the input
-names (`input atlas: Image = "atlas.ppm";`), which the Host watches, or
-read as bytes (`input level: Rows<Int> = bytes "level.bin";`, one
-integer an element, for a format a Kernel reads itself), or
-read frame by frame from a directory (`input clip: Image = frames
-"clip/" at 30;`, the frame of the moment at each evaluation); graph
-parameters are overridden with `--param <name>=<literal>`, a name the
-scene declares with `param` (a node's own value is changed in the
-document, and naming one stops the command with why); a scene sized
-by the window (`domain = window();`) takes `--window <w>x<h>` in pixels,
-with `@<scale>` for a scale factor other than one. `--save
-<node.port>=<file>` writes any node's output after the evaluation: `.field`
-for any Field, `.png` or `.ppm` for a grid of pixels (a `Grid<Float>` as
-gray), `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
-floats; the node is pinned so fusion keeps it. What may be named is a
-node, a node of a placed graph (whose own name carries dots and slashes,
-`steps/8.spread/6.result`, so the port is what follows the last dot), or
-one of the scene's own outputs, which stands for what it is wired to. A Kernel that draws a
-sprite sheet or synthesizes a drum, and a `--save`, are how an asset is
-made; `--out <file>` writes the scene's picture, in the format its
-extension names as a `--save` does, when there is one. `run` writes the
-files named and no other. `--profile`
-prints how long each executed node's Kernel took, the backend that ran
-it (and why, when a GPU session sent it to the JIT), and the bytes it
-carried between Host memory and the device; `bench --nodes` prints the
-same. On the GPU it asks
-the device for the time between the first pass of a node and the last,
-by the device's own clock, and waits for the work before going on; so
-the numbers are the work rather than the submission, and the run is
-slower than it would be. Where a driver takes the timestamp queries and
-writes nothing (Metal through wgpu, at the time of writing), the number
-is the work plus one round trip to the device instead. The Player's F10
-line measures the frame, which costs nothing and is the honest total.
+## Run a scene
 
 ```sh
 cargo run -- run examples/grayscale/scene.osn --out output.ppm
 ```
 
-A scene's output written `to` a file (`output kept <- tally.result to
-"saves/tally.field";`) is written only into a directory given with
-`--allow file.write=<dir>`, which `run`, `render`, `serve` and the Player
-take; without it the session says what was not written and why. A server
-takes its allowances from the command line that started it, never from
-what connects to it. `bench` and `replay` write nothing.
+Evaluates a `.osn` scene once. Flags:
+
+- `--library <dir|file>` adds Kernel sources beyond the scene's `use`.
+- `--input <name>=<file>` binds an external Field the scene declares with
+  `input`; an input may instead name its own file, `bytes`, or `frames`
+  (see [DOCUMENTS](DOCUMENTS.md)).
+- `--param <name>=<literal>` overrides a graph parameter the scene
+  declares with `param`; naming a node's own value is refused with why.
+- `--window <w>x<h>[@<scale>]` is the window a scene sized by
+  `domain = window();` fills, in pixels, with its scale factor.
+- `--save <node.port>=<file>` writes a node's output after the
+  evaluation: `.field` for any Field, `.png` or `.ppm` for pixels (a
+  `Grid<Float>` as gray), `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz
+  for rows of one or two floats. The node is pinned so fusion keeps it.
+  The name is a node, a node of a placed graph
+  (`steps/8.spread/6.result`: the port follows the last dot), or a scene
+  output, which stands for what it is wired to. This is how an asset is
+  made.
+- `--out <file>` writes the scene's picture, in the format its extension
+  names. `run` writes the files named and no others.
+- `--profile` prints each executed node's time, the backend that ran it
+  (and why, when a GPU session sent it to the JIT), and the bytes it
+  carried between Host and device. It waits for the device after each
+  node, so a GPU line is the work, by the device's timestamps, or the
+  work plus one round trip where the driver writes none; the lines add up
+  to more than a frame.
+- `--no-fusion` runs every node on its own.
+- `--memory <MB>` is the Fields the Host may hold at once (2048 by
+  default); `--work <M>` the million loop iterations one run of a Kernel
+  may take (4000 by default). `render`, `replay`, `serve`, `graph`,
+  `trace` and `bench` take both.
+- `--allow file.write=<dir>` lets outputs written `to` a file
+  (`output kept <- tally.result to "saves/tally.field";`) land in that
+  directory; without it the session says what was not written.
+  `--allow file.read=<dir>` lets a served scene's inputs read there.
+  `render`, `serve` and the Player take both; a server takes its
+  allowances from its command line, never from a connection. `bench` and
+  `replay` write nothing.
+- `--grant <capability,...>` names the capabilities a Kernel may be
+  given, and no others; a Kernel requiring another is refused when
+  prepared. `render`, `serve`, `bench` and the Player take it.
+- `--watch` keeps running and republishes Kernels as their files change
+  (see [Hot reload](#hot-reload)).
+- `--backend cpu|gpu|jit` (see [Backends](#backends)).
+
+`run` also reports fused groups as `consumer+producer`, and which `async`
+nodes were still running and which landed.
 
 ```sh
 cargo run -p orla-player -- examples/save/scene.osn --allow file.write=examples/save/saves
@@ -111,191 +108,259 @@ cargo run -p orla-player -- examples/save/scene.osn --allow file.write=examples/
 
 ## Render frames
 
-`orla render <scene.osn> --frames <n>` steps the scene at a fixed rate
-(`--rate`, 60 by default) and writes each frame's picture as
-`<dir>/0000.png`, `0001.png`, ... (`--out`, `frames` by default) and
-the sound output, block after block, as `<dir>/sound.wav` at
-`--sound-rate` (48000 by default, what Kernels read as `rate()`). The
-picture is the first output that is a grid of pixels and the sound the
-first that is rows of one or two floats, as the Player chooses them.
-The clock is the frame count over the rate, so a render is the same
-every time, and an `async` node's run is waited for after every frame,
-so no step is skipped. The other flags are `run`'s; `--save
-<node.port>=<file>` writes a node's output after the last frame, so a
-state that took many frames to reach, a network's weights trained over
-a run or a simulation settled, is kept as a file a scene reads back
-with `input weights: Rows<Float> = "weights.field";`. A clip comes in
-the same way, as a directory of frames a scene reads with `frames
-"clip/" at <rate>`. A
-video is one ffmpeg call over the directory:
-
 ```sh
 cargo run --release -- render examples/audio/scene.osn --frames 300 --out /tmp/audio
 ffmpeg -framerate 60 -i /tmp/audio/%04d.png -i /tmp/audio/sound.wav -pix_fmt yuv420p /tmp/audio.mp4
 ```
 
-## Tracing one element
+`orla render <scene.osn> --frames <n>` steps the scene at `--rate` (60
+by default) and writes each frame's picture as `<dir>/0000.png`, ... and
+the sound, block after block, as `<dir>/sound.wav` at `--sound-rate`
+(48000 by default, what Kernels read as `rate()`); `--out <dir>` is
+`frames` by default. The picture and sound are the outputs the Player
+would choose. The clock is the frame count over the rate and `async`
+runs are waited for after every frame, so a render is the same every
+time. The other flags are `run`'s; `--save` writes after the last frame,
+which keeps a state trained or settled over many frames as a file a
+scene reads back (`input weights: Rows<Float> = "weights.field";`).
+
+## Trace one element
 
 ```sh
 cargo run --release -- trace examples/thumb/scene.osn --node machine --element 9352 --window 128x128
 cargo run -- trace examples/life/scene.osn --node life --at 3 4
 ```
 
-evaluates the scene once (at `--time`, default zero, under `--param`
-and `--window` as `run` takes them), then runs one element of the named
-node's Kernel on the interpreter, element `--at x y [z]` of a map or step
-`--element i` of a scan, the steps before it run first so the memories
-and the carried value are as that step sees them, and prints every `let`
-of the entry in source order with its type and value, then the result;
-an `Int` of sixteen or more also in hex, a struct by its fields, an
-array by its elements, a matrix by its columns, an integer vector as
-`ivec2(x, y)`. A `let`
-in the branch of an `if` the element did not take reads `- (not run)`; a
-`let` in a loop shows its last iteration's value. Every call the element
-made follows, in the order the calls returned, each with its own `let`s
-and result (the first 256; a template instance is named with its Field,
-`store<ram>`). What it walks is the Kernel as the document wrote it,
-compiled again without the optimizer, so every call and every `let` is
-there even though the run itself has the short functions written out.
-The trace is of the
-evaluation after the one just run (the node's `<~` inputs are the state
-that evaluation committed), and commits nothing itself. Over the
-protocol, `trace` is the same as JSON.
-
-## What a Kernel may write
-
-`orla help` lists every builtin with one line each and every form of the
-language and of a graph document with its shape; `orla help <name>` is
-a builtin's signatures, what it does and the capability it needs, or a
-form's shape and meaning (`orla help loop`, `orla help each`, `orla help
-fill`). The protocol's `help` answers the same, so an agent reads it
-rather than guessing.
-
-```sh
-cargo run -- help each
-```
+Evaluates the scene once (at `--time`, zero by default, under `--param`
+and `--window`), then runs one element of the node's Kernel on the
+interpreter: `--at x y [z]` of a map, or step `--element i` of a scan,
+with the steps before it run first. It prints every `let` of the entry
+in source order with its type and value, then the result, then each call
+the element made (the first 256) with its own `let`s. A `let` in a branch
+not taken reads `- (not run)`; a `let` in a loop shows its last
+iteration. The Kernel is compiled without the optimizer, so every call
+and `let` is present. The trace is of the evaluation after the one just
+run, and commits nothing. The protocol's `trace` is the same as JSON.
 
 ## Packages and versions
 
-`orla package <dir.orlapkg>` checks a package directory's manifest and
-says what it holds; `orla pack <dir.orlapkg> [<file>]` writes it as one
-`.orlapkg` file (Orla's own uncompressed container: a magic line, the
-format version, then each file's path and bytes), and `orla unpack
-<file> <new dir>` reads it back. A scene uses a package with `use
-"name.orlapkg";`, by path or by name through `ORLA_PACKAGES`, and places
-its graph presets by path. `orla version` prints the four versions the
-plan keeps apart: `orla.api`, `orla.language`, `orla.ir`,
-`orla.package`; a package's manifest names the least language and IR it
-needs, and one needing more is refused with both numbers.
+```sh
+cargo run -- package packages/text.orlapkg
+```
 
-## Inspecting a graph
+`orla package <dir.orlapkg>` checks a package's manifest and says what
+it holds; `orla pack <dir.orlapkg> [<file>]` writes it as one `.orlapkg`
+file; `orla unpack <file> <new dir>` reads it back. A scene uses a
+package with `use "name.orlapkg";`, by path or by name through
+`ORLA_PACKAGES`. `orla version` prints `orla.api`, `orla.language`,
+`orla.ir` and `orla.package`; a package needing a newer language or IR
+is refused with both numbers.
+
+## Inspect a graph
 
 ```sh
 cargo run -- graph examples/grayscale/scene.osn
 ```
 
-prints the flattened graph in canonical form, the published Kernels with
-their generations, and the plan: which groups execute, in order, with the
-producers each one absorbed. In the Player, Tab cycles the preview through
-the nodes (pinning each so fusion keeps it materialized) and back to the
-output; the F10 line shows the node in view, the frame time, what ran and
-what was fused, and how the frame reached the window.
+Prints the flattened graph in canonical form, the published Kernels with
+their generations, and the plan: the groups that execute, in order, with
+the producers each absorbed. Fusion inlines a pointwise producer into its
+only reader over the same domain; `--no-fusion` turns it off.
 
-## Measuring a scene
+## Measure a scene
 
 ```sh
 cargo run --release -- bench examples/collapse/scene.osn \
     --window 640x400 --backend all --frames 20 --repeat 3 --nodes
 ```
 
-steps the scene for twenty frames three times on each backend and prints
-the least of the runs, a millisecond a frame:
-
-```text
-backend   frame ms    median   vs cpu        was
-cpu         295.20    305.36      1.00x
-jit          10.66     10.70     27.68x
-gpu           6.63      6.73     44.49x
-```
-
-The first frame of all is thrown away: it compiles the Kernels,
-allocates the Fields and warms the caches. Every frame ends by waiting
-for the device to run dry, as a Player's frame ends by presenting,
-since a dispatch is submitted and not waited for and the asking is not
-the work. The clock advances by the
-frame count over `--rate`, as `render`'s does, so the work measured is
-the same work every time, and the least of the runs is the measurement
-least disturbed by everything else on the machine; the median beside it
-says how much the machine wandered while measuring.
-
-`--nodes` measures every node as well, waiting for the device after each
-one, so those numbers are the work rather than the submission and add up
-to more than the frame. A node placed several times is one line,
-`steps/*.spread/* (48)`, with its total.
-
-`--json <file>` writes the measurement and `--compare <file>` reads one
-back, adding what the earlier run said and how far this one is from it,
-which is how a change is shown to cost nothing:
-
-```text
-backend   frame ms    median   vs jit        was
-jit          10.78     10.82      1.00x       10.69 ms +0.9%
-```
-
-A scene whose nodes do not change with the clock reuses all of them
-after the first frame; the table says so rather than reporting the time
-it took to find that out.
-
-The creation protocol has the same measurement as `bench`, so an agent
-holding a session can ask what its own edit cost. See
-[PROTOCOL.md](PROTOCOL.md).
-
-## Fusion
-
-Chains of pointwise nodes run as one Kernel: a producer whose only reader
-samples it at the current coordinate over the same domain is inlined into
-that reader, and its image is never written. `run` reports fused groups as
-`consumer+producer`. Pass `--no-fusion` to `run` to compare, or pin a node
-through the protocol to observe its image.
+Steps the scene `--frames` frames `--repeat` times on each backend and
+prints the least run, in milliseconds a frame, with the median beside it
+and the ratio to the first backend. The first frame of all compiles and
+allocates and is discarded; every frame waits for the device; the clock
+advances by frame count over `--rate`. `--nodes` measures each node too,
+waiting after each, so a node placed several times is one line
+(`steps/*.spread/* (48)`) and the lines add up to more than the frame.
+`--json <file>` writes the measurement; `--compare <file>` reads one back
+and prints the earlier number and the change. The protocol has the same
+measurement ([PROTOCOL](PROTOCOL.md)).
 
 ## Backends
-
-`run` also says which `async` nodes were still running off the frame and
-which landed before the nodes ran.
-
-`run`, `render`, `replay`, `serve`, `trace` and the Player take
-`--backend cpu|gpu|jit`; the JIT is the default everywhere but the
-Player, which takes the GPU when there is one and the JIT otherwise.
-The CPU interpreter, `--backend cpu`, is the reference, reports
-per-pixel integer failures, and is what `trace` walks;
-the GPU backend runs the same IR as WGSL compute through wgpu, keeps
-images resident on the device between nodes and frames, and reads pixels
-back only when something observes them, and is the one to use for
-anything interactive with a device; the JIT compiles the same IR to
-native code through Cranelift when a Kernel is prepared and runs it on
-the CPU's threads, bit for bit what the interpreter computes and ten to
-thirty times faster on the examples, so a machine without a usable GPU
-still runs the interactive scenes, and a machine written as a scan
-steps eight to nine times faster than on the interpreter. The JIT
-compiles every mode (a reduction's fold and a scatter's in-order apply
-follow the interpreter's exactly); the native operations, the
-rasterizer, are the CPU's code. A GPU session hands its scans to the
-JIT, since a GPU walks ordered work on one thread: a machine's step
-runs as native code while the picture stays on the device, the scan's
-memories crossing as a few kilobytes a frame. The Player defaults to
-the GPU when a device is available.
 
 ```sh
 cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm
 ```
 
-## WebAssembly
+`run`, `render`, `replay`, `serve`, `trace` and the Player take
+`--backend cpu|gpu|jit|best`; `best` is the GPU where there is a device,
+else the JIT, else the interpreter, and `bench` also takes `all`. The JIT
+is the default; the Player's default is `best`.
 
-Orla builds for WebAssembly under WASI, where it runs a scene on the
-interpreter: the same replays pass, and `serve` answers the protocol on
-standard input and output. The JIT is absent there (WebAssembly runs no
-code made after it loaded); where no thread can be started, an `async`
-node lands on the frame that started it.
+- `cpu` is the interpreter, the reference: it reports per-pixel integer
+  failures and is what `trace` walks.
+- `jit` compiles the IR to native code through Cranelift and runs it on
+  the CPU's threads, bit for bit the interpreter's results.
+- `gpu` runs the IR as WGSL compute through wgpu, keeps Fields resident
+  on the device, and reads back only what is observed. A GPU session
+  hands scans, and what the device cannot take, to the JIT; `run`,
+  `serve` and the Player say which nodes leave and why.
+
+## Hot reload
+
+```sh
+cargo run -- run examples/grayscale/scene.osn --out output.ppm --watch
+```
+
+Save the scene or any document it uses: the Kernels whose text changed
+republish, the nodes they affect re-execute, and the output is rewritten.
+A Kernel that does not compile is reported with its position and the
+previous version keeps running; a Kernel removed from its document
+retires.
+
+## Player
+
+```sh
+cargo run --release -p orla-player -- examples/material-ball/scene.osn
+```
+
+Opens a scene in a window and keeps it live, watching files as `--watch`
+does; a changed Kernel compiles on a worker thread and swaps in when
+ready, so a republish never stalls a frame. It takes `run`'s
+`--library`, `--input`, `--backend`, `--memory`, `--work`, `--allow` and
+`--grant`, and:
+
+- `--scale <n>` sets the initial magnification; `--window <w>x<h>` the
+  initial logical size.
+- `--no-audio` leaves the sound card closed.
+- `--replay <file>` plays a replay in the window (see
+  [Replay tests](#replay-tests)).
+- `--serve`, `--listen <host:port>` and `--allow-origin <origin>` serve
+  the protocol from the window (see [Creation protocol](#creation-protocol)).
+
+The window shows the first output that is a grid of pixels; the sound
+card plays the first that is rows of one or two floats, one block a
+frame, and paces evaluation while it plays. The window's size and scale
+reach Kernels declaring `input.read` as `window()` and `scale()`, with
+the pointer and keys. A gamepad is keys: the D-pad and left stick are the
+arrows (37 to 40), South is Z, East is X, Start is Enter, Select is
+Escape.
+
+Keys: Tab cycles the preview through the nodes and back to the output;
+F5 resets Graph state; F10 shows a line of frame data (frame interval
+and rate, evaluate and present times, backend, window and scale, what
+ran, was reused and was fused, `async` runs, presentation path and
+downloads, the sound device's rate, block size and dry callbacks);
+Escape closes the window.
+
+## Replay tests
+
+```sh
+cargo run -- replay examples/life/tests/blinker.replay
+cargo run --release -p orla-player -- --replay examples/voxel/tests/voxel.replay
+```
+
+An application's tests are `.replay` files next to its scene: frames,
+pointer and key input, the window (`window 240 135 0.25`), state resets,
+`settle` (waits for every `async` run to land), and expectations:
+
+- a pixel: `expect 11 10 = 1.0 1.0 1.0`, with an optional tolerance;
+- a field of an element of a node's output, by its declared name:
+  `expect step.result[0].score = 1`, `expect sum.result[0].a = 32`; ints
+  and bools compare exactly, floats within the tolerance; `<`, `<=`, `>`,
+  `>=` hold every component to one side of a bound;
+- placement: `expect placed ring main` or `expect placed filter ordered`;
+  a session with one backend reads both as `main`.
+
+The format is documented at the top of
+[the replay module](../crates/interface/session/src/replay.rs). Key codes
+follow the browser's: letters and digits by ASCII uppercase, space 32,
+enter 13, arrows 37 to 40. In the Player, a replay drives the scene at
+its own times, prints what it observed at the end, and leaves the window
+to the person.
+
+## Import and export
+
+```sh
+cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
+cargo run -p orla-import -- examples/skin/source/arm.glb --out examples/skin/assets
+cargo run -p orla-import -- song.ogg --out assets   # writes assets/song.wav
+cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
+```
+
+`orla-import` writes what a scene takes as inputs, into `--out <dir>`
+(the source's directory by default):
+
+- glTF or GLB: vertices as rows of `{position, normal, uv}` with node
+  transforms baked, triangles as rows of three indices, the base colour
+  texture as PNG; sparse accessors and JPEG textures are reported and
+  skipped. A skin adds `<stem>.weights.field`, `<stem>.skeleton.field`
+  and one `<stem>.<name>.clip.field` per animation, sampled at `--rate`
+  frames a second (30 by default), per [the rig contract](RIGS.md),
+  which the [`skin` package](../packages/skin.orlapkg) poses.
+- MP3, OGG Vorbis, FLAC, AAC in MP4, Matroska audio: a WAV at the file's
+  rate, one or two channels.
+- Standard MIDI: `<stem>.notes.field`, a row a note (start and length in
+  seconds, key, velocity 0 to 1, channel).
+
+```sh
+cargo run -p orla-export -- crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
+cargo run -p orla-export -- kick.field --out kick.wav --rate 48000
+cargo run -p orla-export -- atlas.field --out atlas.png
+cargo run -p orla-export -- song.notes.field --out song.mid --beats 100
+```
+
+`orla-export` writes Host files as other software's formats: vertex,
+triangle and PNG as a GLB (with a rig's rows, a skin and its animations,
+`--rate` 30 by default); rows of one or two floats as a WAV (`--rate` 48000
+by default); a grid of pixels or floats as a PNG; rows of notes as MIDI
+(`--beats` a minute, 120 by default). What `orla-import` read is written
+back bit for bit.
+
+## Creation protocol
+
+```sh
+cargo run -- serve examples/life/scene.osn
+```
+
+Agents drive a session with JSON lines on stdin and stdout;
+`--listen <host:port>` also serves every connection there, and a
+connection that opens with HTTP is upgraded to a WebSocket. A page
+connects from this machine or a file, or from an origin
+`--allow-origin` names. `--window` is the window evaluations see unless
+they name one. `orla-player --serve` serves the same protocol from the
+window a person is watching. The operations are in
+[PROTOCOL](PROTOCOL.md).
+
+## In your own process
+
+```sh
+cargo build --release -p orla-ffi
+cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lorla_ffi -o hello
+DYLD_LIBRARY_PATH=target/release ./hello examples/text/scene.osn jit
+```
+
+`orla-ffi` builds `liborla_ffi`, dynamic and static, behind the C header
+[`orla.h`](../crates/interface/ffi/include/orla.h). A host opens a scene
+from a path or from files it hands in, evaluates it under its own input,
+and reads an output or pinned node in place as a pointer with extent,
+stride, shape and schema; `orla_request` takes one protocol line. A
+returned pointer is valid until the next call, a Field's words until the
+next evaluate, request or close; one thread at a time per session.
+[`bridges/c`](../bridges/c/README.md) is the example.
+
+## Bridges
+
+`bridges/blender`, `bridges/web` and `bridges/godot` are clients in
+their program's language that speak the protocol over `--listen`:
+
+```sh
+cargo run --release -p orla-player -- --serve --listen 127.0.0.1:7788 examples/mesh/scene.osn
+cargo test -p orla --test bridges   # web through node and Chrome, Godot through godot -s
+```
+
+The bridge test skips, and says so, what has no tool installed.
+
+## WebAssembly
 
 ```sh
 rustup target add wasm32-wasip1
@@ -303,21 +368,9 @@ cargo build --release -p orla --target wasm32-wasip1
 wasmtime run --dir . target/wasm32-wasip1/release/orla.wasm replay examples/ant/tests/ant.replay --backend cpu
 ```
 
-In a page, Orla is the C ABI built for `wasm32-unknown-unknown`, with
-the glue `wasm-bindgen` writes for the browser's WebGPU. Its documents
-are the files the page hands in (`orla_files`, `orla_files_put`,
-`orla_open_files`), and it answers the protocol in place
-(`orla_request`). It runs a scene on its JIT, which writes WebAssembly
-the page loads (`orla.load`), at tens of times the interpreter's
-speed; or on the GPU, the browser's WebGPU through the same GPU backend
-as everywhere, which waits for the device by suspending Orla while the
-page takes a turn (`orla.wait`, JavaScript Promise Integration: Chrome
-and Edge 137 and later). On the GPU, a picture is drawn on a canvas of
-the page from where the device holds it (`orla_present`), nothing read
-back, as the Player's window is. The web bridge's page runs it, served: add the
-`examples` and `packages` folders, pick a scene and what runs it, and
-Open here. It runs on the page's one thread, and a page has no clock of
-its own, so nothing is timed and history is not dated.
+Under WASI, `orla` runs scenes on the interpreter and `serve` answers on
+stdin and stdout; there is no JIT, and an `async` run lands on the frame
+that started it.
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -328,258 +381,24 @@ wasm-bindgen --target web --keep-lld-exports --no-typescript --out-dir target/pa
 node bridges/web/serve.mjs     # then http://127.0.0.1:7789/bridges/web/index.html
 ```
 
-The Player plays in a page too, as it plays in its window: the same
-frame, keys, pads, line of frame data and replays, the page only its
-devices. Served, `play.html` plays what its address names:
+In a page, Orla is the C ABI with `wasm-bindgen`'s glue. Its documents
+are files the page hands in (`orla_files`, `orla_files_put`,
+`orla_open_files`) and it answers the protocol through `orla_request`.
+It runs on its JIT, which writes WebAssembly the page loads
+(`orla.load`), or on the browser's WebGPU, waiting for the device by
+suspending (`orla.wait`, JavaScript Promise Integration: Chrome and Edge
+137 and later) and drawing on a canvas with `orla_present`. It runs on
+the page's one thread with no clock, so nothing is timed. `play.html`
+is the Player in a page:
 
 ```text
 http://127.0.0.1:7789/bridges/web/play.html?scene=examples/voxel/scene.osn
 http://127.0.0.1:7789/bridges/web/play.html?replay=examples/voxel/tests/voxel.replay&on=gpu
 ```
 
-## Hot reload
-
-Keep the scene running and republish Kernels as their files change:
-
-```sh
-cargo run -- run examples/grayscale/scene.osn --out output.ppm --watch
-```
-
-Edit and save the scene or any document it uses. Only the Kernels whose text
-changed republish and only the nodes they affect re-execute; the output file
-is rewritten. A Kernel that no longer compiles is reported with its position
-and the previous version keeps running. A Kernel that leaves its document
-retires.
-
-## Player
-
-Open a scene in a window and keep it live. Kernel and scene files are watched
-exactly as in `--watch`; Kernels that declare `time.read` re-render every
-frame, pure nodes stay cached. Use a release build for interactive frame rates.
-
-```sh
-cargo run --release -p orla-player -- examples/material-ball/scene.osn
-```
-
-`--scale <n>` sets the initial window magnification, `--window <w>x<h>`
-opens the window at that logical size instead, `--backend` picks the
-backend, and `--input` binds external images as for `run`. The window's
-size in physical pixels and its scale factor are context: a node with
-`domain = window();` fills the window at the window's resolution and
-follows a resize, and Kernels that declare `input.read` read `window()`
-and `scale()`, so a toolbar laid out in units of `scale()` keeps its
-size on screen. On the GPU the
-window is drawn from the resident output directly; the F10 line shows the
-presentation path and how many frames had to be downloaded. The pointer and
-keys reach Kernels that declare `input.read`; F5 resets Graph state; F10
-shows one line of frame data over the picture (the interval between
-frames and the frame rate, the evaluate and present times, each
-smoothed, present on the device including the wait for the display;
-the backend, the window and its scale, the shown image's size, what ran,
-was reused and was fused, `async` runs going, how the frame reached the
-window, downloads, the sound device when open, the session time), the interval being the true frame cost since the picture is
-presented on the device without a readback; Escape
-closes the window.
-
-A gamepad is another keyboard: the D-pad and the left stick are the
-arrow keys (37 to 40), South (A or Cross) is Z, East (B or Circle) is X,
-Start is Enter, and Select is Escape, so a scene written for keys plays
-on a pad without knowing one exists. The Player reports at start whether
-a pad is connected; one plugged in later is picked up.
-
-A graph may have several outputs. The window shows the first that is a
-grid of pixels; the sound card plays the first that is rows of one float
-(mono) or two (stereo), one block per frame, continuing across frames as
-the Kernel's `<~` state dictates. Both are claimed by structure, never by
-name. The device's clock reaches Kernels as `rate()`, and while it plays
-the device paces evaluation: the next block is computed when the ring can
-take it, so nothing is dropped and evaluation neither races ahead of the
-sound nor waits on the display. `--no-audio` leaves the sound card closed.
-The F10 line reports the device's rate, the block size, and how many
-callbacks ran dry.
-
-A saved edit to a running Kernel compiles on a worker thread: the terminal
-shows `preparing`, the window keeps drawing the previous version, and the
-swap happens when the replacement is ready, so a republish never stalls a
-frame. The same holds for fused groups, which run as separate nodes until
-their fused version arrives.
-
-## Import a model or a sound
-
-`orla-import` is the interface layer's converter: it speaks the Host's file
-formats from outside the runtime, in the interface layer that may take
-dependencies. `import` reads a glTF or GLB model and
-writes what a scene takes as inputs: vertices as rows of `{position,
-normal, uv}` with every node's transform baked in, triangles as rows of
-three indices, and the base colour texture as a PNG, into `--out <dir>`
-(the source's directory by default); sparse accessors and JPEG textures
-are reported and left out.
-
-A model with a skin writes three more kinds of row ([the
-contract](RIGS.md)), which the [`skin` package](../packages/skin.orlapkg)
-poses a mesh from:
-`<stem>.weights.field`, the four joints each vertex hangs off and how
-much of each; `<stem>.skeleton.field`, every joint's parent and inverse
-bind matrix; and one `<stem>.<name>.clip.field` per animation, sampled at
-`--rate` frames a second (30 by default) into rows of a local
-translation, rotation and scale, a frame's joints together. A skinned
-mesh keeps its own space, since its joints place it, and the tool prints
-the joints, the clips and the rate a scene needs to read them. It reads a compressed sound
-(MP3, OGG Vorbis, FLAC, AAC in MP4, Matroska audio) and writes a WAV at the
-file's own rate, one or two channels, which `input` reads. It reads a
-standard MIDI file and writes `<stem>.notes.field`, a row a note: the
-second it starts, the seconds it lasts, the key (60 is middle C), how
-hard it was struck (0 to 1) and the channel, with the file's ticks and
-its tempo map already turned into seconds, so a Kernel plays a score
-against `time()` and knows nothing about MIDI. The runtime
-learns no format here; a model or sound in another format needs only
-another tool.
-
-```sh
-cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
-cargo run -p orla-import -- examples/skin/source/arm.glb --out examples/skin/assets
-cargo run -p orla-import -- song.ogg --out assets   # writes assets/song.wav
-cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
-```
-
-## Export a mesh, a sound, a picture
-
-`orla-export` is the way out: it writes the Host's files as formats other
-software opens. Vertex rows, triangle rows and a PNG become a GLB that
-Blender and three.js load as it is, and a [rig's](RIGS.md) weights,
-skeleton and clip rows beside them write a skin and an animation apiece,
-`--rate` naming the frames a second the clips hold (30 by default); rows of one or two floats become a WAV
-(`--rate` names the frames per second of a `.field`, 48000 by default; a
-compressed copy is ffmpeg's job on the WAV); a grid of pixels or floats
-becomes a PNG; rows of notes become a standard MIDI file (`--beats`
-names the quarter notes a minute, 120 by default), which a music editor
-opens. What `orla-import` brought in leaves the same, bit for bit: a
-score read and written again is the same rows.
-
-```sh
-cargo run -p orla-export -- crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
-cargo run -p orla-export -- kick.field --out kick.wav --rate 48000
-cargo run -p orla-export -- atlas.field --out atlas.png
-cargo run -p orla-export -- song.notes.field --out song.mid --beats 100
-```
-
-## Replay tests
-
-An application's tests are `.replay` files next to its scene: scripted frames,
-pointer and key input, the window (`window 240 135 0.25`: its size in
-pixels and its scale factor), state resets, `settle` (waits for every
-`async` node's run off the frame to land, so the next frame reads it),
-and expectations. No Rust is
-needed to test a scene. An expectation is a pixel of the output
-(`expect 11 10 = 1.0 1.0 1.0`, with an optional tolerance) or a field of an
-element of a node's output, named as the Kernel declared it
-(`expect step.result[0].score = 1`, `expect mix.result[0] = -0.125 -0.125 0.01`,
-and a vector's component by its letter, `expect sum.result[0].a = 32`):
-ints and bools compare exactly, floats and vectors within the trailing
-tolerance; `<`, `<=`, `>` or `>=` in place of `=` holds every component
-to one side of a bound instead (`expect fall.result[0].speed > 2.5`),
-strictly, for what a scene promises without pinning an exact value.
-The second kind states what the application's state is rather
-than what its picture looks like, and nodes it names are kept materialized.
-`expect placed ring main` says a node stays on the session's main
-backend and `expect placed filter ordered` that it leaves it (on a GPU
-session, for a scan or a `Double`); where a session has one backend both
-read as `main`, so one replay holds on all three. `run`, `serve` and the
-Player say which nodes leave the main backend, and why, when the scene
-loads.
-
-```sh
-cargo run -- replay examples/life/tests/blinker.replay
-```
-
-The Player plays a replay in its window: its inputs drive the scene at
-the replay's own times, its checks run as they come, and when it ends
-what it observed is printed and the window is the person's to go on
-with. The replay names its scene and its window, so it is all it needs:
-
-```sh
-cargo run --release -p orla-player -- --replay examples/voxel/tests/voxel.replay
-```
-
-The file format is documented at the top of
-[the replay module](../crates/interface/session/src/replay.rs). Key codes follow the common
-browser codes: letters and digits by ASCII uppercase, space 32, enter 13,
-arrows 37 to 40.
-
-## Documents
-
-[The document format](DOCUMENTS.md) defines `.orla` libraries and `.osn`
-graphs: one grammar, wiring written at the consumer, inline Kernels, and
-`use` for reuse.
-
-## Bridges
-
-The bridges with runners of their own are checked by the workspace's
-tests when the tools are present: `cargo test -p orla --test bridges`
-runs the web page headless through node and Chrome and the Godot
-project through `godot -s`, and says which it skipped when a tool is
-missing.
-
-A running window is open to other programs over the protocol's socket
-transport: `orla-player --serve --listen 127.0.0.1:7788 scene.osn`, or
-`orla serve --listen ...` without a window. `bridges/blender` is an add-on
-for Blender that pushes a mesh into a scene's assets as the Host's files
-(and keeps pushing while you edit), pulls a node's rows out as a mesh and
-the picture as an image, sets parameters and publishes Kernels from the
-text editor; `bridges/web` is the second: a page, opened from the file,
-that connects over a WebSocket (the listener upgrades a connection that
-opens with HTTP), shows the frames, sends the pointer, keys and the
-canvas as the window, and edits and publishes Kernels; `bridges/godot`
-is the third: a Godot 4 project whose `OrlaView` Control is the window
-(the frames drawn as a texture, the pointer, keys and its size sent with
-every evaluate), with the graph's params as controls and a Kernel's rows
-pulled out as an `ArrayMesh`. A bridge is a client in its host's
-language, outside the workspace, speaking only the public contracts.
-
-## In your own process
-
-The same session is a library: `orla-ffi` builds `liborla_ffi`
-(a dynamic and a static library) behind the C header
-[`crates/interface/ffi/include/orla.h`](../crates/interface/ffi/include/orla.h), any
-language binds. A host opens a scene on a backend, from its path or
-from files it hands in with no disk read,
-evaluates it under its own input (time, pointer, buttons, keys, the
-window and its scale), and reads an output or a pinned node as a
-pointer into the Host's words with its extent, stride, shape and schema:
-a picture is RGBA32F in place, ready for a texture, no socket and no
-encoding. `orla_request` takes one line of the protocol and returns its
-answer, so params, publishing, composing and resets are there too.
-
-```sh
-cargo build --release -p orla-ffi
-cc bridges/c/hello.c -Icrates/interface/ffi/include -Ltarget/release -lorla_ffi -o hello
-DYLD_LIBRARY_PATH=target/release ./hello examples/text/scene.osn jit
-```
-
-[`bridges/c`](../bridges/c/README.md) is that example. A pointer the
-library returns belongs to the session until the next call; a Field's
-words until the next evaluate, request or close; one thread at a time
-per session.
-
-## Creation protocol
-
-Agents drive a session over stdin and stdout with JSON lines:
-
-```sh
-cargo run -- serve examples/life/scene.osn
-```
-
-A job that spans many frames is one `advance` request: it runs the
-frames, stops when a value says to, and saves what was asked for. See
-[the protocol](PROTOCOL.md) for the operations. `orla-player --serve`
-runs the same protocol inside the window, so an agent edits what a person
-is watching.
-
 ## Where the contracts live
 
-- Language syntax: [the frontend](../crates/frontend/language/src/lib.rs) and its parser tests.
+- Documents: [DOCUMENTS](DOCUMENTS.md), [the frontend](../crates/frontend/language/src/lib.rs), [scene lowering](../crates/frontend/scene/src/lib.rs).
 - Capabilities and types: [the ABI](../crates/core/abi/src/lib.rs).
-- IR operations and validation rules: [the IR](../crates/core/ir/src/lib.rs) and
-  [its validator](../crates/core/ir/src/validate.rs).
-- Document format: [the contract](DOCUMENTS.md), [the frontend](../crates/frontend/language/src/lib.rs), and [scene lowering](../crates/frontend/scene/src/lib.rs).
-- Publication semantics: [the runtime](../crates/core/kernel/src/lib.rs).
+- IR and validation: [the IR](../crates/core/ir/src/lib.rs), [its validator](../crates/core/ir/src/validate.rs).
+- Publication: [the Kernel Runtime](../crates/core/kernel/src/lib.rs).

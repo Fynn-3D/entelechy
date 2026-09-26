@@ -3,11 +3,11 @@
 **Answers:** what rows a rig is, so any tool can write one and any scene
 can read it.
 
-A rig is five kinds of row. `orla import` writes them out of a glTF, the
-Blender bridge writes them out of an armature, and the
-[`skin` package](../packages/skin.orlapkg) reads them. Nothing in the
-runtime knows what a joint is: these are Fields like any other, and the
-posing is Kernels.
+A rig is five kinds of row. `orla import` writes them from a glTF, the
+Blender bridge from an armature, and the
+[`skin` package](../packages/skin.orlapkg) reads them. They are Fields
+like any other; the runtime has no notion of a joint, and posing is
+Kernels.
 
 ## The rows
 
@@ -20,82 +20,65 @@ posing is Kernels.
 | `<name>.<clip>.clip.field` | `f×10` | a joint's local translation (3), rotation (4) and scale (3) |
 
 `i` is an `Int` and `f` a `Float`, in the order the ABI lays a struct
-out, which is the order the fields are written in. The `skin` package
-declares them as `Point`, `Tri`, `Bound`, `Joint` and `Pose`.
+out. The `skin` package declares them as `Point`, `Tri`, `Bound`,
+`Joint` and `Pose`.
 
 ## What the numbers mean
 
-- **Space.** Positions, normals and matrices are y-up, as glTF is. The
-  mesh is written in the skin's own space — the space the joints are in
-  — because the joints place it; a rig's mesh carries no object
-  transform of its own.
+- **Space.** Positions, normals and matrices are y-up, as in glTF. The
+  mesh is in the skin's own space, the joints' space; a rig's mesh
+  carries no object transform.
 - **Order.** `weights.field` has one row per row of `vertices.field`, in
   the same order. A joint index is a row of `skeleton.field`.
 - **Parents.** A joint's `parent` is a row of the same file, or `-1` at a
-  root. Any order does: the palette walks up from each joint rather than
-  down from the roots.
-- **The bind.** `bind` is the *inverse* bind matrix — where the joint
-  stood when the mesh was bound to it, undone — by columns, as the ABI
-  lays a `Mat4` out.
-- **Clips.** A clip holds `frames * joints` rows: every joint of a frame
-  together, frame after frame. A pose is local, in its parent's space,
-  and a root's is in the skin's. The rotation is a quaternion, `x y z w`.
-  Nothing in the rows says what rate they were sampled at: `orla import`
-  prints it, the bridge uses the scene's, and a scene passes it to
-  `skin.sample@1` as `rate`.
-- **Travel.** A clip whose root travels closes on itself: its last
-  frame is its first with the root moved on by one stride, so it loops
-  every `frames - 1` frames. `skin.stride@1` plays it in place and
+  root, in any order.
+- **The bind.** `bind` is the *inverse* bind matrix, by columns, as the
+  ABI lays a `Mat4` out.
+- **Clips.** A clip holds `frames * joints` rows: every joint of a frame,
+  frame after frame. A pose is local, in its parent's space; a root's is
+  in the skin's. The rotation is a quaternion, `x y z w`. The rows carry
+  no sample rate: `orla import` prints it, the bridge uses the scene's,
+  and a scene passes it to `skin.sample@1` as `rate`.
+- **Travel.** A clip whose root travels closes on itself: its last frame
+  is its first with the root moved on by one stride, so it loops every
+  `frames - 1` frames. `skin.stride@1` plays it in place and
   `skin.travel@1` gives the travel for a scene to carry; a clip that
-  does not travel is played by `skin.sample@1`, which loops every
-  `frames`.
-- **Weights.** Four at most, and they should sum to one. All four zero
-  means the vertex is bound to nothing, and the package leaves it where
-  it is — which is how a model that mixes skinned and unskinned meshes
-  comes in whole.
+  does not travel is played by `skin.sample@1`, looping every `frames`.
+- **Weights.** At most four, summing to one. All four zero binds the
+  vertex to nothing, and the package leaves it in place, so skinned and
+  unskinned meshes mix.
+- **Instances.** A scene posing many instances of one rig holds
+  `instances * joints` poses and `instances * vertices` mesh rows, each
+  instance a block in the same order, read that way by the package's
+  Kernels when their node is sized for it. The rig's own rows stay one
+  of each.
+
+`orla import` takes a model's first skin and names in its notes what
+these rows do not hold (other skins, morph targets, a second material's
+texture).
 
 ## What holds it
 
 [`crates/interface/orla/tests/rigs.rs`](../crates/interface/orla/tests/rigs.rs) is the
 contract as a test: one table of layouts, checked against what `orla
 import` writes, against the rows this repository ships, and against the
-package by binding fresh rows to it and evaluating. The Blender bridge's
-push is held to the same table in
-[`crates/interface/orla/tests/bridges.rs`](../crates/interface/orla/tests/bridges.rs), which
-also poses a pushed rig and its own glTF and checks they land in the
-same place.
+package by binding fresh rows and evaluating. The Blender bridge's push
+is held to the same table in
+[`crates/interface/orla/tests/bridges.rs`](../crates/interface/orla/tests/bridges.rs),
+which also poses a pushed rig and its own glTF and checks they land in
+the same place.
 
-A tool of your own writes these five files and is done; there is nothing
-else to register, and no format to teach the runtime.
+A tool that writes these five files is done: nothing is registered.
 
 ## The way back out
 
-`orla-export` writes the same five rows as a GLB: the mesh and its
-triangles, a skin whose joints carry the rest pose the inverse binds
-imply, and one animation a clip, sampled at `--rate`. A rig that came in
-goes back out — the mesh, the weights and the skeleton bit for bit, the
-clips to the rounding a quaternion takes when it is read again — and
-Blender opens it with its bones, its vertex groups and its actions.
+`orla-export` writes the five rows as a GLB: the mesh and its triangles,
+a skin whose joints carry the rest pose the inverse binds imply, and one
+animation per clip, sampled at `--rate`. The mesh, weights and skeleton
+round-trip bit for bit, the clips to a quaternion's rounding; Blender
+opens it with its bones, vertex groups and actions. The rows are told
+apart by layout, so no flag says which file is which.
 
 ```sh
 orla-export examples/skin/assets/arm.*.field --out arm.glb --rate 30
 ```
-
-The rows say which they are by their layout, so there are no flags for
-which file is which.
-
-## What does not come in yet
-
-`orla import` takes the first skin of a model and leaves the rest, and
-says so. Morph targets, a second material's texture and anything else
-these five rows do not hold are named in its notes rather than dropped
-in silence.
-
-## More than one of them
-
-Nothing above changes for a crowd. A scene that poses many instances of
-one rig holds `instances * joints` poses and `instances * vertices`
-mesh rows, each instance a block of its own in the same order, and the
-package's Kernels read them that way when their node is sized for it.
-The rig's own rows — the mesh, the weights, the skeleton, the clips —
-are still one of each.

@@ -1,9 +1,7 @@
 # Fluid
 
-Smoke on a grid: the Navier-Stokes equations for an incompressible fluid,
-solved the way real-time smoke has been since Stam, and nothing was added
-to the language for it. Drag the pointer to stir; a plume at the bottom
-keeps the fluid moving when nobody does.
+Smoke on a grid: incompressible Navier-Stokes, solved Stam-style. Drag
+the pointer to stir; a plume at the bottom keeps the fluid moving.
 
 ```text
 still ─┐
@@ -11,37 +9,19 @@ clear ─┼─ advect ─ divergence ─ solve ×5 (8 Jacobi steps each) ─ pr
 rest ──┴─ hand
 ```
 
-- The velocity is a `Grid<Vec2>` fed back through the Graph from the end
-  of one frame to the start of the next; `fluid.advect` carries it by
-  itself (semi-Lagrangian, a midpoint step, `at_linear` for the reads
-  between cells) and adds the forces: the hand's motion over a soft
-  disc, the plume's push, the lift of warm smoke, and vorticity
-  confinement, which keeps the small eddies the grid would smooth away.
-- `flow_at` reads the staggered velocity at a point; it is one function
-  at the top of the file with the velocity as a parameter, called by the
-  advection, the smoke and the picture on their own velocity ports.
-- The grid is staggered: a cell's x-velocity stands on its left face and
-  its y-velocity on its top face, so `fluid.divergence` and the pressure
-  gradient in `fluid.project` are face differences that agree with the
-  Jacobi stencil in `fluid.relax`, and the projection can drive the
-  divergence toward zero rather than toward a checkerboard.
-- The pressure solve is one Kernel placed forty times: `solve.osn` is
-  eight steps, the scene places it five times, and it starts from last
-  frame's pressure, fed back the same way as the velocity.
-- `fluid.smoke` carries the smoke by the projected velocity and feeds it
-  from the plume and the hand; `fluid.draw` paints it, tinted by speed.
-- `fluid.hand` is one row: the pointer, its button, and how far it moved
-  since last frame while down, which is what stirs.
+- The velocity is a staggered `Grid<Vec2>` fed back through `<~`.
+  `fluid.advect` carries it semi-Lagrangian and adds the hand, the
+  plume, buoyancy and vorticity confinement.
+- `fluid.divergence`, `fluid.relax` and `fluid.project` are face
+  differences on the staggered grid.
+- The pressure solve is `solve.osn` (eight Jacobi steps) placed five
+  times, starting from last frame's pressure.
+- `fluid.smoke` carries the smoke; `fluid.draw` paints it, tinted by speed.
+- `fluid.hand` is one row: the pointer, its button, and its motion.
 
-The replay runs the plume on a 64 by 64 grid and reads `fluid.total`, a
-`merge` Kernel summing |divergence| before and after the projection:
-forty Jacobi steps remove about four fifths of it in one frame, and
-the rest the next frames. It then stirs and reads the hand's velocity,
-the fluid's, and the smoke it carried.
-
-One frame at 384 by 216 with forty Jacobi steps is 52 nodes and about
-5 ms on the GPU over the protocol; on the CPU the fixture runs at a
-few frames a second.
+The replay runs the plume on a 64 by 64 grid, reads `fluid.total` (the
+summed |divergence| before and after projection), then stirs and reads
+the velocities and the smoke.
 
 ```sh
 cargo run --release -p orla-player -- examples/fluid/scene.osn --scale 3

@@ -1,24 +1,13 @@
 # Tiles
 
-A tile map as a `Grid<Tile>`: each element is `{ kind: Int, height: Float,
-passable: Bool }`, exact integers and real booleans rather than values
-smuggled through colour channels. `type Map = Grid<Tile>;` names it once
-for every Kernel in the file.
+A tile map as `Grid<Tile>`, each element `{ kind: Int, height: Float,
+passable: Bool }`. `generate` lays out the map; `flood` spreads water
+to passable neighbours each frame through `<~`; `render` draws each
+pixel from the map and a sprite atlas, at `domain = size(map) * tile`.
 
-`generate` lays out the map, `flood` spreads water to passable neighbours
-every frame through the Graph's `<~` state, and `render` draws each pixel
-by finding its tile with `at(map, cell)` and its sprite in an atlas image
-with `at(atlas, ...)`: two grids of different element types in one Kernel.
-The image is sized by the map: `domain = size(map) * tile;` reads the
-render node's own `tile` parameter, so changing the map's size changes
-the picture's.
-
-The atlas is a PNG: `input atlas: Image = "assets/atlas.png";` declares
-an input the Host reads from disk and watches, so editing the image in
-any paint program changes the tiles while the Player runs. The file was
-baked from `tiles.atlas`, a Kernel that draws the sprites by arithmetic,
-through `bake.osn` and `run --save`; a Field of any shape saves and loads
-the same way as a `.field` file, and a sound as `.wav`.
+The atlas is `assets/atlas.png`, an input the Host reads and watches,
+so edits to it show while the Player runs. `bake.osn` draws it from
+`tiles.atlas` and saves it with `run --save`.
 
 ```sh
 cargo run -- run examples/tiles/bake.osn --save atlas=examples/tiles/assets/atlas.png

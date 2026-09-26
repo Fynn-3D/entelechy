@@ -1,13 +1,10 @@
-# culled
+# Culled
 
-A world of ten million triangles, of which a frame places the ones it
-can see.
-
-The world is `cols` by `cols` chunks, each a `side` by `side` patch of
-ground. `world.visible` writes one flag per chunk — is any of it in
-front of the eye and inside the two side planes — and the compact
-package turns those flags into the kept chunk indices and how many there
-are. Every node that builds geometry is sized by that number:
+A world of ten million triangles; a frame places only the chunks it can
+see. The world is `cols` by `cols` chunks, each a `side` by `side` patch.
+`world.visible` writes one flag per chunk, the compact package turns the
+flags into kept indices and a count, and every geometry node is sized by
+that count:
 
 ```
 node kept: graph "../../packages/compact.orlapkg/graphs/compact.osn" {
@@ -20,33 +17,9 @@ node ground: world.ground@1 {
 }
 ```
 
-A chunk nobody can see is not skipped: it is never placed. There is no
-Field holding it, no vertex projected for it, no triangle handed to the
-rasterizer.
-
-`tests/culled.replay` is the claim: the same frame with the culling on
-and off is the same picture to the last pixel, having built a third of
-the geometry. `--param culling=false` is that switch.
-
-A hand steers it: the left stick, or the arrow keys, which is what the
-Player presses the stick as. With no hand it sweeps on its own, so the
-scene runs and replays without one.
-
-Measured at 1920x1080, least of runs of twenty frames:
-
-| world | placed | whole world placed |
-|---|---|---|
-| 64x64 chunks, 10.0M triangles | 6.9 ms | 26.1 ms |
-| 256x256 chunks, 160.6M triangles | 9.8 ms | (does not fit) |
-
-Sixteen times the world for a millisecond and a half, which is the cull
-test and its prefix sum over sixteen times the chunks. What a frame
-costs is what it can see, and the world above that is free — which is
-the answer to how a scene carries geometry it could never draw.
-
-Nothing here is a renderer. The shading is one lambert term and a fog;
-the mechanism is `value(count)` and the compact package, and what an
-agent builds on top of them is its own.
+`tests/culled.replay` checks that the frame with culling on and off
+(`--param culling=false`) is the same picture to the last pixel. The left
+stick or arrow keys steer; without input the camera sweeps on its own.
 
 ```sh
 cargo run --release -p orla-player -- examples/culled/scene.osn --backend gpu

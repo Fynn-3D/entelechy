@@ -1,38 +1,23 @@
 # Precision
 
-Drawing where a survey puts things. A site plan in a national grid
-lives half a million metres east and four million north of its origin;
-a float keeps about seven significant digits, so out there it cannot
-tell two points a few centimetres apart, and a part a few millimetres
-across is a single point. A double keeps about sixteen.
+Survey coordinates, half a million metres east and four million north,
+in `Double` and `Long`.
 
-```sh
-cargo run --release -p orla-player -- examples/precision/scene.osn
-```
-
-`ring` draws a ring half a millimetre across around `origin`, ten
-micrometres a pixel. Every pixel's place in the world is computed in
-doubles, as a drawing keeps it; the right half then asks, in doubles,
-whether the pixel is inside the ring, and the left half asks the same
-question in floats of the same coordinates. The left half is solid:
-every pixel is the nearest float to the centre, which is a few
-centimetres off it, and so every pixel is inside.
+- `ring` draws a ring half a millimetre across at `origin`: the right
+  half tests inside-ness in doubles, the left in floats, where every
+  pixel collapses to one point and the half is solid.
+- `corners` places a 2.5 x 1.2 mm part in whole nanometres (`LVec2`) and
+  derives its corners in metres.
+- `edges` measures each edge in doubles, floats and nanometres.
 
 ![the ring: floats on the left, doubles on the right](ring.png)
 
-`corners` places a part two and a half millimetres by one point two at
-the same spot, in whole nanometres (`LVec2`), which is what robust
-geometry computes with, and derives each corner in metres from them.
-`edges` measures each edge three ways: in doubles, where 2.5 mm comes
-out within a few picometres; in floats of the same coordinates, where it
-comes out as nothing at all; and in nanometres, exactly.
+These nodes run on the JIT when the session's backend is the GPU.
+`tests/precision.replay` pins the edges, a corner and the picture on all
+three backends, then moves the part near the origin, where both halves
+draw the ring.
 
-The numbers in `kernels/precision.orla` are written as they are meant:
-`param origin: DVec2 = dvec2(500000.123456789, 4000000.987654321)` keeps
-every digit, and `* 0.000000001` beside a double is the double nearest a
-nanometre. Nothing here runs on the GPU: a device has no doubles worth
-the name, so a session on it runs these nodes on the JIT.
-
-The replay pins the edges, a corner, and the picture on the three
-backends, then moves the part near the origin, where a float sees as
-well as a double and the left half draws the ring too.
+```sh
+cargo run --release -p orla-player -- examples/precision/scene.osn
+cargo run -- replay examples/precision/tests/precision.replay
+```

@@ -1,7 +1,6 @@
 # Snake
 
-A whole game with nothing added to the language: five Kernels, two of
-them fed back through the Graph.
+Snake in five Kernels, two fed back through the Graph.
 
 ```text
 start ─┐                    ┌─ view (draw)
@@ -9,19 +8,15 @@ start ─┐                    ┌─ view (draw)
 empty ─┴─ board (cells) ────┘
 ```
 
-`snake.step` is the rules over one row of `Game`: it reads the previous
-state and the previous board, the arrow keys, and the clock; it steers,
-advances one cell per tick, dies at a wall or its own body, eats, and
-finds new food by hashing a cell and probing forward for an empty one in a
-bounded `loop`. `snake.board` is a grid of `Cell` where the body is a
-time-to-live counting down from the head, so the tail disappears by
-itself and eating simply skips one countdown. `snake.draw` shows it at
-`domain = size(board) * cell` and reddens the board once the snake is
-dead. F5 in the Player, or `reset` in a replay, starts over.
+- `snake.step`: the rules over one `Game` row: steering, one cell per
+  tick, death at a wall or the body, eating, and new food found by a
+  hash and a bounded `loop`.
+- `snake.board`: a grid of `Cell`, the body as a time-to-live counting
+  down from the head.
+- `snake.draw`: the board at `size(board) * cell`, red once dead.
 
-Both backends play the same game pixel for pixel; the replay drives it
-through moving, turning, an ignored reversal, eating, dying at the wall,
-and a reset.
+F5 in the Player, or `reset` in a replay, restarts. The replay covers
+moving, turning, an ignored reversal, eating, dying, and reset.
 
 ```sh
 cargo run --release -p orla-player -- examples/snake/scene.osn --scale 2
