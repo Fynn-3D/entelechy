@@ -1448,3 +1448,222 @@ pub fn shape_cases() -> Vec<Case> {
     }
     out
 }
+
+/// What an integer sum case must come to on every backend: the output's
+/// words, or an overflow at the element named, `(x, y)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Summed {
+    /// The output's words.
+    Words(Vec<u32>),
+    /// An overflow at this element.
+    OverflowAt(u32, u32),
+}
+
+impl Summed {
+    /// Where `outcome` differs from what the case must come to, as text.
+    pub fn judge(&self, outcome: &Result<Vec<u32>, orla_rules::ExecutionError>) -> Option<String> {
+        use orla_rules::{ArithmeticError, ExecutionError};
+        match (self, outcome) {
+            (Self::Words(want), Ok(got)) if want == got => None,
+            (
+                Self::OverflowAt(x, y),
+                Err(ExecutionError::Arithmetic {
+                    x: gx,
+                    y: gy,
+                    error: ArithmeticError::Overflow,
+                }),
+            ) if (x, y) == (gx, gy) => None,
+            (want, got) => Some(format!("wanted {want:?}, got {got:?}")),
+        }
+    }
+}
+
+/// Integer sums, under a scatter and a prefix: each element's whole
+/// total, which fails only where it does not fit, at the first element
+/// whose total does not, whatever order a backend adds in. A total that
+/// passes the end of the range on the way and comes back is a total that
+/// fits.
+pub fn sum_cases() -> Vec<(Case, Summed)> {
+    const MAX: i32 = i32::MAX;
+    const MIN: i32 = i32::MIN;
+    let rows = |values: &[i32]| {
+        (
+            Schema::new(vec![Scalar::Int]),
+            Domain::Rows(values.len() as u32),
+            values.iter().map(|v| *v as u32).collect::<Vec<u32>>(),
+        )
+    };
+    let words = |values: &[i32]| Summed::Words(values.iter().map(|v| *v as u32).collect());
+    let scatter = |name: &str, emits: bool, ats: &[i32], values: &[i32], target: &[i32], summed| {
+        // Emitting, each element lands its value in two halves: one
+        // emitted, one returned.
+        let body = if emits {
+            "let i = element(); let v = at(values, i); emit(Pair { at: at(ats, i), value: v / 2 }); return Pair { at: at(ats, i), value: v - v / 2 };"
+        } else {
+            "let i = element(); return Pair { at: at(ats, i), value: at(values, i) };"
+        };
+        let source = format!(
+            "kernel sums.scatter@1 {{ requires {{ field.read; field.write; }}
+    input ats: Rows<Int>; input values: Rows<Int>; input target: Rows<Int>;
+    output result: Rows<Int>;
+    struct Pair {{ at: Int; value: Int; }}
+    scatter into target with sum {{ {body} }} }}"
+        );
+        (
+            Case {
+                name: format!("integer sum: {name}"),
+                source,
+                inputs: vec![rows(ats), rows(values), rows(target)],
+                params: Vec::new(),
+                domain: Domain::Rows(ats.len() as u32),
+                context: context(),
+            },
+            summed,
+        )
+    };
+    let prefix = |name: &str, values: &[i32], summed| {
+        (
+            Case {
+                name: format!("integer prefix: {name}"),
+                source: "kernel sums.prefix@1 { requires { field.read; field.write; }
+    input values: Rows<Int>;
+    output result: Rows<Int>;
+    prefix with sum { return at(values, element()); } }"
+                    .to_owned(),
+                inputs: vec![rows(values)],
+                params: Vec::new(),
+                domain: Domain::Rows(values.len() as u32),
+                context: context(),
+            },
+            summed,
+        )
+    };
+    // Forty-eight to one element, two thousand million each way: the
+    // total is nothing, and every order passes the end on the way.
+    let swings: Vec<i32> = (0..48)
+        .map(|i| {
+            if i % 2 == 0 {
+                2_000_000_000
+            } else {
+                -2_000_000_000
+            }
+        })
+        .collect();
+    // A row long enough to cross a device's blocks: the first element the
+    // least there is, then a million each. A block's own total passes the
+    // end; every prefix fits, until the million more of the second.
+    let long = |each: i32| {
+        std::iter::once(MIN)
+            .chain(std::iter::repeat_n(each, 4095))
+            .collect::<Vec<i32>>()
+    };
+    let prefixes = |values: &[i32]| {
+        let mut total = 0i32;
+        values
+            .iter()
+            .map(|v| {
+                total += v;
+                total
+            })
+            .collect::<Vec<i32>>()
+    };
+    // A record of a float and an integer: the float in element order, the
+    // integer whole.
+    let mixed = |name: &str, values: &[i32], target: &[i32], summed| {
+        let record = |ints: &[i32]| {
+            (
+                Schema::new(vec![Scalar::Float, Scalar::Int]),
+                Domain::Rows(ints.len() as u32),
+                ints.iter()
+                    .flat_map(|v| [0.5f32.to_bits(), *v as u32])
+                    .collect::<Vec<u32>>(),
+            )
+        };
+        (
+            Case {
+                name: format!("integer sum beside a float: {name}"),
+                source: "kernel sums.mixed@1 { requires { field.read; field.write; }
+    struct Both { f: Float; i: Int; }
+    input values: Rows<Int>; input target: Rows<Both>;
+    output result: Rows<Both>;
+    struct Pair { at: Int; value: Both; }
+    scatter into target with sum { let i = element(); return Pair { at: 0, value: Both { f: 0.25, i: at(values, i) } }; } }"
+                    .to_owned(),
+                inputs: vec![rows(values), record(target)],
+                params: Vec::new(),
+                domain: Domain::Rows(values.len() as u32),
+                context: context(),
+            },
+            summed,
+        )
+    };
+    let fits = long(1_000_000);
+    let passes = long(1_100_000);
+    let first_past = (1..passes.len())
+        .find(|&k| i64::from(MIN) + 1_100_000 * k as i64 > i64::from(MAX))
+        .unwrap() as u32;
+    vec![
+        scatter(
+            "passes the end and comes back",
+            false,
+            &[0, 1, 0, 1, 0, 2],
+            &[MAX, 7, 1, 3, -1, -4],
+            &[0, 0, 0, 0],
+            words(&[MAX, 10, -4, 0]),
+        ),
+        scatter(
+            "the first element whose total does not fit",
+            false,
+            &[2, 1, 2, 1],
+            &[MAX, MAX, 1, 1],
+            &[0, 0, 0, 0],
+            Summed::OverflowAt(1, 0),
+        ),
+        scatter(
+            "below the least there is",
+            false,
+            &[0, 0],
+            &[-1, -1],
+            &[MIN + 1, 0],
+            Summed::OverflowAt(0, 0),
+        ),
+        scatter(
+            "swings each way to nothing",
+            false,
+            &[3; 48],
+            &swings,
+            &[5, 0, 0, 0],
+            words(&[5, 0, 0, 0]),
+        ),
+        scatter(
+            "emitted, passes the end and comes back",
+            true,
+            &[0, 1, 0, 1, 0, 2],
+            &[MAX, 7, 1, 3, -1, -4],
+            &[0, 0, 0, 0],
+            words(&[MAX, 10, -4, 0]),
+        ),
+        mixed(
+            "passes the end and comes back",
+            &[MAX, 1, -1],
+            &[0],
+            Summed::Words(vec![1.25f32.to_bits(), MAX as u32]),
+        ),
+        mixed("does not fit", &[MAX, 1], &[0], Summed::OverflowAt(0, 0)),
+        prefix(
+            "a block's total passes the end",
+            &fits,
+            words(&prefixes(&fits)),
+        ),
+        prefix(
+            "the first prefix that does not fit",
+            &passes,
+            Summed::OverflowAt(first_past, 0),
+        ),
+        prefix(
+            "passes the end at the second",
+            &[MAX, 1, -1, 5],
+            Summed::OverflowAt(1, 0),
+        ),
+    ]
+}

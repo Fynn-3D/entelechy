@@ -140,3 +140,53 @@ fn differences(cases: &[orla_conformance::Case]) -> Vec<String> {
     }
     failures
 }
+
+/// An integer sum is each element's whole total on jit as on every
+/// backend: one that passes the end of the range and comes back fits,
+/// and one that does not fit fails at the first element whose total
+/// does not, whatever order the backend adds in.
+#[test]
+fn integer_sums_are_whole_totals_on_jit_as_everywhere() {
+    let Some(backend) = orla_jit::JitBackend::new().ok() else {
+        return;
+    };
+    let failures: Vec<String> = orla_conformance::sum_cases()
+        .iter()
+        .filter_map(|(case, want)| {
+            want.judge(&summed(&backend, case))
+                .map(|why| format!("{}: {why}", case.name))
+        })
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Runs one integer sum case on `backend`: the output's words, or why not.
+fn summed(
+    backend: &dyn orla_rules::Backend,
+    case: &orla_conformance::Case,
+) -> Result<Vec<u32>, orla_rules::ExecutionError> {
+    let module =
+        orla_compiler::compile(&case.source).unwrap_or_else(|e| panic!("{}: {e}", case.name));
+    let mut host = orla_abi::Host::new(1 << 22);
+    let inputs = case
+        .inputs
+        .iter()
+        .map(|(schema, domain, words)| {
+            host.adopt(orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap())
+                .unwrap()
+        })
+        .collect();
+    let invocation = orla_abi::Invocation {
+        inputs,
+        params: case.params.clone(),
+        domain: case.domain,
+        context: case.context,
+    };
+    let all: orla_abi::Capabilities = orla_abi::Capability::ALL.into_iter().collect();
+    let mut scope = orla_abi::Scope::new(&mut host, all);
+    let prepared = backend
+        .prepare(&module)
+        .map_err(orla_rules::ExecutionError::Device)?;
+    let outputs = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?;
+    Ok(scope.values(outputs[0])?.into_owned())
+}

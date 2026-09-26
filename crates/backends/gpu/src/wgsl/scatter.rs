@@ -8,6 +8,90 @@ use super::*;
 pub const SCATTER_PAIRS_BINDING: u32 = 1;
 /// Binding index of the scatter pass's target, a copy of the base input.
 pub const SCATTER_OUT_BINDING: u32 = 2;
+/// Binding index of a whole sum's high words, one beside each word of
+/// the target ([`sums_whole`]).
+pub const SCATTER_HIGHS_BINDING: u32 = 6;
+
+/// The high words a whole sum keeps beside its target, bound at `binding`
+/// as `name`.
+pub(crate) fn highs_binding(binding: u32, name: &str) -> String {
+    format!("@group(0) @binding({binding}) var<storage, read_write> {name}: array<atomic<i32>>;\n")
+}
+
+/// The number of elements of a scatter's target, from the context.
+fn target_count(module: &Module) -> String {
+    let Mode::Scatter { base, .. } = module.manifest.mode else {
+        return "0u".to_owned();
+    };
+    let slot = CONTEXT_HEAD + base as usize;
+    format!("(u32(ctx[{slot}].x) * u32(ctx[{slot}].y) * u32(ctx[{slot}].z))")
+}
+
+/// The pass that sets a whole sum's high words from the base, before any
+/// value is added: each the sign of the word below it, so a word and its
+/// high word are the element's 64-bit total.
+pub fn emit_scatter_highs(module: &Module) -> String {
+    let Mode::Scatter { base, .. } = module.manifest.mode else {
+        return String::new();
+    };
+    let stride = module.manifest.inputs[base as usize]
+        .ty
+        .schema
+        .value_words();
+    let context_len = CONTEXT_HEAD + module.manifest.inputs.len();
+    format!(
+        "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;
+@group(0) @binding({SCATTER_PAIRS_BINDING}) var<storage, read> base: array<u32>;
+@group(0) @binding({SCATTER_HIGHS_BINDING}) var<storage, read_write> highs: array<i32>;
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let i = gid.x + gid.y * {SCATTER_SPAN}u;
+    if (i >= {} * {stride}u) {{
+        return;
+    }}
+    highs[i] = select(0i, -1i, bitcast<i32>(base[i]) < 0i);
+}}
+",
+        target_count(module)
+    )
+}
+
+/// The pass that checks a whole sum once every value is in: an element
+/// whose 64-bit total is no `Int` is recorded, the least one kept.
+pub fn emit_scatter_totals(module: &Module) -> String {
+    let Mode::Scatter { base, .. } = module.manifest.mode else {
+        return String::new();
+    };
+    let stride = module.manifest.inputs[base as usize]
+        .ty
+        .schema
+        .value_words();
+    let context_len = CONTEXT_HEAD + module.manifest.inputs.len();
+    format!(
+        "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;
+@group(0) @binding({SCATTER_OUT_BINDING}) var<storage, read> out0: array<u32>;
+@group(0) @binding({SCATTER_HIGHS_BINDING}) var<storage, read> highs: array<i32>;
+{FAILURE_STRUCT}
+@group(0) @binding({FAILURE_BINDING}) var<storage, read_write> failure: Failure;
+@compute @workgroup_size({SCATTER_WORKGROUP}, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let at = gid.x + gid.y * {SCATTER_SPAN}u;
+    if (at >= {}) {{
+        return;
+    }}
+    for (var k = 0u; k < {stride}u; k = k + 1u) {{
+        let low = out0[at * {stride}u + k];
+        let high = highs[at * {stride}u + k];
+        if (!((high == 0i && low < 0x80000000u) || (high == -1i && low >= 0x80000000u))) {{
+            atomicMax(&failure.total, 0xFFFFFFFFu - at);
+            return;
+        }}
+    }}
+}}
+",
+        target_count(module)
+    )
+}
 
 /// The combine of two values of a type, as a WGSL expression: fieldwise
 /// through structs, WGSL's own operators and builtins below.
@@ -287,10 +371,14 @@ pub fn emit_scatter_parallel(module: &Module) -> String {
     let target = &module.manifest.inputs[base as usize];
     let element = target.element();
     let stride = target.ty.schema.value_words();
-    let mut out = scatter_header(module, Some(true), &winners_binding(false));
+    let mut extra = winners_binding(false);
+    if highs_beside(module) {
+        extra.push_str(&highs_binding(SCATTER_HIGHS_BINDING, "highs"));
+    }
+    let mut out = scatter_header(module, Some(true), &extra);
     let lines = match combine {
         Combine::Last => vec!["    atomicMax(&winner[at], i + 1u);".to_owned()],
-        _ => atomic_lines(module, element, combine, "out0"),
+        _ => atomic_lines(module, element, combine, "out0", "highs"),
     };
     let _ = writeln!(
         out,
@@ -321,6 +409,7 @@ pub(crate) fn atomic_lines(
     element: Type,
     combine: Combine,
     target: &str,
+    highs: &str,
 ) -> Vec<String> {
     let op = match combine {
         Combine::Sum => "atomicAdd",
@@ -343,6 +432,27 @@ pub(crate) fn atomic_lines(
     }
     let mut words = Vec::new();
     value_words(module, element, &path, &mut words);
+    // A whole sum: the word added atomically, and what it carried out of
+    // the word, with the value's sign, added to the high word beside it.
+    if highs_beside(module) {
+        return words
+            .iter()
+            .enumerate()
+            .map(|(k, (expr, _))| {
+                format!(
+                    "    {{
+        let v = bitcast<u32>({expr});
+        let old = bitcast<u32>(atomicAdd(&{target}[b + {k}u], bitcast<i32>(v)));
+        let carry = select(0i, 1i, old + v < old);
+        let high = carry + select(0i, -1i, bitcast<i32>(v) < 0i);
+        if (high != 0i) {{
+            atomicAdd(&{highs}[b + {k}u], high);
+        }}
+    }}"
+                )
+            })
+            .collect();
+    }
     words
         .iter()
         .enumerate()
@@ -405,6 +515,9 @@ pub(crate) fn emit_functions(module: &Module, out: &mut String) {
 fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}",
         atomic_target(module)
     );
+    if highs_beside(module) {
+        out.push_str(&highs_binding(EMIT_HIGHS_BINDING, "emitted_highs"));
+    }
     for pair in pairs {
         let _ = writeln!(
             out,
@@ -416,7 +529,14 @@ fn key_of(b: i32) -> i32 {{ return select(b ^ 0x7fffffff, b, b >= 0); }}",
             emit_name(pair),
             wgsl_type(pair),
             scatter_address(module, "return;"),
-            atomic_lines(module, target.element(), combine, "emitted").join("\n")
+            atomic_lines(
+                module,
+                target.element(),
+                combine,
+                "emitted",
+                "emitted_highs"
+            )
+            .join("\n")
         );
     }
 }
@@ -604,7 +724,47 @@ pub fn emit_scatter_fold(module: &Module) -> String {
     let element = target.element();
     let stride = target.ty.schema.value_words();
     let slot = CONTEXT_HEAD + base as usize;
-    let mut out = scatter_header(module, Some(false), &sort_bindings(true));
+    let mut bindings = sort_bindings(true);
+    // Its integers folded whole: a high word each, carried as it folds,
+    // and the first element whose total does not fit recorded.
+    let mut integers = Vec::new();
+    if sums_whole(module) {
+        let _ = writeln!(
+            bindings,
+            "{FAILURE_STRUCT}\n@group(0) @binding({FAILURE_BINDING}) var<storage, read_write> failure: Failure;"
+        );
+        let mut scalars = Vec::new();
+        value_scalars(module, element, "", &mut scalars);
+        integers = scalars
+            .into_iter()
+            .filter(|(_, kind)| *kind == Scalar::Int)
+            .map(|(path, _)| path)
+            .collect();
+    }
+    let highs_start: String = integers
+        .iter()
+        .enumerate()
+        .map(|(k, path)| format!("    var high{k} = select(0i, -1i, acc{path} < 0i);\n"))
+        .collect();
+    let highs_step: String = integers
+        .iter()
+        .enumerate()
+        .map(|(k, path)| {
+            format!(
+                "        {{ let a = bitcast<u32>(acc{path}); let b = bitcast<u32>(v{path}); high{k} = high{k} + select(0i, 1i, a + b < a) + select(0i, -1i, v{path} < 0i); }}\n"
+            )
+        })
+        .collect();
+    let highs_check: String = integers
+        .iter()
+        .enumerate()
+        .map(|(k, path)| {
+            format!(
+                "    if (!((high{k} == 0i && acc{path} >= 0i) || (high{k} == -1i && acc{path} < 0i))) {{ atomicMax(&failure.total, 0xFFFFFFFFu - e); }}\n"
+            )
+        })
+        .collect();
+    let mut out = scatter_header(module, Some(false), &bindings);
     let (expr, _) = load_expr(module, element, "out0", "b", 0, Encoding::Word);
     let _ = writeln!(
         out,
@@ -656,15 +816,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return;
     }}
     var acc = load_out0(e);
-    var pos = lo;
+{highs_start}    var pos = lo;
     loop {{
         if (pos >= n || keys[pos] != e) {{
             break;
         }}
-        acc = combine(acc, load_pair(order[pos]).{value});
+        let v = load_pair(order[pos]).{value};
+{highs_step}        acc = combine(acc, v);
         pos = pos + 1u;
     }}
-    store_out0(e, acc);
+{highs_check}    store_out0(e, acc);
 }}",
         value = member_name(1),
     );

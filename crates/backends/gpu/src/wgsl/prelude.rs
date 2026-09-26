@@ -434,7 +434,7 @@ fn begin_work() {{
         // names.
         let _ = writeln!(
             out,
-            "struct Failure {{ word: atomic<u32>, blocks: atomic<u32>, limit: u32, left: atomic<u32> }}
+            "struct Failure {{ word: atomic<u32>, blocks: atomic<u32>, limit: u32, left: atomic<u32>, total: atomic<u32> }}
 @group(0) @binding({FAILURE_BINDING}) var<storage, read_write> failure: Failure;
 fn fail(code: u32) {{
     if (!failed_here) {{

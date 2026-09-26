@@ -927,6 +927,15 @@ fn run_scatter(
     if !shared.held.take(pair_count * record) {
         return Err(shared.held.over());
     }
+    // A sum's whole totals, one a target integer, held too.
+    let summed = combine == Combine::Sum;
+    if summed
+        && !shared
+            .held
+            .take(orla_rules::Sums::held_words(scalars, count))
+    {
+        return Err(shared.held.over());
+    }
     drop(shared);
     let sort = |(first, end, emitted): &Emitted| -> Vec<Vec<u32>> {
         let mut buckets = vec![Vec::new(); parts];
@@ -965,6 +974,19 @@ fn run_scatter(
         })
     };
     let apply = |part: usize, slice: &mut [u32]| -> Result<(), (usize, ArithmeticError)> {
+        // A sum is each element's whole total, whatever the order; what
+        // fails is the first target element whose total does not fit.
+        if summed {
+            let mut sums = orla_rules::Sums::new(scalars, slice);
+            for run in &sorted {
+                for pair in run[part].chunks_exact(record) {
+                    sums.add(slice, pair[0] as usize - part * span, &pair[2..]);
+                }
+            }
+            return sums
+                .finish(slice)
+                .map_err(|(element, error)| (part * span + element, error));
+        }
         for run in &sorted {
             for pair in run[part].chunks_exact(record) {
                 let at = pair[0] as usize - part * span;
@@ -998,15 +1020,21 @@ fn run_scatter(
         })
     };
     // Of the parts that failed, the failure the sequential order meets
-    // first: the one from the earliest element.
+    // first: the one from the earliest element, a source's, or under a
+    // sum the target's.
     if let Some((index, error)) = outcomes
         .into_iter()
         .filter_map(Result::err)
         .min_by_key(|(index, _)| *index)
     {
+        let width = if summed {
+            target.width()
+        } else {
+            sources.width()
+        } as usize;
         return Err(ExecutionError::Arithmetic {
-            x: (index % sources.width() as usize) as u32,
-            y: (index / sources.width() as usize) as u32,
+            x: (index % width) as u32,
+            y: (index / width) as u32,
             error,
         });
     }

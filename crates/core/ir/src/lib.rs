@@ -265,8 +265,10 @@ pub enum Mode {
     /// The entry runs once per element of the first input's domain and
     /// yields an address into the `base` input and a value; the output is
     /// `base` with every value combined into the element at its address,
-    /// as if the sources were applied one after another in element order.
-    /// An address outside `base` is dropped. `base` has the output's
+    /// as if the sources were applied one after another in element order;
+    /// under [`Combine::Sum`] an integer is instead the element's whole
+    /// total, which no order changes. An address outside `base` is
+    /// dropped. `base` has the output's
     /// shape and layout, and sizes the output.
     Scatter {
         /// Index of the input the output starts from.
@@ -307,7 +309,10 @@ impl Mode {
 /// How a scattered value combines with the element at its address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Combine {
-    /// Fieldwise addition; `Int` fields overflow as the backend's integers do.
+    /// Fieldwise addition. A float adds in element order; an integer is the
+    /// element's whole total, what it held and every value added to it,
+    /// and fails only when that total does not fit, at the first element
+    /// whose total does not (`orla_rules::Sums`).
     Sum,
     /// Fieldwise minimum.
     Min,

@@ -280,11 +280,12 @@ cannot pays nothing. Two caveats remain, both about a device. A NaN made
 by arithmetic on the GPU (`inf * 0`, or `sqrt` of a negative) may come
 out a number under a driver's fast math, which wgpu does not let a
 program turn off, where the interpreter and the JIT have NaN; a NaN read
-from a Field is seen alike on every backend. And an integer `sum` a
-scatter or a prefix folds is added on a device in an order of its own,
-so whether a partial sum passes the end of the range, which is what the
-reference fails on in element order, is not the same question there; a
-device's sum wraps. What every backend does agree on, and what
+from a Field is seen alike on every backend. An integer `sum` a
+scatter or a prefix folds is each element's whole total, which no order
+of adding changes: it fails only when that total does not fit, at the
+first element whose total does not, and a sum that passes the end of
+the range on the way and comes back is the total it comes back to. What
+every backend does agree on, and what
 the feature matrix holds them to: a positive divided by zero is an
 infinity, zero divided by zero is not a number, and nothing equals or
 orders against a not-a-number. An `Int` literal may be hexadecimal, `0xFF`, its 32 bits as

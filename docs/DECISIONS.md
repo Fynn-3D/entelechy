@@ -408,6 +408,34 @@ there; the GPU's scenes measured within noise.
 constant, lets the check go; that is an optimization of the rule, not a
 change to it.
 
+## An integer sum is its whole total
+
+A scatter's or a prefix's `sum` of integers is each element's whole
+total: what it held and every value added to it, as mathematics adds
+them. It fails only when that total is not one the scalar holds, and
+names the first element whose total is not. A total that passes the end
+of the range on the way and comes back is the total it comes back to.
+The interpreter and the JIT keep each total wide (`orla_rules::Sums`);
+the GPU adds a word atomically and what it carries into a high word
+beside it, checks once every value is in, and, where a float is summed
+beside the integer in element order, carries the high word as it folds.
+
+**Why.** The reference added in element order and failed at the first
+partial sum past the end; the GPU adds in whatever order its atomics
+land, and wrapped. One IR had two meanings, and a counter or a
+histogram passed on the device with a wrong value. A sum's inputs,
+not the order a machine adds them in, decide it now, so every backend
+answers alike, to the element that fails.
+
+**Cost.** On the GPU, a high word beside each word a sum totals, one
+more atomic where a value carries, and a pass that checks the totals;
+on the CPU and the JIT, a wide total for each integer the target holds,
+counted against the run's room.
+
+**What would change it.** Nothing short of changing what `sum` means;
+a `Long` summed on a device that has 64-bit atomics could keep its
+totals the same way, a word wider.
+
 ## Reality changes atomically; history records why
 
 A session's position is `(revision, frame)`: the revision moves when the

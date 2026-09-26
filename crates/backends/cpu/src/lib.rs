@@ -582,6 +582,31 @@ fn scatter(
     let mut words = scope.values(invocation.inputs[base])?.into_owned();
     let port = &module.manifest.outputs[0];
     let scalars = port.ty.schema.scalars();
+    // A sum is each element's whole total, which fails only where it
+    // does not fit, whatever the order: the element that fails is named.
+    if combine == Combine::Sum {
+        if !held.take(orla_rules::Sums::held_words(scalars, target.count())) {
+            return Err(held.over());
+        }
+        let mut sums = orla_rules::Sums::new(scalars, &words);
+        for pair in pairs.chunks_exact(address + stride) {
+            if let Some(at) = scatter_index(target, &pair[..address]) {
+                sums.add(&mut words, at, &pair[address..]);
+            }
+        }
+        sums.finish(&mut words)
+            .map_err(|(element, error)| ExecutionError::Arithmetic {
+                x: (element % target.width() as usize) as u32,
+                y: (element / target.width() as usize) as u32,
+                error,
+            })?;
+        let output = scope.create(port.ty.schema.clone(), target)?;
+        if let Err(error) = scope.write_values(output, &words) {
+            let _ = scope.release(output);
+            return Err(error.into());
+        }
+        return Ok(vec![output]);
+    }
     for (pair, index) in pairs.chunks_exact(address + stride).zip(sources_of) {
         let index = index as usize;
         let Some(at) = scatter_index(target, &pair[..address]) else {

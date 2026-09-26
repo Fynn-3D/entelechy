@@ -42,6 +42,7 @@ impl GpuBackend {
             element_count,
             failure: _,
             target: _,
+            highs: _,
             bound_inputs: _,
         } = staged;
         let scope_guard = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -138,6 +139,7 @@ impl GpuBackend {
     /// A block holds about the square root of the count, which is what
     /// makes the two walks the same length: the blocks' own walk is as
     /// long as one block.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_prefix(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -146,6 +148,7 @@ impl GpuBackend {
         element_count: usize,
         output_words: usize,
         timing: Option<&wgpu::QuerySet>,
+        failure: Option<&wgpu::Buffer>,
     ) -> wgpu::Buffer {
         let count = element_count.max(1);
         let per_block = orla_rules::prefix::block(count);
@@ -160,29 +163,59 @@ impl GpuBackend {
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         );
+        // A whole sum's high words beside the output and the totals.
+        let highs = prefix.whole.then(|| {
+            let take = |words: usize| {
+                self.spare.take(
+                    &self.device,
+                    ((words * 4) as u64).max(16).div_ceil(16) * 16,
+                    wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                )
+            };
+            (take(count * output_words), take(blocks * output_words))
+        });
         let passes = [
             (&prefix.blocks, blocks as u32),
             (&prefix.tops, 1),
             (&prefix.offsets, count as u32),
         ];
         for (index, ((pipeline, layout), threads)) in passes.iter().enumerate() {
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: wgsl::PREFIX_PLAN_BINDING,
+                    resource: plan_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::PREFIX_OUT_BINDING,
+                    resource: output.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: wgsl::PREFIX_SUMS_BINDING,
+                    resource: sums.as_entire_binding(),
+                },
+            ];
+            if let (Some((out_highs, sum_highs)), Some(failure)) = (&highs, failure) {
+                entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::PREFIX_OUT_HIGHS_BINDING,
+                        resource: out_highs.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::PREFIX_SUMS_HIGHS_BINDING,
+                        resource: sum_highs.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::FAILURE_BINDING,
+                        resource: failure.as_entire_binding(),
+                    },
+                ]);
+            }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("orla prefix"),
                 layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::PREFIX_PLAN_BINDING,
-                        resource: plan_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::PREFIX_OUT_BINDING,
-                        resource: output.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::PREFIX_SUMS_BINDING,
-                        resource: sums.as_entire_binding(),
-                    },
-                ],
+                entries: &entries,
             });
             let last = index + 1 == passes.len();
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -201,6 +234,10 @@ impl GpuBackend {
             pass.dispatch_workgroups(x, y, 1);
         }
         self.spare.keep(sums);
+        if let Some((out_highs, sum_highs)) = highs {
+            self.spare.keep(out_highs);
+            self.spare.keep(sum_highs);
+        }
         output
     }
 
@@ -320,16 +357,54 @@ impl GpuBackend {
     /// where the plan compares its words with atomics, the base's words
     /// turned into ordered keys as they are written into it.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_target(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         scatter: &Scatter,
         target: &wgpu::Buffer,
+        highs: Option<&wgpu::Buffer>,
         base_buffer: &wgpu::Buffer,
         context_buffer: &wgpu::Buffer,
         count: usize,
         words: usize,
     ) {
+        // A whole sum's high words start as the base's signs.
+        if let (
+            Scatter::Parallel {
+                totals: Some(totals),
+                ..
+            },
+            Some(highs),
+        ) = (scatter, highs)
+        {
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("orla scatter highs"),
+                layout: &totals.from_base.1,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::CONTEXT_BINDING,
+                        resource: context_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::SCATTER_PAIRS_BINDING,
+                        resource: base_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: wgsl::SCATTER_HIGHS_BINDING,
+                        resource: highs.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("orla scatter highs"),
+                timestamp_writes: None,
+            });
+            compute.set_pipeline(&totals.from_base.0);
+            compute.set_bind_group(0, &group, &[]);
+            let (x, y) = wgsl::folded(((count * words) as u32).div_ceil(wgsl::SCATTER_WORKGROUP));
+            compute.dispatch_workgroups(x, y, 1);
+        }
         let Scatter::Parallel {
             keys: Some(keys), ..
         } = scatter
@@ -379,7 +454,8 @@ impl GpuBackend {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         scatter: &Scatter,
-        target: Option<wgpu::Buffer>,
+        (target, highs): (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
+        failure: Option<&wgpu::Buffer>,
         base_buffer: &wgpu::Buffer,
         context_buffer: &wgpu::Buffer,
         pairs: wgpu::Buffer,
@@ -392,19 +468,31 @@ impl GpuBackend {
         // Ready already when the entry emitted into it, and then the entry
         // landed every pair itself: nothing is left to apply.
         let landed = target.is_some();
-        let target = target.unwrap_or_else(|| {
-            let target = self.target_buffer(target_count, output_words);
-            self.prepare_target(
-                encoder,
-                scatter,
-                &target,
-                base_buffer,
-                context_buffer,
-                target_count,
-                output_words,
-            );
-            target
-        });
+        let whole = matches!(
+            scatter,
+            Scatter::Parallel {
+                totals: Some(_),
+                ..
+            }
+        );
+        let (target, highs) = match target {
+            Some(target) => (target, highs),
+            None => {
+                let target = self.target_buffer(target_count, output_words);
+                let highs = whole.then(|| self.target_buffer(target_count, output_words));
+                self.prepare_target(
+                    encoder,
+                    scatter,
+                    &target,
+                    highs.as_ref(),
+                    base_buffer,
+                    context_buffer,
+                    target_count,
+                    output_words,
+                );
+                (target, highs)
+            }
+        };
         let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
         let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
         let storage = |label: &str, words: usize| {
@@ -455,7 +543,12 @@ impl GpuBackend {
             compute.dispatch_workgroups(x, y, 1);
         };
         match scatter {
-            Scatter::Sorted { keys, step, fold } => {
+            Scatter::Sorted {
+                keys,
+                step,
+                fold,
+                whole,
+            } => {
                 let padded = element_count.next_power_of_two().max(1);
                 let keys_buffer = storage("scatter sort keys", padded);
                 let order_buffer = storage("scatter sort order", padded);
@@ -521,6 +614,14 @@ impl GpuBackend {
                         .iter()
                         .cloned()
                         .chain(sort_entries(true))
+                        .chain(
+                            failure
+                                .filter(|_| *whole)
+                                .map(|failure| wgpu::BindGroupEntry {
+                                    binding: wgsl::FAILURE_BINDING,
+                                    resource: failure.as_entire_binding(),
+                                }),
+                        )
                         .collect::<Vec<_>>(),
                 );
                 let over_padded = (padded as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
@@ -551,6 +652,7 @@ impl GpuBackend {
                 apply,
                 gather,
                 keys,
+                totals,
             } => {
                 // Winners for `last`, zeroed as every new buffer is; a
                 // token buffer where the pass has none to record.
@@ -565,6 +667,10 @@ impl GpuBackend {
                         binding: wgsl::SCATTER_WINNER_BINDING,
                         resource: winners.as_entire_binding(),
                     }])
+                    .chain(highs.as_ref().map(|highs| wgpu::BindGroupEntry {
+                        binding: wgsl::SCATTER_HIGHS_BINDING,
+                        resource: highs.as_entire_binding(),
+                    }))
                     .collect();
                 if !landed {
                     let group = bind(&apply.1, &with_winners);
@@ -577,6 +683,25 @@ impl GpuBackend {
                 if let Some(keys) = keys {
                     let group = bind(&keys.in_place.1, &common);
                     dispatch(encoder, &keys.in_place, &group, &[], over_target);
+                }
+                // Every value in: each element's whole total checked.
+                if let (Some(totals), Some(highs), Some(failure)) = (totals, &highs, failure) {
+                    let group = bind(
+                        &totals.check.1,
+                        &[
+                            common[0].clone(),
+                            common[2].clone(),
+                            wgpu::BindGroupEntry {
+                                binding: wgsl::SCATTER_HIGHS_BINDING,
+                                resource: highs.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: wgsl::FAILURE_BINDING,
+                                resource: failure.as_entire_binding(),
+                            },
+                        ],
+                    );
+                    dispatch(encoder, &totals.check, &group, &[], over_target);
                 }
             }
         }

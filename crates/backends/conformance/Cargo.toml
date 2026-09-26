@@ -12,6 +12,7 @@ doctest = false
 
 [dependencies]
 orla-abi = { path = "../../core/abi" }
+orla-rules = { path = "../../core/rules" }
 
 [lints]
 workspace = true

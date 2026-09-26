@@ -502,6 +502,127 @@ pub fn combine_words(
     Ok(())
 }
 
+/// A scatter's `sum`, kept exact. An integer summed into its element is
+/// the whole total of what the element held and every value scattered to
+/// it, and fails only when that total is not one the scalar holds: the
+/// order the values arrive in cannot change it, so a walk in element
+/// order and a device adding in parallel agree to the bit, and to the
+/// element that fails, the first whose total does not fit. A float is
+/// added in element order, as it always was. Every backend's scatter
+/// under `sum` is held to this.
+pub struct Sums {
+    scalars: Vec<Scalar>,
+    stride: usize,
+    /// The word each integer scalar starts at within an element, and
+    /// whether it is a `Long`.
+    integers: Vec<(usize, bool)>,
+    /// Each element's integer totals, whole.
+    totals: Vec<i128>,
+}
+
+impl Sums {
+    /// The Host words the sums of `elements` elements of `scalars` hold,
+    /// four a total: what a backend holds against its run's room
+    /// ([`Held`]) before it makes them.
+    pub fn held_words(scalars: &[Scalar], elements: usize) -> usize {
+        let integers = scalars
+            .iter()
+            .filter(|scalar| matches!(scalar, Scalar::Int | Scalar::Long))
+            .count();
+        elements.saturating_mul(integers).saturating_mul(4)
+    }
+
+    /// The sums of a scatter into `words`, the target's elements of
+    /// `scalars` in order: its totals start at what each element holds.
+    pub fn new(scalars: &[Scalar], words: &[u32]) -> Self {
+        let mut integers = Vec::new();
+        let mut at = 0;
+        for scalar in scalars {
+            match scalar {
+                Scalar::Int => integers.push((at, false)),
+                Scalar::Long => integers.push((at, true)),
+                _ => {}
+            }
+            at += scalar.words();
+        }
+        let stride = at.max(1);
+        let count = words.len() / stride * integers.len();
+        let mut totals = Vec::with_capacity(count);
+        for element in words.chunks_exact(stride) {
+            for &(at, long) in &integers {
+                totals.push(integer(element, at, long));
+            }
+        }
+        Self {
+            scalars: scalars.to_vec(),
+            stride,
+            integers,
+            totals,
+        }
+    }
+
+    /// Adds `value` into `element`: its integers to their totals, its
+    /// floats to the words in `words`, in the order they are added.
+    pub fn add(&mut self, words: &mut [u32], element: usize, value: &[u32]) {
+        let slot = &mut words[element * self.stride..(element + 1) * self.stride];
+        let mut at = 0;
+        for scalar in &self.scalars {
+            match scalar {
+                Scalar::Float => {
+                    slot[at] = (f32::from_bits(slot[at]) + f32::from_bits(value[at])).to_bits();
+                }
+                Scalar::Double => {
+                    let pair = |w: &[u32]| u64::from(w[at]) | u64::from(w[at + 1]) << 32;
+                    let sum = (f64::from_bits(pair(slot)) + f64::from_bits(pair(value))).to_bits();
+                    slot[at] = sum as u32;
+                    slot[at + 1] = (sum >> 32) as u32;
+                }
+                _ => {}
+            }
+            at += scalar.words();
+        }
+        let n = self.integers.len();
+        for (k, &(at, long)) in self.integers.iter().enumerate() {
+            let total = &mut self.totals[element * n + k];
+            *total = total.saturating_add(integer(value, at, long));
+        }
+    }
+
+    /// Writes every total into `words`, or fails at the first element,
+    /// by its number, whose total its scalar does not hold.
+    pub fn finish(self, words: &mut [u32]) -> Result<(), (usize, ArithmeticError)> {
+        let n = self.integers.len();
+        if n == 0 {
+            return Ok(());
+        }
+        for (element, totals) in self.totals.chunks_exact(n).enumerate() {
+            for (&(at, long), &total) in self.integers.iter().zip(totals) {
+                let at = element * self.stride + at;
+                if long {
+                    let total =
+                        i64::try_from(total).map_err(|_| (element, ArithmeticError::Overflow))?;
+                    words[at] = total as u32;
+                    words[at + 1] = (total >> 32) as u32;
+                } else {
+                    let total =
+                        i32::try_from(total).map_err(|_| (element, ArithmeticError::Overflow))?;
+                    words[at] = total as u32;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The integer at word `at` of `words`, a `Long` over two.
+fn integer(words: &[u32], at: usize, long: bool) -> i128 {
+    if long {
+        i128::from((u64::from(words[at]) | u64::from(words[at + 1]) << 32) as i64)
+    } else {
+        i128::from(words[at] as i32)
+    }
+}
+
 /// The order [`float_order_key`] is, for doubles.
 pub fn double_order_key(bits: u64) -> i64 {
     let bits = bits as i64;

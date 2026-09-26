@@ -355,6 +355,7 @@ impl Backend for GpuBackend {
             element_count,
             failure,
             target,
+            highs,
         } = staged;
         // What the map pass left is the output, unless the mode has more
         // to do with it: a reduction folds it, a scatter combines it
@@ -385,12 +386,14 @@ impl Backend for GpuBackend {
                     element_count,
                     output_words,
                     timing_set.as_ref(),
+                    failure.as_ref().map(|(word, _)| word),
                 )
             }
             (Mode::Scatter { base, .. }, _, Some(scatter)) => self.combine(
                 &mut encoder,
                 scatter,
-                target,
+                (target, highs),
+                failure.as_ref().map(|(word, _)| word),
                 &input_buffers[base as usize],
                 &context_buffer,
                 output_buffer,
@@ -433,6 +436,7 @@ impl Backend for GpuBackend {
                 pair: Some(pair),
                 pile: Arc::clone(&self.failures),
                 width: domain.width(),
+                totals_width: output_domain.width(),
                 budget: module.manifest.budget,
                 run: orla_rules::Run::new(scope.work()),
             }) as Box<dyn Check>

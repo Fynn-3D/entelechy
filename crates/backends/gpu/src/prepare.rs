@@ -30,6 +30,9 @@ pub(crate) struct Prefix {
     pub(crate) blocks: Pass,
     pub(crate) tops: Pass,
     pub(crate) offsets: Pass,
+    /// Whether it sums whole ([`wgsl::sums_whole`]): high words beside
+    /// the output and the totals, and a failure record.
+    pub(crate) whole: bool,
 }
 
 /// One compute pipeline with its bind group layout.
@@ -41,10 +44,24 @@ pub(crate) struct Keys {
     pub(crate) from_base: Pass,
 }
 
+/// A whole sum's two passes around the parallel apply: the high words
+/// set from the base, and the totals checked once every value is in.
+pub(crate) struct Totals {
+    pub(crate) from_base: Pass,
+    pub(crate) check: Pass,
+}
+
 /// A scatter's combine as pipelines, by its plan.
 pub(crate) enum Scatter {
-    /// A float sum: sort keys, the sort's step, and the fold.
-    Sorted { keys: Pass, step: Pass, fold: Pass },
+    /// A float sum: sort keys, the sort's step, and the fold, which with
+    /// `whole` also folds integers whole and records a total that does
+    /// not fit.
+    Sorted {
+        keys: Pass,
+        step: Pass,
+        fold: Pass,
+        whole: bool,
+    },
     /// An order-free rule: the parallel apply; the gather after `last`;
     /// the key transform around `min` and `max` over floats and longs:
     /// in place after, and before from the base into the target, which
@@ -53,6 +70,7 @@ pub(crate) enum Scatter {
         apply: Pass,
         gather: Option<Pass>,
         keys: Option<Keys>,
+        totals: Option<Totals>,
     },
 }
 
@@ -121,6 +139,7 @@ impl GpuBackend {
         if module.holds(orla_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
         }
+
         if !module.holds(orla_abi::Type::Long) {
             return None;
         }
@@ -162,7 +181,8 @@ impl GpuBackend {
         let inputs = module.manifest.inputs.len();
         let written = wgsl::written_outputs(module);
         let failure = usize::from(wgsl::can_fail(module));
-        let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty());
+        let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty())
+            * (1 + usize::from(wgsl::highs_beside(module)));
         // Inputs packed into one buffer bind as one.
         let packed = self.packing(module).len();
         let storage = unpacked - packed + usize::from(packed > 0);
@@ -328,6 +348,9 @@ impl GpuBackend {
         let emits = !wgsl::emitted_pairs(module).is_empty();
         if emits {
             entries.push(storage_entry(wgsl::EMIT_BINDING, false));
+            if wgsl::highs_beside(module) {
+                entries.push(storage_entry(wgsl::EMIT_HIGHS_BINDING, false));
+            }
         }
         let layout = self
             .device
@@ -423,11 +446,20 @@ impl GpuBackend {
             None
         };
         let prefix = if matches!(module.manifest.mode, orla_ir::Mode::Prefix { .. }) {
-            let entries = [
+            let mut entries = vec![
                 uniform_entry(wgsl::PREFIX_PLAN_BINDING),
                 storage_entry(wgsl::PREFIX_OUT_BINDING, false),
                 storage_entry(wgsl::PREFIX_SUMS_BINDING, false),
             ];
+            // A whole sum's high words, and where its first total that
+            // does not fit is recorded.
+            if wgsl::sums_whole(module) {
+                entries.extend([
+                    storage_entry(wgsl::PREFIX_OUT_HIGHS_BINDING, false),
+                    storage_entry(wgsl::PREFIX_SUMS_HIGHS_BINDING, false),
+                    storage_entry(wgsl::FAILURE_BINDING, false),
+                ]);
+            }
             Some(Prefix {
                 blocks: self.pass(
                     "prefix blocks",
@@ -444,6 +476,7 @@ impl GpuBackend {
                     &wgsl::emit_prefix(module, wgsl::PrefixPass::Offsets),
                     &entries,
                 )?,
+                whole: wgsl::sums_whole(module),
             })
         } else {
             None
@@ -481,8 +514,17 @@ impl GpuBackend {
                             storage_entry(wgsl::SCATTER_SORT_KEYS_BINDING, true),
                             storage_entry(wgsl::SCATTER_SORT_ORDER_BINDING, true),
                             dynamic_uniform_entry(wgsl::SCATTER_SORT_PARAMS_BINDING),
-                        ],
+                        ]
+                        .into_iter()
+                        // Where it folds integers whole, the first total
+                        // that does not fit is recorded.
+                        .chain(
+                            wgsl::sums_whole(module)
+                                .then(|| storage_entry(wgsl::FAILURE_BINDING, false)),
+                        )
+                        .collect::<Vec<_>>(),
                     )?,
+                    whole: wgsl::sums_whole(module),
                 },
                 wgsl::ScatterPlan::Parallel { last, keys } => Scatter::Parallel {
                     apply: self.pass(
@@ -493,8 +535,39 @@ impl GpuBackend {
                             storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
                             storage_entry(wgsl::SCATTER_OUT_BINDING, false),
                             storage_entry(wgsl::SCATTER_WINNER_BINDING, false),
-                        ],
+                        ]
+                        .into_iter()
+                        .chain(
+                            wgsl::sums_whole(module)
+                                .then(|| storage_entry(wgsl::SCATTER_HIGHS_BINDING, false)),
+                        )
+                        .collect::<Vec<_>>(),
                     )?,
+                    totals: wgsl::sums_whole(module)
+                        .then(|| -> Result<Totals, String> {
+                            Ok(Totals {
+                                from_base: self.pass(
+                                    "scatter highs from the base",
+                                    &wgsl::emit_scatter_highs(module),
+                                    &[
+                                        uniform_entry(wgsl::CONTEXT_BINDING),
+                                        storage_entry(wgsl::SCATTER_PAIRS_BINDING, true),
+                                        storage_entry(wgsl::SCATTER_HIGHS_BINDING, false),
+                                    ],
+                                )?,
+                                check: self.pass(
+                                    "scatter totals",
+                                    &wgsl::emit_scatter_totals(module),
+                                    &[
+                                        uniform_entry(wgsl::CONTEXT_BINDING),
+                                        storage_entry(wgsl::SCATTER_OUT_BINDING, true),
+                                        storage_entry(wgsl::SCATTER_HIGHS_BINDING, true),
+                                        storage_entry(wgsl::FAILURE_BINDING, false),
+                                    ],
+                                )?,
+                            })
+                        })
+                        .transpose()?,
                     gather: last
                         .then(|| {
                             self.pass(

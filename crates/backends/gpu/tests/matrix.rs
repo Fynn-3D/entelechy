@@ -231,3 +231,67 @@ fn a_64_bit_feature_is_not_taken_and_says_why() {
         }
     }
 }
+
+/// An integer sum is each element's whole total on gpu as on every
+/// backend: one that passes the end of the range and comes back fits,
+/// and one that does not fit fails at the first element whose total
+/// does not, whatever order the backend adds in.
+#[test]
+fn integer_sums_are_whole_totals_on_gpu_as_everywhere() {
+    let Some(backend) = orla_gpu::GpuBackend::new().ok() else {
+        return;
+    };
+    let failures: Vec<String> = orla_conformance::sum_cases()
+        .iter()
+        .filter_map(|(case, want)| {
+            want.judge(&summed(&backend, case))
+                .map(|why| format!("{}: {why}", case.name))
+        })
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Runs one integer sum case on `backend`: the output's words, or why not.
+fn summed(
+    backend: &dyn orla_rules::Backend,
+    case: &orla_conformance::Case,
+) -> Result<Vec<u32>, orla_rules::ExecutionError> {
+    let module =
+        orla_compiler::compile(&case.source).unwrap_or_else(|e| panic!("{}: {e}", case.name));
+    let mut host = orla_abi::Host::new(1 << 22);
+    let inputs = case
+        .inputs
+        .iter()
+        .map(|(schema, domain, words)| {
+            host.adopt(orla_abi::FieldData::from_values(schema.clone(), *domain, words).unwrap())
+                .unwrap()
+        })
+        .collect();
+    let invocation = orla_abi::Invocation {
+        inputs,
+        params: case.params.clone(),
+        domain: case.domain,
+        context: case.context,
+    };
+    let all: orla_abi::Capabilities = orla_abi::Capability::ALL.into_iter().collect();
+    let mut scope = orla_abi::Scope::new(&mut host, all);
+    let prepared = backend
+        .prepare(&module)
+        .map_err(orla_rules::ExecutionError::Device)?;
+    let outputs = backend.execute(prepared.as_ref(), &module, &invocation, &mut scope)?;
+    drop(scope);
+    // What stays on the device is brought home as the Host keeps it.
+    match host.resident(outputs[0]).unwrap() {
+        Some(device) => {
+            let count = host.domain(outputs[0]).unwrap().count();
+            let words = host.schema(outputs[0]).unwrap().storage_words(count);
+            Ok(backend
+                .download(device, words * 4)
+                .map_err(orla_rules::ExecutionError::Device)?
+                .chunks_exact(4)
+                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect())
+        }
+        None => Ok(host.data(outputs[0]).unwrap().values().into_owned()),
+    }
+}

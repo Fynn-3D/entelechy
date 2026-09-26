@@ -165,8 +165,42 @@ fn input_source(
     ("inputs_packed".to_owned(), format!("{offset} + "))
 }
 
-/// The bytes of the failure record: three words, and one to round it.
-pub const FAILURE_BYTES: u64 = 16;
+/// The bytes of the failure record: the first failing element's word,
+/// the blocks of work taken, the most there may be, what was left short
+/// of a block, and the first element whose whole sum does not fit
+/// ([`sums_whole`]), rounded to a multiple of sixteen.
+pub const FAILURE_BYTES: u64 = 32;
+
+/// The failure record as a pass that only records a sum declares it.
+pub(crate) const FAILURE_STRUCT: &str = "struct Failure { word: atomic<u32>, blocks: atomic<u32>, limit: u32, left: atomic<u32>, total: atomic<u32> }";
+
+/// Binding index of an emitting scatter's high words, beside its target.
+pub const EMIT_HIGHS_BINDING: u32 = 92;
+
+/// Whether a scatter or a prefix sums integers, each total kept whole, a
+/// word and a high word beside it, and checked once every value is in.
+/// Such a module records the first element whose total does not fit.
+pub fn sums_whole(module: &Module) -> bool {
+    let (scalars, combine) = match module.manifest.mode {
+        Mode::Scatter { base, combine } => (
+            module.manifest.inputs[base as usize].ty.schema.scalars(),
+            combine,
+        ),
+        Mode::Prefix { combine } => (module.manifest.outputs[0].ty.schema.scalars(), combine),
+        _ => return false,
+    };
+    combine == Combine::Sum && scalars.iter().any(|s| matches!(s, orla_abi::Scalar::Int))
+}
+
+/// Whether a whole sum keeps its high words in a buffer beside what it
+/// totals: a prefix, and a scatter that adds in parallel. A scatter that
+/// also sums floats folds each element's values in order, and keeps its
+/// high words as it folds.
+pub fn highs_beside(module: &Module) -> bool {
+    sums_whole(module)
+        && (matches!(module.manifest.mode, Mode::Prefix { .. })
+            || matches!(scatter_plan(module), ScatterPlan::Parallel { .. }))
+}
 
 /// A failure's code in the word: an overflow.
 pub const FAILED_OVERFLOW: u32 = 1;

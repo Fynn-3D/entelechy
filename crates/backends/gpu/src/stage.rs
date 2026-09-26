@@ -42,6 +42,9 @@ pub(crate) struct Staged {
     pub(crate) failure: Option<(wgpu::Buffer, wgpu::Buffer)>,
     /// A scatter's target, ready before the entry when the entry emits.
     pub(crate) target: Option<wgpu::Buffer>,
+    /// The high words beside it, where it sums whole
+    /// ([`wgsl::sums_whole`]).
+    pub(crate) highs: Option<wgpu::Buffer>,
 }
 
 /// The domain the entry maps over: a reduction's and a scatter's first
@@ -70,12 +73,16 @@ pub(crate) fn outputs_fit(
     domain: orla_abi::Domain,
     scope: &Scope<'_>,
 ) -> Result<(), ExecutionError> {
-    let fields: Vec<_> = module
+    let mut fields: Vec<_> = module
         .manifest
         .outputs
         .iter()
         .map(|port| (&port.ty.schema, domain))
         .collect();
+    // A whole sum keeps a high word beside each word of what it totals.
+    if wgsl::highs_beside(module) {
+        fields.push(fields[0]);
+    }
     Ok(scope.can_hold(&fields)?)
 }
 
@@ -385,8 +392,10 @@ impl GpuBackend {
         }
         // The failure word and its way back, from the pile; cleared below,
         // before the pass, which is no failure.
-        let failure = pipeline.fails.then(|| self.failure_pair());
-        if let Some((failure, _)) = &failure {
+        // A whole sum records its first total that does not fit there too,
+        // though nothing the entry does can fail.
+        let failure = (pipeline.fails || wgsl::sums_whole(module)).then(|| self.failure_pair());
+        if let (Some((failure, _)), true) = (&failure, pipeline.fails) {
             entries.push(wgpu::BindGroupEntry {
                 binding: wgsl::FAILURE_BINDING,
                 resource: failure.as_entire_binding(),
@@ -430,6 +439,16 @@ impl GpuBackend {
                 resource: buffer.as_entire_binding(),
             });
         }
+        let highs = target
+            .as_ref()
+            .filter(|_| wgsl::highs_beside(module))
+            .map(|(_, count, _)| self.target_buffer(*count, output_words));
+        if let Some(highs) = &highs {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::EMIT_HIGHS_BINDING,
+                resource: highs.as_entire_binding(),
+            });
+        }
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("orla kernel"),
             layout: &pipeline.layout,
@@ -455,6 +474,7 @@ impl GpuBackend {
                 &mut encoder,
                 scatter,
                 buffer,
+                highs.as_ref(),
                 &input_buffers[*base as usize],
                 &context_buffer,
                 *count,
@@ -465,7 +485,7 @@ impl GpuBackend {
         // written before this submission's passes run.
         if let Some((failure, _)) = &failure {
             let limit = orla_rules::Run::new(scope.work()).limit();
-            let record: Vec<u8> = [0u32, 0, limit, 0]
+            let record: Vec<u8> = [0u32, 0, limit, 0, 0, 0, 0, 0]
                 .iter()
                 .flat_map(|word| word.to_le_bytes())
                 .collect();
@@ -512,6 +532,7 @@ impl GpuBackend {
             element_count,
             failure,
             target: target.map(|(_, _, buffer)| buffer),
+            highs,
         })
     }
 }

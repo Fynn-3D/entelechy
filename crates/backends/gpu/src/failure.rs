@@ -17,6 +17,9 @@ pub(crate) struct FailureCheck {
     /// The width of the domain the run mapped over, which turns the
     /// element's number into the reference's column and row.
     pub(crate) width: u32,
+    /// The width of what a whole sum totals over (a scatter's target, a
+    /// prefix's rows), which names the element whose total does not fit.
+    pub(crate) totals_width: u32,
     /// The budget the run had, for naming a failure past it.
     pub(crate) budget: u32,
     /// The run's total, for naming a run past it.
@@ -30,21 +33,32 @@ impl Check for FailureCheck {
         self.wait
             .map_read(&self.device, &self.queue, slice)
             .map_err(ExecutionError::Device)?;
-        let (word, blocks, left) = {
+        let (word, blocks, left, total) = {
             let bytes = slice
                 .get_mapped_range()
                 .map_err(|error| ExecutionError::Device(error.to_string()))?;
             let at =
                 |k: usize| u32::from_le_bytes([bytes[k], bytes[k + 1], bytes[k + 2], bytes[k + 3]]);
-            (at(0), at(4), at(12))
+            (at(0), at(4), at(12), at(16))
         };
         back.unmap();
         self.pile
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push((word_buffer, back));
-        // An element's own failure names that element; past the run's
-        // total and with no element failing, the run is what failed.
+        // An element's own failure names that element; then, with every
+        // element's value in, the first whose whole sum does not fit, as
+        // the reference totals them after the entry; past the run's
+        // total and with nothing failing, the run is what failed.
+        if word == 0 && total != 0 {
+            let element = u32::MAX - total;
+            let width = self.totals_width.max(1);
+            return Err(ExecutionError::Arithmetic {
+                x: element % width,
+                y: element / width,
+                error: ArithmeticError::Overflow,
+            });
+        }
         if word == 0 {
             return orla_rules::Run::judge(self.run.work(), u64::from(blocks), u64::from(left));
         }
