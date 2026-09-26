@@ -42,6 +42,21 @@ version*. When the language's surface grows, record it with
 syntax grows, add a document to `crates/frontend/scene/tests/surface/`
 and record it with `ORLA_BLESS=1 cargo test -p orla-scene --test surface`.
 
+## Comments and documents
+
+A comment or a document states present facts: what a thing is, who owns
+it, what it guarantees.
+
+- History is git's; reasons are `docs/DECISIONS.md`'s. No "used to", "no
+  longer", "before".
+- State what is done and where, not what is not; a negative stays only
+  where it is the boundary itself ("no capability, no access").
+- No narrative, comparison, hedging, or dated observation.
+- One fact, one place: a comment holds its code's contract, a document
+  the contract across modules; neither restates the other.
+- A test's comment states what it holds; the regression it guards is
+  its commit's message.
+
 Prefer clear, small, boring, testable over clever, abstract, magical,
 prematurely generic.
 
