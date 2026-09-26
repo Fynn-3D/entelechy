@@ -399,7 +399,7 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "compose",
-            "Changes the scene document, checked before it is written; answered once the scene stands.",
+            "Changes the scene: rewrites its document on disk, the file at `path` (`document` and `status` name it), once the text is checked; answered once the scene stands. A refused text writes nothing.",
             vec![
                 may("text", Ty::Str, "the whole document; or `edits`"),
                 may(
@@ -413,7 +413,7 @@ pub fn operations() -> Vec<Operation> {
                     "the version `document` answered; refused when the scene changed since",
                 ),
             ],
-            "events, version",
+            "events, version, path (the document), written (whether it was)",
         ),
         op(
             "sync",
@@ -642,7 +642,7 @@ pub fn operations() -> Vec<Operation> {
                 may("requires", Ty::Str, "a capability it requires"),
                 may("limit", Ty::Int, "the most to answer; 20 when not given"),
             ],
-            "capabilities, nearest first, each with kind, name, doc, package, reach (what a scene writes to reach it), inputs, params, outputs (name, type, doc), requires, granted, published; and count, how many matched",
+            "capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it, its paths relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched",
         ),
         op(
             "trace",

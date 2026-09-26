@@ -55,7 +55,7 @@ Schema in `schema`.
 | `graph` |  | inputs, params, nodes, outputs |
 | `document` | `version`?: string | path, text, and version, which `compose`'s `expect` names |
 | `history` | `since`?: integer | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
-| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version |
+| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version, path (the document), written (whether it was) |
 | `sync` |  | events |
 | `prepare` | `source`: string | id, manifest; or an error at a line and column |
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation |
@@ -71,7 +71,7 @@ Schema in `schema`.
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
 | `help` | `section`?: string, `name`?: string | the index; a section's items; or one item in full. An unknown name is an error with `similar` |
-| `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (what a scene writes to reach it), inputs, params, outputs (name, type, doc), requires, granted, published; and count, how many matched |
+| `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it, its paths relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched |
 | `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
 | `pin` | `node`: string | pinned |
 | `unpin` | `node`: string | unpinned |

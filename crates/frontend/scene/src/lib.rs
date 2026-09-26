@@ -7,7 +7,7 @@
 //! inline Kernels) and hands the loader the inline Kernels to publish.
 //! The caller supplies files through a [`Loader`].
 
-mod domain;
+pub mod domain;
 pub mod edit;
 
 pub use domain::domain_expr;

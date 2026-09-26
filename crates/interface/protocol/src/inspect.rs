@@ -222,6 +222,7 @@ pub(crate) fn search(session: &Session, request: &Request) -> Result<Json, Json>
     let limit = request.get("limit").and_then(Json::as_u64).unwrap_or(20) as usize;
     let found = session.search(&query);
     Ok(json!({
+        "base": session.reach_base().display().to_string(),
         "count": found.len(),
         "capabilities": found.iter().take(limit).map(crate::wire::capability_json).collect::<Vec<_>>(),
     }))

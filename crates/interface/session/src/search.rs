@@ -59,8 +59,9 @@ pub struct Capability {
     pub package: Option<String>,
     /// What that package is for, its manifest's `//!` doc.
     pub package_doc: Option<String>,
-    /// What a scene writes to reach it; `None` for a Kernel the session
-    /// has published.
+    /// What a scene writes to reach it, its paths relative to the scene
+    /// document's directory ([`Session::reach_base`]); `None` for a Kernel
+    /// the session has published.
     pub reach: Option<String>,
     /// Its inputs, params and outputs.
     pub inputs: Vec<Port>,
@@ -350,6 +351,16 @@ pub fn in_packages(
         .collect()
 }
 
+/// The directory a `reach` is written from: the scene document's, where
+/// the line goes; the working directory without a scene.
+pub fn reach_base(scene: Option<&Path>) -> PathBuf {
+    scene
+        .and_then(Path::parent)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .to_path_buf()
+}
+
 /// The capabilities in `capabilities` matching `query`, nearest first, then
 /// by name.
 pub fn matching(capabilities: Vec<Capability>, query: &Query) -> Vec<Capability> {
@@ -409,12 +420,7 @@ impl Session {
                 published: true,
             });
         }
-        let base = self
-            .root()
-            .parent()
-            .filter(|dir| !dir.as_os_str().is_empty())
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        let base = self.reach_base();
         // Beside the named directories, every one holding a package the
         // scene reads from.
         let beside: Vec<PathBuf> = self
@@ -434,6 +440,12 @@ impl Session {
             }
         }
         out
+    }
+
+    /// The directory a capability's `reach` is written from
+    /// ([`reach_base`]).
+    pub fn reach_base(&self) -> PathBuf {
+        reach_base(Some(self.root()))
     }
 
     /// The capabilities matching `query`, nearest first, then by name.

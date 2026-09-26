@@ -6,6 +6,93 @@ use orla_language::{BinaryOp, Expr, ExprKind};
 
 use crate::DocumentError;
 
+/// One function a `domain` may call, as `help` shows it.
+#[derive(Clone, Debug)]
+pub struct Function {
+    /// Its name.
+    pub name: &'static str,
+    /// How it is written.
+    pub shape: &'static str,
+    /// What it gives.
+    pub doc: &'static str,
+    /// A `domain` written with it, which [`domain_expr`] accepts.
+    pub example: &'static str,
+}
+
+/// Every function a `domain` may call; a domain is also numbers,
+/// parameters by name, and `+ - * /`.
+pub fn functions() -> Vec<Function> {
+    let f = |name, shape, doc, example| Function {
+        name,
+        shape,
+        doc,
+        example,
+    };
+    vec![
+        f("vec2", "vec2(w, h)", "A grid's extent.", "vec2(160, 120)"),
+        f(
+            "vec3",
+            "vec3(w, h, d)",
+            "A volume's extent.",
+            "vec3(32, 32, 32)",
+        ),
+        f(
+            "count",
+            "count(port)",
+            "How many elements an input port of this node holds.",
+            "count(faces) * 4",
+        ),
+        f(
+            "size",
+            "size(port)",
+            "An input port's extent: a count, a pair or a triple.",
+            "size(map) * vec2(2, 1)",
+        ),
+        f(
+            "value",
+            "value(port)   value(port, i)",
+            "A number a Kernel wrote: element i (0 when not given) of an input port of this node, read as the node binds.",
+            "value(count) * 3",
+        ),
+        f(
+            "window",
+            "window()",
+            "The window's size in pixels; the node runs again at the new extent when it changes.",
+            "window()",
+        ),
+        f(
+            "scale",
+            "scale()",
+            "The window's pixels per logical pixel.",
+            "window() / scale()",
+        ),
+        f(
+            "max",
+            "max(a, b)",
+            "The larger, componentwise.",
+            "max(count(items), 1)",
+        ),
+        f(
+            "min",
+            "min(a, b)",
+            "The smaller, componentwise.",
+            "min(count(items), 64)",
+        ),
+        f(
+            "floor",
+            "floor(x)",
+            "A measure made whole, rounding down.",
+            "floor(window() / 2)",
+        ),
+        f(
+            "ceil",
+            "ceil(x)",
+            "A measure made whole, rounding up.",
+            "ceil(size(map) / 2)",
+        ),
+    ]
+}
+
 /// Accepts the subset of the expression language a domain may use.
 pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
     let fail = |message: String| DocumentError {
@@ -94,8 +181,11 @@ pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
                 )
             }
             other => {
+                let known: Vec<&str> = functions().iter().map(|f| f.name).collect();
                 return Err(fail(format!(
-                    "`{other}` cannot size a domain; use numbers, `vec2`/`vec3`, `count(port)`, `size(port)`, `value(port)`, `window()`, `scale()`, `max`, `min`, `floor`, `ceil`, and parameters"
+                    "`{other}` cannot size a domain; it takes numbers, parameters and {}{}",
+                    known.join(", "),
+                    orla_language::did_you_mean(other, known.iter().copied())
                 )));
             }
         },
@@ -110,6 +200,25 @@ pub fn domain_expr(expr: &Expr) -> Result<DomainExpr, DocumentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every function's example is a domain, and a call to any other name
+    /// is refused naming them.
+    #[test]
+    fn every_function_is_one_a_domain_takes() {
+        for function in functions() {
+            let expr = orla_language::parse_literal(function.example)
+                .unwrap_or_else(|e| panic!("{}: {e:?}", function.example));
+            assert!(domain_expr(&expr).is_ok(), "{}", function.example);
+            assert!(
+                function.example.contains(function.name),
+                "{}",
+                function.name
+            );
+        }
+        let expr = orla_language::parse_literal("values(count)").unwrap();
+        let refused = domain_expr(&expr).unwrap_err().to_string();
+        assert!(refused.contains("did you mean `value`"), "{refused}");
+    }
     use orla_abi::{Domain, Value};
 
     fn parse(text: &str) -> DomainExpr {

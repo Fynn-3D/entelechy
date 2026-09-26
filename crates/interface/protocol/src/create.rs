@@ -67,6 +67,8 @@ pub(crate) fn compose_with(
         return Ok(json!({
             "events": events_json(&[orla_session::Event::SceneRejected(why)]),
             "version": current,
+            "path": root.display().to_string(),
+            "written": false,
         }));
     }
     // The scene read here is this request's change: its Kernels published
@@ -80,6 +82,8 @@ pub(crate) fn compose_with(
     Ok(json!({
         "events": events_json(&events),
         "version": document_version(&text),
+        "path": root.display().to_string(),
+        "written": true,
     }))
 }
 

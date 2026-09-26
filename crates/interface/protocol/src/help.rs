@@ -1,6 +1,7 @@
 //! What Orla answers about itself, gathered from where each part is kept:
-//! the builtins and the forms from the compiler, the replay forms from the
-//! replayer, the operations from [`crate::ops`]. An index first, then a
+//! the builtins and the forms from the compiler, what a `domain` may call
+//! from the scene's lowering, the replay forms from the replayer, the
+//! operations from [`crate::ops`]. An index first, then a
 //! section's one line an item, then one name in full.
 
 use serde_json::{Value as Json, json};
@@ -79,6 +80,16 @@ fn items() -> Vec<Json> {
         .map(builtin_json)
         .collect();
     out.extend(orla_compiler::help::forms().iter().map(form_json));
+    out.extend(orla_scene::domain::functions().iter().map(|f| {
+        json!({
+            "section": "scene",
+            "name": f.name,
+            "kind": "domain",
+            "shape": f.shape,
+            "doc": f.doc,
+            "examples": [format!("domain = {};", f.example)],
+        })
+    }));
     out.extend(replay::forms().iter().map(replay_json));
     out.extend(crate::ops::operations().iter().map(op_json));
     out

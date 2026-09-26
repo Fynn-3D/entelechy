@@ -739,6 +739,7 @@ fn search(args: &[String]) -> Result<(), String> {
     if !words.is_empty() {
         query.text = Some(words.join(" "));
     }
+    let base = orla_session::search::reach_base(scene.as_deref());
     let found = match &scene {
         Some(scene) => {
             let runtime = Session::runtime_for("cpu", orla_session::Limits::default())?;
@@ -761,6 +762,7 @@ fn search(args: &[String]) -> Result<(), String> {
     };
     if json {
         let answer = serde_json::json!({
+            "base": base.display().to_string(),
             "count": found.len(),
             "capabilities": found.iter().take(limit).map(orla_protocol::capability_json).collect::<Vec<_>>(),
         });
@@ -774,6 +776,12 @@ fn search(args: &[String]) -> Result<(), String> {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    if found.iter().any(|capability| capability.reach.is_some()) {
+        println!(
+            "(each `use` and `graph` path is written from {})",
+            base.display()
+        );
+    }
     for capability in found.iter().take(limit) {
         let package = capability
             .package

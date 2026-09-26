@@ -826,6 +826,7 @@ fn help_answers_an_index_a_section_or_a_name() {
             json!({ "id": 6, "op": "help", "section": "scene" }),
             json!({ "id": 7, "op": "help", "name": "window" }),
             json!({ "id": 8, "op": "help", "name": "publish" }),
+            json!({ "id": 9, "op": "help", "name": "value" }),
         ],
     );
     let index = &responses[0]["ok"];
@@ -868,10 +869,15 @@ fn help_answers_an_index_a_section_or_a_name() {
         .iter()
         .map(|item| item["section"].as_str().unwrap())
         .collect();
-    assert_eq!(window, ["builtins", "replay", "protocol"]);
+    assert_eq!(window, ["builtins", "scene", "replay", "protocol"]);
     let publish = &responses[7]["ok"]["found"][0];
     assert_eq!(publish["fields"][0]["name"], "source");
     assert_eq!(publish["fields"][0]["required"], true);
+    let value = &responses[8]["ok"]["found"][0];
+    assert_eq!(
+        (&value["section"], &value["kind"]),
+        (&json!("scene"), &json!("domain"))
+    );
 }
 
 /// `search` finds, from a scene using one package, the Kernels and preset
@@ -898,6 +904,10 @@ fn search_finds_the_packages_beside_the_ones_a_scene_uses() {
     assert_eq!(preset["outputs"][1]["type"], "Rows<Int>");
     let kernel = &compact["capabilities"][1];
     assert_eq!(kernel["reach"], "use \"../../packages/compact.orlapkg\";");
+    assert!(
+        compact["base"].as_str().unwrap().ends_with("examples/text"),
+        "{compact}"
+    );
     assert!(kernel["doc"].as_str().is_some_and(|doc| !doc.is_empty()));
     let typed = &responses[1]["ok"];
     assert!(typed["count"].as_u64().unwrap() > 2);
@@ -1440,6 +1450,8 @@ fn compose_checks_before_it_writes_and_against_the_version_read() {
             "{what}: {answer}"
         );
         assert_eq!(answer["version"], version, "{what}");
+        assert_eq!(answer["written"], false, "{what}");
+        assert_eq!(answer["path"], scene.display().to_string(), "{what}");
     }
     assert!(
         responses[2]["ok"]["events"][0]["message"]
@@ -1479,6 +1491,8 @@ fn compose_checks_before_it_writes_and_against_the_version_read() {
         "{taken}"
     );
     assert_ne!(taken["version"], json!(version));
+    assert_eq!(taken["written"], true);
+    assert_eq!(taken["path"], scene.display().to_string());
     assert_eq!(responses[1]["ok"]["version"], taken["version"]);
     assert_eq!(responses[1]["ok"]["text"], grown);
     let _ = std::fs::remove_dir_all(&dir);
