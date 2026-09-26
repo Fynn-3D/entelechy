@@ -25,7 +25,7 @@ const RULES: &[Rule] = &[
     Rule {
         rule: "`node.port` is cut in one place, at the last dot",
         owner: "orla_graph::split_port",
-        since: "d000b28",
+        since: "c48ac7d",
         within: &["crates"],
         owners: &["crates/core/graph/src/lib.rs"],
         acts: &[
@@ -38,7 +38,7 @@ const RULES: &[Rule] = &[
     Rule {
         rule: "a scene output is read by its name, or the first declared, in one place",
         owner: "`Session::output`, over `Graph::primary_output`",
-        since: "3e4d345",
+        since: "db00ce2",
         within: &["crates/interface"],
         owners: &["crates/interface/session/src/session.rs"],
         acts: &["outputs.first()"],
@@ -50,7 +50,7 @@ const RULES: &[Rule] = &[
                and the codecs it writes with make bytes, not files",
         owner: "`Session::write_file`, `Session::write_scene`, `Session::save`, \
                 `Session::export`, or a scene's `to` writes",
-        since: "8248001",
+        since: "b229ebd",
         within: &[
             "crates/interface/session/src",
             "crates/interface/protocol/src",
