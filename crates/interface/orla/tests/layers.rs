@@ -284,32 +284,38 @@ fn only_the_interface_and_two_machines_take_outside_dependencies() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// The session's scene, ledger, history, inputs and writes run on the
-/// runtime it is given; backend specifics belong to its opening, trace
-/// and re-exports.
+/// The session runs on the runtime it is given: only its opening
+/// (`session.rs`), its trace (`observe.rs`) and its re-exports (`lib.rs`)
+/// name a backend; every other part, one added later included, does not.
 #[test]
 fn the_session_runs_on_the_runtime_it_is_given() {
-    let src = root().join("crates/interface/session/src");
-    let parts = [
-        "scene.rs",
-        "kernels.rs",
-        "sources.rs",
-        "store.rs",
-        "history.rs",
-        "inputs.rs",
-        "writes.rs",
-        "check.rs",
-        "session/time.rs",
-    ];
-    let mut wrong = Vec::new();
-    for file in parts {
-        let text = std::fs::read_to_string(src.join(file)).unwrap();
-        for backend in ["orla_cpu", "orla_gpu", "orla_jit"] {
-            if text.contains(backend) {
-                wrong.push(format!("session/src/{file} names {backend}"));
+    const OPENING: [&str; 3] = ["lib.rs", "session.rs", "observe.rs"];
+    fn walk(src: &Path, dir: &Path, wrong: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(src, &path, wrong);
+                continue;
+            }
+            let file = path
+                .strip_prefix(src)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if path.extension().is_none_or(|ext| ext != "rs") || OPENING.contains(&file.as_str()) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for backend in ["orla_cpu", "orla_gpu", "orla_jit"] {
+                if text.contains(backend) {
+                    wrong.push(format!("session/src/{file} names {backend}"));
+                }
             }
         }
     }
+    let src = root().join("crates/interface/session/src");
+    let mut wrong = Vec::new();
+    walk(&src, &src, &mut wrong);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 

@@ -9,6 +9,7 @@
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
 | A new Kernel's cost on the GPU is its pipeline's compile: 40 to 120 ms for the voxel example's Kernels on Metal, nearly all of preparing it; one compiled before comes from the driver's cache in under a millisecond. | Natively it is paid off the frame (the preparation worker). A page has no thread: a Kernel changed while a page plays stops its frames for the compile. Data, params and structure (`write`, `param`, a `compose` that changes no Kernel) never compile. Scenes are built in the native Player; a page shows them. |
 | Making a page's compile smooth needs the browser's `createComputePipelineAsync`, which wgpu does not expose; reaching it takes `wasm-bindgen` and `js-sys` in `orla-gpu` for the page, which AGENTS.md does not allow. | Not done by choice (2026-09-26). Taken up only if Kernels are to be changed live in a page, and then with that rule changed first. |
+| The session holds the world (scene, ledger, sources, history, inputs, writes) and also opens backends; only its `lib.rs`, `session.rs` and `observe.rs` may name one (`crates/interface/orla/tests/layers.rs`). | A world part that needs a backend is the sign to move the world into its own crate below the session, which Cargo then holds, not to lengthen that list. |
 
 Verified surface, as of `main`:
 
@@ -31,20 +32,15 @@ Verified surface, as of `main`:
 
 ## Next
 
-The v0.0.2-alpha.1 batch is on `feat/self-description` (over
-`fix/serve-drain`), verified and matching main on every example, not
-merged: it is published only on the user's word. A release is tagged and
-published once a whole batch is done and accepted, never per fix.
+v0.0.2-alpha.2 is on `feat/typed-protocol`: the protocol's operation
+table types each field and the server checks every request against it;
+each operation's request as JSON Schema; an MCP door (`orla serve
+<scene> --mcp`) whose tools are the operations. Accepted by a fresh
+agent that reached Orla only over MCP. It is merged, tagged and
+published on the user's word; a release is cut once a whole batch is
+done and accepted, never per fix.
 
-The next batch, v0.0.2-alpha.2, agreed with the user:
-
-1. The protocol's operation table types each field structurally (a
-   string, an integer, a number, a bool, a fixed array, one of some
-   values, an object), and the server checks every request's types
-   against it before an operation reads it; the document renders it.
-2. Each operation's request as JSON Schema, from that table.
-3. An MCP door onto the same protocol: each operation a tool, its schema
-   the table's, so any MCP agent drives Orla.
-
-Accepted by a fresh agent that reaches Orla only over MCP. The replay
-and command-line tables stay as they are.
+Left from that acceptance, not taken up: a field's type is checked
+before the operation's own hint about its meaning is given; `compose`
+edits append without a blank line; `read` answers a large picture as
+base64 in full.
