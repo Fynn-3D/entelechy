@@ -43,9 +43,13 @@ impl Part {
         Schema::new([vec![Scalar::Int; ints], vec![Scalar::Float; floats]].concat())
     }
 
-    /// The part rows of `schema` are, when they are one.
+    /// The part rows of `schema` are, when they are one: by the scalars
+    /// a Kernel sees, however each is kept (triangles as `u16`, joints as
+    /// `u8`), since what is read of them is read widened.
     pub fn of(schema: &Schema) -> Option<Part> {
-        Part::ALL.into_iter().find(|part| &part.schema() == schema)
+        Part::ALL
+            .into_iter()
+            .find(|part| part.schema().scalars() == schema.scalars())
     }
 }
 
@@ -61,4 +65,32 @@ pub fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A part is known by its scalars, not by how they are kept: narrow
+    /// triangles and joints are the parts they are. (Compared whole,
+    /// encodings and all, a mesh with `u16` triangles was no mesh.)
+    #[test]
+    fn a_part_kept_narrow_is_the_part_it_is() {
+        let narrow = |part: Part, encoding: &str| {
+            part.schema()
+                .with_encoding(orla_host::encoding::Encoding::parse(encoding).unwrap())
+                .unwrap()
+        };
+        assert_eq!(
+            Part::of(&narrow(Part::Triangles, "u16")),
+            Some(Part::Triangles)
+        );
+        assert_eq!(
+            Part::of(&narrow(Part::Triangles, "u8")),
+            Some(Part::Triangles)
+        );
+        assert_eq!(Part::of(&Part::Triangles.schema()), Some(Part::Triangles));
+        assert_eq!(Part::of(&Part::Vertices.schema()), Some(Part::Vertices));
+        assert_eq!(Part::of(&Schema::pixel()), None);
+    }
 }
