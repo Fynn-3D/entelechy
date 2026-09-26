@@ -81,7 +81,10 @@ document intentional compatibility changes. A commit is not a release.
 
 ## Verification
 
-A change to the code is verified by all of this before it is committed. Run
+A commit on a branch is verified by the tests of the crates it touches,
+formatted and linted, and by its own regression test, seen to fail
+without the change. A branch is verified by all of this once, before it
+merges; a failure is fixed on the branch and the whole run repeated. Run
 it in the background: each step is timed into `target/verify.log`, which
 `tail -f` shows as it goes, and the first step that fails stops the run with
 its output there.
