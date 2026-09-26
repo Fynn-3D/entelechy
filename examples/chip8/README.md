@@ -21,6 +21,6 @@ blank (screen) ────┘
 `--backend jit` runs the step as native code.
 
 ```sh
-cargo run --release -p orla-player -- examples/chip8/scene.osn --window 640x320
-cargo run -- replay examples/chip8/tests/chip8.replay
+orla player examples/chip8/scene.osn --window 640x320
+orla replay examples/chip8/tests/chip8.replay
 ```

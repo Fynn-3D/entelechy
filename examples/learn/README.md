@@ -17,7 +17,7 @@ The replay pins the loss at the start and after 160 steps, and three
 pixels of the answer, on all three backends.
 
 ```sh
-cargo run --release -p orla-player -- examples/learn/scene.osn
-cargo run --release -- replay examples/learn/tests/learn.replay --backend jit
-cargo run --release -- render examples/learn/scene.osn --frames 120 --backend gpu --out /tmp/learn
+orla player examples/learn/scene.osn
+orla replay examples/learn/tests/learn.replay --backend jit
+orla render examples/learn/scene.osn --frames 120 --backend gpu --out /tmp/learn
 ```

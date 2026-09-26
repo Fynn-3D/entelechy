@@ -6,6 +6,6 @@ image by another with trilinear `at_linear`. On the GPU the volume
 stays resident between nodes and across frames.
 
 ```sh
-cargo run --release -p orla-player -- examples/volume/scene.osn --backend gpu
-cargo run -- replay examples/volume/tests/cloud.replay
+orla player examples/volume/scene.osn --backend gpu
+orla replay examples/volume/tests/cloud.replay
 ```

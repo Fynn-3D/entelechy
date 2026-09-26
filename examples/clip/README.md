@@ -9,8 +9,8 @@ pipeline: ffmpeg writes a directory of PNGs, the scene reads it as
 `frames`, `render` writes the result.
 
 ```sh
-cargo run --release -p orla-player -- examples/clip/scene.osn
-cargo run --release -- replay examples/clip/tests/clip.replay
+orla player examples/clip/scene.osn
+orla replay examples/clip/tests/clip.replay
 ffmpeg -i in.mp4 clip/%04d.png          # a real clip in, at its rate
-cargo run --release -- render examples/clip/scene.osn --frames 120 --rate 30 --out /tmp/out
+orla render examples/clip/scene.osn --frames 120 --rate 30 --out /tmp/out
 ```

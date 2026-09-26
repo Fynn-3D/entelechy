@@ -9,7 +9,7 @@ the panel is in the 3D view's sidebar (N), tab "Orla". Preferences hold
 the host and port of a running session:
 
 ```sh
-cargo run --release -p orla-player -- examples/model/scene.osn --serve --listen 127.0.0.1:7788
+orla player examples/model/scene.osn --serve --listen 127.0.0.1:7788
 ```
 
 **Axes**: Blender is z-up and Orla's scenes, like glTF, are y-up; the
@@ -68,6 +68,6 @@ land.
 of it:
 
 ```sh
-cargo run -- serve examples/mesh/scene.osn --listen 127.0.0.1:7788 &
+orla serve examples/mesh/scene.osn --listen 127.0.0.1:7788 &
 /Applications/Blender.app/Contents/MacOS/Blender -b --python bridges/blender/test_bridge.py -- --port 7788 --out /tmp/orla-bridge
 ```

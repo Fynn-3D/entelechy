@@ -514,7 +514,7 @@ fn new_scene(args: &[String]) -> Result<(), String> {
         .map(|path| dir.join(path))
         .unwrap_or_else(|| dir.join("tests"));
     eprintln!(
-        "play it:  orla-player {}\nrun it:   orla run {} --window 640x400 --out frame.ppm\ntest it:  orla replay {}",
+        "play it:  orla player {}\nrun it:   orla run {} --window 640x400 --out frame.ppm\ntest it:  orla replay {}",
         scene.display(),
         scene.display(),
         replay.display()

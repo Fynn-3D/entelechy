@@ -13,6 +13,6 @@ level.bin ─ bytes ─┬─ draw (the map and its entities)
 ```
 
 ```sh
-cargo run --release -p orla-player -- examples/level/scene.osn
-cargo run --release -- replay examples/level/tests/level.replay
+orla player examples/level/scene.osn
+orla replay examples/level/tests/level.replay
 ```

@@ -21,6 +21,6 @@ Every step is integer work; the replay pins its counts exactly on the
 interpreter, the JIT and the GPU.
 
 ```sh
-cargo run --release -p orla-player -- examples/collapse/scene.osn
-cargo run --release -- replay examples/collapse/tests/collapse.replay
+orla player examples/collapse/scene.osn
+orla replay examples/collapse/tests/collapse.replay
 ```

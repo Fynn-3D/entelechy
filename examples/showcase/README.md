@@ -20,6 +20,6 @@ The replay uses a 160 by 90 window: it clicks the colour item, stops
 the turntable, drags and reads the yaw, then resets.
 
 ```sh
-cargo run --release -p orla-player -- examples/showcase/scene.osn --scale 1
-cargo run -- replay examples/showcase/tests/showcase.replay --backend gpu
+orla player examples/showcase/scene.osn --scale 1
+orla replay examples/showcase/tests/showcase.replay --backend gpu
 ```

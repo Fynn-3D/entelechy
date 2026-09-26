@@ -19,6 +19,6 @@ Hold the mouse button to pull the particles toward the pointer.
 `tests/settle.replay` follows one particle and pins its cell and pixel.
 
 ```sh
-cargo run --release -p orla-player -- examples/particles/scene.osn --scale 3
-cargo run -- replay examples/particles/tests/settle.replay
+orla player examples/particles/scene.osn --scale 3
+orla replay examples/particles/tests/settle.replay
 ```

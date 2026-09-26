@@ -63,14 +63,18 @@ a diagnostic at `file:line:column` while the old one keeps running.
 
 ## Start
 
-Requires Rust 1.93 or later.
+Download a release from [Releases](https://github.com/Fynn-3D/orla/releases),
+unpack it, and run `bin/orla` from its directory:
 
 ```sh
-cargo run --release -- new hello                       # a scene that runs: Kernel, scene, test
-cargo run --release -p orla-player -- hello/scene.osn  # open it in a window; edit the Kernel live
-cargo run --release -- run examples/grayscale/scene.osn --out gray.png
-cargo run --release -- help                            # everything a Kernel may call
+bin/orla new hello                                  # a scene that runs: Kernel, scene, test
+bin/orla player hello/scene.osn                     # open it in a window; edit the Kernel live
+bin/orla run examples/grayscale/scene.osn --out gray.png
+bin/orla help                                       # everything a Kernel may call
 ```
+
+From the source (Rust 1.93 or later), `cargo build --release` puts the
+same programs in `target/release/`.
 
 ## For AI agents
 
@@ -78,7 +82,7 @@ An agent creates through one open protocol: JSON lines over stdin and stdout, a 
 or a C function. Any model, any language, any CLI; the same authority rules for all.
 
 ```sh
-cargo run --release -- serve examples/life/scene.osn
+bin/orla serve examples/life/scene.osn
 ```
 
 ```text

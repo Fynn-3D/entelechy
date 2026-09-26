@@ -21,6 +21,6 @@ back to the Host once a frame. `tests/decided.replay` pins the count at
 three heights on all three backends with `expect count`.
 
 ```sh
-cargo run --release -p orla-player -- examples/decided/scene.osn --backend gpu
-cargo run -- replay examples/decided/tests/decided.replay
+orla player examples/decided/scene.osn --backend gpu
+orla replay examples/decided/tests/decided.replay
 ```

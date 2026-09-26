@@ -21,8 +21,8 @@ three files back as a GLB.
 an embedded PNG texture, and a node transform.
 
 ```sh
-cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
-cargo run -p orla-export -- examples/model/assets/crate.vertices.field examples/model/assets/crate.triangles.field examples/model/assets/crate.albedo.png --out crate.glb
-cargo run --release -p orla-player -- examples/model/scene.osn --backend gpu
-cargo run -- replay examples/model/tests/model.replay
+orla import examples/model/source/crate.glb --out examples/model/assets
+orla export examples/model/assets/crate.vertices.field examples/model/assets/crate.triangles.field examples/model/assets/crate.albedo.png --out crate.glb
+orla player examples/model/scene.osn --backend gpu
+orla replay examples/model/tests/model.replay
 ```

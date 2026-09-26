@@ -7,6 +7,6 @@ tile edge); and `at_linear_wrapped` from the shared library, which
 blends four wrapped `at` reads and has no seam.
 
 ```sh
-cargo run --release -p orla-player -- examples/scroll/scene.osn
-cargo run -- replay examples/scroll/tests/scroll.replay
+orla player examples/scroll/scene.osn
+orla replay examples/scroll/tests/scroll.replay
 ```

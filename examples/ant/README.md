@@ -8,6 +8,6 @@ vectors throughout: `icoord() / zoom` finds a pixel's cell, `isize(cells)`
 wraps the walk, and `put` writes a cell by its integer address.
 
 ```sh
-cargo run --release -p orla-player -- examples/ant/scene.osn
-cargo run -- replay examples/ant/tests/ant.replay
+orla player examples/ant/scene.osn
+orla replay examples/ant/tests/ant.replay
 ```

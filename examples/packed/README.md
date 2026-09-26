@@ -23,5 +23,5 @@ numbers. `tests/packed.replay` pins height, a normal and the light on all
 three backends, with tolerances of one encoding step.
 
 ```sh
-cargo run --release -p orla-player -- examples/packed/scene.osn
+orla player examples/packed/scene.osn
 ```

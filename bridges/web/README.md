@@ -7,14 +7,14 @@ Nothing in the Rust workspace depends on it, and it knows nothing about
 how Orla is built.
 
 ```sh
-cargo run --release -p orla-player -- examples/voxel/scene.osn --serve --listen 127.0.0.1:7788
+orla player examples/voxel/scene.osn --serve --listen 127.0.0.1:7788
 open bridges/web/index.html      # or any browser, straight from the file
 ```
 
 Browsers speak WebSocket, so the listener answers a connection that opens
 with an HTTP upgrade in WebSocket frames and every other connection in
 plain lines; the JSON inside is the same. `orla serve` without a window
-works the same way (`cargo run -- serve examples/text/scene.osn --listen
+works the same way (`orla serve examples/text/scene.osn --listen
 127.0.0.1:7788`); then the page's canvas is the only window, and the
 session sizes window-shaped scenes by it.
 

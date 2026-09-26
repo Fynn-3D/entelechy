@@ -7,6 +7,6 @@ arithmetic on the cell composed from `at`. The source puts shapes
 against the edges, where the folding shows.
 
 ```sh
-cargo run --release -p orla-player -- examples/blur/scene.osn
-cargo run -- replay examples/blur/tests/blur.replay
+orla player examples/blur/scene.osn
+orla replay examples/blur/tests/blur.replay
 ```

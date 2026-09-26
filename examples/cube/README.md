@@ -11,6 +11,6 @@ Parameters: `lens` is a `Mat4`, `edges` an `[IVec2; 12]`, and `style` a
 `mat4(..)` lens and a positional `Style`.
 
 ```sh
-cargo run --release -p orla-player -- examples/cube/scene.osn
-cargo run -- replay examples/cube/tests/cube.replay
+orla player examples/cube/scene.osn
+orla replay examples/cube/tests/cube.replay
 ```

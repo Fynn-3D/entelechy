@@ -139,9 +139,9 @@ A picture drawn by one Kernel over the window. Every pixel works out its
 own colour from where it is and what time it is.
 
 ```sh
-cargo run --release -p orla-player -- {name}/scene.osn     # a window
-cargo run --release -- run {name}/scene.osn --window 640x400 --out frame.ppm
-cargo run --release -- replay {name}/tests/{name}.replay
+orla player {name}/scene.osn     # a window
+orla run {name}/scene.osn --window 640x400 --out frame.ppm
+orla replay {name}/tests/{name}.replay
 ```
 
 Change `kernels/{name}.orla` while the Player is open and the picture
@@ -226,9 +226,9 @@ every frame, which the scene plays through `output sound`, and the
 picture draws the block it just wrote.
 
 ```sh
-cargo run --release -p orla-player -- {name}/scene.osn     # plays it
-cargo run --release -- render {name}/scene.osn --frames 120 --out out/
-cargo run --release -- replay {name}/tests/{name}.replay
+orla player {name}/scene.osn     # plays it
+orla render {name}/scene.osn --frames 120 --out out/
+orla replay {name}/tests/{name}.replay
 ```
 
 Change `pitch` in the scene, or the partials in the Kernel, and save;
@@ -349,8 +349,8 @@ carried from frame to frame with `<~`: where the walker is, two
 integers, and the grid of marks, which fades by one a frame.
 
 ```sh
-cargo run --release -p orla-player -- {name}/scene.osn     # arrow keys
-cargo run --release -- replay {name}/tests/{name}.replay
+orla player {name}/scene.osn     # arrow keys
+orla replay {name}/tests/{name}.replay
 ```
 
 What to try next: hold a `struct` per cell instead of an `Int` so a

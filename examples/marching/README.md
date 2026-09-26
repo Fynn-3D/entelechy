@@ -9,6 +9,6 @@ distance to the one or two segments. Cases and cells are data, not an
 `if` chain.
 
 ```sh
-cargo run --release -p orla-player -- examples/marching/scene.osn
-cargo run -- replay examples/marching/tests/marching.replay
+orla player examples/marching/scene.osn
+orla replay examples/marching/tests/marching.replay
 ```

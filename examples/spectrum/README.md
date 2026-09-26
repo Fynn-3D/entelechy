@@ -14,7 +14,7 @@ voice ─┬─ bins ─┬─ peak ─┬─ hertz ─ label ─ glyphs ─┐
 ```
 
 ```sh
-cargo run --release -p orla-player -- examples/spectrum/scene.osn
-cargo run --release -- replay examples/spectrum/tests/spectrum.replay
-cargo run --release -- run examples/spectrum/scene.osn --window 320x200 --save voice.result=tone.wav
+orla player examples/spectrum/scene.osn
+orla replay examples/spectrum/tests/spectrum.replay
+orla run examples/spectrum/scene.osn --window 320x200 --save voice.result=tone.wav
 ```

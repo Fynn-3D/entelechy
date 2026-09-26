@@ -11,7 +11,7 @@ rate. The clock retriggers every second; so does Space.
 `bake.osn`. Any drum in its place plays.
 
 ```sh
-cargo run -- run examples/sampler/bake.osn --save kick=examples/sampler/assets/kick.wav
-cargo run --release -p orla-player -- examples/sampler/scene.osn --scale 3
-cargo run -- replay examples/sampler/tests/sampler.replay
+orla run examples/sampler/bake.osn --save kick=examples/sampler/assets/kick.wav
+orla player examples/sampler/scene.osn --scale 3
+orla replay examples/sampler/tests/sampler.replay
 ```

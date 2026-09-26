@@ -17,7 +17,7 @@ checks, on all three backends, that two distant pixels are the same grey
 with levels and far apart without them.
 
 ```sh
-cargo run --release -p orla-player -- examples/mipmap/scene.osn
-cargo run --release -- run examples/mipmap/scene.osn --window 800x450 --param mip=false --out flat.ppm
-cargo run --release -- replay examples/mipmap/tests/ground.replay
+orla player examples/mipmap/scene.osn
+orla run examples/mipmap/scene.osn --window 800x450 --param mip=false --out flat.ppm
+orla replay examples/mipmap/tests/ground.replay
 ```

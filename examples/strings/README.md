@@ -19,8 +19,8 @@ line is ordered: the head reads what an earlier sample wrote. `draw`
 stretches each line across the window.
 
 ```sh
-cargo run --release -p orla-player -- examples/strings/scene.osn
-cargo run --release -- replay examples/strings/tests/pluck.replay
+orla player examples/strings/scene.osn
+orla replay examples/strings/tests/pluck.replay
 ```
 
 The replay pins samples and lines, and the interpreter, the JIT and the

@@ -12,6 +12,6 @@ The replay sets `param seed` and `param prefill`, drops a piece into
 the gap, and checks the row clears and the cells above fall.
 
 ```sh
-cargo run --release -p orla-player -- examples/blocks/scene.osn --scale 2
-cargo run -- replay examples/blocks/tests/blocks.replay
+orla player examples/blocks/scene.osn --scale 2
+orla replay examples/blocks/tests/blocks.replay
 ```

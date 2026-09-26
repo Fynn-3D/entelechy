@@ -1,37 +1,7 @@
 //! Declarative replay: an application's tests as data. A replay drives a
 //! scene through scripted frames and inputs and checks what they produce.
-//!
-//! ```text
-//! scene ../scene.osn        # required; paths are relative to the replay file
-//! library ../kernels/       # optional extra Kernels beyond the scene's `use`
-//! frame 0.0                 # evaluate at this session time
-//! pointer 20 20 down        # move the pointer and press; `up` releases
-//! pointer up                # release without moving
-//! button right down         # a pointer button: left, right, middle; `up` releases
-//! wheel 0 -1                # the scroll for the next frame only
-//! window 240 135            # the window's size in pixels, for `window()`,
-//! window 240 135 0.25       # and its scale factor (default one)
-//! key 67 down               # press a key by code; `up` releases
-//! reset                     # forget committed state
-//! param exposure 1.5        # override a graph parameter (a literal)
-//! expect 11 10 = 1.0 1.0 1.0        # r g b of the last output, tolerance 0.01
-//! expect 11 10 = 1.0 1.0 1.0 0.05   # explicit tolerance
-//! expect step.result[0].score = 1   # a field of an element of a node's output:
-//!                                   # ints and bools exact, floats and vectors
-//!                                   # with an optional trailing tolerance
-//! expect fall.result[0].speed > 2.5 # or a strict bound on every component:
-//!                                   # `<`, `<=`, `>`, `>=`, numbers only
-//! expect count ground.result = 6889 # how many elements a node's output holds
-//! expect placed ring main           # the node runs on the session's main
-//! expect placed filter ordered      # backend, or off it (a scan on a GPU
-//!                                   # session); `ordered` reads as `main`
-//!                                   # where there is no second backend
-//! ```
-//!
-//! Nodes named by element or count expectations are pinned before the
-//! first frame, so fusion keeps them. A frame evaluates only what its
-//! expectations need: the named nodes, the state, and the picture only
-//! when a pixel expectation follows it.
+//! Every form a line takes is in `docs/USAGE.md`, *Replay tests*, which
+//! [`parse`] is held to.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -806,6 +776,38 @@ fn check_element(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The forms `docs/USAGE.md` lists all parse, and cover every step.
+    #[test]
+    fn the_documented_forms_parse_and_cover_every_step() {
+        let usage = include_str!("../../../../docs/USAGE.md");
+        let section = usage.split("## Replay tests").nth(1).unwrap();
+        let block = section.split("```text\n").nth(1).unwrap();
+        let block = block.split("```").next().unwrap();
+        let replay = parse(block, Path::new(".")).unwrap();
+        assert!(replay.kernels.is_some(), "`library` is listed");
+        let mut seen = [false; 15];
+        for step in &replay.steps {
+            seen[match step {
+                Step::Frame(_) => 0,
+                Step::Settle => 1,
+                Step::Pointer { .. } => 2,
+                Step::Key { .. } => 3,
+                Step::Button { .. } => 4,
+                Step::Wheel(_) => 5,
+                Step::Stick { .. } => 6,
+                Step::Window { .. } => 7,
+                Step::Reset => 8,
+                Step::ResetPort { .. } => 9,
+                Step::Param { .. } => 10,
+                Step::ExpectElement { .. } => 11,
+                Step::ExpectCount { .. } => 12,
+                Step::ExpectPlaced { .. } => 13,
+                Step::Expect { .. } => 14,
+            }] = true;
+        }
+        assert!(seen.iter().all(|seen| *seen), "a step unlisted: {seen:?}");
+    }
 
     #[test]
     fn an_element_is_held_equal_or_to_one_side() {

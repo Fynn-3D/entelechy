@@ -15,6 +15,6 @@ committed evaluation. Hold the mouse button to paint, hold C to clear,
 press F5 to restart from the seed.
 
 ```sh
-cargo run --release -p orla-player -- examples/life/scene.osn --scale 4
-cargo run -- replay examples/life/tests/blinker.replay
+orla player examples/life/scene.osn --scale 4
+orla replay examples/life/tests/blinker.replay
 ```

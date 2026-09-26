@@ -21,7 +21,7 @@ three backends; `tests/elbow.replay` aims a non-root joint and checks
 that weight zero gives the clip's pose.
 
 ```sh
-cargo run --release -p orla-player -- examples/reach/scene.osn
-cargo run -- replay examples/reach/tests/reach.replay
-cargo run -- replay examples/reach/tests/elbow.replay
+orla player examples/reach/scene.osn
+orla replay examples/reach/tests/reach.replay
+orla replay examples/reach/tests/elbow.replay
 ```

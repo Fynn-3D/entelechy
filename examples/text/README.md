@@ -26,7 +26,7 @@ The replay pins pixels of the title, the specimen, and the readout
 before and after the pointer moves.
 
 ```sh
-cargo run -- run examples/text/bake.osn --save font=packages/text.orlapkg/font.png
-cargo run --release -p orla-player -- examples/text/scene.osn --scale 4
-cargo run -- replay examples/text/tests/text.replay
+orla run examples/text/bake.osn --save font=packages/text.orlapkg/font.png
+orla player examples/text/scene.osn --scale 4
+orla replay examples/text/tests/text.replay
 ```

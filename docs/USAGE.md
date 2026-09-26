@@ -5,7 +5,12 @@
 `orla` prints every command and flag with no arguments; this page is the
 commands with a line to run and what their flags mean. `orla player`,
 `orla import` and `orla export` run `orla-player`, `orla-import` and
-`orla-export` beside `orla` with the same arguments. Build and verify:
+`orla-export` beside `orla` with the same arguments.
+
+In a release, `orla` is `bin/orla`, and the paths below are relative to
+the unpacked directory. From the source, `cargo build --release` puts
+every program in `target/release/`, and `cargo run --release --` runs
+`orla`:
 
 ```sh
 cargo build --workspace
@@ -15,8 +20,8 @@ cargo test --workspace
 ## Start here
 
 ```sh
-cargo run --release -- new hello
-cargo run --release -p orla-player -- hello/scene.osn
+orla new hello
+orla player hello/scene.osn
 ```
 
 `orla new <dir>` writes a directory that runs: a Kernel, the scene that
@@ -30,9 +35,9 @@ alone and says why.
 ## What a Kernel may call and write
 
 ```sh
-cargo run -- help              # every builtin and form, one line each
-cargo run -- help smoothstep   # a builtin's signatures, meaning, capability
-cargo run -- help each         # a form's shape and meaning
+orla help              # every builtin and form, one line each
+orla help smoothstep   # a builtin's signatures, meaning, capability
+orla help each         # a form's shape and meaning
 ```
 
 The listing comes from the compiler's own tables, so it is what
@@ -42,7 +47,7 @@ in [DOCUMENTS](DOCUMENTS.md).
 ## Check a Kernel
 
 ```sh
-cargo run -- check --ir examples/grayscale/kernels/grayscale.orla
+orla check --ir examples/grayscale/kernels/grayscale.orla
 ```
 
 Compiles `.orla` or `.osn` files and prints their manifests, or
@@ -53,7 +58,7 @@ backend runs it, with where work is counted (`work spend`) and looked at
 ## Run a scene
 
 ```sh
-cargo run -- run examples/grayscale/scene.osn --out output.ppm
+orla run examples/grayscale/scene.osn --out output.ppm
 ```
 
 Evaluates a `.osn` scene once. Flags:
@@ -105,13 +110,13 @@ Evaluates a `.osn` scene once. Flags:
 nodes were still running and which landed.
 
 ```sh
-cargo run -p orla-player -- examples/save/scene.osn --allow file.write=examples/save/saves
+orla player examples/save/scene.osn --allow file.write=examples/save/saves
 ```
 
 ## Render frames
 
 ```sh
-cargo run --release -- render examples/audio/scene.osn --frames 300 --out /tmp/audio
+orla render examples/audio/scene.osn --frames 300 --out /tmp/audio
 ffmpeg -framerate 60 -i /tmp/audio/%04d.png -i /tmp/audio/sound.wav -pix_fmt yuv420p /tmp/audio.mp4
 ```
 
@@ -129,8 +134,8 @@ scene reads back (`input weights: Rows<Float> = "weights.field";`).
 ## Trace one element
 
 ```sh
-cargo run --release -- trace examples/thumb/scene.osn --node machine --element 9352 --window 128x128
-cargo run -- trace examples/life/scene.osn --node life --at 3 4
+orla trace examples/thumb/scene.osn --node machine --element 9352 --window 128x128
+orla trace examples/life/scene.osn --node life --at 3 4
 ```
 
 Evaluates the scene once (at `--time`, zero by default, under `--param`
@@ -147,7 +152,7 @@ run, and commits nothing. The protocol's `trace` is the same as JSON.
 ## Packages and versions
 
 ```sh
-cargo run -- package packages/text.orlapkg
+orla package packages/text.orlapkg
 ```
 
 `orla package <dir.orlapkg>` checks a package's manifest and says what
@@ -161,7 +166,7 @@ is refused with both numbers.
 ## Inspect a graph
 
 ```sh
-cargo run -- graph examples/grayscale/scene.osn
+orla graph examples/grayscale/scene.osn
 ```
 
 Prints the flattened graph in canonical form, the published Kernels with
@@ -172,7 +177,7 @@ only reader over the same domain; `--no-fusion` turns it off.
 ## Measure a scene
 
 ```sh
-cargo run --release -- bench examples/collapse/scene.osn \
+orla bench examples/collapse/scene.osn \
     --window 640x400 --backend all --frames 20 --repeat 3 --nodes
 ```
 
@@ -190,7 +195,7 @@ measurement ([PROTOCOL](PROTOCOL.md)).
 ## Backends
 
 ```sh
-cargo run --release -- run examples/raymarch/scene.osn --backend gpu --out march.ppm
+orla run examples/raymarch/scene.osn --backend gpu --out march.ppm
 ```
 
 `run`, `render`, `replay`, `serve`, `trace` and the Player take
@@ -210,7 +215,7 @@ is the default; the Player's default is `best`.
 ## Hot reload
 
 ```sh
-cargo run -- run examples/grayscale/scene.osn --out output.ppm --watch
+orla run examples/grayscale/scene.osn --out output.ppm --watch
 ```
 
 Save the scene or any document it uses: the Kernels whose text changed
@@ -222,7 +227,7 @@ retires.
 ## Player
 
 ```sh
-cargo run --release -p orla-player -- examples/material-ball/scene.osn
+orla player examples/material-ball/scene.osn
 ```
 
 Opens a scene in a window and keeps it live, watching files as `--watch`
@@ -257,24 +262,47 @@ Escape closes the window.
 ## Replay tests
 
 ```sh
-cargo run -- replay examples/life/tests/blinker.replay
-cargo run --release -p orla-player -- --replay examples/voxel/tests/voxel.replay
+orla replay examples/life/tests/blinker.replay
+orla player --replay examples/voxel/tests/voxel.replay
 ```
 
-An application's tests are `.replay` files next to its scene: frames,
-pointer and key input, the window (`window 240 135 0.25`), state resets,
-`settle` (waits for every `async` run to land), and expectations:
+An application's tests are `.replay` files next to its scene, one step a
+line, `#` to the end of a line a comment. Every form:
 
-- a pixel: `expect 11 10 = 1.0 1.0 1.0`, with an optional tolerance;
-- a field of an element of a node's output, by its declared name:
-  `expect step.result[0].score = 1`, `expect sum.result[0].a = 32`; ints
-  and bools compare exactly, floats within the tolerance; `<`, `<=`, `>`,
-  `>=` hold every component to one side of a bound;
-- placement: `expect placed ring main` or `expect placed filter ordered`;
-  a session with one backend reads both as `main`.
+```text
+scene ../scene.osn        # required; paths are relative to the replay file
+library ../kernels/       # optional Kernels beyond the scene's `use`
+frame 0.0                 # evaluate at this session time
+settle                    # wait for every `async` run to land
+pointer 20 20 down        # move the pointer and press; `up` releases
+pointer up                # press or release without moving
+button right down         # left, right, middle, or a pad's south, east,
+button south up           # west, north, l1, r1, l3, r3, start, select
+stick left 0.5 -1         # a pad's left, right or triggers pair
+wheel 0 -1                # the scroll for the next frame only
+window 240 135            # the window in pixels, for `window()`,
+window 240 135 0.25       # and its scale factor (one when not given)
+key 67 down               # a key by code; `up` releases
+reset                     # forget every node's committed state
+reset step.result         # forget one port's
+param exposure 1.5        # set a graph parameter to a literal
+expect 11 10 = 1.0 1.0 1.0        # the picture's r g b at x y, tolerance 0.01
+expect 11 10 = 1.0 1.0 1.0 0.05   # with its own tolerance
+expect step.result[0].score = 1   # a field of an element of a node's output
+expect fall.result[0].speed > 2.5 # every component past a bound: < <= > >=
+expect count ground.result = 6889 # how many elements a node's output holds
+expect placed ring main           # where a node runs: main, or ordered (a
+expect placed filter ordered      # scan off a GPU session's main backend)
+```
 
-The format is documented at the top of
-[the replay module](../crates/interface/session/src/replay.rs). Key codes
+A pixel is the colour the Kernel wrote, each channel a float from 0 to 1
+(not 0 to 255), at `x y` from the picture's top left. Ints and bools
+compare exactly, floats and vectors within the tolerance. A session with
+one backend reads `ordered` as `main`. Nodes an expectation names are
+pinned before the first frame, so fusion keeps them; a frame evaluates
+only what its expectations need.
+
+Key codes
 follow the browser's: letters and digits by ASCII uppercase, space 32,
 enter 13, arrows 37 to 40. In the Player, a replay drives the scene at
 its own times, prints what it observed at the end, and leaves the window
@@ -283,10 +311,10 @@ to the person.
 ## Import and export
 
 ```sh
-cargo run -p orla-import -- examples/model/source/crate.glb --out examples/model/assets
-cargo run -p orla-import -- examples/skin/source/arm.glb --out examples/skin/assets
-cargo run -p orla-import -- song.ogg --out assets   # writes assets/song.wav
-cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
+orla import examples/model/source/crate.glb --out examples/model/assets
+orla import examples/skin/source/arm.glb --out examples/skin/assets
+orla import song.ogg --out assets   # writes assets/song.wav
+orla import examples/score/song.mid --out examples/score/assets
 ```
 
 `orla-import` writes what a scene takes as inputs, into `--out <dir>`
@@ -305,10 +333,10 @@ cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
   seconds, key, velocity 0 to 1, channel).
 
 ```sh
-cargo run -p orla-export -- crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
-cargo run -p orla-export -- kick.field --out kick.wav --rate 48000
-cargo run -p orla-export -- atlas.field --out atlas.png
-cargo run -p orla-export -- song.notes.field --out song.mid --beats 100
+orla export crate.vertices.field crate.triangles.field crate.albedo.png --out crate.glb
+orla export kick.field --out kick.wav --rate 48000
+orla export atlas.field --out atlas.png
+orla export song.notes.field --out song.mid --beats 100
 ```
 
 `orla-export` writes Host files as other software's formats: vertex,
@@ -321,7 +349,7 @@ back bit for bit.
 ## Creation protocol
 
 ```sh
-cargo run -- serve examples/life/scene.osn
+orla serve examples/life/scene.osn
 ```
 
 Agents drive a session with JSON lines on stdin and stdout;
@@ -342,7 +370,8 @@ DYLD_LIBRARY_PATH=target/release ./hello examples/text/scene.osn jit
 ```
 
 `orla-ffi` builds `liborla_ffi`, dynamic and static, behind the C header
-[`orla.h`](../crates/interface/ffi/include/orla.h). A host opens a scene
+[`orla.h`](../crates/interface/ffi/include/orla.h) (`include/orla.h` and
+`lib/liborla_ffi.dylib` in a release). A host opens a scene
 from a path or from files it hands in, evaluates it under its own input,
 and reads an output or pinned node in place as a pointer with extent,
 stride, shape and schema; `orla_request` takes one protocol line. A
@@ -356,7 +385,7 @@ next evaluate, request or close; one thread at a time per session.
 their program's language that speak the protocol over `--listen`:
 
 ```sh
-cargo run --release -p orla-player -- --serve --listen 127.0.0.1:7788 examples/mesh/scene.osn
+orla player --serve --listen 127.0.0.1:7788 examples/mesh/scene.osn
 cargo test -p orla --test bridges   # web through node and Chrome, Godot through godot -s
 ```
 

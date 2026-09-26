@@ -15,7 +15,7 @@ device paces evaluation: the next block is computed when the Player's
 ring can take it. Hold the pointer to bend the pitch with x and pan with y.
 
 ```sh
-cargo run --release -p orla-player -- examples/audio/scene.osn
-cargo run --release -p orla-player -- examples/audio/scene.osn --no-audio
-cargo run -- replay examples/audio/tests/scope.replay
+orla player examples/audio/scene.osn
+orla player examples/audio/scene.osn --no-audio
+orla replay examples/audio/tests/scope.replay
 ```

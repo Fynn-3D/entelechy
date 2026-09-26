@@ -7,9 +7,9 @@ colours. The scene `use`s the package for its Kernels and places the
 preset by path as a node; both reach one Kernel file.
 
 ```sh
-cargo run --release -p orla-player -- examples/package/scene.osn
-cargo run -- replay examples/package/tests/package.replay
-cargo run -- package packages/pixelfx.orlapkg
-cargo run -- pack packages/pixelfx.orlapkg /tmp/pixelfx.orlapkg
-cargo run -- unpack /tmp/pixelfx.orlapkg /tmp/pixelfx
+orla player examples/package/scene.osn
+orla replay examples/package/tests/package.replay
+orla package packages/pixelfx.orlapkg
+orla pack packages/pixelfx.orlapkg /tmp/pixelfx.orlapkg
+orla unpack /tmp/pixelfx.orlapkg /tmp/pixelfx
 ```

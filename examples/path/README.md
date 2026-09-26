@@ -17,7 +17,7 @@ mean, and the reset on drag; the interpreter and the JIT match word for
 word, the GPU to the last place.
 
 ```sh
-cargo run --release -p orla-player -- examples/path/scene.osn
-cargo run --release -- replay examples/path/tests/path.replay
-cargo run --release -- render examples/path/scene.osn --frames 32 --backend gpu --window 320x240 --param samples=8 --out /tmp/path
+orla player examples/path/scene.osn
+orla replay examples/path/tests/path.replay
+orla render examples/path/scene.osn --frames 32 --backend gpu --window 320x240 --param samples=8 --out /tmp/path
 ```

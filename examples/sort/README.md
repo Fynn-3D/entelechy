@@ -8,6 +8,6 @@ every half second. The [`sort` package](../../packages/sort.orlapkg) is
 a radix sort, built from `prefix` and `scatter`.
 
 ```sh
-cargo run --release -p orla-player -- examples/sort/scene.osn --backend gpu
-cargo run -- replay examples/sort/tests/sort.replay
+orla player examples/sort/scene.osn --backend gpu
+orla replay examples/sort/tests/sort.replay
 ```

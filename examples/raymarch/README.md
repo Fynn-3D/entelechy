@@ -7,5 +7,5 @@ are `loop` and `if` expressions in `kernels/march.orla`, carrying
 Edit the `scene` function or `steps` in `scene.osn` while it runs.
 
 ```sh
-cargo run --release -p orla-player -- examples/raymarch/scene.osn
+orla player examples/raymarch/scene.osn
 ```

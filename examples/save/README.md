@@ -16,6 +16,6 @@ session reports the skipped write. On start, `saved` reads the file, or
 `tests/tally.replay` uses a fixture that writes nothing.
 
 ```sh
-cargo run --release -p orla-player -- examples/save/scene.osn --allow file.write=examples/save/saves
-cargo run -- replay examples/save/tests/tally.replay
+orla player examples/save/scene.osn --allow file.write=examples/save/saves
+orla replay examples/save/tests/tally.replay
 ```

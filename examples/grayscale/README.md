@@ -7,7 +7,7 @@ gradient -> grayscale -> pixelate -> output.ppm
 ```
 
 ```sh
-cargo run -- run examples/grayscale/scene.osn --out output.ppm --watch
+orla run examples/grayscale/scene.osn --out output.ppm --watch
 ```
 
 While it runs, edit `amount` in `scene.osn`, the luma weights in

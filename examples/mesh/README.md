@@ -19,7 +19,7 @@ rasterizer's edge contract: a triangle with a corner at `w <= 0` is
 skipped whole, and so is a triangle whose three corners are one vertex.
 
 ```sh
-cargo run --release -p orla-player -- examples/mesh/scene.osn --backend gpu
-cargo run -- replay examples/mesh/tests/torus.replay
-cargo run -- replay examples/mesh/tests/near.replay
+orla player examples/mesh/scene.osn --backend gpu
+orla replay examples/mesh/tests/torus.replay
+orla replay examples/mesh/tests/near.replay
 ```

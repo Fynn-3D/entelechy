@@ -716,7 +716,7 @@ Application tests are `.replay` files: `scene <path>`, optional
 `library <path>`, then `frame`, `pointer`, `key`, `reset` (all state, or
 `reset node.port` for one port's), and `expect` lines: a pixel, a field
 of an element (`expect step.result[0].score = 1`), or an output's
-element count (`expect count ground.result = 576`). See [the replay
-module](../crates/interface/session/src/replay.rs). A replay is a test,
+element count (`expect count ground.result = 576`). Every form is in
+[USAGE](USAGE.md#replay-tests). A replay is a test,
 not a way to keep a piece made with a scene; see `docs/DECISIONS.md`,
 *A replay is a test*.

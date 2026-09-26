@@ -33,6 +33,6 @@ words, `write` words into `world.result`. The Player speaks the
 protocol with `--serve`.
 
 ```sh
-cargo run --release -p orla-player -- examples/voxel/scene.osn --scale 1
-cargo run -- replay examples/voxel/tests/voxel.replay --backend gpu
+orla player examples/voxel/scene.osn --scale 1
+orla replay examples/voxel/tests/voxel.replay --backend gpu
 ```

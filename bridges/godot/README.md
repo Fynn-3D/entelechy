@@ -7,7 +7,7 @@ Rust workspace depends on it, and it knows nothing about how Orla is
 built.
 
 ```sh
-cargo run --release -- serve examples/fluid/scene.osn --backend jit --listen 127.0.0.1:7788
+orla serve examples/fluid/scene.osn --backend jit --listen 127.0.0.1:7788
 godot --path bridges/godot          # or open the folder in the Godot editor and press play
 ```
 

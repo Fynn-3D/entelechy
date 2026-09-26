@@ -24,6 +24,6 @@ summed |divergence| before and after projection), then stirs and reads
 the velocities and the smoke.
 
 ```sh
-cargo run --release -p orla-player -- examples/fluid/scene.osn --scale 3
-cargo run -- replay examples/fluid/tests/fluid.replay --backend gpu
+orla player examples/fluid/scene.osn --scale 3
+orla replay examples/fluid/tests/fluid.replay --backend gpu
 ```

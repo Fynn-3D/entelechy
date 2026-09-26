@@ -26,6 +26,6 @@ The skirmish replay asserts on the state rows through a selection, a
 strike, and an enemy turn.
 
 ```sh
-cargo run --release -p orla-player -- examples/slg/scene.osn --scale 3
-cargo run -- replay examples/slg/tests/skirmish.replay
+orla player examples/slg/scene.osn --scale 3
+orla replay examples/slg/tests/skirmish.replay
 ```

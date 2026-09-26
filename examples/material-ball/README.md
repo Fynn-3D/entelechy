@@ -14,6 +14,6 @@ is open; a Kernel that does not compile reports a diagnostic and the last
 good version keeps rendering.
 
 ```sh
-cargo run --release -p orla-player -- examples/material-ball/scene.osn
-cargo run --release -- run examples/material-ball/scene.osn --out ball.ppm
+orla player examples/material-ball/scene.osn
+orla run examples/material-ball/scene.osn --out ball.ppm
 ```

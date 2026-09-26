@@ -16,7 +16,7 @@ The replay pins the count in RAM after the first step, the same count
 while the second runs, and the landed count after `settle`.
 
 ```sh
-cargo run --release -p orla-player -- examples/async/scene.osn
-cargo run --release -- replay examples/async/tests/async.replay --backend jit
-cargo run --release -- run --backend jit --window 64x64 examples/async/scene.osn
+orla player examples/async/scene.osn
+orla replay examples/async/tests/async.replay --backend jit
+orla run --backend jit --window 64x64 examples/async/scene.osn
 ```

@@ -20,6 +20,6 @@ ordered and stable, that no cell exceeds `cap`, and that every-pair draws
 the same picture to rounding.
 
 ```sh
-cargo run --release -p orla-player -- examples/neighbours/scene.osn
-cargo run -- replay examples/neighbours/tests/neighbours.replay
+orla player examples/neighbours/scene.osn
+orla replay examples/neighbours/tests/neighbours.replay
 ```

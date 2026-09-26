@@ -4,41 +4,8 @@
 //! Player use. The contract is these operations and the session's
 //! authority rules.
 //!
-//! A request is one JSON object per line with an `op` and an optional `id`,
-//! echoed back. A response is one line, `{"id", "ok": ...}` or
-//! `{"id", "error": {"message", "line"?, "column"?}}`. An error carries its
-//! actionable parts as data: an unknown operation lists the `operations`,
-//! an unknown `help` name the `similar` ones, a failed evaluation its
-//! `node` (for a state migration, also `port` and `migration`) and a run's
-//! `frame`.
-//!
-//! | op | request fields | ok |
-//! | --- | --- | --- |
-//! | `status` | | backend, scene, watched, kernels, nodes, revision, frame |
-//! | `kernels` | | list of manifests with generations |
-//! | `kernel` | `kernel` (the Kernel's id), `generation`? (one the session remembers) | manifest, generation, source, as `publish` takes it |
-//! | `graph` | | inputs, params, nodes, outputs |
-//! | `document` | `version`? (one the session remembers) | path, text and version of the scene |
-//! | `history` | `since`? (a revision) | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
-//! | `compose` | `text` or `edits` (each names a statement, or a node's `member`, with its `text` or null), `expect`? (a version) | checks, then writes the scene and syncs; events, version |
-//! | `sync` | | events |
-//! | `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
-//! | `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
-//! | `retire` | `kernel` (the Kernel's id) | retired |
-//! | `param` | `name` (a param the scene declares), `value` | name, value, events; a node's own value is refused, and changes by `compose` |
-//! | `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `window`? (`[w, h]` in pixels), `scale`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
-//! | `advance` | `frames`, `fps`?, `time`?, the context `evaluate` takes, `until`? (`{target, below / above / equals}`), `save`? | frames, stopped, target, value, saved, millis, report |
-//! | `bench` | `frames`?, `fps`?, `repeat`?, `nodes`? | backend, frames, repeat, best_ms, median_ms, nodes, ran |
-//! | `window` | `size` (`[w, h]` in pixels, or null for none), `scale`? | the window a headless session reports to evaluations that name none |
-//! | `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
-//! | `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
-//! | `snapshot` | `to`? (a file, where `--allow file.write` allows) | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
-//! | `restore` | `snapshot` (as `snapshot` gave it) or `from` (its file), `laws` = `"current"` / `"snapshot"`, `structure`? = `"current"` / `"snapshot"`, the context `evaluate` takes | the world restored after a trial frame that commits nothing; revision, report |
-//! | `reset` | `node`?, `port`? (`result` when not named) | forgets the committed state, or that one port's alone; `<~` readers restart from their initial sources |
-//! | `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
-//! | `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
-//! | `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
-//! | `quit` | | bye |
+//! The envelope, and every operation with its fields and answer, are in
+//! `docs/PROTOCOL.md`, *Operations*, which [`OPERATIONS`] is held to.
 //!
 //! Each operation lives in the module for what it may do: [`inspect`]
 //! reads the session, [`create`] changes the scene and its Kernels, [`run`]
@@ -170,14 +137,16 @@ mod tests {
     use crate::wire::diagnostic_json;
     use orla_kernel::Value;
 
-    /// The module table names exactly the operations the server answers,
+    /// The protocol document's table names exactly the operations the server answers,
     /// and an unknown name is told the list.
     #[test]
     fn the_table_is_every_operation_and_every_operation_is_answered() {
-        let documented: Vec<&str> = include_str!("lib.rs")
+        let protocol = include_str!("../../../../docs/PROTOCOL.md");
+        let operations = protocol.split("## Operations").nth(1).unwrap();
+        let operations = operations.split("\n## ").next().unwrap();
+        let documented: Vec<&str> = operations
             .lines()
-            .take_while(|line| line.starts_with("//!"))
-            .filter_map(|line| line.strip_prefix("//! | `"))
+            .filter_map(|line| line.strip_prefix("| `"))
             .flat_map(|row| {
                 let cell = row.split(" |").next().unwrap_or_default();
                 cell.split(" / ").map(|op| op.trim_matches('`'))

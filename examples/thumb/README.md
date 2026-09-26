@@ -26,6 +26,6 @@ program, and hold on the CPU, the JIT and the GPU. A GPU session runs
 the scan on the JIT and the picture on the device.
 
 ```sh
-cargo run --release -p orla-player -- examples/thumb/scene.osn --backend jit --window 512x512
-cargo run -- replay examples/thumb/tests/thumb.replay --backend jit
+orla player examples/thumb/scene.osn --backend jit --window 512x512
+orla replay examples/thumb/tests/thumb.replay --backend jit
 ```

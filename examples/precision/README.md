@@ -18,6 +18,6 @@ three backends, then moves the part near the origin, where both halves
 draw the ring.
 
 ```sh
-cargo run --release -p orla-player -- examples/precision/scene.osn
-cargo run -- replay examples/precision/tests/precision.replay
+orla player examples/precision/scene.osn
+orla replay examples/precision/tests/precision.replay
 ```

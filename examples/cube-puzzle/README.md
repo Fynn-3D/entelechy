@@ -24,8 +24,8 @@ init ─ step <~ ─ act ─ delta ─ grads (scatter) ─ step; loss           
 frames of `scene.osn`.
 
 ```sh
-cargo run --release -p orla-player -- examples/cube-puzzle/scene.osn
-cargo run --release -p orla-player -- examples/cube-puzzle/play.osn
-cargo run --release -- replay examples/cube-puzzle/tests/cube-puzzle.replay --backend jit
-cargo run --release -- render examples/cube-puzzle/scene.osn --frames 300 --backend jit --window 64x64 --out /tmp/cube-puzzle --save step.result=examples/cube-puzzle/weights.field
+orla player examples/cube-puzzle/scene.osn
+orla player examples/cube-puzzle/play.osn
+orla replay examples/cube-puzzle/tests/cube-puzzle.replay --backend jit
+orla render examples/cube-puzzle/scene.osn --frames 300 --backend jit --window 64x64 --out /tmp/cube-puzzle --save step.result=examples/cube-puzzle/weights.field
 ```

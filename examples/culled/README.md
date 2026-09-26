@@ -22,6 +22,6 @@ node ground: world.ground@1 {
 stick or arrow keys steer; without input the camera sweeps on its own.
 
 ```sh
-cargo run --release -p orla-player -- examples/culled/scene.osn --backend gpu
-cargo run -- replay examples/culled/tests/culled.replay
+orla player examples/culled/scene.osn --backend gpu
+orla replay examples/culled/tests/culled.replay
 ```

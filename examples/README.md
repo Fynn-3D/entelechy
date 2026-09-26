@@ -10,7 +10,7 @@ What several scenes share is a package in
 `ORLA_PACKAGES` set, by name.
 
 ```sh
-cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
+orla run examples/<example>/scene.osn --out output.ppm --watch
 ```
 
 ## Language and execution modes

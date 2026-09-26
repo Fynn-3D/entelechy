@@ -10,7 +10,7 @@ so edits to it show while the Player runs. `bake.osn` draws it from
 `tiles.atlas` and saves it with `run --save`.
 
 ```sh
-cargo run -- run examples/tiles/bake.osn --save atlas=examples/tiles/assets/atlas.png
-cargo run --release -p orla-player -- examples/tiles/scene.osn
-cargo run -- replay examples/tiles/tests/flood.replay
+orla run examples/tiles/bake.osn --save atlas=examples/tiles/assets/atlas.png
+orla player examples/tiles/scene.osn
+orla replay examples/tiles/tests/flood.replay
 ```

@@ -17,11 +17,9 @@ when a whole evaluation succeeds.
 {"id": 2, "error": {"message": "`nope` is not defined", "line": 4, "column": 20}}
 ```
 
-Operations, fields and results are defined in
-[the protocol module](../crates/interface/protocol/src/lib.rs);
-[the end-to-end test](../crates/interface/orla/tests/protocol.rs) drives
-the binary as a client. An unknown operation is an error listing every
-one in `operations`.
+Every operation, its fields and its answer are in
+[Operations](#operations); an unknown operation is an error listing
+every one in `operations`.
 
 The loop an agent runs:
 
@@ -33,6 +31,44 @@ compose   compose with expect = <version>, text or edits (checks, then rewrites 
 observe   evaluate, read (rgba32f or ppm, base64)
 repair    the same operations again; retire; reset
 ```
+
+## Operations
+
+A request is one JSON object a line, with an `op` and an optional `id`
+echoed back. An answer is one line, `{"id", "ok": ...}` or `{"id",
+"error": {"message", "line"?, "column"?}}`. An error carries what acts
+on it as data: an unknown operation the `operations`, an unknown `help`
+name the `similar` ones, a failed evaluation its `node` (a state
+migration's also `port` and `migration`) and a run's `frame`. A field
+marked `?` may be left out.
+
+| op | request fields | ok |
+| --- | --- | --- |
+| `status` | | backend, scene, watched, kernels (native operations included), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
+| `kernels` | | list of manifests with generations |
+| `kernel` | `kernel` (the Kernel's id), `generation`? (one the session remembers) | manifest, generation, source, as `publish` takes it |
+| `graph` | | inputs, params, nodes, outputs |
+| `document` | `version`? (one the session remembers) | path, text and version of the scene |
+| `history` | `since`? (a revision) | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
+| `compose` | `text` or `edits` (each names a statement, or a node's `member`, with its `text` or null), `expect`? (a version) | checks, then writes the scene and syncs; events, version |
+| `sync` | | events |
+| `prepare` | `source` (a document with one Kernel; it inherits the scene's declarations) | id, manifest (nothing published) |
+| `publish` | `source`, `expect` = `"absent"` / `"any"` / generation | id, generation |
+| `retire` | `kernel` (the Kernel's id) | retired |
+| `param` | `name` (a param the scene declares), `value` | name, value, events; a node's own value is refused, and changes by `compose` |
+| `evaluate` | `time`?, `rate`?, `pointer`?, `down`?, `buttons`?, `wheel`?, `keys`?, `window`? (`[w, h]` in pixels), `scale`?, `nodes`? (evaluate only these, the state, and never-produced outputs) | executed, reused, committed, outputs |
+| `advance` | `frames`, `fps`?, `time`?, the context `evaluate` takes, `until`? (`{target, below / above / equals}`), `save`? | frames, stopped, target, value, saved, millis, report |
+| `bench` | `frames`?, `fps`?, `repeat`?, `nodes`? | backend, frames, repeat, best_ms, median_ms, nodes, ran |
+| `window` | `size` (`[w, h]` in pixels, or null for none), `scale`? | the window a headless session reports to evaluations that name none |
+| `read` | `output`? or `node`+`port`, `format`? = `"rgba32f"` / `"ppm"` / `"field"` | width, height, format, data (base64); words for a Field that is not pixels; `field` is the Host's file format for any Field |
+| `write` | `node`, `port`?, `data` (base64 words, or a `field` file with `format`) | replaces the node's committed state; the port must be read by a `<~` binding |
+| `snapshot` | `to`? (a file, where `--allow file.write` allows) | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
+| `restore` | `snapshot` (as `snapshot` gave it) or `from` (its file), `laws` = `"current"` / `"snapshot"`, `structure`? = `"current"` / `"snapshot"`, the context `evaluate` takes | the world restored after a trial frame that commits nothing; revision, report |
+| `reset` | `node`?, `port`? (`result` when not named) | forgets the committed state, or that one port's alone; `<~` readers restart from their initial sources |
+| `help` | `name`? | every builtin and form, or the one named; an unknown name is an error with `similar` |
+| `trace` | `node`, `at` or `element`, the context `evaluate` takes | kernel, at, bindings, results, calls |
+| `pin` / `unpin` | `node` | keeps a node materialized so `read` can see it |
+| `quit` | | bye |
 
 ## Transports
 
@@ -54,7 +90,8 @@ repair    the same operations again; retire; reset
   origin named by `--allow-origin <origin>` (`https://host:port` as a
   browser writes it).
 - **In process.** `orla_request` in
-  [`orla.h`](../crates/interface/ffi/include/orla.h) takes one line and
+  [`orla.h`](../crates/interface/ffi/include/orla.h) (`include/orla.h` in a
+  release) takes one line and
   returns its answer, beside the C functions that evaluate and read
   Fields in place.
 - A socket request (a line or a WebSocket message) is at most 256 MiB; a

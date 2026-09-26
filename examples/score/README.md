@@ -5,7 +5,7 @@ of notes (start, duration, key, velocity, channel), which the scene
 takes as an input Field:
 
 ```sh
-cargo run -p orla-import -- examples/score/song.mid --out examples/score/assets
+orla import examples/score/song.mid --out examples/score/assets
 ```
 
 `voice` sums the sounding notes into each sound block; `roll` paints
@@ -19,9 +19,9 @@ song.mid ─ orla-import ─ song.notes.field ─┬─ voice (the sound)
 ```
 
 ```sh
-cargo run --release -p orla-player -- examples/score/scene.osn
-cargo run --release -- replay examples/score/tests/score.replay
-cargo run --release -- run examples/score/scene.osn --window 480x240 --save voice.result=bar.wav
+orla player examples/score/scene.osn
+orla replay examples/score/tests/score.replay
+orla run examples/score/scene.osn --window 480x240 --save voice.result=bar.wav
 ```
 
 Notes written by a Kernel export the same way: `--save

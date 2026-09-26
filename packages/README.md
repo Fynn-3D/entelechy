@@ -17,7 +17,7 @@ node display: graph "../../packages/picture.orlapkg/graphs/display.osn" { ... }
 or by name, when `ORLA_PACKAGES` lists the directory it is in:
 
 ```sh
-ORLA_PACKAGES=/path/to/orla/packages cargo run -- run scene.osn
+ORLA_PACKAGES=/path/to/orla/packages orla run scene.osn
 ```
 
 ```text

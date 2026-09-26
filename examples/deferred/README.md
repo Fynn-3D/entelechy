@@ -19,5 +19,5 @@ the camera. The replay pins G-buffer values, the outline, and the lit
 picture on all three backends.
 
 ```sh
-cargo run --release -p orla-player -- examples/deferred/scene.osn
+orla player examples/deferred/scene.osn
 ```
