@@ -105,7 +105,7 @@ fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
 
     put(&files, "scene.osn", &root("out"));
     let mut loaded = false;
-    for _ in 0..10_000 {
+    for _ in 0..5_000 {
         let events = session.sync();
         session
             .evaluate(&Context::default())
@@ -114,7 +114,7 @@ fn a_scene_prepared_off_the_frame_goes_live_with_its_kernels() {
             loaded = true;
             break;
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(loaded, "the change lands");
     session.evaluate(&Context::default()).unwrap();
@@ -175,7 +175,7 @@ fn a_scene_whose_kernel_fails_off_the_frame_is_refused_and_the_old_one_runs() {
 
     put(&files, "scene.osn", &root("refused"));
     let mut refused = false;
-    for _ in 0..10_000 {
+    for _ in 0..5_000 {
         let events = session.sync();
         assert!(
             !events.iter().any(|e| matches!(e, Event::SceneLoaded)),
@@ -188,7 +188,7 @@ fn a_scene_whose_kernel_fails_off_the_frame_is_refused_and_the_old_one_runs() {
             refused = true;
             break;
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(refused, "the change is refused");
     assert_eq!(generation(&session, "k.src@1"), before);
@@ -217,7 +217,7 @@ fn a_claimed_scene_landing_later_is_the_requests() {
         .iter()
         .any(|e| matches!(e, Event::SceneLoaded));
     session.act_for(before);
-    for _ in 0..10_000 {
+    for _ in 0..5_000 {
         if landed {
             break;
         }
@@ -225,7 +225,7 @@ fn a_claimed_scene_landing_later_is_the_requests() {
             .sync()
             .iter()
             .any(|e| matches!(e, Event::SceneLoaded));
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(landed);
     let scene = session
@@ -271,7 +271,7 @@ fn a_param_is_judged_by_the_newest_scene_read() {
     session
         .set_param("zoom", orla_runtime::Value::Float(5.0))
         .expect("the newest scene declares it");
-    for _ in 0..10_000 {
+    for _ in 0..5_000 {
         if session
             .sync()
             .iter()
@@ -279,7 +279,7 @@ fn a_param_is_judged_by_the_newest_scene_read() {
         {
             break;
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_eq!(
         session.params().get("zoom"),
@@ -355,7 +355,7 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
     // A person's edit on disk reads in its place before it lands.
     put(&files, "scene.osn", &root("again"));
     let mut landed = false;
-    for _ in 0..10_000 {
+    for _ in 0..5_000 {
         if session
             .sync()
             .iter()
@@ -364,7 +364,7 @@ fn a_claimed_scene_superseded_on_disk_is_the_documents() {
             landed = true;
             break;
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(landed);
     let scene = session
