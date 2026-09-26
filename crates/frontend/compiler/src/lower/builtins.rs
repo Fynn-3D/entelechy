@@ -478,6 +478,15 @@ impl Builder<'_> {
                 for arg in args {
                     let part = self.value(arg)?;
                     let part = self.adapt(part, kind);
+                    if matches!(kind, Type::Float | Type::Double) && self.is_truncated(part) {
+                        return Err(semantic(
+                            arg.span,
+                            format!(
+                                "`{name}` would take a whole number that is not what was written{}",
+                                self.truncated_hint(&[part])
+                            ),
+                        ));
+                    }
                     let part_ty = self.ty(part);
                     given.push(part_ty.to_string());
                     let (from, count) = match part_ty.shape() {

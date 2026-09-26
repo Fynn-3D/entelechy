@@ -122,7 +122,10 @@ impl Builder<'_> {
                         let (a, b) = written;
                         // Two widths of one kind meet through a conversion.
                         let widths = [a.scalar(), b.scalar()];
-                        let hint = if widths.contains(&Some(Type::Float))
+                        let hint = self.truncated_hint(&[left, right]);
+                        let hint = if !hint.is_empty() {
+                            hint
+                        } else if widths.contains(&Some(Type::Float))
                             && widths.contains(&Some(Type::Double))
                         {
                             "; a float and a double meet through `double(..)` or `float(..)`"

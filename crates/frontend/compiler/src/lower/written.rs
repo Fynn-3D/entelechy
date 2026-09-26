@@ -39,15 +39,28 @@ impl Builder<'_> {
     /// that fails, which is left to fail where it runs.
     pub(super) fn fold_written(&mut self, op: BinaryOp, a: ValueId, b: ValueId) -> Option<ValueId> {
         let (x, y) = (*self.literals.get(&a.0)?, *self.literals.get(&b.0)?);
+        let truncated = self.truncated.contains(&a.0) || self.truncated.contains(&b.0);
         let number = match (x, y) {
-            (Number::Long(x), Number::Long(y)) => Number::Long(match op {
-                BinaryOp::Add => x.checked_add(y)?,
-                BinaryOp::Sub => x.checked_sub(y)?,
-                BinaryOp::Mul => x.checked_mul(y)?,
-                BinaryOp::Div if y != 0 => x.checked_div(y)?,
-                BinaryOp::Rem if y != 0 => x.checked_rem(y)?,
-                _ => return None,
-            }),
+            (Number::Long(x), Number::Long(y)) => {
+                // A division that leaves a remainder is whole, not exact:
+                // it stays an integer, and says so to whatever meets it.
+                let dropped = op == BinaryOp::Div && y != 0 && x % y != 0;
+                let folded = self.written(Number::Long(match op {
+                    BinaryOp::Add => x.checked_add(y)?,
+                    BinaryOp::Sub => x.checked_sub(y)?,
+                    BinaryOp::Mul => x.checked_mul(y)?,
+                    BinaryOp::Div if y != 0 => x.checked_div(y)?,
+                    BinaryOp::Rem if y != 0 => x.checked_rem(y)?,
+                    _ => return None,
+                }));
+                if truncated || dropped {
+                    self.truncated.insert(folded.0);
+                }
+                return Some(folded);
+            }
+            // A truncated integer beside a written float is not folded:
+            // an integer meets a float, and is refused where it does.
+            _ if truncated => return None,
             _ => {
                 let exact = |n: Number| match n {
                     Number::Long(v) => v as f64,
@@ -66,6 +79,21 @@ impl Builder<'_> {
             }
         };
         Some(self.written(number))
+    }
+
+    /// Whether `id` is a written integer a division left a remainder of,
+    /// which no float takes.
+    pub(super) fn is_truncated(&self, id: ValueId) -> bool {
+        self.truncated.contains(&id.0)
+    }
+
+    /// What a refusal says of a truncated written integer meeting a float.
+    pub(super) fn truncated_hint(&self, ids: &[ValueId]) -> &'static str {
+        if ids.iter().any(|id| self.is_truncated(*id)) {
+            "; a division of whole numbers that leaves a remainder is whole, not a fraction: write `1.0 / 2` for a half"
+        } else {
+            ""
+        }
     }
 
     /// `-a` of a written number, as a written number.
@@ -203,6 +231,7 @@ impl Builder<'_> {
         match (self.literals.get(&id.0)?, want) {
             (Number::Double(v), Type::Double) => Some(Value::Double(*v)),
             (Number::Double(v), Type::Float) => Some(Value::Float(*v as f32)),
+            (Number::Long(_), Type::Double | Type::Float) if self.is_truncated(id) => None,
             (Number::Long(v), Type::Double) => Some(Value::Double(*v as f64)),
             (Number::Long(v), Type::Float) => Some(Value::Float(*v as f32)),
             (Number::Long(v), Type::Long) => Some(Value::Long(*v)),

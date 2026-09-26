@@ -222,7 +222,10 @@ and the result is still a written number; beside a `Double` a written
 `0.1` is the double nearest a tenth, not the float's, beside a `Long` a
 written integer is a long, beside a `Float` a written integer is a
 float, and an integer too big for an `Int` is a `Long` wherever it is
-written. A vector, a matrix or an array built of written numbers alone
+written. A division of written whole numbers is whole, as an `Int`'s
+is: `7 / 2` is `3`, and one that leaves a remainder is refused beside a
+float rather than taken as the float it truncated to (`x * (1 / 2)`
+says to write `1.0 / 2`). A vector, a matrix or an array built of written numbers alone
 (`vec3(0.1, 0.2, 0.3)`, `[0.5, 0.25]`) takes the width it meets as a
 whole, given to a `DVec3` or a `[Double; 2]`, beside one in an
 operation, or among the branches of an `if` or the elements of an

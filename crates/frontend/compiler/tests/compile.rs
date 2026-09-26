@@ -1503,3 +1503,39 @@ fn nested_builders_are_refused_before_they_run_away() {
 fn account_ok(module: &orla_ir::Validated) -> orla_ir::Validated {
     orla_ir::account(module).unwrap_or_else(|error| panic!("{error}"))
 }
+
+/// A division of written whole numbers that leaves a remainder is whole,
+/// not a fraction: beside a float it is refused, loudly, rather than
+/// taken as the float it truncated to (`x * (1 / 2)` was `x * 0.0`). One
+/// that divides exactly is a written number like any other.
+#[test]
+fn a_written_division_with_a_remainder_is_no_float() {
+    let kernel = |body: &str| {
+        format!(
+            "kernel t.h@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ {body} }} }}"
+        )
+    };
+    for body in [
+        "let x = 3.0; return x * (1 / 2);",
+        "return (1 / 2) + 0.5;",
+        "let x = 3.0; return x * (7 / 2 * 2);",
+        "let v = vec2(1 / 2, 1.0); return v.x;",
+        "return pow(3.0, 1 / 2);",
+    ] {
+        let (_, message) = semantic(&kernel(body));
+        assert!(
+            message.contains("Int") || message.contains("whole"),
+            "{body}: {message}"
+        );
+    }
+    let (_, message) = semantic(&kernel("let x = 3.0; return x * (1 / 2);"));
+    assert!(message.contains("write `1.0 / 2`"), "{message}");
+    // Exact, or named first as the integer it is: taken as written.
+    for body in [
+        "let x = 3.0; return x * (4 / 2);",
+        "return 1.0 / 2;",
+        "let h = 7 / 2; return float(h);",
+    ] {
+        compile(&kernel(body)).unwrap_or_else(|e| panic!("{body}: {e}"));
+    }
+}

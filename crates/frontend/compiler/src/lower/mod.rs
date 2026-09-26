@@ -531,6 +531,9 @@ struct Builder<'a> {
     /// The vectors, matrices and arrays built of written numbers alone
     /// that nothing has named yet: each takes the kind it meets as whole.
     aggregates: BTreeSet<u32>,
+    /// Written integers a division left a remainder of (`1 / 2`): whole,
+    /// but not what was written, so no float or double takes them.
+    truncated: BTreeSet<u32>,
 }
 
 impl<'a> Builder<'a> {
@@ -552,6 +555,7 @@ impl<'a> Builder<'a> {
             bindings: Vec::new(),
             literals: std::collections::HashMap::new(),
             aggregates: BTreeSet::new(),
+            truncated: BTreeSet::new(),
         }
     }
 
@@ -802,6 +806,7 @@ impl<'a> Builder<'a> {
                 // A name fixes a number's width: every use sees one value.
                 self.literals.remove(&id.0);
                 self.aggregates.remove(&id.0);
+                self.truncated.remove(&id.0);
                 if name.value != "_" {
                     self.bindings.push((id, name.value.clone()));
                 }
