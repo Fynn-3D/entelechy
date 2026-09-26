@@ -295,12 +295,8 @@ pub(crate) fn snapshot(session: &mut Session, request: &Request) -> Result<Json,
     };
     // Written where the person running the session allowed, whole.
     let target = session
-        .allowed_write(&path)
+        .write_file(&path, json.to_string().as_bytes())
         .map_err(|why| failure(format!("cannot write the snapshot: {why}")))?;
-    session
-        .store()
-        .write(&target, json.to_string().as_bytes())
-        .map_err(|e| failure(format!("{}: {e}", target.display())))?;
     Ok(json!({
         "path": target.display().to_string(),
         "revision": snapshot.revision,
@@ -338,13 +334,9 @@ pub(crate) fn restore(session: &mut Session, request: &Request) -> Result<Json, 
                     .unwrap_or_else(|| std::path::Path::new("."))
                     .join(path)
             };
-            session
-                .allowed_read(&path)
-                .map_err(|why| failure(format!("cannot read the snapshot: {why}")))?;
             let text = session
-                .store()
-                .read_text(&path)
-                .map_err(|e| failure(format!("{}: {e}", path.display())))?;
+                .read_file(&path)
+                .map_err(|why| failure(format!("cannot read the snapshot: {why}")))?;
             read = serde_json::from_str::<Json>(&text)
                 .map_err(|e| failure(format!("{}: not a snapshot: {e}", path.display())))?;
             &read

@@ -31,7 +31,7 @@ pub(crate) fn compose_with(
     settle: bool,
 ) -> Result<Json, Json> {
     let root = session.root().to_path_buf();
-    let written = session.store().read_text(&root);
+    let written = session.scene_text();
     let current = written
         .as_ref()
         .map(|text| document_version(text))
@@ -59,20 +59,19 @@ pub(crate) fn compose_with(
         }
         _ => request.text("text")?,
     };
-    // Rejected as a sync would reject it, and the document on disk, and
-    // so the scene running, left as they were.
-    if let Err(why) = session.check_scene(&text) {
+    // Rejected as a sync would reject it, the document on disk, and so
+    // the scene running, are left as they were; replaced, it is replaced
+    // whole, so a reader, the session's own watcher included, never sees
+    // half of it.
+    if let Err(why) = session
+        .write_scene(&text)
+        .map_err(|e| failure(e.to_string()))?
+    {
         return Ok(json!({
             "events": events_json(&[orla_session::Event::SceneRejected(why)]),
             "version": current,
         }));
     }
-    // Replaced whole: a reader, the session's own watcher included, never
-    // sees half of it.
-    session
-        .store()
-        .write(&root, text.as_bytes())
-        .map_err(|e| failure(format!("{}: {e}", root.display())))?;
     // The scene this reads is this request's change, answered whole: its
     // Kernels published and the scene replaced, or refused.
     session.claim_scene();

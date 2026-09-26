@@ -107,9 +107,11 @@ impl Session {
         }
     }
 
-    /// Where the session's documents are, for what its caller reads and
-    /// writes on its behalf.
-    pub fn store(&self) -> &dyn Store {
+    /// Where the session's documents are. Only the session reads and
+    /// writes them: what a caller reads or writes on another's behalf goes
+    /// through [`Session::read_file`], [`Session::write_file`] and
+    /// [`Session::write_scene`], which ask what may be first.
+    pub(crate) fn store(&self) -> &dyn Store {
         self.scene.store().as_ref()
     }
 
@@ -399,6 +401,44 @@ impl Session {
     /// over the protocol, asks before it writes anywhere.
     pub fn allowed_write(&self, path: &Path) -> Result<std::path::PathBuf, String> {
         self.writes.place(self.scene.store().as_ref(), path)
+    }
+
+    /// The scene document's text as it stands in the store.
+    pub fn scene_text(&self) -> std::io::Result<String> {
+        self.store().read_text(self.scene.root())
+    }
+
+    /// Reads `path` where the session may read ([`Session::allowed_read`]).
+    pub fn read_file(&self, path: &Path) -> Result<String, String> {
+        self.allowed_read(path)?;
+        self.store()
+            .read_text(path)
+            .map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Writes `bytes` to `path`, whole, where the session may write
+    /// ([`Session::allowed_write`]); answers where they landed.
+    pub fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
+        let target = self.allowed_write(path)?;
+        self.store()
+            .write(&target, bytes)
+            .map_err(|e| format!("{}: {e}", target.display()))?;
+        Ok(target)
+    }
+
+    /// Replaces the scene document with `text`, whole, once it is known to
+    /// load as a sync would load it ([`Session::check_scene`]): refused,
+    /// the document, and so the scene running, are left as they were. The
+    /// outer error is the store's; the inner, why the scene was refused.
+    pub fn write_scene(&self, text: &str) -> Result<Result<(), crate::Diagnostic>, SessionError> {
+        if let Err(why) = self.check_scene(text) {
+            return Ok(Err(why));
+        }
+        let root = self.scene.root();
+        self.store()
+            .write(root, text.as_bytes())
+            .map_err(|e| SessionError::Io(root.to_path_buf(), e))?;
+        Ok(Ok(()))
     }
 
     /// Where every node of the scene runs: the backend, and why it is not

@@ -162,8 +162,7 @@ pub(crate) fn document(session: &Session, request: &Request) -> Result<Json, Jso
         );
     }
     let text = session
-        .store()
-        .read_text(session.root())
+        .scene_text()
         .map_err(|e| failure(format!("{}: {e}", session.root().display())))?;
     let version = crate::create::document_version(&text);
     Ok(json!({ "path": session.root().display().to_string(), "text": text, "version": version }))
