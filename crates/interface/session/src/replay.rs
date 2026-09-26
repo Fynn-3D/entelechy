@@ -567,12 +567,14 @@ impl Replayer {
     /// Starts `replay` over a synced `session`, pinning the nodes the
     /// expectations name.
     pub fn start(replay: &Replay, session: &mut Session) -> Self {
+        // What an expectation names, by the node that produces it: a
+        // placed graph's output names the node inside that gives it.
         let named: std::collections::BTreeSet<orla_graph::NodeId> = replay
             .steps
             .iter()
             .filter_map(|step| match step {
-                Step::ExpectElement { node, .. } | Step::ExpectCount { node, .. } => {
-                    Some(orla_graph::NodeId(node.clone()))
+                Step::ExpectElement { node, port, .. } | Step::ExpectCount { node, port, .. } => {
+                    Some(session.producer(&orla_graph::NodeId(node.clone()), port).0)
                 }
                 _ => None,
             })

@@ -177,6 +177,9 @@ pub struct Graph {
     /// Fallbacks: an external's name and the source it reads while the
     /// caller supplies nothing (its file absent or unreadable).
     pub fallbacks: Vec<(String, Source)>,
+    /// Each placed graph's outputs, by the id it was placed under, each
+    /// wired to the node that gives it.
+    pub placed: Vec<(String, Vec<(String, Source)>)>,
 }
 
 /// Structural problems with a graph.
@@ -247,6 +250,29 @@ impl fmt::Display for GraphError {
 impl std::error::Error for GraphError {}
 
 impl Graph {
+    /// The node and port that produce what `node.port` names: a node's
+    /// own port; a placed graph's output (`kept.count`), by the node inside
+    /// it that gives it; or the graph's own output named `node`, as
+    /// `node.result`. `None` when the name is none of these.
+    pub fn producer(&self, node: &NodeId, port: &str) -> Option<(NodeId, String)> {
+        if self.node(node).is_some() {
+            return Some((node.clone(), port.to_owned()));
+        }
+        let wired = |source: &Source| match source {
+            Source::Node { node, port } => Some((node.clone(), port.clone())),
+            Source::External(_) => None,
+        };
+        if let Some((_, outputs)) = self.placed.iter().find(|(id, _)| *id == node.0) {
+            let (_, source) = outputs.iter().find(|(name, _)| name == port)?;
+            return wired(source);
+        }
+        if port == "result" {
+            let (_, source) = self.outputs.iter().find(|(name, _)| *name == node.0)?;
+            return wired(source);
+        }
+        None
+    }
+
     /// The first declared output.
     pub fn primary_output(&self) -> Option<&(String, Source)> {
         self.outputs.first()

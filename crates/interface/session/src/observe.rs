@@ -53,23 +53,6 @@ pub fn parse_target(text: &str) -> Result<(String, String, u32, Vec<String>), St
     Ok((node.0, port, index, path))
 }
 
-/// The source a scene output named `node` is wired to, when `node` is
-/// an output and not a node.
-fn output_source(graph: Option<&Graph>, node: &NodeId, port: &str) -> Option<(NodeId, String)> {
-    let graph = graph?;
-    if graph.nodes.iter().any(|n| n.id == *node) {
-        return None;
-    }
-    let (name, _) = graph
-        .outputs
-        .iter()
-        .find(|(name, _)| name == &node.0 && port == "result")?;
-    match &graph.outputs.iter().find(|(o, _)| o == name)?.1 {
-        orla_graph::Source::Node { node, port } => Some((node.clone(), port.clone())),
-        orla_graph::Source::External(_) => None,
-    }
-}
-
 /// Why a node's output has no value to save: the name is a placed
 /// graph or repeated node, no node, or unevaluated.
 fn why_not_saved(graph: Option<&Graph>, node: &NodeId, port: &str) -> String {
@@ -108,11 +91,11 @@ pub(crate) fn save(
     port: &str,
     path: &Path,
 ) -> Result<(), String> {
-    // A scene output name stands for its wired source.
-    let (node, port) = match output_source(graph, node, port) {
-        Some((node, port)) => (node, port),
-        None => (node.clone(), port.to_owned()),
-    };
+    // A placed graph's output, or a scene output, stands for the node
+    // that gives it.
+    let (node, port) = graph
+        .and_then(|graph| graph.producer(node, port))
+        .unwrap_or_else(|| (node.clone(), port.to_owned()));
     let (node, port) = (&node, port.as_str());
     let Some(handle) = evaluator.cached(node, port) else {
         return Err(why_not_saved(graph, node, port));

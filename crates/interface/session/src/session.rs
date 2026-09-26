@@ -36,6 +36,9 @@ pub struct Session {
     /// The request whose change the scene being read is
     /// ([`Session::claim_scene`]).
     claim: Claim,
+    /// The names asked to stay materialized ([`Session::pin`]), resolved
+    /// against the running graph before each evaluation.
+    pins: Vec<orla_graph::NodeId>,
 }
 
 /// A request's claim on the scene it wrote, from asked to landed. A scene
@@ -97,6 +100,7 @@ impl Session {
             history: crate::history::History::default(),
             origin: crate::Origin::Local,
             claim: Claim::None,
+            pins: Vec::new(),
         }
     }
 
@@ -586,9 +590,20 @@ impl Session {
         self.inputs.handles().get(name).copied()
     }
 
-    /// The cached image of a node's output port, if it was evaluated.
+    /// The node and port that produce what `node.port` names: itself, or
+    /// for a placed graph's output or a scene output, the node that gives
+    /// it ([`orla_graph::Graph::producer`]).
+    pub fn producer(&self, node: &orla_graph::NodeId, port: &str) -> (orla_graph::NodeId, String) {
+        self.scene
+            .graph()
+            .and_then(|graph| graph.producer(node, port))
+            .unwrap_or_else(|| (node.clone(), port.to_owned()))
+    }
+
+    /// The Field last evaluated for what `node.port` names, if any.
     pub fn cached(&self, node: &orla_graph::NodeId, port: &str) -> Option<Handle> {
-        self.evaluator.cached(node, port)
+        let (node, port) = self.producer(node, port);
+        self.evaluator.cached(&node, &port)
     }
 
     /// Waits for every `async` node's run and takes it in; see
@@ -610,6 +625,7 @@ impl Session {
             self.runtime.host_mut(),
             context.time,
         );
+        self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self.evaluator.evaluate(
             graph,
@@ -641,6 +657,7 @@ impl Session {
             self.runtime.host_mut(),
             context.time,
         );
+        self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         let report = self.evaluator.evaluate_for(
             graph,
@@ -662,6 +679,7 @@ impl Session {
         port: &str,
         words: Vec<u32>,
     ) -> Result<(), EvaluateError> {
+        self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         self.evaluator
             .write(graph, &mut self.runtime, node, port, words)?;
@@ -690,6 +708,7 @@ impl Session {
         node: &orla_graph::NodeId,
         port: &str,
     ) -> Result<(), EvaluateError> {
+        self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         self.evaluator
             .reset_port(graph, &mut self.runtime, node, port)?;
@@ -742,13 +761,19 @@ impl Session {
         self.evaluator.fusion()
     }
 
-    /// Keeps a node materialized so its image can be read.
+    /// Keeps what `node` names materialized so it can be read: a node, or
+    /// a placed graph by the nodes that give its outputs. The name holds
+    /// across a scene read again.
     pub fn pin(&mut self, node: orla_graph::NodeId) {
-        self.evaluator.pin(node);
+        if !self.pins.contains(&node) {
+            self.pins.push(node);
+        }
+        self.repin();
     }
 
     /// What would execute right now, in order, with fusion applied.
     pub fn plan(&mut self) -> Result<Vec<orla_graph::PlanEntry>, EvaluateError> {
+        self.repin();
         let graph = self.scene.graph().ok_or_else(no_scene)?;
         self.evaluator.plan_summary(
             graph,
@@ -758,9 +783,40 @@ impl Session {
         )
     }
 
-    /// Lets a node be fused away again.
+    /// Lets fusion have what `node` names back.
     pub fn unpin(&mut self, node: &orla_graph::NodeId) {
-        self.evaluator.unpin(node);
+        self.pins.retain(|pinned| pinned != node);
+        for inner in self.pinned_by(node) {
+            self.evaluator.unpin(&inner);
+        }
+    }
+
+    /// The nodes `name` pins in the running graph: itself, or a placed
+    /// graph's output nodes.
+    fn pinned_by(&self, name: &orla_graph::NodeId) -> Vec<orla_graph::NodeId> {
+        let placed = self
+            .scene
+            .graph()
+            .and_then(|graph| graph.placed.iter().find(|(id, _)| *id == name.0));
+        match placed {
+            Some((_, outputs)) => outputs
+                .iter()
+                .filter_map(|(_, source)| match source {
+                    orla_graph::Source::Node { node, .. } => Some(node.clone()),
+                    orla_graph::Source::External(_) => None,
+                })
+                .collect(),
+            None => vec![name.clone()],
+        }
+    }
+
+    /// Pins what every pinned name names in the running graph.
+    fn repin(&mut self) {
+        for name in self.pins.clone() {
+            for node in self.pinned_by(&name) {
+                self.evaluator.pin(node);
+            }
+        }
     }
 
     // What follows observes: each hands [`observe`] the parts it reads.
@@ -790,7 +846,8 @@ impl Session {
 
     /// How many elements a node's output holds.
     pub fn element_count(&self, node: &orla_graph::NodeId, port: &str) -> Result<usize, String> {
-        observe::element_count(&self.evaluator, &self.runtime, node, port)
+        let (node, port) = self.producer(node, port);
+        observe::element_count(&self.evaluator, &self.runtime, &node, &port)
     }
 
     /// Runs one element of `node`'s Kernel on the interpreter and returns
@@ -844,11 +901,12 @@ impl Session {
         index: u32,
         path: &[String],
     ) -> Result<(orla_ir::Type, Vec<u32>), String> {
+        let (node, port) = self.producer(node, port);
         observe::element_field(
             self.scene.graph(),
             &self.evaluator,
             &mut self.runtime,
-            (node, port),
+            (&node, &port),
             index,
             path,
         )

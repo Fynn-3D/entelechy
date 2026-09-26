@@ -358,6 +358,7 @@ fn lower(
                 nodes: Vec::new(),
                 outputs: Vec::new(),
                 fallbacks: Vec::new(),
+                placed: Vec::new(),
             },
             files: Files::default(),
             inline: Vec::new(),
@@ -1342,6 +1343,7 @@ impl Lowering<'_, '_> {
                         ));
                     }
                     let outputs = self.place(sub_path, base, &id, inputs, node_params)?;
+                    self.out.graph.placed.push((id.0.clone(), outputs.clone()));
                     aliases.insert(id.0.clone(), outputs);
                 }
             }
