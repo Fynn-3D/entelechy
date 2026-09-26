@@ -129,8 +129,12 @@ impl Session {
     ) -> Result<Report, String> {
         // What stands, taken in first: an edit made on disk is part of
         // the world a refused restore returns to.
-        self.sync();
+        self.sync_settled();
         let history = self.history.clone();
+        // The scene that runs and its ledger, to be put back from memory:
+        // the text on disk may be an edit that does not load.
+        let scene_kept = self.scene.keep();
+        let kernels_kept = self.kernels.keep();
         // Every version that runs, to be put back exactly, generations
         // and all, whatever the restore publishes or its scene writes.
         let registry: Vec<(KernelId, Arc<KernelVersion>)> = self
@@ -172,15 +176,21 @@ impl Session {
                 Ok(report)
             }
             Err(why) => {
-                // The scene document back as it was on disk, then every
-                // version that ran, as it ran: what the scene's reading
-                // republished is undone with the rest.
+                // The scene document's bytes back on disk as they were,
+                // written, not read; the scene that ran, its ledger and
+                // every version that ran, as they ran, put back from
+                // memory, whether or not that text would load.
                 let mut why = why;
+                let root = self.scene.root().to_path_buf();
                 if let Some(before) = scene_before
-                    && let Err(also) = self.replace_scene(&before)
+                    && let Err(also) = self.store().write(&root, before.as_bytes())
                 {
-                    why = format!("{why}; and the scene could not be put back: {also}");
+                    why =
+                        format!("{why}; and the scene document could not be written back: {also}");
                 }
+                let stamp = self.store().stamp(&root);
+                self.scene.put_back(scene_kept, stamp);
+                self.kernels.put_back(kernels_kept, &mut self.runtime);
                 let mut back: Vec<(KernelId, Option<Arc<KernelVersion>>)> = self
                     .runtime
                     .kernels()
@@ -193,6 +203,8 @@ impl Session {
                         .map(|(id, version)| (id, Some(version))),
                 );
                 self.runtime.reinstate(back);
+                // The inputs and placements follow the scene put back.
+                self.sync();
                 self.history = history;
                 self.history.refused(
                     format!("the snapshot of revision {}", snapshot.revision),

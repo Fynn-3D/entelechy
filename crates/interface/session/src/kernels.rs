@@ -91,7 +91,36 @@ pub(crate) struct Kernels {
     scene: Option<Vec<(PathBuf, Batch)>>,
 }
 
+/// Which document published which Kernel, kept to be put back whole
+/// ([`Kernels::put_back`]).
+pub(crate) struct Kept {
+    documents: BTreeMap<PathBuf, DocumentState>,
+    owners: BTreeMap<KernelId, PathBuf>,
+}
+
 impl Kernels {
+    /// The ledger as it is, to put back when a change is refused after
+    /// it published: the runtime's own registry is put back beside it.
+    pub(crate) fn keep(&self) -> Kept {
+        Kept {
+            documents: self.documents.clone(),
+            owners: self.owners.clone(),
+        }
+    }
+
+    /// Puts back the ledger [`Kernels::keep`] kept, letting go of every
+    /// change still being prepared.
+    pub(crate) fn put_back(&mut self, kept: Kept, runtime: &mut Runtime) {
+        for (_, batch) in std::mem::take(&mut self.pending) {
+            batch.discard(runtime);
+        }
+        for (_, batch) in self.scene.take().into_iter().flatten() {
+            batch.discard(runtime);
+        }
+        self.documents = kept.documents;
+        self.owners = kept.owners;
+    }
+
     /// Every document that has published, or tried to.
     pub(crate) fn documents(&self) -> Vec<PathBuf> {
         self.documents.keys().cloned().collect()

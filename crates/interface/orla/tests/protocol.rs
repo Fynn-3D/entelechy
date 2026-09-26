@@ -2067,6 +2067,69 @@ fn a_world_restored_with_its_structure_and_put_back_when_it_cannot_run() {
     let _ = std::fs::remove_dir_all(scene.parent().unwrap());
 }
 
+/// A restore with its structure that is refused while the document on
+/// disk is an edit that does not load: the scene that ran is put back
+/// from memory, not read from that text, and the history says a restore
+/// was refused. (It used to leave the snapshot's scene running and the
+/// history saying nothing had moved.)
+#[test]
+fn a_refused_restore_puts_back_the_scene_that_ran_whatever_is_on_disk() {
+    use orla_runtime::Context;
+    use orla_session::{Laws, Session, Structure};
+    let scene = tally_world("put-back", 3);
+    let strict = std::fs::read_to_string(&scene).unwrap();
+    let relaxed = strict.replace("- 3)", "- 1000000)");
+    let context = |time: f32| Context {
+        time,
+        ..Context::default()
+    };
+    // A snapshot of the strict scene at two: restored, its trial counts
+    // to three and divides by zero.
+    let mut session = Session::open(&scene, None, 1 << 20);
+    session.sync();
+    session.evaluate(&context(0.0)).unwrap();
+    session.evaluate(&context(0.1)).unwrap();
+    let strict_at_two = session.snapshot().unwrap();
+    // The relaxed scene runs; then the person half-types an edit.
+    std::fs::write(&scene, &relaxed).unwrap();
+    session.sync();
+    session.evaluate(&context(0.2)).unwrap();
+    let half = format!("{relaxed}node oops: ");
+    std::fs::write(&scene, &half).unwrap();
+    let (revision, _) = session.position();
+    let refused = session.restore(
+        &strict_at_two,
+        Laws::Current,
+        Structure::Snapshot,
+        &context(0.3),
+    );
+    assert!(refused.is_err(), "{refused:?}");
+    // What runs is the relaxed scene that ran, as it ran.
+    assert_eq!(
+        session.snapshot().unwrap().scene.as_deref(),
+        Some(relaxed.as_str()),
+        "the scene that ran"
+    );
+    session
+        .evaluate(&context(0.4))
+        .expect("the scene that ran runs on");
+    assert_eq!(
+        std::fs::read_to_string(&scene).unwrap(),
+        half,
+        "the edit on disk stands"
+    );
+    let (after, _) = session.position();
+    assert!(after >= revision);
+    assert!(
+        session
+            .attempts_since(revision)
+            .iter()
+            .any(|attempt| format!("{attempt:?}").contains("snapshot")),
+        "the refused restore is recorded"
+    );
+    let _ = std::fs::remove_dir_all(scene.parent().unwrap());
+}
+
 /// A refused restore moves nothing: not the revision, not a Kernel's
 /// generation, not the scene on disk, and not an edit a person made there
 /// that the session had not read yet. Only the attempt is recorded.

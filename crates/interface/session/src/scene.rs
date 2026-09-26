@@ -52,6 +52,18 @@ pub(crate) struct Scene {
     staged: Option<Staged>,
 }
 
+/// The scene running, kept to be put back whole ([`Scene::put_back`]).
+pub(crate) struct Kept {
+    stamp: Option<Stamp>,
+    uses: Vec<(PathBuf, bool)>,
+    sub_graphs: BTreeMap<PathBuf, Option<Stamp>>,
+    declared: Declared,
+    graph: Option<Graph>,
+    files: orla_scene::Files,
+    text: Option<String>,
+    params: BTreeMap<String, Value>,
+}
+
 /// A scene lowered and waiting for its own Kernels, and what it replaces
 /// when they stand.
 struct Staged {
@@ -529,6 +541,40 @@ impl Scene {
                 events.push(Event::SceneLoaded);
             }
         }
+    }
+
+    /// The scene running, as it is: what a change that may be refused
+    /// puts back, from memory, whatever its documents now say.
+    pub(crate) fn keep(&self) -> Kept {
+        Kept {
+            stamp: self.stamp,
+            uses: self.uses.clone(),
+            sub_graphs: self.sub_graphs.clone(),
+            declared: (
+                self.structs.clone(),
+                self.types.clone(),
+                self.functions.clone(),
+            ),
+            graph: self.graph.clone(),
+            files: self.files.clone(),
+            text: self.text.clone(),
+            params: self.params.clone(),
+        }
+    }
+
+    /// Puts back the scene [`Scene::keep`] kept, the root read at `stamp`:
+    /// the graph that ran runs again, whether or not the text on disk
+    /// would load, and a scene waiting for its Kernels is dropped.
+    pub(crate) fn put_back(&mut self, kept: Kept, stamp: Option<Stamp>) {
+        self.staged = None;
+        self.stamp = stamp.or(kept.stamp);
+        self.uses = kept.uses;
+        self.sub_graphs = kept.sub_graphs;
+        (self.structs, self.types, self.functions) = kept.declared;
+        self.graph = kept.graph;
+        self.files = kept.files;
+        self.text = kept.text;
+        self.params = kept.params;
     }
 
     /// Whether a scene read is waiting for its Kernels to replace the one
