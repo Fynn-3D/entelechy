@@ -204,6 +204,9 @@ pub struct Evaluator {
     fusion: bool,
     pinned: BTreeSet<NodeId>,
     fused: BTreeMap<NodeId, Fused>,
+    /// The groups fusion declined, by consumer, at the generations it
+    /// declined them: not tried again until one of them changes.
+    declined: BTreeMap<NodeId, Vec<(NodeId, Generation)>>,
     pending: BTreeMap<NodeId, Pending>,
     running: BTreeMap<NodeId, Running>,
     /// State an evaluation replaced before its nodes ran (a migration, a

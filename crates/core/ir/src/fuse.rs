@@ -20,19 +20,27 @@ use crate::{
 pub struct FuseError {
     /// What went wrong.
     pub message: String,
-    /// Whether the two simply do not fit: the producer writes a Field
-    /// the consumer's port cannot take. That is the scene's mistake and
-    /// not fusion's, and the binding check says it far better, so a
-    /// planner declines to fuse and lets that happen. Everything else a
-    /// fusion refuses is this crate's own fault and is reported.
-    pub mismatch: bool,
+    /// Whether the two are simply not to be fused, and a planner runs
+    /// each on its own: the producer writes a Field the consumer's port
+    /// cannot take (the scene's mistake, which the binding check says far
+    /// better), or a Kernel's work is counted and held to its own budget.
+    /// Everything else a fusion refuses is this crate's own fault and is
+    /// reported.
+    pub declines: bool,
 }
 
 impl FuseError {
     fn new(message: String) -> Self {
         Self {
             message,
-            mismatch: false,
+            declines: false,
+        }
+    }
+
+    fn declined(message: String) -> Self {
+        Self {
+            message,
+            declines: true,
         }
     }
 }
@@ -145,6 +153,15 @@ pub fn fuse_outputs(
             )));
         }
     }
+    // A Kernel whose work is counted is held to its own budget, and its
+    // node to its own run: fused, the two would share one, and whether a
+    // scene fits would turn on fusion, which pinning a node to look at it
+    // turns off. Such Kernels run on their own.
+    if producer.counts_work() || consumer.counts_work() {
+        return Err(FuseError::declined(
+            "a Kernel whose work is counted runs on its own, held to its own budget".into(),
+        ));
+    }
     if consumer.manifest.mode != Mode::Map || producer.manifest.mode != Mode::Map {
         return Err(FuseError::new(
             "only map Kernels fuse; reductions and scans run on their own".into(),
@@ -173,7 +190,7 @@ pub fn fuse_outputs(
         if written.shape != read.shape || written.schema != read.schema {
             return Err(FuseError {
                 message: format!("producer writes {written} but the consumer reads {read}"),
-                mismatch: true,
+                declines: true,
             });
         }
     }
@@ -378,7 +395,7 @@ pub fn fuse_outputs(
         results,
         bindings,
     };
-    validate(Module {
+    let fused = validate(Module {
         manifest,
         structs,
         functions,
@@ -386,7 +403,16 @@ pub fn fuse_outputs(
         merge: None,
         init: None,
     })
-    .map_err(|error| FuseError::new(format!("fused module is invalid: {error}")))
+    .map_err(|error| FuseError::new(format!("fused module is invalid: {error}")))?;
+    // Two that each run uncounted may together not: then the fused one
+    // would be counted where neither is, and each is left its own.
+    if fused.counts_work() {
+        return Err(FuseError::declined(
+            "together the two would run long enough to be counted, which neither is on its own"
+                .into(),
+        ));
+    }
+    Ok(fused)
 }
 
 /// Rewrites a function body with fresh pre-order ids, applying `ops` to

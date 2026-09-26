@@ -2120,6 +2120,63 @@ output result <- w.result;",
     }
 }
 
+/// Whether a scene fits its work bounds is decided by its nodes, each
+/// held to its own budget and its own run: never by fusion, which is
+/// hidden from the author, nor by pinning a node to look at it, which
+/// turns fusion off. (Fused, two nodes that each fit shared one run's
+/// bound and failed, and a producer past its own budget hid in the sum of
+/// two.)
+#[test]
+fn work_bounds_hold_per_node_whether_or_not_nodes_fuse() {
+    let dir = scratch("work-fused");
+    // Counts are params, so the loops are run, not folded away.
+    let pair = "node a: kernel { requires { field.write; } BUDGET param n: Int = STEPS; output result: Rows<Float>; domain = 700;
+    compute { return float(loop n with x = 0 { x + 1 }); } }
+node b: kernel { requires { field.read; field.write; } param n: Int = 1000; input t: Rows<Float> <- a.result; output result: Rows<Float>;
+    compute { return sample(t) + float(loop n with x = 0 { x + 1 }); } }
+output result <- b.result;";
+    // (the producer's budget, its iterations, the run's bound, what fails)
+    let cases = [
+        ("", "1000", 1_000_000, None),
+        ("budget 1500;", "2000", 1_000_000_000, Some("node `a`")),
+    ];
+    for (budget, steps, work, fails) in cases {
+        let text = pair.replace("BUDGET", budget).replace("STEPS", steps);
+        std::fs::write(dir.join("scene.osn"), text).unwrap();
+        for backend in ["cpu", "jit", "gpu"] {
+            for (fusion, pinned) in [(true, false), (false, false), (true, true)] {
+                let limits = orla_session::Limits {
+                    words: 1 << 22,
+                    work,
+                };
+                let Ok(runtime) = Session::runtime_for(backend, limits) else {
+                    continue;
+                };
+                let mut session = Session::open_with(&dir.join("scene.osn"), None, runtime);
+                session.set_fusion(fusion);
+                if pinned {
+                    session.pin(orla_graph::NodeId("a".into()));
+                }
+                let events = session.sync();
+                assert!(rejected(&events).is_empty(), "{:?}", rejected(&events));
+                let answer = session
+                    .evaluate(&Context::default())
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+                let case =
+                    format!("{budget} {steps} on {backend}, fusion {fusion}, pinned {pinned}");
+                match fails {
+                    None => assert!(answer.is_ok(), "{case}: {answer:?}"),
+                    Some(node) => assert!(
+                        answer.as_ref().is_err_and(|error| error.contains(node)),
+                        "{case}: {answer:?}"
+                    ),
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn an_element_past_its_budget_fails_alike_on_every_backend() {
     // Each element runs n + n * n iterations for its own n; with a budget

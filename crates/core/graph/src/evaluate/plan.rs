@@ -440,6 +440,9 @@ impl Evaluator {
         {
             return Ok(Some(Arc::clone(&existing.version)));
         }
+        if self.declined.get(consumer) == Some(&parts) {
+            return Ok(None);
+        }
         let fusion = |message: String| EvaluateError::Fusion {
             node: consumer.clone(),
             message,
@@ -450,16 +453,18 @@ impl Evaluator {
                 if let Some(superseded) = other {
                     runtime.discard(superseded.ticket);
                 }
-                // A producer whose Field the consumer's port cannot
-                // take is the scene's mistake, and the binding check
-                // names the port and the two layouts; fusion says only
-                // that it would not fit. So that one declines rather
-                // than fails, and the evaluation goes on to the check
-                // that explains it. Anything else a fusion refuses is
-                // this engine's own fault and is reported.
+                // What fusion declines runs unfused: a producer whose
+                // Field the consumer's port cannot take (the scene's
+                // mistake, which the binding check goes on to name), or a
+                // Kernel whose work is counted and held to its own
+                // budget. Anything else a fusion refuses is this engine's
+                // own fault and is reported.
                 let module = match fuse() {
                     Ok(module) => module,
-                    Err(error) if error.mismatch => return Ok(None),
+                    Err(error) if error.declines => {
+                        self.declined.insert(consumer.clone(), parts);
+                        return Ok(None);
+                    }
                     Err(error) => return Err(fusion(error.to_string())),
                 };
                 let source = format!(

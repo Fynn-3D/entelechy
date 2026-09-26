@@ -225,5 +225,5 @@ fn a_producer_of_several_outputs_fuses_whole_and_changes_no_bit() {
     assert!(fuse_outputs(&show, &[(1, 3)], &split, "split").is_err());
     // A link whose layouts differ is the scene's mismatch, not fusion's.
     let wrong = fuse_outputs(&show, &[(2, 1)], &split, "split").unwrap_err();
-    assert!(wrong.mismatch, "{wrong}");
+    assert!(wrong.declines, "{wrong}");
 }

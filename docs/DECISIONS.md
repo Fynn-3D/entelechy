@@ -67,7 +67,9 @@ passes today passes on a slower machine. Whether a run passes the
 Host's bound is its elements' exact sum, so it is decided alike however
 they are scheduled. A run that passes it and also has a failing element
 may be named for either, since a run that has passed is stopped before
-every element runs; it fails either way.
+every element runs; it fails either way. Both bounds are a node's own: a
+Kernel whose work is counted is never fused with another, so whether a
+scene fits is not turned by fusion, nor by pinning a node to look at it.
 
 **Where the rule lives.** Where work is counted is written into the IR,
 once: [`orla_ir::account`](../crates/core/ir/src/account.rs) follows every
