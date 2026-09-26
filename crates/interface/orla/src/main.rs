@@ -699,65 +699,25 @@ fn replay(args: &[String]) -> Result<(), String> {
 
 /// `orla help`: the builtins, all or one.
 fn help(args: &[String]) -> Result<(), String> {
-    match args.first() {
-        None => {
-            let builtins = orla_compiler::help::builtins();
-            let width = builtins.iter().map(|b| b.name.len()).max().unwrap_or(0);
-            let mut kind = "";
-            for builtin in &builtins {
-                if builtin.kind != kind {
-                    kind = builtin.kind;
-                    println!("{kind}");
-                }
-                println!("  {:<width$}  {}", builtin.name, builtin.doc);
-            }
-            let forms = orla_compiler::help::forms();
-            let width = forms.iter().map(|f| f.name.len()).max().unwrap_or(0);
-            let mut kind = "";
-            for form in &forms {
-                if form.kind != kind {
-                    kind = form.kind;
-                    println!("{kind}");
-                }
-                println!("  {:<width$}  {}", form.name, form.shape);
-            }
-            println!(
-                "orla help <name> shows a builtin's signatures or a form's shape and meaning; docs/DOCUMENTS.md the language."
-            );
+    let json = args.iter().any(|arg| arg == "--json");
+    let asked = args.iter().find(|arg| *arg != "--json").map(String::as_str);
+    match orla::help::answer(asked) {
+        Ok(answer) if json => {
+            println!("{answer}");
             Ok(())
         }
-        Some(name) => {
-            if let Some(form) = orla_compiler::help::form_named(name) {
-                println!("{} ({})", form.name, form.kind);
-                println!("  {}", form.shape);
-                println!("{}", form.doc);
-                return Ok(());
-            }
-            let Some(builtin) = orla_compiler::help::builtin(name) else {
-                let similar = orla_compiler::help::similar(name);
-                return Err(if similar.is_empty() {
-                    format!("nothing named `{name}`; `orla help` lists the builtins and the forms")
-                } else {
-                    format!(
-                        "nothing named `{name}`; did you mean {}?",
-                        similar.join(", ")
-                    )
-                });
-            };
-            println!("{} ({})", builtin.name, builtin.kind);
-            for signature in &builtin.signatures {
-                println!("  {signature}");
-            }
-            println!("{}", builtin.doc);
-            if let Some(capability) = builtin.requires {
-                println!("Needs `{capability}` in the Kernel's `requires`.");
-            }
-            if builtin.entry_only {
-                println!(
-                    "Only the entry (`compute`, `scan`, `scatter`) may call it; a function takes its value as an argument."
-                );
-            }
+        Ok(answer) => {
+            print!("{}", orla::help::text(&answer));
             Ok(())
+        }
+        Err(refusal) => {
+            if json {
+                println!("{refusal}");
+            }
+            Err(refusal["message"]
+                .as_str()
+                .unwrap_or("nothing named so")
+                .to_owned())
         }
     }
 }

@@ -32,17 +32,21 @@ Kernel over the window), `sound` (a voice with a drawing of it) or
 Player is open; a Kernel that does not compile leaves the running one
 alone and says why.
 
-## What a Kernel may call and write
+## What Orla answers about itself
 
 ```sh
-orla help              # every builtin and form, one line each
-orla help smoothstep   # a builtin's signatures, meaning, capability
-orla help each         # a form's shape and meaning
+orla help              # the sections and how many items each holds
+orla help builtins     # one line an item: builtins, kernel, scene, replay, protocol, commands
+orla help smoothstep   # one name in full: a builtin's signatures and capability
+orla help window       # every item of a name: the builtin, the replay step, the operation
+orla help publish --json
 ```
 
-The listing comes from the compiler's own tables, so it is what
-compiles. The protocol's `help` answers the same as JSON; the language is
-in [DOCUMENTS](DOCUMENTS.md).
+Every answer comes from the table the part it describes enforces: the
+compiler's builtins and forms, the replayer's forms, the protocol's
+operations, the command line's commands. The protocol's `help` answers
+the same, without `commands`; the language is in
+[DOCUMENTS](DOCUMENTS.md).
 
 ## Check a Kernel
 

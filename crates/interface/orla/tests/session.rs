@@ -1068,13 +1068,27 @@ output result <- tally.result;
     );
 }
 
+/// `orla help` is an index of sections; a section lists its items; a
+/// name shows every item of it in full.
 #[test]
-fn help_lists_the_builtins_and_the_forms_and_shows_one() {
+fn help_lists_the_sections_their_items_and_shows_one() {
     let orla = env!("CARGO_BIN_EXE_orla");
     let output = Command::new(orla).arg("help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    // Builtins by name, and the language's forms beside them.
+    for section in [
+        "builtins", "kernel", "scene", "replay", "protocol", "commands",
+    ] {
+        assert!(
+            stdout.contains(&format!("  {section} ")),
+            "{section} in {stdout}"
+        );
+    }
+    let listed = |section: &str| {
+        let output = Command::new(orla).args(["help", section]).output().unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let builtins = listed("builtins");
     for name in [
         "floor",
         "atan2",
@@ -1083,14 +1097,19 @@ fn help_lists_the_builtins_and_the_forms_and_shows_one() {
         "key",
         "vec4",
         "add_wrap",
-        "match",
-        "loop",
-        "each",
-        "scatter",
-        "fill",
     ] {
-        assert!(stdout.contains(&format!("  {name} ")), "{name} in {stdout}");
+        assert!(
+            builtins.contains(&format!("  {name} ")),
+            "{name} in {builtins}"
+        );
     }
+    let forms = format!("{}{}", listed("kernel"), listed("scene"));
+    for name in ["match", "loop", "each", "scatter", "fill"] {
+        assert!(forms.contains(&format!("  {name} ")), "{name} in {forms}");
+    }
+    assert!(listed("replay").contains("  expect "));
+    assert!(listed("protocol").contains("  publish "));
+    assert!(listed("commands").contains("  serve "));
     let output = Command::new(orla).args(["help", "each"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[each n { body }]"), "{stdout}");
@@ -1121,9 +1140,15 @@ fn help_lists_the_builtins_and_the_forms_and_shows_one() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("did you mean") && stderr.contains("atan2"),
+        stderr.contains("did you mean") && stderr.contains("atan"),
         "{stderr}"
     );
+    let output = Command::new(orla)
+        .args(["help", "publish", "--json"])
+        .output()
+        .unwrap();
+    let answer: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(answer["found"][0]["fields"][0]["name"], "source");
 }
 
 /// `pack` makes one file, `unpack` restores the directory, `package` lists

@@ -299,12 +299,16 @@ which `orla` does not check.",
         },
         Command {
             name: "help",
-            args: "[<name>]",
-            summary: "List the builtins a Kernel may call, or show one.",
+            args: "[<section> | <name>]",
+            summary: "What Orla answers: the index, a section, or one item in full.",
             doc: "\
-List every builtin a Kernel may call with one line each, or show one
-builtin's signatures, what it does, and the capability it needs.",
-            flags: Vec::new(),
+With nothing, the sections (builtins, kernel, scene, replay, protocol,
+commands) and how many items each holds; with a section, each item's one
+line; with a name, every item of that name in full: a builtin's
+signatures and capability, a form's shape, a replay step, a protocol
+operation's fields, a command's flags. --json answers as the protocol's
+`help` does.",
+            flags: vec![switch("--json", "answer as the protocol's `help` does")],
             passes: false,
         },
         Command {

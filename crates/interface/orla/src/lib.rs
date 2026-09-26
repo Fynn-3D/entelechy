@@ -3,6 +3,7 @@
 //! packages, rendering frames to files, replays, and scaffolding.
 
 pub mod commands;
+pub mod help;
 pub mod package;
 pub mod render;
 /// Replays, owned by the session.
