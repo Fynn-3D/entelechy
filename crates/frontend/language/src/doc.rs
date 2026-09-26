@@ -92,18 +92,28 @@ pub fn kernel_docs(source: &str) -> KernelDocs {
     }
 }
 
-/// Doc lines as one text: a line break kept only where a line is empty,
-/// so a paragraph reads as one line.
+/// Doc lines as one text: a paragraph reads as one line, an empty line
+/// parts paragraphs, and an indented line (code) keeps its own.
 fn joined<'a>(lines: impl Iterator<Item = &'a str>) -> Option<String> {
     let mut out = String::new();
+    let mut code = false;
     for line in lines {
         if line.is_empty() {
             out.push_str("\n\n");
+            code = false;
+        } else if line.starts_with(' ') {
+            // An indented line is code: it keeps its line.
+            out.push('\n');
+            out.push_str(line);
+            code = true;
         } else {
-            if !out.is_empty() && !out.ends_with('\n') {
+            if code {
+                out.push('\n');
+            } else if !out.is_empty() && !out.ends_with('\n') {
                 out.push(' ');
             }
             out.push_str(line);
+            code = false;
         }
     }
     let out = out.trim().to_owned();
@@ -129,6 +139,11 @@ mod tests {
         assert_eq!(doc_above(text, 12), None);
         assert_eq!(doc_above(text, 1), None);
         assert_eq!(doc_of_document("kernel a.b@1 {}"), None);
+        assert_eq!(
+            doc_of_document("//! Place it with\n//!   node n: x@1 {}\n//! and size it.\n")
+                .as_deref(),
+            Some("Place it with\n  node n: x@1 {}\nand size it.")
+        );
     }
 
     #[test]

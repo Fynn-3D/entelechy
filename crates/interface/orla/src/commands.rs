@@ -236,6 +236,30 @@ how a state trained or settled over many frames is kept.",
             passes: false,
         },
         Command {
+            name: "search",
+            args: "[<scene.osn>] [<words>...]",
+            summary: "Find the capabilities that exist: Kernels and preset graphs.",
+            doc: "\
+The Kernels a scene publishes and every Kernel and preset graph of the
+packages it reaches (ORLA_PACKAGES, the packages installed beside Orla,
+and those beside a package the scene uses), each with what it is for,
+what it takes and gives, what it requires, and the line a scene writes
+to reach it. Without a scene, the packages alone. Words match a name, a
+package, a doc or a port name.",
+            flags: vec![
+                valued(
+                    "--takes",
+                    "<type>",
+                    "one of its inputs takes the type, as written: Rows<Int>",
+                ),
+                valued("--gives", "<type>", "one of its outputs gives the type"),
+                valued("--requires", "<capability>", "it requires the capability"),
+                valued("--limit", "<n>", "the most to show; 20 when not given"),
+                switch("--json", "answer as the protocol's `search` does"),
+            ],
+            passes: false,
+        },
+        Command {
             name: "trace",
             args: "<scene.osn> --node <name> (--element <i> | --at <x> <y> [<z>])",
             summary: "Run one element of a node's Kernel and print every binding it makes.",

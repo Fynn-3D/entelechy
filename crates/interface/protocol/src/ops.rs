@@ -397,6 +397,26 @@ pub fn operations() -> Vec<Operation> {
             "the index; a section's items; or one item in full. An unknown name is an error with `similar`",
         ),
         op(
+            "search",
+            "The capabilities that exist: published Kernels, and every Kernel and preset graph of the packages this session reaches.",
+            vec![
+                may(
+                    "text",
+                    "string",
+                    "words in a name, package, doc or port name, any case",
+                ),
+                may(
+                    "takes",
+                    "string",
+                    "a type one of its inputs takes, as written: `Rows<Int>`",
+                ),
+                may("gives", "string", "a type one of its outputs gives"),
+                may("requires", "string", "a capability it requires"),
+                may("limit", "integer", "the most to answer; 20 when not given"),
+            ],
+            "capabilities, nearest first, each with kind, name, doc, package, reach (what a scene writes to reach it), inputs, params, outputs (name, type, doc), requires, granted, published; and count, how many matched",
+        ),
+        op(
             "trace",
             "Runs one element of a node's Kernel and shows every step of it.",
             with_context(vec![

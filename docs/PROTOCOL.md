@@ -66,6 +66,7 @@ marked `?` may be left out.
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
 | `help` | `section`?: string, `name`?: string | the index; a section's items; or one item in full. An unknown name is an error with `similar` |
+| `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (what a scene writes to reach it), inputs, params, outputs (name, type, doc), requires, granted, published; and count, how many matched |
 | `trace` | `node`: string, `at`?: [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
 | `pin` | `node`: string | pinned |
 | `unpin` | `node`: string | unpinned |
@@ -349,6 +350,22 @@ answer small:
   each is needed.
 
 An unknown section or name is an error naming the near one in `similar`.
+
+## Search
+
+`search` answers the capabilities that exist, so an agent composes what
+is there before it writes anew: the Kernels the session publishes, and
+every Kernel and preset graph of the packages it reaches. It reaches
+the packages in `ORLA_PACKAGES`, those installed beside Orla (a
+release's `packages/`), and every one beside a package the scene uses.
+Each answer says what the capability is for (its `///` and `//!` docs),
+what it takes and gives with types as written, what it requires and
+whether this session grants that, and `reach`: the line a scene writes
+to use it (`use "..";` for a Kernel, `node name: graph ".." { ... }` for
+a preset). `text` matches a name, package, doc or port name; `takes`,
+`gives` and `requires` hold to a type or a capability. A name that is
+the words comes first, then a name holding them, then a doc; ties go by
+name. The same session and query answer the same list.
 
 ## Timing of changes
 

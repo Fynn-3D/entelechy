@@ -99,7 +99,7 @@ pub fn index() -> Json {
     json!({
         "sections": sections,
         "versions": crate::inspect::versions(),
-        "ask": "`help` with `section` for one line an item, with `name` for one item in full; the answer holds while `versions` does",
+        "ask": "`help` with `section` for one line an item, with `name` for one item in full; the answer holds while `versions` does. `search` finds the capabilities that exist: Kernels and preset graphs, by words, types and capability",
     })
 }
 
