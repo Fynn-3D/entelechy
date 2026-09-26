@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orla_graph::Graph;
+use orla_graph::{Graph, GraphParam};
 use orla_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
@@ -158,31 +158,42 @@ impl Scene {
         &self.params
     }
 
-    /// Overrides a graph parameter; see [`crate::Session::set_param`].
-    pub(crate) fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
-        // Judged by the newest document read (staged, else running), so
-        // the answer is independent of worker timing.
-        let newest = self
-            .staged
+    /// The newest document read (staged, else running), so an answer
+    /// about params is independent of worker timing.
+    fn newest(&self) -> Option<&Graph> {
+        self.staged
             .as_ref()
             .map(|staged| &staged.graph)
-            .or(self.graph.as_ref());
-        let declared = newest.and_then(|graph| graph.params.iter().find(|p| p.name == name));
-        let value = match (declared, newest) {
-            (Some(param), _) => value
+            .or(self.graph.as_ref())
+    }
+
+    /// The param `name` a loaded scene declares; one it does not is
+    /// refused, saying why. `None` before a scene loads, which holds any.
+    pub(crate) fn declared_param(&self, name: &str) -> Result<Option<&GraphParam>, String> {
+        let Some(graph) = self.newest() else {
+            return Ok(None);
+        };
+        match graph.params.iter().find(|p| p.name == name) {
+            Some(param) => Ok(Some(param)),
+            None => Err(undeclared(graph, name)),
+        }
+    }
+
+    /// Overrides a graph parameter; see [`crate::Session::set_param`].
+    pub(crate) fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
+        let value = match self.declared_param(name)? {
+            Some(param) => value
                 .shaped_like(&param.default)
                 .ok_or_else(|| format!("param `{name}` is a {}; `{value}` is not one", param.ty))?,
-            // A loaded scene accepts only declared params. Before one
-            // loads, the value is held for the scene to declare.
-            (None, Some(graph)) => return Err(undeclared(graph, name)),
-            (None, None) => value,
+            None => value,
         };
+        let sizes = self
+            .newest()
+            .is_some_and(|graph| graph.times_params.iter().any(|p| p == name));
         let previous = self.params.insert(name.to_owned(), value.clone());
         // A param that sizes the graph (a node's `times`) relowers the
         // document on the next sync.
-        if previous != Some(value)
-            && newest.is_some_and(|graph| graph.times_params.iter().any(|p| p == name))
-        {
+        if previous != Some(value) && sizes {
             self.stamp = None;
         }
         Ok(())

@@ -158,7 +158,8 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
         "count": domain.count(),
         "schema": schema.to_string(),
     });
-    let picture = schema.is_pixel() && domain.shape() != Shape::Volume;
+    // A picture is a Grid of pixels; a row of Vec4s is numbers.
+    let picture = schema.is_pixel() && domain.shape() == Shape::Grid;
     let format = request.get("format").and_then(Json::as_str);
     let from = request.get("from").and_then(Json::as_u64);
     let count = request.get("count").and_then(Json::as_u64);

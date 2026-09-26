@@ -82,6 +82,30 @@ fn a_node_not_written_is_added_after_the_last_node() {
 }
 
 #[test]
+fn a_statement_of_several_lines_stands_apart_by_a_blank_line() {
+    let moat = "node moat: castle.moat@1 {\n    base <- castle.result;\n}";
+    let edited = edit(SCENE, &[node("moat", Some(moat))]).unwrap();
+    assert_eq!(
+        edited,
+        SCENE.replace(
+            "node view: voxel.draw@1 { voxels <- castle.result; }\n",
+            &format!("node view: voxel.draw@1 {{ voxels <- castle.result; }}\n\n{moat}\n"),
+        )
+    );
+    // After a node of several lines, a one-line node stands apart too.
+    let scene = SCENE.replace("node view: voxel.draw@1 { voxels <- castle.result; }\n", "");
+    let edited = edit(
+        &scene,
+        &[node(
+            "wall",
+            Some("node wall: castle.wall@1 { base <- castle.result; }"),
+        )],
+    )
+    .unwrap();
+    assert!(edited.contains("}\n\nnode wall: castle.wall@1"), "{edited}");
+}
+
+#[test]
 fn a_node_removed_takes_its_lines_and_the_comment_above_it() {
     let edited = edit(SCENE, &[node("castle", None)]).unwrap();
     assert_eq!(

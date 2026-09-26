@@ -755,6 +755,6 @@ form struct
 form times
   times = 5;   carry port <- output;
 form type
-  type Cells = Grid<Int>;   struct Cell { alive: Int, age: Float }
+  type Cells = Grid<Int>;   struct Cell { alive: Int; age: Float; }
 form use
   use "kernels/";   use "name.orlapkg";

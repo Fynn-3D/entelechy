@@ -933,6 +933,24 @@ fn read_shows_a_picture_and_sums_up_any_other_field() {
             json!({ "id": 7, "op": "read", "node": "life", "from": 0, "format": "words" }),
         ],
     );
+    // A row of Vec4s is numbers, not a picture one pixel high.
+    let original = std::fs::read_to_string(&scene).unwrap();
+    let rows = format!(
+        "{original}\nnode r: kernel {{ requires {{ field.write; }} domain = 4; output result: Rows<Vec4>; compute {{ return vec4(1.0, 2.0, 3.0, 4.0); }} }}\n"
+    );
+    let row = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "compose", "text": rows }),
+            json!({ "id": 2, "op": "pin", "node": "r" }),
+            json!({ "id": 3, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 4, "op": "read", "node": "r" }),
+        ],
+    );
+    let answers = row;
+    let row = &answers[3]["ok"];
+    assert_eq!(row["format"], "summary", "{answers:?}");
+    assert_eq!(row["summary"][3]["max"], 4.0, "{row}");
     let picture = &responses[1]["ok"];
     assert_eq!(picture["format"], "png");
     assert_eq!(
@@ -2597,7 +2615,7 @@ fn compose_edits_the_document_where_it_changes() {
         .replace("brush = 2.0;", "brush = 3.0;")
         .replace(
             "node show: life.show@1 {\n    cells <- life.result;\n}\n",
-            "node show: life.show@1 {\n    cells <- life.result;\n}\nnode dim: life.show@1 { cells <- life.result; }\n",
+            "node show: life.show@1 {\n    cells <- life.result;\n}\n\nnode dim: life.show@1 { cells <- life.result; }\n",
         )
         .replace("output result <- show.result;", "output result <- dim.result;");
     assert!(
@@ -2670,6 +2688,9 @@ fn a_nodes_own_value_is_the_documents() {
             json!({ "id": 10, "op": "graph" }),
             json!({ "id": 11, "op": "document" }),
             json!({ "id": 12, "op": "param", "name": "sise", "value": 7.0 }),
+            // The name is judged before the value.
+            json!({ "id": 13, "op": "param", "name": "brush", "value": "big" }),
+            json!({ "id": 14, "op": "param", "name": "size", "value": "big" }),
         ],
     );
     let ok = |i: usize| -> &Json {
@@ -2715,6 +2736,13 @@ fn a_nodes_own_value_is_the_documents() {
     );
     let near = responses[11]["error"]["message"].as_str().unwrap();
     assert!(near.contains("did you mean `size`?"), "{near}");
+    let elsewhere = responses[12]["error"]["message"].as_str().unwrap();
+    assert!(
+        elsewhere.contains("node `life` sets its own `brush`"),
+        "{elsewhere}"
+    );
+    let typed = responses[13]["error"]["message"].as_str().unwrap();
+    assert!(typed.starts_with("param `size` is a Float;"), "{typed}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

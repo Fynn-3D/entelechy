@@ -253,7 +253,15 @@ pub(crate) fn retire(session: &mut Session, request: &Request) -> Result<Json, J
 /// Sets a graph parameter.
 pub(crate) fn param(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let name = request.text("name")?;
-    let given = value_from_json(request.field("value")?)?;
+    // The name is judged before the value, so a value for a param that
+    // lives elsewhere is answered with where it lives.
+    let ty = session.param_type(&name).map_err(failure)?;
+    let given = value_from_json(request.field("value")?).map_err(|mut refused| {
+        if let (Some(ty), Some(message)) = (&ty, refused["message"].as_str()) {
+            refused["message"] = json!(format!("param `{name}` is a {ty}; {message}"));
+        }
+        refused
+    })?;
     session.set_param(&name, given).map_err(failure)?;
     let value = session.params().get(&name).cloned().expect("just set");
     // A param that sizes the graph lowers the document now, as this

@@ -258,6 +258,15 @@ impl Session {
         self.scene.root()
     }
 
+    /// The type of the param `name` the scene declares, as written; an
+    /// undeclared one is refused, saying where it lives instead. `None`
+    /// before a scene loads, which holds any name.
+    pub fn param_type(&self, name: &str) -> Result<Option<String>, String> {
+        self.scene
+            .declared_param(name)
+            .map(|param| param.map(|param| param.ty.to_string()))
+    }
+
     /// Overrides a graph parameter for later evaluations, in the shape of
     /// its declared type (`[[1, 0], [0, 1]]` for a `Mat2`); another layout
     /// is refused. Unknown names are kept for a later declaration.

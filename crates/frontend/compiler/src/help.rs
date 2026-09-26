@@ -345,7 +345,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "type",
             "kernel",
-            "type Cells = Grid<Int>;   struct Cell { alive: Int, age: Float }",
+            "type Cells = Grid<Int>;   struct Cell { alive: Int; age: Float; }",
             "A name for a port type, or a struct of named fields, shared by the Kernels of a document.",
         ),
         form(
@@ -448,7 +448,7 @@ pub fn forms() -> Vec<Form> {
             "scatter",
             "kernel",
             "scatter into target with sum { return Pair { at: address, value: v }; }",
-            "The scatter mode: the body runs once per element of the node's domain and combines its value into the target at its address with `sum`, `min`, `max` or `last`, in element order.",
+            "The scatter mode: the body runs once per element of the node's domain and gives a struct the document declares, of two fields, an address into the target and a value of its element (`struct Pair { at: Int; value: Float; }`); the value is combined into the target at the address with `sum`, `min`, `max` or `last`, in element order.",
         ),
         form(
             "memory",
@@ -466,7 +466,7 @@ pub fn forms() -> Vec<Form> {
             "inline",
             "graph",
             "node name: kernel { ... input x: Image <- src; ... }",
-            "A Kernel written in place; its inputs carry their wiring, and the session publishes it under the document's name.",
+            "A Kernel written in place; its inputs carry their wiring, a param whose default names a scene param follows that param (`param gain: Float = amount;`), and the session publishes it under the document's name.",
         ),
         form(
             "fill",

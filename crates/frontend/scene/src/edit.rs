@@ -233,8 +233,9 @@ fn order(kind: StatementKind) -> u8 {
     }
 }
 
-/// Adds a statement after the last of its kind, or else after the last
-/// of the kinds before it with a blank line between, or else first.
+/// Adds a statement after the last of its kind (with a blank line
+/// between when either spans several lines), or else after the last of
+/// the kinds before it with a blank line between, or else first.
 fn add_statement(text: &str, outline: &Outline, kind: StatementKind, fragment: &str) -> String {
     let same = outline.statements.iter().rev().find(|s| s.kind == kind);
     let before = outline
@@ -242,7 +243,13 @@ fn add_statement(text: &str, outline: &Outline, kind: StatementKind, fragment: &
         .iter()
         .rev()
         .find(|s| order(s.kind) < order(kind));
+    // One-line statements of a kind stay together; a statement of
+    // several lines, or one after it, stands apart by a blank line.
+    let lines = |text: &str| text.trim_end().contains('\n');
     let (after, gap) = match (same, before) {
+        (Some(same), _) if lines(&text[same.range.clone()]) || lines(fragment) => {
+            (Some(same), "\n")
+        }
         (Some(same), _) => (Some(same), ""),
         (None, Some(before)) => (Some(before), "\n"),
         (None, None) => (None, ""),

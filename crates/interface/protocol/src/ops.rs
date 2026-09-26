@@ -545,7 +545,7 @@ pub fn operations() -> Vec<Operation> {
                 may(
                     "format",
                     Ty::Words(&["png", "rgba32f", "ppm", "summary", "words", "field"]),
-                    "a picture as `png` (when not given), `rgba32f` or `ppm`; any Field as its `summary` (when not given and not a picture), its `words` or the Host's `field` file",
+                    "a picture (a Grid of pixels) as `png` (when not given), `rgba32f` or `ppm`; any Field as its `summary` (when not given and not a picture), its `words` or the Host's `field` file",
                 ),
                 may(
                     "from",
