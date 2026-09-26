@@ -42,7 +42,10 @@ fn near(a: [f32; 4], rgb: [f32; 3]) -> bool {
 
 #[test]
 fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
-    assert_eq!(unsafe { str_of(orla_ffi::orla_version()) }, "0.1.0");
+    assert_eq!(
+        unsafe { str_of(orla_ffi::orla_version()) },
+        env!("CARGO_PKG_VERSION")
+    );
     let scene = example("text/scene.osn");
     let session =
         unsafe { orla_ffi::orla_open(scene.as_ptr(), c("cpu").as_ptr(), std::ptr::null()) };

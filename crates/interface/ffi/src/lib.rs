@@ -155,7 +155,11 @@ thread_local! {
     static OPEN_ERROR: RefCell<CString> = RefCell::new(CString::default());
 }
 
-const VERSION: &CStr = c"0.1.0";
+const VERSION: &CStr =
+    match CStr::from_bytes_with_nul(concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes()) {
+        Ok(version) => version,
+        Err(_) => panic!("the package version holds no NUL"),
+    };
 const EMPTY: &CStr = c"";
 
 fn c_string(text: &str) -> CString {
