@@ -477,6 +477,10 @@ fn opened(
         )?;
         let (mut session, display, passed_over) =
             (loaded.session, loaded.display, loaded.passed_over);
+        // The first read published inline; a replacement from here on is
+        // prepared off the caller's thread, so a program's frames go on
+        // while it is. A page has no thread for it, and prepares in place.
+        session.set_background(true);
         let mut play = orla_session::play::Play::new(clock);
         for passed in passed_over {
             play.say(format!("backend passed over: {passed}"));

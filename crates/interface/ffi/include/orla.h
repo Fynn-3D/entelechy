@@ -207,7 +207,10 @@ int orla_allow(OrlaSession *session, const char *allowance);
  * param, compose, pin, read, write, reset, window, sync, ...) and its
  * response line, {"id":...,"ok":{...}} or {"id":...,"error":{...}}.
  * What it changes is recorded in the session's history as coming from
- * the protocol, through "orla_request". */
+ * the protocol, through "orla_request". It answers in its call: a
+ * `compose` or a `publish` returns once its change stands. A session
+ * opened here prepares a Kernel edited on disk off the caller's thread
+ * (a page, which has no thread, prepares it in place). */
 const char *orla_request(OrlaSession *session, const char *line);
 
 #ifdef __cplusplus

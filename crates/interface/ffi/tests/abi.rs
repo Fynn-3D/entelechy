@@ -518,3 +518,49 @@ fn a_request_reads_beside_the_scene_or_where_the_program_allowed() {
     unsafe { orla_ffi::orla_close(session) };
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A session the C ABI opens prepares a replacement off the caller's
+/// thread, as a window's does: a program's frames go on while an edited
+/// Kernel is prepared, and the next sync publishes it. (It used to
+/// prepare every replacement in the caller's call.)
+#[test]
+fn a_replacement_is_prepared_off_the_callers_thread() {
+    let base = std::env::temp_dir().join(format!("orla-ffi-background-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let scene = base.join("scene.osn");
+    let text = |red: &str| {
+        format!(
+            "node wave: kernel k.wave@1 {{ requires {{ field.write; }} output result: Image; domain = vec2(4, 4); compute {{ return vec4({red}, 0.5, 0.25, 1.0); }} }}\noutput result <- wave.result;\n"
+        )
+    };
+    std::fs::write(&scene, text("0.1")).unwrap();
+    let session = unsafe {
+        orla_ffi::orla_open(
+            c(scene.to_str().unwrap()).as_ptr(),
+            c("cpu").as_ptr(),
+            std::ptr::null(),
+        )
+    };
+    assert!(!session.is_null(), "{}", unsafe {
+        str_of(orla_ffi::orla_open_error())
+    });
+    // A later write, with a stamp of its own.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&scene, text("0.9")).unwrap();
+    let sync = c(r#"{"op":"sync"}"#);
+    let said = unsafe { str_of(orla_ffi::orla_request(session, sync.as_ptr())) };
+    assert!(said.contains("\"preparing\""), "{said}");
+    let mut published = said.contains("\"published\"");
+    for _ in 0..1000 {
+        if published {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let said = unsafe { str_of(orla_ffi::orla_request(session, sync.as_ptr())) };
+        published = said.contains("\"published\"");
+    }
+    assert!(published, "the next sync publishes it");
+    unsafe { orla_ffi::orla_close(session) };
+    let _ = std::fs::remove_dir_all(&base);
+}
