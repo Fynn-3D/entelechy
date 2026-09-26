@@ -1195,7 +1195,9 @@ fn packages_pack_unpack_describe_and_refuse_a_newer_language() {
     let output = Command::new(orla).arg("version").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("orla.language = 1") && stdout.contains("orla.package = 1"),
+        stdout.starts_with(&format!("orla = {}\n", env!("CARGO_PKG_VERSION")))
+            && stdout.contains("orla.language = 1")
+            && stdout.contains("orla.package = 1"),
         "{stdout}"
     );
 }

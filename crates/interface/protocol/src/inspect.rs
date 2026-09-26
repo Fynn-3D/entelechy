@@ -11,7 +11,7 @@ use crate::wire::{failure, graph_json, manifest_json};
 /// The session at a glance, and the versions it speaks.
 pub(crate) fn status(session: &Session) -> Result<Json, Json> {
     Ok(json!({
-        "versions": { "api": orla_kernel::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": orla_session::PACKAGE_VERSION },
+        "versions": { "orla": env!("CARGO_PKG_VERSION"), "api": orla_kernel::ABI_VERSION, "language": orla_language::LANGUAGE_VERSION, "ir": orla_ir::IR_VERSION, "package": orla_session::PACKAGE_VERSION },
         "backend": session.runtime().backend_name(),
         "scene": session.root().display().to_string(),
         "watched": session.watched().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),

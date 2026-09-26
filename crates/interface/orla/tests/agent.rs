@@ -196,6 +196,11 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
     // The versions it speaks, and what the scene shows.
     let status = agent.ask("status", json!({})).unwrap();
     assert!(status["versions"]["api"].is_u64(), "{status}");
+    assert_eq!(
+        status["versions"]["orla"],
+        env!("CARGO_PKG_VERSION"),
+        "{status}"
+    );
     let graph = agent.ask("graph", json!({})).unwrap();
     let output = graph["outputs"]
         .as_array()

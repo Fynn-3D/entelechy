@@ -73,8 +73,8 @@ usage:
       List every builtin a Kernel may call with one line each, or show one
       builtin's signatures, what it does, and the capability it needs.
   orla version
-      Print the versions of the ABI, the language, the IR and the package
-      format, each its own.
+      Print Orla's release and the versions of the ABI, the language, the IR
+      and the package format, each its own.
   orla package <dir.orlapkg>
       Check a package directory's manifest and say what it holds.
   orla pack <dir.orlapkg> [<file.orlapkg>]
@@ -138,7 +138,8 @@ fn main() -> ExitCode {
         Some("help") => help(&args[1..]),
         Some("version") => {
             println!(
-                "orla.api = {}\norla.language = {}\norla.ir = {}\norla.package = {}",
+                "orla = {}\norla.api = {}\norla.language = {}\norla.ir = {}\norla.package = {}",
+                env!("CARGO_PKG_VERSION"),
                 orla_kernel::ABI_VERSION,
                 orla_language::LANGUAGE_VERSION,
                 orla_ir::IR_VERSION,

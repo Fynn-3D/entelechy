@@ -67,7 +67,7 @@ typedef struct OrlaField {
     const char *schema;
 } OrlaField;
 
-/* The library's version, e.g. "0.1.0". */
+/* The library's version, e.g. "0.0.1". */
 const char *orla_version(void);
 
 /* Opens `scene` (a `.osn` path) on `backend` ("cpu", "gpu", "jit", or

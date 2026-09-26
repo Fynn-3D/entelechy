@@ -278,7 +278,8 @@ either way ([decision](DECISIONS.md)).
 ## Status and history
 
 `status` answers the backend, scene, watched files, counts, `versions`
-(ABI, language, IR and package format, as `orla version` prints them),
+(the release, ABI, language, IR and package format, as `orla version`
+prints them),
 `grants`, and the position: `revision` moves when the world changes
 other than by running (a Kernel published or retired, the scene read
 again, a param set, state written or reset); `frame` counts evaluations
