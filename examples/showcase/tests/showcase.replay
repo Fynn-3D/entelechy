@@ -9,7 +9,7 @@ expect state.result[0].scheme = 0
 expect state.result[0].spin = true
 expect 4 4 = 0.484 0.492 0.539 0.02          # the sky behind, top-left
 
-# A click on the first item cycles the colour; on the third stops the turntable.
+# A click on the first item cycles the color; on the third stops the turntable.
 pointer 65.75 86 down
 frame 0.02
 pointer up

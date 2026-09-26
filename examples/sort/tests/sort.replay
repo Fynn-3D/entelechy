@@ -1,7 +1,7 @@
 scene sort.osn
 
 # The lower half shows the sorted values as bars: heights rise from left
-# to right, and the colour runs from blue (small) to yellow (large). A
+# to right, and the color runs from blue (small) to yellow (large). A
 # pixel just inside a bar is lit; one just above it is background.
 frame 0.0
 expect 2 235 = 0.059 0.071 0.102 0.03

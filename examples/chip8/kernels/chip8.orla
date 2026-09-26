@@ -238,7 +238,7 @@ kernel chip8.view@1 {
         let local = fract(uv);
         let edge = local.x < 0.08 || local.y < 0.08;
         let lit = if on { vec3(0.55, 0.95, 0.45) } else { vec3(0.06, 0.09, 0.06) };
-        let colour = if edge { lit * 0.7 } else { lit };
-        return vec4(colour.x, colour.y, colour.z, 1.0);
+        let color = if edge { lit * 0.7 } else { lit };
+        return vec4(color.x, color.y, color.z, 1.0);
     }
 }

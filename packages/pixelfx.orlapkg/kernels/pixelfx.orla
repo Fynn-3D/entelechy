@@ -1,6 +1,6 @@
 // Pixel effects.
 
-/// Cells of `cell` pixels, each the colour at its centre.
+/// Cells of `cell` pixels, each the color at its centre.
 kernel pixelfx.pixelate@1 {
     requires { field.read; field.write; }
     input source: Image;
@@ -12,7 +12,7 @@ kernel pixelfx.pixelate@1 {
     }
 }
 
-/// Four colours by brightness, a palette in a table.
+/// Four colors by brightness, a palette in a table.
 kernel pixelfx.palette@1 {
     requires { field.read; field.write; }
     input source: Image;

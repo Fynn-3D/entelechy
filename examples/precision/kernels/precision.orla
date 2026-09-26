@@ -36,8 +36,8 @@ kernel precision.ring@1 {
         let line = float(abs(d) < pixel * 1.5);
         let fill = if d < 0.0 { inside } else { outside };
         let divider = float(abs(c.x - half.x) < 1.0);
-        let colour = mix(mix(fill, vec3(1.0, 1.0, 1.0), line * 0.8), vec3(0.9, 0.9, 0.9), divider);
-        return vec4(colour, 1.0);
+        let color = mix(mix(fill, vec3(1.0, 1.0, 1.0), line * 0.8), vec3(0.9, 0.9, 0.9), divider);
+        return vec4(color, 1.0);
     }
 }
 

@@ -778,7 +778,7 @@ fn search(args: &[String]) -> Result<(), String> {
     };
     if found.iter().any(|capability| capability.reach.is_some()) {
         println!(
-            "(each `use` and `graph` path is written from {})",
+            "(a path that is not an installed package's name is written from {})",
             base.display()
         );
     }

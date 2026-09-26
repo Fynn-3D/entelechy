@@ -121,7 +121,7 @@ def mesh_rows(obj, depsgraph=None, axes=AXES_YUP, matrix=None, corners=None):
         evaluated.to_mesh_clear()
 
 
-def base_colour_image(obj):
+def base_color_image(obj):
     """The image wired into the active material's Base Color, if any."""
     material = obj.active_material
     if not material or not material.use_nodes:
@@ -150,7 +150,7 @@ def push_object(obj, assets_dir, depsgraph=None, axes=AXES_YUP):
     path = os.path.join(assets_dir, f"{name}.triangles.field")
     write_field(path, "Rows", (faces, 1, 1), "i,i,i", triangles)
     paths.append(path)
-    image = base_colour_image(obj)
+    image = base_color_image(obj)
     if image is not None:
         path = os.path.join(assets_dir, f"{name}.albedo.png")
         settings = bpy.context.scene.render.image_settings
@@ -579,7 +579,7 @@ class OrlaSettings(bpy.types.PropertyGroup):
 class ORLA_OT_push(bpy.types.Operator):
     bl_idname = "orla.push"
     bl_label = "Push mesh to Orla"
-    bl_description = "Write the active object as vertex and triangle rows (and its base colour as PNG) into the assets directory"
+    bl_description = "Write the active object as vertex and triangle rows (and its base color as PNG) into the assets directory"
 
     def execute(self, context):
         obj = context.active_object

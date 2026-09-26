@@ -1,5 +1,5 @@
-// A voxel studio: a Volume<Int> of colours fed back through the Graph,
-// one row of state (the camera, the tool, the colour, the voxel under
+// A voxel studio: a Volume<Int> of colors fed back through the Graph,
+// one row of state (the camera, the tool, the color, the voxel under
 // the pointer), a backup volume for one level of undo, and a picture.
 // The middle button orbits, with Shift it pans, the wheel zooms; the
 // left button applies the tool to the voxel under the pointer and keeps
@@ -16,7 +16,7 @@ struct Edit {
     on_bar: Bool;                            // the left press began on the bar
     painting: Bool; erasing: Bool;           // a stroke in progress, left or right
     stroked: Bool;                           // the stroke has changed something
-    tool: Int; colour: Int; hover: Int;
+    tool: Int; color: Int; hover: Int;
     found: Bool; hit: Vec3; face: Vec3;      // the voxel under the pointer and the face seen
     apply: Bool; act: Int; begin: Bool;      // this frame edits, with this tool, starting a stroke
     since: Int;                              // frames since the last edit
@@ -26,7 +26,7 @@ struct Edit {
 type Studio = Rows<Edit>;
 type Voxels = Volume<Int>;
 struct Cast { cell: Vec3; side: Vec3; t: Float; face: Vec3; id: Int; inside: Bool; }
-struct Mark { hit: Bool; depth: Float; colour: Vec3; }
+struct Mark { hit: Bool; depth: Float; color: Vec3; }
 
 // The camera and the walk, shared by the state and the picture: a
 // function with a Field parameter is instantiated for the port it is
@@ -55,7 +55,7 @@ fn inv(d: Float) -> Float {
 }
 
 // Amanatides-Woo: enter the box, then step cell to cell until a
-// coloured voxel or the far side.
+// colored voxel or the far side.
 fn cast(voxels: Voxels, eye: Vec3, dir: Vec3, n: Float) -> Cast {
     let ix = inv(dir.x); let iy = inv(dir.y); let iz = inv(dir.z);
     let ax = (0.0 - eye.x) * ix; let bx = (n - eye.x) * ix;
@@ -92,7 +92,7 @@ fn palette(id: Int) -> Vec3 {
         else if id == 7 { vec3(0.45, 0.3, 0.2) } else { vec3(0.55, 0.56, 0.6) };
 }
 
-// Whether a voxel is coloured, empty outside the box.
+// Whether a voxel is colored, empty outside the box.
 fn solid(voxels: Voxels, c: Vec3, n: Float) -> Bool {
     let inside = c.x >= 0.0 && c.x < n && c.y >= 0.0 && c.y < n && c.z >= 0.0 && c.z < n;
     return inside && at(voxels, c) > 0;
@@ -121,7 +121,7 @@ kernel voxel.begin@1 {
             yaw: 0.7, pitch: 0.5, zoom: 0.8, pan: vec3(0.0, 0.0, 0.0),
             px: 0.0, py: 0.0, down: false, right: false, middle: false,
             on_bar: false, painting: false, erasing: false, stroked: false,
-            tool: 0, colour: 1, hover: -1,
+            tool: 0, color: 1, hover: -1,
             found: false, hit: vec3(0.0, 0.0, 0.0), face: vec3(0.0, 1.0, 0.0),
             apply: false, act: 0, begin: false, since: 0,
             undo: false, reset: false,
@@ -133,7 +133,7 @@ kernel voxel.begin@1 {
 /// The bar: six items of 64 pixels with 12 between, centred at the bottom,
 /// laid out in logical pixels (the window's scale factor is the unit), so
 /// it keeps its size on screen however large the window is.
-/// Place, erase, paint, the colour (a click cycles it), undo, reset.
+/// Place, erase, paint, the color (a click cycles it), undo, reset.
 kernel voxel.state@1 {
     requires { field.read; field.write; input.read; }
     input previous: Studio;
@@ -210,7 +210,7 @@ kernel voxel.state@1 {
             px: p.x, py: p.y, down: left, right: right, middle: middle,
             on_bar: on_bar, painting: painting, erasing: erasing, stroked: stroked,
             tool: tool,
-            colour: if item == 3 { s.colour % 8 + 1 } else { s.colour },
+            color: if item == 3 { s.color % 8 + 1 } else { s.color },
             hover: hover,
             found: seen.id > 0, hit: seen.cell, face: seen.face,
             apply: apply, act: act, begin: apply && !s.stroked, since: since,
@@ -237,7 +237,7 @@ kernel voxel.edit@1 {
         let target = if s.act == 0 { s.hit + s.face } else { s.hit };
         return if s.reset { sample(origin) }
             else if s.undo { sample(backup) }
-            else if s.apply && c == target { if s.act == 1 { 0 } else { s.colour } }
+            else if s.apply && c == target { if s.act == 1 { 0 } else { s.color } }
             else { me };
     }
 }
@@ -313,7 +313,7 @@ kernel voxel.draw@1 {
         return 1.0 - 0.45 * clamp(shade, 0.0, 1.5);
     }
 
-    fn icon(item: Int, u: Vec2, tool: Int, colour: Int) -> Vec3 {
+    fn icon(item: Int, u: Vec2, tool: Int, color: Int) -> Vec3 {
         let box = max(abs(u.x), abs(u.y));
         let ring = abs(box - 9.0) < 1.5;
         let plus = (abs(u.x) < 1.2 && abs(u.y) < 5.0) || (abs(u.y) < 1.2 && abs(u.x) < 5.0);
@@ -326,13 +326,13 @@ kernel voxel.draw@1 {
         let light = vec3(0.92, 0.92, 0.95);
         let on = if item == 0 { ring || plus } else if item == 1 { ring || minus } else if item == 2 { dot_ }
             else if item == 3 { swatch } else if item == 4 { arc || head } else { cross_ };
-        let tint = if item == 2 || item == 3 { palette(colour) } else { light };
+        let tint = if item == 2 || item == 3 { palette(color) } else { light };
         return if on { tint } else { vec3(0.0, 0.0, 0.0) };
     }
 
     // One axis of the compass: a disc where the axis points, nearer
     // ones drawn over farther ones; the negative end smaller and dimmer.
-    fn mark(d: Vec2, axis: Vec3, right: Vec3, up: Vec3, fwd: Vec3, colour: Vec3, positive: Bool) -> Mark {
+    fn mark(d: Vec2, axis: Vec3, right: Vec3, up: Vec3, fwd: Vec3, color: Vec3, positive: Bool) -> Mark {
         let at = vec2(dot(axis, right), -dot(axis, up)) * 26.0;
         let depth = dot(axis, fwd);
         let r = if positive { 7.0 } else { 5.0 };
@@ -340,8 +340,8 @@ kernel voxel.draw@1 {
         let disc = dist < r;
         let stem = positive && !disc && abs(d.x * at.y - d.y * at.x) / (length(at) + 0.001) < 1.2 && dot(d, at) > 0.0 && dot(d, at) < dot(at, at);
         let shade = 0.75 + 0.25 * (0.0 - depth);
-        let c = if positive { colour * shade } else if dist < r - 1.8 { colour * 0.25 } else { colour * 0.7 };
-        return Mark { hit: disc || stem, depth: if disc { depth } else { depth + 0.5 }, colour: if stem { colour * 0.6 } else { c } };
+        let c = if positive { color * shade } else if dist < r - 1.8 { color * 0.25 } else { color * 0.7 };
+        return Mark { hit: disc || stem, depth: if disc { depth } else { depth + 0.5 }, color: if stem { color * 0.6 } else { c } };
     }
 
     fn nearer_mark(a: Mark, b: Mark) -> Mark {
@@ -404,7 +404,7 @@ kernel voxel.draw@1 {
             mark(d, vec3(0.0, -1.0, 0.0), cam_right, cam_up, fwd, vec3(0.55, 0.85, 0.3), false)),
             mark(d, vec3(0.0, 0.0, -1.0), cam_right, cam_up, fwd, vec3(0.3, 0.5, 1.0), false)));
         let in_compass = length(d) < 40.0;
-        let with_compass = if m.hit { m.colour } else if in_compass { mix(scene, vec3(0.1, 0.105, 0.13), 0.5) } else { scene };
+        let with_compass = if m.hit { m.color } else if in_compass { mix(scene, vec3(0.1, 0.105, 0.13), 0.5) } else { scene };
         // The bar, drawn over everything.
         let left = wd * 0.5 - 222.0;
         let slot = int(floor((q.x - left) / 76.0));
@@ -413,11 +413,11 @@ kernel voxel.draw@1 {
         let in_item = in_bar && slot >= 0 && slot < 6 && abs(u.x) <= 32.0;
         let active = in_item && slot == s.tool;
         let hovered = in_item && slot == s.hover;
-        let glyph = if in_item { icon(slot, u, s.tool, s.colour) } else { vec3(0.0, 0.0, 0.0) };
+        let glyph = if in_item { icon(slot, u, s.tool, s.color) } else { vec3(0.0, 0.0, 0.0) };
         let plate = if active { vec3(0.36, 0.38, 0.46) } else if hovered { vec3(0.2, 0.21, 0.25) } else { vec3(0.11, 0.115, 0.14) };
-        let colour = if in_bar { mix(with_compass, plate, 0.85) + glyph } else { with_compass };
+        let color = if in_bar { mix(with_compass, plate, 0.85) + glyph } else { with_compass };
         // The label, in the text library's ink.
-        let lettered = mix(colour, vec3(0.95, 0.95, 0.97), ink(label, font, px + vec2(0.5, 0.5)));
+        let lettered = mix(color, vec3(0.95, 0.95, 0.97), ink(label, font, px + vec2(0.5, 0.5)));
         let out = pow(clamp(lettered, 0.0, 1.0), 1.0 / 1.8);
         return vec4(out.x, out.y, out.z, 1.0);
     }

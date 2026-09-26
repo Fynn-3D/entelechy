@@ -1,5 +1,5 @@
 // A cube puzzle in three dimensions, turned by the keys and orbited by
-// the pointer. The state is 54 stickers, a Rows<Int> of face colours
+// the pointer. The state is 54 stickers, a Rows<Int> of face colors
 // (0 white up, 1 red right, 2 green front, 3 yellow down, 4 orange
 // left, 5 blue back), and a move is a permutation of them: `perm(m, i)`
 // says which sticker lands at i. The picture is two boxes cast per
@@ -43,10 +43,10 @@ fn spin(axis: Int, a: Float, v: Vec3) -> Vec3 {
         else { vec3(c * v.x - s * v.y, s * v.x + c * v.y, v.z) };
 }
 
-fn palette(colour: Int) -> Vec3 {
-    let colours = [vec3(0.95, 0.95, 0.95), vec3(0.85, 0.1, 0.1), vec3(0.1, 0.65, 0.2),
+fn palette(color: Int) -> Vec3 {
+    let colors = [vec3(0.95, 0.95, 0.95), vec3(0.85, 0.1, 0.1), vec3(0.1, 0.65, 0.2),
                    vec3(0.95, 0.85, 0.1), vec3(0.95, 0.5, 0.1), vec3(0.1, 0.3, 0.85)];
-    return colours[colour];
+    return colors[color];
 }
 
 // A ray against a box, the nearest face hit: t below zero for a miss.
@@ -67,7 +67,7 @@ fn slab(ro: Vec3, rd: Vec3, lo: Vec3, hi: Vec3) -> Hit {
     return Hit { t: t, n: n, p: ro + rd * t };
 }
 
-/// The solved cube: each face its own colour.
+/// The solved cube: each face its own color.
 kernel cube.solved@1 {
     requires { field.write; }
     output result: Stickers;
@@ -148,7 +148,7 @@ kernel cube.draw@1 {
 
     // What a hit on a box of the cube shows: the sticker under it, and
     // a dark border around every cubelet face.
-    fn colour_at(hit: Hit, stickers: Stickers, shade: Vec3) -> Vec3 {
+    fn color_at(hit: Hit, stickers: Stickers, shade: Vec3) -> Vec3 {
         let { p, n } = hit;
         let c = vec3(clamp(floor(p.x + 1.5), 0.0, 2.0) - 1.0, clamp(floor(p.y + 1.5), 0.0, 2.0) - 1.0, clamp(floor(p.z + 1.5), 0.0, 2.0) - 1.0);
         let centre = vec3(if abs(n.x) > 0.5 { n.x } else { c.x }, if abs(n.y) > 0.5 { n.y } else { c.y }, if abs(n.z) > 0.5 { n.z } else { c.z });
@@ -189,13 +189,13 @@ kernel cube.draw@1 {
         let layer = if turning { slab(ro_l, rd_l, layer_lo, layer_hi) } else { Hit { t: -1.0, n: vec3(0.0, 1.0, 0.0), p: ro } };
         let layer_first = layer.t >= 0.0 && (still.t < 0.0 || layer.t < still.t);
         let background = vec3(0.12, 0.13, 0.17) + vec3(0.06, 0.06, 0.08) * (1.0 - px.y / res.y);
-        let colour = if layer_first {
-            // Lit by the normal as it is now, coloured by the sticker as it was.
-            colour_at(layer, stickers, spin(1, g.yaw, spin(0, g.pitch, spin(axis, angle, layer.n))))
+        let color = if layer_first {
+            // Lit by the normal as it is now, colored by the sticker as it was.
+            color_at(layer, stickers, spin(1, g.yaw, spin(0, g.pitch, spin(axis, angle, layer.n))))
         } else if still.t >= 0.0 {
-            colour_at(still, stickers, spin(1, g.yaw, spin(0, g.pitch, still.n)))
+            color_at(still, stickers, spin(1, g.yaw, spin(0, g.pitch, still.n)))
         } else { background };
-        return vec4(colour.x, colour.y, colour.z, 1.0);
+        return vec4(color.x, color.y, color.z, 1.0);
     }
 }
 

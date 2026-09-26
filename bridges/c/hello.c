@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
     printf("picture %u x %u, %u words a pixel, schema %s, pixels %u\n",
            picture.width, picture.height, picture.stride, picture.schema, picture.pixels);
     show_pixel(&picture, 12, 12);
-    /* The protocol through the same door: a recoloured background. */
+    /* The protocol through the same door: a recolored background. */
     const char *reply = orla_request(session,
         "{\"op\":\"publish\",\"expect\":\"any\",\"source\":\"kernel scene.back@1 { requires { field.write; } output result: Image; compute { return vec4(0.3, 0.1, 0.1, 1.0); } }\"}");
     printf("publish: %.80s\n", reply);

@@ -98,7 +98,7 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
         "{:?}",
         pixel(&field, 12, 12)
     );
-    // The protocol through the same entry: a recoloured copy of the
+    // The protocol through the same entry: a recolored copy of the
     // background published over it changes the picture.
     let response = unsafe {
         str_of(orla_ffi::orla_request(
@@ -112,11 +112,11 @@ fn a_scene_opens_evaluates_and_its_fields_read_in_place() {
         .replace("\\n", "\n")
         .replace("\\\"", "\"");
     assert!(source.starts_with("kernel scene.back@1 {"), "{source}");
-    let recoloured = source.replace("vec4(0.09, 0.1, 0.13, 1.0)", "vec4(0.3, 0.1, 0.1, 1.0)");
-    assert_ne!(recoloured, source);
+    let recolored = source.replace("vec4(0.09, 0.1, 0.13, 1.0)", "vec4(0.3, 0.1, 0.1, 1.0)");
+    assert_ne!(recolored, source);
     let publish = format!(
         "{{\"op\":\"publish\",\"expect\":\"any\",\"source\":{}}}",
-        serde_json_string(&recoloured)
+        serde_json_string(&recolored)
     );
     let response = unsafe { str_of(orla_ffi::orla_request(session, c(&publish).as_ptr())) };
     assert!(response.contains("\"ok\""), "{response}");
@@ -289,14 +289,14 @@ fn a_scene_opens_on_files_handed_in_and_reads_them_again() {
             unsafe { orla_ffi::orla_files_put(files, path.as_ptr(), bytes.as_ptr(), bytes.len()) };
         assert_eq!(done, 0);
     };
-    let back = |colour: &str| {
+    let back = |color: &str| {
         format!(
-            "use \"kernels/\";\nnode back: fill.flat@1 {{ domain = vec2(4, 2); }}\noutput result <- back.result;\n// {colour}\n"
+            "use \"kernels/\";\nnode back: fill.flat@1 {{ domain = vec2(4, 2); }}\noutput result <- back.result;\n// {color}\n"
         )
     };
-    let kernel = |colour: &str| {
+    let kernel = |color: &str| {
         format!(
-            "kernel fill.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4({colour}, 1.0); }} }}\n"
+            "kernel fill.flat@1 {{ requires {{ field.write; }} output result: Image; compute {{ return vec4({color}, 1.0); }} }}\n"
         )
     };
     let files = orla_ffi::orla_files();

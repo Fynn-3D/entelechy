@@ -20,7 +20,7 @@ coordinates unchanged.
 **Files** push the active mesh into a scene's assets directory as the
 rows the runtime uses, `<name>.vertices.field` (position, normal, uv per
 triangle corner, in world space) and `<name>.triangles.field`, and the
-material's base colour image as `<name>.albedo.png`. A scene reads them as
+material's base color image as `<name>.albedo.png`. A scene reads them as
 inputs (`input mesh: Model = "assets/Cube.vertices.field";`) and the Host
 watches them, so with **Live** on, editing the mesh in Blender changes the
 window. This path needs no connection.

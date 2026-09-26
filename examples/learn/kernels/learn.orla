@@ -114,24 +114,24 @@ kernel learn.view@1 {
         let uv = (coord() + vec2(0.5, 0.5)) / domain();
         let p = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
         let o = sigmoid(logit(weights, p));
-        let colour = mix(vec3(0.15, 0.25, 0.55), vec3(0.95, 0.6, 0.2), o);
+        let color = mix(vec3(0.15, 0.25, 0.55), vec3(0.95, 0.6, 0.2), o);
         let ring = abs(length(p - vec2(0.1, 0.05)) - 0.55) < 0.008;
-        let shown = if ring { colour * 0.5 } else { colour };
+        let shown = if ring { color * 0.5 } else { color };
         return vec4(shown.x, shown.y, shown.z, 1.0);
     }
 }
 
-/// The points, a dot each in its label's colour, over the picture.
+/// The points, a dot each in its label's color, over the picture.
 kernel learn.dots@1 {
     requires { field.read; field.write; }
     input points: Rows<Point>;
     input picture: Image;
     output result: Image;
-    struct Dot { cell: Vec2; colour: Vec4; }
+    struct Dot { cell: Vec2; color: Vec4; }
     scatter into picture with last {
         let point = sample(points);
         let uv = vec2(point.position.x + 1.0, 1.0 - point.position.y) * 0.5;
-        let colour = if point.label > 0.5 { vec4(1.0, 0.9, 0.7, 1.0) } else { vec4(0.6, 0.75, 1.0, 1.0) };
-        return Dot { cell: floor(uv * size(picture)), colour: colour };
+        let color = if point.label > 0.5 { vec4(1.0, 0.9, 0.7, 1.0) } else { vec4(0.6, 0.75, 1.0, 1.0) };
+        return Dot { cell: floor(uv * size(picture)), color: color };
     }
 }

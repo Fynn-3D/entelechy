@@ -1,5 +1,5 @@
 //! PNG as Fields: decodes to a pixel grid or a `Grid<Float>` of samples
-//! (bit depths 1 to 16, every colour type, palettes; interlaced files are
+//! (bit depths 1 to 16, every color type, palettes; interlaced files are
 //! refused); encodes a pixel grid.
 
 use std::fmt;
@@ -108,16 +108,16 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, PngError> {
         }
         position += 12 + length;
     }
-    let (width, height, depth, colour) = header.ok_or_else(|| format("no IHDR"))?;
-    let channels = match colour {
+    let (width, height, depth, color) = header.ok_or_else(|| format("no IHDR"))?;
+    let channels = match color {
         0 => 1,
         2 => 3,
         3 => 1,
         4 => 2,
         6 => 4,
-        _ => return Err(format("colour type")),
+        _ => return Err(format("color type")),
     };
-    if !matches!(depth, 1 | 2 | 4 | 8 | 16) || (depth < 8 && !matches!(colour, 0 | 3)) {
+    if !matches!(depth, 1 | 2 | 4 | 8 | 16) || (depth < 8 && !matches!(color, 0 | 3)) {
         return Err(format("bit depth"));
     }
     let raw = unzlib(&data).map_err(PngError::Inflate)?;
@@ -170,7 +170,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, PngError> {
     }
     // Samples: palette entries expand to RGB or RGBA; other depths scale.
     let count = width as usize * height as usize;
-    let out_channels = if colour == 3 {
+    let out_channels = if color == 3 {
         if alpha.is_empty() { 3 } else { 4 }
     } else {
         channels
@@ -190,7 +190,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, PngError> {
                         ((row[bit / 8] >> (8 - d as usize - bit % 8)) & ((1 << d) - 1)) as u32
                     }
                 };
-                if colour == 3 {
+                if color == 3 {
                     let entry = palette
                         .get(value as usize)
                         .ok_or_else(|| format("palette index"))?;

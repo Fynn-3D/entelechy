@@ -1,6 +1,6 @@
 # Voxel
 
-A voxel editor: a `Volume<Int>` of colours edited one voxel at a time
+A voxel editor: a `Volume<Int>` of colors edited one voxel at a time
 under a toolbar, with one level of undo.
 
 ```text
@@ -8,7 +8,7 @@ seed ─┬─ state (feeds back; reads last frame's world) ─┬─ world (fee
 begin ┘                                                └─ backup (feeds back)
 ```
 
-- `voxel.state`: one row of camera, pointer, tool, colour, hovered
+- `voxel.state`: one row of camera, pointer, tool, color, hovered
   item, the voxel under the pointer (an Amanatides-Woo walk through last
   frame's volume) and the stroke in progress. Middle button orbits,
   Shift+middle pans, wheel and arrows zoom; left applies the tool, right
@@ -20,7 +20,7 @@ begin ┘                                                └─ backup (feeds ba
   coordinates, as glyph rows from the text package.
 - `voxel.draw`: the volume per pixel with the same camera and walk,
   shaded faces, the hovered voxel outlined, a floor grid, an axis
-  compass, the toolbar (place, erase, paint, colour, undo, reset), and
+  compass, the toolbar (place, erase, paint, color, undo, reset), and
   the label.
 
 The picture fills `window()`; the toolbar and compass use logical pixels

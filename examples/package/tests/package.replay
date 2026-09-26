@@ -1,6 +1,6 @@
 scene ../scene.osn
 
-# Eight-pixel cells, each one of four colours: two pixels of one cell
+# Eight-pixel cells, each one of four colors: two pixels of one cell
 # agree, the next cell down is brighter at the disc's edge, the corner
 # is the darkest shade.
 frame 0.0

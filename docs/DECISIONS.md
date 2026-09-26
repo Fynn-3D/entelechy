@@ -19,7 +19,7 @@ A `domain` expression reads values (a parameter, the window, a number a
 Kernel wrote with `value(port)`) and yields only a count or a size. Its
 arithmetic is over counts and measures: whole numbers are exact and fail
 rather than wrap, a measure is made whole before it sizes anything, and
-a boolean, a colour or a struct is not a size.
+a boolean, a color or a struct is not a size.
 
 **Why.** A scene that computes values is a second language beside
 `.orla`: untyped, untraced, unchecked, run on the Host rather than a

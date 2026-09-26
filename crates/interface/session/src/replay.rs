@@ -60,7 +60,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "pointer",
             "pointer [<x> <y>] [down | up]",
-            "moves the pointer, in pixels from the window's top left, and presses or releases it",
+            "moves the pointer, in the output's pixels from its top left (what `pointer()` reads), and presses or releases it",
             &["pointer 20 20 down", "pointer up"],
         ),
         form(
@@ -108,7 +108,7 @@ pub fn forms() -> Vec<Form> {
         form(
             "expect",
             "expect <x> <y> = <r> <g> <b> [<tolerance>]",
-            "the picture's colour at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given",
+            "the picture's color at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given",
             &[
                 "expect 11 10 = 1.0 1.0 1.0",
                 "expect 11 10 = 1.0 1.0 1.0 0.05",

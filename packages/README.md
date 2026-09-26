@@ -81,5 +81,5 @@ use "picture.orlapkg";
   place is the fast path, bit for bit the same on the interpreter and
   the JIT and the device's approximate rasterizer on a GPU
   ([why](../docs/DECISIONS.md)).
-- **pixelfx** — a coarse pixel grid and a four-colour palette, and the
+- **pixelfx** — a coarse pixel grid and a four-color palette, and the
   NES look made of both as a preset. The example of what a package is.

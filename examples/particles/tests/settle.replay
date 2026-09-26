@@ -3,7 +3,7 @@ scene settle.osn
 # The particle starts at the centre and moves less than a pixel in the
 # first step, so the scatter puts its tint in canvas cell (16, 16) and
 # nowhere else. Its seeded age is about 1.56, so the tint is about a
-# quarter of the way from the warm colour to the cool one; the pixel
+# quarter of the way from the warm color to the cool one; the pixel
 # under it shows the background plus that tint, a far pixel only the
 # background.
 frame 0.0

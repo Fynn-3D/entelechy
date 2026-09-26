@@ -461,6 +461,8 @@ struct Place<'a> {
     params: &'a [GraphParam],
     /// The structs a literal may build.
     known: Vec<(String, Vec<String>)>,
+    /// The nodes the document declares, by name.
+    nodes: Vec<String>,
 }
 
 impl Place<'_> {
@@ -527,6 +529,15 @@ impl Place<'_> {
     /// document input replaced by the parent's binding.
     fn now(&self, reference: &SourceRef) -> Result<Binding, DocumentError> {
         let prefix = self.prefix;
+        if reference.node.is_none() && self.nodes.contains(&reference.name) {
+            let node = &reference.name;
+            return Err(error(
+                reference.span,
+                format!(
+                    "`{node}` is a node; a source names one of its outputs, `{node}.<output>` (`{node}.result` for a Kernel's `result`)"
+                ),
+            ));
+        }
         match &reference.node {
             Some(node) => Ok(Binding::Now(Source::Node {
                 node: NodeId(format!("{prefix}{node}")),
@@ -1109,6 +1120,11 @@ impl Lowering<'_, '_> {
             placement,
             params: &params,
             known: self.known_structs(),
+            nodes: document
+                .nodes
+                .iter()
+                .map(|node| node.name.value.clone())
+                .collect(),
         };
         let mut aliases: BTreeMap<String, Vec<(String, Source)>> = BTreeMap::new();
         let first_node = self.out.graph.nodes.len();
@@ -1378,6 +1394,16 @@ impl Lowering<'_, '_> {
                     }
                 }
             }
+        }
+        // A document with nodes, or with nothing at all, is a scene; one
+        // of Kernels alone shows nothing.
+        let a_scene =
+            !document.nodes.is_empty() || (document.kernels.is_empty() && document.uses.is_empty());
+        if placement.is_none() && declared_outputs.is_empty() && a_scene {
+            return Err(error(
+                Span::default(),
+                "the scene declares no output; it shows one of its nodes' outputs with `output name <- node.port;`",
+            ));
         }
         let mut outputs: Vec<(String, Source)> = Vec::new();
         for (output, reference) in &declared_outputs {
@@ -1805,6 +1831,25 @@ output result <- a.result;
             vec![PathBuf::from("root/shared/display.osn"); 2]
         );
         assert!(graph.order().is_ok());
+    }
+
+    #[test]
+    fn a_bare_node_name_and_a_scene_without_output_say_what_to_write() {
+        let error =
+            parse("node a: t.k@1 { }\nnode b: t.k@1 { x <- a; }\noutput r <- b.r;").unwrap_err();
+        assert!(error.message.contains("`a.result`"), "{error}");
+        assert_eq!(error.span.line, 2);
+        for text in ["node a: t.k@1 { }", ""] {
+            let error = parse(text).unwrap_err();
+            assert!(
+                error.message.contains("output name <- node.port;"),
+                "{error}"
+            );
+        }
+        // A document of Kernels alone is not a scene.
+        assert!(
+            parse("kernel t.k@1 { output result: Image; compute { return vec4(0.0); } }").is_ok()
+        );
     }
 
     #[test]

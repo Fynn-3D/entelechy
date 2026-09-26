@@ -1,5 +1,5 @@
 //! A mesh as GLB: vertex rows `{position, normal, uv}`, triangle rows
-//! and an optional base colour PNG become one glTF 2.0 binary with one
+//! and an optional base color PNG become one glTF 2.0 binary with one
 //! mesh, node and scene.
 //!
 //! With the rest of [a rig's rows](../../../docs/RIGS.md) it also writes
@@ -134,7 +134,7 @@ fn decompose(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
 }
 
 /// Writes `vertices` (eight floats a row) and `triangles` (three ints a
-/// row) as a GLB, with `texture` as the base colour when given.
+/// row) as a GLB, with `texture` as the base color when given.
 pub fn write_glb(
     vertices: &FieldData,
     triangles: &FieldData,

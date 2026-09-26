@@ -293,7 +293,7 @@ file. `orla help replay` lists the same forms:
 | `library <path>` | Kernels beyond the scene's `use` | `library ../kernels/` |
 | `frame <seconds>` | evaluates one frame at this session time | `frame 0.0` |
 | `settle` | waits for every `async` run to land | `settle` |
-| `pointer [<x> <y>] [down \| up]` | moves the pointer, in pixels from the window's top left, and presses or releases it | `pointer 20 20 down`, `pointer up` |
+| `pointer [<x> <y>] [down \| up]` | moves the pointer, in the output's pixels from its top left (what `pointer()` reads), and presses or releases it | `pointer 20 20 down`, `pointer up` |
 | `button <name> down \| up` | left, right, middle, or a pad's south, east, west, north, l1, r1, l3, r3, start, select | `button right down`, `button south up` |
 | `stick left \| right \| triggers <x> <y>` | a pad's axis pair | `stick left 0.5 -1` |
 | `wheel <x> <y>` | the scroll for the next frame only | `wheel 0 -1` |
@@ -301,7 +301,7 @@ file. `orla help replay` lists the same forms:
 | `key <code> down \| up` | a key by the browser's code: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40 | `key 67 down` |
 | `reset [<node.port>]` | forgets every node's committed state, or one port's | `reset`, `reset step.result` |
 | `param <name> <literal>` | sets a graph parameter | `param exposure 1.5` |
-| `expect <x> <y> = <r> <g> <b> [<tolerance>]` | the picture's colour at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given | `expect 11 10 = 1.0 1.0 1.0`, `expect 11 10 = 1.0 1.0 1.0 0.05` |
+| `expect <x> <y> = <r> <g> <b> [<tolerance>]` | the picture's color at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given | `expect 11 10 = 1.0 1.0 1.0`, `expect 11 10 = 1.0 1.0 1.0 0.05` |
 | `expect <node.port[i].field> = <value>... [<tolerance>]` | a field of an element of a node's output: ints and bools exactly, floats and vectors within the tolerance | `expect step.result[0].score = 1` |
 | `expect <node.port[i].field> < \| <= \| > \| >= <number>...` | every component of it past a bound | `expect fall.result[0].speed > 2.5` |
 | `expect count <node.port> = <n>` | how many elements a node's output holds | `expect count ground.result = 6889` |
@@ -327,7 +327,7 @@ orla import examples/score/song.mid --out examples/score/assets
 (the source's directory by default):
 
 - glTF or GLB: vertices as rows of `{position, normal, uv}` with node
-  transforms baked, triangles as rows of three indices, the base colour
+  transforms baked, triangles as rows of three indices, the base color
   texture as PNG; sparse accessors and JPEG textures are reported and
   skipped. A skin adds `<stem>.weights.field`, `<stem>.skeleton.field`
   and one `<stem>.<name>.clip.field` per animation, sampled at `--rate`

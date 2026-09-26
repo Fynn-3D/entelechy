@@ -162,7 +162,7 @@ kernel blocks.step@1 {
     }
 }
 
-/// The settled cells: when a piece lands it is merged in, its colour the
+/// The settled cells: when a piece lands it is merged in, its color the
 /// piece's number plus one, and every full row vanishes, the rows above
 /// falling by as many rows as were full beneath them.
 kernel blocks.board@1 {

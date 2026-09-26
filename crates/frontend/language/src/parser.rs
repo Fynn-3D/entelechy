@@ -2214,7 +2214,7 @@ kernel image.grayscale@1 {
     #[test]
     fn a_let_may_name_the_fields_it_takes() {
         let kernel = parse(
-            "kernel t.k@1 { compute { let { x, y: top } = at(rows, 0); let { r, g, b } = colour; return vec4(r, g, b, x + top); } }",
+            "kernel t.k@1 { compute { let { x, y: top } = at(rows, 0); let { r, g, b } = color; return vec4(r, g, b, x + top); } }",
         )
         .unwrap();
         let lets = &kernel.compute.lets;
@@ -2234,7 +2234,7 @@ kernel image.grayscale@1 {
         assert_eq!(member(1), ("$0".to_owned(), "x".to_owned()));
         assert_eq!(lets[2].0.value, "top");
         assert_eq!(member(2), ("$0".to_owned(), "y".to_owned()));
-        assert_eq!(member(3), ("colour".to_owned(), "r".to_owned()));
+        assert_eq!(member(3), ("color".to_owned(), "r".to_owned()));
         assert_eq!(lets.len(), 6, "three fields and one value, then three");
 
         let error = parse("kernel t.k@1 { compute { let { } = c; return 1.0; } }").unwrap_err();
@@ -2403,8 +2403,8 @@ mod document_tests {
         let error = parse_document("package nes_fx@1 { language = 1; }").unwrap_err();
         assert!(error.message.contains("`ir`"), "{error}");
         let error =
-            parse_document("package nes_fx@1 { language = 1; ir = 1; colour = 2; }").unwrap_err();
-        assert!(error.message.contains("not `colour`"), "{error}");
+            parse_document("package nes_fx@1 { language = 1; ir = 1; color = 2; }").unwrap_err();
+        assert!(error.message.contains("not `color`"), "{error}");
         let error = parse_document("package nes_fx { language = 1; ir = 1; }").unwrap_err();
         assert!(error.message.contains("`@`"), "{error}");
     }

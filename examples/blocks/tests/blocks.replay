@@ -60,5 +60,5 @@ expect board.result[199] = 1
 expect board.result[190] = 0
 expect board.result[189] = 1
 expect board.result[169] = 0
-expect 114 234 = 0.3 0.8 0.9 0.03         # cell (9, 19): the I's colour
+expect 114 234 = 0.3 0.8 0.9 0.03         # cell (9, 19): the I's color
 expect 6 234 = 0.08 0.09 0.12 0.03        # cell (0, 19): cleared

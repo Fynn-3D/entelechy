@@ -401,7 +401,7 @@ kernel slg.draw@1 {
         let frame = on_map && tx == g.cx && ty == g.cy && (px == 0 || px == 15 || py == 0 || py == 15) && blink && g.phase < 3;
         let enemy_mark = on_map && tx == g.cx && ty == g.cy && (px == 0 || px == 15 || py == 0 || py == 15) && g.phase >= 3 && g.phase <= 5;
         let scene = if frame { vec3(1.0, 1.0, 1.0) } else if enemy_mark { vec3(1.0, 0.5, 0.2) } else { with_units };
-        // The status bar: turn as ticks, phase as a colour block, ends as a tint.
+        // The status bar: turn as ticks, phase as a color block, ends as a tint.
         let bar = if ty >= int(extent.y) {
             let ticks = (x - 8) / 8 < g.turn && (x - 8) % 8 < 5 && x >= 8 && y >= 200 && y < 208;
             let phase_color = if g.phase < 3 { vec3(0.3, 0.45, 1.0) } else { vec3(1.0, 0.35, 0.3) };

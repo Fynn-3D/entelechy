@@ -1,8 +1,8 @@
 scene ../scene.osn
 
-# The disc against the top edge stays its own colour in the top row:
+# The disc against the top edge stays its own color in the top row:
 # the reads past the edge fold back into the disc. Its lower edge blurs
-# over three rows. The bar along the left edge likewise keeps its colour
+# over three rows. The bar along the left edge likewise keeps its color
 # at x = 0 and blurs at x = 11..13. Flat regions of the emboss are mid
 # grey; the disc's lower edge embosses dark above and light below.
 frame 0.0

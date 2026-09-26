@@ -2,7 +2,7 @@
 
 A textured model from a glTF file. `orla-import` writes the vertices
 (`{position, normal, uv}`, node transforms baked in), the triangles and
-the base colour texture as files the scene reads and watches:
+the base color texture as files the scene reads and watches:
 
 ```text
 input mesh: Model = "assets/crate.vertices.field";

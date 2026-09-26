@@ -1358,11 +1358,11 @@ fn a_frames_input_brings_in_the_frame_of_the_moment_and_wraps() {
     let dir = std::env::temp_dir().join(format!("orla-frames-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("clip")).unwrap();
-    for (index, colour) in [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]]
+    for (index, color) in [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]]
         .iter()
         .enumerate()
     {
-        let pixels = vec![*colour; 4];
+        let pixels = vec![*color; 4];
         std::fs::write(
             dir.join(format!("clip/{index}.png")),
             orla_formats::png::encode(2, 2, &pixels),

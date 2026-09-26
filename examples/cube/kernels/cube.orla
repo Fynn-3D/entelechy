@@ -14,7 +14,7 @@ fn placed(r: Mat3, t: Vec3) -> Mat4 {
     return mat4(vec4(r[0], 0.0), vec4(r[1], 0.0), vec4(r[2], 0.0), vec4(t, 1.0));
 }
 
-// How the picture is drawn: the colour where nothing is, the colour and
+// How the picture is drawn: the color where nothing is, the color and
 // the width of an edge. Declared here, at the top of the document, so a
 // scene that uses this file can write one: `Style { .. }`.
 struct Style { ground: Vec3; edge: Vec3; width: Float; }

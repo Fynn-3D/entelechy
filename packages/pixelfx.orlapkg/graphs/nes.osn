@@ -1,4 +1,4 @@
-//! The NES look: the picture pixelated, then held to four colours.
+//! The NES look: the picture pixelated, then held to four colors.
 use "../kernels/";
 
 input source: Image;

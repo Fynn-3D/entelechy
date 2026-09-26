@@ -13,7 +13,7 @@ compute {
 }
 ```
 
-`light` samples the colour and normal; `outline` reads the depth at each
+`light` samples the color and normal; `outline` reads the depth at each
 pixel's neighbours by address and marks silhouette edges. `turn` orbits
 the camera. The replay pins G-buffer values, the outline, and the lit
 picture on all three backends.

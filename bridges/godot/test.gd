@@ -89,7 +89,7 @@ static func _near(a: float, b: float, tolerance: float) -> bool:
 	return absf(a - b) <= tolerance
 
 
-static func _colour_is(image: Image, x: int, y: int, rgb: Color, tolerance: float) -> bool:
+static func _color_is(image: Image, x: int, y: int, rgb: Color, tolerance: float) -> bool:
 	var got := image.get_pixel(x, y)
 	return _near(got.r, rgb.r, tolerance) and _near(got.g, rgb.g, tolerance) and _near(got.b, rgb.b, tolerance)
 
@@ -111,32 +111,32 @@ func _text(port: int) -> String:
 	if int(read.get("width", 0)) != 192 or int(read.get("height", 0)) != 88:
 		return "text: size %sx%s" % [read.get("width"), read.get("height")]
 	var frame := Client.decode_ppm(read["data"])
-	if not _colour_is(frame, 10, 6, Color(1.0, 0.85, 0.45), 0.02):
+	if not _color_is(frame, 10, 6, Color(1.0, 0.85, 0.45), 0.02):
 		return "text: the O's top is " + str(frame.get_pixel(10, 6))
-	if not _colour_is(frame, 12, 12, Color(0.09, 0.1, 0.13), 0.02):
+	if not _color_is(frame, 12, 12, Color(0.09, 0.1, 0.13), 0.02):
 		return "text: the O's hollow is " + str(frame.get_pixel(12, 12))
 	print("text: picture read")
 	# The background is the node's inline Kernel: its source comes back as
-	# publish takes it, so a recoloured copy publishes over it.
+	# publish takes it, so a recolored copy publishes over it.
 	var back := client.request("kernel", {"kernel": "scene.back@1"})
 	var source: String = str(back.get("source", ""))
 	if not source.begins_with("kernel scene.back@1 {") or source.contains("domain ="):
 		return "text: source as publish takes it: " + source
-	var recoloured := source.replace("vec4(0.09, 0.1, 0.13, 1.0)", "vec4(0.3, 0.1, 0.1, 1.0)")
-	if recoloured == source:
-		return "text: the background colour is where expected"
-	var refused := client.request("prepare", {"source": recoloured.replace("vec4(", "vec5(")})
+	var recolored := source.replace("vec4(0.09, 0.1, 0.13, 1.0)", "vec4(0.3, 0.1, 0.1, 1.0)")
+	if recolored == source:
+		return "text: the background color is where expected"
+	var refused := client.request("prepare", {"source": recolored.replace("vec4(", "vec5(")})
 	if not Client.failed(refused) or int(refused.get("line", 0)) <= 0 or not str(refused["error"]).contains("vec5"):
 		return "text: a diagnostic names the problem and its line: " + JSON.stringify(refused)
 	print("text: a broken Kernel is refused with a position")
-	var published := client.request("publish", {"source": recoloured, "expect": "any"})
+	var published := client.request("publish", {"source": recolored, "expect": "any"})
 	if str(published.get("id", "")) != "scene.back@1":
 		return "text: published " + JSON.stringify(published)
 	client.request("evaluate", {"time": 0.1})
 	var again := Client.decode_ppm(client.request("read", {"format": "ppm"})["data"])
-	if not _colour_is(again, 12, 12, Color(0.3, 0.1, 0.1), 0.02):
-		return "text: the recoloured hollow is " + str(again.get_pixel(12, 12))
-	if not _colour_is(again, 10, 6, Color(1.0, 0.85, 0.45), 0.02):
+	if not _color_is(again, 12, 12, Color(0.3, 0.1, 0.1), 0.02):
+		return "text: the recolored hollow is " + str(again.get_pixel(12, 12))
+	if not _color_is(again, 10, 6, Color(1.0, 0.85, 0.45), 0.02):
 		return "text: the title changed"
 	print("text: background republished")
 	client.close()
@@ -165,7 +165,7 @@ func _voxel(port: int) -> String:
 	var state := client.request("read", {"node": "state", "port": "result"})
 	var words := Client.decode_words(state["data"])
 	# Edit { yaw, pitch, zoom, pan(3), px, py, down, right, middle, on_bar,
-	# painting, erasing, stroked, tool, colour, hover, found, hit(3), ... }
+	# painting, erasing, stroked, tool, color, hover, found, hit(3), ... }
 	if Client.float_at(words, 6) != 120.0 or Client.float_at(words, 7) != 78.0:
 		return "voxel: pointer %s, %s" % [Client.float_at(words, 6), Client.float_at(words, 7)]
 	if not Client.bool_at(words, 18):

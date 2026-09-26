@@ -14,8 +14,8 @@ fn noise(n: Float) -> Float {
     return fract((r + r) * q);
 }
 
-// The sticker colour, centred, as the network sees it.
-fn seen(colour: Int) -> Float { return float(colour) / 5.0 - 0.5; }
+// The sticker color, centred, as the network sees it.
+fn seen(color: Int) -> Float { return float(color) / 5.0 - 0.5; }
 
 // Hidden unit j of the network `w` over the 54 values `x` reads with `get`.
 fn unit(w: Rows<Float>, x: Rows<Float>, first: Int, j: Int) -> Float {
@@ -30,7 +30,7 @@ kernel train.init@1 {
 }
 
 /// This frame's scrambles: element e is sticker e % 54 of cube e / 54,
-/// which is solved, then turned k random times; the colour is the one
+/// which is solved, then turned k random times; the color is the one
 /// that ends up there, found by following the permutations back.
 kernel train.samples@1 {
     requires { field.read; field.write; time.read; }

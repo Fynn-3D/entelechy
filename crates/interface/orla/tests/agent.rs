@@ -158,7 +158,7 @@ fn repair(agent: &mut Agent, draft: &str) -> (String, Vec<(String, String)>) {
 /// The intended Kernel with first-draft typos: a misspelt `sample` and a
 /// misspelt `clamp`, twice.
 const DRAFT: &str = "\
-// The picture with every colour turned to its opposite.
+// The picture with every color turned to its opposite.
 kernel agent.invert@1 {
     requires { field.read; field.write; }
     input source: Image;
@@ -283,7 +283,7 @@ fn an_agent_repairs_publishes_composes_and_meets_its_goal() {
         "{events}"
     );
 
-    // The goal: every colour turned to its opposite.
+    // The goal: every color turned to its opposite.
     let after = agent.picture("result");
     assert_eq!(after.len(), before.len());
     let mut changed = false;

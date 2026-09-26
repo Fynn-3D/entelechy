@@ -1159,7 +1159,7 @@ fn several_outputs_are_a_maps_and_are_checked() {
     assert!(twice.1.contains("given twice"), "{}", twice.1);
     let unknown = semantic(
         "kernel s.m@1 { requires { field.write; } output color: Image; output b: Grid<Float>;
-            compute { return { colour: vec4(1.0, 1.0, 1.0, 1.0), b: 1.0 }; } }",
+            compute { return { colr: vec4(1.0, 1.0, 1.0, 1.0), b: 1.0 }; } }",
     );
     assert!(unknown.1.contains("did you mean `color`"), "{}", unknown.1);
     let typed = semantic(

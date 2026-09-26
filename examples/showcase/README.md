@@ -9,14 +9,14 @@ begin ─ state (feeds back) ─ view
 ```
 
 - `show.state` is one row: camera yaw and pitch, drag and pointer
-  state, colour, finish, turntable, and the hovered toolbar item. A drag
+  state, color, finish, turntable, and the hovered toolbar item. A drag
   orbits; a click on the toolbar acts on it.
 - `show.render` draws the model, the pressed buttons (keys or gamepad),
-  and a toolbar of four items: colour, finish, turntable, reset view.
+  and a toolbar of four items: color, finish, turntable, reset view.
   The toolbar is laid out in logical pixels (`scale()`), the picture
   fills `window()`.
 
-The replay uses a 160 by 90 window: it clicks the colour item, stops
+The replay uses a 160 by 90 window: it clicks the color item, stops
 the turntable, drags and reads the yaw, then resets.
 
 ```sh

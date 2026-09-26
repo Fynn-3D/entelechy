@@ -68,18 +68,18 @@ kernel text.digits@1 {
     }
 }
 
-/// The glyphs painted over `under` in `colour`.
+/// The glyphs painted over `under` in `color`.
 kernel text.draw@1 {
     requires { field.read; field.write; }
     input under: Image;
     input glyphs: Text;
     input font: Atlas;
-    param colour: Vec3 = vec3(1.0, 1.0, 1.0);
+    param color: Vec3 = vec3(1.0, 1.0, 1.0);
     output result: Image;
     compute {
         let c = sample(under);
         let a = ink(glyphs, font, coord() + vec2(0.5, 0.5));
-        return mix(c, vec4(colour.x, colour.y, colour.z, c.a), a);
+        return mix(c, vec4(color.x, color.y, color.z, c.a), a);
     }
 }
 

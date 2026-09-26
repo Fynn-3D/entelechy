@@ -59,9 +59,10 @@ pub struct Capability {
     pub package: Option<String>,
     /// What that package is for, its manifest's `//!` doc.
     pub package_doc: Option<String>,
-    /// What a scene writes to reach it, its paths relative to the scene
-    /// document's directory ([`Session::reach_base`]); `None` for a Kernel
-    /// the session has published.
+    /// What a scene writes to reach it: an installed package by its name,
+    /// any other path relative to the scene document's directory
+    /// ([`Session::reach_base`]); `None` for a Kernel the session publishes
+    /// from no package.
     pub reach: Option<String>,
     /// Its inputs, params and outputs.
     pub inputs: Vec<Port>,
@@ -208,13 +209,26 @@ fn port(name: &orla_language::Spanned<String>, ty: Option<String>, text: &str) -
     }
 }
 
-/// Every Kernel and preset of the package at `dir`, reached from `base`.
+/// Every Kernel and preset of the package at `dir`, reached from `base`,
+/// or by the package's name when `by_name` (a package installed where the
+/// store finds packages).
 fn in_package(
     store: &dyn Store,
     dir: &Path,
     base: &Path,
+    by_name: bool,
     grants: &dyn Fn(&str) -> bool,
 ) -> Vec<Capability> {
+    let written = |path: &Path| match (by_name, dir.file_name(), path.strip_prefix(dir)) {
+        (true, Some(name), Ok(inside)) if inside.as_os_str().is_empty() => {
+            name.to_string_lossy().into_owned()
+        }
+        (true, Some(name), Ok(inside)) => Path::new(name)
+            .join(inside)
+            .to_string_lossy()
+            .replace('\\', "/"),
+        _ => relative(path, base),
+    };
     let Ok(declared) = package_manifest(store, &dir.join("package.osn")) else {
         return Vec::new();
     };
@@ -223,7 +237,7 @@ fn in_package(
         .read_text(&dir.join("package.osn"))
         .ok()
         .and_then(|text| doc::doc_of_document(&text));
-    let reach_package = format!("use \"{}\";", relative(dir, base));
+    let reach_package = format!("use \"{}\";", written(dir));
     let mut out = Vec::new();
     // Every Kernel a package's manifest uses, by id, with its ports as
     // written; what its presets' outputs are traced to.
@@ -289,7 +303,7 @@ fn in_package(
             let (_, outputs) = kernels.iter().find(|(k, _)| *k == id.value)?;
             outputs.iter().find(|p| p.name == source.name)?.ty.clone()
         };
-        let path_text = relative(&path, base);
+        let path_text = written(&path);
         out.push(Capability {
             kind: Kind::Preset,
             name: path_text.clone(),
@@ -322,8 +336,9 @@ fn in_package(
 
 /// Every Kernel and preset of the packages in the store's
 /// [`Store::packages`] and in
-/// `beside`, each reached from a document in `base`, in package and file
-/// order; `grants` says whether a capability is granted.
+/// `beside`, in package and file order: one the store finds is reached by
+/// its name, one only beside from a document in `base`; `grants` says
+/// whether a capability is granted.
 pub fn in_packages(
     store: &dyn Store,
     base: &Path,
@@ -331,6 +346,11 @@ pub fn in_packages(
     grants: &dyn Fn(&str) -> bool,
 ) -> Vec<Capability> {
     let base = store.canonical(base).unwrap_or_else(|_| base.to_path_buf());
+    let installed: Vec<PathBuf> = store
+        .packages()
+        .iter()
+        .map(|dir| store.canonical(dir).unwrap_or_else(|_| dir.clone()))
+        .collect();
     let mut packages: Vec<PathBuf> = Vec::new();
     for dir in store.packages().iter().chain(beside).cloned() {
         let dir = store.canonical(&dir).unwrap_or(dir);
@@ -347,7 +367,12 @@ pub fn in_packages(
     packages.sort();
     packages
         .iter()
-        .flat_map(|dir| in_package(store, dir, &base, grants))
+        .flat_map(|dir| {
+            let by_name = dir
+                .parent()
+                .is_some_and(|parent| installed.iter().any(|d| d == parent));
+            in_package(store, dir, &base, by_name, grants)
+        })
         .collect()
 }
 
@@ -434,9 +459,18 @@ impl Session {
             })
             .collect();
         for capability in in_packages(self.store(), &base, &beside, &granted) {
-            // A Kernel the session publishes is answered as published.
-            if !out.iter().any(|c| c.published && c.name == capability.name) {
-                out.push(capability);
+            // A Kernel the session publishes is answered as published,
+            // with the package it comes from and the line that reaches it.
+            match out
+                .iter_mut()
+                .find(|c| c.published && c.name == capability.name)
+            {
+                Some(published) => {
+                    published.package = capability.package;
+                    published.package_doc = capability.package_doc;
+                    published.reach = capability.reach;
+                }
+                None => out.push(capability),
             }
         }
         out

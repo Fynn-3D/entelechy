@@ -160,7 +160,7 @@ pub fn builtins() -> Vec<Builtin> {
         fixed("rate", "context", &["rate() -> Float"], "The sound device's samples per second, zero without one.", Some("time.read"), false),
         fixed("window", "context", &["window() -> Vec2"], "The window's size in physical pixels, zero by zero without one; a node's domain may take it.", Some("input.read"), false),
         fixed("scale", "context", &["scale() -> Float"], "The window's physical pixels per logical pixel, one without a window.", Some("input.read"), false),
-        fixed("pointer", "context", &["pointer() -> Vec2"], "The pointer in output pixels.", Some("input.read"), false),
+        fixed("pointer", "context", &["pointer() -> Vec2"], "The pointer in the output's pixels from its top left; a player maps its window's into them.", Some("input.read"), false),
         fixed("pointer_down", "context", &["pointer_down() -> Bool"], "Whether the left button is held.", Some("input.read"), false),
         fixed("button", "context", &["button(n: Int) -> Bool"], "Whether button n is held: 0 left, 1 right, 2 middle of a pointer; a pad's from 8 (south, east, west, north, shoulders, thumbs, start, select).", Some("input.read"), false),
         fixed("stick", "context", &["stick(n: Int) -> Vec2"], "A pad's axis pair: 0 the left stick, 1 the right, 2 the two triggers (x left, y right). Sticks run -1 to 1 with y away from the person, triggers 0 to 1; all zero without a pad.", Some("input.read"), false),

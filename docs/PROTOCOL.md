@@ -49,12 +49,12 @@ Schema in `schema`.
 
 | op | fields | answer |
 | --- | --- | --- |
-| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
+| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
 | `graph` |  | inputs, params, nodes, outputs |
 | `document` | `version`?: string | path, text, and version, which `compose`'s `expect` names |
-| `history` | `since`?: integer | revision, frame, the changes after `since` and the attempts refused since, each with its origin |
+| `history` | `since`?: integer | revision, frame (the frames committed since that revision), the changes after `since` and the attempts refused since, each with its origin |
 | `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version, path (the document), written (whether it was) |
 | `sync` |  | events |
 | `prepare` | `source`: string | id, manifest; or an error at a line and column |
@@ -67,11 +67,11 @@ Schema in `schema`.
 | `window` | `size`?: [w, h] \| null, `scale`?: number | the window |
 | `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "rgba32f" \| "ppm" \| "field" | width, height, format, data (base64); words for a Field that is not pixels |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
-| `snapshot` | `to`?: string | the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written |
+| `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
 | `help` | `section`?: string, `name`?: string | the index; a section's items; or one item in full. An unknown name is an error with `similar` |
-| `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it, its paths relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched |
+| `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it: an installed package by its name, any other path relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched |
 | `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
 | `pin` | `node`: string | pinned |
 | `unpin` | `node`: string | unpinned |

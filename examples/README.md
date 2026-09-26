@@ -30,7 +30,7 @@ orla run examples/<example>/scene.osn --out output.ppm --watch
 
 ## Rendering
 
-- [deferred](deferred/README.md): one Kernel writes colour, normal and depth by name; lighting and outline are fused passes over them.
+- [deferred](deferred/README.md): one Kernel writes color, normal and depth by name; lighting and outline are fused passes over them.
 - [raymarch](raymarch/README.md): a signed-distance scene, tone-mapped by a shared sub-graph with `exposure` as a graph parameter.
 - [volume](volume/README.md): a `Volume<Float>` of cloud density ray-marched into an image.
 - [path](path/README.md): a progressive path tracer; samples and bounces are graph parameters, the running sum is state.

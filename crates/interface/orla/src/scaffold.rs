@@ -85,11 +85,11 @@ fn clean(name: &str) -> String {
 fn picture(name: &str) -> (String, String, String, String) {
     let kernel = format!(
         r#"// A picture, one Kernel over the window: every pixel works out its
-// own colour from where it is and what time it is. Nothing here reads
+// own color from where it is and what time it is. Nothing here reads
 // another Field, so it is the smallest shape a scene can have.
 kernel {name}.draw@1 {{
     requires {{ field.write; time.read; }}
-    param rate: Float = 0.35;             // how fast the colours turn
+    param rate: Float = 0.35;             // how fast the colors turn
     output result: Image;
     compute {{
         // Where this pixel is, from -1 to 1 across the shorter side.
@@ -97,14 +97,14 @@ kernel {name}.draw@1 {{
         let place = (coord() * 2.0 - domain()) / min(width, height);
         let away = length(place);
         let turn = time() * rate;
-        // Rings that move outwards, and a colour that goes round.
+        // Rings that move outwards, and a color that goes round.
         let ring = sin(away * 8.0 - turn * 6.2831853) * 0.5 + 0.5;
-        let colour = mix(
+        let color = mix(
             vec3(0.15, 0.25, 0.45),
             vec3(0.95, 0.65, 0.35),
             ring * clamp(1.2 - away, 0.0, 1.0)
         );
-        return vec4(colour.x, colour.y, colour.z, 1.0);
+        return vec4(color.x, color.y, color.z, 1.0);
     }}
 }}
 "#
@@ -123,7 +123,7 @@ output result <- picture.result;
     let replay = r#"scene ../scene.osn
 
 # A small window, so the pixels are few and the test is quick. The
-# middle of the picture at this moment is this colour; change the
+# middle of the picture at this moment is this color; change the
 # Kernel and this is what says so.
 window 64 40 1
 frame 0.0
@@ -136,7 +136,7 @@ expect 32 20 = 0.194 0.272 0.445 0.01
         r#"# {name}
 
 A picture drawn by one Kernel over the window. Every pixel works out its
-own colour from where it is and what time it is.
+own color from where it is and what time it is.
 
 ```sh
 orla player {name}/scene.osn     # a window
@@ -293,8 +293,8 @@ kernel {name}.draw@1 {{
         let mark = float(at(cells, cell)) / float(max(fade, 1));
         let local = fract(uv * size(cells)) - vec2(0.5, 0.5);
         let inside = clamp(1.0 - length(local) * 2.4, 0.0, 1.0);
-        let colour = mix(vec3(0.08, 0.09, 0.13), vec3(0.45, 0.90, 0.80), mark * inside);
-        return vec4(colour.x, colour.y, colour.z, 1.0);
+        let color = mix(vec3(0.08, 0.09, 0.13), vec3(0.45, 0.90, 0.80), mark * inside);
+        return vec4(color.x, color.y, color.z, 1.0);
     }}
 }}
 "#
@@ -354,7 +354,7 @@ orla replay {name}/tests/{name}.replay
 ```
 
 What to try next: hold a `struct` per cell instead of an `Int` so a
-trail can have a colour as well as an age, or add a second walker on
+trail can have a color as well as an age, or add a second walker on
 other keys and a rule for what happens where the trails cross.
 "#
     );

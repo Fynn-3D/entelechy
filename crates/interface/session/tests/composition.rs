@@ -323,7 +323,12 @@ fn structural_errors_are_reported_before_execution() {
         message.ends_with("did you mean `image.gradient@1`?"),
         "{message}"
     );
-    let no_output = orla_scene::parse("node a: image.gradient@1 { domain = vec2(1, 1); }").unwrap();
+    // The scene refuses a scene without output first; the graph still does.
+    let mut no_output = orla_scene::parse(
+        "node a: image.gradient@1 { domain = vec2(1, 1); }\noutput r <- a.result;",
+    )
+    .unwrap();
+    no_output.outputs.clear();
     assert!(matches!(no_output.order(), Err(GraphError::NoOutput)));
     let no_domain =
         orla_scene::parse("node a: image.gradient@1 { }\noutput r <- a.result;").unwrap();

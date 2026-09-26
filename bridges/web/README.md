@@ -32,7 +32,7 @@ session sizes window-shaped scenes by it.
   diagnostic with its line and column, **Publish** publishes it over
   whatever generation runs; the source a session returns is what
   `publish` takes, a node's inline Kernel included. Load `scene.back@1`
-  from the text example, change the colour, publish, and the picture
+  from the text example, change the color, publish, and the picture
   changes; the title itself is text in the document (`input title:
   Rows<Int> = text "ORLA";`), changed through `compose`.
 - **Graph params** set a parameter with `param`; a param that sizes the

@@ -60,10 +60,10 @@ pub fn read_document(store: &dyn Store, path: &Path) -> Result<String, String> {
     }
 }
 
-/// Whether `path` is inside a package (an ancestor `*.orlapkg` holding
-/// `package.osn`). Package contents are readable by any user.
+/// Whether `path` is a package or inside one (it or an ancestor a
+/// `*.orlapkg` holding `package.osn`). Packages are readable by any user.
 pub(crate) fn in_a_package(store: &dyn Store, path: &Path) -> bool {
-    path.ancestors().skip(1).any(|dir| {
+    path.ancestors().any(|dir| {
         dir.extension().is_some_and(|ext| ext == "orlapkg")
             && store.is_file(&dir.join("package.osn"))
     })

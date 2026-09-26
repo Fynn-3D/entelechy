@@ -207,8 +207,8 @@ kernel fluid.draw@1 {
         let fast = vec3(0.45, 0.7, 1.0);
         let tint = mix(calm, fast, clamp(speed * 0.2, 0.0, 1.0));
         let ground = vec3(0.02, 0.022, 0.03);
-        let colour = ground + tint * pow(s, 0.8);
-        return vec4(colour.x, colour.y, colour.z, 1.0);
+        let color = ground + tint * pow(s, 0.8);
+        return vec4(color.x, color.y, color.z, 1.0);
     }
 }
 

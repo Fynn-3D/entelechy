@@ -1,6 +1,6 @@
 scene ../scene.osn
 
-# One Kernel wrote the G-buffer: the blue sphere's colour, its normal
+# One Kernel wrote the G-buffer: the blue sphere's color, its normal
 # and its distance at one pixel, the sky's far depth at another.
 frame 0.0
 expect count gbuffer.normal = 57600

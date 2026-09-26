@@ -13,7 +13,7 @@ const USAGE: &str = "\
 usage:
   orla-export <file>... --out <target> [--rate <hz>] [--beats <n>]
       To .glb: a vertices .field (rows of position, normal, uv), a triangles
-      .field (rows of three ints), and a .png for the base colour if you have
+      .field (rows of three ints), and a .png for the base color if you have
       .field and, when it has one, a PNG; a rig's weights, skeleton and clip
       .fields beside them write a skin and an animation apiece, --rate naming
       the frames a second the clips were sampled at (30 by default).

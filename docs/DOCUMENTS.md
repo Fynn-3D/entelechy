@@ -642,7 +642,7 @@ be keywords.
    are exact whole numbers, and one too large is an error, never
    wrapped; the window, `scale()`, a `Float` parameter and a division
    with a remainder are measures, whole only after `floor` or `ceil`, so
-   `ceil(size(p) / 2)` and `ceil(window() / 2)` agree. A boolean, colour
+   `ceil(size(p) / 2)` and `ceil(window() / 2)` agree. A boolean, color
    or struct sizes nothing. Examples: `domain = size(map) * tile;`,
    `domain = 4 * count(faces);`, `domain = window();` (runs again at the
    new extent on resize), `domain = value(detail) * value(detail);`. The

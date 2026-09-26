@@ -284,7 +284,7 @@ fn context() -> Vec<Field> {
         may(
             "pointer",
             Ty::Numbers(&["x", "y"]),
-            "the pointer in pixels from the window's top left",
+            "the pointer in the output's pixels from its top left, as a Kernel's `pointer()` reads it",
         ),
         may("down", Ty::Bool, "whether the pointer is pressed"),
         may(
@@ -346,7 +346,7 @@ pub fn operations() -> Vec<Operation> {
             "status",
             "The session at a glance.",
             vec![],
-            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision, frame, fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`)",
+            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`)",
         ),
         op(
             "kernels",
@@ -395,7 +395,7 @@ pub fn operations() -> Vec<Operation> {
                 Ty::Int,
                 "a revision; everything when not given",
             )],
-            "revision, frame, the changes after `since` and the attempts refused since, each with its origin",
+            "revision, frame (the frames committed since that revision), the changes after `since` and the attempts refused since, each with its origin",
         ),
         op(
             "compose",
@@ -581,11 +581,11 @@ pub fn operations() -> Vec<Operation> {
                 Ty::Str,
                 "a file to write it to, where `--allow file.write` allows",
             )],
-            "the world's revision and frame, every Kernel with its generation and source, every port's committed state; or the file written",
+            "the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written",
         ),
         op(
             "restore",
-            "Puts a snapshot's world back, after a trial frame that commits nothing.",
+            "Puts a snapshot's world back, after a trial frame that commits nothing: the state is the snapshot's, which the next frame reads; until then `read` shows the trial frame's outputs.",
             with_context(vec![
                 may("snapshot", Ty::Object, "as `snapshot` gave it; or `from`"),
                 may("from", Ty::Str, "a file `snapshot` wrote"),
@@ -642,7 +642,7 @@ pub fn operations() -> Vec<Operation> {
                 may("requires", Ty::Str, "a capability it requires"),
                 may("limit", Ty::Int, "the most to answer; 20 when not given"),
             ],
-            "capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it, its paths relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched",
+            "capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it: an installed package by its name, any other path relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched",
         ),
         op(
             "trace",

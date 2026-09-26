@@ -1,4 +1,4 @@
-// A million bodies, each with its own place, speed and colour, stepped
+// A million bodies, each with its own place, speed and color, stepped
 // every frame and drawn every frame. The step is a map over a
 // `Rows<Body>` carried frame to frame; the drawing is a scatter, every
 // body writing into the cell it lands on, which is the one place in
@@ -108,7 +108,7 @@ kernel million.draw@1 {
         let lit = clamp(log(1.0 + count * scale) * 0.55, 0.0, 1.0);
         let ground = vec3(0.04, 0.05, 0.08);
         let warm = mix(vec3(0.20, 0.45, 0.95), vec3(0.99, 0.80, 0.42), lit);
-        let colour = mix(ground, warm, lit);
-        return vec4(colour.x, colour.y, colour.z, 1.0);
+        let color = mix(ground, warm, lit);
+        return vec4(color.x, color.y, color.z, 1.0);
     }
 }

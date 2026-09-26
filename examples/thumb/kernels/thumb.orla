@@ -401,7 +401,7 @@ kernel thumb.step@1 {
     }
 }
 
-/// The framebuffer at 0x1000, 32 by 32 bytes, each a colour by its value.
+/// The framebuffer at 0x1000, 32 by 32 bytes, each a color by its value.
 kernel thumb.view@1 {
     requires { field.read; field.write; }
     input ram: Words;
@@ -414,8 +414,8 @@ kernel thumb.view@1 {
         let t = float(v) / 255.0;
         let local = fract(uv);
         let edge = local.x < 0.06 || local.y < 0.06;
-        let colour = vec3(t, fract(t * 4.0) * 0.6 + 0.2, 1.0 - t);
-        let shaded = if edge { colour * 0.7 } else { colour };
+        let color = vec3(t, fract(t * 4.0) * 0.6 + 0.2, 1.0 - t);
+        let shaded = if edge { color * 0.7 } else { color };
         return vec4(shaded.x, shaded.y, shaded.z, 1.0);
     }
 }

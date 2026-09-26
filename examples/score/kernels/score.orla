@@ -89,13 +89,13 @@ kernel score.roll@1 {
         let sounding = second <= now && second + 0.08 > now;
         let bar = if found.x < 0.5 { melody } else { bass } * (0.55 + 0.45 * found.y);
         let lit = if sounding { bar * 1.35 } else { bar };
-        let colour = if playhead {
+        let color = if playhead {
             vec3(1.0, 1.0, 0.9)
         } else if found.x >= 0.0 {
             lit
         } else {
             back
         };
-        return vec4(colour.x, colour.y, colour.z, 1.0);
+        return vec4(color.x, color.y, color.z, 1.0);
     }
 }

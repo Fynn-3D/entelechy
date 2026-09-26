@@ -1,5 +1,5 @@
 //! glTF 2.0 as Fields: vertices as rows of `{position, normal, uv}`,
-//! triangles as rows of three indices, the base colour texture as a PNG,
+//! triangles as rows of three indices, the base color texture as a PNG,
 //! and a skin's weights, skeleton and clips. Node transforms are baked
 //! in; every mesh of the scene lands in one pair of rows. What is left
 //! out is named in the notes.
@@ -19,7 +19,7 @@ pub struct Imported {
     pub vertices: usize,
     /// Rows of triangles written.
     pub triangles: usize,
-    /// The texture file, when the model has a base colour texture in PNG.
+    /// The texture file, when the model has a base color texture in PNG.
     pub texture: Option<PathBuf>,
     /// Notes about what was left out.
     pub notes: Vec<String>,
@@ -701,7 +701,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
         .count();
     if textured > 1 {
         notes.push(format!(
-            "the model has {textured} materials with a base colour texture; the first comes in and the rest are left out"
+            "the model has {textured} materials with a base color texture; the first comes in and the rest are left out"
         ));
     }
     let scene_index = model.json["scene"].as_u64().unwrap_or(0) as usize;
@@ -898,7 +898,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
     )
     .map_err(|e| format!("{}: {e}", triangles_path.display()))?;
     files.push(triangles_path);
-    // The base colour texture of the first material that has one.
+    // The base color texture of the first material that has one.
     let mut texture = None;
     let image_index = model.json["materials"]
         .as_array()
@@ -925,7 +925,7 @@ pub fn import(path: &Path, out_dir: &Path, rate: f32) -> Result<Imported, String
             files.push(texture_path.clone());
             texture = Some(texture_path);
         } else if !bytes.is_empty() {
-            notes.push("the base colour texture is not PNG (JPEG, likely); convert it to PNG and it comes in".into());
+            notes.push("the base color texture is not PNG (JPEG, likely); convert it to PNG and it comes in".into());
         }
     }
     let mut clips = Vec::new();
@@ -1164,7 +1164,7 @@ mod tests {
             imported
                 .notes
                 .iter()
-                .any(|note| note.contains("2 materials with a base colour texture")),
+                .any(|note| note.contains("2 materials with a base color texture")),
             "{:?}",
             imported.notes
         );

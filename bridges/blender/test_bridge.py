@@ -21,7 +21,7 @@ sys.modules["orla_bridge"] = bridge
 spec.loader.exec_module(bridge)
 bridge.register()
 
-# A cube with a UV map and a base colour image, moved and scaled.
+# A cube with a UV map and a base color image, moved and scaled.
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.mesh.primitive_cube_add(size=2.0)
 cube = bpy.context.active_object

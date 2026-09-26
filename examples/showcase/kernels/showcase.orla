@@ -2,13 +2,13 @@
 // shaded with a physically based model, on a reflective floor, with a
 // minimal toolbar. One row of state (the camera, the choices, the
 // pointer's last position) and one image. Drag to orbit; the bar at the
-// bottom cycles the colour and the finish, toggles the turntable, and
+// bottom cycles the color and the finish, toggles the turntable, and
 // resets the view; keys or a pad light the buttons they press.
 struct Show {
     yaw: Float; pitch: Float;
     dragging: Bool; px: Float; py: Float;   // pointer, last frame
     down: Bool;                             // button, last frame
-    scheme: Int; finish: Int;               // colour scheme, surface finish
+    scheme: Int; finish: Int;               // color scheme, surface finish
     spin: Bool; hover: Int;                 // turntable on, toolbar item under the pointer
     spun: Float;                            // accumulated turntable angle
 }

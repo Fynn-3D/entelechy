@@ -187,7 +187,7 @@ impl Builder<'_> {
                     .collect::<Option<Vec<_>>>()
                     .filter(|letters| {
                         (1..=4).contains(&letters.len())
-                            && letters.iter().all(|(_, colour)| *colour == letters[0].1)
+                            && letters.iter().all(|(_, color)| *color == letters[0].1)
                     })
                     .ok_or_else(|| {
                         semantic(
