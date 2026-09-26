@@ -1,189 +1,166 @@
 # Orla
 
-**Answers:** the vision, and the shortest path to running something.
+**A runtime for software that evolves while it runs, built for AI agents to create with.**
 
-**An open runtime for AI-created applications and games.**
+![A gamepad drawn by Orla Kernels: signed-distance modelling, physically based shading, a toolbar, all in .orla](docs/media/showcase.jpg)
 
-Orla's vision is to let any AI agent create, run, and continuously evolve
-interactive applications and games through Kernels and Graphs.
-
-It provides a stable computational world in which software behavior can be
-defined, composed, inspected, and replaced while the program is running.
-Agents bring intent, reasoning, and creativity. Orla provides the execution
-rules, resource boundaries, and language through which that creativity becomes
-working software.
+<sub>Every pixel above is computed by Kernels written in `.orla` and composed by a `.osn` scene
+([`examples/showcase`](examples/showcase/README.md)). The Host knows no gamepads, no shading, no toolbar.</sub>
 
 > **Host is the world.**
 > **Kernel is the law.**
 > **Graph is the structure.**
 > **AI is the creator.**
 
-## The vision
+## What Orla is
 
-A person should be able to work with an agent of their choice to build an
-interactive tool, invent a visual effect, compose an application, or develop a
-game. The agent should be able to inspect what exists, introduce new capabilities,
-connect them, observe the result, and refine the running program.
+- **Kernels are the laws.** A Kernel is a small typed function, `Y = K(X, P, C)`: inputs, parameters,
+  context in; outputs out. It reaches the machine only through the capabilities it declares and is
+  granted.
+- **Graphs are the structure.** A scene composes Kernels by stable id (`image.blur@1`) and wires their
+  typed ports. Kernel owns computation; Graph owns relationships.
+- **The Host is the world.** It owns memory, devices and time, and nothing else. Images, sound,
+  geometry, rigs and game state are one resource: a typed Field.
+- **Change is atomic.** A new Kernel is compiled, validated and prepared beside the running one, then
+  swapped in whole. A rejected change leaves the running program as it was.
+- **One IR, many machines.** Every Kernel lowers to one backend-neutral IR, run by a reference
+  interpreter, a JIT (native code through Cranelift, or WebAssembly) and the GPU (WGSL through wgpu).
+  The interpreter is the reference; the JIT matches it bit for bit.
 
-Orla aims to make this possible through a common creation surface. An agent's
-vendor, model, planning strategy, and command-line environment should not determine
-which parts of the runtime it can use. Access follows explicit capabilities and
-protocol contracts.
-
-The long-term ambition is broad: a runtime on which many kinds of applications
-and games can be created. Each expansion must earn its place through working
-examples and a clear architectural boundary. The current implementation proves
-dynamic computation and live composition; general application and game creation
-is the direction of development.
-
-## An open creation surface
-
-Orla is built for AI to create software through Kernels and Graphs. AI Runtime
-and AI Control Layer describe creative responsibilities: understanding intent,
-generating capabilities, composing programs, observing results, and refining them.
-Their integration or deployment location does not define the architecture.
-
-Any agent or AI-native CLI should be able to use the same creation contracts.
-Orla remains independent of model providers; authority, validation, and publication
-rules apply regardless of how an agent connects.
-
-The intended creation loop is:
+## A Kernel and a scene
 
 ```text
-Human intent
-    ↓
-Any AI agent / AI-native CLI
-    ↓
-Open creation protocol
-    ↓
-Inspect → Propose → Validate → Preview → Publish → Observe
-              ↑                                    │
-              └────────── Repair / Refine ──────────┘
-    ↓
-Kernel + Graph Runtime
-    ↓
-Live application or game
+// kernels/grayscale.orla
+kernel image.grayscale@1 {
+    requires { field.read; field.write; }
+    input source: Image;
+    param amount: Float = 1.0;
+    output result: Image;
+    fn luma(c: Vec4) -> Float {
+        return c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    }
+    compute {
+        let c = sample(source);
+        let g = luma(c);
+        return mix(c, vec4(g, g, g, c.a), amount);
+    }
+}
 ```
 
-This protocol should let clients discover capabilities and signatures, inspect
-Graph structure and versions, submit source and composition changes, receive
-structured diagnostics, preview candidates, and publish against an expected
-generation. Different agents should be able to use the same operations.
+```text
+// scene.osn
+use "kernels/";
 
-Transport is an implementation choice; the durable contract is the creation
-workflow and its authority, ownership, and publication semantics.
+node source: image.gradient@1 { domain = vec2(128, 128); }
+node gray:   image.grayscale@1 { source <- source.result; amount = 1.0; }
+node blocks: image.pixelate@1  { source <- gray.result; size = 8; }
 
-## The architecture
+output result <- blocks.result;
+```
 
-| Layer | Responsibility |
+Edit either file while it runs: the new version replaces the old at the next frame, or is refused with
+a diagnostic at `file:line:column` while the old one keeps running.
+
+## Start
+
+Requires Rust 1.93 or later.
+
+```sh
+cargo run --release -- new hello                       # a scene that runs: Kernel, scene, test
+cargo run --release -p orla-player -- hello/scene.osn  # open it in a window; edit the Kernel live
+cargo run --release -- run examples/grayscale/scene.osn --out gray.png
+cargo run --release -- help                            # everything a Kernel may call
+```
+
+## For AI agents
+
+An agent creates through one open protocol: JSON lines over stdin and stdout, a socket, a WebSocket,
+or a C function. Any model, any language, any CLI; the same authority rules for all.
+
+```sh
+cargo run --release -- serve examples/life/scene.osn
+```
+
+```text
+→ {"id":1,"op":"status"}
+← {"id":1,"ok":{"backend":"jit","kernels":5,"nodes":3,"revision":4,"scene":"examples/life/scene.osn",...}}
+→ {"id":2,"op":"prepare","source":"kernel demo.tint@1 { ... vec4(1.0, 0.5, nope, 1.0) ... }"}
+← {"id":2,"error":{"line":1,"column":152,"message":"`nope` is not defined"}}
+```
+
+| Step | Operations |
 | --- | --- |
-| Host Core | Stable primitives for memory, compute, GPU, IO, resources, tasks, and security |
-| Capability ABI | Explicit authority and opaque handles through which Kernels access primitives |
-| Orla IR | Typed computation independent of the execution backend |
-| Kernel Runtime | Preparation, execution, immutable versions, and safe replacement |
-| Graph Runtime | Composition, typed connections, and relationships between capabilities |
-| Interfaces | Agent protocols, CLI tools, players, editors, and other runtime clients |
+| Inspect | `status`, `kernels`, `kernel`, `graph`, `document`, `help` |
+| Propose | `prepare`: diagnostics, nothing published |
+| Publish | `publish` against an expected generation |
+| Compose | `compose` the scene by text or by named edits, `param` |
+| Observe | `evaluate`, `read`, `trace`, `bench` |
+| Keep and return | `snapshot`, `restore`, `history` |
 
-These responsibilities describe the architecture. The available primitive set
-grows incrementally; not every domain in the table is exposed to Kernels today.
+What an agent can rely on:
 
-### Host provides the world
+- **Authority is granted.** A Kernel runs with the capabilities the person running the session grants;
+  files are read and written only in directories they allow.
+- **Every change is validated first.** A Kernel or a scene is compiled and checked before it replaces
+  anything; publication is atomic and checked against the generation the agent last saw.
+- **State commits only when truth is valid.** A frame's state and file writes commit only when the
+  whole evaluation succeeds.
+- **The world is observable.** Any port can be read, any element traced through its Kernel, any node
+  timed; a run is a replay, and a replay is a test.
 
-The Host supplies primitives with explicit ownership and bounded resources.
-Application rules, visual algorithms, and game behavior belong in replaceable
-programs wherever the available primitives can express them.
+The operations, fields and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same
+protocol from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md),
+[a web page](bridges/web/README.md) and [C](bridges/c/README.md).
 
-New Host functionality must protect a real hardware or authority boundary.
-Higher-level capabilities should grow through Kernels and composition.
+## What runs on it
 
-### Kernels define capabilities
+![A voxel editor built from Orla Kernels](docs/media/voxel.jpg)
 
-A Kernel describes computation:
+54 examples, each a scene, its Kernels and its replay tests, none with a line of Rust:
 
-```text
-Y = K(X, P, C)
+| | |
+| --- | --- |
+| **Rendering** | path tracing, ray marching, deferred shading, a rasterizer written as Kernels, ten million culled triangles, volumes, text |
+| **Simulation** | a million bodies, smoke by Navier-Stokes, neighbour search, wave function collapse |
+| **Learning** | networks trained by gradient descent, one learning how far a Rubik's cube is scrambled |
+| **Sound** | a synthesizer, plucked strings, a sampler, a spectrum, MIDI in and out |
+| **Rigs** | glTF and Blender rigs posed, blended, aimed and walked by the `skin` package |
+| **Games and machines** | Snake, Tetris, a tactics game, a voxel editor, a CHIP-8 interpreter, an ARM Thumb core |
 
-X = Input     P = Parameters     C = Context     Y = Output
-```
+Browse them in [`examples/`](examples/README.md).
 
-Prefer small, typed, pure, deterministic, composable Kernels. Make mutation and
-side effects explicit when they become necessary. Resource access uses declared
-and granted capabilities with opaque handles. Generated source receives no raw
-pointer or unrestricted machine access through the Kernel interface.
-
-The current Rust backends and embedding applications remain trusted. The
-capability boundary constrains Orla programs; it is not an operating-system
-sandbox for arbitrary native extensions.
-
-### Graphs define programs
-
-Graph nodes reference stable `KernelID`s. A Kernel owns its computation; the
-Graph owns connections and composition. Source paths and interface state remain
-outside those relationships.
-
-Changing a connection or binding can create new behavior without changing the
-underlying Kernel. New Kernels extend what can be composed. Together, these are
-the building blocks from which application and game behavior should emerge.
-
-### IR preserves freedom of execution
+## How it is built
 
 ```text
-.orla source → AST → Validated Orla IR → Backend → Execution
+Host Core        memory, devices, time, budgets
+Capability ABI   declared capabilities, opaque handles
+Orla IR          typed computation, backend-neutral
+Kernel Runtime   prepare, validate, atomic swap
+Graph Runtime    composition by KernelID, typed ports
+Interfaces       CLI, Player, protocol, C ABI, bridges
 ```
 
-The frontend describes computation. Backends decide how it executes. CPU and GPU
-implementations share this boundary; future backends should preserve it rather
-than impose their own machine model on the language or Graph.
+Rust, in layers held by tests: the core depends on the core alone, a backend on the core alone, and
+only the interface layer on everything. The core and front end take no external dependency; `unsafe`
+lives in two crates, the JIT and the C ABI. Verified on macOS (Apple silicon, Metal), under WASI, and
+in the browser on WebAssembly and WebGPU.
 
-### Change preserves the running program
+## Read further
 
-Compile, validate, and prepare a replacement before publishing it. Publication
-must be atomic for the affected program. Reject stale or foreign candidates.
-Keep existing evaluations pinned to their immutable versions.
+| Question | Document |
+| --- | --- |
+| The architecture and its boundaries | [CORE-ARCHITECTURE](CORE-ARCHITECTURE.md), [ARCHITECTURE-PLAN](ARCHITECTURE-PLAN.md) |
+| Why one resource | [Typed Fields](docs/TYPED-FIELD-ARCHITECTURE.md) |
+| How a Kernel or a scene is written | [Documents](docs/DOCUMENTS.md) |
+| What an agent sends | [Protocol](docs/PROTOCOL.md) |
+| Which command does what | [Usage](docs/USAGE.md) |
+| Why it is this way | [Decisions](docs/DECISIONS.md) |
+| Where the code and its evidence are | [Implementation](IMPLEMENTATION.md) |
+| The rules for working on Orla | [AGENTS](AGENTS.md), [PROCESS](PROCESS.md) |
 
-A failed update leaves the active program intact. A later execution failure is a
-separate event: it does not automatically reverse a committed revision. Interfaces
-can retain the last successful result while exposing the failure for repair.
+## License
 
-Persistent state, runtime state, cache state, and UI state must have distinct
-owners. Cross-frame state and migration require equally explicit contracts.
-
-## Building toward the vision
-
-Two directions guide development: make creation accessible to AI agents,
-and make more application behavior expressible through Kernels and Graphs.
-
-The first requires an open, versioned creation protocol with structured feedback
-and explicit publication semantics. The second requires composable primitives
-for resources, input, state, rendering, and audio, proved through small working
-programs before broader applications.
-
-Use the [implementation evidence index](IMPLEMENTATION.md) to inspect code and
-executable proofs. The [usage guide](docs/USAGE.md) provides commands and examples.
-The roadmaps describe acceptance criteria, not a promise of universal support.
-
-## Design references
-
-- [Typed Field architecture](docs/TYPED-FIELD-ARCHITECTURE.md): resource
-  convergence, domain extension boundaries, and cross-session acceptance rules.
-
-- [Architecture plan](ARCHITECTURE-PLAN.md): the broader system roadmap.
-- [Minimal core architecture](CORE-ARCHITECTURE.md):
-  the computational model and layer boundaries.
-- [Engineering principles](AGENTS.md): rules for preserving those boundaries.
-- [Document format](docs/DOCUMENTS.md): `.orla` libraries and `.osn` graphs.
-- [Creation protocol](docs/PROTOCOL.md): how agents inspect, propose,
-  publish, compose, and observe over stdin and stdout.
-- [Implementation evidence](IMPLEMENTATION.md): code and test entry points.
-- [Usage guide](docs/USAGE.md): setup, examples, and technical reference.
-- [Current handoff](HANDOFF.md): session context and the next action.
-
-## The guiding questions
-
-Does this change let more agents work reliably through Orla's public interfaces?
-
-Does it let more application behavior be expressed through Kernels and Graphs
-without adding product logic to the Host?
+MIT or Apache-2.0, at your option.
 
 > **Keep the world stable.**
 > **Keep the laws replaceable.**
