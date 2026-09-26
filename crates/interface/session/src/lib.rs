@@ -142,6 +142,20 @@ pub struct Built {
     pub passed_over: Vec<String>,
 }
 
+/// A session opened and its scene read ([`Session::open_loaded`]): the
+/// session, its device's display, what its first read said, and the
+/// backends `best` passed over, each with why.
+pub struct Loaded {
+    /// The session, its scene loaded.
+    pub session: Session,
+    /// The device's display, when the backend has one.
+    pub display: Option<orla_gpu::present::Display>,
+    /// What reading the scene said.
+    pub events: Vec<Event>,
+    /// The backends tried first and passed over, as `name: why`.
+    pub passed_over: Vec<String>,
+}
+
 /// Parses an allowance given on a command line: `file.read=<dir>` or
 /// `file.write=<dir>`.
 pub fn parse_allow(text: &str) -> Result<Allowance, String> {

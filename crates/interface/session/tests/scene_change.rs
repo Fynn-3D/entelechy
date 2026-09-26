@@ -288,3 +288,41 @@ fn a_param_is_judged_by_the_newest_scene_read() {
     );
     assert!(session.params().get("speed").is_none());
 }
+
+/// A session opened on `best` reads its scene on the first backend that
+/// opens and takes it, and one it takes on none is refused with why;
+/// every backend passed over is said.
+#[test]
+fn best_opens_where_the_scene_loads_and_says_why_when_it_loads_nowhere() {
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.osn", &root("result"));
+    put(&files, "sub.osn", &sub("return sample(source);"));
+    let store: Arc<dyn orla_session::Store> = Arc::clone(&files) as _;
+    let open = |backend: &str| {
+        Session::open_loaded(
+            Arc::clone(&store),
+            Path::new("/s/scene.osn"),
+            None,
+            backend,
+            Default::default(),
+            orla_gpu::Wait::blocking(),
+            true,
+        )
+    };
+    let mut loaded = open("best").map_err(|e| e.to_string()).unwrap();
+    assert!(
+        loaded
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::SceneLoaded))
+    );
+    loaded.session.evaluate(&Context::default()).unwrap();
+
+    put(&files, "sub.osn", &sub("return nothing;"));
+    for backend in ["best", "cpu"] {
+        let Err(why) = open(backend) else {
+            panic!("{backend}: a scene that loads nowhere opens");
+        };
+        assert!(why.contains("nothing"), "{backend}: {why}");
+    }
+}

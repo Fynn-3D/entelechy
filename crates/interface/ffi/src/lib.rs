@@ -20,7 +20,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 use orla_abi::{Context, Handle, InputState, Shape};
-use orla_session::{Event, Session};
+use orla_session::Session;
 
 /// The version of the header's contract, `ORLA_ABI_VERSION`.
 pub const ABI_VERSION: u32 = 1;
@@ -463,25 +463,20 @@ fn opened(
                 (replay.scene.clone(), replay.kernels.clone(), Some(replay))
             }
         };
-        let built = Session::build(backend, orla_session::Limits::default(), waiting())?;
-        let (runtime, display, passed_over) = (built.runtime, built.display, built.passed_over);
-        let mut session = Session::open_in(store, &scene, library.as_deref(), runtime);
         // Any session opened here answers `orla_request`, an agent's door:
         // what its scene reads is held from the start to the directories
         // of the scene as it first loads, and what `orla_allow` allows.
-        session.restrict_reads()?;
-        let events = session.sync();
-        if session.graph().is_none() {
-            let reason = events
-                .iter()
-                .find_map(|event| match event {
-                    Event::SceneRejected(error) => Some(error.to_string()),
-                    Event::Rejected { path, error } => Some(format!("{}: {error}", path.display())),
-                    _ => None,
-                })
-                .unwrap_or_else(|| format!("{} did not load", scene.display()));
-            return Err(reason);
-        }
+        let loaded = Session::open_loaded(
+            store,
+            &scene,
+            library.as_deref(),
+            backend,
+            orla_session::Limits::default(),
+            waiting(),
+            true,
+        )?;
+        let (mut session, display, passed_over) =
+            (loaded.session, loaded.display, loaded.passed_over);
         let mut play = orla_session::play::Play::new(clock);
         for passed in passed_over {
             play.say(format!("backend passed over: {passed}"));

@@ -140,6 +140,68 @@ impl Session {
         Err(format!("no backend opens: {}", passed_over.join("; ")))
     }
 
+    /// Opens `scene` in `store` on `backend` and reads it, its reads held
+    /// from the start when `hold_reads` ([`Session::restrict_reads`]).
+    /// With `best`, the first of the GPU, the JIT and the interpreter on
+    /// which a runtime opens and the scene loads: a scene a device will
+    /// not take (a shader its driver refuses) runs on the next, and each
+    /// passed over is said with why. Refused, it says why the scene did
+    /// not load on the last tried.
+    pub fn open_loaded(
+        store: Arc<dyn Store>,
+        scene: &Path,
+        library: Option<&Path>,
+        backend: &str,
+        limits: Limits,
+        wait: orla_gpu::Wait,
+        hold_reads: bool,
+    ) -> Result<crate::Loaded, String> {
+        let one = [backend];
+        let named: &[&str] = match backend {
+            "best" => &["gpu", "jit", "cpu"],
+            _ => &one,
+        };
+        let mut passed_over = Vec::new();
+        let mut last = String::new();
+        for name in named {
+            let built = match Self::build(name, limits, wait) {
+                Ok(built) => built,
+                Err(why) if named.len() > 1 => {
+                    passed_over.push(format!("{name}: {why}"));
+                    continue;
+                }
+                Err(why) => return Err(why),
+            };
+            let mut session = Self::open_in(Arc::clone(&store), scene, library, built.runtime);
+            if hold_reads {
+                session.restrict_reads()?;
+            }
+            let events = session.sync();
+            if session.graph().is_some() {
+                return Ok(crate::Loaded {
+                    session,
+                    display: built.display,
+                    events,
+                    passed_over,
+                });
+            }
+            last = events
+                .iter()
+                .find_map(|event| match event {
+                    Event::SceneRejected(error) => Some(error.to_string()),
+                    Event::Rejected { path, error } => Some(format!("{}: {error}", path.display())),
+                    _ => None,
+                })
+                .unwrap_or_else(|| format!("{} did not load", scene.display()));
+            passed_over.push(format!("{name}: the scene did not load: {last}"));
+        }
+        Err(if last.is_empty() {
+            format!("no backend opens: {}", passed_over.join("; "))
+        } else {
+            last
+        })
+    }
+
     fn backend_runtime(
         backend: &str,
         budget_words: usize,
