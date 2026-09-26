@@ -163,11 +163,16 @@ impl Scene {
 
     /// Overrides a graph parameter; see [`crate::Session::set_param`].
     pub(crate) fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
-        let declared = self
-            .graph
+        // Judged by the newest document the session has read: a scene
+        // waiting for its Kernels, else the one running. Which of them
+        // runs at this moment is the worker's timing, not the scene's.
+        let newest = self
+            .staged
             .as_ref()
-            .and_then(|graph| graph.params.iter().find(|p| p.name == name));
-        let value = match (declared, &self.graph) {
+            .map(|staged| &staged.graph)
+            .or(self.graph.as_ref());
+        let declared = newest.and_then(|graph| graph.params.iter().find(|p| p.name == name));
+        let value = match (declared, newest) {
             (Some(param), _) => value
                 .shaped_like(&param.default)
                 .ok_or_else(|| format!("param `{name}` is a {}; `{value}` is not one", param.ty))?,
@@ -182,10 +187,7 @@ impl Scene {
         // A parameter that sizes the graph (a node's `times`) changes its
         // structure: the document is lowered again on the next sync.
         if previous != Some(value)
-            && self
-                .graph
-                .as_ref()
-                .is_some_and(|graph| graph.times_params.iter().any(|p| p == name))
+            && newest.is_some_and(|graph| graph.times_params.iter().any(|p| p == name))
         {
             self.stamp = None;
         }

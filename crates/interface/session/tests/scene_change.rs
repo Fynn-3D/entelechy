@@ -235,3 +235,56 @@ fn a_claimed_scene_landing_later_is_the_requests() {
         .expect("the scene is recorded");
     assert_eq!(scene.origin, asked);
 }
+
+/// A graph parameter set while a scene waits for its Kernels is judged
+/// by that scene, the newest the session has read, not by whichever
+/// runs at that moment: the same request has one answer however far the
+/// worker has got. (A param the new document dropped was taken and then
+/// silently lost, and one it declared refused.)
+#[test]
+fn a_param_is_judged_by_the_newest_scene_read() {
+    let scene = |param: &str, red: &str| {
+        format!(
+            "param {param}: Float = 0.5;\n\
+             kernel k.src@1 {{ requires {{ field.write; }} param level: Float = 0.5; output result: Image; compute {{ return vec4({red}, level, 0.0, 1.0); }} }}\n\
+             node src: k.src@1 {{ level = {param}; domain = vec2(4, 4); }}\n\
+             output result <- src.result;\n"
+        )
+    };
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.osn", &scene("speed", "0.25"));
+    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    let mut session = open(&files, runtime);
+    session.sync();
+    session.set_background(true);
+    session.evaluate(&Context::default()).unwrap();
+
+    // The new document declares `zoom`, not `speed`, and its Kernel
+    // changes, so it waits for the worker.
+    put(&files, "scene.osn", &scene("zoom", "0.75"));
+    session.sync();
+    assert!(
+        session
+            .set_param("speed", orla_runtime::Value::Float(2.0))
+            .is_err()
+    );
+    session
+        .set_param("zoom", orla_runtime::Value::Float(5.0))
+        .expect("the newest scene declares it");
+    for _ in 0..10_000 {
+        if session
+            .sync()
+            .iter()
+            .any(|e| matches!(e, Event::SceneLoaded))
+        {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        session.params().get("zoom"),
+        Some(&orla_runtime::Value::Float(5.0)),
+        "the value set is the scene's once it runs"
+    );
+    assert!(session.params().get("speed").is_none());
+}
