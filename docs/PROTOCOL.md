@@ -370,8 +370,9 @@ a preset). `text` is words, each matching a word of a name, a package or
 its doc, a capability's doc or a port's name or doc, where one begins
 the other and the shorter has four letters or more (`compaction` finds
 `compact`); `takes`, `gives` and `requires` hold to a type or a
-capability. Each word matched counts, a word of the name most; ties go
-by name. The same session and query answer the same list.
+capability. Each word matched counts: a word of the name most, of the
+capability's own doc and ports next, of its package's least; ties go by
+name. The same session and query answer the same list.
 
 ## Timing of changes
 

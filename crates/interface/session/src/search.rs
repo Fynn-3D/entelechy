@@ -96,7 +96,8 @@ fn same_type(a: &str, b: &str) -> bool {
 
 impl Query {
     /// How well `capability` matches: `None` when it does not; higher is
-    /// nearer: each word it matches counts, a word of its name most.
+    /// nearer: each word it matches counts, a word of its name most, of
+    /// its own doc and ports next, of its package's least.
     pub fn rank(&self, capability: &Capability) -> Option<u32> {
         if let Some(takes) = &self.takes
             && !capability
@@ -122,9 +123,10 @@ impl Query {
         let Some(text) = &self.text else {
             return Some(1);
         };
-        // Each word counts where it matches a word of the name, most, then
-        // anywhere else it is described; a word matches a word it begins,
-        // or that begins it, of four letters or more.
+        // Each word counts where it matches: a word of the name most, then
+        // of the capability's own doc and ports, then of its package's; a
+        // word matches a word it begins, or that begins it, of four letters
+        // or more.
         let tokens = |text: &str| -> Vec<String> {
             text.to_lowercase()
                 .split(|c: char| !c.is_alphanumeric())
@@ -136,38 +138,40 @@ impl Query {
             a == b || (a.len().min(b.len()) >= 4 && (a.starts_with(b) || b.starts_with(a)))
         };
         let name = tokens(&capability.name);
-        let mut described = Vec::new();
+        let ports = capability
+            .inputs
+            .iter()
+            .chain(&capability.params)
+            .chain(&capability.outputs);
+        let mut own = Vec::new();
+        for part in capability
+            .doc
+            .iter()
+            .chain(ports.clone().map(|p| &p.name))
+            .chain(ports.filter_map(|p| p.doc.as_ref()))
+        {
+            own.extend(tokens(part));
+        }
+        let mut package = Vec::new();
         for part in capability
             .package
             .iter()
             .chain(capability.package_doc.iter())
-            .chain(capability.doc.iter())
-            .chain(
-                capability
-                    .inputs
-                    .iter()
-                    .chain(&capability.params)
-                    .chain(&capability.outputs)
-                    .map(|p| &p.name),
-            )
-            .chain(
-                capability
-                    .inputs
-                    .iter()
-                    .chain(&capability.params)
-                    .chain(&capability.outputs)
-                    .filter_map(|p| p.doc.as_ref()),
-            )
         {
-            described.extend(tokens(part));
+            package.extend(tokens(part));
         }
         let mut score: u32 = 0;
         for word in tokens(text) {
-            if name.iter().any(|n| near(n, &word)) {
-                score += 10;
-            } else if described.iter().any(|d| near(d, &word)) {
-                score += 1;
-            }
+            let hit = |words: &[String]| words.iter().any(|w| near(w, &word));
+            score += if hit(&name) {
+                10
+            } else if hit(&own) {
+                3
+            } else if hit(&package) {
+                1
+            } else {
+                0
+            };
         }
         (score > 0).then_some(score)
     }
