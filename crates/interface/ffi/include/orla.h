@@ -3,7 +3,10 @@
  * C ABI any language binds; the JSON protocol is here too, one line at a
  * time, for everything the fast path does not name.
  *
- * Every function is called from one thread at a time per session. A
+ * Every function is called from one thread at a time per session, and
+ * one call at a time: a call made while another is inside the session
+ * (a page reaching in while Orla waits for its device) is refused as a
+ * NULL session's is, and closing it then frees nothing. A
  * pointer or string a call returns belongs to the session and stays
  * valid until the next call on that session, except a Field's words,
  * which stay valid until the next evaluate, request or close. */

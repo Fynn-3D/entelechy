@@ -12,7 +12,8 @@ use std::path::Path;
 use orla_session::play::{Asked, Frame, PadAxis, PadButton, View, hud};
 
 use crate::{
-    OPEN_ERROR, Opening, OrlaField, OrlaFiles, OrlaSession, c_string, clock, guarded, opened, text,
+    OPEN_ERROR, Opening, OrlaField, OrlaFiles, OrlaSession, c_string, clock, enter, guarded,
+    opened, text,
 };
 
 /// A pad button by its name in the header.
@@ -83,13 +84,15 @@ pub unsafe extern "C" fn orla_play_key(
     name: *const c_char,
     down: c_int,
 ) -> c_int {
-    let (Some(s), Some(name)) = (unsafe { session.as_mut() }, unsafe { text(name) }) else {
+    let (Some(mut s), Some(name)) = (unsafe { enter(session) }, unsafe { text(name) }) else {
         return -1;
     };
     let name = name.to_owned();
-    guarded(s, |s| match s.play.key(&mut s.session, &name, down != 0) {
-        Some(Asked::Stop) => 1,
-        None => 0,
+    guarded(&mut s, |s| {
+        match s.play.key(&mut s.session, &name, down != 0) {
+            Some(Asked::Stop) => 1,
+            None => 0,
+        }
     })
 }
 
@@ -99,7 +102,7 @@ pub unsafe extern "C" fn orla_play_key(
 /// `session` is a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_play_pointer(session: *mut OrlaSession, x: f32, y: f32) {
-    if let Some(s) = unsafe { session.as_mut() } {
+    if let Some(mut s) = unsafe { enter(session) } {
         s.play.pointer(x, y);
     }
 }
@@ -110,7 +113,7 @@ pub unsafe extern "C" fn orla_play_pointer(session: *mut OrlaSession, x: f32, y:
 /// `session` is a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_play_button(session: *mut OrlaSession, which: c_int, down: c_int) {
-    if let (Some(s), Ok(which)) = (unsafe { session.as_mut() }, u8::try_from(which)) {
+    if let (Some(mut s), Ok(which)) = (unsafe { enter(session) }, u8::try_from(which)) {
         s.play.button(which, down != 0);
     }
 }
@@ -121,7 +124,7 @@ pub unsafe extern "C" fn orla_play_button(session: *mut OrlaSession, which: c_in
 /// `session` is a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_play_wheel(session: *mut OrlaSession, x: f32, y: f32) {
-    if let Some(s) = unsafe { session.as_mut() } {
+    if let Some(mut s) = unsafe { enter(session) } {
         s.play.wheel(x, y);
     }
 }
@@ -137,8 +140,8 @@ pub unsafe extern "C" fn orla_play_pad(
     name: *const c_char,
     down: c_int,
 ) -> c_int {
-    let (Some(s), Some(button)) = (
-        unsafe { session.as_mut() },
+    let (Some(mut s), Some(button)) = (
+        unsafe { enter(session) },
         unsafe { text(name) }.and_then(pad_button),
     ) else {
         return -1;
@@ -158,8 +161,8 @@ pub unsafe extern "C" fn orla_play_axis(
     name: *const c_char,
     value: f32,
 ) -> c_int {
-    let (Some(s), Some(axis)) = (
-        unsafe { session.as_mut() },
+    let (Some(mut s), Some(axis)) = (
+        unsafe { enter(session) },
         unsafe { text(name) }.and_then(pad_axis),
     ) else {
         return -1;
@@ -181,7 +184,7 @@ pub unsafe extern "C" fn orla_play_frame(
     scale: f32,
     rate: f32,
 ) -> c_int {
-    let Some(s) = (unsafe { session.as_mut() }) else {
+    let Some(mut s) = (unsafe { enter(session) }) else {
         return -1;
     };
     let view = View {
@@ -189,7 +192,7 @@ pub unsafe extern "C" fn orla_play_frame(
         scale,
         rate,
     };
-    guarded(s, |s| {
+    guarded(&mut s, |s| {
         s.clear();
         match s.play.frame(&mut s.session, view) {
             Frame::Wait => 1,
@@ -218,11 +221,11 @@ pub unsafe extern "C" fn orla_play_present(
     session: *mut OrlaSession,
     canvas: *const c_char,
 ) -> c_int {
-    let (Some(s), Some(canvas)) = (unsafe { session.as_mut() }, unsafe { text(canvas) }) else {
+    let (Some(mut s), Some(canvas)) = (unsafe { enter(session) }, unsafe { text(canvas) }) else {
         return -1;
     };
     let canvas = canvas.to_owned();
-    guarded(s, |s| {
+    guarded(&mut s, |s| {
         s.clear();
         let Some((picture, _)) = s.shown else {
             return 1;
@@ -264,10 +267,10 @@ pub unsafe extern "C" fn orla_play_pixels(
     width: u32,
     height: u32,
 ) -> *const u32 {
-    let Some(s) = (unsafe { session.as_mut() }) else {
+    let Some(mut s) = (unsafe { enter(session) }) else {
         return std::ptr::null();
     };
-    let drawn = guarded(s, |s| {
+    let drawn = guarded(&mut s, |s| {
         s.clear();
         let started = clock();
         // The picture brought home; one that cannot come shows the last.
@@ -320,10 +323,10 @@ pub unsafe extern "C" fn orla_play_sound(
     session: *mut OrlaSession,
     field: *mut OrlaField,
 ) -> c_int {
-    let (Some(s), Some(field)) = (unsafe { session.as_mut() }, unsafe { field.as_mut() }) else {
+    let (Some(mut s), Some(field)) = (unsafe { enter(session) }, unsafe { field.as_mut() }) else {
         return -1;
     };
-    guarded(s, |s| {
+    guarded(&mut s, |s| {
         s.clear();
         let Some((_, Some(sound))) = s.shown else {
             return 1;
@@ -345,8 +348,8 @@ pub unsafe extern "C" fn orla_play_sound_opened(
     session: *mut OrlaSession,
     description: *const c_char,
 ) {
-    if let (Some(s), Some(description)) =
-        (unsafe { session.as_mut() }, unsafe { text(description) })
+    if let (Some(mut s), Some(description)) =
+        (unsafe { enter(session) }, unsafe { text(description) })
     {
         s.play.sound_opened(description);
     }
@@ -359,7 +362,7 @@ pub unsafe extern "C" fn orla_play_sound_opened(
 /// `session` is a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_play_said(session: *mut OrlaSession) -> *const c_char {
-    let Some(s) = (unsafe { session.as_mut() }) else {
+    let Some(mut s) = (unsafe { enter(session) }) else {
         return crate::EMPTY.as_ptr();
     };
     s.said = CString::new(s.play.said().join("\n").replace('\0', " ")).unwrap_or_default();
@@ -372,5 +375,5 @@ pub unsafe extern "C" fn orla_play_said(session: *mut OrlaSession) -> *const c_c
 /// `session` is NULL or a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_play_replaying(session: *const OrlaSession) -> c_int {
-    unsafe { session.as_ref() }.is_some_and(|s| s.play.replaying()) as c_int
+    unsafe { enter(session) }.is_some_and(|s| s.play.replaying()) as c_int
 }

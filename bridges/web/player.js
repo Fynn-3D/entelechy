@@ -115,19 +115,22 @@ class OrlaPlayer {
   }
 
   /// One request of the creation protocol (`write`, `publish`, `read`,
-  /// ...), answered between frames, or at once while the scene is
-  /// stopped; the same promise `OrlaInPage.call` gives.
+  /// ...), answered between frames, or in its own turn while the scene is
+  /// stopped; the same promise `OrlaInPage.call` gives. Everything that
+  /// reaches into Orla, a frame, a hand, a request, waits for its turn,
+  /// so nothing reaches in while a call inside waits for the device.
   call(op, fields = {}) {
-    if (!this.running) return this.orla.call(op, fields);
-    return new Promise((resolve, reject) => this.requests.push({ op, fields, resolve, reject }));
+    const asked = new Promise((resolve, reject) => this.requests.push({ op, fields, resolve, reject }));
+    if (!this.running) this.orla.inTurn(() => this.answerNow());
+    return asked;
   }
 
-  /// Answers the requests that came since the last frame.
-  async answer() {
+  /// Answers the requests that came since the last turn, inside one.
+  async answerNow() {
     const requests = this.requests;
     this.requests = [];
     for (const { op, fields, resolve, reject } of requests) {
-      await this.orla.call(op, fields).then(resolve, reject);
+      await this.orla.callNow(op, fields).then(resolve, reject);
     }
   }
 
@@ -235,11 +238,15 @@ class OrlaPlayer {
     }
   }
 
-  /// One frame: the play's, shown on the page.
-  async step() {
+  /// One frame: the play's, shown on the page, in its turn.
+  step() {
+    return this.orla.inTurn(() => this.stepNow());
+  }
+
+  async stepNow() {
     if (!this.handOver()) return;
     this.pollPads();
-    await this.answer();
+    await this.answerNow();
     this.say();
     // With sound, the card sets the pace: a block is made when it has
     // room, as the Player's ring does.
@@ -330,7 +337,7 @@ class OrlaPlayer {
   stop() {
     this.running = false;
     // Between frames: what waits is answered now, not at the next run.
-    this.answer();
+    this.orla.inTurn(() => this.answerNow());
     document.title = "Orla Player (stopped: a key or a click goes on)";
   }
 

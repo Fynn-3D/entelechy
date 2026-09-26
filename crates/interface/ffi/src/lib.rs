@@ -5,14 +5,17 @@
 //! socket and no encoding between; the JSON protocol is reachable too,
 //! one line at a time, for everything the fast path does not name.
 //!
-//! Every function takes one session from one thread at a time. Strings
+//! Every function takes one session from one thread at a time, and one
+//! call at a time: a call made while another is inside the session is
+//! refused ([`OrlaSession`]), never let in beside it. Strings
 //! and pointers returned belong to the session until the next call on
 //! it; a Field's words until the next evaluate, request or close. No
 //! panic crosses the boundary: each entry catches one and reports it as
 //! an error.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ffi::{CStr, CString, c_char, c_int};
+use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
@@ -66,8 +69,57 @@ pub struct OrlaField {
     pub schema: *const c_char,
 }
 
-/// A running scene and the buffers its answers live in.
+/// A session as a caller holds it: what it holds, and whether a call is
+/// inside it. A call made while another is inside it (a page reaching in
+/// while Orla waits for its device, the first call suspended) is refused
+/// and answers as a NULL session would: it is never let in beside the
+/// other, so what one call holds no other call touches.
 pub struct OrlaSession {
+    inside: Cell<bool>,
+    held: UnsafeCell<Held>,
+}
+
+/// A session entered by one call: what it holds, the call's alone until
+/// it leaves.
+struct Entered<'a>(&'a OrlaSession);
+
+impl Deref for Entered<'_> {
+    type Target = Held;
+
+    fn deref(&self) -> &Held {
+        // Only the call that entered reaches what is held ([`enter`]).
+        unsafe { &*self.0.held.get() }
+    }
+}
+
+impl DerefMut for Entered<'_> {
+    fn deref_mut(&mut self) -> &mut Held {
+        // Only the call that entered reaches what is held ([`enter`]).
+        unsafe { &mut *self.0.held.get() }
+    }
+}
+
+impl Drop for Entered<'_> {
+    fn drop(&mut self) {
+        self.0.inside.set(false);
+    }
+}
+
+/// Enters a session for one call; `None` for a NULL session, or one
+/// another call is inside.
+///
+/// # Safety
+/// `session` is NULL or a live session.
+unsafe fn enter<'a>(session: *const OrlaSession) -> Option<Entered<'a>> {
+    let session = unsafe { session.as_ref() }?;
+    if session.inside.replace(true) {
+        return None;
+    }
+    Some(Entered(session))
+}
+
+/// A running scene and the buffers its answers live in.
+struct Held {
     session: Session,
     error: CString,
     report: CString,
@@ -129,7 +181,7 @@ unsafe fn text<'a>(pointer: *const c_char) -> Option<&'a str> {
     }
 }
 
-impl OrlaSession {
+impl Held {
     /// A graph output's Field, `name` `None` for the first.
     fn output(&self, name: Option<&str>) -> Result<Handle, String> {
         let graph = self.session.graph().ok_or("no scene is loaded")?;
@@ -273,7 +325,7 @@ impl OrlaSession {
 }
 
 /// Runs an entry point, turning a panic into an error result.
-fn guarded(session: &mut OrlaSession, body: impl FnOnce(&mut OrlaSession) -> c_int) -> c_int {
+fn guarded(session: &mut Held, body: impl FnOnce(&mut Held) -> c_int) -> c_int {
     match catch_unwind(AssertUnwindSafe(|| body(session))) {
         Ok(code) => code,
         Err(payload) => {
@@ -441,20 +493,23 @@ fn opened(
     }));
     match made {
         Ok(Ok((session, display, play))) => Box::into_raw(Box::new(OrlaSession {
-            session,
-            error: CString::default(),
-            report: CString::default(),
-            response: CString::default(),
-            schema: CString::default(),
-            widened: Vec::new(),
-            display,
-            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-            presenter: None,
-            play,
-            shown: None,
-            said: CString::default(),
-            pixels: Vec::new(),
-            picture: (Vec::new(), (0, 0)),
+            inside: Cell::new(false),
+            held: UnsafeCell::new(Held {
+                session,
+                error: CString::default(),
+                report: CString::default(),
+                response: CString::default(),
+                schema: CString::default(),
+                widened: Vec::new(),
+                display,
+                #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+                presenter: None,
+                play,
+                shown: None,
+                said: CString::default(),
+                pixels: Vec::new(),
+                picture: (Vec::new(), (0, 0)),
+            }),
         })),
         Ok(Err(message)) => set_error(message),
         Err(_) => set_error("a panic inside Orla while opening".to_owned()),
@@ -570,7 +625,8 @@ pub extern "C" fn orla_open_error() -> *const c_char {
 /// `session` is NULL or a pointer `orla_open` returned, not closed yet.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_close(session: *mut OrlaSession) {
-    if !session.is_null() {
+    // A session another call is inside is not freed under it.
+    if unsafe { session.as_ref() }.is_some_and(|held| !held.inside.get()) {
         drop(unsafe { Box::from_raw(session) });
     }
 }
@@ -581,7 +637,7 @@ pub unsafe extern "C" fn orla_close(session: *mut OrlaSession) {
 /// `session` is NULL or a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_error(session: *const OrlaSession) -> *const c_char {
-    match unsafe { session.as_ref() } {
+    match unsafe { enter(session) } {
         Some(session) => session.error.as_ptr(),
         None => EMPTY.as_ptr(),
     }
@@ -596,11 +652,11 @@ pub unsafe extern "C" fn orla_evaluate(
     session: *mut OrlaSession,
     input: *const OrlaInput,
 ) -> c_int {
-    let Some(session) = (unsafe { session.as_mut() }) else {
+    let Some(mut session) = (unsafe { enter(session) }) else {
         return -1;
     };
     let input = unsafe { input.as_ref() }.copied().unwrap_or_default();
-    guarded(session, |s| {
+    guarded(&mut session, |s| {
         s.clear();
         s.session.sync();
         // The window: the input's, else the session's, else none.
@@ -643,7 +699,7 @@ pub unsafe extern "C" fn orla_evaluate(
 /// `session` is NULL or a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_report(session: *const OrlaSession) -> *const c_char {
-    match unsafe { session.as_ref() } {
+    match unsafe { enter(session) } {
         Some(session) => session.report.as_ptr(),
         None => EMPTY.as_ptr(),
     }
@@ -660,12 +716,12 @@ pub unsafe extern "C" fn orla_output(
     name: *const c_char,
     field: *mut OrlaField,
 ) -> c_int {
-    let (Some(session), Some(field)) = (unsafe { session.as_mut() }, unsafe { field.as_mut() })
+    let (Some(mut session), Some(field)) = (unsafe { enter(session) }, unsafe { field.as_mut() })
     else {
         return -1;
     };
     let name = unsafe { text(name) }.map(str::to_owned);
-    guarded(session, |s| {
+    guarded(&mut session, |s| {
         s.clear();
         let handle = match s.output(name.as_deref()) {
             Ok(handle) => handle,
@@ -690,12 +746,12 @@ pub unsafe extern "C" fn orla_present(
     canvas: *const c_char,
     output: *const c_char,
 ) -> c_int {
-    let Some(session) = (unsafe { session.as_mut() }) else {
+    let Some(mut session) = (unsafe { enter(session) }) else {
         return -1;
     };
     let canvas = unsafe { text(canvas) }.unwrap_or("").to_owned();
     let output = unsafe { text(output) }.map(str::to_owned);
-    guarded(session, |s| {
+    guarded(&mut session, |s| {
         s.clear();
         match s.present(&canvas, output.as_deref()) {
             Ok(true) => 0,
@@ -717,7 +773,7 @@ pub unsafe extern "C" fn orla_node(
     port: *const c_char,
     field: *mut OrlaField,
 ) -> c_int {
-    let (Some(session), Some(field)) = (unsafe { session.as_mut() }, unsafe { field.as_mut() })
+    let (Some(mut session), Some(field)) = (unsafe { enter(session) }, unsafe { field.as_mut() })
     else {
         return -1;
     };
@@ -725,7 +781,7 @@ pub unsafe extern "C" fn orla_node(
         return session.fail("orla_node needs a node name");
     };
     let port = unsafe { text(port) }.unwrap_or("result").to_owned();
-    guarded(session, |s| {
+    guarded(&mut session, |s| {
         s.clear();
         let Some(handle) = s.session.cached(&orla_graph::NodeId(node.clone()), &port) else {
             return s.fail(format!(
@@ -748,11 +804,11 @@ pub unsafe extern "C" fn orla_node(
 /// `session` is a live session; `allowance` is a NUL-terminated string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn orla_allow(session: *mut OrlaSession, allowance: *const c_char) -> c_int {
-    let Some(session) = (unsafe { session.as_mut() }) else {
+    let Some(mut session) = (unsafe { enter(session) }) else {
         return -1;
     };
     let allowance = unsafe { text(allowance) }.unwrap_or("").to_owned();
-    guarded(session, |s| {
+    guarded(&mut session, |s| {
         s.clear();
         match orla_session::parse_allow(&allowance).and_then(|a| s.session.allow(&a)) {
             Ok(()) => 0,
@@ -770,11 +826,11 @@ pub unsafe extern "C" fn orla_request(
     session: *mut OrlaSession,
     line: *const c_char,
 ) -> *const c_char {
-    let Some(session) = (unsafe { session.as_mut() }) else {
+    let Some(mut session) = (unsafe { enter(session) }) else {
         return EMPTY.as_ptr();
     };
     let line = unsafe { text(line) }.unwrap_or("").to_owned();
-    guarded(session, |s| {
+    guarded(&mut session, |s| {
         s.clear();
         // What it changes is recorded as the protocol's, arrived through
         // this function: a fact about how it came, as `stdin` or
@@ -788,4 +844,42 @@ pub unsafe extern "C" fn orla_request(
         0
     });
     session.response.as_ptr()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A call made while another is inside the session is refused, as a
+    /// NULL session's is, and the session is whole again once the first
+    /// leaves: no call ever holds what another holds. (A page could reach
+    /// in while a request waited for the device, a second `&mut` of one
+    /// session.)
+    #[test]
+    fn a_call_while_another_is_inside_is_refused() {
+        let scene = CString::new(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../examples/text/scene.osn")
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let cpu = CString::new("cpu").unwrap();
+        let session = unsafe { orla_open(scene.as_ptr(), cpu.as_ptr(), std::ptr::null()) };
+        assert!(!session.is_null());
+        let status = CString::new(r#"{"op":"status"}"#).unwrap();
+        {
+            let _inside = unsafe { enter(session) }.expect("the first call enters");
+            assert!(unsafe { enter(session) }.is_none());
+            assert_eq!(unsafe { orla_evaluate(session, std::ptr::null()) }, -1);
+            let answer = unsafe { CStr::from_ptr(orla_request(session, status.as_ptr())) };
+            assert!(answer.to_bytes().is_empty());
+            // Not freed under the call inside it.
+            unsafe { orla_close(session) };
+        }
+        assert_eq!(unsafe { orla_evaluate(session, std::ptr::null()) }, 0);
+        let answer = unsafe { CStr::from_ptr(orla_request(session, status.as_ptr())) };
+        assert!(answer.to_string_lossy().contains("\"ok\""));
+        unsafe { orla_close(session) };
+    }
 }
