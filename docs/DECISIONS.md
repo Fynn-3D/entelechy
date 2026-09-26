@@ -576,3 +576,30 @@ patterns readers learn to silence.
 rows, each shown to fail on the source its commit replaced. The
 session's store, `pub(crate)` in [the session](../crates/interface/session/src/session.rs).
 The layers are held beside it, in [`layers.rs`](../crates/interface/orla/tests/layers.rs).
+
+## Orla describes itself, from the tables it enforces
+
+What an agent must know is in three kinds, each kept where it is
+enforced: the laws (the builtins and forms, the compiler's), the doors
+(the protocol's operations, the replay forms, the command line's
+commands, each a table its parser or server checks input against), and
+the capabilities (Kernels and preset graphs, each with the `///` and
+`//!` docs of its source). `help` answers the laws and the doors in
+three steps, an index, a section, a name in full; `search` answers the
+capabilities that exist, by words, types and capability, with the line
+a scene writes to reach each. Documents render the tables and are held
+to them. Search is deterministic and holds no model: understanding what
+is wanted is the agent's.
+
+**Why.** An agent composes what exists before it writes anew, and can
+only rely on a description the implementation cannot drift from. A doc
+lives in the source it describes, so it travels with a Kernel through
+publish and snapshot; the IR stays computation alone.
+
+**Where.** [`ops`](../crates/interface/protocol/src/ops.rs),
+[`help`](../crates/interface/protocol/src/help.rs),
+[`replay::forms`](../crates/interface/session/src/replay.rs),
+[`commands`](../crates/interface/orla/src/commands.rs),
+[`search`](../crates/interface/session/src/search.rs),
+[`doc`](../crates/frontend/language/src/doc.rs); held by their tests
+and by `docs/PROTOCOL.md`'s and `docs/USAGE.md`'s rendered tables.
