@@ -51,7 +51,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 - [fluid](fluid/README.md): smoke by Navier-Stokes, the pressure solve one Jacobi Kernel placed with `times`.
 - [collapse](collapse/README.md): wave function collapse on a `Grid<Int>` of tile bitmasks.
 - [learn](learn/README.md): a 2-16-1 network trained by gradient descent, the gradient a scatter.
-- [rubik](rubik/README.md): a playable Rubik's cube and a 54-32-1 network trained on its scrambles; `play.osn` reads kept weights.
+- [cube-puzzle](cube-puzzle/README.md): a playable cube puzzle and a 54-32-1 network trained on its scrambles; `play.osn` reads kept weights.
 
 ## Sound
 
@@ -71,7 +71,7 @@ cargo run -- run examples/<example>/scene.osn --out output.ppm --watch
 ## Games, tools and machines
 
 - [snake](snake/README.md): a game in five Kernels; the replay plays it through.
-- [tetris](tetris/README.md): pieces as a bit-mask table; the replay clears a line.
+- [blocks](blocks/README.md): falling blocks, pieces as a bit-mask table; the replay clears a line.
 - [slg](slg/README.md): a tactics game with a turn machine and movement ranges as a sub-graph placed three times.
 - [tiles](tiles/README.md): a `Grid<Tile>` flooded a step a frame, drawn through a watched atlas.
 - [voxel](voxel/README.md): a voxel editor over a `Volume<Int>` with undo and a toolbar.

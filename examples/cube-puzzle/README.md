@@ -1,6 +1,6 @@
-# Rubik
+# Cube puzzle
 
-A Rubik's cube and a network learning to read it, all Kernels. Drag to
+A cube puzzle and a network learning to read it, all Kernels. Drag to
 orbit; U, R, F, D, L and B turn a face (shift reverses); space scrambles
 ten turns; enter resets.
 
@@ -24,8 +24,8 @@ init ─ step <~ ─ act ─ delta ─ grads (scatter) ─ step; loss           
 frames of `scene.osn`.
 
 ```sh
-cargo run --release -p orla-player -- examples/rubik/scene.osn
-cargo run --release -p orla-player -- examples/rubik/play.osn
-cargo run --release -- replay examples/rubik/tests/rubik.replay --backend jit
-cargo run --release -- render examples/rubik/scene.osn --frames 300 --backend jit --window 64x64 --out /tmp/rubik --save step.result=examples/rubik/weights.field
+cargo run --release -p orla-player -- examples/cube-puzzle/scene.osn
+cargo run --release -p orla-player -- examples/cube-puzzle/play.osn
+cargo run --release -- replay examples/cube-puzzle/tests/cube-puzzle.replay --backend jit
+cargo run --release -- render examples/cube-puzzle/scene.osn --frames 300 --backend jit --window 64x64 --out /tmp/cube-puzzle --save step.result=examples/cube-puzzle/weights.field
 ```

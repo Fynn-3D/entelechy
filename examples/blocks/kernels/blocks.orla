@@ -1,4 +1,4 @@
-// Tetris: the falling piece is a row of state, the settled cells a grid,
+// Falling blocks: the falling piece is a row of state, the settled cells a grid,
 // both fed back through the Graph. The seven pieces in their four
 // rotations are a table of sixteen-bit masks over a 4 by 4 box, and
 // every cell question is integer vector arithmetic against that table.
@@ -72,7 +72,7 @@ fn full(board: Board, y: Int, mask: Int, at: IVec2) -> Bool {
     };
 }
 
-kernel tetris.start@1 {
+kernel blocks.start@1 {
     requires { field.write; }
     param seed: Int = 7;
     output result: State;
@@ -89,7 +89,7 @@ kernel tetris.start@1 {
 
 // An empty board, or one with its bottom row all but one cell filled,
 // for a test of the clearing.
-kernel tetris.empty@1 {
+kernel blocks.empty@1 {
     requires { field.write; }
     param prefill: Int = 0;
     output result: Board;
@@ -102,7 +102,7 @@ kernel tetris.empty@1 {
 
 // The rules, once per frame: steer on a key's press, fall on a tick or
 // while down is held, drop on space, land, count the lines, spawn.
-kernel tetris.step@1 {
+kernel blocks.step@1 {
     requires { field.read; field.write; time.read; input.read; }
     input previous: State;
     input board: Board;
@@ -165,7 +165,7 @@ kernel tetris.step@1 {
 // The settled cells: when a piece lands it is merged in, its colour the
 // piece's number plus one, and every full row vanishes, the rows above
 // falling by as many rows as were full beneath them.
-kernel tetris.board@1 {
+kernel blocks.board@1 {
     requires { field.read; field.write; }
     input previous: Board;
     input game: State;
@@ -196,7 +196,7 @@ kernel tetris.board@1 {
 // Pixels: the board at `cell` pixels a cell with the falling piece over
 // it, the next piece in a panel to the right, grid lines, and a dimmed
 // board once the game is over.
-kernel tetris.draw@1 {
+kernel blocks.draw@1 {
     requires { field.read; field.write; }
     input board: Board;
     input game: State;

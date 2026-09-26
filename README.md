@@ -122,10 +122,10 @@ protocol from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README
 | --- | --- |
 | **Rendering** | path tracing, ray marching, deferred shading, a rasterizer written as Kernels, ten million culled triangles, volumes, text |
 | **Simulation** | a million bodies, smoke by Navier-Stokes, neighbour search, wave function collapse |
-| **Learning** | networks trained by gradient descent, one learning how far a Rubik's cube is scrambled |
+| **Learning** | networks trained by gradient descent, one learning how far a cube puzzle is scrambled |
 | **Sound** | a synthesizer, plucked strings, a sampler, a spectrum, MIDI in and out |
 | **Rigs** | glTF and Blender rigs posed, blended, aimed and walked by the `skin` package |
-| **Games and machines** | Snake, Tetris, a tactics game, a voxel editor, a CHIP-8 interpreter, an ARM Thumb core |
+| **Games and machines** | Snake, falling blocks, a tactics game, a voxel editor, a CHIP-8 interpreter, an ARM Thumb core |
 
 Browse them in [`examples/`](examples/README.md).
 

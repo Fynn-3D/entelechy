@@ -1,4 +1,4 @@
-// A Rubik's cube in three dimensions, turned by the keys and orbited by
+// A cube puzzle in three dimensions, turned by the keys and orbited by
 // the pointer. The state is 54 stickers, a Rows<Int> of face colours
 // (0 white up, 1 red right, 2 green front, 3 yellow down, 4 orange
 // left, 5 blue back), and a move is a permutation of them: `perm(m, i)`

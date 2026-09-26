@@ -1,6 +1,6 @@
-# Tetris
+# Blocks
 
-Tetris in five Kernels: a state row and a grid of settled cells fed
+Falling blocks in five Kernels: a state row and a grid of settled cells fed
 back through the Graph, the rules once per frame, the picture from
 both. The seven pieces in four rotations are one `[[Int; 4]; 7]` table
 of 16-bit masks over a 4 by 4 box; `covers` and `fits` test cells by
@@ -12,6 +12,6 @@ The replay sets `param seed` and `param prefill`, drops a piece into
 the gap, and checks the row clears and the cells above fall.
 
 ```sh
-cargo run --release -p orla-player -- examples/tetris/scene.osn --scale 2
-cargo run -- replay examples/tetris/tests/tetris.replay
+cargo run --release -p orla-player -- examples/blocks/scene.osn --scale 2
+cargo run -- replay examples/blocks/tests/blocks.replay
 ```
