@@ -240,8 +240,8 @@ mod tests {
                 .contains("`expect` is \"absent\" | \"any\" | integer")
         );
         assert!(
-            refused(json!({ "op": "read", "format": "png" }))
-                .contains("\"rgba32f\" | \"ppm\" | \"field\"")
+            refused(json!({ "op": "read", "format": "jpeg" }))
+                .contains("\"png\" | \"rgba32f\" | \"ppm\" | \"summary\" | \"words\" | \"field\"")
         );
         assert!(
             refused(json!({ "op": "evaluate", "pointer": [1] })).contains("`pointer` is [x, y]")

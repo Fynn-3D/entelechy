@@ -12,7 +12,7 @@ use crate::ops;
 const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// What the server tells an agent it has just met.
-const INSTRUCTIONS: &str = "Orla is a runtime where Kernels (`.orla`) compute and scenes (`.osn`) compose them into a running world; this session serves one scene. Call `help` with no arguments first: it answers an index of everything Orla answers, and `help` with `section` or `name` goes further. Call `search` before writing a Kernel: it finds the Kernels and preset graphs that already exist. Changes are checked before they replace anything; a refused one leaves the world as it was. `publish` changes the running world only; `compose` rewrites the scene's document on disk (the file `status` names), so serve a copy of a scene you mean to keep.";
+const INSTRUCTIONS: &str = "Orla is a runtime where Kernels (`.orla`) compute and scenes (`.osn`) compose them into a running world; this session serves one scene. Call `help` with no arguments first: it answers an index of everything Orla answers, and `help` with `section` or `name` goes further. Call `search` before writing a Kernel: it finds the Kernels and preset graphs that already exist. `read` shows a picture as a picture and answers any other Field as a summary, its numbers with `from` and `count`. Changes are checked before they replace anything; a refused one leaves the world as it was. `publish` changes the running world only; `compose` rewrites the scene's document on disk (the file `status` names), so serve a copy of a scene you mean to keep.";
 
 /// What one line from the client comes to.
 pub enum Step {
@@ -115,8 +115,8 @@ pub fn step(line: &str) -> Step {
 
 /// The tool result for a protocol answer line (`{"id", "ok"}` or
 /// `{"id", "error"}`), under `id`: the answer as text, and as structured
-/// content when it is an object; a refusal is an error result, so the
-/// agent reads why.
+/// content when it is an object, a PNG picture as an image; a refusal is
+/// an error result, so the agent reads why.
 pub fn result(id: &Json, answer: &str) -> String {
     let answer: Json = serde_json::from_str(answer).unwrap_or(Json::Null);
     let (value, failed) = match (answer.get("ok"), answer.get("error")) {
@@ -124,10 +124,17 @@ pub fn result(id: &Json, answer: &str) -> String {
         (None, Some(error)) => (error.clone(), true),
         (None, None) => (answer, true),
     };
-    let mut result = json!({
-        "content": [{ "type": "text", "text": value.to_string() }],
-        "isError": failed,
-    });
+    // A picture answered as PNG is shown as the picture; the rest of the
+    // answer stays text.
+    let mut value = value;
+    let mut content = Vec::new();
+    if value["format"] == "png"
+        && let Some(Json::String(data)) = value.as_object_mut().and_then(|o| o.remove("data"))
+    {
+        content.push(json!({ "type": "image", "data": data, "mimeType": "image/png" }));
+    }
+    content.insert(0, json!({ "type": "text", "text": value.to_string() }));
+    let mut result = json!({ "content": content, "isError": failed });
     if value.is_object() {
         result["structuredContent"] = value;
     }

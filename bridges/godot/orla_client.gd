@@ -172,8 +172,8 @@ func mesh_of(vertex_node: String, triangle_node: String, vertex_port := "result"
 	if failed(evaluated):
 		push_error(evaluated["error"])
 		return null
-	var vertices := request("read", {"node": vertex_node, "port": vertex_port})
-	var triangles := request("read", {"node": triangle_node, "port": triangle_port})
+	var vertices := request("read", {"node": vertex_node, "port": vertex_port, "format": "words"})
+	var triangles := request("read", {"node": triangle_node, "port": triangle_port, "format": "words"})
 	if failed(vertices) or failed(triangles):
 		push_error(str(vertices.get("error", triangles.get("error"))))
 		return null

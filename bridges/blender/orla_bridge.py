@@ -439,14 +439,14 @@ def read_rows(client, vertex_node, triangles, evaluate=True):
         client.call("pin", node=triangles)
     if evaluate:
         client.call("evaluate", time=time.monotonic() - _started)
-    vertices = client.call("read", node=vertex_node, port="result")
+    vertices = client.call("read", node=vertex_node, port="result", format="words")
     stride = len(vertices["schema"].split(","))
     if stride not in (8, 9):
         raise RuntimeError(f"{vertex_node} has {stride} words per row; a mesh has 8 or 9")
     if from_file:
         _, _, _, triangle_words = read_field(bpy.path.abspath(triangles))
     else:
-        triangle_words = base64.b64decode(client.call("read", node=triangles, port="result")["data"])
+        triangle_words = base64.b64decode(client.call("read", node=triangles, port="result", format="words")["data"])
     return base64.b64decode(vertices["data"]), stride, triangle_words
 
 

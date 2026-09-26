@@ -176,7 +176,7 @@ async function voxelScene(port) {
   assert(driver.frame.width === 240 && driver.frame.height === 135, `frame ${driver.frame.width}x${driver.frame.height}`);
   driver.pointer = [120, 78];
   await driver.step();
-  const state = await client.call("read", { node: "state", port: "result" });
+  const state = await client.call("read", { node: "state", port: "result", format: "words" });
   const words = decodeWords(state.data);
   // Edit { yaw, pitch, zoom, pan(3), px, py, down, right, middle, on_bar,
   // painting, erasing, stroked, tool, color, hover, found, hit(3), ... }
@@ -190,7 +190,7 @@ async function voxelScene(port) {
   driver.buttons.delete(0);
   await client.call("pin", { node: "world" });
   await driver.step();
-  const world = decodeWords((await client.call("read", { node: "world", port: "result" })).data);
+  const world = decodeWords((await client.call("read", { node: "world", port: "result", format: "words" })).data);
   assert(world.int(62811) === 1, `placed voxel is ${world.int(62811)}`);
   say("voxel: a click places a voxel");
   // A wider canvas is a resize: the picture follows the window.

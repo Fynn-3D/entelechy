@@ -1,7 +1,7 @@
 //! Operations on a node's Fields: read, write committed state, trace one
 //! element, and pin for reading.
 
-use orla_kernel::Shape;
+use orla_kernel::{Number, Shape};
 use serde_json::{Value as Json, json};
 
 use orla_formats::base64::{base64, unbase64};
@@ -143,8 +143,6 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
         let name = request.get("output").and_then(Json::as_str);
         session.output(name).map_err(failure)?
     };
-    // A Field of pixels reads as an image; any other as words with its
-    // shape and layout.
     let (domain, schema) = {
         let host = session.runtime().host();
         (
@@ -154,49 +152,184 @@ pub(crate) fn read(session: &mut Session, request: &Request) -> Result<Json, Jso
                 .clone(),
         )
     };
-    let as_file = request.get("format").and_then(Json::as_str) == Some("field");
-    if as_file || !schema.is_pixel() || domain.shape() == Shape::Volume {
-        let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
-        let bytes: Vec<u8> = if as_file {
-            orla_formats::file::encode_data(data)
-        } else {
-            data.values().iter().flat_map(|w| w.to_le_bytes()).collect()
-        };
-        return Ok(json!({
-            "shape": domain.shape().to_string(),
-            "extent": [domain.width(), domain.height(), domain.depth()],
-            "count": domain.count(),
-            "schema": schema.to_string(),
-            "format": if as_file { "field" } else { "words" },
-            "data": base64(&bytes),
-        }));
-    }
-    let image = session
-        .picture(handle)
-        .map_err(|e| failure(e.to_string()))?;
-    let format = request
-        .get("format")
-        .and_then(Json::as_str)
-        .unwrap_or("rgba32f");
-    let bytes = match format {
-        "rgba32f" => image
-            .pixels()
-            .iter()
-            .flat_map(|pixel| pixel.iter().flat_map(|v| v.to_le_bytes()))
-            .collect::<Vec<u8>>(),
-        "ppm" => ppm::encode(&image),
-        other => {
-            return Err(failure(format!(
-                "unknown format `{other}`; use rgba32f or ppm"
-            )));
+    let described = json!({
+        "shape": domain.shape().to_string(),
+        "extent": [domain.width(), domain.height(), domain.depth()],
+        "count": domain.count(),
+        "schema": schema.to_string(),
+    });
+    let picture = schema.is_pixel() && domain.shape() != Shape::Volume;
+    let format = request.get("format").and_then(Json::as_str);
+    let from = request.get("from").and_then(Json::as_u64);
+    let count = request.get("count").and_then(Json::as_u64);
+    if from.is_some() || count.is_some() {
+        if format.is_some() {
+            return Err(failure(
+                "`from` and `count` answer numbers, `format` the whole Field; name one",
+            ));
         }
-    };
-    Ok(json!({
-        "width": image.width(),
-        "height": image.height(),
-        "format": format,
-        "data": base64(&bytes),
-    }))
+        return values(
+            session,
+            handle,
+            described,
+            from.unwrap_or(0),
+            count.unwrap_or(1),
+        );
+    }
+    let format = format.unwrap_or(if picture { "png" } else { "summary" });
+    match format {
+        "summary" => summary(session, handle, described),
+        "words" | "field" => {
+            let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
+            let bytes: Vec<u8> = if format == "field" {
+                orla_formats::file::encode_data(data)
+            } else {
+                data.values().iter().flat_map(|w| w.to_le_bytes()).collect()
+            };
+            let mut answer = described;
+            answer["format"] = json!(format);
+            answer["data"] = json!(base64(&bytes));
+            Ok(answer)
+        }
+        "png" | "rgba32f" | "ppm" if picture => {
+            let image = session
+                .picture(handle)
+                .map_err(|e| failure(e.to_string()))?;
+            let bytes = match format {
+                "png" => orla_formats::png::encode(image.width(), image.height(), image.pixels()),
+                "ppm" => ppm::encode(&image),
+                _ => image
+                    .pixels()
+                    .iter()
+                    .flat_map(|pixel| pixel.iter().flat_map(|v| v.to_le_bytes()))
+                    .collect(),
+            };
+            Ok(json!({
+                "width": image.width(),
+                "height": image.height(),
+                "format": format,
+                "data": base64(&bytes),
+            }))
+        }
+        other => Err(failure(format!(
+            "`{other}` is a picture's encoding, and this Field is {} {} {}: read its `summary`, numbers with `from` and `count`, or `words` or `field`",
+            domain.shape(),
+            domain.count(),
+            schema
+        ))),
+    }
+}
+
+/// The most elements one `read` answers as numbers.
+const MOST_VALUES: u64 = 4096;
+
+/// A number as JSON: a float that is not finite is `null`.
+fn number_json(number: Number) -> Json {
+    match number {
+        Number::Float(v) => json!(v),
+        Number::Double(v) => json!(v),
+        Number::Int(v) => json!(v),
+        Number::Long(v) => json!(v),
+        Number::Bool(v) => json!(v),
+    }
+}
+
+/// Elements `from` onward, `count` of them, as numbers: one element a
+/// number, or a list of its numbers in order.
+fn values(
+    session: &mut Session,
+    handle: orla_kernel::Handle,
+    described: Json,
+    from: u64,
+    count: u64,
+) -> Result<Json, Json> {
+    let total = described["count"].as_u64().unwrap_or(0);
+    if count == 0 || count > MOST_VALUES {
+        return Err(failure(format!(
+            "`count` is 1 to {MOST_VALUES}; read more in parts, or the whole Field as `words` or `field`"
+        )));
+    }
+    if from >= total {
+        return Err(failure(format!(
+            "`from` {from} is past the Field's {total} elements"
+        )));
+    }
+    let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
+    let schema = data.schema().clone();
+    let per = schema.value_words().max(1);
+    let words = data.values();
+    let end = (from + count).min(total) as usize;
+    let values: Vec<Json> = (from as usize..end)
+        .map(|element| {
+            let numbers = Number::of_element(&schema, &words[element * per..(element + 1) * per]);
+            match numbers.as_slice() {
+                [one] => number_json(*one),
+                _ => Json::Array(numbers.into_iter().map(number_json).collect()),
+            }
+        })
+        .collect();
+    let mut answer = described;
+    answer["from"] = json!(from);
+    answer["values"] = Json::Array(values);
+    Ok(answer)
+}
+
+/// Each number of the elements, over every element: its least, its most
+/// and its mean (a truth value counted as 0 or 1), and how many were not
+/// finite.
+fn summary(
+    session: &mut Session,
+    handle: orla_kernel::Handle,
+    described: Json,
+) -> Result<Json, Json> {
+    let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
+    let schema = data.schema().clone();
+    let per = schema.value_words().max(1);
+    let words = data.values();
+    // Per number of an element: least, most, sum and finite count; and
+    // how many were not finite.
+    let mut seen: Vec<(f64, f64, f64, u64, u64)> = Vec::new();
+    for element in words.chunks_exact(per) {
+        let numbers = Number::of_element(&schema, element);
+        if seen.is_empty() {
+            seen = vec![(f64::INFINITY, f64::NEG_INFINITY, 0.0, 0, 0); numbers.len()];
+        }
+        for (slot, number) in seen.iter_mut().zip(numbers) {
+            let v = match number {
+                Number::Float(v) => f64::from(v),
+                Number::Double(v) => v,
+                Number::Int(v) => f64::from(v),
+                Number::Long(v) => v as f64,
+                Number::Bool(v) => f64::from(u8::from(v)),
+            };
+            if v.is_finite() {
+                slot.0 = slot.0.min(v);
+                slot.1 = slot.1.max(v);
+                slot.2 += v;
+                slot.3 += 1;
+            } else {
+                slot.4 += 1;
+            }
+        }
+    }
+    let each: Vec<Json> = seen
+        .into_iter()
+        .map(|(least, most, sum, finite, other)| {
+            let mut one = if finite == 0 {
+                json!({ "min": null, "max": null, "mean": null })
+            } else {
+                json!({ "min": least, "max": most, "mean": sum / finite as f64 })
+            };
+            if other > 0 {
+                one["nonfinite"] = json!(other);
+            }
+            one
+        })
+        .collect();
+    let mut answer = described;
+    answer["format"] = json!("summary");
+    answer["summary"] = Json::Array(each);
+    Ok(answer)
 }
 
 /// Keeps a node materialized so `read` can see it.

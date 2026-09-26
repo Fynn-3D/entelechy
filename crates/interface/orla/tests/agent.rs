@@ -66,7 +66,7 @@ impl Agent {
     /// A node's current layout, as a file spells it, and its words.
     fn state(&mut self, node: &str) -> (String, Vec<u32>) {
         let read = self
-            .ask("read", json!({ "node": node }))
+            .ask("read", json!({ "node": node, "format": "words" }))
             .expect("the node's state reads");
         let bytes = orla_formats::base64::unbase64(read["data"].as_str().unwrap()).unwrap();
         let words = bytes

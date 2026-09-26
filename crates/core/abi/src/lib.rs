@@ -486,6 +486,27 @@ impl Number {
         }
     }
 
+    /// The numbers of one element's Kernel words as `schema` lays them
+    /// out, in order: what [`Number::push_words`] wrote, read back.
+    pub fn of_element(schema: &Schema, element: &[u32]) -> Vec<Number> {
+        let scalars = schema.scalars();
+        let word = |i: usize| element.get(i).copied().unwrap_or(0);
+        let wide = |i: usize| u64::from(word(i)) | (u64::from(word(i + 1)) << 32);
+        let mut out = Vec::with_capacity(scalars.len());
+        let mut i = 0;
+        while i < scalars.len() {
+            out.push(match scalars[i] {
+                Scalar::Float => Self::Float(f32::from_bits(word(i))),
+                Scalar::Int => Self::Int(word(i) as i32),
+                Scalar::Bool => Self::Bool(word(i) != 0),
+                Scalar::Double => Self::Double(f64::from_bits(wide(i))),
+                Scalar::Long => Self::Long(wide(i) as i64),
+            });
+            i += scalars[i].words();
+        }
+        out
+    }
+
     /// Its words: one, or two for a 64-bit scalar, the low one first.
     pub fn push_words(self, out: &mut Vec<u32>) {
         match self {
@@ -1238,6 +1259,30 @@ impl<'a> Scope<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An element's words read back as the numbers that wrote them, a
+    /// 64-bit pair as one.
+    #[test]
+    fn an_elements_words_read_back_as_its_numbers() {
+        let numbers = [
+            Number::Float(1.5),
+            Number::Int(-3),
+            Number::Bool(true),
+            Number::Double(0.1),
+            Number::Long(-5_000_000_000),
+        ];
+        let mut words = Vec::new();
+        for number in numbers {
+            number.push_words(&mut words);
+        }
+        let schema = Schema::new(
+            numbers
+                .iter()
+                .flat_map(|n| vec![n.kind(); n.kind().words()])
+                .collect(),
+        );
+        assert_eq!(Number::of_element(&schema, &words), numbers);
+    }
 
     #[test]
     fn buttons_and_the_wheel_are_input() {

@@ -162,7 +162,7 @@ func _voxel(port: int) -> String:
 		return "voxel: frame " + str(view.frame_size)
 	view.set_pointer(Vector2(120, 78))
 	view.step()
-	var state := client.request("read", {"node": "state", "port": "result"})
+	var state := client.request("read", {"node": "state", "port": "result", "format": "words"})
 	var words := Client.decode_words(state["data"])
 	# Edit { yaw, pitch, zoom, pan(3), px, py, down, right, middle, on_bar,
 	# painting, erasing, stroked, tool, color, hover, found, hit(3), ... }
@@ -179,7 +179,7 @@ func _voxel(port: int) -> String:
 	view.press_button(0, false)
 	client.request("pin", {"node": "world"})
 	view.step()
-	var world := Client.decode_words(client.request("read", {"node": "world", "port": "result"})["data"])
+	var world := Client.decode_words(client.request("read", {"node": "world", "port": "result", "format": "words"})["data"])
 	if Client.int_at(world, 62811) != 1:
 		return "voxel: placed voxel is %d" % Client.int_at(world, 62811)
 	print("voxel: a click places a voxel")

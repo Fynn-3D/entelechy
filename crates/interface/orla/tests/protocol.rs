@@ -332,14 +332,14 @@ output stirred <- stir.result;
         &scene,
         &[
             json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
-            json!({ "id": 2, "op": "read", "node": "count" }),
+            json!({ "id": 2, "op": "read", "node": "count" , "format": "words" }),
             json!({ "id": 3, "op": "write", "node": "count", "data": words(&[40.0, 50.0]) }),
             json!({ "id": 4, "op": "evaluate", "time": 0.1 }),
-            json!({ "id": 5, "op": "read", "node": "count" }),
+            json!({ "id": 5, "op": "read", "node": "count" , "format": "words" }),
             json!({ "id": 6, "op": "write", "node": "seed", "data": words(&[1.0, 2.0]) }),
             json!({ "id": 7, "op": "write", "node": "count", "data": words(&[1.0]) }),
             json!({ "id": 8, "op": "evaluate", "time": 0.2, "buttons": [1], "wheel": [0.0, -1.0] }),
-            json!({ "id": 9, "op": "read", "output": "stirred" }),
+            json!({ "id": 9, "op": "read", "output": "stirred", "format": "words" }),
             // A published Kernel sees the scene's declarations.
             json!({ "id": 10, "op": "publish", "source": "kernel t.pair@1 { requires { field.write; } output result: Rows<Pair>; compute { return Pair { a: twice(1.0), b: 2.0 }; } }" }),
             json!({ "id": 11, "op": "prepare", "source": "struct Own { x: Float; }\nkernel t.own@1 { requires { field.write; } output result: Rows<Own>; compute { return Own { x: 1.0 }; } }" }),
@@ -361,7 +361,7 @@ output stirred <- stir.result;
             json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
             json!({ "id": 2, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&file) }),
             json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
-            json!({ "id": 4, "op": "read", "node": "count" }),
+            json!({ "id": 4, "op": "read", "node": "count" , "format": "words" }),
             json!({ "id": 5, "op": "write", "node": "count", "format": "field", "data": orla_formats::base64::base64(&orla_formats::file::encode(&"f".parse().unwrap(), orla_kernel::Domain::Rows(3), &[0, 0, 0])) }),
             json!({ "id": 6, "op": "quit" }),
         ],
@@ -912,6 +912,98 @@ fn search_finds_the_packages_beside_the_ones_a_scene_uses() {
     let typed = &responses[1]["ok"];
     assert!(typed["count"].as_u64().unwrap() > 2);
     assert_eq!(typed["capabilities"].as_array().unwrap().len(), 2);
+}
+
+/// `read` shows a picture as PNG and sums up any other Field; numbers come
+/// from `from` and `count`, at most 4096 at once; over MCP the picture is
+/// an image.
+#[test]
+fn read_shows_a_picture_and_sums_up_any_other_field() {
+    let dir = scratch_in("-read");
+    let scene = dir.join("scene.osn");
+    let responses = talk(
+        &scene,
+        &[
+            json!({ "id": 1, "op": "evaluate", "time": 0.0 }),
+            json!({ "id": 2, "op": "read" }),
+            json!({ "id": 3, "op": "read", "node": "life" }),
+            json!({ "id": 4, "op": "read", "node": "life", "from": 160, "count": 3 }),
+            json!({ "id": 5, "op": "read", "node": "life", "count": 5000 }),
+            json!({ "id": 6, "op": "read", "node": "life", "format": "ppm" }),
+            json!({ "id": 7, "op": "read", "node": "life", "from": 0, "format": "words" }),
+        ],
+    );
+    let picture = &responses[1]["ok"];
+    assert_eq!(picture["format"], "png");
+    assert_eq!(
+        (&picture["width"], &picture["height"]),
+        (&json!(160), &json!(120))
+    );
+    let png = orla_formats::base64::unbase64(picture["data"].as_str().unwrap()).unwrap();
+    assert!(png.starts_with(b"\x89PNG"));
+    let summed = &responses[2]["ok"];
+    assert_eq!(summed["format"], "summary", "{summed}");
+    assert_eq!(summed["count"], 160 * 120);
+    assert!(summed.get("data").is_none());
+    let alive = &summed["summary"][0];
+    assert_eq!(
+        (&alive["min"], &alive["max"]),
+        (&json!(0.0), &json!(1.0)),
+        "{summed}"
+    );
+    let share = alive["mean"].as_f64().unwrap();
+    assert!(share > 0.0 && share < 1.0, "{summed}");
+    let values = responses[3]["ok"]["values"].as_array().unwrap();
+    assert_eq!(values.len(), 3);
+    assert!(
+        values
+            .iter()
+            .all(|cell| cell[0].is_boolean() && cell[1].is_i64()),
+        "a Cell is its alive and its age: {values:?}"
+    );
+    for (at, words) in [
+        (4, "1 to 4096"),
+        (5, "a picture's encoding"),
+        (6, "name one"),
+    ] {
+        let message = responses[at]["error"]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(message.contains(words), "{at}: {}", responses[at]);
+    }
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_orla"))
+        .arg("serve")
+        .arg(&scene)
+        .arg("--mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for (id, name, arguments) in [
+        (1, "evaluate", json!({ "time": 0.0 })),
+        (2, "read", json!({})),
+    ] {
+        let call = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+        writeln!(stdin, "{call}").unwrap();
+    }
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    let read: Json = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<Json>(line).unwrap())
+        .find(|answer| answer["id"] == 2)
+        .unwrap();
+    let content = read["result"]["content"].as_array().unwrap();
+    assert_eq!(content[1]["type"], "image", "{read}");
+    assert_eq!(content[1]["mimeType"], "image/png");
+    assert!(
+        !content[0]["text"].as_str().unwrap().contains("\"data\""),
+        "the picture is not text as well"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An MCP client meets Orla, lists its tools, and drives the session
@@ -1816,7 +1908,7 @@ fn a_snapshot_takes_committed_state_and_the_laws_it_ran_under() {
             json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
             // The third count divides by zero: nothing of it commits.
             json!({ "id": 4, "op": "evaluate", "time": 0.2 }),
-            json!({ "id": 5, "op": "read", "node": "tally" }),
+            json!({ "id": 5, "op": "read", "node": "tally" , "format": "words" }),
             json!({ "id": 6, "op": "snapshot" }),
             json!({ "id": 7, "op": "snapshot", "to": "saves/world.json" }),
             json!({ "id": 8, "op": "snapshot", "to": "elsewhere.json" }),
@@ -2412,8 +2504,8 @@ output b <- b.result;
             json!({ "id": 1, "op": "advance", "frames": 3 }),
             json!({ "id": 2, "op": "reset", "node": "a" }),
             json!({ "id": 3, "op": "evaluate", "time": 0.0 }),
-            json!({ "id": 4, "op": "read", "node": "a" }),
-            json!({ "id": 5, "op": "read", "node": "b" }),
+            json!({ "id": 4, "op": "read", "node": "a" , "format": "words" }),
+            json!({ "id": 5, "op": "read", "node": "b" , "format": "words" }),
             json!({ "id": 6, "op": "reset", "node": "seed" }),
             json!({ "id": 7, "op": "reset", "port": "result" }),
             json!({ "id": 8, "op": "reset", "node": "a", "port": 3 }),

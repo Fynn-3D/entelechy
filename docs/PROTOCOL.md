@@ -28,7 +28,7 @@ inspect   status, kernels, kernel, graph, document
 propose   prepare (diagnostics, nothing published)
 publish   publish with expect = "absent" | "any" | <generation>
 compose   compose with expect = <version>, text or edits (checks, then rewrites the scene document and syncs), param
-observe   evaluate, read (rgba32f or ppm, base64)
+observe   evaluate, read (a picture as PNG; any other Field as a summary, or numbers from `from`)
 repair    the same operations again; retire; reset
 ```
 
@@ -65,7 +65,7 @@ Schema in `schema`.
 | `advance` | `frames`: integer, `fps`?: number, `until`?: {target: string, below?: number, above?: number, equals?: number}, `save`?: {node.port: string}, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | frames, stopped, target, value, saved, millis, report |
 | `bench` | `frames`?: integer, `fps`?: number, `repeat`?: integer, `nodes`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | backend, frames, repeat, best_ms, median_ms, nodes, ran |
 | `window` | `size`?: [w, h] \| null, `scale`?: number | the window |
-| `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "rgba32f" \| "ppm" \| "field" | width, height, format, data (base64); words for a Field that is not pixels |
+| `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, mean, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
@@ -290,10 +290,14 @@ backend, or null).
 
 ## State
 
-`read` returns an output (`rgba32f` or `ppm`, base64); with `format:
-"field"`, any Field in the Host's file format, which `write` with the
-same format takes back, checked against the port's layout and extent.
-`read` with a `node` returns a non-pixel Field as its words; `write`
+`read` answers what it is asked, and without asking, how the Field
+looks: a picture as a PNG (over MCP, an image the agent sees), any other
+Field as its summary, each number's least, most and mean over every
+element. `from` and `count` answer up to 4096 elements as numbers, an
+element of several as a list in order. The whole Field comes when a
+`format` names it: a picture's `rgba32f` or `ppm`, or any Field's
+`words`, or `field`, the Host's file format, which `write` with the same
+format takes back, checked against the port's layout and extent. `write`
 with a `node`, a `port` and `data` (base64 words in the same layout)
 replaces that port's committed state for the next evaluation's `<~`
 readers. The port must be state, read by some `<~` binding, and the

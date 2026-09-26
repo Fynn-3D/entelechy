@@ -544,11 +544,21 @@ pub fn operations() -> Vec<Operation> {
                 may("port", Ty::Str, "the node's port; `result` when not given"),
                 may(
                     "format",
-                    Ty::Words(&["rgba32f", "ppm", "field"]),
-                    "a picture's encoding, or `field` for any Field as the Host's file",
+                    Ty::Words(&["png", "rgba32f", "ppm", "summary", "words", "field"]),
+                    "a picture as `png` (when not given), `rgba32f` or `ppm`; any Field as its `summary` (when not given and not a picture), its `words` or the Host's `field` file",
+                ),
+                may(
+                    "from",
+                    Ty::Int,
+                    "the first element to answer as numbers, counted along the Field; 0 when not given",
+                ),
+                may(
+                    "count",
+                    Ty::Int,
+                    "how many elements from `from` to answer as numbers, at most 4096; 1 when not given",
                 ),
             ],
-            "width, height, format, data (base64); words for a Field that is not pixels",
+            "a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, mean, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
         ),
         op(
             "write",
