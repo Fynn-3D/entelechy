@@ -77,7 +77,7 @@ impl Session {
 
     /// Creates a session over a runtime the caller built.
     pub fn open_with(scene: &Path, library: Option<&Path>, runtime: Runtime) -> Self {
-        Self::open_in(Arc::new(crate::Disk), scene, library, runtime)
+        Self::open_in(Arc::new(crate::Disk::default()), scene, library, runtime)
     }
 
     /// Creates a session whose documents are in `store`: the disk, or

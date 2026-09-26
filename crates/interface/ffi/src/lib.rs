@@ -417,7 +417,7 @@ fn opened(
         std::ptr::null_mut()
     };
     let made = catch_unwind(AssertUnwindSafe(|| {
-        let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk));
+        let store = store.unwrap_or_else(|| std::sync::Arc::new(orla_session::Disk::default()));
         let (scene, library, replay) = match opening {
             Opening::Scene(scene, library) => {
                 (scene.to_path_buf(), library.map(Path::to_path_buf), None)

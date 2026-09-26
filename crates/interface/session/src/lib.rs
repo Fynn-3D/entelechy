@@ -43,7 +43,7 @@ use orla_formats::ppm;
 use orla_kernel::{Generation, KernelId};
 
 pub use history::{Attempt, Change, Origin, Record};
-pub use options::SessionOptions;
+pub use options::{SessionOptions, environment_packages};
 /// How a device is waited for: blocking, or giving a page turns.
 pub use orla_gpu::Wait;
 pub use store::{Disk, Memory, Store};
@@ -102,8 +102,8 @@ pub use session::Session;
 
 pub use observe::parse_target;
 pub use sources::{
-    Declarations, PACKAGE_VERSION, declarations_for, declarations_within, package_dirs,
-    package_manifest, read_document, used_documents,
+    Declarations, PACKAGE_VERSION, declarations_for, declarations_within, package_manifest,
+    read_document, used_documents,
 };
 
 /// What `trace` returns: the reference interpreter's record of one

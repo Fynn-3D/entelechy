@@ -1,6 +1,6 @@
 //! The capabilities a session reaches, and a search over them: the
 //! Kernels it has published, and every Kernel and preset graph of each
-//! package in [`crate::sources::package_dirs`] or beside a package the
+//! package in the store's [`Store::packages`] or beside a package the
 //! scene uses. Each says what it is for (its `///` and `//!` docs), what
 //! it takes and gives, what it requires and whether this session grants
 //! that, and how a scene reaches it. Matching is by text, by type and by
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use orla_language::doc;
 
 use crate::Session;
-use crate::sources::{in_a_package, package_dirs, package_files, package_manifest};
+use crate::sources::{in_a_package, package_files, package_manifest};
 use crate::store::Store;
 
 /// What a capability is.
@@ -319,7 +319,8 @@ fn in_package(
     out
 }
 
-/// Every Kernel and preset of the packages in [`package_dirs`] and in
+/// Every Kernel and preset of the packages in the store's
+/// [`Store::packages`] and in
 /// `beside`, each reached from a document in `base`, in package and file
 /// order; `grants` says whether a capability is granted.
 pub fn in_packages(
@@ -330,7 +331,7 @@ pub fn in_packages(
 ) -> Vec<Capability> {
     let base = store.canonical(base).unwrap_or_else(|_| base.to_path_buf());
     let mut packages: Vec<PathBuf> = Vec::new();
-    for dir in package_dirs().into_iter().chain(beside.iter().cloned()) {
+    for dir in store.packages().iter().chain(beside).cloned() {
         let dir = store.canonical(&dir).unwrap_or(dir);
         for entry in store.list(&dir).unwrap_or_default() {
             let entry = store.canonical(&entry).unwrap_or(entry);

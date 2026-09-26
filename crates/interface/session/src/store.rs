@@ -45,6 +45,11 @@ pub trait Store: Send + Sync {
     /// `path` made whole: absolute where the store has a current
     /// directory, `.` and `..` folded, links unread.
     fn whole(&self, path: &Path) -> PathBuf;
+    /// The directories a `use` by name looks for a package in, in order;
+    /// none unless the store was given some.
+    fn packages(&self) -> &[PathBuf] {
+        &[]
+    }
 }
 
 impl dyn Store + '_ {
@@ -92,11 +97,25 @@ fn folded(path: &Path) -> PathBuf {
     plain
 }
 
-/// The process's file system.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Disk;
+/// The process's file system, and the directories packages are found in
+/// by name, as whoever opened the session gave them.
+#[derive(Clone, Debug, Default)]
+pub struct Disk {
+    packages: Vec<PathBuf>,
+}
+
+impl Disk {
+    /// The file system, finding packages by name in `packages`.
+    pub fn with_packages(packages: Vec<PathBuf>) -> Self {
+        Self { packages }
+    }
+}
 
 impl Store for Disk {
+    fn packages(&self) -> &[PathBuf] {
+        &self.packages
+    }
+
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         std::fs::read(path)
     }

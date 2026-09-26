@@ -34,7 +34,7 @@ fn one_declaration_written_in_two_files_is_one() {
         ],
     );
     let (structs, _, _) = declarations_for(
-        &orla_session::Disk,
+        &orla_session::Disk::default(),
         &dir,
         &uses("use \"a.orla\";\nuse \"b.orla\";"),
     )
@@ -53,7 +53,7 @@ fn two_declarations_of_one_name_are_refused() {
         ],
     );
     let error = declarations_for(
-        &orla_session::Disk,
+        &orla_session::Disk::default(),
         &dir,
         &uses("use \"a.orla\";\nuse \"b.orla\";"),
     )

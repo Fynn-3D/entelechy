@@ -1,5 +1,6 @@
 //! Source resolution: what a `use` reaches (a file, a directory of
-//! `.orla`, or a package beside the document or in [`package_dirs`]),
+//! `.orla`, or a package beside the document or in the store's
+//! [`Store::packages`]),
 //! inherited declarations, and where a missing name is declared.
 //! Stateless; reads through the given store.
 
@@ -15,7 +16,7 @@ pub const PACKAGE_VERSION: u32 = 1;
 
 /// A `use` target's files: a file; each `.orla` directly in a
 /// directory; or a package (a directory with `package.osn`, beside the
-/// document or in `ORLA_PACKAGES`), whose manifest `use`s are followed
+/// document or in the store's packages), whose manifest `use`s are followed
 /// once its versions fit.
 pub(crate) fn expand_use(
     store: &dyn Store,
@@ -90,23 +91,8 @@ fn in_package(store: &dyn Store, path: &Path) -> Option<PathBuf> {
     store.exists(&inside).then_some(inside)
 }
 
-/// Where packages are found by name: each `:`-separated `ORLA_PACKAGES`
-/// directory, then the `packages` directory installed beside Orla's
-/// `bin` (a release's), when there is one.
-pub fn package_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("ORLA_PACKAGES")
-        .map(|dirs| std::env::split_paths(&dirs).collect())
-        .unwrap_or_default();
-    let installed = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.parent()?.join("packages")))
-        .filter(|dir| dir.is_dir());
-    dirs.extend(installed);
-    dirs
-}
-
-/// A missing path, looked up by name as a package in each of
-/// [`package_dirs`].
+/// A missing path, looked up by name as a package in each of the store's
+/// [`Store::packages`].
 fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
     if store.exists(path) {
         return path.to_path_buf();
@@ -114,7 +100,7 @@ fn resolve_package(store: &dyn Store, path: &Path) -> PathBuf {
     let Some(name) = path.file_name() else {
         return path.to_path_buf();
     };
-    for dir in package_dirs() {
+    for dir in store.packages() {
         let candidate = dir.join(name);
         if store.is_file(&candidate.join("package.osn")) {
             return candidate;

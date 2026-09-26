@@ -112,9 +112,10 @@ fn check(args: &[String]) -> Result<(), String> {
     if files.is_empty() {
         return Err("check needs at least one document".into());
     }
+    let packages = orla_session::Disk::with_packages(orla_session::environment_packages());
     let mut failures = 0;
     for file in files {
-        let checked = orla_session::check_document(&orla_session::Disk, Path::new(file), show_ir);
+        let checked = orla_session::check_document(&packages, Path::new(file), show_ir);
         for (_, line) in &checked.lines {
             println!("{line}");
         }
@@ -162,7 +163,7 @@ fn parse_save(binding: &str) -> Result<(String, String, PathBuf), String> {
 
 fn parse_render(args: &[String]) -> Result<RenderOptions, String> {
     let mut options = RenderOptions {
-        session: orla_session::SessionOptions::default(),
+        session: orla_session::SessionOptions::from_environment(),
         saves: Vec::new(),
         render: orla::render::Options {
             frames: 0,
@@ -262,7 +263,7 @@ fn render(args: &[String]) -> Result<(), String> {
 
 fn parse_run(args: &[String]) -> Result<RunOptions, String> {
     let mut options = RunOptions {
-        session: orla_session::SessionOptions::default(),
+        session: orla_session::SessionOptions::from_environment(),
         saves: Vec::new(),
         out: None,
         watch: false,
@@ -503,7 +504,7 @@ fn measure(args: &[String]) -> Result<(), String> {
 fn graph(args: &[String]) -> Result<(), String> {
     // `run`'s session flags: the plan printed is the one `run` executes
     // with the same params and inputs.
-    let mut options = orla_session::SessionOptions::default();
+    let mut options = orla_session::SessionOptions::from_environment();
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
         if !options.read(&arg, &mut || iter.next())? {
@@ -557,7 +558,7 @@ fn graph(args: &[String]) -> Result<(), String> {
 }
 
 fn serve(args: &[String]) -> Result<(), String> {
-    let mut options = orla_session::SessionOptions::default();
+    let mut options = orla_session::SessionOptions::from_environment();
     let mut listen = None;
     let mut window = None;
     let mut origins = Vec::new();
@@ -669,7 +670,10 @@ fn replay(args: &[String]) -> Result<(), String> {
         let replay = orla::replay::parse(&text, base)
             .map_err(|error| format!("{}: {error}", file.display()))?;
         let runtime = Session::runtime_for(&backend, limits)?;
-        match orla::replay::run(&replay, runtime) {
+        let store = std::sync::Arc::new(orla_session::Disk::with_packages(
+            orla_session::environment_packages(),
+        ));
+        match orla::replay::run_in(&replay, store, runtime) {
             Ok(outcome) if outcome.failures.is_empty() => {
                 println!(
                     "{}: ok ({} frames, {} checks)",
@@ -735,12 +739,21 @@ fn search(args: &[String]) -> Result<(), String> {
     }
     let found = match &scene {
         Some(scene) => {
-            let mut session = Session::open(scene, None, orla_session::DEFAULT_BUDGET_WORDS);
+            let runtime = Session::runtime_for("cpu", orla_session::Limits::default())?;
+            let store = std::sync::Arc::new(orla_session::Disk::with_packages(
+                orla_session::environment_packages(),
+            ));
+            let mut session = Session::open_in(store, scene, None, runtime);
             session.sync();
             session.search(&query)
         }
         None => orla_session::search::matching(
-            orla_session::search::in_packages(&orla_session::Disk, Path::new("."), &[], &|_| true),
+            orla_session::search::in_packages(
+                &orla_session::Disk::with_packages(orla_session::environment_packages()),
+                Path::new("."),
+                &[],
+                &|_| true,
+            ),
             &query,
         ),
     };

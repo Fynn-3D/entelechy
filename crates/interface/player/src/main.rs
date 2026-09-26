@@ -79,7 +79,7 @@ struct Options {
 
 fn parse(args: &[String]) -> Result<Options, String> {
     let mut options = Options {
-        session: orla_session::SessionOptions::default(),
+        session: orla_session::SessionOptions::from_environment(),
         scale: 2,
         window: None,
         serve: false,

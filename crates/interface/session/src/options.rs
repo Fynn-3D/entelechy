@@ -30,6 +30,8 @@ pub struct SessionOptions {
     /// The capabilities a Kernel may be given (`--grant`); `None` grants
     /// every capability.
     pub grants: Option<orla_kernel::Capabilities>,
+    /// Where a `use` by name finds a package; see [`environment_packages`].
+    pub packages: Vec<PathBuf>,
 }
 
 impl Default for SessionOptions {
@@ -44,11 +46,43 @@ impl Default for SessionOptions {
             limits: Limits::default(),
             allow: Vec::new(),
             grants: None,
+            packages: Vec::new(),
         }
     }
 }
 
+/// The package directories a front takes from where it runs: each
+/// `:`-separated `ORLA_PACKAGES` directory, then the `packages` directory
+/// installed beside its executable's `bin` (a release's), when there is
+/// one. A front passes them to the session it opens; the session reads no
+/// environment of its own.
+pub fn environment_packages() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("ORLA_PACKAGES")
+        .map(|dirs| std::env::split_paths(&dirs).collect())
+        .unwrap_or_default();
+    let installed = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("packages")))
+        .filter(|dir| dir.is_dir());
+    dirs.extend(installed);
+    dirs
+}
+
 impl SessionOptions {
+    /// The defaults, with the packages of [`environment_packages`].
+    pub fn from_environment() -> Self {
+        Self {
+            packages: environment_packages(),
+            ..Self::default()
+        }
+    }
+
+    /// The store the session's documents are read from: the disk, finding
+    /// packages in [`SessionOptions::packages`].
+    pub fn store(&self) -> std::sync::Arc<dyn crate::Store> {
+        std::sync::Arc::new(crate::Disk::with_packages(self.packages.clone()))
+    }
+
     /// Reads `arg` if it is one of these flags or the scene, taking a
     /// value from `next`; returns whether it was. Other flags are the
     /// caller's.
@@ -124,7 +158,12 @@ impl SessionOptions {
         if let Some(grants) = &self.grants {
             runtime.set_grants(grants.clone());
         }
-        let mut session = Session::open_with(self.scene()?, self.library.as_deref(), runtime);
+        let mut session = Session::open_in(
+            self.store(),
+            self.scene()?,
+            self.library.as_deref(),
+            runtime,
+        );
         for (name, path) in &self.inputs {
             session
                 .bind_external(name, path)

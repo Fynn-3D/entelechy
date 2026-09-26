@@ -42,7 +42,7 @@ fn files_of(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// Writes a package directory as one `.orlapkg` file after checking its
 /// manifest.
 pub fn pack(dir: &Path, out: &Path) -> Result<usize, String> {
-    let declared = package_manifest(&orla_session::Disk, &dir.join("package.osn"))?;
+    let declared = package_manifest(&orla_session::Disk::default(), &dir.join("package.osn"))?;
     let files = files_of(dir)?;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(MAGIC);
@@ -111,14 +111,14 @@ pub fn unpack(file: &Path, dir: &Path) -> Result<usize, String> {
         }
         std::fs::write(&target, data).map_err(|e| format!("{}: {e}", target.display()))?;
     }
-    package_manifest(&orla_session::Disk, &dir.join("package.osn"))?;
+    package_manifest(&orla_session::Disk::default(), &dir.join("package.osn"))?;
     Ok(count)
 }
 
 /// A package's id, needs, and counts of Kernel files, graph presets and
 /// other files.
 pub fn describe(dir: &Path) -> Result<String, String> {
-    let declared = package_manifest(&orla_session::Disk, &dir.join("package.osn"))?;
+    let declared = package_manifest(&orla_session::Disk::default(), &dir.join("package.osn"))?;
     let files = files_of(dir)?;
     let kernels = files
         .iter()

@@ -519,7 +519,16 @@ pub struct Outcome {
 /// Runs a replay on a fresh session over `runtime`, each frame
 /// evaluating only what its expectations need.
 pub fn run(replay: &Replay, runtime: Runtime) -> Result<Outcome, String> {
-    let mut session = Session::open_with(&replay.scene, replay.kernels.as_deref(), runtime);
+    run_in(replay, std::sync::Arc::new(crate::Disk::default()), runtime)
+}
+
+/// [`run`], reading documents from `store`.
+pub fn run_in(
+    replay: &Replay,
+    store: std::sync::Arc<dyn crate::Store>,
+    runtime: Runtime,
+) -> Result<Outcome, String> {
+    let mut session = Session::open_in(store, &replay.scene, replay.kernels.as_deref(), runtime);
     let mut rejected = Vec::new();
     for event in session.sync() {
         if let crate::Event::Rejected { .. } | crate::Event::SceneRejected(_) = &event {
