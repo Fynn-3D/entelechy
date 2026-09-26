@@ -7,6 +7,8 @@
 | Fact | What follows from it |
 | --- | --- |
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
+| A new Kernel's cost on the GPU is its pipeline's compile: 40 to 120 ms for the voxel example's Kernels on Metal, nearly all of preparing it; one compiled before comes from the driver's cache in under a millisecond. | Natively it is paid off the frame (the preparation worker). A page has no thread: a Kernel changed while a page plays stops its frames for the compile. Data, params and structure (`write`, `param`, a `compose` that changes no Kernel) never compile. Scenes are built in the native Player; a page shows them. |
+| Making a page's compile smooth needs the browser's `createComputePipelineAsync`, which wgpu does not expose; reaching it takes `wasm-bindgen` and `js-sys` in `orla-gpu` for the page, which AGENTS.md does not allow. | Not done by choice (2026-09-26). Taken up only if Kernels are to be changed live in a page, and then with that rule changed first. |
 
 Verified surface, as of `main`:
 
