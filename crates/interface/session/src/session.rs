@@ -11,7 +11,9 @@ use orla_graph::{EvaluateError, Evaluator, Graph, Report};
 use orla_runtime::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
 
 use crate::store::Store;
-use crate::{Event, Limits, SessionError, Trace, inputs, kernels, observe, scene, writes};
+use crate::{
+    Event, Limits, Publishing, SessionError, Trace, inputs, kernels, observe, scene, writes,
+};
 
 mod time;
 
@@ -39,6 +41,10 @@ pub struct Session {
     /// The origin of a claimed scene still waiting for its Kernels, which
     /// it carries when it lands.
     claim_waiting: Option<crate::Origin>,
+    /// What the sync on which a claimed scene landed, a sync after the
+    /// request's own, said: for the request to answer with
+    /// ([`Session::take_landing`]).
+    claim_landed: Option<Vec<Event>>,
 }
 
 /// The error an evaluation returns when no scene has loaded.
@@ -87,6 +93,7 @@ impl Session {
             origin: crate::Origin::Local,
             claimed: false,
             claim_waiting: None,
+            claim_landed: None,
         }
     }
 
@@ -436,6 +443,84 @@ impl Session {
         self.runtime.background()
     }
 
+    /// Whether the scene last read waits for its Kernels, prepared off the
+    /// frame, before it replaces the one running.
+    pub fn scene_waiting(&self) -> bool {
+        self.scene.waiting()
+    }
+
+    /// What the sync on which the scene a request claimed landed said, a
+    /// sync after the request's own: the request answers with it once. A
+    /// scene that landed on the request's own sync leaves nothing here.
+    pub fn take_landing(&mut self) -> Option<Vec<Event>> {
+        self.claim_landed.take()
+    }
+
+    /// Starts publishing Kernel source that did not come from a document,
+    /// as [`Session::publish_source`] does, without waiting for it to be
+    /// prepared: compiled here, refused here if it does not compile, and
+    /// prepared off the frame where replacements are
+    /// ([`Session::set_background`]). [`Session::publishing`] finishes it.
+    pub fn publish_later(
+        &mut self,
+        source: &str,
+        expect: Expect,
+    ) -> Result<Publishing, crate::Diagnostic> {
+        match self.scene.compile_source(source, &self.kernels) {
+            Ok(module) => Ok(Publishing {
+                ticket: self.runtime.prepare_later(module, source.to_owned()),
+                expect,
+                source: source.to_owned(),
+            }),
+            Err(error) => {
+                self.refused_source(source, &error);
+                Err(error)
+            }
+        }
+    }
+
+    /// Finishes what [`Session::publish_later`] started, once it is
+    /// prepared: published with the expectation it was given, or refused;
+    /// `None` while it is still being prepared.
+    pub fn publishing(
+        &mut self,
+        publishing: &Publishing,
+    ) -> Option<Result<std::sync::Arc<orla_runtime::KernelVersion>, crate::Diagnostic>> {
+        let prepared = self.runtime.poll(publishing.ticket)?;
+        let published = prepared
+            .map_err(|e| crate::Diagnostic::new(e.to_string()))
+            .and_then(|candidate| {
+                self.runtime
+                    .publish(candidate, publishing.expect)
+                    .map_err(|e| crate::Diagnostic::new(e.to_string()))
+            });
+        match &published {
+            Ok(version) => self.history.published(
+                version.id(),
+                version.generation(),
+                &publishing.source,
+                self.origin.clone(),
+            ),
+            Err(error) => self.refused_source(&publishing.source, error),
+        }
+        Some(published)
+    }
+
+    /// Records a Kernel source refused, by the id it names when it names
+    /// one it can.
+    fn refused_source(&mut self, source: &str, error: &crate::Diagnostic) {
+        let subject = orla_language::parse_document(source)
+            .ok()
+            .and_then(|document| document.kernels.first().and_then(|k| k.id.clone()))
+            .map_or_else(|| "a Kernel".to_owned(), |id| id.value);
+        self.history.refused(
+            subject,
+            error.to_string(),
+            Some(source),
+            self.origin.clone(),
+        );
+    }
+
     /// Publishes Kernel source that did not come from a document, for the
     /// creation protocol. The source holds exactly one Kernel. Ownership
     /// stays with documents: a document that later defines the id
@@ -445,28 +530,13 @@ impl Session {
         source: &str,
         expect: Expect,
     ) -> Result<std::sync::Arc<orla_runtime::KernelVersion>, crate::Diagnostic> {
-        let published = self.prepare_source(source).and_then(|candidate| {
-            self.runtime
-                .publish(candidate, expect)
-                .map_err(|e| crate::Diagnostic::new(e.to_string()))
-        });
-        let origin = self.origin.clone();
-        match &published {
-            Ok(version) => {
-                self.history
-                    .published(version.id(), version.generation(), source, origin)
+        let publishing = self.publish_later(source, expect)?;
+        loop {
+            if let Some(published) = self.publishing(&publishing) {
+                return published;
             }
-            Err(error) => {
-                // The id the source names, when it names one it can.
-                let subject = orla_language::parse_document(source)
-                    .ok()
-                    .and_then(|document| document.kernels.first().and_then(|k| k.id.clone()))
-                    .map_or_else(|| "a Kernel".to_owned(), |id| id.value);
-                self.history
-                    .refused(subject, error.to_string(), Some(source), origin);
-            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        published
     }
 
     /// Prepares `source`, a document holding one Kernel, without

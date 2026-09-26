@@ -28,6 +28,7 @@ impl Session {
     /// on disk is its document's.
     pub fn claim_scene(&mut self) {
         self.claimed = true;
+        self.claim_landed = None;
     }
 
     /// The world's position: its revision, which moves when the world
@@ -351,6 +352,15 @@ impl Session {
         // A claimed scene waiting for its Kernels is still the request's
         // when it lands, on a later sync.
         let waiting = self.claim_waiting.take();
+        // Landing on a sync after the request's own, what that sync said
+        // is the request's to answer with.
+        if waiting.is_some()
+            && events
+                .iter()
+                .any(|e| matches!(e, Event::SceneLoaded | Event::SceneRejected(_)))
+        {
+            self.claim_landed = Some(events.to_vec());
+        }
         let scene_origin = if claimed {
             Some(self.origin.clone())
         } else {

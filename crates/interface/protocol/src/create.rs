@@ -19,6 +19,17 @@ use crate::wire::{
 /// given whole (`text`), or as `edits` of the one on disk, each naming a
 /// statement or a node's member and only its bytes changing.
 pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, Json> {
+    compose_with(session, request, true)
+}
+
+/// [`compose`], answered once its scene stands when `settle` says so;
+/// otherwise with what the sync said, the scene perhaps still waiting for
+/// its Kernels ([`crate::Answers`] answers it once it lands).
+pub(crate) fn compose_with(
+    session: &mut Session,
+    request: &Request,
+    settle: bool,
+) -> Result<Json, Json> {
     let root = session.root().to_path_buf();
     let written = session.store().read_text(&root);
     let current = written
@@ -65,8 +76,13 @@ pub(crate) fn compose(session: &mut Session, request: &Request) -> Result<Json, 
     // The scene this reads is this request's change, answered whole: its
     // Kernels published and the scene replaced, or refused.
     session.claim_scene();
+    let events = if settle {
+        session.sync_settled()
+    } else {
+        session.sync()
+    };
     Ok(json!({
-        "events": events_json(&session.sync_settled()),
+        "events": events_json(&events),
         "version": document_version(&text),
     }))
 }
@@ -177,6 +193,21 @@ pub(crate) fn prepare(session: &mut Session, request: &Request) -> Result<Json, 
 
 /// Publishes a Kernel against the generation expected.
 pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, Json> {
+    let publishing = publish_begin(session, request)?;
+    loop {
+        if let Some(published) = session.publishing(&publishing) {
+            return published_json(published);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// A `publish` begun: its source compiled, and prepared off the frame
+/// where the session prepares replacements so.
+pub(crate) fn publish_begin(
+    session: &mut Session,
+    request: &Request,
+) -> Result<orla_session::Publishing, Json> {
     let source = request.text("source")?;
     let expect = match request.get("expect") {
         None | Some(Json::Null) => Expect::Any,
@@ -192,9 +223,16 @@ pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, 
             ));
         }
     };
-    let version = session
-        .publish_source(&source, expect)
-        .map_err(|e| diagnostic_json(&e))?;
+    session
+        .publish_later(&source, expect)
+        .map_err(|e| diagnostic_json(&e))
+}
+
+/// What a finished `publish` answers.
+pub(crate) fn published_json(
+    published: Result<std::sync::Arc<orla_runtime::KernelVersion>, orla_session::Diagnostic>,
+) -> Result<Json, Json> {
+    let version = published.map_err(|e| diagnostic_json(&e))?;
     Ok(json!({ "id": version.id().to_string(), "generation": version.generation().0 }))
 }
 

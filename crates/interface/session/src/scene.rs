@@ -746,6 +746,19 @@ impl Scene {
         kernels: &Kernels,
         runtime: &Runtime,
     ) -> Result<orla_runtime::Candidate, Diagnostic> {
+        let module = self.compile_source(source, kernels)?;
+        runtime
+            .prepare_module(module, source)
+            .map_err(|e| Diagnostic::new(e.to_string()))
+    }
+
+    /// Compiles `source`, a document holding one Kernel, as
+    /// [`Scene::prepare_source`] does, and no further.
+    pub(crate) fn compile_source(
+        &self,
+        source: &str,
+        kernels: &Kernels,
+    ) -> Result<orla_runtime::Validated, Diagnostic> {
         let mut document =
             orla_language::parse_document(source).map_err(|e| Diagnostic::from(&e))?;
         if document.kernels.len() != 1 {
@@ -792,17 +805,14 @@ impl Scene {
             }
         }
         document.inherit(&structs, &types, &functions);
-        let module = orla_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| {
+        orla_compiler::compile_kernel(&document.kernels[0], None).map_err(|e| {
             kernels.located(
                 self.store.as_ref(),
                 Diagnostic::from(&e),
                 &self.root,
                 &self.root,
             )
-        })?;
-        runtime
-            .prepare_module(module, source)
-            .map_err(|e| Diagnostic::new(e.to_string()))
+        })
     }
 }
 

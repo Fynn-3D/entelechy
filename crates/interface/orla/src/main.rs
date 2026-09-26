@@ -678,8 +678,28 @@ fn serve(args: &[String]) -> Result<(), String> {
         }
         return Ok(());
     }
-    for incoming in requests {
-        if orla_protocol::answer(&mut session, incoming) {
+    // A `compose` or a `publish` waiting for what it changed to stand is
+    // answered once it does; meanwhile every other request is.
+    let mut answers = orla_protocol::Answers::new();
+    loop {
+        let incoming = if answers.waiting() {
+            match requests.recv_timeout(std::time::Duration::from_millis(1)) {
+                Ok(incoming) => Some(incoming),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match requests.recv() {
+                Ok(incoming) => Some(incoming),
+                Err(_) => break,
+            }
+        };
+        if let Some(incoming) = incoming
+            && answers.answer(&mut session, incoming)
+        {
+            break;
+        }
+        if answers.poll(&mut session) {
             break;
         }
     }

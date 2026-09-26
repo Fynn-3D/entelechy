@@ -142,6 +142,14 @@ pub struct Built {
     pub passed_over: Vec<String>,
 }
 
+/// A `publish` being prepared ([`Session::publish_later`]), finished by
+/// [`Session::publishing`].
+pub struct Publishing {
+    ticket: orla_runtime::Ticket,
+    expect: orla_runtime::Expect,
+    source: String,
+}
+
 /// A session opened and its scene read ([`Session::open_loaded`]): the
 /// session, its device's display, what its first read said, and the
 /// backends `best` passed over, each with why.

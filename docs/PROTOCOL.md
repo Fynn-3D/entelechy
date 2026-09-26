@@ -331,7 +331,15 @@ version. A scene whose own Kernels are being prepared so waits for them:
 its `scene_loaded` comes on the `sync` that publishes them, every
 `evaluate` until then runs the scene before it on the Kernels it ran on,
 and a Kernel of it refused there refuses the scene (`scene_rejected`)
-with none of its Kernels published. `compose` waits for its own scene
-so, and answers with where it landed. `sync` reports `routed`, `{node, backend, why}`, when a node's
-placement off the main backend begins or changes, once. A Kernel nothing runs yet, and `publish` itself, prepare inline so
-the reply is final.
+with none of its Kernels published. `sync` reports `routed`, `{node, backend, why}`, when a node's
+placement off the main backend begins or changes, once. A Kernel
+nothing runs yet prepares inline.
+
+`compose` and `publish` answer with what their change came to: the
+scene landed or refused, the Kernel published or refused. Where it is
+prepared off the frame (`serve`, the Player), the answer waits for it
+and nothing else does: frames go on, another connection is answered at
+once, and what a connection sent after it is answered after it, in
+order; one change is made at a time, so another `compose` or `publish`
+waits its turn. `orla_request` answers in its call, so a program
+calling it, and a page, waits there.

@@ -175,12 +175,34 @@ struct Player {
     last_size: (u32, u32),
     /// Protocol requests arriving from stdin or a socket, when serving.
     requests: Option<Receiver<orla_protocol::Incoming>>,
+    /// The answers owed, a `compose` or a `publish` among them waiting
+    /// for what it changed to stand while the frames go on.
+    answers: orla_protocol::Answers,
     /// The sound card, opened when a scene has a sound-shaped output.
     audio: Option<Audio>,
     /// The gamepads, when the system offers them.
     gamepad: Option<Gamepad>,
     audio_allowed: bool,
     audio_failed: bool,
+}
+
+impl orla_protocol::Served for Player {
+    fn session(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    /// `evaluate` runs one window frame under the person's input.
+    fn own(&mut self, incoming: &orla_protocol::Incoming) -> Option<(String, bool)> {
+        let (id, request) = orla_protocol::parse_request(&incoming.line).ok()?;
+        if request.get("op").and_then(Json::as_str) != Some("evaluate") {
+            return None;
+        }
+        let result = match self.frame() {
+            Some(report) => Ok(orla_protocol::report_json(&self.session, &report)),
+            None => Err(serde_json::json!({ "message": self.play.status() })),
+        };
+        Some((orla_protocol::envelope(&id, result), false))
+    }
 }
 
 impl Player {
@@ -261,28 +283,16 @@ impl Player {
         };
         let pending: Vec<orla_protocol::Incoming> =
             std::iter::from_fn(|| requests.try_recv().ok()).collect();
+        // What waited for its change to stand first, then what came: a
+        // quit on standard input closes the window.
+        let mut answers = std::mem::take(&mut self.answers);
+        let mut quit = answers.poll(self);
         for incoming in pending {
-            let (response, quit) = match orla_protocol::parse_request(&incoming.line) {
-                Ok((id, request))
-                    if request.get("op").and_then(Json::as_str) == Some("evaluate") =>
-                {
-                    let result = match self.frame() {
-                        Some(report) => Ok(orla_protocol::report_json(&self.session, &report)),
-                        None => Err(serde_json::json!({ "message": self.play.status() })),
-                    };
-                    (orla_protocol::envelope(&id, result), false)
-                }
-                _ => orla_protocol::respond_from(&mut self.session, &incoming),
-            };
-            incoming.reply.send(response);
-            // A quit on standard input closes the window; on a socket it
-            // closes that connection, which an empty line tells its writer.
-            if quit && !incoming.local {
-                incoming.reply.send(String::new());
-            }
-            if quit && incoming.local {
-                event_loop.exit();
-            }
+            quit |= answers.answer(self, incoming);
+        }
+        self.answers = answers;
+        if quit {
+            event_loop.exit();
         }
     }
 
@@ -616,6 +626,7 @@ fn main() -> ExitCode {
         last_frame: Vec::new(),
         last_size: (0, 0),
         requests: None,
+        answers: orla_protocol::Answers::new(),
         audio: None,
         gamepad,
         audio_allowed: !options.no_audio,

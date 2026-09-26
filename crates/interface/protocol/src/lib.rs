@@ -51,6 +51,7 @@
 
 #![warn(missing_docs)]
 
+mod answers;
 mod create;
 mod fields;
 mod inspect;
@@ -67,6 +68,7 @@ use orla_session::Session;
 use crate::request::Request;
 use crate::wire::failure;
 
+pub use answers::{Answers, Served};
 pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     context_of, report_json, trace_json, type_name, value_from_json, value_json, words_json,

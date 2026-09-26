@@ -2647,3 +2647,167 @@ fn a_native_operation_is_neither_retired_nor_replaced() {
     assert_eq!(responses[3]["ok"]["generation"], 0, "{}", responses[3]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The interpreter, slow to prepare, so a replacement prepared off the
+/// frame is still being prepared when the request that asked for it
+/// has been read.
+struct Slow;
+
+impl orla_runtime::Backend for Slow {
+    fn name(&self) -> &'static str {
+        "slow"
+    }
+
+    fn prepare(
+        &self,
+        module: &orla_runtime::Validated,
+    ) -> Result<Box<dyn orla_runtime::Prepared>, String> {
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        orla_runtime::Backend::prepare(&orla_cpu::CpuBackend, module)
+    }
+
+    fn execute(
+        &self,
+        prepared: &dyn orla_runtime::Prepared,
+        module: &orla_runtime::Validated,
+        invocation: &orla_runtime::Invocation,
+        scope: &mut orla_runtime::Scope<'_>,
+    ) -> Result<Vec<orla_runtime::Handle>, orla_runtime::ExecutionError> {
+        orla_runtime::Backend::execute(&orla_cpu::CpuBackend, prepared, module, invocation, scope)
+    }
+}
+
+/// A `compose` or a `publish` whose change is prepared off the frame is
+/// answered once it stands, with what it came to, and nothing waits for
+/// it meanwhile: another connection is answered at once, and only what
+/// its own connection sent after it waits its turn. (A `compose` used to
+/// hold the whole session until its Kernels were prepared, a window's
+/// frames with it.)
+#[test]
+fn a_change_is_answered_once_it_stands_and_nothing_waits_for_it() {
+    use orla_protocol::{Answers, Incoming, Reply};
+    use std::sync::mpsc::{Receiver, channel};
+    let dir = scratch_in("-later");
+    let scene = dir.join("scene.osn");
+    let text = |red: &str| {
+        format!(
+            "node wave: kernel k.wave@1 {{ requires {{ field.write; }} output result: Image; domain = vec2(4, 4); compute {{ return vec4({red}, 0.5, 0.25, 1.0); }} }}\noutput result <- wave.result;\n"
+        )
+    };
+    std::fs::write(&scene, text("0.1")).unwrap();
+    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Slow));
+    let mut session = orla_session::Session::open_with(&scene, None, runtime);
+    session.sync();
+    session.set_background(true);
+    let mut answers = Answers::new();
+    let connection = |from: &str| {
+        let (send, receive) = channel::<String>();
+        (from.to_owned(), send, receive)
+    };
+    let (agent, to_agent, agent_hears) = connection("socket 1");
+    let (other, to_other, other_hears) = connection("socket 2");
+    let ask = |answers: &mut Answers,
+               session: &mut orla_session::Session,
+               from: &str,
+               to: &std::sync::mpsc::Sender<String>,
+               request: Json| {
+        let incoming = Incoming {
+            line: request.to_string(),
+            reply: Reply::Connection(to.clone()),
+            local: false,
+            from: from.to_owned(),
+        };
+        answers.answer(session, incoming);
+    };
+    let heard = |receiver: &Receiver<String>| -> Option<Json> {
+        receiver
+            .try_recv()
+            .ok()
+            .map(|line| serde_json::from_str(&line).unwrap())
+    };
+    let wait = |answers: &mut Answers,
+                session: &mut orla_session::Session,
+                receiver: &Receiver<String>|
+     -> Json {
+        for _ in 0..10_000 {
+            answers.poll(session);
+            if let Some(answer) = heard(receiver) {
+                return answer;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("never answered");
+    };
+
+    ask(
+        &mut answers,
+        &mut session,
+        &agent,
+        &to_agent,
+        json!({ "id": 1, "op": "compose", "text": text("0.9") }),
+    );
+    ask(
+        &mut answers,
+        &mut session,
+        &agent,
+        &to_agent,
+        json!({ "id": 2, "op": "status" }),
+    );
+    ask(
+        &mut answers,
+        &mut session,
+        &other,
+        &to_other,
+        json!({ "id": 3, "op": "status" }),
+    );
+    assert!(answers.waiting(), "the compose waits for its Kernel");
+    assert!(
+        heard(&agent_hears).is_none(),
+        "nor is what came after it answered"
+    );
+    let now = heard(&other_hears).expect("another connection is answered at once");
+    assert_eq!(now["id"], 3);
+    let composed = wait(&mut answers, &mut session, &agent_hears);
+    assert_eq!(composed["id"], 1, "{composed}");
+    let kinds: Vec<&str> = composed["ok"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect();
+    assert!(
+        kinds.contains(&"published") && kinds.contains(&"scene_loaded"),
+        "{kinds:?}"
+    );
+    assert_eq!(
+        heard(&agent_hears).expect("then what came after it")["id"],
+        2
+    );
+
+    // A publish, prepared off the frame, answers with its generation.
+    let source = "kernel k.wave@1 { requires { field.write; } output result: Image; compute { return vec4(0.3, 0.5, 0.25, 1.0); } }";
+    ask(
+        &mut answers,
+        &mut session,
+        &agent,
+        &to_agent,
+        json!({ "id": 4, "op": "publish", "source": source, "expect": "any" }),
+    );
+    assert!(answers.waiting());
+    ask(
+        &mut answers,
+        &mut session,
+        &other,
+        &to_other,
+        json!({ "id": 5, "op": "status" }),
+    );
+    assert_eq!(heard(&other_hears).expect("answered at once")["id"], 5);
+    let published = wait(&mut answers, &mut session, &agent_hears);
+    assert_eq!(published["id"], 4, "{published}");
+    assert!(
+        published["ok"]["generation"].as_u64().unwrap() >= 2,
+        "{published}"
+    );
+    assert!(!answers.waiting());
+    let _ = std::fs::remove_dir_all(&dir);
+}
