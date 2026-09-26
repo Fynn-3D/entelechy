@@ -67,6 +67,33 @@ output shown <- over.result;
 output kept <- next.result to \"saves/n.field\";
 ";
 
+/// A file the person running the session allowed on its own, as a
+/// command line's `--out` or `--save` names one, is for that command's
+/// own write: the scene's `to` still writes only where a directory is
+/// allowed, even into that very file, and says how to allow it. (A
+/// command line's output file used to let the scene write there too, and
+/// `orla run` always names one.)
+#[test]
+fn a_file_allowed_for_the_caller_is_not_the_scenes_to_write() {
+    let dir = scratch("caller-file", SAVING);
+    let file = dir.join("saves/n.field");
+    let mut session = open(&dir);
+    session.allow_write_to(&file).unwrap();
+    session.allow_write_to(&dir.join("output.ppm")).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+    let events = session.sync();
+    assert_eq!(wrote(&events), 0, "{events:?}");
+    assert!(
+        refused(&events)
+            .iter()
+            .any(|why| why.contains("writing files is not allowed; run with `--allow file.write=")),
+        "{events:?}"
+    );
+    assert!(!file.exists());
+    // The caller's own write to it lands.
+    assert!(session.allowed_write(&file).is_ok());
+}
+
 #[test]
 fn an_output_is_written_where_allowed_once_it_changed_and_read_back() {
     let dir = scratch("saving", SAVING);

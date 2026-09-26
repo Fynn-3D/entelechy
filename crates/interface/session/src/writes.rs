@@ -21,7 +21,9 @@ pub(crate) struct Writes {
     /// Allowed directories, resolved.
     allowed: Vec<PathBuf>,
     /// Allowed files, resolved: each named by the person running the
-    /// session, as a command line's `--save` or `--out` names one.
+    /// session, as a command line's `--save` or `--out` names one, for
+    /// that command's own write alone ([`Writes::place`]); a scene's
+    /// `to` writes only where a directory is allowed.
     files: Vec<PathBuf>,
     /// Per file: the Field last written, and a digest of its bytes.
     written: BTreeMap<PathBuf, (Handle, u64)>,
@@ -80,7 +82,7 @@ impl Writes {
             {
                 continue;
             }
-            let outcome = self.place(store, &write.path).and_then(|target| {
+            let outcome = self.place_in(store, &write.path, false).and_then(|target| {
                 encode(runtime, handle, &write.path, write.bytes).map(|b| (target, b))
             });
             let (target, bytes) = match outcome {
@@ -124,18 +126,25 @@ impl Writes {
         std::mem::take(&mut self.events)
     }
 
-    /// Where `path` lands, once it is known to be inside an allowed
-    /// directory: `..` and links are followed before the test, so no
-    /// spelling reaches past one.
+    /// Where a write the session's caller makes to `path` (a `save`, an
+    /// export) lands, once it is known to be an allowed file or inside an
+    /// allowed directory: `..` and links are followed before the test,
+    /// so no spelling reaches past one.
     pub(crate) fn place(&self, store: &dyn Store, path: &Path) -> Result<PathBuf, String> {
-        if self.allowed.is_empty() && self.files.is_empty() {
+        self.place_in(store, path, true)
+    }
+
+    /// Where `path` lands; with `files`, a file allowed on its own counts.
+    fn place_in(&self, store: &dyn Store, path: &Path, files: bool) -> Result<PathBuf, String> {
+        let files = if files { &self.files[..] } else { &[] };
+        if self.allowed.is_empty() && files.is_empty() {
             return Err(format!(
                 "writing files is not allowed; run with `--allow file.write={}`",
                 path.parent().unwrap_or(Path::new(".")).display()
             ));
         }
         let target = resolve(store, path)?;
-        if self.files.contains(&target) {
+        if files.contains(&target) {
             return Ok(target);
         }
         if !self.allowed.iter().any(|dir| target.starts_with(dir)) {
