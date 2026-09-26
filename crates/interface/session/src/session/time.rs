@@ -351,7 +351,10 @@ impl Session {
         let claimed = std::mem::take(&mut self.claimed);
         // A claimed scene waiting for its Kernels is still the request's
         // when it lands, on a later sync.
-        let waiting = self.claim_waiting.take();
+        // A claim is on the scene it made: one read in its place since, a
+        // document changed on disk, is that document's.
+        let superseded = self.scene.take_superseded();
+        let waiting = self.claim_waiting.take().filter(|_| !superseded);
         // Landing on a sync after the request's own, what that sync said
         // is the request's to answer with.
         if waiting.is_some()

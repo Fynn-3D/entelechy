@@ -50,6 +50,9 @@ pub(crate) struct Scene {
     /// it replaces the scene running when they publish, and is dropped
     /// when one is refused.
     staged: Option<Staged>,
+    /// Whether a sync read a newer scene in place of one that waited for
+    /// its Kernels, since this was last asked ([`Scene::take_superseded`]).
+    superseded: bool,
 }
 
 /// The scene running, kept to be put back whole ([`Scene::put_back`]).
@@ -103,6 +106,7 @@ impl Scene {
             text: None,
             params: BTreeMap::new(),
             staged: None,
+            superseded: false,
         }
     }
 
@@ -347,6 +351,7 @@ impl Scene {
         if let Some(staged) = self.staged.take() {
             (self.structs, self.types, self.functions) = staged.declared;
             kernels.supersede_scene(runtime, events);
+            self.superseded = true;
         }
         let text = match self.store.read_text(&self.root) {
             Ok(text) => text,
@@ -590,6 +595,12 @@ impl Scene {
         self.files = kept.files;
         self.text = kept.text;
         self.params = kept.params;
+    }
+
+    /// Whether a scene that waited for its Kernels was superseded by a
+    /// newer one read since this was last asked.
+    pub(crate) fn take_superseded(&mut self) -> bool {
+        std::mem::take(&mut self.superseded)
     }
 
     /// Whether a scene read is waiting for its Kernels to replace the one

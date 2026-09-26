@@ -326,3 +326,54 @@ fn best_opens_where_the_scene_loads_and_says_why_when_it_loads_nowhere() {
         assert!(why.contains("nothing"), "{backend}: {why}");
     }
 }
+
+/// A scene a request claimed that a document changed on disk supersedes
+/// before it lands is not the request's: what lands is the document's,
+/// and the history says so. (The claim used to carry over to the scene
+/// read in its place.)
+#[test]
+fn a_claimed_scene_superseded_on_disk_is_the_documents() {
+    let files = Arc::new(Memory::default());
+    put(&files, "scene.osn", &root("result"));
+    put(&files, "sub.osn", &sub("return sample(source);"));
+    let runtime = orla_runtime::Runtime::with_backend(1 << 20, Box::new(Deliberate));
+    let mut session = open(&files, runtime);
+    session.sync();
+    session.set_background(true);
+    let (since, _) = session.position();
+
+    let asked = orla_session::Origin::Protocol("socket 1".into());
+    let before = session.act_for(asked.clone());
+    put(&files, "scene.osn", &root("out"));
+    session.claim_scene();
+    session.sync();
+    session.act_for(before);
+    assert!(
+        session.scene_waiting(),
+        "the claimed scene waits for its Kernel"
+    );
+    // A person's edit on disk reads in its place before it lands.
+    put(&files, "scene.osn", &root("again"));
+    let mut landed = false;
+    for _ in 0..10_000 {
+        if session
+            .sync()
+            .iter()
+            .any(|e| matches!(e, Event::SceneLoaded))
+        {
+            landed = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(landed);
+    let scene = session
+        .changes_since(since)
+        .into_iter()
+        .rfind(|record| matches!(record.change, orla_session::Change::Scene { .. }))
+        .expect("the scene is recorded");
+    assert_eq!(
+        scene.origin,
+        orla_session::Origin::Document(PathBuf::from("/s/scene.osn"))
+    );
+}
