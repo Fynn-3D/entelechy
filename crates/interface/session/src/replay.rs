@@ -11,6 +11,155 @@ use orla_kernel::{Context, Handle, InputState, Runtime};
 
 use crate::Session;
 
+/// One form a replay line takes, as `help` and `docs/USAGE.md` show it.
+#[derive(Clone, Debug)]
+pub struct Form {
+    /// The line's first word.
+    pub keyword: &'static str,
+    /// Its shape: `<...>` a value, `[...]` optional, `|` a choice.
+    pub shape: &'static str,
+    /// What it does.
+    pub doc: &'static str,
+    /// Lines written in it, each one the parser reads.
+    pub examples: &'static [&'static str],
+}
+
+/// Every form a replay line takes, in the order a replay uses them.
+pub fn forms() -> Vec<Form> {
+    let form = |keyword, shape, doc, examples| Form {
+        keyword,
+        shape,
+        doc,
+        examples,
+    };
+    vec![
+        form(
+            "scene",
+            "scene <path>",
+            "the scene to test, relative to the replay file; required",
+            &["scene ../scene.osn"],
+        ),
+        form(
+            "library",
+            "library <path>",
+            "Kernels beyond the scene's `use`",
+            &["library ../kernels/"],
+        ),
+        form(
+            "frame",
+            "frame <seconds>",
+            "evaluates one frame at this session time",
+            &["frame 0.0"],
+        ),
+        form(
+            "settle",
+            "settle",
+            "waits for every `async` run to land",
+            &["settle"],
+        ),
+        form(
+            "pointer",
+            "pointer [<x> <y>] [down | up]",
+            "moves the pointer, in pixels from the window's top left, and presses or releases it",
+            &["pointer 20 20 down", "pointer up"],
+        ),
+        form(
+            "button",
+            "button <name> down | up",
+            "left, right, middle, or a pad's south, east, west, north, l1, r1, l3, r3, start, select",
+            &["button right down", "button south up"],
+        ),
+        form(
+            "stick",
+            "stick left | right | triggers <x> <y>",
+            "a pad's axis pair",
+            &["stick left 0.5 -1"],
+        ),
+        form(
+            "wheel",
+            "wheel <x> <y>",
+            "the scroll for the next frame only",
+            &["wheel 0 -1"],
+        ),
+        form(
+            "window",
+            "window <w> <h> [<scale>]",
+            "the window in pixels, for `window()`, and its scale factor; one when not given",
+            &["window 240 135", "window 240 135 0.25"],
+        ),
+        form(
+            "key",
+            "key <code> down | up",
+            "a key by the browser's code: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40",
+            &["key 67 down"],
+        ),
+        form(
+            "reset",
+            "reset [<node.port>]",
+            "forgets every node's committed state, or one port's",
+            &["reset", "reset step.result"],
+        ),
+        form(
+            "param",
+            "param <name> <literal>",
+            "sets a graph parameter",
+            &["param exposure 1.5"],
+        ),
+        form(
+            "expect",
+            "expect <x> <y> = <r> <g> <b> [<tolerance>]",
+            "the picture's colour at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given",
+            &[
+                "expect 11 10 = 1.0 1.0 1.0",
+                "expect 11 10 = 1.0 1.0 1.0 0.05",
+            ],
+        ),
+        form(
+            "expect",
+            "expect <node.port[i].field> = <value>... [<tolerance>]",
+            "a field of an element of a node's output: ints and bools exactly, floats and vectors within the tolerance",
+            &["expect step.result[0].score = 1"],
+        ),
+        form(
+            "expect",
+            "expect <node.port[i].field> < | <= | > | >= <number>...",
+            "every component of it past a bound",
+            &["expect fall.result[0].speed > 2.5"],
+        ),
+        form(
+            "expect",
+            "expect count <node.port> = <n>",
+            "how many elements a node's output holds",
+            &["expect count ground.result = 6889"],
+        ),
+        form(
+            "expect",
+            "expect placed <node> main | ordered",
+            "where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main",
+            &["expect placed ring main", "expect placed filter ordered"],
+        ),
+    ]
+}
+
+/// The forms as `docs/USAGE.md` shows them.
+pub fn forms_table() -> String {
+    let mut out = String::from("| form | what it does | example |\n| --- | --- | --- |\n");
+    for form in forms() {
+        let examples = form
+            .examples
+            .iter()
+            .map(|example| format!("`{example}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "| `{}` | {} | {examples} |\n",
+            form.shape.replace('|', "\\|"),
+            form.doc
+        ));
+    }
+    out
+}
+
 /// One scripted step.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -321,7 +470,29 @@ pub fn parse(text: &str, base: &Path) -> Result<Replay, ReplayError> {
                     line,
                 });
             }
-            _ => return Err(error(format!("cannot read `{content}`"))),
+            [word, ..] => {
+                let all = forms();
+                let shapes: Vec<&str> = all
+                    .iter()
+                    .filter(|form| form.keyword == *word)
+                    .map(|form| form.shape)
+                    .collect();
+                return Err(error(if shapes.is_empty() {
+                    let mut keywords: Vec<&str> = all.iter().map(|form| form.keyword).collect();
+                    keywords.dedup();
+                    format!(
+                        "`{word}` is no step; the steps are {}{}",
+                        keywords.join(", "),
+                        orla_language::did_you_mean(word, keywords.iter().copied())
+                    )
+                } else {
+                    format!(
+                        "cannot read `{content}`; `{word}` is written {}",
+                        shapes.join(", or ")
+                    )
+                }));
+            }
+            [] => unreachable!("an empty line is skipped"),
         }
     }
     Ok(Replay {
@@ -777,15 +948,16 @@ fn check_element(
 mod tests {
     use super::*;
 
-    /// The forms `docs/USAGE.md` lists all parse, and cover every step.
+    /// Every form's examples parse, together they cover every step, and
+    /// `docs/USAGE.md` shows the forms; `ORLA_BLESS=1` writes them again.
     #[test]
-    fn the_documented_forms_parse_and_cover_every_step() {
-        let usage = include_str!("../../../../docs/USAGE.md");
-        let section = usage.split("## Replay tests").nth(1).unwrap();
-        let block = section.split("```text\n").nth(1).unwrap();
-        let block = block.split("```").next().unwrap();
-        let replay = parse(block, Path::new(".")).unwrap();
-        assert!(replay.kernels.is_some(), "`library` is listed");
+    fn the_forms_parse_cover_every_step_and_are_shown() {
+        let lines: Vec<&str> = forms()
+            .iter()
+            .flat_map(|form| form.examples.iter().copied())
+            .collect();
+        let replay = parse(&lines.join("\n"), Path::new(".")).unwrap();
+        assert!(replay.kernels.is_some(), "`library` is a form");
         let mut seen = [false; 15];
         for step in &replay.steps {
             seen[match step {
@@ -806,7 +978,56 @@ mod tests {
                 Step::Expect { .. } => 14,
             }] = true;
         }
-        assert!(seen.iter().all(|seen| *seen), "a step unlisted: {seen:?}");
+        assert!(
+            seen.iter().all(|seen| *seen),
+            "a step no form shows: {seen:?}"
+        );
+        for form in forms() {
+            for example in form.examples {
+                assert!(example.starts_with(form.keyword), "{example}");
+            }
+        }
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/USAGE.md");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let start = text
+            .find("\n| form |")
+            .expect("USAGE.md has the replay forms")
+            + 1;
+        let end = start + text[start..].find("\n\n").expect("the table ends") + 1;
+        let table = forms_table();
+        if text[start..end] != table {
+            if std::env::var_os("ORLA_BLESS").is_some() {
+                std::fs::write(&path, format!("{}{table}{}", &text[..start], &text[end..]))
+                    .unwrap();
+            } else {
+                panic!(
+                    "docs/USAGE.md's replay forms are not the parser's; write them again with ORLA_BLESS=1 cargo test -p orla-session --lib\n{table}"
+                );
+            }
+        }
+    }
+
+    /// A line no form reads names the steps, or how its keyword is written.
+    #[test]
+    fn a_line_no_form_reads_says_what_is() {
+        let error = parse("scene s.osn\nfram 0", Path::new(".")).unwrap_err();
+        assert!(
+            error.message.contains("did you mean `frame`"),
+            "{}",
+            error.message
+        );
+        let error = parse("scene s.osn\nstick up 1 2", Path::new(".")).unwrap_err();
+        assert!(
+            error.message.contains("stick is `left`"),
+            "{}",
+            error.message
+        );
+        let error = parse("scene s.osn\nwheel 1", Path::new(".")).unwrap_err();
+        assert!(
+            error.message.contains("`wheel` is written wheel <x> <y>"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

@@ -267,44 +267,33 @@ orla player --replay examples/voxel/tests/voxel.replay
 ```
 
 An application's tests are `.replay` files next to its scene, one step a
-line, `#` to the end of a line a comment. Every form:
+line, `#` to the end of a line a comment, paths relative to the replay
+file. `orla help replay` lists the same forms:
 
-```text
-scene ../scene.osn        # required; paths are relative to the replay file
-library ../kernels/       # optional Kernels beyond the scene's `use`
-frame 0.0                 # evaluate at this session time
-settle                    # wait for every `async` run to land
-pointer 20 20 down        # move the pointer and press; `up` releases
-pointer up                # press or release without moving
-button right down         # left, right, middle, or a pad's south, east,
-button south up           # west, north, l1, r1, l3, r3, start, select
-stick left 0.5 -1         # a pad's left, right or triggers pair
-wheel 0 -1                # the scroll for the next frame only
-window 240 135            # the window in pixels, for `window()`,
-window 240 135 0.25       # and its scale factor (one when not given)
-key 67 down               # a key by code; `up` releases
-reset                     # forget every node's committed state
-reset step.result         # forget one port's
-param exposure 1.5        # set a graph parameter to a literal
-expect 11 10 = 1.0 1.0 1.0        # the picture's r g b at x y, tolerance 0.01
-expect 11 10 = 1.0 1.0 1.0 0.05   # with its own tolerance
-expect step.result[0].score = 1   # a field of an element of a node's output
-expect fall.result[0].speed > 2.5 # every component past a bound: < <= > >=
-expect count ground.result = 6889 # how many elements a node's output holds
-expect placed ring main           # where a node runs: main, or ordered (a
-expect placed filter ordered      # scan off a GPU session's main backend)
-```
+| form | what it does | example |
+| --- | --- | --- |
+| `scene <path>` | the scene to test, relative to the replay file; required | `scene ../scene.osn` |
+| `library <path>` | Kernels beyond the scene's `use` | `library ../kernels/` |
+| `frame <seconds>` | evaluates one frame at this session time | `frame 0.0` |
+| `settle` | waits for every `async` run to land | `settle` |
+| `pointer [<x> <y>] [down \| up]` | moves the pointer, in pixels from the window's top left, and presses or releases it | `pointer 20 20 down`, `pointer up` |
+| `button <name> down \| up` | left, right, middle, or a pad's south, east, west, north, l1, r1, l3, r3, start, select | `button right down`, `button south up` |
+| `stick left \| right \| triggers <x> <y>` | a pad's axis pair | `stick left 0.5 -1` |
+| `wheel <x> <y>` | the scroll for the next frame only | `wheel 0 -1` |
+| `window <w> <h> [<scale>]` | the window in pixels, for `window()`, and its scale factor; one when not given | `window 240 135`, `window 240 135 0.25` |
+| `key <code> down \| up` | a key by the browser's code: letters and digits by uppercase ASCII, space 32, enter 13, arrows 37 to 40 | `key 67 down` |
+| `reset [<node.port>]` | forgets every node's committed state, or one port's | `reset`, `reset step.result` |
+| `param <name> <literal>` | sets a graph parameter | `param exposure 1.5` |
+| `expect <x> <y> = <r> <g> <b> [<tolerance>]` | the picture's colour at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given | `expect 11 10 = 1.0 1.0 1.0`, `expect 11 10 = 1.0 1.0 1.0 0.05` |
+| `expect <node.port[i].field> = <value>... [<tolerance>]` | a field of an element of a node's output: ints and bools exactly, floats and vectors within the tolerance | `expect step.result[0].score = 1` |
+| `expect <node.port[i].field> < \| <= \| > \| >= <number>...` | every component of it past a bound | `expect fall.result[0].speed > 2.5` |
+| `expect count <node.port> = <n>` | how many elements a node's output holds | `expect count ground.result = 6889` |
+| `expect placed <node> main \| ordered` | where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main | `expect placed ring main`, `expect placed filter ordered` |
 
-A pixel is the colour the Kernel wrote, each channel a float from 0 to 1
-(not 0 to 255), at `x y` from the picture's top left. Ints and bools
-compare exactly, floats and vectors within the tolerance. A session with
-one backend reads `ordered` as `main`. Nodes an expectation names are
-pinned before the first frame, so fusion keeps them; a frame evaluates
-only what its expectations need.
+Nodes an expectation names are pinned before the first frame, so fusion
+keeps them; a frame evaluates only what its expectations need.
 
-Key codes
-follow the browser's: letters and digits by ASCII uppercase, space 32,
-enter 13, arrows 37 to 40. In the Player, a replay drives the scene at
+In the Player, a replay drives the scene at
 its own times, prints what it observed at the end, and leaves the window
 to the person.
 
