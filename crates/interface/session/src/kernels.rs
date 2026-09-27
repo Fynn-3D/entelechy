@@ -88,6 +88,13 @@ pub(crate) struct Kernels {
     pending: Vec<Change>,
 }
 
+impl Kernels {
+    /// The document that publishes `id`, if a document does.
+    pub(crate) fn owner(&self, id: &KernelId) -> Option<&Path> {
+        self.owners.get(id).map(PathBuf::as_path)
+    }
+}
+
 /// A copy of the ledger to restore whole ([`Kernels::put_back`]).
 pub(crate) struct Kept {
     documents: BTreeMap<PathBuf, DocumentState>,

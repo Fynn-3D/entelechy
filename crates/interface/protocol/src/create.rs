@@ -201,7 +201,7 @@ pub(crate) fn publish(session: &mut Session, request: &Request) -> Result<Json, 
     let publishing = publish_begin(session, request)?;
     loop {
         if let Some(published) = session.publishing(&publishing) {
-            return published_json(published);
+            return published_json(session, published);
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
@@ -235,10 +235,25 @@ pub(crate) fn publish_begin(
 
 /// What a finished `publish` answers.
 pub(crate) fn published_json(
+    session: &Session,
     published: Result<std::sync::Arc<orla_kernel::KernelVersion>, orla_session::Diagnostic>,
 ) -> Result<Json, Json> {
     let version = published.map_err(|e| diagnostic_json(&e))?;
-    Ok(json!({ "id": version.id().to_string(), "generation": version.generation().0 }))
+    let mut answer =
+        json!({ "id": version.id().to_string(), "generation": version.generation().0 });
+    // State this Kernel starts keeps what it committed; reset starts it
+    // from the new law.
+    let kept = session.started_by(version.id());
+    if !kept.is_empty() {
+        let resets: Vec<Json> = kept
+            .iter()
+            .filter_map(|at| orla_graph::split_port(at))
+            .map(|(node, port)| json!({ "op": "reset", "node": node.0, "port": port }))
+            .collect();
+        answer["keeps"] = json!(kept);
+        answer["reset"] = Json::Array(resets);
+    }
+    Ok(answer)
 }
 
 /// Retires a published Kernel.

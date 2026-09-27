@@ -446,7 +446,7 @@ pub fn operations() -> Vec<Operation> {
                     "`absent` for a new Kernel, a generation `kernels` answered, or `any`; `any` when not given",
                 ),
             ],
-            "id, generation",
+            "id, generation; and when nodes running it start state, `keeps` (those `node.port`s, which keep what they committed) and `reset` (the requests that start them from the new law)",
         ),
         op(
             "retire",
@@ -554,7 +554,7 @@ pub fn operations() -> Vec<Operation> {
                 may(
                     "from",
                     Ty::Int,
-                    "the first element to answer as numbers, counted along the Field; 0 when not given",
+                    "the first element to answer as numbers, counted along the Field, x fastest, then y, then z; 0 when not given",
                 ),
                 may(
                     "count",
@@ -562,7 +562,7 @@ pub fn operations() -> Vec<Operation> {
                     "how many elements from `from` to answer as numbers, at most 4096; 1 when not given",
                 ),
             ],
-            "a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
+            "a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
         ),
         op(
             "write",

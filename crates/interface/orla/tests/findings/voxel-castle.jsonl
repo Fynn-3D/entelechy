@@ -1,0 +1,7 @@
+{"scene": "examples/life"}
+{"send": {"op": "evaluate", "time": 0.0}}
+{"finding": "a new law for what starts a state changed nothing on screen, and nothing said the state keeps what it committed until reset", "send": {"op": "publish", "source": "kernel life.seed@1 { requires { field.write; } param noise: Float = 0.3; param blinker: Vec2 = vec2(10.0, 10.0); output result: Cells; compute { return Cell { alive: true, age: 0 }; } }"}, "expect": {"ok": true, "at": {"/ok/keeps/0": "life.previous", "/ok/reset/0/op": "reset", "/ok/reset/0/node": "life"}}}
+{"finding": "a Kernel's source called functions and built structs its document declares, which `kernel` did not show", "send": {"op": "kernel", "kernel": "life.step@1"}, "expect": {"has": ["/ok/document"], "says": ["struct Cell"]}}
+{"finding": "the order `from` counts a Grid or a Volume in was not said", "send": {"op": "help", "name": "read"}, "expect": {"says": ["x fastest, then y, then z"]}}
+{"finding": "a summary said the sum but not how many cells were filled", "send": {"op": "read", "node": "life"}, "expect": {"has": ["/ok/summary/0/nonzero"]}}
+{"finding": "help for a name that is an operation and a replay step answered the replay step first", "send": {"op": "help", "name": "reset"}, "expect": {"at": {"/ok/found/0/section": "protocol"}}}

@@ -91,6 +91,13 @@ pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json>
         .ok_or_else(|| failure(format!("{id} is not published")))?;
     let mut json = version_json(&version);
     json["source"] = Json::String(version.source().to_owned());
+    // What it calls or builds that its document declares beside it.
+    if let Some((document, shared)) = session.shared_with(&id)
+        && !shared.is_empty()
+    {
+        json["document"] = json!(document.display().to_string());
+        json["shared"] = json!(shared);
+    }
     Ok(json)
 }
 

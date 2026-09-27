@@ -206,7 +206,6 @@ fn items() -> Vec<Json> {
             "examples": [format!("domain = {};", f.example)],
         })
     }));
-    out.extend(replay::forms().iter().map(replay_json));
     out.extend(crate::ops::operations().iter().map(op_json));
     out.extend(crate::envelope::PARTS.iter().map(|part| {
         json!({
@@ -226,6 +225,8 @@ fn items() -> Vec<Json> {
             "doc": door.doc,
         })
     }));
+    // The doors in the index's order: the protocol, its wire, replay.
+    out.extend(replay::forms().iter().map(replay_json));
     out
 }
 

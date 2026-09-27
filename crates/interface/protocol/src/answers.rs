@@ -118,7 +118,9 @@ impl Answers {
                     Ok(answer)
                 })
             }
-            On::Kernel(publishing) => session.publishing(publishing).map(create::published_json),
+            On::Kernel(publishing) => session
+                .publishing(publishing)
+                .map(|published| create::published_json(session, published)),
         };
         session.act_for(before);
         let Some(result) = done else {
@@ -151,7 +153,7 @@ impl Answers {
             Ok(request) => match create::publish_begin(session, &request) {
                 Err(error) => Begun::Answered(Err(error)),
                 Ok(publishing) => match session.publishing(&publishing) {
-                    Some(published) => Begun::Answered(create::published_json(published)),
+                    Some(published) => Begun::Answered(create::published_json(session, published)),
                     None => Begun::Waits(On::Kernel(publishing)),
                 },
             },

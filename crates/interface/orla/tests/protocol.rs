@@ -901,7 +901,7 @@ fn help_answers_an_index_a_section_or_a_name() {
         .iter()
         .map(|item| item["section"].as_str().unwrap())
         .collect();
-    assert_eq!(window, ["builtins", "scene", "replay", "protocol"]);
+    assert_eq!(window, ["builtins", "scene", "protocol", "replay"]);
     let publish = &responses[7]["ok"]["found"][0];
     assert_eq!(publish["fields"][0]["name"], "source");
     assert_eq!(publish["fields"][0]["required"], true);

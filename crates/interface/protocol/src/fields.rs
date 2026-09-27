@@ -307,8 +307,8 @@ fn values(
 }
 
 /// Each number of the elements, over every element: its least, its most,
-/// its sum and its mean (a truth value counted as 0 or 1), and how many
-/// were not finite.
+/// its sum and its mean (a truth value counted as 0 or 1), how many were
+/// not zero, and how many were not finite.
 fn summary(
     session: &mut Session,
     handle: orla_kernel::Handle,
@@ -318,13 +318,13 @@ fn summary(
     let schema = data.schema().clone();
     let per = schema.value_words().max(1);
     let words = data.values();
-    // Per number of an element: least, most, sum and finite count; and
-    // how many were not finite.
-    let mut seen: Vec<(f64, f64, f64, u64, u64)> = Vec::new();
+    // Per number of an element: least, most, sum, finite count, how many
+    // were not finite and how many were not zero.
+    let mut seen: Vec<(f64, f64, f64, u64, u64, u64)> = Vec::new();
     for element in words.chunks_exact(per) {
         let numbers = Number::of_element(&schema, element);
         if seen.is_empty() {
-            seen = vec![(f64::INFINITY, f64::NEG_INFINITY, 0.0, 0, 0); numbers.len()];
+            seen = vec![(f64::INFINITY, f64::NEG_INFINITY, 0.0, 0, 0, 0); numbers.len()];
         }
         for (slot, number) in seen.iter_mut().zip(numbers) {
             let v = match number {
@@ -334,6 +334,9 @@ fn summary(
                 Number::Long(v) => v as f64,
                 Number::Bool(v) => f64::from(u8::from(v)),
             };
+            if v != 0.0 {
+                slot.5 += 1;
+            }
             if v.is_finite() {
                 slot.0 = slot.0.min(v);
                 slot.1 = slot.1.max(v);
@@ -346,12 +349,13 @@ fn summary(
     }
     let each: Vec<Json> = seen
         .into_iter()
-        .map(|(least, most, sum, finite, other)| {
+        .map(|(least, most, sum, finite, other, nonzero)| {
             let mut one = if finite == 0 {
                 json!({ "min": null, "max": null, "sum": null, "mean": null })
             } else {
                 json!({ "min": least, "max": most, "sum": sum, "mean": sum / finite as f64 })
             };
+            one["nonzero"] = json!(nonzero);
             if other > 0 {
                 one["nonfinite"] = json!(other);
             }

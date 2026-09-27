@@ -630,6 +630,57 @@ impl Session {
         self.evaluator.fused_into(&node).cloned()
     }
 
+    /// The declarations `kernel` shares with its document's other Kernels,
+    /// as that document writes them (its `struct`s, `type`s and `fn`s),
+    /// and the document; none for a Kernel no document publishes.
+    pub fn shared_with(&self, kernel: &KernelId) -> Option<(PathBuf, String)> {
+        use orla_language::StatementKind;
+        let path = self.kernels.owner(kernel)?.to_path_buf();
+        let text = self.store().read_text(&path).ok()?;
+        let outline = orla_language::outline(&text).ok()?;
+        let shared: Vec<&str> = outline
+            .statements
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.kind,
+                    StatementKind::Struct | StatementKind::Type | StatementKind::Fn
+                )
+            })
+            .filter_map(|s| text.get(s.range.clone()))
+            .collect();
+        Some((path, shared.join("\n\n")))
+    }
+
+    /// The state ports (`node.port`) whose initial source is a node running
+    /// `kernel`: they keep their committed state when it changes, and start
+    /// from it again only when reset.
+    pub fn started_by(&self, kernel: &KernelId) -> Vec<String> {
+        let Some(graph) = self.scene.graph() else {
+            return Vec::new();
+        };
+        let runs = |node: &orla_graph::NodeId| {
+            graph
+                .nodes
+                .iter()
+                .any(|n| &n.id == node && &n.kernel == kernel)
+        };
+        let mut out = Vec::new();
+        for node in &graph.nodes {
+            for (port, binding) in &node.inputs {
+                if let orla_graph::Binding::Previous {
+                    initial: orla_graph::Source::Node { node: from, .. },
+                    ..
+                } = binding
+                    && runs(from)
+                {
+                    out.push(format!("{}.{port}", node.id));
+                }
+            }
+        }
+        out
+    }
+
     /// Why `node`'s `port` has no value to read: not a node, placed as
     /// several, folded into its reader, or not run since it was placed.
     pub fn why_no_value(&self, node: &orla_graph::NodeId, port: &str) -> String {
