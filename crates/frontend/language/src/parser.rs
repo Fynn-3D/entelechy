@@ -369,6 +369,16 @@ impl Parser {
                 };
                 Ok(Spanned { value, span })
             }
+            // A word the language keeps for itself says so.
+            Token::Ident(word) => {
+                let word = word.clone();
+                Err(ParseError {
+                    span: self.span(),
+                    message: format!(
+                        "expected {what}; `{word}` is a word the language keeps for itself, so name it otherwise"
+                    ),
+                })
+            }
             _ => Err(self.unexpected(what)),
         }
     }
@@ -1380,7 +1390,16 @@ impl Parser {
                         .insert(saved, (condition, then, self.position));
                     self.position = saved;
                 } else {
-                    let (otherwise, _) = self.block_body_with(effects)?;
+                    let (otherwise, fell) = self.block_body_with(effects)?;
+                    // In a block of statements alone, nothing after the
+                    // `if` gives its other paths a value: the block would
+                    // return on some paths and fall through on others.
+                    if fell {
+                        return Err(ParseError {
+                            span,
+                            message: "this `if` returns on some paths only, inside an `if` of statements, whose other paths go on past it: give it an `else` that returns too, or join the conditions into the outer `if` (`if a && b { return x; }`)".to_owned(),
+                        });
+                    }
                     return Ok((
                         Block {
                             lets,
@@ -2059,6 +2078,37 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A return on some paths only, inside an `if` of statements, is
+    /// refused where it is written, not read as a value on the others.
+    #[test]
+    fn a_return_that_falls_through_a_block_of_statements_is_refused() {
+        let error = parse_document(
+            "kernel t.k@1 { requires { field.write; } output result: Rows<Int>; compute { let i = element(); if i > 1 { if i == 50 { return 1; } } return 7; } }",
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("returns on some paths only"),
+            "{error}"
+        );
+        let reserved = parse_document("fn f(from: Int) -> Int { return 1; }").unwrap_err();
+        assert!(
+            reserved
+                .message
+                .contains("`from` is a word the language keeps"),
+            "{reserved}"
+        );
+        for written in [
+            "if i > 1 && i == 50 { return 1; } return 7;",
+            "if i > 1 { if i == 50 { return 1; } else { return 7; } } return 7;",
+            "if i > 1 { put(m, 0, i); } return 7;",
+        ] {
+            let source = format!(
+                "kernel t.k@1 {{ requires {{ field.write; }} memory m: Rows<Int>; output result: Rows<Int>; scan with y = 0 {{ let i = element(); {written} }} }}"
+            );
+            assert!(parse_document(&source).is_ok(), "{written}");
+        }
+    }
 
     const GRAYSCALE: &str = r#"
 kernel image.grayscale@1 {

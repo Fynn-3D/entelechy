@@ -174,7 +174,10 @@ Inside `compute`, a body is `let` bindings and a result.
   An `if` whose arm is statements alone, `if hit { emit(p); }`, runs them
   and the block goes on; its `else` or `else if` is statements too, and
   `{ }` does nothing. It equals `let _ = if hit { emit(p); 0 } else { 0 };`,
-  so an arm giving a value beside one that does not is refused.
+  so an arm giving a value beside one that does not is refused, and so
+  is a guard inside such an arm (`if a { if b { return x; } }`), which
+  would return on some paths and go on past the arm on others: join the
+  conditions, `if a && b { return x; }`, or give the inner `if` an `else`.
 - **`match`.** `match i { 0 => a, 1 | 2 => { let x = ..; x }, 8..16 => c,
   16..=31 => d, _ => b }` on an `Int`. The `_` arm is required and last;
   a range `..` stops before its end, `..=` takes it, at most 256 values;
