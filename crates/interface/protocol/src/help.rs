@@ -94,7 +94,7 @@ pub fn scenarios() -> Vec<Json> {
 }
 
 /// The sections, each under a surface or the doors, with what it holds.
-const SECTIONS: [(&str, &str, &str); 8] = [
+const SECTIONS: [(&str, &str, &str); 9] = [
     (
         "types",
         "language",
@@ -115,6 +115,11 @@ const SECTIONS: [(&str, &str, &str); 8] = [
         "authority",
         "capabilities",
         "the capabilities a Kernel declares in `requires`, each what it grants",
+    ),
+    (
+        "packages",
+        "capabilities",
+        "what a package holds and how a scene reaches one; `search` finds what they hold",
     ),
     ("protocol", "doors", "the operations a session answers"),
     (
@@ -204,6 +209,15 @@ fn items() -> Vec<Json> {
             "shape": f.shape,
             "doc": f.doc,
             "examples": [format!("domain = {};", f.example)],
+        })
+    }));
+    out.extend(orla_session::package::LAYOUT.iter().map(|part| {
+        json!({
+            "section": "packages",
+            "name": part.name,
+            "kind": "package",
+            "shape": part.shape,
+            "doc": part.doc,
         })
     }));
     out.extend(crate::ops::operations().iter().map(op_json));

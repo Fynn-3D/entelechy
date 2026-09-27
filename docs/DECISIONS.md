@@ -590,7 +590,8 @@ sections stand as the architecture gives AI to create: the creation
 surfaces (the Kernel Language: types, builtins, forms; the Graph API:
 the scene's forms and what a `domain` may call; the Capability API, which
 is what the world grants, the ABI's capabilities, and what it already
-knows, the Kernels and preset graphs `search` finds) and the doors that
+knows, the Kernels and preset graphs `search` finds in what packages
+hold) and the doors that
 reach them (the protocol and its envelope, what a request and an answer
 carry and the doors they cross, MCP among them; replay; the command
 line). The loop an agent works in (understand, search, generate,

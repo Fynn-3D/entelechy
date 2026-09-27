@@ -846,6 +846,7 @@ fn help_answers_an_index_a_section_or_a_name() {
             "kernel",
             "scene",
             "authority",
+            "packages",
             "protocol",
             "wire",
             "replay"
@@ -865,6 +866,7 @@ fn help_answers_an_index_a_section_or_a_name() {
             "language",
             "language",
             "graph",
+            "capabilities",
             "capabilities",
             "doors",
             "doors",

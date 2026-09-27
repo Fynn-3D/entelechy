@@ -420,7 +420,8 @@ in three steps, each answer small:
 
 - `{"op": "help"}`: the index. What the sections stand `under`, the
   `sections` (`types`, `builtins`, `kernel`, `scene`, `authority`,
-  `protocol`, `wire`, `replay`) with how many items each holds, the `workflow` an
+  `packages`, `protocol`, `wire`, `replay`) with how many items each
+  holds, the `workflow` an
   agent works in (each step and its operations), and the `versions` the
   answer holds for.
 - `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.
