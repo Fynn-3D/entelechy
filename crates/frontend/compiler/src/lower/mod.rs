@@ -666,14 +666,26 @@ impl<'a> Builder<'a> {
             let value = self.emit(expected, Op::Extract(pair, 1));
             pair = self.emit(normal, Op::Construct(vec![at, value]));
         } else if !well_formed {
+            // A struct given is shown with its fields' types.
+            let given = match fields {
+                Some(fields) => format!(
+                    "{} {{ {} }}",
+                    describe(actual, &table),
+                    fields
+                        .iter()
+                        .map(|f| format!("{}: {}", f.name, describe(f.ty, &table)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                None => describe(actual, &table),
+            };
             return Err(semantic(
                 span,
                 format!(
-                    "a scatter into `{}` gives a struct of two fields per element, an address ({}) and a value ({}), but the body gives {}",
+                    "a scatter into `{}` gives a struct of two fields per element, an address ({}) and a value ({}), but the body gives {given}",
                     target.name,
                     describe(address, &table),
                     describe(expected, &table),
-                    describe(actual, &table)
                 ),
             ));
         }

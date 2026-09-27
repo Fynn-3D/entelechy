@@ -1,0 +1,2 @@
+{"scene": "examples/culled"}
+{"finding": "a sub-graph output misnamed was placed at 0:0 and its outputs were not named", "send": {"op": "compose", "edits": [{"output": "wrong", "text": "output wrong <- kept.cnt;"}]}, "expect": {"ok": false, "has": ["/error/line"], "says": ["its outputs are `indices`, `count`"], "not": ["\"line\":0"]}}

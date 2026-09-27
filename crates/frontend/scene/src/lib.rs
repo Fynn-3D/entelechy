@@ -1374,9 +1374,31 @@ impl Lowering<'_, '_> {
                     .find(|(name, _)| name == port)
                     .map(|(_, source)| source.clone())
                     .ok_or_else(|| {
+                        // Where the document wrote it, and what it has.
+                        let span = document
+                            .source_refs()
+                            .into_iter()
+                            .find(|r| {
+                                r.node
+                                    .as_ref()
+                                    .is_some_and(|n| format!("{prefix}{n}") == node.0)
+                                    && &r.name == port
+                            })
+                            .map_or(Span::default(), |r| r.span);
+                        let names: Vec<&str> =
+                            outputs.iter().map(|(name, _)| name.as_str()).collect();
+                        let near = orla_language::nearest(port, names.iter().copied());
                         error(
-                            Span::default(),
-                            format!("sub-graph `{node}` has no output `{port}`"),
+                            span,
+                            format!(
+                                "sub-graph `{node}` has no output `{port}`{}; its outputs are {}",
+                                orla_language::suggestion(near),
+                                names
+                                    .iter()
+                                    .map(|name| format!("`{name}`"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
                         )
                     })?;
             }

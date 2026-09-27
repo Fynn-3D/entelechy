@@ -1,6 +1,6 @@
 //! The permutation that orders `keys`, least significant bit first.
-//! Place it with
-//!   node order: graph "../../packages/sort.orlapkg/graphs/sort.osn" {
+//! Place it, by the path `search` gives as its `reach`, with
+//!   node order: graph "sort.orlapkg/graphs/sort.osn" {
 //!       keys <- cell.result; bits = 12;
 //!   }
 //! and read a row through it: `at(bodies, at(order, slot))`.

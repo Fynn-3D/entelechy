@@ -106,6 +106,16 @@ fn a_statement_of_several_lines_stands_apart_by_a_blank_line() {
 }
 
 #[test]
+fn a_node_removed_between_blank_lines_leaves_one() {
+    let scene = "use \"kernels/\";\n\nnode a: t.a@1 {\n    x = 1;\n}\n\nnode b: t.b@1 {\n    y <- a.result;\n}\n\noutput r <- b.result;\n";
+    let edited = edit(scene, &[node("a", None)]).unwrap();
+    assert_eq!(
+        edited,
+        "use \"kernels/\";\n\nnode b: t.b@1 {\n    y <- a.result;\n}\n\noutput r <- b.result;\n"
+    );
+}
+
+#[test]
 fn a_node_removed_takes_its_lines_and_the_comment_above_it() {
     let edited = edit(SCENE, &[node("castle", None)]).unwrap();
     assert_eq!(

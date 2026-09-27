@@ -182,9 +182,12 @@ impl Scene {
     /// Overrides a graph parameter; see [`crate::Session::set_param`].
     pub(crate) fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
         let value = match self.declared_param(name)? {
-            Some(param) => value
-                .shaped_like(&param.default)
-                .ok_or_else(|| format!("param `{name}` is a {}; `{value}` is not one", param.ty))?,
+            Some(param) => value.shaped_like(&param.default).ok_or_else(|| {
+                format!(
+                    "param `{name}` is of type {}; `{value}` is not one",
+                    param.ty
+                )
+            })?,
             None => value,
         };
         let sizes = self
@@ -272,7 +275,7 @@ impl Scene {
         lowered
             .graph
             .order()
-            .map_err(|e| Diagnostic::new(e.to_string()))?;
+            .map_err(|e| graph_diagnostic(&document, &e))?;
         // A held param the first scene does not declare is refused.
         if self.graph.is_none()
             && let Some(name) = self
@@ -800,6 +803,36 @@ impl Scene {
                 &self.root,
             )
         })
+    }
+}
+
+/// A graph's refusal at the place `document` wrote the source it names,
+/// when it wrote it; a cycle, or a source in a placed graph, has none.
+pub(crate) fn graph_diagnostic(
+    document: &orla_language::Document,
+    error: &orla_graph::GraphError,
+) -> Diagnostic {
+    use orla_graph::{GraphError, Source};
+    let named = match error {
+        GraphError::UnknownSource { source, .. } | GraphError::UnknownOutput(source) => {
+            Some(source)
+        }
+        _ => None,
+    };
+    let span = named.and_then(|source| {
+        document
+            .source_refs()
+            .into_iter()
+            .find(|written| match source {
+                Source::Node { node, port } => {
+                    written.node.as_deref() == Some(node.0.as_str()) && &written.name == port
+                }
+                Source::External(name) => written.node.is_none() && &written.name == name,
+            })
+    });
+    match span {
+        Some(written) => Diagnostic::at(written.span, error.to_string()),
+        None => Diagnostic::new(error.to_string()),
     }
 }
 

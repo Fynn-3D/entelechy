@@ -1,5 +1,6 @@
-//! The mip strip of a square texture, as a sub-graph. Place it with
-//!   node strip: graph "../../packages/picture.orlapkg/graphs/mip.osn" {
+//! The mip strip of a square texture, as a sub-graph. Place it, by
+//! the path `search` gives as its `reach`, with
+//!   node strip: graph "picture.orlapkg/graphs/mip.osn" {
 //!       source <- texture.result; side = 256; levels = 7;
 //!   }
 //! and read it with the functions in `mip.orla`.

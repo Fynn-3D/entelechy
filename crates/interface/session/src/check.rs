@@ -159,9 +159,10 @@ pub fn check_document(store: &dyn Store, path: &Path, show_ir: bool) -> Checked 
                 order.len(),
                 document.uses.len()
             ),
-            Err(error) => {
-                say!(problem, "{file}: {error}");
-            }
+            Err(error) => match crate::scene::graph_diagnostic(&document, &error) {
+                placed if placed.at.is_some() => say!(problem, "{file}:{placed}"),
+                unplaced => say!(problem, "{file}: {unplaced}"),
+            },
         }
     }
     checked

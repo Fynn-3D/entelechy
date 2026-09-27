@@ -274,9 +274,9 @@ fn values(
     Ok(answer)
 }
 
-/// Each number of the elements, over every element: its least, its most
-/// and its mean (a truth value counted as 0 or 1), and how many were not
-/// finite.
+/// Each number of the elements, over every element: its least, its most,
+/// its sum and its mean (a truth value counted as 0 or 1), and how many
+/// were not finite.
 fn summary(
     session: &mut Session,
     handle: orla_kernel::Handle,
@@ -316,9 +316,9 @@ fn summary(
         .into_iter()
         .map(|(least, most, sum, finite, other)| {
             let mut one = if finite == 0 {
-                json!({ "min": null, "max": null, "mean": null })
+                json!({ "min": null, "max": null, "sum": null, "mean": null })
             } else {
-                json!({ "min": least, "max": most, "mean": sum / finite as f64 })
+                json!({ "min": least, "max": most, "sum": sum, "mean": sum / finite as f64 })
             };
             if other > 0 {
                 one["nonfinite"] = json!(other);

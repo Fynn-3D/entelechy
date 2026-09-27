@@ -55,7 +55,7 @@ Schema in `schema`.
 | `graph` |  | inputs, params, nodes, outputs |
 | `document` | `version`?: string | path, text, and version, which `compose`'s `expect` names |
 | `history` | `since`?: integer | revision, frame (the frames committed since that revision), the changes after `since` and the attempts refused since, each with its origin |
-| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version, path (the document), written (whether it was) |
+| `compose` | `text`?: string, `edits`?: [{node?: string, output?: string, param?: string, input?: string, kernel?: string, struct?: string, type?: string, fn?: string, use?: string, member?: string, text: string \| null}], `expect`?: string | events, version, path (the document), written |
 | `sync` |  | events |
 | `prepare` | `source`: string | id, manifest; or an error at a line and column |
 | `publish` | `source`: string, `expect`?: "absent" \| "any" \| integer | id, generation |
@@ -65,7 +65,7 @@ Schema in `schema`.
 | `advance` | `frames`: integer, `fps`?: number, `until`?: {target: string, below?: number, above?: number, equals?: number}, `save`?: {node.port: string}, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | frames, stopped, target, value, saved, millis, report |
 | `bench` | `frames`?: integer, `fps`?: number, `repeat`?: integer, `nodes`?: bool, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | backend, frames, repeat, best_ms, median_ms, nodes, ran |
 | `window` | `size`?: [w, h] \| null, `scale`?: number | the window |
-| `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, mean, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
+| `read` | `output`?: string, `node`?: string, `port`?: string, `format`?: "png" \| "rgba32f" \| "ppm" \| "summary" \| "words" \| "field", `from`?: integer, `count`?: integer | a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64) |
 | `write` | `node`: string, `port`?: string, `data`: string, `format`?: "words" \| "field" | the state replaced |
 | `snapshot` | `to`?: string | the world's revision and frame (the frames committed since it), every Kernel with its generation and source, every port's committed state; or the file written |
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
@@ -164,8 +164,10 @@ structure back.
 `compose` checks before it writes: a text that does not lower, names a
 source nothing provides, wires a cycle, defines a Kernel that does not
 compile or requires what is not granted, or uses or places a document
-it may not read, is answered with a `scene_rejected` event as a sync
-would be, and the document on disk and the running scene stay. A
+it may not read, is refused as an error, as a refused `publish` is: why,
+at its `line` and `column` where it has a place, the document's
+`version`, and for `edits` the `text` they made, which the line counts
+in. The document on disk and the running scene stay. A
 document saved on disk whose own Kernels are refused does not replace
 the running scene either.
 
@@ -292,8 +294,8 @@ backend, or null).
 
 `read` answers what it is asked, and without asking, how the Field
 looks: a picture as a PNG (over MCP, an image the agent sees), any other
-Field as its summary, each number's least, most and mean over every
-element. `from` and `count` answer up to 4096 elements as numbers, an
+Field as its summary, each number's least, most, sum and mean over
+every element. `from` and `count` answer up to 4096 elements as numbers, an
 element of several as a list in order. The whole Field comes when a
 `format` names it: a picture's `rgba32f` or `ppm`, or any Field's
 `words`, or `field`, the Host's file format, which `write` with the same

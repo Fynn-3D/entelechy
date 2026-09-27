@@ -6,8 +6,11 @@
 {"finding": "a search for `color` found nothing: the docs spelled it `colour`", "send": {"op": "search", "text": "color"}, "expect": {"has": ["/ok/capabilities/0"]}}
 {"send": {"op": "evaluate", "time": 0.0}}
 {"finding": "read answered any Field as one large base64 text", "send": {"op": "read", "node": "life"}, "expect": {"at": {"/ok/format": "summary"}, "has": ["/ok/summary"], "lacks": ["/ok/data"]}}
+{"finding": "a summary gave min, max and mean but no sum, so a total took a node of its own", "send": {"op": "read", "node": "life"}, "expect": {"has": ["/ok/summary/1/sum"]}}
 {"finding": "a Field's numbers took decoding bytes by hand", "send": {"op": "read", "node": "life", "from": 0, "count": 2}, "expect": {"has": ["/ok/values/1"]}}
 {"finding": "a picture came as numbers, not as something to look at", "send": {"op": "read"}, "expect": {"at": {"/ok/format": "png"}}}
+{"finding": "a refused compose was answered as a success, unlike a refused publish", "send": {"op": "compose", "text": "{scene}\nnode broken: {"}, "expect": {"ok": false, "at": {"/error/written": false}}}
+{"finding": "a source nothing provides was refused with no place in the document", "send": {"op": "compose", "text": "{scene}\nnode dim: life.show@1 { cells <- nowhere.result; }\n"}, "expect": {"ok": false, "at": {"/error/line": 20, "/error/column": 34}}}
 {"finding": "a bare node name as a source did not say to name one of its outputs", "send": {"op": "compose", "text": "{scene}\nnode dim: life.show@1 { cells <- life; }\n"}, "expect": {"says": ["`life.result`"]}}
 {"finding": "a scene without output did not say how one is declared", "send": {"op": "compose", "text": "use \"kernels/\";\nnode a: life.seed@1 { domain = vec2(4, 4); }\n"}, "expect": {"says": ["output name <- node.port;"]}}
 {"finding": "a read after restore looked like a failed restore: the trial frame was not mentioned", "send": {"op": "help", "name": "restore"}, "expect": {"says": ["trial frame's outputs"]}}
@@ -22,3 +25,8 @@
 {"send": {"op": "pin", "node": "r"}}
 {"send": {"op": "evaluate", "time": 0.0}}
 {"finding": "a row of Vec4s was read as a picture one pixel high", "send": {"op": "read", "node": "r"}, "expect": {"at": {"/ok/format": "summary"}}}
+{"finding": "a scatter body of the wrong struct was named without its fields, hiding which field was wrong", "send": {"op": "prepare", "source": "struct Pair { at: Int; value: Int; }\nkernel t.h@1 { requires { field.read; field.write; } input bins: Rows<Float>; output result: Rows<Float>; scatter into bins with sum { return Pair { at: 0, value: 1 }; } }"}, "expect": {"ok": false, "says": ["Pair { at: Int, value: Int }"]}}
+{"finding": "renaming a member by an edit was refused without saying how to rename", "send": {"op": "compose", "edits": [{"node": "life", "member": "brush", "text": "brushes = 2.0;"}]}, "expect": {"ok": false, "says": ["remove it (`text`: null) and add `brushes` in another edit"]}}
+{"finding": "a float for an Int param was answered as `is a Int; 2500.5d`: bad grammar, and the value in another notation than the caller's", "send": {"op": "compose", "edits": [{"param": "gain", "text": "param gain: Int = 2;"}]}, "expect": {"ok": true}}
+{"finding": "a float for an Int param was answered as `is a Int; 2500.5d`: bad grammar, and the value in another notation than the caller's", "send": {"op": "param", "name": "gain", "value": 2500.5}, "expect": {"ok": false, "says": ["param `gain` is of type Int; 2500.5 is not one"], "not": ["2500.5d"]}}
+{"finding": "an edits compose refused at a line of a text the caller never saw", "send": {"op": "compose", "edits": [{"node": "seed", "text": null}]}, "expect": {"ok": false, "has": ["/error/text", "/error/line"]}}

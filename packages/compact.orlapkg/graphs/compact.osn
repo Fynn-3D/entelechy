@@ -1,7 +1,7 @@
 //! Filters a row, stream compaction: flags in (non-zero keeps an
 //! element), the kept elements' indices gathered to the front and their
-//! count out. A scene in `examples/<demo>/` places it with
-//!   node kept: graph "../../packages/compact.orlapkg/graphs/compact.osn" {
+//! count out. Place it, by the path `search` gives as its `reach`, with
+//!   node kept: graph "compact.orlapkg/graphs/compact.osn" {
 //!       flags <- visible.result;
 //!   }
 //! and size what does the work with

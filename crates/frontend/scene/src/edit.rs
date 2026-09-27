@@ -133,7 +133,7 @@ fn declares<'a>(fragment: &'a str, target: &Target) -> Result<&'a str, String> {
             match outline.statements.as_slice() {
                 [one] if one.kind == *kind && &one.name == name => Ok(fragment),
                 [one] => Err(format!(
-                    "the text for {target} declares {} `{}`",
+                    "the text for {target} declares {} `{}`; an edit changes the statement it names: to rename it, remove it (`text`: null) and add the new one in another edit",
                     one.kind.keyword(),
                     one.name
                 )),
@@ -154,7 +154,10 @@ fn declares<'a>(fragment: &'a str, target: &Target) -> Result<&'a str, String> {
             };
             match members {
                 Some([one]) if &one.name == member => Ok(fragment),
-                Some([one]) => Err(format!("the text for {target} sets `{}`", one.name)),
+                Some([one]) => Err(format!(
+                    "the text for {target} sets `{}`; an edit changes the member it names: to rename `{member}`, remove it (`text`: null) and add `{}` in another edit",
+                    one.name, one.name
+                )),
                 _ => Err(format!("the text for {target} is not one member")),
             }
         }
@@ -191,7 +194,8 @@ fn splice(text: &str, range: Range<usize>, with: &str) -> String {
 
 /// Takes `range` out. Alone on its lines, the lines go too, with a
 /// trailing comment and, for a statement, the comment lines right above
-/// it; sharing a line, the spaces before it go.
+/// it, and one blank line of two it stood between; sharing a line, the
+/// spaces before it go.
 fn remove(text: &str, range: Range<usize>, comments: bool) -> String {
     let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = text[range.end..]
@@ -214,7 +218,13 @@ fn remove(text: &str, range: Range<usize>, comments: bool) -> String {
             start = above;
         }
     }
-    splice(text, start..line_end, "")
+    // Between two blank lines, one of them goes with it.
+    let mut end = line_end;
+    let blank_before = start == 0 || text[..start].ends_with("\n\n");
+    if blank_before && text[end..].starts_with('\n') {
+        end += 1;
+    }
+    splice(text, start..end, "")
 }
 
 /// The order of statement kinds, for placing the first of a kind.

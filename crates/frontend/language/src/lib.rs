@@ -201,6 +201,42 @@ pub struct WriteDecl {
 }
 
 impl Document {
+    /// Every source reference the document writes, in no set order: node
+    /// wiring, inline Kernel inputs, outputs and input fallbacks. Where a
+    /// reference found wanting after lowering is found again.
+    pub fn source_refs(&self) -> Vec<&SourceRef> {
+        let mut refs = Vec::new();
+        for node in &self.nodes {
+            for member in &node.members {
+                match member {
+                    NodeMember::Bind(_, source) => refs.push(source),
+                    NodeMember::Previous {
+                        source, initial, ..
+                    } => refs.extend([source, initial]),
+                    NodeMember::Set(..) | NodeMember::Carry(..) => {}
+                }
+            }
+            if let NodeKind::Inline(kernel) = &node.kind {
+                for input in &kernel.inputs {
+                    match &input.binding {
+                        Some(BindingDecl::Now(source)) => refs.push(source),
+                        Some(BindingDecl::Previous {
+                            source, initial, ..
+                        }) => refs.extend([source, initial]),
+                        None => {}
+                    }
+                }
+            }
+        }
+        refs.extend(self.outputs.iter().map(|(_, source)| source));
+        refs.extend(
+            self.inputs
+                .iter()
+                .filter_map(|input| input.otherwise.as_ref()),
+        );
+        refs
+    }
+
     /// Puts declarations from used documents in front of every Kernel's
     /// own, so a shared struct or type has one layout everywhere.
     pub fn inherit(&mut self, structs: &[StructDecl], types: &[TypeAlias], functions: &[FnDecl]) {

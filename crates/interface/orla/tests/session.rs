@@ -2005,11 +2005,11 @@ fn a_parameter_of_any_value_type_is_set_by_its_layout() {
     let error = session
         .set_param("lens", Value::Vec3([1.0, 2.0, 3.0]))
         .unwrap_err();
-    assert!(error.contains("param `lens` is a Mat4"), "{error}");
+    assert!(error.contains("param `lens` is of type Mat4"), "{error}");
     let error = session
         .set_param("style", Value::Record(vec![Value::Bool(true)]))
         .unwrap_err();
-    assert!(error.contains("param `style` is a Style"), "{error}");
+    assert!(error.contains("param `style` is of type Style"), "{error}");
 }
 
 /// The interpreter declining every module holding a `Double`: a device

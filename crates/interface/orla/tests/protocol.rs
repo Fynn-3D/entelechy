@@ -265,9 +265,10 @@ fn an_agent_can_inspect_prepare_publish_evaluate_and_read() {
         responses[8]
     );
 
-    let events = ok(9)["events"].as_array().unwrap();
-    assert_eq!(events[0]["kind"], "scene_rejected");
-    assert!(events[0]["line"].is_number(), "{events:?}");
+    // A refused compose is an error, at its place.
+    let refused = &responses[9]["error"];
+    assert!(refused["line"].is_number(), "{refused}");
+    assert_eq!(refused["written"], false, "{refused}");
 
     let report = ok(10);
     assert!(
@@ -1479,7 +1480,10 @@ fn a_matrix_or_a_struct_parameter_crosses_the_protocol_as_arrays() {
     assert!(replies[1].get("ok").is_some(), "{}", replies[1]);
     assert!(replies[2].get("ok").is_some(), "{}", replies[2]);
     let message = replies[3]["error"].to_string();
-    assert!(message.contains("param `lens` is a Mat4"), "{message}");
+    assert!(
+        message.contains("param `lens` is of type Mat4"),
+        "{message}"
+    );
     let params = replies[4]["ok"]["params"].as_array().unwrap();
     let style = params.iter().find(|p| p["name"] == "style").unwrap();
     assert_eq!(style["type"], "Style");
@@ -1554,17 +1558,18 @@ fn compose_checks_before_it_writes_and_against_the_version_read() {
     let version = responses[0]["ok"]["version"].as_str().unwrap().to_owned();
     assert_eq!(responses[0]["ok"]["text"], original);
     for (index, what) in [(1, "syntax"), (2, "an inline Kernel")] {
-        let answer = &responses[index]["ok"];
-        assert_eq!(
-            answer["events"][0]["kind"], "scene_rejected",
-            "{what}: {answer}"
+        let answer = &responses[index]["error"];
+        assert!(
+            answer["message"].is_string(),
+            "{what}: {}",
+            responses[index]
         );
         assert_eq!(answer["version"], version, "{what}");
         assert_eq!(answer["written"], false, "{what}");
         assert_eq!(answer["path"], scene.display().to_string(), "{what}");
     }
     assert!(
-        responses[2]["ok"]["events"][0]["message"]
+        responses[2]["error"]["message"]
             .as_str()
             .unwrap_or_default()
             .contains("`nope` is not defined"),
@@ -2631,7 +2636,20 @@ fn compose_edits_the_document_where_it_changes() {
     assert_eq!(ok(2)["text"], edited);
     assert_eq!(ok(2)["version"], ok(1)["version"]);
     ok(3);
-    assert_eq!(ok(4)["events"][0]["kind"], "scene_rejected", "{}", ok(4));
+    // Refused, with the text the edits made, which its line counts in.
+    let refused = &responses[4]["error"];
+    assert!(
+        refused["text"]
+            .as_str()
+            .is_some_and(|t| !t.contains("node life:")),
+        "{refused}"
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("`life.result`")),
+        "{refused}"
+    );
     assert!(
         failed(5).contains("edit 1: there is no node `nowhere` to remove"),
         "{}",
@@ -2742,7 +2760,10 @@ fn a_nodes_own_value_is_the_documents() {
         "{elsewhere}"
     );
     let typed = responses[13]["error"]["message"].as_str().unwrap();
-    assert!(typed.starts_with("param `size` is a Float;"), "{typed}");
+    assert!(
+        typed.starts_with("param `size` is of type Float;"),
+        "{typed}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2767,10 +2788,9 @@ fn a_scene_update_that_cannot_run_leaves_the_scene_running() {
             json!({ "id": 3, "op": "evaluate", "time": 0.1 }),
         ],
     );
-    let refused = &responses[1]["ok"];
-    assert_eq!(refused["events"][0]["kind"], "scene_rejected", "{refused}");
+    let refused = &responses[1]["error"];
     assert!(
-        refused["events"][0]["message"]
+        refused["message"]
             .as_str()
             .is_some_and(|m| m.contains("does not grant")),
         "{refused}"
@@ -2807,9 +2827,8 @@ fn a_composed_scene_cannot_widen_what_it_may_read() {
         ],
     );
     for response in &responses[..2] {
-        let answer = &response["ok"];
-        assert_eq!(answer["events"][0]["kind"], "scene_rejected", "{answer}");
-        let message = answer["events"][0]["message"].as_str().unwrap_or_default();
+        let answer = &response["error"];
+        let message = answer["message"].as_str().unwrap_or_default();
         assert!(message.contains("is not read"), "{message}");
         assert!(
             !message.contains("not for the agent"),

@@ -60,16 +60,21 @@ pub(crate) fn compose_with(
     // A text a sync rejects leaves the disk and the running scene as they
     // are; an accepted one replaces the file whole, so every reader,
     // the session's watcher included, sees one version.
+    // A refusal is an error, as a refused publish is: why and where, the
+    // document untouched at its version, and for `edits` the text they
+    // made, which `line` counts in.
     if let Err(why) = session
         .write_scene(&text)
         .map_err(|e| failure(e.to_string()))?
     {
-        return Ok(json!({
-            "events": events_json(&[orla_session::Event::SceneRejected(why)]),
-            "version": current,
-            "path": root.display().to_string(),
-            "written": false,
-        }));
+        let mut refused = diagnostic_json(&why);
+        refused["version"] = json!(current);
+        refused["path"] = json!(root.display().to_string());
+        refused["written"] = json!(false);
+        if request.get("edits").is_some() {
+            refused["text"] = json!(text);
+        }
+        return Err(refused);
     }
     // The scene read here is this request's change: its Kernels published
     // and the scene replaced, or refused, as one.
@@ -258,11 +263,18 @@ pub(crate) fn param(session: &mut Session, request: &Request) -> Result<Json, Js
     let ty = session.param_type(&name).map_err(failure)?;
     let given = value_from_json(request.field("value")?).map_err(|mut refused| {
         if let (Some(ty), Some(message)) = (&ty, refused["message"].as_str()) {
-            refused["message"] = json!(format!("param `{name}` is a {ty}; {message}"));
+            refused["message"] = json!(format!("param `{name}` is of type {ty}; {message}"));
         }
         refused
     })?;
-    session.set_param(&name, given).map_err(failure)?;
+    // A value of another shape is refused as the caller wrote it.
+    session.set_param(&name, given).map_err(|why| match &ty {
+        Some(ty) => failure(format!(
+            "param `{name}` is of type {ty}; {} is not one",
+            request.get("value").cloned().unwrap_or_default()
+        )),
+        None => failure(why),
+    })?;
     let value = session.params().get(&name).cloned().expect("just set");
     // A param that sizes the graph lowers the document now, as this
     // request's change.

@@ -399,7 +399,7 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "compose",
-            "Changes the scene: rewrites its document on disk, the file at `path` (`document` and `status` name it), once the text is checked; answered once the scene stands. A refused text writes nothing.",
+            "Changes the scene: rewrites its document on disk, the file at `path` (`document` and `status` name it), once the text is checked; answered once the scene stands. A refused text writes nothing and is an error: why, at `line` and `column`, the document's `version`, and for `edits` the `text` they made, which `line` counts in.",
             vec![
                 may("text", Ty::Str, "the whole document; or `edits`"),
                 may(
@@ -413,7 +413,7 @@ pub fn operations() -> Vec<Operation> {
                     "the version `document` answered; refused when the scene changed since",
                 ),
             ],
-            "events, version, path (the document), written (whether it was)",
+            "events, version, path (the document), written",
         ),
         op(
             "sync",
@@ -558,7 +558,7 @@ pub fn operations() -> Vec<Operation> {
                     "how many elements from `from` to answer as numbers, at most 4096; 1 when not given",
                 ),
             ],
-            "a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, mean, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
+            "a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
         ),
         op(
             "write",

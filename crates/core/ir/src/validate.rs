@@ -518,7 +518,7 @@ fn validate_manifest(manifest: &Manifest, structs: &[StructDef]) -> Result<(), V
             return Err(error(
                 "manifest",
                 format!(
-                    "param `{}` is a {} and its default is not one",
+                    "param `{}` is of type {} and its default is not one",
                     param.name,
                     crate::type_name(param.ty, structs)
                 ),
