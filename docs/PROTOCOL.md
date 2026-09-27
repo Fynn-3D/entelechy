@@ -49,7 +49,7 @@ Schema in `schema`.
 
 | op | fields | answer |
 | --- | --- | --- |
-| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
+| `status` |  | backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`) |
 | `kernels` |  | a list of manifests, each with its generation, which `publish`'s `expect` names |
 | `kernel` | `kernel`?: string, `generation`?: integer | manifest, generation, source, as `publish` takes it |
 | `graph` |  | inputs, params, nodes, outputs |

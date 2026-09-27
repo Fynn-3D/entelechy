@@ -274,11 +274,12 @@ impl Diagnostic {
         }
     }
 
-    /// A diagnostic at a place in its document.
+    /// A diagnostic at a place in its document; one whose span is no
+    /// place has none.
     pub fn at(span: orla_language::Span, message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            at: Some((span.line, span.column)),
+            at: span.is_placed().then_some((span.line, span.column)),
         }
     }
 }

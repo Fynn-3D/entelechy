@@ -90,10 +90,22 @@ pub fn respond_line(session: &mut Session, line: &str) -> (String, bool) {
     }
 }
 
+/// The operations that run or read the scene.
+const RUNS_THE_SCENE: [&str; 6] = ["evaluate", "advance", "bench", "read", "write", "trace"];
+
 /// Handles one request by the function for the operation it names.
 pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     ops::check(request)?;
     let request = Request::new(request)?;
+    // What runs or reads the scene is refused while none is loaded,
+    // saying why and what to do.
+    if RUNS_THE_SCENE.contains(&request.op())
+        && let Some(why) = session.why_no_scene()
+    {
+        return Err(wire::failure(format!(
+            "no scene is loaded: {why}; `compose` one"
+        )));
+    }
     match request.op() {
         "status" => inspect::status(session),
         "kernels" => inspect::kernels(session),

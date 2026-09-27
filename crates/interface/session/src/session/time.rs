@@ -41,6 +41,25 @@ impl Session {
         self.history.attempts(since).cloned().collect()
     }
 
+    /// Why no scene is loaded, when none is: the scene document's last
+    /// refusal the history keeps, or that it has not loaded.
+    pub fn why_no_scene(&self) -> Option<String> {
+        if self.scene.graph().is_some() {
+            return None;
+        }
+        let root = self.scene.root().display().to_string();
+        Some(
+            self.history
+                .attempts(0)
+                .filter(|attempt| attempt.subject == root)
+                .last()
+                .map_or_else(
+                    || "its document has not loaded".to_owned(),
+                    |a| a.why.clone(),
+                ),
+        )
+    }
+
     /// A Kernel's source at `generation`, from the registry or the
     /// history.
     pub fn source_at(&self, id: &KernelId, generation: orla_kernel::Generation) -> Option<String> {

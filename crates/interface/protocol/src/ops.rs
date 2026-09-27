@@ -346,7 +346,7 @@ pub fn operations() -> Vec<Operation> {
             "status",
             "The session at a glance.",
             vec![],
-            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`)",
+            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, versions (`orla`, `api`, `language`, `ir`, `package`)",
         ),
         op(
             "kernels",

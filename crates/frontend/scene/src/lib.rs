@@ -78,7 +78,11 @@ pub struct DocumentError {
 
 impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.span, self.message)
+        if self.span.is_placed() {
+            write!(f, "{}: {}", self.span, self.message)
+        } else {
+            f.write_str(&self.message)
+        }
     }
 }
 

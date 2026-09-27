@@ -43,7 +43,8 @@ impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse(error) => write!(f, "{error}"),
-            Self::Semantic { span, message } => write!(f, "{span}: {message}"),
+            Self::Semantic { span, message } if span.is_placed() => write!(f, "{span}: {message}"),
+            Self::Semantic { message, .. } => f.write_str(message),
             Self::Validation(error) => write!(f, "invalid IR: {error}"),
         }
     }

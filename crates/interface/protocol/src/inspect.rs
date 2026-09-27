@@ -18,6 +18,8 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
         "kernels": session.runtime().kernels().filter(|v| v.native().is_none()).count(),
         "natives": session.runtime().kernels().filter(|v| v.native().is_some()).count(),
         "nodes": session.graph().map_or(0, |graph| graph.nodes.len()),
+        "loaded": session.graph().is_some(),
+        "refused": session.why_no_scene(),
         "fusion": session.fusion(),
         "revision": session.position().0,
         "frame": session.position().1,

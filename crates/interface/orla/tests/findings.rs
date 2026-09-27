@@ -1,7 +1,8 @@
 //! What agents found wrong stays fixed. Each file in `findings/` is a
 //! session over a copy of an example: its first line names the example
 //! (`{"scene": "examples/life"}`, with `"installed": true` when the copied
-//! packages are the ones installed), and every other line sends a request
+//! packages are the ones installed, and `"text"` to start from that text
+//! in its place), and every other line sends a request
 //! and may hold its answer to what was found wanting:
 //!
 //! - `"finding"`: what an agent met, as a sentence;
@@ -209,6 +210,9 @@ fn what_agents_found_wanting_stays_fixed() {
             .as_str()
             .expect("the first line names a scene");
         let copied = copy(example, &name);
+        if let Some(text) = head["text"].as_str() {
+            std::fs::write(&copied, text).unwrap();
+        }
         let scene = std::fs::read_to_string(&copied).unwrap();
         let steps: Vec<Json> = lines
             .map(|line| {

@@ -352,13 +352,21 @@ pub struct SourceRef {
     pub span: Span,
 }
 
-/// A position in the source, 1-based.
+/// A position in the source, 1-based; line 0 (the default) is no place,
+/// for what belongs to the document as a whole.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Span {
     /// Line number.
     pub line: u32,
     /// Column number in characters.
     pub column: u32,
+}
+
+impl Span {
+    /// Whether it names a place in the source.
+    pub fn is_placed(self) -> bool {
+        self.line > 0
+    }
 }
 
 impl fmt::Display for Span {
@@ -765,7 +773,11 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.span, self.message)
+        if self.span.is_placed() {
+            write!(f, "{}: {}", self.span, self.message)
+        } else {
+            f.write_str(&self.message)
+        }
     }
 }
 
