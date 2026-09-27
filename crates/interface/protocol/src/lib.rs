@@ -38,8 +38,8 @@ pub use answers::{Answers, Served};
 pub use envelope::{envelope, parse_request};
 pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
-    capability_json, context_of, report_json, trace_json, type_name, value_from_json, value_json,
-    words_json, words_text,
+    context_of, report_json, trace_json, type_name, value_from_json, value_json, words_json,
+    words_text,
 };
 
 /// Answers one incoming request; true when the process should end (a
@@ -98,7 +98,6 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "document" => inspect::document(session, &request),
         "history" => inspect::history(session, &request),
         "help" => inspect::help(&request),
-        "search" => inspect::search(session, &request),
         "compose" => create::compose(session, &request),
         "sync" => create::sync(session),
         "prepare" => create::prepare(session, &request),

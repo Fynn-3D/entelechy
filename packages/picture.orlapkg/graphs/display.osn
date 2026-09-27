@@ -1,5 +1,4 @@
-//! Tone mapping as a sub-graph. Place it, by the path `search`
-//! gives as its `reach`, with
+//! Tone mapping as a sub-graph. Place it with
 //!   node display: graph "picture.orlapkg/graphs/display.osn" {
 //!       source <- x.result; exposure = 1.2;
 //!   }

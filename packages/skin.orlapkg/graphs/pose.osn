@@ -1,5 +1,4 @@
-//! One clip playing on one skeleton, as one node. Place it, by the
-//! path `search` gives as its `reach`, with
+//! One clip playing on one skeleton, as one node. Place it with
 //!   node posed: graph "skin.orlapkg/graphs/pose.osn" {
 //!       mesh <- mesh; weights <- weights; skeleton <- skeleton;
 //!       clip <- walk; at <- clock.result; rate = 30.0;

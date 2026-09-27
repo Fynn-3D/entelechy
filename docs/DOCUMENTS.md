@@ -23,8 +23,8 @@ below explain.
 
 ### Docs
 
-A capability says what it is for in its source, and `kernel`, `kernels`
-and `search` answer it:
+A capability says what it is for in its source, and `kernel` and
+`kernels` answer a published Kernel's:
 
 ```text
 //! A preset graph's or a package manifest's doc: the lines a document
@@ -43,15 +43,13 @@ kernel tally.twice@1 {
 
 - `///` lines directly above a `kernel`, `input`, `param`, `output` or
   `memory` are its doc; a blank line or a `//` line ends them. `//!`
-  lines a document opens with are the document's own: a preset graph's,
-  a package's.
+  lines a document opens with say what the document is for: a preset
+  graph, a package.
 - Lines join into a paragraph, an empty `///` parts paragraphs, and an
   indented line is code and keeps its own.
 - Both are comments to the grammar: a document compiles the same with or
   without them. A Kernel's doc lines travel with its source, through
   `publish`, `kernel` and `snapshot`; changing them publishes it again.
-- Write a doc in the words someone looking for the capability would
-  use: `search` matches them.
 
 ## Kernel
 

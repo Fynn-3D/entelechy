@@ -93,7 +93,6 @@ through:
 | `restore` | `snapshot`?: object, `from`?: string, `laws`: "current" \| "snapshot", `structure`?: "current" \| "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | revision, frame, report |
 | `reset` | `node`?: string, `port`?: string | what was reset |
 | `help` | `name`?: string | `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar` |
-| `search` | `text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer | capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it: an installed package by its name, any other path relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched |
 | `trace` | `node`: string, `at`?: [x, y] \| [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number | kernel, at, bindings, results, calls |
 | `pin` | `node`: string | pinned |
 | `unpin` | `node`: string | unpinned |
@@ -389,25 +388,6 @@ operations and the wire above, the replay lines from the replayer.
 
 An unknown name is an error naming the near one in `similar`. Whole
 programs are in `examples/`.
-
-## Search
-
-`search` answers the capabilities that exist, so an agent composes what
-is there before it writes anew: the Kernels the session publishes, and
-every Kernel and preset graph of the packages it reaches. It reaches
-the packages in `ORLA_PACKAGES`, those installed beside Orla (a
-release's `packages/`), and every one beside a package the scene uses.
-Each answer says what the capability is for (its `///` and `//!` docs),
-what it takes and gives with types as written, what it requires and
-whether this session grants that, and `reach`: the line a scene writes
-to use it (`use "..";` for a Kernel, `node name: graph ".." { ... }` for
-a preset). `text` is words, each matching a word of a name, a package or
-its doc, a capability's doc or a port's name or doc, where one begins
-the other and the shorter has four letters or more (`compaction` finds
-`compact`); `takes`, `gives` and `requires` hold to a type or a
-capability. Each word matched counts: a word of the name most, of the
-capability's own doc and ports next, of its package's least; ties go by
-name. The same session and query answer the same list.
 
 ## Timing of changes
 

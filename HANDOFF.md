@@ -36,9 +36,6 @@ Verified surface, as of `main`:
 and API are one reference rendered from the tables the implementation
 executes (`orla help`, the protocol's `help`, `docs/REFERENCE.md`), and
 agents learn from it and `examples/`; the protocol's doors are its own
-lines and the bridges. It also holds the runtime fixes agents writing
+lines and the bridges, and neither MCP nor `search` stands beside them. It also holds the runtime fixes agents writing
 demos found (`crates/interface/orla/tests/findings/`). It merges on the
 user's word; a release is cut once a whole batch is done and accepted.
-
-`search` answers every capability with its whole doc, a broad word
-filling a page.

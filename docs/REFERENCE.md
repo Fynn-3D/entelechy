@@ -204,10 +204,10 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 
 - **manifest**: `name.orlapkg/package.osn: package name@1 { language = 1; ir = 1; }` What the directory is called, and the least language and IR it needs: one this Orla does not have refuses the package, naming both.
 - **kernels**: `use "kernels/";   (in the manifest)` The documents the manifest uses, inside the directory, are the package's Kernels; a scene that uses the package publishes every one of them.
-- **graphs**: `name.orlapkg/graphs/*.osn` Preset graphs, placed with `node n: graph "name.orlapkg/graphs/g.osn" { ... }`; `search` lists each with its inputs, params and outputs.
-- **docs**: `//! at the top of a manifest or a preset;   /// above a Kernel, a port or a param` What each part is for, in its source: `search` matches the words and answers them.
+- **graphs**: `name.orlapkg/graphs/*.osn` Preset graphs, placed with `node n: graph "name.orlapkg/graphs/g.osn" { ... }`.
+- **docs**: `//! at the top of a manifest or a preset;   /// above a Kernel, a port or a param` What each part is for, in its source; `kernel` and `kernels` answer a published Kernel's.
 - **assets**: `name.orlapkg/font.png` Any other file in the directory, which a scene's `input` reads; a package's files are readable wherever reads are held.
-- **by name**: `use "name.orlapkg";` A package not beside the scene is found by its name in each directory of `ORLA_PACKAGES`, then in `packages/` beside the program; `search` writes such a package's `use` by its name.
+- **by name**: `use "name.orlapkg";` A package not beside the scene is found by its name in each directory of `ORLA_PACKAGES`, then in `packages/` beside the program.
 
 ## protocol: the operations a session answers
 
@@ -233,7 +233,6 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world. Wh
 - **restore**: `restore` {`snapshot`?: object, `from`?: string, `laws`: "current" | "snapshot", `structure`?: "current" | "snapshot", `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number} Puts a snapshot's world back, after a trial frame that commits nothing: the state is the snapshot's, which the next frame reads; until then `read` shows the trial frame's outputs. Answers revision, frame, report.
 - **reset**: `reset` {`node`?: string, `port`?: string} Forgets committed state; `<~` readers start from their initial sources. Answers what was reset.
 - **help**: `help` {`name`?: string} Orla's syntax and API, layer by layer: all of it, or one name in full. Answers `reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar`.
-- **search**: `search` {`text`?: string, `takes`?: string, `gives`?: string, `requires`?: string, `limit`?: integer} The capabilities that exist: published Kernels, and every Kernel and preset graph of the packages this session reaches. Answers capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it: an installed package by its name, any other path relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched.
 - **trace**: `trace` {`node`: string, `at`?: [x, y] | [x, y, z], `element`?: integer, `time`?: number, `rate`?: number, `pointer`?: [x, y], `down`?: bool, `buttons`?: [integer], `wheel`?: [x, y], `sticks`?: [[x, y]], `keys`?: [integer], `window`?: [w, h], `scale`?: number} Runs one element of a node's Kernel and shows every step of it. Answers kernel, at, bindings, results, calls.
 - **pin**: `pin` {`node`: string} Keeps a node materialized so `read` can see it. Answers pinned.
 - **unpin**: `unpin` {`node`: string} Lets fusion have a pinned node back. Answers unpinned.

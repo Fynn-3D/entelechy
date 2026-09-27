@@ -1,11 +1,10 @@
-//! What a document says about what it declares. `///` lines directly
-//! above a declaration are its doc; `//!` lines at the top of a document
-//! are the document's own (a graph preset's, a package's). Both are
-//! comments to the grammar: the text, not the parse, holds them.
+//! What a document says about what it declares: the `///` lines directly
+//! above a declaration are its doc. They are comments to the grammar: the
+//! text, not the parse, holds them.
 
 /// The `///` lines directly above line `line` (from 1), joined; `None`
 /// when there are none. Blank lines and `//` lines end the doc.
-pub fn doc_above(text: &str, line: u32) -> Option<String> {
+fn doc_above(text: &str, line: u32) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
     let mut at = (line as usize).checked_sub(1)?;
     let mut doc = Vec::new();
@@ -20,18 +19,6 @@ pub fn doc_above(text: &str, line: u32) -> Option<String> {
         doc.push(rest.strip_prefix(' ').unwrap_or(rest).trim_end());
     }
     joined(doc.into_iter().rev())
-}
-
-/// The `//!` lines a document opens with, joined; `None` when there are
-/// none.
-pub fn doc_of_document(text: &str) -> Option<String> {
-    joined(
-        text.lines()
-            .map(str::trim_start)
-            .skip_while(|line| line.is_empty())
-            .map_while(|line| line.strip_prefix("//!"))
-            .map(|rest| rest.strip_prefix(' ').unwrap_or(rest).trim_end()),
-    )
 }
 
 /// `range` widened back over the `///` lines directly above it, so a
@@ -128,22 +115,12 @@ mod tests {
     fn a_declaration_owns_the_doc_lines_directly_above_it() {
         let text = "//! A preset\n//! that blurs.\n\n// not a doc\n/// Rows kept.\n///\n/// Second paragraph.\nkernel a.b@1 {\n    /// The flags.\n    input flags: Rows<Int>;\n\n    input bare: Rows<Int>;\n}\n";
         assert_eq!(
-            doc_of_document(text).as_deref(),
-            Some("A preset that blurs.")
-        );
-        assert_eq!(
             doc_above(text, 8).as_deref(),
             Some("Rows kept.\n\nSecond paragraph.")
         );
         assert_eq!(doc_above(text, 10).as_deref(), Some("The flags."));
         assert_eq!(doc_above(text, 12), None);
         assert_eq!(doc_above(text, 1), None);
-        assert_eq!(doc_of_document("kernel a.b@1 {}"), None);
-        assert_eq!(
-            doc_of_document("//! Place it with\n//!   node n: x@1 {}\n//! and size it.\n")
-                .as_deref(),
-            Some("Place it with\n  node n: x@1 {}\nand size it.")
-        );
     }
 
     #[test]

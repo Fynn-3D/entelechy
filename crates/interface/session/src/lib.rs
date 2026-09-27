@@ -31,7 +31,6 @@ pub mod package;
 pub mod play;
 pub mod replay;
 mod scene;
-pub mod search;
 mod session;
 mod sources;
 pub mod store;

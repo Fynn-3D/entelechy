@@ -1,8 +1,6 @@
 {"scene": "examples/life"}
 {"finding": "compose did not say it rewrites the scene's document on disk, nor which file", "send": {"op": "compose", "text": "{scene}"}, "expect": {"ok": true, "at": {"/ok/written": true}, "says": ["scene.osn"]}}
 {"finding": "a param's value was judged before its name, hiding where the param lives", "send": {"op": "param", "name": "brush", "value": "big"}, "expect": {"ok": false, "says": ["node `life` sets its own `brush`"]}}
-{"finding": "search did not say what its reach paths are written from", "send": {"op": "search", "text": "compact"}, "expect": {"has": ["/ok/base"]}}
-{"finding": "a search for `color` found nothing: the docs spelled it `colour`", "send": {"op": "search", "text": "color"}, "expect": {"has": ["/ok/capabilities/0"]}}
 {"send": {"op": "evaluate", "time": 0.0}}
 {"finding": "read answered any Field as one large base64 text", "send": {"op": "read", "node": "life"}, "expect": {"at": {"/ok/format": "summary"}, "has": ["/ok/summary"], "lacks": ["/ok/data"]}}
 {"finding": "a summary gave min, max and mean but no sum, so a total took a node of its own", "send": {"op": "read", "node": "life"}, "expect": {"has": ["/ok/summary/1/sum"]}}

@@ -462,26 +462,3 @@ pub fn value_from_json(json: &Json) -> Result<Value, Json> {
         )),
     }
 }
-
-/// A capability as `search` answers it.
-pub fn capability_json(capability: &orla_session::search::Capability) -> Json {
-    let ports = |ports: &[orla_session::search::Port]| {
-        ports
-            .iter()
-            .map(|p| json!({ "name": p.name, "type": p.ty, "doc": p.doc }))
-            .collect::<Vec<_>>()
-    };
-    json!({
-        "kind": capability.kind.name(),
-        "name": capability.name,
-        "doc": capability.doc,
-        "package": capability.package,
-        "reach": capability.reach,
-        "inputs": ports(&capability.inputs),
-        "params": ports(&capability.params),
-        "outputs": ports(&capability.outputs),
-        "requires": capability.requires,
-        "granted": capability.granted,
-        "published": capability.published,
-    })
-}

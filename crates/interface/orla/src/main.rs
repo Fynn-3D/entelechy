@@ -51,7 +51,6 @@ fn main() -> ExitCode {
         Some("graph") => graph(&args[1..]),
         Some("trace") => trace(&args[1..]),
         Some("help") => help(&args[1..]),
-        Some("search") => search(&args[1..]),
         Some("version") => {
             println!(
                 "orla = {}\norla.api = {}\norla.language = {}\norla.ir = {}\norla.package = {}",
@@ -705,127 +704,6 @@ fn replay(args: &[String]) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-/// `orla help`: the builtins, all or one.
-fn search(args: &[String]) -> Result<(), String> {
-    let mut query = orla_session::search::Query::default();
-    let (mut scene, mut words, mut limit, mut json) = (None, Vec::new(), 20usize, false);
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        let mut value = |flag: &str| {
-            iter.next()
-                .cloned()
-                .ok_or_else(|| format!("{flag} needs a value"))
-        };
-        match arg.as_str() {
-            "--takes" => query.takes = Some(value("--takes")?),
-            "--gives" => query.gives = Some(value("--gives")?),
-            "--requires" => query.requires = Some(value("--requires")?),
-            "--limit" => {
-                limit = value("--limit")?
-                    .parse()
-                    .map_err(|_| "--limit is a whole number".to_owned())?;
-            }
-            "--json" => json = true,
-            other if scene.is_none() && words.is_empty() && other.ends_with(".osn") => {
-                scene = Some(PathBuf::from(other));
-            }
-            other => words.push(other.to_owned()),
-        }
-    }
-    if !words.is_empty() {
-        query.text = Some(words.join(" "));
-    }
-    let base = orla_session::search::reach_base(scene.as_deref());
-    let found = match &scene {
-        Some(scene) => {
-            let runtime = Session::runtime_for("cpu", orla_session::Limits::default())?;
-            let store = std::sync::Arc::new(orla_session::Disk::with_packages(
-                orla_session::environment_packages(),
-            ));
-            let mut session = Session::open_in(store, scene, None, runtime);
-            session.sync();
-            session.search(&query)
-        }
-        None => orla_session::search::matching(
-            orla_session::search::in_packages(
-                &orla_session::Disk::with_packages(orla_session::environment_packages()),
-                Path::new("."),
-                &[],
-                &|_| true,
-            ),
-            &query,
-        ),
-    };
-    if json {
-        let answer = serde_json::json!({
-            "base": base.display().to_string(),
-            "count": found.len(),
-            "capabilities": found.iter().take(limit).map(orla_protocol::capability_json).collect::<Vec<_>>(),
-        });
-        println!("{answer}");
-        return Ok(());
-    }
-    let ports = |ports: &[orla_session::search::Port]| {
-        ports
-            .iter()
-            .map(|p| format!("{}: {}", p.name, p.ty.as_deref().unwrap_or("?")))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    if found.iter().any(|capability| capability.reach.is_some()) {
-        println!(
-            "(a path that is not an installed package's name is written from {})",
-            base.display()
-        );
-    }
-    for capability in found.iter().take(limit) {
-        let package = capability
-            .package
-            .as_deref()
-            .map(|p| format!("  ({p})"))
-            .unwrap_or_default();
-        println!("{} {}{package}", capability.kind.name(), capability.name);
-        if let Some(doc) = &capability.doc {
-            println!(
-                "  {}",
-                doc.split("\n\n")
-                    .next()
-                    .unwrap_or_default()
-                    .replace('\n', "\n  ")
-            );
-        }
-        println!(
-            "  ({}) -> ({})",
-            ports(&capability.inputs),
-            ports(&capability.outputs)
-        );
-        if !capability.params.is_empty() {
-            println!("  params: {}", ports(&capability.params));
-        }
-        if !capability.requires.is_empty() {
-            println!(
-                "  requires {}{}",
-                capability.requires.join(", "),
-                if capability.granted {
-                    ""
-                } else {
-                    " (not all granted)"
-                }
-            );
-        }
-        if let Some(reach) = &capability.reach {
-            println!("  {reach}");
-        }
-    }
-    if found.len() > limit {
-        println!("... {} more; --limit shows more", found.len() - limit);
-    }
-    if found.is_empty() {
-        return Err("nothing matches; `orla search` with no words lists everything reached".into());
-    }
-    Ok(())
 }
 
 fn help(args: &[String]) -> Result<(), String> {

@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orla_session::Session;
-use orla_session::search::Kind;
 
 const MANIFEST: &str = "//! Counting things.
 package tally@1 { language = 1; ir = 1; }
@@ -37,6 +36,7 @@ fn scene(reach: &str, asset: &str) -> String {
 input picture: Image = \"{asset}\";
 node start: Rows<Int> {{ domain = 3; value = 1; }}
 node twice: tally.twice@1 {{ counts <- start.result; }}
+node quad: graph \"{reach}/graphs/quad.osn\" {{ counts <- start.result; }}
 node shown: kernel {{
     requires {{ field.read; field.write; }}
     input p: Image <- picture;
@@ -44,6 +44,7 @@ node shown: kernel {{
     compute {{ return sample(p); }}
 }}
 output result <- twice.result;
+output four <- quad.result;
 output view <- shown.result;
 "
     )
@@ -89,7 +90,6 @@ fn a_package_is_what_its_layout_says() {
     let mut session = served(&dir, "tally.orlapkg", "../packages/tally.orlapkg/dot.ppm");
     let events = session.sync();
     let loaded = session.graph().is_some();
-    let capabilities = session.capabilities();
     for part in &orla_session::package::LAYOUT {
         match part.name {
             // The manifest: a language this Orla lacks refuses the
@@ -116,27 +116,26 @@ fn a_package_is_what_its_layout_says() {
                         .is_some()
                 );
             }
-            // A preset in `graphs/` is listed, reached by the package's
-            // name.
+            // A preset in `graphs/` is placed by the package's name.
             "graphs" => {
-                let preset = capabilities
-                    .iter()
-                    .find(|c| c.kind == Kind::Preset)
-                    .unwrap_or_else(|| panic!("no preset in {capabilities:?}"));
-                assert_eq!(preset.name, "tally.orlapkg/graphs/quad.osn");
-                // It requires what the Kernels it places require.
-                assert_eq!(preset.requires, ["field.read", "field.write"]);
-            }
-            // The docs are what search answers.
-            "docs" => {
-                let named = |name: &str| capabilities.iter().find(|c| c.name == name);
-                assert_eq!(
-                    named("tally.twice@1").and_then(|c| c.doc.as_deref()),
-                    Some("Each count doubled.")
+                let graph = session.graph().unwrap_or_else(|| panic!("{events:?}"));
+                assert!(
+                    graph.nodes.iter().any(|node| node.id.0 == "quad.again"),
+                    "{:?}",
+                    graph.nodes
                 );
+            }
+            // The docs are in the source, and travel with the Kernel.
+            "docs" => {
+                let kernel = session
+                    .runtime()
+                    .kernel(&"tally.twice@1".parse().unwrap())
+                    .unwrap();
                 assert_eq!(
-                    named("tally.orlapkg/graphs/quad.osn").and_then(|c| c.doc.as_deref()),
-                    Some("Doubles twice.")
+                    orla_language::doc::kernel_docs(kernel.source())
+                        .doc
+                        .as_deref(),
+                    Some("Each count doubled.")
                 );
             }
             // A file of the package is read where reads are held.
@@ -150,14 +149,7 @@ fn a_package_is_what_its_layout_says() {
                 );
             }
             // Found by its name, and reached by it.
-            "by name" => {
-                assert!(loaded, "{events:?}");
-                let twice = capabilities.iter().find(|c| c.name == "tally.twice@1");
-                assert_eq!(
-                    twice.and_then(|c| c.reach.as_deref()),
-                    Some("use \"tally.orlapkg\";")
-                );
-            }
+            "by name" => assert!(loaded, "{events:?}"),
             other => panic!("the layout's `{other}` has no proof here"),
         }
     }

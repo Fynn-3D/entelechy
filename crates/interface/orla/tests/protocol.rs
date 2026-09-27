@@ -879,40 +879,6 @@ fn help_answers_the_reference_or_a_name() {
     );
 }
 
-/// `search` finds, from a scene using one package, the Kernels and preset
-/// graphs of the packages beside it, with docs, types and the line that
-/// reaches them.
-#[test]
-fn search_finds_the_packages_beside_the_ones_a_scene_uses() {
-    let scene = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/text/scene.osn");
-    let responses = talk(
-        &scene,
-        &[
-            json!({ "id": 1, "op": "search", "text": "compact" }),
-            json!({ "id": 2, "op": "search", "takes": "Rows<Int>", "gives": "Rows<Int>", "limit": 2 }),
-        ],
-    );
-    let compact = &responses[0]["ok"];
-    let preset = &compact["capabilities"][0];
-    assert_eq!(preset["kind"], "preset", "{compact}");
-    assert_eq!(
-        preset["name"],
-        "../../packages/compact.orlapkg/graphs/compact.osn"
-    );
-    assert_eq!(preset["outputs"][1]["name"], "count");
-    assert_eq!(preset["outputs"][1]["type"], "Rows<Int>");
-    let kernel = &compact["capabilities"][1];
-    assert_eq!(kernel["reach"], "use \"../../packages/compact.orlapkg\";");
-    assert!(
-        compact["base"].as_str().unwrap().ends_with("examples/text"),
-        "{compact}"
-    );
-    assert!(kernel["doc"].as_str().is_some_and(|doc| !doc.is_empty()));
-    let typed = &responses[1]["ok"];
-    assert!(typed["count"].as_u64().unwrap() > 2);
-    assert_eq!(typed["capabilities"].as_array().unwrap().len(), 2);
-}
-
 /// `read` shows a picture as PNG and sums up any other Field; numbers come
 /// from `from` and `count`, at most 4096 at once.
 #[test]

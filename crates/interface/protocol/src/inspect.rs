@@ -217,21 +217,3 @@ pub(crate) fn help(request: &Request) -> Result<Json, Json> {
         })),
     }
 }
-
-/// The capabilities matching the request; see [`orla_session::search`].
-pub(crate) fn search(session: &Session, request: &Request) -> Result<Json, Json> {
-    let text = |name: &str| request.get(name).and_then(Json::as_str).map(str::to_owned);
-    let query = orla_session::search::Query {
-        text: text("text"),
-        takes: text("takes"),
-        gives: text("gives"),
-        requires: text("requires"),
-    };
-    let limit = request.get("limit").and_then(Json::as_u64).unwrap_or(20) as usize;
-    let found = session.search(&query);
-    Ok(json!({
-        "base": session.reach_base().display().to_string(),
-        "count": found.len(),
-        "capabilities": found.iter().take(limit).map(crate::wire::capability_json).collect::<Vec<_>>(),
-    }))
-}

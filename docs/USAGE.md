@@ -48,19 +48,6 @@ commands. The protocol's `help` answers the same, without `commands`
 ([REFERENCE](REFERENCE.md)); the language is in
 [DOCUMENTS](DOCUMENTS.md), whole programs in `examples/`.
 
-## Find what exists
-
-```sh
-orla search examples/text/scene.osn compact    # what the scene reaches, by words
-orla search --takes 'Rows<Int>' --gives 'Rows<Int>'
-orla search blur --json
-```
-
-Kernels and preset graphs, each with what it is for, its types, what it
-requires, and the line a scene writes to reach it; without a scene, the
-packages in `ORLA_PACKAGES` and those installed beside Orla. The
-protocol's `search` answers the same.
-
 ## Check a Kernel
 
 ```sh

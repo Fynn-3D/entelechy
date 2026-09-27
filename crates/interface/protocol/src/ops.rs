@@ -595,26 +595,6 @@ pub fn operations() -> Vec<Operation> {
             "`reference`, the whole of it as one Markdown text, and `versions`; or with `name`, every item of that name in full. An unknown name is an error with `similar`",
         ),
         op(
-            "search",
-            "The capabilities that exist: published Kernels, and every Kernel and preset graph of the packages this session reaches.",
-            vec![
-                may(
-                    "text",
-                    Ty::Str,
-                    "words in a name, package, doc or port name, any case",
-                ),
-                may(
-                    "takes",
-                    Ty::Str,
-                    "a type one of its inputs takes, as written: `Rows<Int>`",
-                ),
-                may("gives", Ty::Str, "a type one of its outputs gives"),
-                may("requires", Ty::Str, "a capability it requires"),
-                may("limit", Ty::Int, "the most to answer; 20 when not given"),
-            ],
-            "capabilities, nearest first, each with kind, name, doc, package, reach (the line a scene writes to use it: an installed package by its name, any other path relative to `base`), inputs, params, outputs (name, type, doc), requires, granted, published; base, the scene document's directory; count, how many matched",
-        ),
-        op(
             "trace",
             "Runs one element of a node's Kernel and shows every step of it.",
             with_context(vec![

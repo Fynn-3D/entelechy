@@ -1,5 +1,5 @@
 //! The permutation that orders `keys`, least significant bit first.
-//! Place it, by the path `search` gives as its `reach`, with
+//! Place it with
 //!   node order: graph "sort.orlapkg/graphs/sort.osn" {
 //!       keys <- cell.result; bits = 12;
 //!   }
