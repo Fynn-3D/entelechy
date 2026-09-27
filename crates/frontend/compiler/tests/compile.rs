@@ -364,6 +364,44 @@ fn scan_carries_a_value_and_is_checked() {
     );
 }
 
+/// A function's capabilities are its callers' to hold: a Kernel that
+/// never calls it compiles without them, one that calls it (itself or
+/// through another function) is refused where it calls, naming the
+/// function and the builtin that needs them.
+#[test]
+fn a_function_needs_its_capabilities_only_where_it_is_called() {
+    let document = orla_language::parse_document(
+        "fn beat(t: Float) -> Float { return t * rate(); }
+fn twice(t: Float) -> Float { return beat(t) * 2.0; }
+kernel t.plain@1 { requires { field.write; } output result: Rows<Float>; compute { return 2.0; } }
+kernel t.held@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return twice(1.0); } }
+kernel t.direct@1 { requires { field.write; } output result: Rows<Float>; compute { return beat(1.0); } }
+kernel t.through@1 { requires { field.write; } output result: Rows<Float>; compute { return twice(1.0); } }",
+    )
+    .unwrap();
+    let compiled = |name: &str| {
+        let kernel = document
+            .kernels
+            .iter()
+            .find(|k| k.id.as_ref().is_some_and(|id| id.value == name))
+            .unwrap();
+        orla_compiler::compile_kernel(kernel, None)
+    };
+    compiled("t.plain@1").unwrap_or_else(|e| panic!("{e}"));
+    compiled("t.held@1").unwrap_or_else(|e| panic!("{e}"));
+    let refused = |name: &str| compiled(name).unwrap_err().to_string();
+    assert!(
+        refused("t.direct@1").contains("`beat` calls `rate`, which needs `time.read`"),
+        "{}",
+        refused("t.direct@1")
+    );
+    assert!(
+        refused("t.through@1").contains("`twice` calls `rate`, which needs `time.read`"),
+        "{}",
+        refused("t.through@1")
+    );
+}
+
 #[test]
 fn rate_is_context_under_time_read() {
     let module = compile(

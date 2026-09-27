@@ -648,6 +648,7 @@ impl Builder<'_> {
                         }
                         ids.push(id);
                     }
+                    self.called(index as u32, span)?;
                     return Ok(self.emit(ret, Op::Call(index as u32, ids)));
                 }
                 if let Some(template) = self.shared.templates.iter().find(|t| t.name.value == name)

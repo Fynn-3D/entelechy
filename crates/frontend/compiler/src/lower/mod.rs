@@ -205,6 +205,7 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
         templates: Vec::new(),
         instances: RefCell::new(BTreeMap::new()),
         instantiating: RefCell::new(Vec::new()),
+        needs: RefCell::new(BTreeMap::new()),
         declared: kernel
             .functions
             .iter()
@@ -253,17 +254,19 @@ pub(crate) fn lower(kernel: &Kernel, id: Option<&KernelId>) -> Result<Module, Co
             shared.templates.push(declaration);
             continue;
         }
-        let function = lower_function(
+        let (function, needs) = lower_function(
             &shared,
             declaration,
             Vec::new(),
             Vec::new(),
             &declaration.name.value,
         )?;
+        let mut functions = shared.functions.borrow_mut();
         shared
-            .functions
+            .needs
             .borrow_mut()
-            .push((declaration.name.value.clone(), function));
+            .insert(functions.len() as u32, needs);
+        functions.push((declaration.name.value.clone(), function));
     }
     let expected = match manifest.outputs.first() {
         Some(port) => port.element(),
@@ -405,6 +408,10 @@ struct Shared<'a> {
     instances: RefCell<BTreeMap<Instance, u32>>,
     /// Templates being instantiated; a template calling itself is refused.
     instantiating: RefCell<Vec<String>>,
+    /// What each function needs, by its index in `functions`: each
+    /// capability with the builtin that needs it, checked where a
+    /// Kernel's own code calls the function.
+    needs: RefCell<BTreeMap<u32, Vec<(Capability, String)>>>,
     /// Every declared function name, in order, for diagnostics on a call
     /// to one below the caller.
     declared: Vec<String>,
@@ -421,7 +428,7 @@ fn lower_function(
     fields: Vec<(String, u32)>,
     generics: Vec<(String, Type)>,
     name: &str,
-) -> Result<Function, CompileError> {
+) -> Result<(Function, Vec<(Capability, String)>), CompileError> {
     let structs = shared.structs;
     let bound = |ty: &Spanned<String>| -> Option<Type> {
         generics
@@ -430,6 +437,7 @@ fn lower_function(
             .map(|(_, bound)| *bound)
     };
     let mut builder = Builder::new(shared, false, name, fields);
+    builder.needs = Some(RefCell::new(Vec::new()));
     for (name, ty) in &declaration.args {
         if builder.fields.iter().any(|(field, _)| field == &name.value) {
             continue;
@@ -483,7 +491,12 @@ fn lower_function(
             ),
         ));
     }
-    Ok(builder.finish(vec![result]))
+    let needs = builder
+        .needs
+        .take()
+        .map(RefCell::into_inner)
+        .unwrap_or_default();
+    Ok((builder.finish(vec![result]), needs))
 }
 
 /// A template instance: its name, the input ports bound to its Field
@@ -508,6 +521,9 @@ struct Builder<'a> {
     manifest: &'a Manifest,
     shared: &'a Shared<'a>,
     is_entry: bool,
+    /// In a function's body, what it needs, each capability with the
+    /// builtin that needs it; a Kernel's own code needs its `requires`.
+    needs: Option<RefCell<Vec<(Capability, String)>>>,
     name: String,
     args: Vec<(String, Type)>,
     /// Field parameters bound to input ports, for a template's instance.
@@ -548,6 +564,7 @@ impl<'a> Builder<'a> {
             manifest: shared.manifest,
             shared,
             is_entry,
+            needs: None,
             name: name.to_owned(),
             args: Vec::new(),
             fields,
@@ -1030,12 +1047,13 @@ impl<'a> Builder<'a> {
                     (error, _) => error,
                 });
                 self.shared.instantiating.borrow_mut().pop();
-                let instance = instance?;
+                let (instance, needs) = instance?;
                 let index = {
                     let mut functions = self.shared.functions.borrow_mut();
                     functions.push((format!("{name}<{bound}>"), instance));
                     (functions.len() - 1) as u32
                 };
+                self.shared.needs.borrow_mut().insert(index, needs);
                 self.shared.instances.borrow_mut().insert(key, index);
                 index
             }
@@ -1044,6 +1062,7 @@ impl<'a> Builder<'a> {
             let functions = self.shared.functions.borrow();
             functions[index as usize].1.result_type()
         };
+        self.called(index, span)?;
         Ok(self.emit(ret, Op::Call(index, values)))
     }
 
@@ -1112,6 +1131,13 @@ impl<'a> Builder<'a> {
     }
 
     fn require(&self, name: &str, capability: Capability, span: Span) -> Result<(), CompileError> {
+        if let Some(needs) = &self.needs {
+            let mut needs = needs.borrow_mut();
+            if !needs.iter().any(|(had, _)| *had == capability) {
+                needs.push((capability, name.to_owned()));
+            }
+            return Ok(());
+        }
         if self.manifest.requires.contains(capability) {
             Ok(())
         } else {
@@ -1120,6 +1146,35 @@ impl<'a> Builder<'a> {
                 format!("`{name}` needs `{capability}`; add it to `requires`"),
             ))
         }
+    }
+
+    /// A call to the function at `index`: what it needs is the caller's
+    /// to hold, a function's passed on to its own callers.
+    fn called(&self, index: u32, span: Span) -> Result<(), CompileError> {
+        let needs = self
+            .shared
+            .needs
+            .borrow()
+            .get(&index)
+            .cloned()
+            .unwrap_or_default();
+        for (capability, via) in needs {
+            if let Some(own) = &self.needs {
+                let mut own = own.borrow_mut();
+                if !own.iter().any(|(had, _)| *had == capability) {
+                    own.push((capability, via));
+                }
+            } else if !self.manifest.requires.contains(capability) {
+                let function = self.shared.functions.borrow()[index as usize].0.clone();
+                return Err(semantic(
+                    span,
+                    format!(
+                        "`{function}` calls `{via}`, which needs `{capability}`; add it to `requires`"
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// An integer vector address converted to the float one a Field
