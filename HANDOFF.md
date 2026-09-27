@@ -32,15 +32,16 @@ Verified surface, as of `main`:
 
 ## Next
 
-v0.0.2-alpha.2 is on `feat/typed-protocol`: the protocol's operation
-table types each field and the server checks every request against it;
-each operation's request as JSON Schema; an MCP door (`orla serve
-<scene> --mcp`) whose tools are the operations. Accepted by a fresh
-agent that reached Orla only over MCP. It is merged, tagged and
-published on the user's word; a release is cut once a whole batch is
-done and accepted, never per fix.
+The next batch is the user's choice. Found wanting by the MCP trials and
+not taken up, none of them misleading or blocking:
 
-Left from that acceptance, not taken up: a field's type is checked
-before the operation's own hint about its meaning is given; `compose`
-edits append without a blank line; `read` answers a large picture as
-base64 in full.
+- `search` answers every capability with its whole doc; a broad word
+  fills a page.
+- `help` shows each form as one line; no whole worked scene.
+- `read` of a one-element output answers its summary; `from` gives the
+  value.
+
+An agent trial runs a fresh agent against a release copy over MCP only;
+what it finds wanting and is fixed goes into
+`crates/interface/orla/tests/findings/`. A release is cut once a whole
+batch is done and accepted, on the user's word, never per fix.
