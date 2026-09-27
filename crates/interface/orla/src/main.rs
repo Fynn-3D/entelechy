@@ -562,7 +562,6 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut listen = None;
     let mut window = None;
     let mut origins = Vec::new();
-    let mut framing = orla_protocol::Framing::Lines;
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
         if options.read(&arg, &mut || iter.next())? {
@@ -573,7 +572,6 @@ fn serve(args: &[String]) -> Result<(), String> {
             "--window" => window = Some(orla_session::parse_window(&value("--window")?)?),
             "--listen" => listen = Some(value("--listen")?),
             "--allow-origin" => origins.push(value("--allow-origin")?),
-            "--mcp" => framing = orla_protocol::Framing::Mcp,
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -593,9 +591,9 @@ fn serve(args: &[String]) -> Result<(), String> {
             orla_protocol::listen(address, sink.clone(), origins).map_err(|e| e.to_string())?;
         eprintln!("listening on {bound}");
     }
-    if orla_protocol::stdin_into(sink, framing).is_err() {
+    if orla_protocol::stdin_into(sink).is_err() {
         // Without a reader thread, requests are answered in turn here.
-        for incoming in orla_protocol::stdin_lines(framing) {
+        for incoming in orla_protocol::stdin_lines() {
             if orla_protocol::answer(&mut session, incoming) {
                 break;
             }

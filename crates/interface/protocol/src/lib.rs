@@ -21,7 +21,6 @@ pub mod envelope;
 mod fields;
 pub mod help;
 mod inspect;
-pub mod mcp;
 pub mod ops;
 mod request;
 mod run;
@@ -38,7 +37,7 @@ use crate::request::Request;
 
 pub use answers::{Answers, Served};
 pub use envelope::{envelope, parse_request};
-pub use transport::{Framing, Incoming, Reply, listen, serve, stdin_into, stdin_lines};
+pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     capability_json, context_of, report_json, trace_json, type_name, value_from_json, value_json,
     words_json, words_text,
@@ -281,35 +280,6 @@ mod tests {
             )
             .is_ok()
         );
-    }
-
-    /// Every operation's request is an object of its fields and no others,
-    /// as JSON Schema, the needed ones required.
-    #[test]
-    fn every_operation_has_a_schema_of_its_fields() {
-        for op in ops::operations() {
-            let schema = op.schema();
-            assert_eq!(schema["type"], "object", "{}", op.name);
-            assert_eq!(schema["additionalProperties"], false, "{}", op.name);
-            let properties = schema["properties"].as_object().unwrap();
-            assert_eq!(properties.len(), op.fields.len(), "{}", op.name);
-            for field in &op.fields {
-                assert!(
-                    properties[field.name]["description"].is_string(),
-                    "{}.{}",
-                    op.name,
-                    field.name
-                );
-            }
-        }
-        let publish = ops::operation("publish").unwrap().schema();
-        assert_eq!(publish["required"], json!(["source"]));
-        assert_eq!(
-            publish["properties"]["expect"]["anyOf"][0]["enum"],
-            json!(["absent", "any"])
-        );
-        let evaluate = ops::operation("evaluate").unwrap().schema();
-        assert_eq!(evaluate["properties"]["pointer"]["maxItems"], 2);
     }
 
     /// A float answers as the decimal written for it.

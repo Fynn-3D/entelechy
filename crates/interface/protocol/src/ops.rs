@@ -169,51 +169,6 @@ impl Ty {
             Self::Either(tys) => is(tys.iter().any(|ty| ty.check(value, at).is_ok())),
         }
     }
-
-    /// As JSON Schema.
-    pub fn schema(&self) -> Json {
-        match self {
-            Self::Str => json!({ "type": "string" }),
-            Self::Int => json!({ "type": "integer" }),
-            Self::Num => json!({ "type": "number" }),
-            Self::Bool => json!({ "type": "boolean" }),
-            Self::Null => json!({ "type": "null" }),
-            Self::Value => json!({}),
-            Self::Object => json!({ "type": "object" }),
-            Self::Words(words) => json!({ "type": "string", "enum": words }),
-            Self::Numbers(names) => json!({
-                "type": "array",
-                "items": { "type": "number" },
-                "minItems": names.len(),
-                "maxItems": names.len(),
-                "description": format!("[{}]", names.join(", ")),
-            }),
-            Self::List(item) => json!({ "type": "array", "items": item.schema() }),
-            Self::Record(fields) => fields_schema(fields),
-            Self::Map(key, value) => json!({
-                "type": "object",
-                "additionalProperties": value.schema(),
-                "description": format!("keys: {key}"),
-            }),
-            Self::Either(tys) => json!({ "anyOf": tys.iter().map(Ty::schema).collect::<Vec<_>>() }),
-        }
-    }
-}
-
-/// An object of `fields` and no others, as JSON Schema.
-fn fields_schema(fields: &[Field]) -> Json {
-    let mut properties = serde_json::Map::new();
-    for field in fields {
-        let mut schema = field.ty.schema();
-        schema["description"] = json!(field.doc);
-        properties.insert(field.name.to_owned(), schema);
-    }
-    json!({
-        "type": "object",
-        "properties": properties,
-        "required": fields.iter().filter(|f| f.required).map(|f| f.name).collect::<Vec<_>>(),
-        "additionalProperties": false,
-    })
 }
 
 /// `advance`'s `until`: a value to watch and a bound on it.
@@ -566,7 +521,7 @@ pub fn operations() -> Vec<Operation> {
                     "how many elements from `from` to answer as numbers, at most 4096; 1 when not given",
                 ),
             ],
-            "a picture: width, height, format, data (base64; over MCP the picture itself). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
+            "a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
         ),
         op(
             "write",
@@ -836,13 +791,7 @@ impl Operation {
                 "doc": field.doc,
             })).collect::<Vec<_>>(),
             "answer": self.answer,
-            "schema": self.schema(),
         })
-    }
-
-    /// Its request's fields, beside `op` and `id`, as JSON Schema.
-    pub fn schema(&self) -> Json {
-        fields_schema(&self.fields)
     }
 }
 

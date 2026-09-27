@@ -467,9 +467,7 @@ line on stdout, and on every connection to --listen, where a client's
 quit ends only its connection. A browser's page connects from this
 machine or from a file; a page elsewhere only from an origin
 --allow-origin names (`https://host:port`). --window is what evaluations that name
-no window see (the protocol's `window` op changes it). With --mcp, stdin
-and stdout speak MCP instead: each operation but quit a tool, for any MCP client
-(`orla serve scene.osn --mcp` as its server command). See
+no window see (the protocol's `window` op changes it). See
 docs/PROTOCOL.md.",
             flags: with(
                 vec![
@@ -483,10 +481,6 @@ docs/PROTOCOL.md.",
                         "--allow-origin",
                         "<origin>",
                         "A page's origin elsewhere that may connect.",
-                    ),
-                    switch(
-                        "--mcp",
-                        "Speak MCP on stdin and stdout: each operation but quit a tool.",
                     ),
                 ],
                 session_flags(),

@@ -54,18 +54,6 @@ pub enum Reply {
     /// answer is made, so a `quit`'s answer is out before the process
     /// ends.
     Stdout,
-    /// Standard output as an MCP server's tool result, under the call's
-    /// JSON-RPC id ([`crate::mcp::result`]).
-    Mcp(serde_json::Value),
-}
-
-/// How requests arrive on standard input.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Framing {
-    /// The protocol's own lines.
-    Lines,
-    /// MCP: JSON-RPC 2.0, each operation but `quit` a tool ([`crate::mcp`]).
-    Mcp,
 }
 
 impl Reply {
@@ -76,12 +64,6 @@ impl Reply {
                 let _ = sender.send(line);
             }
             Self::Stdout => write_stdout(&line),
-            Self::Mcp(id) => {
-                // The empty line that closes a connection has no result.
-                if !line.is_empty() {
-                    write_stdout(&crate::mcp::result(id, &line));
-                }
-            }
         }
     }
 }
@@ -97,14 +79,11 @@ fn write_stdout(line: &str) {
 /// Feeds standard input's requests to `sink` from its own thread. Where no
 /// thread starts (WebAssembly) it returns the error, and the caller reads
 /// [`stdin_lines`] itself, answering each before the next.
-pub fn stdin_into(
-    sink: std::sync::mpsc::Sender<Incoming>,
-    framing: Framing,
-) -> std::io::Result<()> {
+pub fn stdin_into(sink: std::sync::mpsc::Sender<Incoming>) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("orla stdin".into())
         .spawn(move || {
-            for incoming in stdin_lines(framing) {
+            for incoming in stdin_lines() {
                 if sink.send(incoming).is_err() {
                     break;
                 }
@@ -113,34 +92,17 @@ pub fn stdin_into(
         .map(drop)
 }
 
-/// Standard input's requests, as they arrive. Under MCP, what needs no
-/// session (`initialize`, `tools/list`, `ping`) is answered here, and a
-/// tool call arrives as its operation's request.
-pub fn stdin_lines(framing: Framing) -> impl Iterator<Item = Incoming> {
+/// Standard input's requests, as they arrive.
+pub fn stdin_lines() -> impl Iterator<Item = Incoming> {
     std::io::stdin()
         .lines()
         .map_while(Result::ok)
         .filter(|line| !line.trim().is_empty())
-        .filter_map(move |line| match framing {
-            Framing::Lines => Some(Incoming {
-                line,
-                reply: Reply::Stdout,
-                local: true,
-                from: "stdin".into(),
-            }),
-            Framing::Mcp => match crate::mcp::step(&line) {
-                crate::mcp::Step::Answer(answer) => {
-                    write_stdout(&answer);
-                    None
-                }
-                crate::mcp::Step::Quiet => None,
-                crate::mcp::Step::Call { id, request } => Some(Incoming {
-                    line: request.to_string(),
-                    reply: Reply::Mcp(id),
-                    local: true,
-                    from: "mcp".into(),
-                }),
-            },
+        .map(|line| Incoming {
+            line,
+            reply: Reply::Stdout,
+            local: true,
+            from: "stdin".into(),
         })
 }
 
