@@ -1,7 +1,8 @@
 //! Fields flowing through a scene: a Kernel declared once by its id and
 //! run by a node, a param the caller sets, a Field filled with a value,
-//! an input read from text, state carried from the last frame with `<~`,
-//! and the builtins that read a Field.
+//! an input read from text, state carried from the last frame with `<~`
+//! by a node and by a Kernel written in place, and the builtins that read
+//! a Field.
 //! shows: kernel, node, param, fill, input, previous, at, fetch, at_linear, sample, count, size, isize, element, coord
 kernel fields.decay@1 {
     requires { field.read; field.write; }
@@ -20,6 +21,13 @@ node decay: fields.decay@1 {
     rate = rate;
 }
 
+node frames: kernel {
+    requires { field.read; field.write; }
+    input before: Rows<Float> <~ frames.result from start.result;
+    output result: Rows<Float>;
+    compute { return sample(before) + 1.0; }
+}
+
 node plane: kernel {
     requires { field.write; }
     domain = vec2(4, 2);
@@ -32,13 +40,14 @@ node read: kernel {
     input level: Rows<Float> <- decay.result;
     input letters: Rows<Int> <- word;
     input grid: Grid<Float> <- plane.result;
+    input seen: Rows<Float> <- frames.result;
     domain = 4;
     output result: Rows<Float>;
     compute {
         let i = element();
         let cell = at(grid, vec2(1.0, 1.0)) + fetch(grid, ivec2(2, 0)) + at_linear(level, 1.5);
         let extent = size(grid).x + float(isize(grid).y + count(letters));
-        return sample(level) + at(level, i) + cell + extent + float(at(letters, 0));
+        return sample(level) + at(level, i) + cell + extent + float(at(letters, 0)) + sample(seen);
     }
 }
 

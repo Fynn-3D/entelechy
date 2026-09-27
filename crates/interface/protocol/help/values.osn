@@ -1,7 +1,7 @@
-//! Values a Kernel computes with: names bound by `let`, choices by `if`
-//! and `match`, truth by `&&`, `||` and `!`, arrays, a struct of its own,
-//! and a function over any type.
-//! shows: let, if, and, match, array, struct, type, fn, element, float, Rows, Float, Int, reserved
+//! Values a Kernel computes with: names bound by `let`, the operators,
+//! choices by `if` and `match`, truth by `&&`, `||` and `!`, arrays, a
+//! struct of its own, and a function over any type.
+//! shows: let, operators, if, and, match, array, struct, type, fn, element, float, Rows, Float, Int, reserved
 struct Step { at: Float; size: Int; }
 type Values = Rows<Float>;
 
@@ -18,10 +18,12 @@ node values: kernel {
         let { at, size: width } = wider;
         let even = i % 2 == 0;
         let small = i < 4 && !(i == 0 || i == 1);
+        let bits = ((i << 3) >> 1 >>> 1 ^ (i & 3) | 8) % 5 - i / 2 * 1;
+        let order = i != 3 && i <= 6 && i > -1 && i >= bits - bits;
         let tier = match i { 0 => 0.0, 1 | 2 => 1.0, 3..6 => 2.0, 6..=7 => 3.0, _ => 4.0 };
         let table = [1.0, 2.0, 4.0];
         let zeros = [0.0; 4];
-        let pick = if even { table[1] } else { zeros[0] };
+        let pick = if even && order { table[1] } else { zeros[0] };
         if small { return twice(at) + tier; }
         return pick + float(width);
     }

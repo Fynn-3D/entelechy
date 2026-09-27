@@ -340,7 +340,7 @@ pub fn forms() -> Vec<Form> {
             "output",
             "kernel",
             "output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to \"saves/n.field\";",
-            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, and one written `to` a file is saved after each evaluation that changed it, where allowed.",
+            "In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame, and one written `to` a file is saved after each evaluation that changed it, where allowed.",
         ),
         form(
             "type",
@@ -359,6 +359,12 @@ pub fn forms() -> Vec<Form> {
             "expression",
             "if condition { a } else { b }   if condition { return a; }",
             "Both arms give one type and only the arm taken runs, which a trace shows; with no `else`, among a block's statements, it guards, and the rest of the block is its other arm.",
+        ),
+        form(
+            "operators",
+            "expression",
+            "a + b   a - b   a * b   a / b   a % b   a << b   a >> b   a >>> b   a & b   a ^ b   a | b   a == b   a != b   a < b   a <= b   a > b   a >= b",
+            "Arithmetic on numbers and, component by component, vectors, `/` and `%` on Ints truncating toward zero; on Ints only, `<<`, `>>` keeping the sign, `>>>` filling with zeros, and `&`, `^`, `|` bit by bit; a comparison gives a Bool. From the tightest: unary `-` and `!`; `*` `/` `%`; `+` `-`; the shifts; `&`; `^`; `|`; the comparisons; `&&`; `||`.",
         ),
         form(
             "and",
@@ -466,13 +472,13 @@ pub fn forms() -> Vec<Form> {
             "inline",
             "graph",
             "node name: kernel { ... input x: Image <- src; ... }",
-            "A Kernel written in place; its inputs carry their wiring, a param whose default names a scene param follows that param (`param gain: Float = amount;`), and the session publishes it under the document's name.",
+            "A Kernel written in place; its inputs carry their wiring, `<-` or `<~` with its initial source (`input s: Rows<Float> <~ name.result from start.result;`), a param whose default names a scene param follows that param (`param gain: Float = amount;`), and the session publishes it under the document's name.",
         ),
         form(
             "fill",
             "graph",
             "node zeros: Rows<Float> { domain = 65; value = 0.5; }",
-            "A node that is a Field rather than a Kernel: its element's zero, or the `value` given, over the domain; the type may be an alias a used document declares.",
+            "A node that is a Field rather than a Kernel: its element's zero, or the `value` given, over the domain. Its element is a Float, Int, Bool, Vec2, Vec3 or Vec4 (a pixel for `Image`), or an alias of one; a struct is filled by a Kernel.",
         ),
         form(
             "graph",

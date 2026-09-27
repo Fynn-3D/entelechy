@@ -47,3 +47,18 @@ fn every_whole_declaration_help_shows_parses() {
         wrong.join("\n")
     );
 }
+
+/// Every operator help lists is one the language takes between two values.
+#[test]
+fn every_operator_help_lists_parses_between_two_values() {
+    let operators = help::forms()
+        .into_iter()
+        .find(|form| form.name == "operators")
+        .expect("the operators are a form");
+    for piece in operators.shape.split("   ").map(str::trim) {
+        let text = format!(
+            "kernel t.k@1 {{ requires {{ field.write; }} output probe: Rows<Int>; compute {{ let a = 1; let b = 2; let c = {piece}; return 0; }} }}"
+        );
+        assert!(parse_document(&text).is_ok(), "`{piece}` does not parse");
+    }
+}

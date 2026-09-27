@@ -219,7 +219,11 @@ fn fields_schema(fields: &[Field]) -> Json {
 /// `advance`'s `until`: a value to watch and a bound on it.
 fn until() -> Ty {
     Ty::Record(vec![
-        needs("target", Ty::Str, "the value watched: `node.port[i].field`"),
+        needs(
+            "target",
+            Ty::Str,
+            "the value watched: `node.port[i]`, or `.field` of it",
+        ),
         may("below", Ty::Num, "stop once it is below this"),
         may("above", Ty::Num, "stop once it is above this"),
         may("equals", Ty::Num, "stop once it equals this"),
@@ -501,7 +505,7 @@ pub fn operations() -> Vec<Operation> {
                 may(
                     "until",
                     until(),
-                    "stops when `node.port[i].field` passes the bound",
+                    "stops when `node.port[i]`, or `.field` of it, passes the bound",
                 ),
                 may(
                     "save",

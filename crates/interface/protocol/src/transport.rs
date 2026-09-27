@@ -64,7 +64,7 @@ pub enum Reply {
 pub enum Framing {
     /// The protocol's own lines.
     Lines,
-    /// MCP: JSON-RPC 2.0, each operation a tool ([`crate::mcp`]).
+    /// MCP: JSON-RPC 2.0, each operation but `quit` a tool ([`crate::mcp`]).
     Mcp,
 }
 

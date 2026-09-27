@@ -116,13 +116,13 @@ pub fn forms() -> Vec<Form> {
         ),
         form(
             "expect",
-            "expect <node.port[i].field> = <value>... [<tolerance>]",
-            "a field of an element of a node's output: ints and bools exactly, floats and vectors within the tolerance",
+            "expect <node.port[i][.field]> = <value>... [<tolerance>]",
+            "an element of a node's output, or a field of it: ints and bools exactly, floats and vectors within the tolerance",
             &["expect step.result[0].score = 1"],
         ),
         form(
             "expect",
-            "expect <node.port[i].field> < | <= | > | >= <number>...",
+            "expect <node.port[i][.field]> < | <= | > | >= <number>...",
             "every component of it past a bound",
             &["expect fall.result[0].speed > 2.5"],
         ),

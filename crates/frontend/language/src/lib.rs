@@ -295,8 +295,8 @@ pub enum NodeKind {
     /// Another `.osn` document as a node: `node fx: graph "path";`, wired
     /// and set like a Kernel.
     SubGraph(Spanned<String>),
-    /// A filled Field of a type: zeros, or `value = 0.5;`. An alias or
-    /// struct element type needs the `value`.
+    /// A filled Field of a type: zeros, or `value = 0.5;`; its element a
+    /// scalar or vector, or an alias of one.
     Fill(Spanned<String>),
 }
 

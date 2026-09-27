@@ -734,6 +734,8 @@ form merge
   compute { ... } merge(a, b) { ... }
 form node
   node name: fx.glow@1 { port <- source.result; param = 2; domain = vec2(w, h); }
+form operators
+  a + b   a - b   a * b   a / b   a % b   a << b   a >> b   a >>> b   a & b   a ^ b   a | b   a == b   a != b   a < b   a <= b   a > b   a >= b
 form output
   output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to "saves/n.field";
 form package

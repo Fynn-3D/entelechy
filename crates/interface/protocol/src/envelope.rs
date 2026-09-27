@@ -192,7 +192,7 @@ pub const DOORS: [Door; 4] = [
     Door {
         name: "mcp",
         opened: "orla serve <scene.osn> --mcp",
-        doc: "MCP over standard input and output: each operation a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result.",
+        doc: "MCP over standard input and output: each operation but `quit` a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result; the client ends the session by closing standard input.",
     },
 ];
 

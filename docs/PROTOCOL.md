@@ -84,7 +84,7 @@ through (`help`'s `wire` section answers the same):
 | stdin | `orla serve <scene.osn>` | Request lines on standard input, answer lines on standard output; `quit` ends the process. |
 | socket | `orla serve <scene.osn> --listen <host:port>` | The same lines over each TCP connection to the address; `quit` ends the connection. |
 | websocket | `orla serve <scene.osn> --listen <host:port>` | The same lines as WebSocket text messages to the same address, one request a message. |
-| mcp | `orla serve <scene.osn> --mcp` | MCP over standard input and output: each operation a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result. |
+| mcp | `orla serve <scene.osn> --mcp` | MCP over standard input and output: each operation but `quit` a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result; the client ends the session by closing standard input. |
 <!-- end -->
 
 A refusal whose next step is known carries it in `try`: the requests to

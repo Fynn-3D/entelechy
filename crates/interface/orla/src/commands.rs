@@ -153,8 +153,9 @@ counted (`work spend`) and looked at (`work look`) included.",
             args: "<scene.osn>",
             summary: "Evaluate a scene once, or keep running it as its files change.",
             doc: "\
-Evaluate a scene; write its picture to --out and each --save, in the
-format each file's extension names, and nothing else. With --watch, keep running and
+Evaluate a scene at time zero; write its picture to --out and each --save, in the
+format each file's extension names, and nothing else. With --watch, keep running, at
+the seconds since it started, and
 republish Kernels as their files change; a rejected change keeps the
 running version. --window is the window a scene sized by `window()`
 would fill, in pixels, with its scale factor.
@@ -209,7 +210,10 @@ take it too.",
 Step the scene for n frames at the rate (60 by default) and write each
 frame's picture as <dir>/0000.png, 0001.png, ... and the sound output,
 block after block, as <dir>/sound.wav at the sound rate (48000 by
-default, what Kernels read as rate()). The clock is the frame count
+default, what Kernels read as rate()); a scene without a picture or a
+sound writes none of it. The blocks are joined as they come, whatever
+their length: a block of rate() / fps samples keeps the sound in time
+with the frames. The clock is the frame count
 over the rate, so a render is the same every time; async nodes are
 waited for after every frame. ffmpeg makes a video of the directory.
 --save writes a node's output after the last frame, as run's does:
@@ -353,7 +357,7 @@ and the package format, each its own.",
             name: "package",
             args: "<dir.orlapkg>",
             summary: "Check a package directory and say what it holds.",
-            doc: "Check a package directory's manifest and say what it holds.",
+            doc: "Check a package directory as `orla check` checks a document: its manifest, the Kernels it uses compiled, and each preset graph read; then say what it holds. A preset's Kernels are found where a scene places it.",
             flags: Vec::new(),
             passes: false,
         },
@@ -464,7 +468,7 @@ quit ends only its connection. A browser's page connects from this
 machine or from a file; a page elsewhere only from an origin
 --allow-origin names (`https://host:port`). --window is what evaluations that name
 no window see (the protocol's `window` op changes it). With --mcp, stdin
-and stdout speak MCP instead: each operation a tool, for any MCP client
+and stdout speak MCP instead: each operation but quit a tool, for any MCP client
 (`orla serve scene.osn --mcp` as its server command). See
 docs/PROTOCOL.md.",
             flags: with(
@@ -482,7 +486,7 @@ docs/PROTOCOL.md.",
                     ),
                     switch(
                         "--mcp",
-                        "Speak MCP on stdin and stdout: each operation a tool.",
+                        "Speak MCP on stdin and stdout: each operation but quit a tool.",
                     ),
                 ],
                 session_flags(),

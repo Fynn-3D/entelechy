@@ -159,10 +159,11 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world.
 - **requires**: `requires { field.read; field.write; time.read; input.read; }` The capabilities a Kernel uses, and no others: reading inputs, writing outputs, the clock, the pointer, keys and window.
 - **input**: `input x: Image;   = "atlas.png";   = text "ORLA";   = frames "clip/" at 30;` In a Kernel, a Field it reads, bound by the node that runs it (`source <- other.result;`); in a scene, a Field the caller supplies, or one the Host reads from a file, from text, or frame by frame from a directory.
 - **param**: `param gain: Float = 1.0;` In a Kernel, a value the node that runs it may set (`gain = 0.5;`), with its default; in a scene, a value the caller sets (`--param`, the protocol's `param`) and its nodes read by name.
-- **output**: `output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to "saves/n.field";` In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, and one written `to` a file is saved after each evaluation that changed it, where allowed.
+- **output**: `output result: Grid<Vec4>;   output shown <- node.port;   output kept <- node.port to "saves/n.field";` In a Kernel, a Field it writes, an element per element of its domain (a map may write several); in a scene, a named result: the first picture is what it shows, the first row of one or two Floats (mono, stereo) what it plays, a block each frame, and one written `to` a file is saved after each evaluation that changed it, where allowed.
 - **type**: `type Cells = Grid<Int>;   struct Cell { alive: Int; age: Float; }` A name for a port type, or a struct of named fields, shared by the Kernels of a document.
 - **let**: `let name = expr;   let { x, y: top } = value;` A binding, immutable and scoped to its block; `let _ = put(...)` is a statement for its effect. A `{ ... }` names fields of one value instead, each under its own name or the one written after `:`.
 - **if**: `if condition { a } else { b }   if condition { return a; }` Both arms give one type and only the arm taken runs, which a trace shows; with no `else`, among a block's statements, it guards, and the rest of the block is its other arm.
+- **operators**: `a + b   a - b   a * b   a / b   a % b   a << b   a >> b   a >>> b   a & b   a ^ b   a | b   a == b   a != b   a < b   a <= b   a > b   a >= b` Arithmetic on numbers and, component by component, vectors, `/` and `%` on Ints truncating toward zero; on Ints only, `<<`, `>>` keeping the sign, `>>>` filling with zeros, and `&`, `^`, `|` bit by bit; a comparison gives a Bool. From the tightest: unary `-` and `!`; `*` `/` `%`; `+` `-`; the shifts; `&`; `^`; `|`; the comparisons; `&&`; `||`.
 - **and**: `a && b   a || b   !a` Truth: `&&` and `||` ask the other side only where the first settles nothing, so a guard guards and what it guards does not run.
 - **match**: `match i { 0 => a, 1 | 2 => b, 8..16 => c, 16..=31 => d, _ => e }` On an Int: the arm whose values hold it, else the `_` arm, which comes last and is required; the GPU runs it as a switch. A range is the values it holds, `..` stopping before its end and `..=` taking it, at most 256 to an arm.
 - **loop**: `loop n with x = init until done { next }` A bounded fold: `n` is a literal, which is its bound, or any Int expression read once and clamped to 0..=65536; `index()` is the iteration, and `until` stops it early, as `break` does from inside.
@@ -186,8 +187,8 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world.
 ### scene: how a scene is written: nodes, bindings, inputs and packages
 
 - **node**: `node name: fx.glow@1 { port <- source.result; param = 2; domain = vec2(w, h); }` A node runs a Kernel: its inputs wired at the consumer, its parameters set, its extent explicit or the first input's.
-- **inline**: `node name: kernel { ... input x: Image <- src; ... }` A Kernel written in place; its inputs carry their wiring, a param whose default names a scene param follows that param (`param gain: Float = amount;`), and the session publishes it under the document's name.
-- **fill**: `node zeros: Rows<Float> { domain = 65; value = 0.5; }` A node that is a Field rather than a Kernel: its element's zero, or the `value` given, over the domain; the type may be an alias a used document declares.
+- **inline**: `node name: kernel { ... input x: Image <- src; ... }` A Kernel written in place; its inputs carry their wiring, `<-` or `<~` with its initial source (`input s: Rows<Float> <~ name.result from start.result;`), a param whose default names a scene param follows that param (`param gain: Float = amount;`), and the session publishes it under the document's name.
+- **fill**: `node zeros: Rows<Float> { domain = 65; value = 0.5; }` A node that is a Field rather than a Kernel: its element's zero, or the `value` given, over the domain. Its element is a Float, Int, Bool, Vec2, Vec3 or Vec4 (a pixel for `Image`), or an alias of one; a struct is filled by a Kernel.
 - **graph**: `node name: graph "other.osn" { source <- src; param = 2; }` Another document placed as a node: its nodes join under `name.`, its inputs take the wiring, its outputs are read as `name.output`.
 - **previous**: `port <~ node.output from initial [migrate id@v];` State: the port reads what the last evaluation committed, the initial source before the first, and a migration carries it when a republished Kernel changes its layout.
 - **times**: `times = 5;   carry port <- output;` A node written once and placed N times, each wired as written, `carry` feeding a port from the previous time's output; at N = 0, a carried output is what its port is first bound to.
@@ -284,7 +285,7 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world.
 - **stdin**: `orla serve <scene.osn>` Request lines on standard input, answer lines on standard output; `quit` ends the process.
 - **socket**: `orla serve <scene.osn> --listen <host:port>` The same lines over each TCP connection to the address; `quit` ends the connection.
 - **websocket**: `orla serve <scene.osn> --listen <host:port>` The same lines as WebSocket text messages to the same address, one request a message.
-- **mcp**: `orla serve <scene.osn> --mcp` MCP over standard input and output: each operation a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result.
+- **mcp**: `orla serve <scene.osn> --mcp` MCP over standard input and output: each operation but `quit` a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result; the client ends the session by closing standard input.
 
 ### replay: the lines of a replay test
 
@@ -301,8 +302,8 @@ Kernels (`.orla`) compute; scenes (`.osn`) compose them into a running world.
 - **reset**: `reset [<node.port>]` forgets every node's committed state, or one port's
 - **param**: `param <name> <literal>` sets a graph parameter
 - **expect**: `expect <x> <y> = <r> <g> <b> [<tolerance>]` the picture's color at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given
-- **expect**: `expect <node.port[i].field> = <value>... [<tolerance>]` a field of an element of a node's output: ints and bools exactly, floats and vectors within the tolerance
-- **expect**: `expect <node.port[i].field> < | <= | > | >= <number>...` every component of it past a bound
+- **expect**: `expect <node.port[i][.field]> = <value>... [<tolerance>]` an element of a node's output, or a field of it: ints and bools exactly, floats and vectors within the tolerance
+- **expect**: `expect <node.port[i][.field]> < | <= | > | >= <number>...` every component of it past a bound
 - **expect**: `expect count <node.port> = <n>` how many elements a node's output holds
 - **expect**: `expect placed <node> main | ordered` where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main
 
@@ -361,41 +362,6 @@ node loops: kernel {
 output result <- loops.result;
 ```
 
-### values.osn
-
-```osn
-//! Values a Kernel computes with: names bound by `let`, choices by `if`
-//! and `match`, truth by `&&`, `||` and `!`, arrays, a struct of its own,
-//! and a function over any type.
-//! shows: let, if, and, match, array, struct, type, fn, element, float, Rows, Float, Int, reserved
-struct Step { at: Float; size: Int; }
-type Values = Rows<Float>;
-
-fn twice<T>(v: T) -> T { return v + v; }
-
-node values: kernel {
-    requires { field.write; }
-    domain = 8;
-    output result: Values;
-    compute {
-        let i = element();
-        let step = Step { at: float(i), size: 1 };
-        let wider = Step { ..step, size: 3 };
-        let { at, size: width } = wider;
-        let even = i % 2 == 0;
-        let small = i < 4 && !(i == 0 || i == 1);
-        let tier = match i { 0 => 0.0, 1 | 2 => 1.0, 3..6 => 2.0, 6..=7 => 3.0, _ => 4.0 };
-        let table = [1.0, 2.0, 4.0];
-        let zeros = [0.0; 4];
-        let pick = if even { table[1] } else { zeros[0] };
-        if small { return twice(at) + tier; }
-        return pick + float(width);
-    }
-}
-
-output result <- values.result;
-```
-
 ### context.osn
 
 ```osn
@@ -427,13 +393,51 @@ node read: kernel {
 output result <- read.result;
 ```
 
+### values.osn
+
+```osn
+//! Values a Kernel computes with: names bound by `let`, the operators,
+//! choices by `if` and `match`, truth by `&&`, `||` and `!`, arrays, a
+//! struct of its own, and a function over any type.
+//! shows: let, operators, if, and, match, array, struct, type, fn, element, float, Rows, Float, Int, reserved
+struct Step { at: Float; size: Int; }
+type Values = Rows<Float>;
+
+fn twice<T>(v: T) -> T { return v + v; }
+
+node values: kernel {
+    requires { field.write; }
+    domain = 8;
+    output result: Values;
+    compute {
+        let i = element();
+        let step = Step { at: float(i), size: 1 };
+        let wider = Step { ..step, size: 3 };
+        let { at, size: width } = wider;
+        let even = i % 2 == 0;
+        let small = i < 4 && !(i == 0 || i == 1);
+        let bits = ((i << 3) >> 1 >>> 1 ^ (i & 3) | 8) % 5 - i / 2 * 1;
+        let order = i != 3 && i <= 6 && i > -1 && i >= bits - bits;
+        let tier = match i { 0 => 0.0, 1 | 2 => 1.0, 3..6 => 2.0, 6..=7 => 3.0, _ => 4.0 };
+        let table = [1.0, 2.0, 4.0];
+        let zeros = [0.0; 4];
+        let pick = if even && order { table[1] } else { zeros[0] };
+        if small { return twice(at) + tier; }
+        return pick + float(width);
+    }
+}
+
+output result <- values.result;
+```
+
 ### fields.osn
 
 ```osn
 //! Fields flowing through a scene: a Kernel declared once by its id and
 //! run by a node, a param the caller sets, a Field filled with a value,
-//! an input read from text, state carried from the last frame with `<~`,
-//! and the builtins that read a Field.
+//! an input read from text, state carried from the last frame with `<~`
+//! by a node and by a Kernel written in place, and the builtins that read
+//! a Field.
 //! shows: kernel, node, param, fill, input, previous, at, fetch, at_linear, sample, count, size, isize, element, coord
 kernel fields.decay@1 {
     requires { field.read; field.write; }
@@ -452,6 +456,13 @@ node decay: fields.decay@1 {
     rate = rate;
 }
 
+node frames: kernel {
+    requires { field.read; field.write; }
+    input before: Rows<Float> <~ frames.result from start.result;
+    output result: Rows<Float>;
+    compute { return sample(before) + 1.0; }
+}
+
 node plane: kernel {
     requires { field.write; }
     domain = vec2(4, 2);
@@ -464,13 +475,14 @@ node read: kernel {
     input level: Rows<Float> <- decay.result;
     input letters: Rows<Int> <- word;
     input grid: Grid<Float> <- plane.result;
+    input seen: Rows<Float> <- frames.result;
     domain = 4;
     output result: Rows<Float>;
     compute {
         let i = element();
         let cell = at(grid, vec2(1.0, 1.0)) + fetch(grid, ivec2(2, 0)) + at_linear(level, 1.5);
         let extent = size(grid).x + float(isize(grid).y + count(letters));
-        return sample(level) + at(level, i) + cell + extent + float(at(letters, 0));
+        return sample(level) + at(level, i) + cell + extent + float(at(letters, 0)) + sample(seen);
     }
 }
 

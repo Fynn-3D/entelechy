@@ -174,8 +174,9 @@ run, and commits nothing. The protocol's `trace` is the same as JSON.
 orla package packages/text.orlapkg
 ```
 
-`orla package <dir.orlapkg>` checks a package's manifest and says what
-it holds; `orla pack <dir.orlapkg> [<file>]` writes it as one `.orlapkg`
+`orla package <dir.orlapkg>` checks a package as `orla check` checks a
+document (its manifest, its Kernels compiled, its presets read) and says
+what it holds; `orla pack <dir.orlapkg> [<file>]` writes it as one `.orlapkg`
 file; `orla unpack <file> <new dir>` reads it back. A scene uses a
 package with `use "name.orlapkg";`, by path or by name through
 `ORLA_PACKAGES`. `orla version` prints `orla.api`, `orla.language`,
@@ -304,8 +305,8 @@ file. `orla help replay` lists the same forms:
 | `reset [<node.port>]` | forgets every node's committed state, or one port's | `reset`, `reset step.result` |
 | `param <name> <literal>` | sets a graph parameter | `param exposure 1.5` |
 | `expect <x> <y> = <r> <g> <b> [<tolerance>]` | the picture's color at x y from its top left, each channel 0 to 1 as the Kernel wrote it; tolerance 0.01 when not given | `expect 11 10 = 1.0 1.0 1.0`, `expect 11 10 = 1.0 1.0 1.0 0.05` |
-| `expect <node.port[i].field> = <value>... [<tolerance>]` | a field of an element of a node's output: ints and bools exactly, floats and vectors within the tolerance | `expect step.result[0].score = 1` |
-| `expect <node.port[i].field> < \| <= \| > \| >= <number>...` | every component of it past a bound | `expect fall.result[0].speed > 2.5` |
+| `expect <node.port[i][.field]> = <value>... [<tolerance>]` | an element of a node's output, or a field of it: ints and bools exactly, floats and vectors within the tolerance | `expect step.result[0].score = 1` |
+| `expect <node.port[i][.field]> < \| <= \| > \| >= <number>...` | every component of it past a bound | `expect fall.result[0].speed > 2.5` |
 | `expect count <node.port> = <n>` | how many elements a node's output holds | `expect count ground.result = 6889` |
 | `expect placed <node> main \| ordered` | where a node runs: the session's main backend, or ordered work off it; a session with one backend reads both as main | `expect placed ring main`, `expect placed filter ordered` |
 

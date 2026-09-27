@@ -51,6 +51,15 @@ fn written(text: &str, section: &str, name: &str) -> bool {
     };
     match (section, name) {
         ("kernel", "and") => text.contains("&&"),
+        // Every operator the item lists, written between spaces.
+        ("kernel", "operators") => orla_compiler::help::forms()
+            .iter()
+            .find(|form| form.name == "operators")
+            .expect("the operators are a form")
+            .shape
+            .split_whitespace()
+            .filter(|op| *op != "a" && *op != "b")
+            .all(|op| text.contains(&format!(" {op} "))),
         // The reserved words are shown by the ones an example writes.
         ("kernel", "reserved") => orla_language::RESERVED.iter().any(|w| word(w)),
         ("kernel", "array") => text.contains("; 4]") || text.contains("[1.0"),
