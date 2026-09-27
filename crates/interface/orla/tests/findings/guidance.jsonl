@@ -14,3 +14,5 @@
 {"finding": "too many frames asked at once was refused with no request to send", "send": {"op": "advance", "frames": 0}, "expect": {"ok": false, "tries": "corrects"}}
 {"finding": "a misspelled node to trace named the near one but gave nothing to send", "send": {"op": "trace", "node": "lif", "at": [1, 1]}, "expect": {"ok": false, "tries": "corrects"}}
 {"finding": "a snapshot to a file without leave to write said which flag to run with, not that it can be held in the answer", "send": {"op": "snapshot", "to": "kept.json"}, "expect": {"ok": false, "tries": "corrects"}}
+{"send": {"op": "compose", "text": "{scene}\nnode broken: kernel { requires { field.write; } domain = 4; output result: Rows<Int>; compute { return 1 / (element() - element()); } }\noutput also <- broken.result;\n"}}
+{"finding": "a failed evaluation names the node it failed at, as the envelope says an error may", "send": {"op": "evaluate", "time": 0.0}, "expect": {"ok": false, "at": {"/error/node": "broken"}}}

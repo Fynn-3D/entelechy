@@ -17,6 +17,7 @@
 
 mod answers;
 mod create;
+pub mod envelope;
 mod fields;
 pub mod help;
 mod inspect;
@@ -34,9 +35,9 @@ use serde_json::{Value as Json, json};
 use orla_session::Session;
 
 use crate::request::Request;
-use crate::wire::failure;
 
 pub use answers::{Answers, Served};
+pub use envelope::{envelope, parse_request};
 pub use transport::{Framing, Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     capability_json, context_of, report_json, trace_json, type_name, value_from_json, value_json,
@@ -61,23 +62,6 @@ pub fn respond_from(session: &mut Session, incoming: &Incoming) -> (String, bool
     let answered = respond_line(session, &incoming.line);
     session.act_for(before);
     answered
-}
-
-/// Parses one request line into its echoed id and the request, or an
-/// error envelope's payload.
-pub fn parse_request(line: &str) -> Result<(Json, Json), Json> {
-    let request = serde_json::from_str::<Json>(line)
-        .map_err(|error| failure(format!("request is not JSON: {error}")))?;
-    let id = request.get("id").cloned().unwrap_or(Json::Null);
-    Ok((id, request))
-}
-
-/// The response line for a result.
-pub fn envelope(id: &Json, response: Result<Json, Json>) -> String {
-    match response {
-        Ok(ok) => json!({ "id": id, "ok": ok }).to_string(),
-        Err(error) => json!({ "id": id, "error": error }).to_string(),
-    }
 }
 
 /// Answers one request line; the flag says whether it asked to quit.
@@ -403,6 +387,9 @@ mod tests {
     fn rendering(what: &str) -> Option<String> {
         if what == "workflow" {
             return Some(crate::workflow::table());
+        }
+        if what == "wire" {
+            return Some(crate::envelope::table());
         }
         let file = what.strip_prefix("help/")?;
         let example = crate::help::examples()

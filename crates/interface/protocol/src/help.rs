@@ -94,7 +94,7 @@ pub fn scenarios() -> Vec<Json> {
 }
 
 /// The sections, each under a surface or the doors, with what it holds.
-const SECTIONS: [(&str, &str, &str); 7] = [
+const SECTIONS: [(&str, &str, &str); 8] = [
     (
         "types",
         "language",
@@ -117,6 +117,11 @@ const SECTIONS: [(&str, &str, &str); 7] = [
         "the capabilities a Kernel declares in `requires`, each what it grants",
     ),
     ("protocol", "doors", "the operations a session answers"),
+    (
+        "wire",
+        "doors",
+        "a request and an answer as they cross a door, and the doors",
+    ),
     ("replay", "doors", "the lines of a replay test"),
 ];
 
@@ -203,6 +208,24 @@ fn items() -> Vec<Json> {
     }));
     out.extend(replay::forms().iter().map(replay_json));
     out.extend(crate::ops::operations().iter().map(op_json));
+    out.extend(crate::envelope::PARTS.iter().map(|part| {
+        json!({
+            "section": "wire",
+            "name": part.name,
+            "kind": part.within,
+            "shape": format!("{}: `{}`: {}", part.within, part.name, part.ty),
+            "doc": part.doc,
+        })
+    }));
+    out.extend(crate::envelope::DOORS.iter().map(|door| {
+        json!({
+            "section": "wire",
+            "name": door.name,
+            "kind": "door",
+            "shape": door.opened,
+            "doc": door.doc,
+        })
+    }));
     out
 }
 

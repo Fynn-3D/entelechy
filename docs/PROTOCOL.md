@@ -49,6 +49,44 @@ operation reads it: a request with a field of the wrong type, one its
 operation does not take, or without one it needs, is refused with the
 fields it takes, the `field` at fault and the type `expected`.
 
+What a request and an answer carry, and the doors a session is reached
+through (`help`'s `wire` section answers the same):
+
+<!-- rendered: wire -->
+| part | in | type | says |
+| --- | --- | --- | --- |
+| `op` | request | string | The operation: one of the protocol section's, each with its own fields. |
+| `id` | request | value | Anything; the answer carries it back as it was sent, to pair them. |
+| `id` | answer | value | The request's `id`, or null when it sent none or was not JSON. |
+| `ok` | answer | object | What the operation answered, as its entry in the protocol section says. |
+| `error` | answer | object | Why the request was refused, and what acts on it as data; the world is as it was. |
+| `message` | error | string | Why, one or more sentences for a person or an agent to read. |
+| `line` | error | integer | Where in the text the request carried the fault is, from 1. |
+| `column` | error | integer | Where on that line, from 1. |
+| `try` | error | [object] | The requests to send next, in order, as they are: the request corrected, what it needs first, or what the caller needs to know; never one that widens authority. |
+| `similar` | error | [string] | The names nearest an unknown one. |
+| `fields` | error | [string] | The fields the operation takes. |
+| `field` | error | string | The field at fault. |
+| `expected` | error | string | The type that field is. |
+| `operations` | error | [string] | Every operation, for an unknown one. |
+| `sections` | error | [string] | Every help section, for an unknown one. |
+| `version` | error | string | The scene document's version as it stands, for a compose refused. |
+| `path` | error | string | The scene document a refused compose would have written. |
+| `written` | error | bool | Whether a compose wrote its document: false when refused. |
+| `text` | error | string | The document an `edits` compose made, which `line` counts in. |
+| `node` | error | string | The node an evaluation failed at. |
+| `port` | error | string | The state port whose migration failed. |
+| `migration` | error | string | The Kernel that failed to migrate that state. |
+| `frame` | error | integer | The frame a run failed at, counted from its first. |
+
+| door | opened by | carries |
+| --- | --- | --- |
+| stdin | `orla serve <scene.osn>` | Request lines on standard input, answer lines on standard output; `quit` ends the process. |
+| socket | `orla serve <scene.osn> --listen <host:port>` | The same lines over each TCP connection to the address; `quit` ends the connection. |
+| websocket | `orla serve <scene.osn> --listen <host:port>` | The same lines as WebSocket text messages to the same address, one request a message. |
+| mcp | `orla serve <scene.osn> --mcp` | MCP over standard input and output: each operation a tool whose input schema is its request's, a tool call's arguments its fields, the answer's `ok` or `error` the tool's result. |
+<!-- end -->
+
 A refusal whose next step is known carries it in `try`: the requests to
 send, in order, as they are. They correct the request (a near name in
 place of an unknown one, a field renamed or left out, a count within
@@ -382,7 +420,7 @@ in three steps, each answer small:
 
 - `{"op": "help"}`: the index. What the sections stand `under`, the
   `sections` (`types`, `builtins`, `kernel`, `scene`, `authority`,
-  `protocol`, `replay`) with how many items each holds, the `workflow` an
+  `protocol`, `wire`, `replay`) with how many items each holds, the `workflow` an
   agent works in (each step and its operations), and the `versions` the
   answer holds for.
 - `{"op": "help", "section": "replay"}`: each item's `name` and one `line`.

@@ -17,8 +17,9 @@
 //!   and not empty), `lacks` (pointers to nothing), `says` and `not`
 //!   (text the answer, or a string in it, holds or does not).
 //!
-//! Every refusal's `try`, held to an expectation or not, names operations
-//! of the table and never `quit`.
+//! Every answer carries only what the envelope names, and every refusal's
+//! `try`, held to an expectation or not, names operations of the table and
+//! never `quit`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -121,6 +122,40 @@ impl Drop for Served {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// What an answer carries that the envelope does not say it may: its keys
+/// are the answer's parts, an error's the error's
+/// ([`orla_protocol::envelope::PARTS`]).
+fn unenveloped(answer: &Json) -> Vec<String> {
+    let parts = |within: &str| -> Vec<&str> {
+        orla_protocol::envelope::PARTS
+            .iter()
+            .filter(|p| p.within == within)
+            .map(|p| p.name)
+            .collect()
+    };
+    let mut out = Vec::new();
+    for (key, within) in answer
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, _)| (k, "answer"))
+        .chain(
+            answer["error"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(k, _)| (k, "error")),
+        )
+    {
+        if !parts(within).contains(&key.as_str()) {
+            out.push(format!(
+                "the {within} carries `{key}`, which the envelope does not name"
+            ));
+        }
+    }
+    out
 }
 
 /// What a refusal's `try` falls short of: every request it names is an
@@ -272,6 +307,7 @@ fn what_agents_found_wanting_stays_fixed() {
             request["id"] = Json::from(id);
             let answer = served.ask(&request);
             let mut short = untried(&answer);
+            short.extend(unenveloped(&answer));
             if let Some(expect) = step.get("expect") {
                 held += 1;
                 short.extend(wanting(&answer, expect));
